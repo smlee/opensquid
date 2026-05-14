@@ -44,35 +44,63 @@ User authorship is load-bearing. If you (the human) explicitly endorse a lesson,
 
 ---
 
-## Quick start
+## Quick start (Claude Code — local development)
+
+Until OpenSquid is published to npm, point Claude Code at the local build:
 
 ```bash
-npx opensquid
+git clone git@github.com:smlee/opensquid.git
+cd opensquid
+npm install
+npm run build
 ```
 
-Wire into Claude Code (`~/.claude/mcp_servers.json`):
+Then add to Claude Code via the CLI:
 
-```json
-{
-  "opensquid": {
-    "command": "npx",
-    "args": ["-y", "opensquid"]
-  }
-}
+```bash
+claude mcp add opensquid -- node /absolute/path/to/opensquid/dist/index.js
 ```
 
-Wire into Cursor:
+Or edit `~/.claude.json` (or your Claude Code config file) directly:
 
 ```json
 {
   "mcpServers": {
     "opensquid": {
-      "command": "npx",
-      "args": ["-y", "opensquid"]
+      "command": "node",
+      "args": ["/absolute/path/to/opensquid/dist/index.js"]
     }
   }
 }
 ```
+
+Restart Claude Code. The four tools (`remember`, `recall`, `promote`, `eliminate`) appear under the `opensquid` server.
+
+## Quick start (Cursor / any MCP host)
+
+```json
+{
+  "mcpServers": {
+    "opensquid": {
+      "command": "node",
+      "args": ["/absolute/path/to/opensquid/dist/index.js"]
+    }
+  }
+}
+```
+
+## Try it
+
+In any MCP-enabled chat, ask the model to:
+
+- *"Remember this: SSH host aliases let you push to different GitHub accounts from the same machine. Evidence: my own debugging session today."* → creates a `○ pending` lesson.
+- *"Recall anything about SSH or GitHub auth."* → surfaces matching lessons with similarity scores.
+- *"Promote lesson les-xxxxxxxx."* → runs the wedge gate. Probably blocks on time-floor for the first hour; that's the point.
+- *"Eliminate lesson les-xxxxxxxx."* → discards (refuses if user-authored without `force=true`).
+
+Storage lives at `~/.opensquid/lessons/{status}/<id>.json`. Inspect with `ls ~/.opensquid/lessons/promoted/` to see what graduated.
+
+Set `OPENSQUID_HOME=/some/path` to relocate storage (handy for testing).
 
 ---
 
