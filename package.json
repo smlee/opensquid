@@ -1,0 +1,56 @@
+{
+  "name": "opensquid",
+  "version": "0.0.1",
+  "description": "The MCP server that decides which of your agent's memories survive. Powered by loop-engine.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "opensquid": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "memory",
+    "verification",
+    "anti-self-grading",
+    "loop-engine",
+    "mindcraftor"
+  ],
+  "author": "Sangmin Lee <sangmlee23@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smlee/opensquid.git"
+  },
+  "bugs": {
+    "url": "https://github.com/smlee/opensquid/issues"
+  },
+  "homepage": "https://opensquid.tools",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "prettier": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}
