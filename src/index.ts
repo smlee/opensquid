@@ -34,6 +34,13 @@ import {
   type MemoryScopeFilter,
 } from "./engine-client.js";
 import { detectOrigin } from "./origin.js";
+import {
+  DEFAULT_MIN_SIMILARITY,
+  filterBySimilarity,
+  mergeRrf,
+  type LessonHit,
+  type MemoryHit,
+} from "./recall.js";
 import { defaultMemorizeScope, defaultRecallScopeFilter } from "./scope.js";
 
 const VERSION = "0.3.1";
@@ -127,12 +134,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "recall",
       description:
-        "Surface relevant lessons + memories for the current task. v0.3: text-match across " +
-        "lessons + semantic vector search across memories (via Qwen3-Embedding-4B). Returns " +
-        "mixed results ranked by similarity. Discarded lessons excluded. " +
-        "v0.3.1: pass `include_body: true` to receive full memory bodies (no preview truncation) — " +
-        "use after drift when you need to re-anchor on a long memory. Scope filter defaults to " +
-        "user + auto-detected project scope; pass `scope_filter` to override.",
+        "Surface relevant lessons + memories for the current task. Fans out text-match (lessons) " +
+        "+ semantic vector search (memories via Qwen3-Embedding-4B) in parallel; returns separate " +
+        "per-source lists AND a single RRF-merged ranked list (`merged`). Discarded lessons excluded. " +
+        "v0.3.1: `include_body: true` returns full memory bodies (no truncation); `scope_filter` " +
+        "restricts results by MemoryScope. v0.4: `min_similarity` (default 0.5) drops weak hits — " +
+        "`merged: []` means \"nothing relevant\" (decision-makable). Items appearing in BOTH lists " +
+        "are boosted by RRF.",
       inputSchema: {
         type: "object",
         properties: {
@@ -148,6 +156,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "Optional scope filter. Shape: `{kind:\"exact\",scope:<MemoryScope>}`, " +
               "`{kind:\"kind\",kind_name:\"project\"|\"team\"|...}`, or " +
               "`{kind:\"any_of\",scopes:[...]}`. Default: any_of([user, <detected-project>]).",
+          },
+          min_similarity: {
+            type: "number",
+            description:
+              "Drop hits with similarity below this threshold BEFORE merging. Range 0-1. " +
+              "Default 0.5 — produces \"no relevant context\" signals when nothing's a real match. " +
+              "Pass 0 to reproduce v0.3.1 behavior (return top-K regardless).",
+            default: 0.5,
           },
         },
         required: ["query"],
@@ -388,6 +404,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const include_body = a.include_body === true;
         const scope_filter =
           coerceMemoryScopeFilter(a.scope_filter) ?? defaultRecallScopeFilter();
+        // v0.4: similarity threshold. Defaults to 0.5 (decision-makable
+        // signal); pass 0 explicitly to reproduce v0.3.1 behavior.
+        const min_similarity =
+          typeof a.min_similarity === "number"
+            ? Math.max(0, Math.min(1, a.min_similarity))
+            : DEFAULT_MIN_SIMILARITY;
         if (!query) return textResult({ error: "query is required" });
         // Fan out: text-match lessons + semantic memories in parallel.
         const [lessonResult, memoryResult] = await Promise.all([
@@ -403,17 +425,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               return { query, returned: 0, results: [] };
             }),
         ]);
+        // v0.4: filter per-source by similarity, then RRF-merge the
+        // survivors. Threshold applied BEFORE merge so a weak hit in
+        // one list can't poison the unified ranking.
+        const lessonsKept = filterBySimilarity(
+          lessonResult.results as LessonHit[],
+          min_similarity,
+        );
+        const memoriesKept = filterBySimilarity(
+          memoryResult.results as MemoryHit[],
+          min_similarity,
+        );
+        const merged = mergeRrf(lessonsKept, memoriesKept);
         return textResult({
           query,
           scope_filter,
           include_body,
+          min_similarity,
+          merged,
           lessons: {
-            returned: lessonResult.returned,
-            results: lessonResult.results,
+            returned: lessonsKept.length,
+            results: lessonsKept,
           },
           memories: {
-            returned: memoryResult.returned,
-            results: memoryResult.results,
+            returned: memoriesKept.length,
+            results: memoriesKept,
           },
         });
       }

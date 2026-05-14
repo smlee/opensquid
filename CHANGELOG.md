@@ -22,6 +22,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 - New `src/origin.ts` with `detectOrigin()` helper; engine v1.0+
   required for the wire schema.
 
+### Added — v0.4 Phase 4 (recall quality)
+
+- **`min_similarity` parameter** on `recall` (default `0.5`). Hits
+  with similarity below the threshold are dropped per-source BEFORE
+  merging — `merged: []` is the new "no relevant context"
+  decision-makable signal. Pass `min_similarity: 0` to reproduce
+  v0.3.1 behavior (return top-K regardless).
+
+- **RRF (Reciprocal Rank Fusion) merge** — `recall` now returns a
+  unified `merged` array alongside the per-source `lessons` /
+  `memories` lists. Items keep their original similarity score;
+  `rrf_score` = `sum over each list: 1 / (60 + rank_in_that_list)`
+  with rank 1-based. When an entity surfaces in BOTH lists (v0.5+
+  hybrid search), it accumulates contributions and naturally ranks
+  above single-source items.
+
+- New `src/recall.ts` with `filterBySimilarity`, `mergeRrf`, and
+  type stubs.
+
 ### Added — v0.4 Phase 3 (memory lifecycle)
 
 - **`update_memory`** tool — mutate description / content / scope on
