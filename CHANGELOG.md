@@ -9,11 +9,39 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
-### Planned for v0.4
+### Added — v0.4 Phase 1 (origination metadata)
+
+- **`memorize` auto-attaches `origin` block** to every memory:
+  `{ host, session_id, model, cwd_basename, written_at }`. Detected
+  from env (`CLAUDE_SESSION_ID`, `OPENSQUID_HOST`, `OPENSQUID_MODEL`,
+  `ANTHROPIC_MODEL`) with a `sha1(start_time+pid)[:8]` fallback for
+  session_id. Explicit `origin` argument on the tool call overrides
+  auto-detect.
+- **`get_memory` returns `origin` block** alongside content + scope.
+  Pre-v0.4 memories return `origin: null` cleanly.
+- New `src/origin.ts` with `detectOrigin()` helper; engine v1.0+
+  required for the wire schema.
+
+### Added — v0.4 Phase 3 (memory lifecycle)
+
+- **`update_memory`** tool — mutate description / content / scope on
+  an existing memory. Identity (id, created_at, citation count,
+  derived_from, origin) is always preserved. Re-embeds on content
+  change (visible in subsequent recall similarity scores); the
+  description/scope-only path skips the embed call. Errors when no
+  mutable field is supplied OR when the id doesn't exist.
+- **`forget`** tool — the user-facing memory delete. Default
+  `force: false` respects user-immunity (returns RpcError -32003 if
+  the memory is cited by a user-authored lesson). `force: true` is
+  the user-initiated override. Idempotent — forgetting an
+  already-gone memory returns `ok: true`.
+- New engine-client methods: `updateMemory()`, `deleteMemory()`.
+
+### Planned for v0.4 (remaining)
 
 - Hooks-based automation (Claude Skill `UserPromptSubmit` + `Stop`).
-- `update_memory`, `forget` (user-immunity-respecting deletion).
 - Hybrid lesson + memory search via RRF; similarity threshold gating.
+- Wedge gate `origin_diverse` signal (multi-session reproducibility).
 
 ---
 

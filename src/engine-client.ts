@@ -174,6 +174,25 @@ export type MemoryScope =
   | { project: string };
 
 /**
+ * Mirror of the engine's `MemoryOrigin` serde shape — v0.4 provenance
+ * metadata attached to every memorize call. All fields are optional;
+ * hosts populate what they can detect. Engine YAML omits absent
+ * fields via `skip_serializing_if`, so partial blocks round-trip
+ * cleanly.
+ *
+ * Privacy invariant: `session_id` is opaque (hashed first 8 chars),
+ * never a raw UUID. `cwd_basename` is the last path segment only,
+ * never the full path.
+ */
+export interface MemoryOrigin {
+  host?: string;
+  session_id?: string;
+  model?: string;
+  cwd_basename?: string;
+  written_at?: string;
+}
+
+/**
  * Mirror of the engine's serve.rs `ScopeFilterWire` enum. The engine's
  * runtime `MemoryScopeFilter` is allocation-aware; this wire form is
  * intentionally simple JSON the host can build inline.
@@ -225,6 +244,8 @@ export interface CreateMemoryResult {
   description: string;
   created_at: string;
   scope: MemoryScope;
+  /** v0.4: provenance block, populated when the caller sent one. */
+  origin?: MemoryOrigin | null;
 }
 
 export interface MemorySearchResult {
@@ -252,6 +273,8 @@ export interface GetMemoryResult {
   content: string;
   created_at: string;
   scope: MemoryScope;
+  /** v0.4: provenance block; `null` for pre-v0.4 memories. */
+  origin?: MemoryOrigin | null;
 }
 
 export class OpenSquidEngine {
@@ -292,6 +315,12 @@ export class OpenSquidEngine {
     authored_by?: "user" | "agent";
     /** v0.3.1: optional scope tag. Defaults to `User` on the engine. */
     scope?: MemoryScope;
+    /**
+     * v0.4: optional provenance block. opensquid auto-populates via
+     * `detectOrigin()` when this is omitted; pass an explicit value
+     * to override (test fixtures, replay tooling).
+     */
+    origin?: MemoryOrigin;
   }): Promise<CreateMemoryResult> {
     return this.client.call("memory.create", args);
   }
@@ -318,5 +347,43 @@ export class OpenSquidEngine {
    */
   getMemory(args: { id: string }): Promise<GetMemoryResult> {
     return this.client.call("memory.get", args);
+  }
+
+  /**
+   * v0.4: mutate description / content / scope on an existing memory.
+   * Identity, citation counter, derived_from, and origin are always
+   * preserved. Re-embeds on content change; cheap path for
+   * description/scope-only edits. At least one mutable field must
+   * be supplied. Throws `RpcError` -32002 if the id doesn't exist.
+   */
+  updateMemory(args: {
+    id: string;
+    description?: string;
+    content?: string;
+    scope?: MemoryScope;
+  }): Promise<{
+    ok: true;
+    id: string;
+    description: string;
+    created_at: string;
+    updated_at: string;
+    scope: MemoryScope;
+    origin?: MemoryOrigin | null;
+  }> {
+    return this.client.call("memory.update", args);
+  }
+
+  /**
+   * v0.4: `forget` — delete a memory. `force = false` (default)
+   * respects user-immunity (returns RpcError -32003 if cited by a
+   * user-authored lesson). `force = true` is the user-initiated
+   * override.
+   */
+  deleteMemory(args: { id: string; force?: boolean }): Promise<{
+    ok: true;
+    id: string;
+    forced: boolean;
+  }> {
+    return this.client.call("memory.delete", args);
   }
 }

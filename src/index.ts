@@ -26,7 +26,14 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { OpenSquidEngine, RpcError, type MemoryScope, type MemoryScopeFilter } from "./engine-client.js";
+import {
+  OpenSquidEngine,
+  RpcError,
+  type MemoryOrigin,
+  type MemoryScope,
+  type MemoryScopeFilter,
+} from "./engine-client.js";
+import { detectOrigin } from "./origin.js";
 import { defaultMemorizeScope, defaultRecallScopeFilter } from "./scope.js";
 
 const VERSION = "0.3.1";
@@ -156,6 +163,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {
           memory_id: { type: "string", description: "Memory id (mem-xxxxxxxx)." },
+        },
+        required: ["memory_id"],
+      },
+    },
+    {
+      name: "update_memory",
+      description:
+        "Mutate an existing memory's description, content, and/or scope. " +
+        "Identity (id, created_at, citation count, origin) is always preserved. " +
+        "Re-embeds on content change; description-only or scope-only edits are cheap " +
+        "(no re-embedding). At least one of description/content/scope must be supplied.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          memory_id: { type: "string", description: "Memory id (mem-xxxxxxxx)." },
+          description: { type: "string", description: "New short summary. Omit to keep existing." },
+          content: { type: "string", description: "New full content. Triggers re-embedding when different." },
+          scope: {
+            description:
+              "New scope tag. Shape: `\"user\"`, `\"global\"`, `{team:id}`, `{skill:id}`, `{project:id}`. Omit to keep existing.",
+          },
+        },
+        required: ["memory_id"],
+      },
+    },
+    {
+      name: "forget",
+      description:
+        "Delete a memory. User-immunity-respecting by default: memories cited by " +
+        "user-authored lessons are protected. Pass `force: true` ONLY when the user " +
+        "explicitly intends to retire a memory they themselves cite (the wedge invariant).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          memory_id: { type: "string", description: "Memory id (mem-xxxxxxxx)." },
+          force: {
+            type: "boolean",
+            description: "Bypass user-immunity. Default false.",
+            default: false,
+          },
         },
         required: ["memory_id"],
       },
@@ -311,11 +358,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // MCP-level error (not the engine's serde message).
         const scope =
           coerceMemoryScope(a.scope) ?? defaultMemorizeScope();
+        // v0.4 Phase 1: attach provenance unless the caller overrode
+        // it. Hosts that don't need provenance can pass `origin: null`
+        // (or any non-object) to suppress.
+        const origin: MemoryOrigin =
+          (a.origin && typeof a.origin === "object" ? (a.origin as MemoryOrigin) : null) ??
+          detectOrigin();
         const result = await engine.createMemory({
           description: String(a.description ?? "").trim(),
           content: String(a.content ?? "").trim(),
           authored_by: a.authored_by === "user" ? "user" : "agent",
           scope,
+          origin,
         });
         return textResult({
           ok: true,
@@ -323,6 +377,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           description: result.description,
           created_at: result.created_at,
           scope: result.scope,
+          origin: result.origin,
           next: "Memory stored + embedded. Surface via `recall` with any related query (semantic search).",
         });
       }
@@ -371,6 +426,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ok: true,
           ...result,
         });
+      }
+
+      case "update_memory": {
+        const id = String(a.memory_id ?? "").trim();
+        if (!id) return textResult({ error: "memory_id is required" });
+        const args: {
+          id: string;
+          description?: string;
+          content?: string;
+          scope?: MemoryScope;
+        } = { id };
+        if (typeof a.description === "string") args.description = a.description;
+        if (typeof a.content === "string") args.content = a.content;
+        if (a.scope !== undefined) {
+          const coerced = coerceMemoryScope(a.scope);
+          if (coerced) args.scope = coerced;
+        }
+        if (
+          args.description === undefined &&
+          args.content === undefined &&
+          args.scope === undefined
+        ) {
+          return textResult({
+            error: "at least one of description, content, scope must be supplied",
+          });
+        }
+        const result = await engine.updateMemory(args);
+        return textResult(result);
+      }
+
+      case "forget": {
+        const id = String(a.memory_id ?? "").trim();
+        if (!id) return textResult({ error: "memory_id is required" });
+        const force = a.force === true;
+        const result = await engine.deleteMemory({ id, force });
+        return textResult(result);
       }
 
       case "promote": {

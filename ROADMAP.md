@@ -88,7 +88,16 @@ No new architecture; just exposing existing engine surface (MemoryScope was Phas
 
 ## v0.4 — Hooks-based automation + memory lifecycle
 
+> **Detailed design:** [`docs/v0.4-design.md`](./docs/v0.4-design.md) — full architecture, ordering, risks, test plan.
+
 Make the auto-recall + auto-memorize feel native rather than CLAUDE.md-suggested.
+
+### New in v0.4 scope (added 2026-05-14)
+
+- **Origination metadata** — every memory carries `origin: { host,
+  session_id, model, cwd_basename, written_at }`. Strengthens the
+  wedge gate's external-signal count (multi-session reproducibility =
+  harder to fake) and unlocks session-aware recall biasing.
 
 ### Hooks-based automation
 
