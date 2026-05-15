@@ -41,6 +41,7 @@ import {
 import { defaultMemorizeScopeAsync, defaultRecallScopeFilterAsync } from "./scope.js";
 import { CodexActivationCache, extractCodexId } from "./codex/activate.js";
 import { appendPromotedLessonToClaudeMd } from "./claude-md.js";
+import { classifyUtterance } from "./utterance/classifier.js";
 
 const VERSION = "0.4.0";
 
@@ -372,6 +373,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["lesson_id"],
       },
     },
+    {
+      name: "classify_utterance",
+      description:
+        "v0.4 #111: classify a user utterance via the pattern catalog. Returns " +
+        '{ kind: "fact" | "preference" | "correction" | "workflow_lock" | "none", ' +
+        "suggested_action, matched: <pattern-ids>, confidence }. Pure regex catalog — " +
+        "no LLM call. Call this when the agent receives a substantive user message " +
+        "(per the classify-and-act block in CLAUDE.md), then act on suggested_action " +
+        "by calling memorize / remember / update_memory yourself.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: {
+            type: "string",
+            description: "The user utterance to classify.",
+          },
+        },
+        required: ["text"],
+      },
+    },
+    {
+      name: "pending_candidates",
+      description:
+        "v0.4 #111 companion: list lessons currently in `pending` state (lesson " +
+        "candidates awaiting promote/discard decision). Returns the candidates' " +
+        "ids + descriptions + body previews so the operator can review and decide. " +
+        "Uses engine.recall internally and filters by status; no new engine RPC.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            description: "Max candidates to return. Default 10.",
+            default: 10,
+          },
+        },
+      },
+    },
   ],
 }));
 
@@ -687,6 +726,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const force = a.force === true;
         const result = await engine.discard({ id, reason, force });
         return textResult(result);
+      }
+
+      case "classify_utterance": {
+        const text = String(a.text ?? "");
+        const result = classifyUtterance(text);
+        return textResult(result);
+      }
+
+      case "pending_candidates": {
+        // Use recall with a wildcard query and filter by status === "pending".
+        // engine.recall iterates all status dirs and returns text-scored hits.
+        const limit = typeof a.limit === "number" ? Math.max(1, Math.min(50, a.limit)) : 10;
+        // Use the broadest query the engine accepts to maximize scan coverage;
+        // we then filter client-side by status.
+        const raw = await engine.recall({ query: "lesson", limit: 50 });
+        const pending = (raw.results as Array<Record<string, unknown>>)
+          .filter((r) => r.status === "pending")
+          .slice(0, limit)
+          .map((r) => ({
+            id: r.id,
+            description: r.description,
+            body_preview: r.body_preview,
+          }));
+        return textResult({
+          returned: pending.length,
+          candidates: pending,
+        });
       }
 
       default:
