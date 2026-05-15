@@ -30,7 +30,28 @@ export class HooksCliError extends Error {
   }
 }
 
-const HOOK_ID = "opensquid-drift-pretooluse";
+/**
+ * Per-event opensquid hook id. Was a single shared id pre-#118, which
+ * meant uninstall could not selectively target one event AND legacy
+ * entries written by older opensquid versions never got recognized
+ * (since they had a different id, or none at all).
+ */
+const HOOK_IDS = {
+  PreToolUse: "opensquid-pre-tool-use",
+  Stop: "opensquid-stop",
+  UserPromptSubmit: "opensquid-user-prompt-submit",
+  SessionEnd: "opensquid-session-end",
+} as const;
+
+/** Legacy id used through 2026-05-15 — purgeOurHook still recognizes it. */
+const LEGACY_HOOK_ID = "opensquid-drift-pretooluse";
+
+/**
+ * Path-substring fallback that identifies opensquid hook entries even
+ * when no `_id` marker is present (older installs, manual edits, etc.).
+ * Matches anything that runs `opensquid/dist/index.js hook <event>`.
+ */
+const COMMAND_FINGERPRINT = "/opensquid/dist/index.js hook ";
 
 interface ClaudeHook {
   type: "command";
@@ -86,12 +107,31 @@ function buildHookCommand(
   return `node ${opensquidBinPath()} hook ${hookName}`;
 }
 
+/** True when a hook entry is recognizably opensquid's. */
+export function isOurHook(h: ClaudeHook): boolean {
+  if (h._id === LEGACY_HOOK_ID) return true;
+  for (const id of Object.values(HOOK_IDS)) {
+    if (h._id === id) return true;
+  }
+  // Fallback: command-path fingerprint catches un-marked legacy entries
+  // that purgeOurHook used to silently skip (the bug from #118 dogfood).
+  // Case-insensitive — macOS APFS default is case-preserving but case-
+  // insensitive, so an install at /projects/OpenSquid/ should match too.
+  if (
+    typeof h.command === "string" &&
+    h.command.toLowerCase().includes(COMMAND_FINGERPRINT.toLowerCase())
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Remove any existing opensquid hook from a matcher list. */
 function purgeOurHook(matchers: ClaudeMatcher[]): ClaudeMatcher[] {
   return matchers
     .map((m) => ({
       ...m,
-      hooks: m.hooks.filter((h) => h._id !== HOOK_ID),
+      hooks: m.hooks.filter((h) => !isOurHook(h)),
     }))
     .filter((m) => m.hooks.length > 0);
 }
@@ -100,37 +140,54 @@ async function cmdInstall(): Promise<void> {
   const settings = await loadSettings();
   const hooks = settings.hooks ?? {};
 
-  // PreToolUse — drift-detection on Bash + honesty-ledger record on all tools.
-  // (We register both matchers; matcher "*" catches non-Bash tools so the
-  // ledger has full evidence for Stop-hook reconciliation.)
+  // PreToolUse — single matcher ".*" is sufficient. It catches Bash
+  // (drift checks live in pre-tool-use.ts handler keyed off tool_name)
+  // AND every other tool (so the honesty ledger has full evidence for
+  // Stop-hook reconciliation). Pre-#118 we registered TWO matchers
+  // (Bash + .*) which double-fired on Bash and caused duplicate ledger
+  // entries.
   const preToolUse = purgeOurHook(hooks.PreToolUse ?? []);
   preToolUse.push({
-    matcher: "Bash",
-    hooks: [{ type: "command", command: buildHookCommand("pre-tool-use"), _id: HOOK_ID }],
-  });
-  preToolUse.push({
     matcher: ".*",
-    hooks: [{ type: "command", command: buildHookCommand("pre-tool-use"), _id: HOOK_ID }],
+    hooks: [
+      {
+        type: "command",
+        command: buildHookCommand("pre-tool-use"),
+        _id: HOOK_IDS.PreToolUse,
+      },
+    ],
   });
 
-  // Stop — claim-vs-action reconciliation at turn end.
+  // Stop — claim-vs-action reconciliation + auto-classify spawn at turn end.
   const stop = purgeOurHook(hooks.Stop ?? []);
   stop.push({
-    hooks: [{ type: "command", command: buildHookCommand("stop"), _id: HOOK_ID }],
+    hooks: [{ type: "command", command: buildHookCommand("stop"), _id: HOOK_IDS.Stop }],
   });
 
-  // UserPromptSubmit — surface previous turn's broken promises at the
-  // start of the next turn.
+  // UserPromptSubmit — surface previous turn's broken promises +
+  // auto-classify candidates at the start of the next turn.
   const ups = purgeOurHook(hooks.UserPromptSubmit ?? []);
   ups.push({
-    hooks: [{ type: "command", command: buildHookCommand("user-prompt-submit"), _id: HOOK_ID }],
+    hooks: [
+      {
+        type: "command",
+        command: buildHookCommand("user-prompt-submit"),
+        _id: HOOK_IDS.UserPromptSubmit,
+      },
+    ],
   });
 
   // SessionEnd — clearSession to bound disk usage from per-session
   // ledger accumulation.
   const sessionEnd = purgeOurHook(hooks.SessionEnd ?? []);
   sessionEnd.push({
-    hooks: [{ type: "command", command: buildHookCommand("session-end"), _id: HOOK_ID }],
+    hooks: [
+      {
+        type: "command",
+        command: buildHookCommand("session-end"),
+        _id: HOOK_IDS.SessionEnd,
+      },
+    ],
   });
 
   settings.hooks = {
@@ -189,7 +246,7 @@ function countOurHooks(matchers: ClaudeMatcher[]): number {
   let n = 0;
   for (const m of matchers) {
     for (const h of m.hooks) {
-      if (h._id === HOOK_ID) n++;
+      if (isOurHook(h)) n++;
     }
   }
   return n;
