@@ -117,6 +117,34 @@ if (subcommand === "engine") {
     process.exit(1);
   }
 }
+if (subcommand === "hook") {
+  const hookCmd = process.argv[3];
+  if (hookCmd !== "pre-tool-use") {
+    console.error("usage: opensquid hook pre-tool-use");
+    process.exit(2);
+  }
+  // Hook handler manages its own exit code (0 = proceed, 2 = block).
+  const { runPreToolUseHook } = await import("./hooks/pre-tool-use.js");
+  await runPreToolUseHook();
+  // runPreToolUseHook calls process.exit() itself; this line is
+  // unreachable but keeps TypeScript happy on control-flow analysis.
+  process.exit(0);
+}
+if (subcommand === "hooks") {
+  const hooksCmd = process.argv[3];
+  if (hooksCmd !== "install" && hooksCmd !== "uninstall" && hooksCmd !== "doctor") {
+    console.error("usage: opensquid hooks install|uninstall|doctor");
+    process.exit(2);
+  }
+  const { runHooksCli } = await import("./hooks-cli.js");
+  try {
+    await runHooksCli(hooksCmd, process.argv.slice(4));
+    process.exit(0);
+  } catch (e) {
+    console.error(`[opensquid hooks ${hooksCmd}] error: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+}
 
 const engine = new OpenSquidEngine();
 
