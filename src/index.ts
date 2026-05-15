@@ -38,14 +38,19 @@ import {
   type LessonHit,
   type MemoryHit,
 } from "./recall.js";
-import { defaultMemorizeScope, defaultRecallScopeFilter } from "./scope.js";
+import { defaultMemorizeScopeAsync, defaultRecallScopeFilterAsync } from "./scope.js";
+import { CodexActivationCache, extractCodexId } from "./codex/activate.js";
 
-const VERSION = "0.3.1";
+const VERSION = "0.4.0";
 
 // ---- CLI subcommand dispatch ---------------------------------------
-// When invoked as `npx opensquid install|uninstall|doctor [...flags]`,
-// route to the CLI module and exit. With no args (the MCP-host startup
-// path), fall through to the stdio server setup below.
+// When invoked as `npx opensquid <subcommand> [...flags]`, route to the
+// CLI module and exit. With no args (the MCP-host startup path), fall
+// through to the stdio server setup below.
+//
+// Subcommand layout:
+//   opensquid install|uninstall|doctor            → CLAUDE.md installer
+//   opensquid codex install|list|remove|doctor    → codex management
 const subcommand = process.argv[2];
 if (subcommand === "install" || subcommand === "uninstall" || subcommand === "doctor") {
   const { runCli } = await import("./cli.js");
@@ -54,6 +59,46 @@ if (subcommand === "install" || subcommand === "uninstall" || subcommand === "do
     process.exit(0);
   } catch (e) {
     console.error(`[opensquid ${subcommand}] error: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+}
+if (subcommand === "codex") {
+  const codexCmd = process.argv[3];
+  if (
+    codexCmd !== "install" &&
+    codexCmd !== "list" &&
+    codexCmd !== "remove" &&
+    codexCmd !== "doctor"
+  ) {
+    console.error("usage: opensquid codex install|list|remove|doctor [<args>...]");
+    process.exit(2);
+  }
+  const { runCodexCli } = await import("./codex/cli.js");
+  try {
+    await runCodexCli(codexCmd, process.argv.slice(4));
+    process.exit(0);
+  } catch (e) {
+    console.error(`[opensquid codex ${codexCmd}] error: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+}
+if (subcommand === "project") {
+  const projectCmd = process.argv[3];
+  if (
+    projectCmd !== "init" &&
+    projectCmd !== "info" &&
+    projectCmd !== "list" &&
+    projectCmd !== "prune"
+  ) {
+    console.error("usage: opensquid project init|info|list|prune [<args>...]");
+    process.exit(2);
+  }
+  const { runProjectCli } = await import("./project-cli.js");
+  try {
+    await runProjectCli(projectCmd, process.argv.slice(4));
+    process.exit(0);
+  } catch (e) {
+    console.error(`[opensquid project ${projectCmd}] error: ${e instanceof Error ? e.message : e}`);
     process.exit(1);
   }
 }
@@ -378,7 +423,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Caller-provided `scope` is validated by `coerceMemoryScope`
         // before reaching the engine — invalid shapes get a clear
         // MCP-level error (not the engine's serde message).
-        const scope = coerceMemoryScope(a.scope) ?? defaultMemorizeScope();
+        const scope = coerceMemoryScope(a.scope) ?? (await defaultMemorizeScopeAsync());
         // v0.4 Phase 1: attach provenance unless the caller overrode
         // it. Hosts that don't need provenance can pass `origin: null`
         // (or any non-object) to suppress.
@@ -407,7 +452,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const query = String(a.query ?? "").trim();
         const limit = typeof a.limit === "number" ? Math.max(1, Math.min(50, a.limit)) : 5;
         const include_body = a.include_body === true;
-        const scope_filter = coerceMemoryScopeFilter(a.scope_filter) ?? defaultRecallScopeFilter();
+        const scope_filter =
+          coerceMemoryScopeFilter(a.scope_filter) ?? (await defaultRecallScopeFilterAsync());
         // v0.4: similarity threshold. Defaults to 0.5 (decision-makable
         // signal); pass 0 explicitly to reproduce v0.3.1 behavior.
         const min_similarity =
@@ -458,7 +504,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // the opensquid layer — the same memory id can't appear in
         // both lists so the dual-source boost here doesn't fire
         // (that's exercised inside engine's hybrid_search instead).
-        const lessonsKept = filterBySimilarity(lessonResult.results as LessonHit[], min_similarity);
+        const lessonsAboveThreshold = filterBySimilarity(
+          lessonResult.results as LessonHit[],
+          min_similarity,
+        );
+        // v0.4: filter Pack-authored lessons by codex activation.
+        // Lessons with `(codex:X)` suffix only surface when codex X's
+        // `detected_by` matches the current cwd. Lessons WITHOUT the
+        // suffix (pre-codex direct lesson.create) are always kept.
+        const activationCache = new CodexActivationCache(process.cwd());
+        const lessonsKept: LessonHit[] = [];
+        for (const lesson of lessonsAboveThreshold) {
+          const codexId = extractCodexId(lesson.description);
+          if (codexId === null || (await activationCache.isActive(codexId))) {
+            lessonsKept.push(lesson);
+          }
+        }
         const memoriesKept = memoryResult.results as MemoryHit[];
         const merged = mergeRrf(lessonsKept, memoriesKept);
         return textResult({

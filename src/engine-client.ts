@@ -304,7 +304,19 @@ export class OpenSquidEngine {
     description: string;
     body: string;
     evidence?: string[];
-    authored_by?: "user" | "agent";
+    /**
+     * Engine v1.1: `"pack"` indicates codex-seeded provenance; requires
+     * `pack_id` companion + `seed_as_promoted: true` to land in promoted.
+     */
+    authored_by?: "user" | "agent" | "pack";
+    /** Engine v1.1: required when `authored_by === "pack"`. */
+    pack_id?: string;
+    /**
+     * Engine v1.1: bypass the wedge gate and land in `promoted` directly.
+     * Only valid when `authored_by === "pack"`. The trust comes from
+     * user-installing the codex.
+     */
+    seed_as_promoted?: boolean;
   }): Promise<CreateLessonResult> {
     return this.client.call("lesson.create", args);
   }
