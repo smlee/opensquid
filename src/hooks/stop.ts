@@ -1,11 +1,18 @@
 /**
  * `opensquid hook stop` — Claude Code Stop hook handler.
  *
- * Fires at the end of every assistant turn. Reads the per-turn tool-
- * call ledger (recorded by PreToolUse), reads the assistant's final
- * message from the transcript JSONL, reconciles claims against the
- * ledger, writes any broken promises to the session's append-only
- * ledger. Clears the per-turn ledger when done.
+ * Fires at the end of every assistant turn. Two responsibilities:
+ *
+ *   1. Honesty ledger reconciliation: cross-reference the assistant's
+ *      final message against the session's accumulated tool-call ledger.
+ *      Any unfulfilled claim is recorded as a broken promise that the
+ *      next turn's UserPromptSubmit hook surfaces back to the agent.
+ *
+ *   2. Auto-classify spawn: launch a DETACHED subprocess that runs the
+ *      LLM utterance classifier on the user's most recent message.
+ *      The subprocess writes candidates to a session file that
+ *      UserPromptSubmit surfaces next turn. Detached so the agent's
+ *      response latency is unaffected.
  *
  * Exit 0 always — Stop hook is observational, not blocking.
  *
@@ -19,8 +26,12 @@
  *   ]
  */
 
-import { promises as fs } from "node:fs";
+import { spawn } from "node:child_process";
+import { promises as fsp } from "node:fs";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
+import { resolveDataRoot } from "../codex/store.js";
 import {
   reconcile,
   readBrokenPromises,
@@ -28,11 +39,11 @@ import {
   recordBrokenPromise,
   type BrokenPromise,
 } from "./honesty-ledger.js";
+import { readLastAssistantText } from "./transcript.js";
 
 interface StopHookInput {
   session_id?: string;
   transcript_path?: string;
-  // Other fields ignored.
 }
 
 export async function runStopHook(): Promise<void> {
@@ -54,20 +65,14 @@ export async function runStopHook(): Promise<void> {
   const sessionId = payload.session_id;
   if (!sessionId) process.exit(0);
 
-  // Read the assistant's last message from the transcript JSONL.
+  // -- (1) Honesty-ledger reconcile ----------------------------------
   const assistantText = payload.transcript_path
     ? await readLastAssistantText(payload.transcript_path)
     : "";
 
-  // Cross-reference claims against the SESSION ledger — every tool
-  // call from any turn in this session counts as evidence. Recap text
-  // describing prior-turn work is correctly NOT flagged.
   const ledger = await readTurnLedger(sessionId);
   const broken = reconcile(assistantText, ledger);
 
-  // De-dupe: don't re-record a broken promise that's already in this
-  // session's ledger (avoids the stuck-broken-promise loop where the
-  // same claim text recurs across turns).
   const existing = await readBrokenPromises(sessionId);
   const existingKeys = new Set(existing.map((p) => `${p.claim_id}|${p.matched_text}`));
   const fresh: BrokenPromise[] = [];
@@ -84,71 +89,82 @@ export async function runStopHook(): Promise<void> {
     }
   }
 
-  // Surface only the fresh broken promises (not previously-recorded
-  // ones still sitting in the file).
   if (fresh.length > 0) {
     for (const p of fresh) {
       process.stderr.write(`🦑 [opensquid honesty] ${p.claim_id}: ${p.reason}\n`);
     }
   }
 
-  // Session ledger is NOT cleared here — see honesty-ledger.ts
-  // `clearTurnLedger` doc-comment. Cleared at session end.
+  // -- (2) Auto-classify (detached) ----------------------------------
+  if (payload.transcript_path) {
+    spawnAutoClassify(sessionId, payload.transcript_path);
+  }
+
   process.exit(0);
 }
 
 /**
- * Read the most recent assistant message text from a Claude Code
- * transcript JSONL. Returns empty string on any failure.
+ * Launch the auto-classifier as a fully detached child. We do not
+ * await it, but we DO redirect stdout+stderr to a per-session log file
+ * (#112-audit finding 5) so engine panics, Ollama errors, and Zod
+ * failures are recoverable instead of silenced.
  *
- * Each line is one event; assistant text shows up as
- * `{ "type": "assistant", "message": { "content": [{ "type": "text", "text": "..." }] } }`.
+ * Best-effort: if the log file can't be opened, fall back to `ignore`.
  */
-async function readLastAssistantText(transcriptPath: string): Promise<string> {
-  let raw: string;
+function spawnAutoClassify(sessionId: string, transcriptPath: string): void {
+  if (process.env.OPENSQUID_AUTO_CLASSIFY === "off") return;
+  const cli = process.argv[1];
+  if (!cli) return;
+
   try {
-    raw = await fs.readFile(transcriptPath, "utf8");
+    const logFd = openSessionLog(sessionId);
+    const stdio: ("ignore" | number)[] =
+      logFd === null ? ["ignore", "ignore", "ignore"] : ["ignore", logFd, logFd];
+    const child = spawn(
+      process.execPath,
+      [path.resolve(cli), "hook", "auto-classify", sessionId, transcriptPath],
+      {
+        detached: true,
+        stdio,
+        env: process.env,
+      },
+    );
+    if (typeof logFd === "number") {
+      // Parent doesn't need its handle once spawn inherits it.
+      try {
+        fs.closeSync(logFd);
+      } catch {
+        // ignore
+      }
+      // Surface the PID into the log so a stuck subprocess can be found.
+      void appendLogLine(
+        sessionId,
+        `[opensquid stop] spawned auto-classify pid=${child.pid ?? "?"}`,
+      );
+    }
+    child.unref();
   } catch {
-    return "";
+    // Fail-open: the agent's response is more important than the
+    // classifier running.
   }
-  const lines = raw.split("\n").filter((l) => l.trim());
-  for (let i = lines.length - 1; i >= 0; i--) {
-    try {
-      const event = JSON.parse(lines[i]) as TranscriptEvent;
-      if (event.type !== "assistant") continue;
-      const text = extractAssistantText(event);
-      if (text) return text;
-    } catch {
-      continue;
-    }
-  }
-  return "";
 }
 
-interface TranscriptEvent {
-  type?: string;
-  message?: {
-    content?: unknown;
-  };
-}
-
-function extractAssistantText(event: TranscriptEvent): string {
-  const content = event.message?.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const block of content) {
-    if (
-      block &&
-      typeof block === "object" &&
-      "type" in block &&
-      (block as { type: string }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
-    ) {
-      parts.push((block as { text: string }).text);
-    }
+function openSessionLog(sessionId: string): number | null {
+  try {
+    const dir = path.join(resolveDataRoot(), "sessions", sessionId);
+    fs.mkdirSync(dir, { recursive: true });
+    const logPath = path.join(dir, "auto-classify.log");
+    return fs.openSync(logPath, "a");
+  } catch {
+    return null;
   }
-  return parts.join("\n");
 }
 
-export { readLastAssistantText };
+async function appendLogLine(sessionId: string, line: string): Promise<void> {
+  try {
+    const p = path.join(resolveDataRoot(), "sessions", sessionId, "auto-classify.log");
+    await fsp.appendFile(p, line + "\n", "utf8");
+  } catch {
+    // ignore
+  }
+}

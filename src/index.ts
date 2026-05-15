@@ -141,7 +141,30 @@ if (subcommand === "hook") {
     await runSessionEndHook();
     process.exit(0);
   }
-  console.error("usage: opensquid hook pre-tool-use|stop|user-prompt-submit|session-end");
+  if (hookCmd === "auto-classify") {
+    const { runAutoClassifyHook } = await import("./hooks/auto-classify.js");
+    const { createMemory, searchMemoryHybrid, shutdownAutoClassifyEngine } =
+      await import("./hooks/auto-classify-engine.js");
+    try {
+      await runAutoClassifyHook(undefined, undefined, {
+        createMemory,
+        searchMemory: searchMemoryHybrid,
+      });
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook auto-classify] error: ${err instanceof Error ? err.message : err}\n`,
+      );
+    } finally {
+      // Always tear down the engine subprocess — even if no engine call
+      // happened. Prevents the process leak when only `searchMemory` ran
+      // and returned a duplicate (no `createMemory` ever fired).
+      await shutdownAutoClassifyEngine();
+    }
+    process.exit(0);
+  }
+  console.error(
+    "usage: opensquid hook pre-tool-use|stop|user-prompt-submit|session-end|auto-classify",
+  );
   process.exit(2);
 }
 if (subcommand === "hooks") {

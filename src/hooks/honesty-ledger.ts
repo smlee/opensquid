@@ -186,15 +186,24 @@ export async function clearTurnLedger(
   }
 }
 
-/** Explicit session-end clear: ledger + broken-promises both gone. */
+/**
+ * Explicit session-end clear: wipes everything opensquid wrote under
+ * this session's directory — turn ledger, broken promises, plus the
+ * auto-classify candidate file and hash set. Files are removed
+ * individually so unrelated files in the session dir survive (in case
+ * a future hook drops something else there).
+ */
 export async function clearSession(
   sessionId: string,
   options: { dataRoot?: string } = {},
 ): Promise<void> {
-  for (const p of [
+  const sessionFiles = [
     ledgerPath(sessionId, options.dataRoot),
     brokenPromisesPath(sessionId, options.dataRoot),
-  ]) {
+    path.join(sessionDir(sessionId, options.dataRoot), "auto-classify-candidates.jsonl"),
+    path.join(sessionDir(sessionId, options.dataRoot), "auto-classified-hashes.jsonl"),
+  ];
+  for (const p of sessionFiles) {
     try {
       await fs.rm(p);
     } catch {
