@@ -135,7 +135,12 @@ if (subcommand === "hook") {
     await runUserPromptSubmitHook();
     process.exit(0);
   }
-  console.error("usage: opensquid hook pre-tool-use|stop|user-prompt-submit");
+  if (hookCmd === "session-end") {
+    const { runSessionEndHook } = await import("./hooks/session-end.js");
+    await runSessionEndHook();
+    process.exit(0);
+  }
+  console.error("usage: opensquid hook pre-tool-use|stop|user-prompt-submit|session-end");
   process.exit(2);
 }
 if (subcommand === "hooks") {

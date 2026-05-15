@@ -80,7 +80,9 @@ function opensquidBinPath(): string {
   return path.join(path.dirname(here), "index.js");
 }
 
-function buildHookCommand(hookName: "pre-tool-use" | "stop" | "user-prompt-submit"): string {
+function buildHookCommand(
+  hookName: "pre-tool-use" | "stop" | "user-prompt-submit" | "session-end",
+): string {
   return `node ${opensquidBinPath()} hook ${hookName}`;
 }
 
@@ -124,11 +126,19 @@ async function cmdInstall(): Promise<void> {
     hooks: [{ type: "command", command: buildHookCommand("user-prompt-submit"), _id: HOOK_ID }],
   });
 
+  // SessionEnd — clearSession to bound disk usage from per-session
+  // ledger accumulation.
+  const sessionEnd = purgeOurHook(hooks.SessionEnd ?? []);
+  sessionEnd.push({
+    hooks: [{ type: "command", command: buildHookCommand("session-end"), _id: HOOK_ID }],
+  });
+
   settings.hooks = {
     ...hooks,
     PreToolUse: preToolUse,
     Stop: stop,
     UserPromptSubmit: ups,
+    SessionEnd: sessionEnd,
   };
   await saveSettings(settings);
 
@@ -136,6 +146,7 @@ async function cmdInstall(): Promise<void> {
   console.log(`  PreToolUse       → ${buildHookCommand("pre-tool-use")}`);
   console.log(`  Stop             → ${buildHookCommand("stop")}`);
   console.log(`  UserPromptSubmit → ${buildHookCommand("user-prompt-submit")}`);
+  console.log(`  SessionEnd       → ${buildHookCommand("session-end")}`);
   console.log(`  next: restart Claude Code so the new settings load.`);
 }
 
@@ -147,7 +158,7 @@ async function cmdUninstall(): Promise<void> {
     return;
   }
   let totalRemoved = 0;
-  for (const event of ["PreToolUse", "Stop", "UserPromptSubmit"] as const) {
+  for (const event of ["PreToolUse", "Stop", "UserPromptSubmit", "SessionEnd"] as const) {
     const matchers = hooks[event];
     if (!matchers) continue;
     totalRemoved += countOurHooks(matchers);
@@ -167,7 +178,7 @@ async function cmdDoctor(): Promise<void> {
   const hooks = settings.hooks ?? {};
   console.log(`[opensquid hooks doctor]`);
   console.log(`  settings.json: ${settingsPath()}`);
-  for (const event of ["PreToolUse", "Stop", "UserPromptSubmit"] as const) {
+  for (const event of ["PreToolUse", "Stop", "UserPromptSubmit", "SessionEnd"] as const) {
     const matchers = hooks[event] ?? [];
     const ours = countOurHooks(matchers);
     console.log(`  ${event.padEnd(18)} total=${matchers.length}  opensquid=${ours}`);
