@@ -102,6 +102,21 @@ if (subcommand === "project") {
     process.exit(1);
   }
 }
+if (subcommand === "engine") {
+  const engineCmd = process.argv[3];
+  if (engineCmd !== "doctor" && engineCmd !== "set-path" && engineCmd !== "forget") {
+    console.error("usage: opensquid engine doctor|set-path|forget [<args>...]");
+    process.exit(2);
+  }
+  const { runEngineCli } = await import("./engine-cli.js");
+  try {
+    await runEngineCli(engineCmd, process.argv.slice(4));
+    process.exit(0);
+  } catch (e) {
+    console.error(`[opensquid engine ${engineCmd}] error: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+}
 
 const engine = new OpenSquidEngine();
 

@@ -9,11 +9,18 @@
  *    `.code` and `.data` attached.
  *  - Survive crashes: if the subprocess exits, the next call respawns.
  *
- * Binary discovery (in priority order):
- *   1. `process.env.OPENSQUID_ENGINE_BIN` — explicit override.
- *   2. The local cargo `--release` build at the canonical loop-engine
- *      path (dogfood mode on the developer's machine).
- *   3. Future v1.0: npm `optionalDependencies` per-platform package.
+ * Binary discovery (v0.4 — see src/config.ts resolveEngineBin):
+ *   1. `OPENSQUID_ENGINE_BIN` env var — explicit override
+ *   2. `<data-root>/config.json` `engine_bin` field — persisted choice
+ *   3. Auto-search common dev paths (~/projects/<*>/engine/target/release/
+ *      and ~/work/<*>/engine/target/release/)
+ *   4. $PATH — system-installed binary
+ *   5. Throw with a helpful error message
+ *
+ * On first successful auto-discovery, the resolved path is written back
+ * to config.json so subsequent sessions skip the search. Moving the
+ * loop-engine checkout invalidates the cached path; the next start
+ * re-discovers automatically.
  *
  * v0.2 keeps the subprocess alive across the MCP session lifetime —
  * a single engine process serves all tool calls until the MCP host
@@ -23,7 +30,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 
-const DEFAULT_BINARY = "/Users/slee/projects/loop/engine/target/release/loop-engine";
+import { resolveEngineBin } from "./config.js";
 
 export class RpcError extends Error {
   public readonly code: number;
@@ -60,7 +67,14 @@ export class EngineClient {
     if (this.proc) return;
     if (this.startupAck) return this.startupAck;
 
-    const bin = process.env.OPENSQUID_ENGINE_BIN ?? DEFAULT_BINARY;
+    const bin = await resolveEngineBin();
+    if (!bin) {
+      throw new Error(
+        "loop-engine binary not found. Set OPENSQUID_ENGINE_BIN, or run " +
+          "`opensquid engine set-path <path>`, or build the engine at " +
+          "~/projects/loop/engine/target/release/loop-engine",
+      );
+    }
     const proc = spawn(bin, ["serve"], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
