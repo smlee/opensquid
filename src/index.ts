@@ -415,26 +415,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ? Math.max(0, Math.min(1, a.min_similarity))
             : DEFAULT_MIN_SIMILARITY;
         if (!query) return textResult({ error: "query is required" });
-        // Fan out: text-match lessons + semantic memories in parallel.
+        // Fan out: text-match lessons + hybrid memories in parallel.
+        // v0.5: memory search runs in `hybrid` mode by default — the
+        // engine runs both semantic and text-match sub-searches and
+        // RRF-merges by id. Solves the v0.4 false-negative on
+        // proper-noun queries that scored below the semantic
+        // threshold despite a literal description match (see
+        // docs/v0.5-hybrid-recall-design.md). Callers can override
+        // by setting `mode` on a future tool surface; default stays
+        // hybrid because that's the strictly-better behavior.
+        //
+        // Threshold semantics: opensquid passes `min_similarity`
+        // down to the engine, which applies it to RAW per-source
+        // scores BEFORE the RRF merge. RRF scores are in a
+        // different range and can't share the threshold meaningfully.
+        // Lesson hits still get post-filtered here because
+        // engine.recall doesn't accept a threshold param (lesson
+        // scores are single-source so the post-filter is correct).
         const [lessonResult, memoryResult] = await Promise.all([
           engine.recall({ query, limit }),
-          engine.searchMemory({ query, limit, include_body, scope_filter }).catch((e) => {
-            // Memory search needs Ollama running; surface the error
-            // inline rather than failing the whole recall.
-            console.error(
-              `[opensquid] memory.search failed: ${e instanceof Error ? e.message : e}`,
-            );
-            return { query, returned: 0, results: [] };
-          }),
+          engine
+            .searchMemory({
+              query,
+              limit,
+              include_body,
+              scope_filter,
+              mode: "hybrid",
+              min_similarity,
+            })
+            .catch((e) => {
+              // Memory search needs Ollama running; surface the error
+              // inline rather than failing the whole recall.
+              console.error(
+                `[opensquid] memory.search failed: ${e instanceof Error ? e.message : e}`,
+              );
+              return { query, returned: 0, results: [] };
+            }),
         ]);
-        // v0.4: filter per-source by similarity, then RRF-merge the
-        // survivors. Threshold applied BEFORE merge so a weak hit in
-        // one list can't poison the unified ranking.
+        // Filter lessons (single-source text-match scores) by
+        // min_similarity; trust the engine on memories (already
+        // filtered pre-RRF). Then RRF-merge lessons + memories at
+        // the opensquid layer — the same memory id can't appear in
+        // both lists so the dual-source boost here doesn't fire
+        // (that's exercised inside engine's hybrid_search instead).
         const lessonsKept = filterBySimilarity(lessonResult.results as LessonHit[], min_similarity);
-        const memoriesKept = filterBySimilarity(
-          memoryResult.results as MemoryHit[],
-          min_similarity,
-        );
+        const memoriesKept = memoryResult.results as MemoryHit[];
         const merged = mergeRrf(lessonsKept, memoriesKept);
         return textResult({
           query,

@@ -38,6 +38,11 @@ export interface MemoryHit {
   description: string;
   body_preview: string;
   similarity: number;
+  /** v0.5: present when the engine's `memory.search` ran in hybrid
+   * (or text-only) mode. `"both"` means the hit surfaced from both
+   * the semantic neighborhood AND the text-match scan — strongest
+   * signal. Surfaced through to the MCP response for diagnostics. */
+  source?: "semantic" | "text" | "both";
 }
 
 export type RecallHit = LessonHit | MemoryHit;
@@ -55,6 +60,12 @@ export interface MergedHit {
   lesson_rank?: number;
   /** 1-based rank in the memory list (undefined if not a memory hit). */
   memory_rank?: number;
+  /** v0.5: when this hit came from a memory and the engine produced
+   * the memory in hybrid (or text-only) mode, this carries the
+   * sub-source attribution: `"semantic"`, `"text"`, or `"both"`.
+   * Lesson hits leave this undefined (engine.recall doesn't expose
+   * a sub-source). */
+  source?: "semantic" | "text" | "both";
 }
 
 /**
@@ -103,6 +114,7 @@ export function mergeRrf(lessons: LessonHit[], memories: MemoryHit[]): MergedHit
     if (existing) {
       existing.rrf_score += score;
       existing.memory_rank = rank;
+      if (h.source) existing.source = h.source;
     } else {
       byId.set(h.id, {
         kind: "memory",
@@ -112,6 +124,7 @@ export function mergeRrf(lessons: LessonHit[], memories: MemoryHit[]): MergedHit
         similarity: h.similarity,
         rrf_score: score,
         memory_rank: rank,
+        source: h.source,
       });
     }
   });

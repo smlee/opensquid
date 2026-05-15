@@ -262,7 +262,19 @@ export interface MemorySearchResult {
      * both modes so callers don't have to branch on shape.
      */
     body_preview: string;
+    /**
+     * Score in `[0.0, 1.0]`. Interpretation depends on `source`:
+     * `semantic` → cosine similarity; `text` → token+substring score;
+     * `both` → RRF-fused score (sum of `1/(60+rank)` per source).
+     */
     similarity: number;
+    /**
+     * v0.5: which search path produced this hit. `undefined` on
+     * pre-v0.5 engine responses. `"both"` means the same memory
+     * surfaced from both the semantic and text sub-searches under
+     * mode `"hybrid"` — strongest signal.
+     */
+    source?: "semantic" | "text" | "both";
   }>;
 }
 
@@ -336,6 +348,27 @@ export class OpenSquidEngine {
     include_body?: boolean;
     /** v0.3.1: restrict results to memories matching this scope filter. */
     scope_filter?: MemoryScopeFilter;
+    /**
+     * v0.5: which search path to run.
+     * - `"semantic"` (default): cosine similarity over the embedder.
+     * - `"text"`: token-overlap + substring score (no embedder call).
+     * - `"hybrid"`: run both and RRF-merge by id; same-id hits get
+     *   a strict score boost and `source: "both"`.
+     *
+     * opensquid's `recall` defaults to `"hybrid"` — it fixes the
+     * v0.4 false-negative where proper-noun queries scored below
+     * the semantic threshold even when the description matched
+     * literally.
+     */
+    mode?: "semantic" | "text" | "hybrid";
+    /**
+     * v0.5: per-sub-search similarity floor, applied to RAW scores
+     * BEFORE the hybrid RRF merge. Use this instead of post-filtering
+     * the response — RRF scores aren't in the same range as raw
+     * cosine/token scores so a uniform threshold post-merge would be
+     * wrong. opensquid's recall passes its `min_similarity` here.
+     */
+    min_similarity?: number;
   }): Promise<MemorySearchResult> {
     return this.client.call("memory.search", args);
   }
