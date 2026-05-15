@@ -434,6 +434,88 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: "list_lessons",
+      description:
+        "v0.5: paginated list of lessons across the four non-discarded status " +
+        "dirs (pending / active / promoted / superseded). Order is deterministic " +
+        "(status, then id ascending) so paginated callers get stable ranking. " +
+        "Default limit 50, capped at 500. Pass `statuses` to filter — e.g. " +
+        '`["promoted"]` to enumerate just the promoted-rule tier. Returns full ' +
+        "frontmatter summary per row including pack_id / external_id provenance.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          statuses: {
+            type: "array",
+            items: { type: "string", enum: ["pending", "active", "promoted", "superseded"] },
+            description:
+              "Status dirs to scan. Default: all four non-discarded. Pass a subset to filter.",
+          },
+          limit: {
+            type: "number",
+            description: "Page size. Default 50, capped at 500.",
+            default: 50,
+          },
+          offset: {
+            type: "number",
+            description: "Items to skip from the deterministic-sorted list. Default 0.",
+            default: 0,
+          },
+        },
+      },
+    },
+    {
+      name: "capture_feedback",
+      description:
+        "v0.5: record a thumbs-up or thumbs-down on a lesson. Adds to the " +
+        "lesson's `external_signal_sources` (the wedge gate's signal-diversity " +
+        "input — multiple distinct signals are required for promotion). " +
+        "Idempotent on `source_signal_id`. The wedge invariant still applies: " +
+        "this records evidence; it does NOT auto-promote. Use `promote` " +
+        "explicitly when you want to run the gate.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          lesson_id: { type: "string", description: "Engine lesson id (les-xxxxxxxx)." },
+          polarity: {
+            type: "string",
+            enum: ["thumbs_up", "thumbs_down"],
+            description: "Direction of the feedback signal.",
+          },
+          source_signal_id: {
+            type: "string",
+            description:
+              "Optional opaque id deduplicating repeat signals from the same source. " +
+              "If omitted, the engine mints a synthetic id (the call still records).",
+          },
+        },
+        required: ["lesson_id", "polarity"],
+      },
+    },
+    {
+      name: "supersede",
+      description:
+        "v0.5: point an old lesson at a new replacement. Old lesson moves to " +
+        "`superseded/`, the new lesson is unaffected. The causal chain is " +
+        "preserved via `superseded_by` so historical reasoning is recoverable. " +
+        "User-authored lessons are protected unless `force: true` (the user " +
+        "must be explicit about retiring their own work). Engine rejects " +
+        "self-references and cycles.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          old_lesson_id: { type: "string", description: "Lesson being superseded." },
+          new_lesson_id: { type: "string", description: "Replacement lesson." },
+          force: {
+            type: "boolean",
+            description: "Bypass user-authored immunity. Default false.",
+            default: false,
+          },
+        },
+        required: ["old_lesson_id", "new_lesson_id"],
+      },
+    },
   ],
 }));
 
@@ -758,24 +840,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "pending_candidates": {
-        // Use recall with a wildcard query and filter by status === "pending".
-        // engine.recall iterates all status dirs and returns text-scored hits.
+        // v0.5: switched to engine.listLessons({statuses: ["pending"]}) —
+        // the v0.4 implementation faked it with engine.recall + client
+        // filter, which was bound by recall's similarity ranking and
+        // miscounted candidates whose description didn't match the
+        // wildcard query strongly enough.
         const limit = typeof a.limit === "number" ? Math.max(1, Math.min(50, a.limit)) : 10;
-        // Use the broadest query the engine accepts to maximize scan coverage;
-        // we then filter client-side by status.
-        const raw = await engine.recall({ query: "lesson", limit: 50 });
-        const pending = (raw.results as Array<Record<string, unknown>>)
-          .filter((r) => r.status === "pending")
-          .slice(0, limit)
-          .map((r) => ({
+        const page = await engine.listLessons({ statuses: ["pending"], limit });
+        return textResult({
+          total: page.total,
+          returned: page.returned,
+          candidates: page.results.map((r) => ({
             id: r.id,
             description: r.description,
-            body_preview: r.body_preview,
-          }));
-        return textResult({
-          returned: pending.length,
-          candidates: pending,
+            authored_by: r.authored_by,
+          })),
         });
+      }
+
+      case "list_lessons": {
+        const statuses = Array.isArray(a.statuses) ? (a.statuses as string[]) : undefined;
+        const limit = typeof a.limit === "number" ? a.limit : undefined;
+        const offset = typeof a.offset === "number" ? a.offset : undefined;
+        const result = await engine.listLessons({ statuses, limit, offset });
+        return textResult(result);
+      }
+
+      case "capture_feedback": {
+        const lessonId = typeof a.lesson_id === "string" ? a.lesson_id : "";
+        const polarity = typeof a.polarity === "string" ? a.polarity : "";
+        if (!lessonId || (polarity !== "thumbs_up" && polarity !== "thumbs_down")) {
+          return textResult({
+            error: "lesson_id (string) + polarity ('thumbs_up' | 'thumbs_down') required",
+          });
+        }
+        const result = await engine.captureFeedback({
+          id: lessonId,
+          polarity: polarity as "thumbs_up" | "thumbs_down",
+          source_signal_id: typeof a.source_signal_id === "string" ? a.source_signal_id : undefined,
+        });
+        return textResult(result);
+      }
+
+      case "supersede": {
+        const oldId = typeof a.old_lesson_id === "string" ? a.old_lesson_id : "";
+        const newId = typeof a.new_lesson_id === "string" ? a.new_lesson_id : "";
+        if (!oldId || !newId) {
+          return textResult({
+            error: "old_lesson_id and new_lesson_id (both strings) required",
+          });
+        }
+        const result = await engine.supersedeLesson({
+          old_id: oldId,
+          new_id: newId,
+          force: a.force === true,
+        });
+        return textResult(result);
       }
 
       default:

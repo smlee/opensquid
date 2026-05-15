@@ -357,6 +357,78 @@ export class OpenSquidEngine {
     return this.client.call("lesson.discard", args);
   }
 
+  /**
+   * v0.5 / engine v1.3: paginated list across the four non-discarded
+   * status dirs. Order is deterministic (status then id ascending).
+   * Default limit 50, capped at 500. Pass `statuses` to restrict to
+   * specific dirs (e.g. `["pending"]` for the pending-candidates flow).
+   */
+  listLessons(args: { statuses?: string[]; limit?: number; offset?: number }): Promise<{
+    total: number;
+    limit: number;
+    offset: number;
+    returned: number;
+    results: Array<{
+      id: string;
+      description: string;
+      status: string;
+      authored_by: string;
+      pack_id: string | null;
+      external_id: string | null;
+      applied_count: number;
+      thumbs_up_count: number;
+      thumbs_down_count: number;
+      created_at: string;
+      updated_at: string | null;
+    }>;
+  }> {
+    return this.client.call("lesson.list", args);
+  }
+
+  /**
+   * v0.5 / engine v1.3: record a thumbs-up or thumbs-down on a lesson.
+   * Adds to the lesson's `external_signal_sources`, which feeds the
+   * wedge gate's signal-diversity check. Idempotent on
+   * `source_signal_id` — passing the same signal twice doesn't
+   * double-count. If `source_signal_id` is omitted, the engine mints a
+   * synthetic one (the call still records).
+   */
+  captureFeedback(args: {
+    id: string;
+    polarity: "thumbs_up" | "thumbs_down";
+    source_signal_id?: string;
+  }): Promise<{
+    ok: true;
+    id: string;
+    status: string;
+    thumbs_up_count: number;
+    thumbs_down_count: number;
+    external_signal_sources: string[];
+  }> {
+    return this.client.call("lesson.capture_feedback", args);
+  }
+
+  /**
+   * v0.5 / engine v1.3: point an old lesson at a new replacement.
+   * Old lesson moves to `superseded/`, new lesson is unaffected. The
+   * causal chain is preserved via `superseded_by`. User-authored
+   * lessons are protected unless `force: true`.
+   *
+   * Engine errors:
+   *   -32004 — supersede blocked (cycle detected, self-reference,
+   *            or replacement not found)
+   *   -32001 — user lesson immune (force=true required)
+   *   -32002 — old or new lesson not found
+   */
+  supersedeLesson(args: { old_id: string; new_id: string; force?: boolean }): Promise<{
+    ok: true;
+    old_id: string;
+    new_id: string;
+    old_status: string;
+  }> {
+    return this.client.call("lesson.supersede", args);
+  }
+
   createMemory(args: {
     description: string;
     content: string;
