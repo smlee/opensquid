@@ -22,8 +22,8 @@
 import { promises as fs } from "node:fs";
 
 import {
-  clearTurnLedger,
   reconcile,
+  readBrokenPromises,
   readTurnLedger,
   recordBrokenPromise,
   type BrokenPromise,
@@ -59,12 +59,22 @@ export async function runStopHook(): Promise<void> {
     ? await readLastAssistantText(payload.transcript_path)
     : "";
 
-  // Cross-reference claims against the per-turn ledger.
+  // Cross-reference claims against the SESSION ledger — every tool
+  // call from any turn in this session counts as evidence. Recap text
+  // describing prior-turn work is correctly NOT flagged.
   const ledger = await readTurnLedger(sessionId);
   const broken = reconcile(assistantText, ledger);
 
-  // Record any broken promises for the next turn to surface.
+  // De-dupe: don't re-record a broken promise that's already in this
+  // session's ledger (avoids the stuck-broken-promise loop where the
+  // same claim text recurs across turns).
+  const existing = await readBrokenPromises(sessionId);
+  const existingKeys = new Set(existing.map((p) => `${p.claim_id}|${p.matched_text}`));
+  const fresh: BrokenPromise[] = [];
   for (const promise of broken) {
+    const key = `${promise.claim_id}|${promise.matched_text}`;
+    if (existingKeys.has(key)) continue;
+    fresh.push(promise);
     try {
       await recordBrokenPromise(sessionId, promise);
     } catch (err) {
@@ -74,17 +84,16 @@ export async function runStopHook(): Promise<void> {
     }
   }
 
-  // Surface broken promises in stderr so the user sees them in the
-  // current turn's hook output panel.
-  if (broken.length > 0) {
-    for (const p of broken) {
+  // Surface only the fresh broken promises (not previously-recorded
+  // ones still sitting in the file).
+  if (fresh.length > 0) {
+    for (const p of fresh) {
       process.stderr.write(`🦑 [opensquid honesty] ${p.claim_id}: ${p.reason}\n`);
     }
   }
 
-  // Clear the per-turn ledger — next turn starts fresh.
-  await clearTurnLedger(sessionId);
-
+  // Session ledger is NOT cleared here — see honesty-ledger.ts
+  // `clearTurnLedger` doc-comment. Cleared at session end.
   process.exit(0);
 }
 

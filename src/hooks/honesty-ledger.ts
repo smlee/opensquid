@@ -97,9 +97,21 @@ export const CLAIM_PATTERNS: ClaimPattern[] = [
 ];
 
 // ---------------------------------------------------------------------
-// Per-turn ledger
+// Session-scoped ledger
 // ---------------------------------------------------------------------
 
+/**
+ * One tool-call entry, persisted across ALL turns in the same Claude
+ * Code session. Cleared only at session end (or explicit
+ * `clearSessionLedger`).
+ *
+ * #114 (2026-05-15) — v0.4.C.1 fix: previously this was a PER-TURN
+ * ledger that got cleared by the Stop hook, which caused recap text
+ * describing prior-turn work to be flagged as broken promises. Now
+ * the ledger accumulates across the whole session so claims like
+ * "tests pass" satisfy against any `npm test` from any earlier turn
+ * in the same session.
+ */
 export interface TurnLedgerEntry {
   ts: string;
   tool: string;
@@ -112,6 +124,8 @@ function sessionDir(sessionId: string, dataRoot?: string): string {
 }
 
 function ledgerPath(sessionId: string, dataRoot?: string): string {
+  // Filename kept as `turn-ledger.jsonl` for back-compat with any
+  // existing per-turn files on disk; semantics are now session-scoped.
   return path.join(sessionDir(sessionId, dataRoot), "turn-ledger.jsonl");
 }
 
@@ -140,7 +154,7 @@ export async function recordToolCall(
   );
 }
 
-/** Read the current turn's ledger entries. */
+/** Read the session-scoped ledger (every tool call so far this session). */
 export async function readTurnLedger(
   sessionId: string,
   options: { dataRoot?: string } = {},
@@ -156,7 +170,11 @@ export async function readTurnLedger(
   }
 }
 
-/** Clear the ledger after Stop-hook reconciliation. */
+/**
+ * Clear the session ledger. ONLY called at session end (or by tests).
+ * Stop hook does NOT call this anymore — the ledger persists across
+ * turns to avoid recap-text false-positives.
+ */
 export async function clearTurnLedger(
   sessionId: string,
   options: { dataRoot?: string } = {},
@@ -165,6 +183,23 @@ export async function clearTurnLedger(
     await fs.rm(ledgerPath(sessionId, options.dataRoot));
   } catch {
     // already gone, fine
+  }
+}
+
+/** Explicit session-end clear: ledger + broken-promises both gone. */
+export async function clearSession(
+  sessionId: string,
+  options: { dataRoot?: string } = {},
+): Promise<void> {
+  for (const p of [
+    ledgerPath(sessionId, options.dataRoot),
+    brokenPromisesPath(sessionId, options.dataRoot),
+  ]) {
+    try {
+      await fs.rm(p);
+    } catch {
+      // ignore
+    }
   }
 }
 
