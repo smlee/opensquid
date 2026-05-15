@@ -45,9 +45,11 @@ export async function runUserPromptSubmitHook(): Promise<void> {
   if (broken.length === 0) process.exit(0);
 
   // Emit a tight summary the agent will see in its context.
-  const lines: string[] = ["[opensquid honesty-ledger] unresolved claims from the previous turn:"];
+  const lines: string[] = [
+    "🦑 [opensquid honesty-ledger] unresolved claims from the previous turn:",
+  ];
   for (const p of broken) {
-    lines.push(`  - ${p.claim_id}: "${p.matched_text}" — needed ${p.claim_label}`);
+    lines.push(`  🦑 ${p.claim_id}: "${p.matched_text}" — needed ${p.claim_label}`);
   }
   lines.push(
     "Acknowledge these in your reply: either do the missing action now, or " +

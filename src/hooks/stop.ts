@@ -78,7 +78,7 @@ export async function runStopHook(): Promise<void> {
   // current turn's hook output panel.
   if (broken.length > 0) {
     for (const p of broken) {
-      process.stderr.write(`[opensquid honesty] ${p.claim_id}: ${p.reason}\n`);
+      process.stderr.write(`🦑 [opensquid honesty] ${p.claim_id}: ${p.reason}\n`);
     }
   }
 

@@ -202,10 +202,10 @@ export function decide(hits: DriftHit[]): {
   const warns = hits.filter((h) => h.pattern.severity === "warn");
   const lines: string[] = [];
   for (const h of blocks) {
-    lines.push(`[opensquid drift-block] ${h.pattern.id}: ${h.pattern.message}`);
+    lines.push(`🦑 [opensquid drift-block] ${h.pattern.id}: ${h.pattern.message}`);
   }
   for (const h of warns) {
-    lines.push(`[opensquid drift-warn]  ${h.pattern.id}: ${h.pattern.message}`);
+    lines.push(`🦑 [opensquid drift-warn]  ${h.pattern.id}: ${h.pattern.message}`);
   }
   return {
     exit: blocks.length > 0 ? 2 : 0,
