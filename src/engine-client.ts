@@ -491,6 +491,39 @@ export class OpenSquidEngine {
   }
 
   /**
+   * v0.5 / engine v1.3: paginated memory enumeration. Filter-optional
+   * via scope_filter (same wire shape as searchMemory). Default limit
+   * 50, capped at 500. Order is deterministic (id ascending — memory
+   * ids are ULID-shaped so this is roughly chronological).
+   *
+   * Returns frontmatter rows but NOT body — call getMemory(id) for
+   * the full content of any single hit. consumed_by_user_lessons is
+   * the reverse-citation count enforcing the user-immunity invariant
+   * (>0 means a user-authored lesson cites this memory; prune refuses).
+   */
+  listMemories(args: {
+    scope_filter?: MemoryScopeFilter;
+    limit?: number;
+    offset?: number;
+  }): Promise<{
+    total: number;
+    limit: number;
+    offset: number;
+    returned: number;
+    results: Array<{
+      id: string;
+      description: string;
+      scope: MemoryScope;
+      origin: MemoryOrigin | null;
+      created_at: string;
+      updated_at: string | null;
+      consumed_by_user_lessons: number;
+    }>;
+  }> {
+    return this.client.call("memory.list", args);
+  }
+
+  /**
    * v0.4: mutate description / content / scope on an existing memory.
    * Identity, citation counter, derived_from, and origin are always
    * preserved. Re-embeds on content change; cheap path for

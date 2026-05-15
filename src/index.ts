@@ -494,6 +494,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "list_memories",
+      description:
+        "v0.5: paginated memory enumeration. Filter-optional via scope_filter " +
+        "(same wire shape as recall). Default limit 50, capped at 500. Order " +
+        "is deterministic (id ascending — memory ids are ULID-shaped so this " +
+        "is roughly chronological). Returns frontmatter rows but NOT body — " +
+        "call get_memory(id) for the full content of any single hit.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          scope_filter: {
+            description:
+              'Optional scope filter. Shape: `{kind:"exact",scope:<MemoryScope>}`, ' +
+              '`{kind:"kind",kind_name:"project"|"team"|...}`, or ' +
+              '`{kind:"any_of",scopes:[...]}`. Default: no filter (all scopes).',
+          },
+          limit: {
+            type: "number",
+            description: "Page size. Default 50, capped at 500.",
+            default: 50,
+          },
+          offset: {
+            type: "number",
+            description: "Items to skip from the deterministic-sorted list. Default 0.",
+            default: 0,
+          },
+        },
+      },
+    },
+    {
       name: "supersede",
       description:
         "v0.5: point an old lesson at a new replacement. Old lesson moves to " +
@@ -863,6 +893,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const limit = typeof a.limit === "number" ? a.limit : undefined;
         const offset = typeof a.offset === "number" ? a.offset : undefined;
         const result = await engine.listLessons({ statuses, limit, offset });
+        return textResult(result);
+      }
+
+      case "list_memories": {
+        const limit = typeof a.limit === "number" ? a.limit : undefined;
+        const offset = typeof a.offset === "number" ? a.offset : undefined;
+        const scopeFilter =
+          a.scope_filter && typeof a.scope_filter === "object"
+            ? (a.scope_filter as MemoryScopeFilter)
+            : undefined;
+        const result = await engine.listMemories({
+          scope_filter: scopeFilter,
+          limit,
+          offset,
+        });
         return textResult(result);
       }
 
