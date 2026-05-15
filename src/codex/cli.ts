@@ -23,6 +23,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
+import { appendPromotedLessonToClaudeMd } from "../claude-md.js";
 import { OpenSquidEngine } from "../engine-client.js";
 import {
   CodexStoreError,
@@ -136,6 +137,19 @@ interface CliOptions {
   force?: boolean;
   /** Skip seeding lessons into the engine (filesystem-only install). */
   skipSeed?: boolean;
+  /**
+   * Optional override for the CLAUDE.md auto-publish target. Defaults to
+   * `~/.claude/CLAUDE.md` via `defaultClaudeMdPath()` in claude-md.ts.
+   * Tests inject a tmp path here. CLI users have no flag for this — they
+   * always write to the canonical global path.
+   */
+  claudeMdPath?: string;
+  /**
+   * Skip the CLAUDE.md auto-publish step. Tests use this to isolate the
+   * engine-seed path from the CLAUDE.md write path. CLI users have no
+   * flag — auto-publish always runs.
+   */
+  skipClaudeMdPublish?: boolean;
 }
 
 async function cmdInstall(args: string[], opts: CliOptions): Promise<void> {
@@ -164,7 +178,7 @@ async function cmdInstall(args: string[], opts: CliOptions): Promise<void> {
       );
       return;
     }
-    await seedLessonsIntoEngine(codex.seed_lessons, codex.id, destDir);
+    await seedLessonsIntoEngine(codex.seed_lessons, codex.id, destDir, opts);
   }
 }
 
@@ -174,14 +188,57 @@ async function cmdInstall(args: string[], opts: CliOptions): Promise<void> {
  * `authored_by: "pack"` + `seed_as_promoted: true`. The engine treats
  * Pack provenance as user-equivalent (codex install = user authorship).
  */
+/**
+ * Append a single seeded lesson's one-line summary to the user's
+ * CLAUDE.md `opensquid-rules` block. Exported for direct unit testing
+ * — covers the auto-publish behavior without spawning the real engine.
+ *
+ * Returns true if a new line was appended, false if it was an idempotent
+ * no-op (lesson id already present, or rules block missing). Failure is
+ * non-fatal and logged to stderr — CLAUDE.md is downstream display, not
+ * source of truth.
+ */
+export async function publishSeededLessonToClaudeMd(
+  args: {
+    /** The engine-assigned `les-...` id for the seeded lesson. */
+    engineLessonId: string | undefined;
+    /** Human-readable description (typically `${trigger} (codex:${codexId})`). */
+    description: string;
+    /** ISO timestamp; defaults to now if engine doesn't return one. */
+    createdAt: string;
+    /** Codex-local lesson id, used only for error logging context. */
+    codexLessonId: string;
+  },
+  options: { target?: string } = {},
+): Promise<boolean> {
+  if (!args.engineLessonId) return false;
+  try {
+    const writeResult = await appendPromotedLessonToClaudeMd(
+      {
+        id: args.engineLessonId,
+        description: args.description,
+        promoted_at: args.createdAt,
+      },
+      { target: options.target },
+    );
+    return writeResult?.appended ?? false;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`  [claude-md publish failed] ${args.codexLessonId}: ${msg}`);
+    return false;
+  }
+}
+
 async function seedLessonsIntoEngine(
   seedLessons: CodexSeedLesson[],
   codexId: string,
   codexDestDir: string,
+  opts: CliOptions = {},
 ): Promise<void> {
   const engine = new OpenSquidEngine();
   let ok = 0;
   let failed = 0;
+  let published = 0;
   try {
     for (const lesson of seedLessons) {
       try {
@@ -191,7 +248,7 @@ async function seedLessonsIntoEngine(
           typeof lesson.trigger === "string"
             ? lesson.trigger
             : (lesson.trigger.prescriptive_form ?? lesson.trigger.intent);
-        await engine.createLesson({
+        const result = await engine.createLesson({
           description: `${trigger} (codex:${codexId})`,
           body,
           authored_by: "pack",
@@ -199,6 +256,24 @@ async function seedLessonsIntoEngine(
           seed_as_promoted: true,
         });
         ok++;
+
+        // #116: auto-publish to CLAUDE.md so the promoted-lesson tier
+        // stays visible to the agent's system prompt without a recall
+        // round-trip. Mirrors the `lesson.promote` MCP tool's behavior.
+        if (!opts.skipClaudeMdPublish) {
+          const wasAppended = await publishSeededLessonToClaudeMd(
+            {
+              engineLessonId: (result as unknown as { id?: string }).id,
+              description: `${trigger} (codex:${codexId})`,
+              createdAt:
+                (result as unknown as { created_at?: string }).created_at ??
+                new Date().toISOString(),
+              codexLessonId: lesson.id,
+            },
+            { target: opts.claudeMdPath },
+          );
+          if (wasAppended) published++;
+        }
       } catch (err) {
         failed++;
         const msg = err instanceof Error ? err.message : String(err);
@@ -210,7 +285,8 @@ async function seedLessonsIntoEngine(
   }
   console.log(
     `  [seeded] ${ok}/${seedLessons.length} lesson(s) into engine as promoted` +
-      (failed > 0 ? ` (${failed} failed)` : ""),
+      (failed > 0 ? ` (${failed} failed)` : "") +
+      (published > 0 ? `; ${published} appended to CLAUDE.md` : ""),
   );
 }
 
