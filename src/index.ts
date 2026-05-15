@@ -53,7 +53,64 @@ const VERSION = "0.4.0";
 // Subcommand layout:
 //   opensquid install|uninstall|doctor            → CLAUDE.md installer
 //   opensquid codex install|list|remove|doctor|export → codex management
+//   opensquid export                              → entire-system tar.gz export
+//   opensquid import <path>                       → restore from export
 const subcommand = process.argv[2];
+if (subcommand === "export") {
+  const { exportSystem, SystemExportError } = await import("./system-export.js");
+  let output: string | undefined;
+  let force = false;
+  for (let i = 3; i < process.argv.length; i++) {
+    const a = process.argv[i];
+    if ((a === "--output" || a === "-o") && process.argv[i + 1]) {
+      output = process.argv[++i];
+    } else if (a === "--force") {
+      force = true;
+    }
+  }
+  try {
+    const result = await exportSystem({ output, force });
+    console.log(`[opensquid export] wrote ${result.output} (${result.size_bytes} bytes)`);
+    console.log(`  restore via:  opensquid import ${result.output}`);
+    process.exit(0);
+  } catch (e) {
+    if (e instanceof SystemExportError) {
+      console.error(`[opensquid export] error: ${e.message}`);
+      if (e.hint) console.error(`  hint: ${e.hint}`);
+      process.exit(1);
+    }
+    console.error(`[opensquid export] unexpected error: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+}
+if (subcommand === "import") {
+  const { importSystem, SystemExportError } = await import("./system-export.js");
+  const input = process.argv[3];
+  if (!input || input.startsWith("-")) {
+    console.error("usage: opensquid import <archive.tar.gz> [--merge|--replace]");
+    process.exit(2);
+  }
+  let mode: "merge" | "replace" = "merge";
+  for (let i = 4; i < process.argv.length; i++) {
+    if (process.argv[i] === "--merge") mode = "merge";
+    else if (process.argv[i] === "--replace") mode = "replace";
+  }
+  try {
+    const result = await importSystem({ input, mode });
+    console.log(
+      `[opensquid import] restored ${result.input} → ${result.data_root} (mode: ${result.mode})`,
+    );
+    process.exit(0);
+  } catch (e) {
+    if (e instanceof SystemExportError) {
+      console.error(`[opensquid import] error: ${e.message}`);
+      if (e.hint) console.error(`  hint: ${e.hint}`);
+      process.exit(1);
+    }
+    console.error(`[opensquid import] unexpected error: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+}
 if (subcommand === "install" || subcommand === "uninstall" || subcommand === "doctor") {
   const { runCli } = await import("./cli.js");
   try {
