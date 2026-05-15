@@ -326,6 +326,16 @@ export class OpenSquidEngine {
     /** Engine v1.1: required when `authored_by === "pack"`. */
     pack_id?: string;
     /**
+     * Engine v1.2: opaque per-pack lesson id. When present alongside
+     * `pack_id` on a Pack-authored create, the engine UPSERTs by
+     * `(pack_id, external_id)` — re-installing the same codex updates
+     * the existing lesson in place instead of minting a new engine id.
+     * This keeps the engine-id stable so CLAUDE.md auto-publish dedup
+     * (which is keyed on engine id) actually works on re-installs.
+     * Only meaningful when `authored_by === "pack"`.
+     */
+    external_id?: string;
+    /**
      * Engine v1.1: bypass the wedge gate and land in `promoted` directly.
      * Only valid when `authored_by === "pack"`. The trust comes from
      * user-installing the codex.

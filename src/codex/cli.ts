@@ -253,6 +253,13 @@ async function seedLessonsIntoEngine(
           body,
           authored_by: "pack",
           pack_id: codexId,
+          // v0.5/engine-v1.2: opaque per-pack lesson id so re-installing
+          // the same codex UPSERTs by (pack_id, external_id) instead of
+          // minting a new engine row each time. Preserves the engine
+          // lesson id across re-installs, which is what CLAUDE.md auto-
+          // publish dedupes on. Without this, re-install grew the
+          // CLAUDE.md rules block by N lines every refresh (#117).
+          external_id: lesson.id,
           seed_as_promoted: true,
         });
         ok++;
