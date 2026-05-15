@@ -65,11 +65,7 @@ function detectSessionId(): string {
 }
 
 function detectModel(): string | undefined {
-  return (
-    process.env.OPENSQUID_MODEL?.trim() ||
-    process.env.ANTHROPIC_MODEL?.trim() ||
-    undefined
-  );
+  return process.env.OPENSQUID_MODEL?.trim() || process.env.ANTHROPIC_MODEL?.trim() || undefined;
 }
 
 function detectCwdBasename(): string {

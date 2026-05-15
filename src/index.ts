@@ -21,10 +21,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 import {
   OpenSquidEngine,
@@ -63,10 +60,7 @@ if (subcommand === "install" || subcommand === "uninstall" || subcommand === "do
 
 const engine = new OpenSquidEngine();
 
-const server = new Server(
-  { name: "opensquid", version: VERSION },
-  { capabilities: { tools: {} } },
-);
+const server = new Server({ name: "opensquid", version: VERSION }, { capabilities: { tools: {} } });
 
 // ---- Tool catalogue ------------------------------------------------
 
@@ -89,7 +83,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           evidence: {
             type: "array",
-            description: "Citations — free-text quotes or `mem-xxxxxxxx` memory references. Needed for promotion.",
+            description:
+              "Citations — free-text quotes or `mem-xxxxxxxx` memory references. Needed for promotion.",
             items: { type: "string" },
             default: [],
           },
@@ -115,7 +110,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {
           description: { type: "string", description: "Short summary of what to remember." },
-          content: { type: "string", description: "Full content — observation, snippet, raw text." },
+          content: {
+            type: "string",
+            description: "Full content — observation, snippet, raw text.",
+          },
           authored_by: {
             type: "string",
             enum: ["user", "agent"],
@@ -124,7 +122,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           scope: {
             description:
-              "Optional scope tag. Shape: `\"user\"`, `\"global\"`, `{team:id}`, `{skill:id}`, " +
+              'Optional scope tag. Shape: `"user"`, `"global"`, `{team:id}`, `{skill:id}`, ' +
               "or `{project:id}`. Default: auto-detected project (if inside a git repo) else `user`.",
           },
         },
@@ -139,13 +137,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "per-source lists AND a single RRF-merged ranked list (`merged`). Discarded lessons excluded. " +
         "v0.3.1: `include_body: true` returns full memory bodies (no truncation); `scope_filter` " +
         "restricts results by MemoryScope. v0.4: `min_similarity` (default 0.5) drops weak hits — " +
-        "`merged: []` means \"nothing relevant\" (decision-makable). Items appearing in BOTH lists " +
+        '`merged: []` means "nothing relevant" (decision-makable). Items appearing in BOTH lists ' +
         "are boosted by RRF.",
       inputSchema: {
         type: "object",
         properties: {
           query: { type: "string", description: "What you're trying to do or recall." },
-          limit: { type: "number", description: "Max items per source to return (default 5).", default: 5 },
+          limit: {
+            type: "number",
+            description: "Max items per source to return (default 5).",
+            default: 5,
+          },
           include_body: {
             type: "boolean",
             description: "Return full memory bodies instead of 240-char previews. Default false.",
@@ -153,15 +155,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           scope_filter: {
             description:
-              "Optional scope filter. Shape: `{kind:\"exact\",scope:<MemoryScope>}`, " +
-              "`{kind:\"kind\",kind_name:\"project\"|\"team\"|...}`, or " +
-              "`{kind:\"any_of\",scopes:[...]}`. Default: any_of([user, <detected-project>]).",
+              'Optional scope filter. Shape: `{kind:"exact",scope:<MemoryScope>}`, ' +
+              '`{kind:"kind",kind_name:"project"|"team"|...}`, or ' +
+              '`{kind:"any_of",scopes:[...]}`. Default: any_of([user, <detected-project>]).',
           },
           min_similarity: {
             type: "number",
             description:
               "Drop hits with similarity below this threshold BEFORE merging. Range 0-1. " +
-              "Default 0.5 — produces \"no relevant context\" signals when nothing's a real match. " +
+              'Default 0.5 — produces "no relevant context" signals when nothing\'s a real match. ' +
               "Pass 0 to reproduce v0.3.1 behavior (return top-K regardless).",
             default: 0.5,
           },
@@ -195,10 +197,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           memory_id: { type: "string", description: "Memory id (mem-xxxxxxxx)." },
           description: { type: "string", description: "New short summary. Omit to keep existing." },
-          content: { type: "string", description: "New full content. Triggers re-embedding when different." },
+          content: {
+            type: "string",
+            description: "New full content. Triggers re-embedding when different.",
+          },
           scope: {
             description:
-              "New scope tag. Shape: `\"user\"`, `\"global\"`, `{team:id}`, `{skill:id}`, `{project:id}`. Omit to keep existing.",
+              'New scope tag. Shape: `"user"`, `"global"`, `{team:id}`, `{skill:id}`, `{project:id}`. Omit to keep existing.',
           },
         },
         required: ["memory_id"],
@@ -264,8 +269,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 function textResult(payload: unknown): {
   content: { type: "text"; text: string }[];
 } {
-  const text =
-    typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+  const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
   return { content: [{ type: "text", text }] };
 }
 
@@ -329,7 +333,10 @@ function coerceMemoryScopeFilter(value: unknown): MemoryScopeFilter | null {
   throw new Error(`invalid scope_filter: unknown kind "${String(o.kind)}"`);
 }
 
-function rpcErrorResult(method: string, e: unknown): {
+function rpcErrorResult(
+  method: string,
+  e: unknown,
+): {
   content: { type: "text"; text: string }[];
 } {
   if (e instanceof RpcError) {
@@ -362,8 +369,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           status: result.status,
           authored_by: result.authored_by,
           created_at: result.created_at,
-          next:
-            "Lesson captured as ○ pending. The wedge gate enforces 24h time-floor + applied-count + signal-sources before promotion.",
+          next: "Lesson captured as ○ pending. The wedge gate enforces 24h time-floor + applied-count + signal-sources before promotion.",
         });
       }
 
@@ -372,8 +378,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Caller-provided `scope` is validated by `coerceMemoryScope`
         // before reaching the engine — invalid shapes get a clear
         // MCP-level error (not the engine's serde message).
-        const scope =
-          coerceMemoryScope(a.scope) ?? defaultMemorizeScope();
+        const scope = coerceMemoryScope(a.scope) ?? defaultMemorizeScope();
         // v0.4 Phase 1: attach provenance unless the caller overrode
         // it. Hosts that don't need provenance can pass `origin: null`
         // (or any non-object) to suppress.
@@ -402,8 +407,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const query = String(a.query ?? "").trim();
         const limit = typeof a.limit === "number" ? Math.max(1, Math.min(50, a.limit)) : 5;
         const include_body = a.include_body === true;
-        const scope_filter =
-          coerceMemoryScopeFilter(a.scope_filter) ?? defaultRecallScopeFilter();
+        const scope_filter = coerceMemoryScopeFilter(a.scope_filter) ?? defaultRecallScopeFilter();
         // v0.4: similarity threshold. Defaults to 0.5 (decision-makable
         // signal); pass 0 explicitly to reproduce v0.3.1 behavior.
         const min_similarity =
@@ -414,24 +418,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Fan out: text-match lessons + semantic memories in parallel.
         const [lessonResult, memoryResult] = await Promise.all([
           engine.recall({ query, limit }),
-          engine
-            .searchMemory({ query, limit, include_body, scope_filter })
-            .catch((e) => {
-              // Memory search needs Ollama running; surface the error
-              // inline rather than failing the whole recall.
-              console.error(
-                `[opensquid] memory.search failed: ${e instanceof Error ? e.message : e}`,
-              );
-              return { query, returned: 0, results: [] };
-            }),
+          engine.searchMemory({ query, limit, include_body, scope_filter }).catch((e) => {
+            // Memory search needs Ollama running; surface the error
+            // inline rather than failing the whole recall.
+            console.error(
+              `[opensquid] memory.search failed: ${e instanceof Error ? e.message : e}`,
+            );
+            return { query, returned: 0, results: [] };
+          }),
         ]);
         // v0.4: filter per-source by similarity, then RRF-merge the
         // survivors. Threshold applied BEFORE merge so a weak hit in
         // one list can't poison the unified ranking.
-        const lessonsKept = filterBySimilarity(
-          lessonResult.results as LessonHit[],
-          min_similarity,
-        );
+        const lessonsKept = filterBySimilarity(lessonResult.results as LessonHit[], min_similarity);
         const memoriesKept = filterBySimilarity(
           memoryResult.results as MemoryHit[],
           min_similarity,

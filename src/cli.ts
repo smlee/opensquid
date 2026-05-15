@@ -43,11 +43,7 @@ function blockBody(): string {
 }
 
 function fullBlock(version: string = BLOCK_VERSION): string {
-  return [
-    `${SENTINEL_START_PREFIX}${version} -->`,
-    blockBody(),
-    SENTINEL_END,
-  ].join("\n");
+  return [`${SENTINEL_START_PREFIX}${version} -->`, blockBody(), SENTINEL_END].join("\n");
 }
 
 function targetPath(argv: string[]): string {
@@ -72,9 +68,7 @@ interface ParsedBlock {
  * Tolerant of trailing whitespace on either sentinel line.
  */
 function findBlock(content: string): ParsedBlock | null {
-  const startMatch = content.match(
-    /<!-- opensquid-automation:start ([^\s>]+) -->/,
-  );
+  const startMatch = content.match(/<!-- opensquid-automation:start ([^\s>]+) -->/);
   if (!startMatch || startMatch.index === undefined) return null;
   const startIdx = startMatch.index;
   const endMatch = content.indexOf(SENTINEL_END, startIdx);
