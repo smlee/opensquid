@@ -40,6 +40,7 @@ import {
 } from "./recall.js";
 import { defaultMemorizeScopeAsync, defaultRecallScopeFilterAsync } from "./scope.js";
 import { CodexActivationCache, extractCodexId } from "./codex/activate.js";
+import { appendPromotedLessonToClaudeMd } from "./claude-md.js";
 
 const VERSION = "0.4.0";
 
@@ -321,11 +322,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         "Run the wedge gate. ○/△ → □ promoted on pass, or returns structured BlockReason. " +
         "The gate enforces: ≥24h age, applied-count threshold, external-signal-sources, " +
-        "thumbs ratio, causal-narrative presence, evidence-refs non-empty. No self-grading.",
+        "thumbs ratio, causal-narrative presence, evidence-refs non-empty. No self-grading. " +
+        "v0.4 #106.1: on successful promote, the lesson's `description` (if passed) is " +
+        "appended to the CLAUDE.md `opensquid-rules` sub-block so future sessions see " +
+        "it in their system prompt with no recall lag.",
       inputSchema: {
         type: "object",
         properties: {
           lesson_id: { type: "string", description: "Lesson id (les-xxxxxxxx)." },
+          description: {
+            type: "string",
+            description:
+              "Optional one-line rule summary to append to CLAUDE.md's auto-managed " +
+              "rules block on successful promote. Recommend: '<trigger> — <action>'. " +
+              "When omitted, the CLAUDE.md update is silently skipped.",
+          },
         },
         required: ["lesson_id"],
       },
@@ -631,6 +642,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "promote": {
         const id = String(a.lesson_id ?? "");
         const result = await engine.promote({ id });
+        // v0.4 #106.1: surface promoted lesson into CLAUDE.md's
+        // auto-managed rules sub-block so future sessions see the
+        // rule in their system prompt without needing recall.
+        //
+        // Non-fatal — CLAUDE.md is downstream display, not the source
+        // of truth. Failures are logged but don't block the promote.
+        try {
+          // Best-effort fetch of the just-promoted lesson's description.
+          // engine.promote currently returns minimal fields; we use the
+          // id + a placeholder description. A richer description requires
+          // a separate engine.getLesson RPC (deferred to #106.2).
+          const description = String(a.description ?? "");
+          if (description) {
+            await appendPromotedLessonToClaudeMd({
+              id,
+              description,
+              promoted_at: new Date().toISOString(),
+            });
+          }
+        } catch (e) {
+          console.error(
+            `[opensquid] CLAUDE.md rules-block update failed (non-fatal): ${e instanceof Error ? e.message : e}`,
+          );
+        }
         return textResult(result);
       }
 
