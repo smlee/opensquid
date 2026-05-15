@@ -27,14 +27,16 @@
  */
 
 import { decide, findDrifts, type ToolCallInput } from "./drift-patterns.js";
+import { recordToolCall } from "./honesty-ledger.js";
 
 interface ClaudeHookInput {
   /** Tool name (e.g. "Bash", "Edit", "Write"). */
   tool_name?: string;
   /** Tool input object — shape varies by tool. */
   tool_input?: Record<string, unknown>;
-  // Other fields Claude Code may send (session_id, transcript_path, etc.)
-  // are ignored here; we only care about the planned call.
+  /** Claude Code session id — used to scope the honesty ledger. */
+  session_id?: string;
+  // Other fields Claude Code may send (transcript_path etc.) are ignored.
 }
 
 /**
@@ -69,8 +71,48 @@ export async function runPreToolUseHook(): Promise<void> {
     input: payload.tool_input ?? {},
   };
 
+  // v0.4: append to the honesty ledger so the Stop hook can reconcile
+  // assistant claims against tool calls. Best-effort — never block the
+  // call on a ledger write failure.
+  if (payload.session_id) {
+    try {
+      const inputSummary = summarizeInput(call.tool, call.input);
+      await recordToolCall(payload.session_id, call.tool, inputSummary);
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook] honesty-ledger write failed (non-fatal): ${err instanceof Error ? err.message : err}\n`,
+      );
+    }
+  }
+
   const hits = findDrifts(call);
   const { exit, stderr } = decide(hits);
   if (stderr) process.stderr.write(stderr);
   process.exit(exit);
+}
+
+/**
+ * Tight summary of tool input for the ledger. We keep just enough to
+ * reconcile claims (e.g. "did the agent run npm test?") without writing
+ * the whole tool_input blob.
+ */
+function summarizeInput(tool: string, input: Record<string, unknown>): string {
+  if (tool === "Bash") {
+    const cmd = input.command;
+    return typeof cmd === "string" ? cmd.slice(0, 500) : "";
+  }
+  if (tool === "Edit" || tool === "Write" || tool === "Read") {
+    const fp = input.file_path;
+    return typeof fp === "string" ? fp : "";
+  }
+  if (tool === "Agent") {
+    const desc = input.description ?? input.subagent_type ?? "";
+    return typeof desc === "string" ? desc.slice(0, 200) : "";
+  }
+  // Default — short JSON peek for unknown tools.
+  try {
+    return JSON.stringify(input).slice(0, 200);
+  } catch {
+    return "";
+  }
 }

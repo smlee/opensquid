@@ -120,16 +120,23 @@ if (subcommand === "engine") {
 }
 if (subcommand === "hook") {
   const hookCmd = process.argv[3];
-  if (hookCmd !== "pre-tool-use") {
-    console.error("usage: opensquid hook pre-tool-use");
-    process.exit(2);
+  if (hookCmd === "pre-tool-use") {
+    const { runPreToolUseHook } = await import("./hooks/pre-tool-use.js");
+    await runPreToolUseHook();
+    process.exit(0);
   }
-  // Hook handler manages its own exit code (0 = proceed, 2 = block).
-  const { runPreToolUseHook } = await import("./hooks/pre-tool-use.js");
-  await runPreToolUseHook();
-  // runPreToolUseHook calls process.exit() itself; this line is
-  // unreachable but keeps TypeScript happy on control-flow analysis.
-  process.exit(0);
+  if (hookCmd === "stop") {
+    const { runStopHook } = await import("./hooks/stop.js");
+    await runStopHook();
+    process.exit(0);
+  }
+  if (hookCmd === "user-prompt-submit") {
+    const { runUserPromptSubmitHook } = await import("./hooks/user-prompt-submit.js");
+    await runUserPromptSubmitHook();
+    process.exit(0);
+  }
+  console.error("usage: opensquid hook pre-tool-use|stop|user-prompt-submit");
+  process.exit(2);
 }
 if (subcommand === "hooks") {
   const hooksCmd = process.argv[3];

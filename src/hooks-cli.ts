@@ -80,8 +80,8 @@ function opensquidBinPath(): string {
   return path.join(path.dirname(here), "index.js");
 }
 
-function buildHookCommand(): string {
-  return `node ${opensquidBinPath()} hook pre-tool-use`;
+function buildHookCommand(hookName: "pre-tool-use" | "stop" | "user-prompt-submit"): string {
+  return `node ${opensquidBinPath()} hook ${hookName}`;
 }
 
 /** Remove any existing opensquid hook from a matcher list. */
@@ -97,57 +97,80 @@ function purgeOurHook(matchers: ClaudeMatcher[]): ClaudeMatcher[] {
 async function cmdInstall(): Promise<void> {
   const settings = await loadSettings();
   const hooks = settings.hooks ?? {};
-  const existing = hooks.PreToolUse ?? [];
-  const purged = purgeOurHook(existing);
-  // Add our hook fresh — single matcher "Bash" (the only tool we
-  // currently intercept; widen later as more patterns land).
-  purged.push({
+
+  // PreToolUse — drift-detection on Bash + honesty-ledger record on all tools.
+  // (We register both matchers; matcher "*" catches non-Bash tools so the
+  // ledger has full evidence for Stop-hook reconciliation.)
+  const preToolUse = purgeOurHook(hooks.PreToolUse ?? []);
+  preToolUse.push({
     matcher: "Bash",
-    hooks: [
-      {
-        type: "command",
-        command: buildHookCommand(),
-        _id: HOOK_ID,
-      },
-    ],
+    hooks: [{ type: "command", command: buildHookCommand("pre-tool-use"), _id: HOOK_ID }],
   });
-  settings.hooks = { ...hooks, PreToolUse: purged };
+  preToolUse.push({
+    matcher: ".*",
+    hooks: [{ type: "command", command: buildHookCommand("pre-tool-use"), _id: HOOK_ID }],
+  });
+
+  // Stop — claim-vs-action reconciliation at turn end.
+  const stop = purgeOurHook(hooks.Stop ?? []);
+  stop.push({
+    hooks: [{ type: "command", command: buildHookCommand("stop"), _id: HOOK_ID }],
+  });
+
+  // UserPromptSubmit — surface previous turn's broken promises at the
+  // start of the next turn.
+  const ups = purgeOurHook(hooks.UserPromptSubmit ?? []);
+  ups.push({
+    hooks: [{ type: "command", command: buildHookCommand("user-prompt-submit"), _id: HOOK_ID }],
+  });
+
+  settings.hooks = {
+    ...hooks,
+    PreToolUse: preToolUse,
+    Stop: stop,
+    UserPromptSubmit: ups,
+  };
   await saveSettings(settings);
+
   console.log(`[opensquid hooks install] wrote ${settingsPath()}`);
-  console.log(`  PreToolUse → ${buildHookCommand()}`);
-  console.log(`  matcher:     Bash`);
+  console.log(`  PreToolUse       → ${buildHookCommand("pre-tool-use")}`);
+  console.log(`  Stop             → ${buildHookCommand("stop")}`);
+  console.log(`  UserPromptSubmit → ${buildHookCommand("user-prompt-submit")}`);
   console.log(`  next: restart Claude Code so the new settings load.`);
 }
 
 async function cmdUninstall(): Promise<void> {
   const settings = await loadSettings();
   const hooks = settings.hooks;
-  if (!hooks || !hooks.PreToolUse) {
-    console.log(`[opensquid hooks uninstall] no PreToolUse hooks configured`);
+  if (!hooks) {
+    console.log(`[opensquid hooks uninstall] no hooks configured`);
     return;
   }
-  const before = countOurHooks(hooks.PreToolUse);
-  const purged = purgeOurHook(hooks.PreToolUse);
-  if (purged.length === 0) {
-    delete hooks.PreToolUse;
-  } else {
-    hooks.PreToolUse = purged;
+  let totalRemoved = 0;
+  for (const event of ["PreToolUse", "Stop", "UserPromptSubmit"] as const) {
+    const matchers = hooks[event];
+    if (!matchers) continue;
+    totalRemoved += countOurHooks(matchers);
+    const purged = purgeOurHook(matchers);
+    if (purged.length === 0) {
+      delete hooks[event];
+    } else {
+      hooks[event] = purged;
+    }
   }
   await saveSettings(settings);
-  console.log(`[opensquid hooks uninstall] removed ${before} opensquid hook(s)`);
+  console.log(`[opensquid hooks uninstall] removed ${totalRemoved} opensquid hook(s)`);
 }
 
 async function cmdDoctor(): Promise<void> {
   const settings = await loadSettings();
-  const preToolUse = settings.hooks?.PreToolUse ?? [];
-  const ourCount = countOurHooks(preToolUse);
+  const hooks = settings.hooks ?? {};
   console.log(`[opensquid hooks doctor]`);
-  console.log(`  settings.json:   ${settingsPath()}`);
-  console.log(`  PreToolUse total entries: ${preToolUse.length}`);
-  console.log(`  opensquid hooks active:   ${ourCount}`);
-  console.log(`  expected command:         ${buildHookCommand()}`);
-  if (ourCount === 0) {
-    console.log(`  hint: run \`opensquid hooks install\` to enable drift-detection.`);
+  console.log(`  settings.json: ${settingsPath()}`);
+  for (const event of ["PreToolUse", "Stop", "UserPromptSubmit"] as const) {
+    const matchers = hooks[event] ?? [];
+    const ours = countOurHooks(matchers);
+    console.log(`  ${event.padEnd(18)} total=${matchers.length}  opensquid=${ours}`);
   }
 }
 
