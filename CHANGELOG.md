@@ -9,6 +9,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — v0.5 hybrid recall
+
+- **`recall` defaults to engine hybrid mode**: every memory query runs both
+  semantic (cosine-similarity neighborhood on the embedder output) and text
+  (token-overlap + substring match on description+body) in parallel, then
+  RRF-merges by id. Items appearing in both lists get a strict score boost
+  and `source: "both"`.
+- **`min_similarity` flows down to the engine**: per-sub-search floor
+  applied to RAW per-source scores BEFORE the RRF merge. Replaces the v0.4
+  opensquid-side post-filter, which couldn't sensibly threshold RRF scores
+  (range ≤0.033) against the same 0.5 default tuned for raw cosine.
+- **`MergedHit.source` + `MemoryHit.source`**: carries the engine's
+  attribution through the opensquid RRF. Renders as `"semantic"`, `"text"`,
+  or `"both"` in the JSON response.
+- **engine-client.ts**: `searchMemory()` accepts `mode` + `min_similarity`
+  parameters. Backward-compatible — old callers default to `"semantic"`.
+
+Solves the v0.4 false-negative on proper-noun queries (e.g. `"Gianna"` —
+semantic 0.486 < 0.5 threshold but description literally contains the name).
+Dogfood-verified end-to-end against the family memory.
+
+See `docs/v0.5-hybrid-recall-design.md` for the locked design.
+
 ### Added — v0.4 Phase 1 (origination metadata)
 
 - **`memorize` auto-attaches `origin` block** to every memory:
