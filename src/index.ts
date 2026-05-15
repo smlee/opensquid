@@ -52,7 +52,7 @@ const VERSION = "0.4.0";
 //
 // Subcommand layout:
 //   opensquid install|uninstall|doctor            → CLAUDE.md installer
-//   opensquid codex install|list|remove|doctor    → codex management
+//   opensquid codex install|list|remove|doctor|export → codex management
 const subcommand = process.argv[2];
 if (subcommand === "install" || subcommand === "uninstall" || subcommand === "doctor") {
   const { runCli } = await import("./cli.js");
@@ -70,9 +70,10 @@ if (subcommand === "codex") {
     codexCmd !== "install" &&
     codexCmd !== "list" &&
     codexCmd !== "remove" &&
-    codexCmd !== "doctor"
+    codexCmd !== "doctor" &&
+    codexCmd !== "export"
   ) {
-    console.error("usage: opensquid codex install|list|remove|doctor [<args>...]");
+    console.error("usage: opensquid codex install|list|remove|doctor|export [<args>...]");
     process.exit(2);
   }
   const { runCodexCli } = await import("./codex/cli.js");

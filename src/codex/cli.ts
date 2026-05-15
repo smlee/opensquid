@@ -150,6 +150,11 @@ interface CliOptions {
    * flag — auto-publish always runs.
    */
   skipClaudeMdPublish?: boolean;
+  /**
+   * v0.6: optional output path for `codex export`. Defaults to
+   * `./<id>-v<version>.codex/` in the current working directory.
+   */
+  exportOutput?: string;
 }
 
 async function cmdInstall(args: string[], opts: CliOptions): Promise<void> {
@@ -332,6 +337,82 @@ async function cmdRemove(args: string[], opts: CliOptions): Promise<void> {
   }
 }
 
+/**
+ * v0.6: export an installed codex to a portable directory bundle.
+ *
+ * Output layout matches the install-source layout (codex.yaml at root +
+ * lessons/<id>/lesson.md tree), so `opensquid codex install <output>`
+ * round-trips cleanly. The bundle includes a `.opensquid-export.json`
+ * manifest with timestamp + opensquid version + source codex id for
+ * provenance — not load-bearing on import.
+ */
+async function cmdExport(args: string[], opts: CliOptions): Promise<void> {
+  const id = args[0];
+  if (!id) {
+    throw new CodexCliError(
+      "usage: opensquid codex export <id> [--output <path>]",
+      "pass the codex id (see `opensquid codex list`)",
+    );
+  }
+  // Validate the codex exists + load its parsed manifest.
+  let codex: Codex;
+  try {
+    codex = await getCodex(id, opts);
+  } catch (err) {
+    if (err instanceof CodexStoreError && err.code === "NOT_FOUND") {
+      throw new CodexCliError(
+        `codex '${id}' is not installed`,
+        "see `opensquid codex list` for installed codexes",
+      );
+    }
+    throw err;
+  }
+
+  const sourceDir = codexDir(id, opts.rootDir);
+  const outputPath = opts.exportOutput ?? path.resolve(`${id}-v${codex.version}.codex`);
+
+  // Refuse to overwrite an existing path unless --force.
+  let outputExists = false;
+  try {
+    await fs.access(outputPath);
+    outputExists = true;
+  } catch {
+    // doesn't exist, fine
+  }
+  if (outputExists && !opts.force) {
+    throw new CodexCliError(
+      `output path already exists: ${outputPath}`,
+      "pass --force to overwrite, or pick a different --output",
+    );
+  }
+  if (outputExists && opts.force) {
+    await fs.rm(outputPath, { recursive: true, force: true });
+  }
+
+  // Recursive copy of the canonical install dir.
+  await fs.mkdir(outputPath, { recursive: true });
+  await fs.cp(sourceDir, outputPath, { recursive: true });
+
+  // Write provenance manifest. Round-trip irrelevant — pure
+  // diagnostic. Importer is `opensquid codex install <output>` which
+  // ignores files outside codex.yaml + lessons/.
+  const exportManifest = {
+    exported_at: new Date().toISOString(),
+    exported_by: "opensquid codex export",
+    opensquid_version: "0.4.0",
+    source_codex_id: id,
+    source_codex_version: codex.version,
+  };
+  await fs.writeFile(
+    path.join(outputPath, ".opensquid-export.json"),
+    JSON.stringify(exportManifest, null, 2) + "\n",
+    "utf8",
+  );
+
+  console.log(`[opensquid codex export] exported ${id} v${codex.version} → ${outputPath}`);
+  console.log(`  re-import via:  opensquid codex install ${outputPath}`);
+}
+
 async function cmdDoctor(args: string[], opts: CliOptions): Promise<void> {
   const root = resolveDataRoot(opts.rootDir);
   const id = args[0];
@@ -396,6 +477,8 @@ function parseFlags(argv: string[]): { args: string[]; opts: CliOptions } {
       opts.skipSeed = true;
     } else if (a === "--root" && argv[i + 1]) {
       opts.rootDir = argv[++i];
+    } else if ((a === "--output" || a === "-o") && argv[i + 1]) {
+      opts.exportOutput = argv[++i];
     } else {
       args.push(a);
     }
@@ -407,7 +490,7 @@ function parseFlags(argv: string[]): { args: string[]; opts: CliOptions } {
 // Entry point
 // ---------------------------------------------------------------------
 
-export type CodexCliCmd = "install" | "list" | "remove" | "doctor";
+export type CodexCliCmd = "install" | "list" | "remove" | "doctor" | "export";
 
 export async function runCodexCli(cmd: CodexCliCmd, argv: string[]): Promise<void> {
   const { args, opts } = parseFlags(argv);
@@ -423,6 +506,9 @@ export async function runCodexCli(cmd: CodexCliCmd, argv: string[]): Promise<voi
       return;
     case "doctor":
       await cmdDoctor(args, opts);
+      return;
+    case "export":
+      await cmdExport(args, opts);
       return;
   }
 }
