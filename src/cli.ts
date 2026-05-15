@@ -27,18 +27,58 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const BLOCK_VERSION = "v0.3.1";
+const BLOCK_VERSION = "v0.4.0";
 const SENTINEL_START_PREFIX = "<!-- opensquid-automation:start ";
 const SENTINEL_END = "<!-- opensquid-automation:end -->";
+const RULES_SENTINEL_START = "<!-- opensquid-rules:start (auto-managed) -->";
+const RULES_SENTINEL_END = "<!-- opensquid-rules:end -->";
 
-/** The body of the automation block (between sentinels). */
+/**
+ * The body of the automation block (between sentinels).
+ *
+ * Three concerns layered in:
+ *   1. Active recall (drift defense)
+ *   2. Auto-observation: classify user utterances → silent memorize +
+ *      surface promote-to-lesson offers
+ *   3. Auto-managed rules sub-block — opensquid runtime appends one
+ *      line per promoted lesson here; agent treats them as always-on
+ *      rules.
+ *
+ * Keep this dense — every line lives in every turn's system prompt.
+ */
 function blockBody(): string {
   return [
-    "Use opensquid recall before answering substantive questions — your in-",
-    "context memory drifts after ~10 unrelated turns. Use memorize when the",
-    "user states a non-trivial fact, preference, or observation. Don't",
-    "auto-call remember / promote / eliminate — those require explicit user",
-    "intent (the wedge invariant).",
+    "## opensquid — memory + lesson layer for this agent",
+    "",
+    "**Before answering substantive questions**, call `recall`. Your in-",
+    "context memory drifts after ~10 unrelated turns; recall re-anchors.",
+    "",
+    "**When the user says something, classify and act**:",
+    "",
+    '- Fact / observation ("X is the case", "I use Y", "Z is my kid") →',
+    "  call `memorize` with the fact. Note the memory id in your reply.",
+    '- Preference / directive ("always X", "never Y", "I prefer Z") →',
+    "  call `memorize` AND `remember` (create a lesson candidate). Reply:",
+    '  "Captured as a candidate rule — promote to permanent?"',
+    '- Correction ("no, that\'s wrong", "actually it should be X") →',
+    "  call `memorize` with the correction. If it supersedes a specific",
+    "  prior memory you can identify, also call `update_memory`.",
+    '- Workflow lock ("the workflow is X→Y→Z", "no hedges", "always pre-',
+    '  research first") → same as preference: `memorize` + `remember` +',
+    "  offer promote.",
+    "",
+    "**Never auto-call `promote` or `eliminate`** — these need explicit",
+    "user intent (the wedge invariant). Surface offers; wait for OK.",
+    "",
+    "**Within `recall` results**, treat lessons as prescriptive rules and",
+    "memories as background context. Apply lesson rules; cite memories.",
+    "",
+    "### Active lessons (auto-managed — do not edit by hand)",
+    "",
+    RULES_SENTINEL_START,
+    "(no promoted lessons yet — this block populates as `lesson.promote`",
+    "succeeds for user-endorsed candidates)",
+    RULES_SENTINEL_END,
   ].join("\n");
 }
 
