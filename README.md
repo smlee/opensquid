@@ -1,24 +1,25 @@
 # 🦑 opensquid
 
-> **Pass the gate, or get eliminated.**
-> The MCP server that decides which of your agent's memories survive.
+> **Your agent learns. You decide what gets locked in.**
+> The MCP server that stops your AI agent from grading its own homework.
 
-```
-   ○            △            □
-pending  →    active   →   promoted
-   ↘             ↘
-    discarded     superseded
-```
-
-OpenSquid is the user-facing MCP layer over [`loop-engine`](https://github.com/MindcraftorAI/loop-engine) — a Rust cognitive-memory substrate with an **anti-self-grading promotion gate** at its core. Your agent proposes lessons; OpenSquid decides which ones graduate.
+opensquid is the user-facing MCP layer over [`loop-engine`](https://github.com/MindcraftorAI/loop-engine) — a Rust cognitive-memory substrate with an **anti-self-grading promotion gate** at its core. Your agent proposes lessons; you decide which ones graduate.
 
 No self-promotion. No vibes. External evidence only.
+
+```
+   [proposed]  →  [active]  →  [promoted]
+         ↘              ↘
+      [discarded]   [superseded]
+```
 
 ---
 
 ## What it does
 
-OpenSquid surfaces these tools to your AI agent via MCP:
+opensquid surfaces these tools to your AI agent via MCP.
+
+### Memory layer
 
 | Tool | What it does |
 |------|--------------|
@@ -27,9 +28,21 @@ OpenSquid surfaces these tools to your AI agent via MCP:
 | **`get_memory`** | Fetch a single memory by id with the FULL body — no truncation. Companion to `recall` when a preview hit looks load-bearing. |
 | **`update_memory`** | Edit description / content / scope on an existing memory. Identity (id, citation counter, origin) always preserved. Re-embeds on content change. |
 | **`forget`** | Delete a memory. User-immunity-respecting by default — memories cited by user-authored lessons are protected unless `force=true`. |
-| **`remember`** | Capture a candidate lesson (`○ pending`). Pass through the promotion gate before it graduates. |
-| **`promote`** | Run the wedge gate. `△ active` → `□ promoted`, or blocked with structured reasons. |
+
+### Lesson layer (wedge-gated)
+
+| Tool | What it does |
+|------|--------------|
+| **`remember`** | Capture a candidate lesson (`proposed`). Must pass the promotion gate before it graduates. |
+| **`promote`** | Run the wedge gate. `active` → `promoted`, or blocked with structured reasons. Auto-publishes promoted lessons into your CLAUDE.md `<!-- opensquid-rules -->` block. |
 | **`eliminate`** | Discard a lesson (terminal). User-authored lessons immune to engine-initiated elimination — explicit intent required. |
+| **`pending_candidates`** | List unpromoted lesson candidates so the agent (or user) can review what's waiting at the gate. |
+
+### Auto-observation layer (v0.4)
+
+| Tool | What it does |
+|------|--------------|
+| **`classify_utterance`** | Pattern-classify a user-said line as `fact` / `preference` / `correction` / `workflow_lock`, with a suggested follow-up action (`memorize`, `remember`, `update_memory`). Lets the agent auto-capture context without explicit prompting. |
 
 Behind those tools sits the full `loop-engine` machinery: causal-narrative generation, vector-embedded memory store with HNSW + rehydration across restarts, citation-chain-preserving compression, skill + persona + team scoping, lifecycle transitions, and the 4-layer wedge ratchet (gate → compression → skill immunity → lesson decrement).
 
@@ -37,7 +50,7 @@ Behind those tools sits the full `loop-engine` machinery: causal-narrative gener
 
 ## The wedge
 
-Every promotion through OpenSquid runs an external-evidence check. A lesson cannot graduate to `□ promoted` based on the originating agent's own thumbs-up — it must carry:
+Every promotion through opensquid runs an external-evidence check. A lesson cannot graduate to `promoted` based on the originating agent's own thumbs-up — it must carry:
 
 - Structured causal narrative (`trigger / failure_mode / correction`)
 - Confidence level (observed / inferred / speculative)
@@ -46,6 +59,42 @@ Every promotion through OpenSquid runs an external-evidence check. A lesson cann
 - (Opt-in v0.4+) Multi-session reproducibility — `origin_diverse` signal from the engine's gate when configured
 
 User authorship is load-bearing. If you (the human) explicitly endorse a lesson, the memories it cites become eviction-immune. If the agent self-endorses, no immunity is conferred. **The agent doesn't decide what it learned — you do, indirectly, via the gate.**
+
+---
+
+## Hooks (v0.4)
+
+opensquid installs four Claude Code hooks that work even when the agent forgets to call its tools.
+
+| Hook | What it catches |
+|------|-----------------|
+| **PreToolUse — drift** | Blocks known anti-patterns before they execute — `git commit --amend`, force-push to `main`, substrate-purity violations, implicit `git push`, etc. Catalogued in `src/hooks/drift-patterns.ts`. Surfaces with a 🦑 prefix. |
+| **Stop — honesty ledger** | Reconciles claim-vs-action: if the agent said "running tests" but never invoked a test tool, the gap is recorded as a broken promise. Session-scoped, so end-of-turn recap text doesn't false-positive. |
+| **UserPromptSubmit** | Surfaces last turn's broken promises to the user at the start of the next prompt. |
+| **SessionEnd** | Clears the session-scoped ledger so disk usage stays bounded. |
+
+Install all four:
+
+```bash
+node dist/index.js hooks install
+node dist/index.js hooks uninstall   # idempotent
+```
+
+---
+
+## Codex packs (v0.4)
+
+opensquid speaks a YAML pack format called **codex** — portable bundles of foundation (tools/domains/methodologies), lessons, and detection rules.
+
+- **Reads** superpowers / ECC `SKILL.md` as input — the existing skill ecosystem is accessible day-1.
+- **Writes** opensquid's richer native codex format with explicit activation rules and wedge-gated lessons.
+- **Exports** `.claude-plugin/plugin.json` + per-host shims so a codex runs in vanilla Claude Code with opensquid uninstalled. Your packs aren't locked to your runtime.
+
+```bash
+node dist/index.js codex list
+node dist/index.js codex install <path-or-id>
+node dist/index.js codex export <id>   # → .claude-plugin/plugin.json
+```
 
 ---
 
@@ -66,18 +115,29 @@ claude mcp add --scope user opensquid -- node /absolute/path/to/opensquid/dist/i
 
 Restart Claude Code. The tools appear under the `opensquid` server in `/mcp`.
 
-### Optional: idempotent CLAUDE.md installer
+### Idempotent CLAUDE.md installer
 
-Have opensquid configure your global CLAUDE.md so the agent reaches for `recall` / `memorize` unconsciously:
+Configure your global CLAUDE.md so the agent reaches for `recall` / `memorize` unconsciously:
 
 ```bash
-node dist/index.js install        # ~/.claude/CLAUDE.md
-node dist/index.js install --project   # ./CLAUDE.md
-node dist/index.js doctor         # check what's installed
-node dist/index.js uninstall      # strip the block, leave the rest intact
+node dist/index.js install         # ~/.claude/CLAUDE.md
+node dist/index.js install --project    # ./CLAUDE.md
+node dist/index.js doctor          # check what's installed
+node dist/index.js uninstall       # strip the block, leave the rest intact
 ```
 
-Detect-don't-replace: existing CLAUDE.md content is preserved; only opensquid's sentinel-bracketed block is touched. Same-version re-install is a no-op.
+Detect-don't-replace: existing CLAUDE.md content is preserved; only opensquid's sentinel-bracketed block is touched. Promoted lessons publish themselves into the `<!-- opensquid-rules -->` sub-block on every `promote` call.
+
+### Project ID card + engine binary registry (v0.4)
+
+opensquid writes a `.opensquid/project.json` ID card into each project so identity survives folder moves and renames. A global `~/.opensquid/config.json` records where the engine binary lives, so opensquid keeps working when you relocate the engine checkout.
+
+```bash
+node dist/index.js project doctor
+node dist/index.js engine doctor
+```
+
+---
 
 ## Quick start (Claude Desktop / Cursor / any MCP host)
 
@@ -95,6 +155,8 @@ Add to your host's MCP config:
 ```
 
 All MCP hosts on the same machine share `~/.opensquid/` — a memory created in Claude Code is available in Claude Desktop on the next session (engine rehydrates the vector index on every spawn).
+
+---
 
 ## Try it
 
@@ -114,18 +176,19 @@ Set `LOOP_HOME=/some/path` to relocate storage (handy for testing).
 
 ## Status & roadmap
 
-**v0.3.1+ — actively shipping.** Engine integration complete, full MCP tool surface, scope-aware recall, hybrid (semantic + text + RRF) memory search, origin-metadata provenance, user-immunity invariant enforced across all eviction paths.
+**v0.4.0 — actively shipping.** Codex pack format, four-hook automation layer (drift + honesty ledger), project + engine identity, utterance classifier, auto-publishing promoted lessons.
 
 Recent releases:
 
-- **v0.5** — hybrid recall: every memory query runs both semantic and text-match in parallel, RRF-merges, items in both lists get a score boost. Fixed the v0.4 false-negative on proper-noun queries.
-- **v0.4** — origination metadata (host/session/model/cwd attached to every memory), memory lifecycle (`update_memory` / `forget`), recall quality (similarity threshold + RRF merge).
+- **v0.4** (current) — codex format + local storage; project ID card (survives moves); engine binary registry; drift-detection PreToolUse hook; honesty ledger (Stop / UserPromptSubmit / SessionEnd); CLAUDE.md auto-rule publishing on `promote`; pattern-based utterance classifier + `pending_candidates` MCP tool.
+- **v0.5 hybrid recall** (interim) — every memory query runs both semantic and text-match in parallel, RRF-merges, items in both lists get a score boost. Fixes the false-negative on proper-noun queries.
+- **v0.4 Phase 1** — origination metadata (host/session/model/cwd attached to every memory), memory lifecycle (`update_memory` / `forget`), recall quality (`min_similarity` threshold).
 - **v0.3.1** — daily-work milestone: `include_body` recall (no more truncated previews), `MemoryScope` per-project isolation, sentinel-bracketed CLAUDE.md installer.
 - **v0.3.0** — opensquid pivoted to a thin RPC client over `loop-engine serve`; the Rust engine owns all wedge logic, storage, and embedding. Powered by Qwen3-Embedding-4B via Ollama by default.
 
 Next:
 
-- **v0.4 Phase 2** — Claude Skill packaging + `UserPromptSubmit` / `Stop` hooks so `recall` fires unconsciously on every prompt and `memorize` is offered after every turn (opt-in via env vars).
+- **v0.4 Phase 2** — LLM-driven Stop-hook auto-classifier (true unprompted auto-observation; the pattern classifier is the deterministic stepping stone).
 - **v0.6** — telemetry on recall queries + dual-source boost in ranking + token-length config + (conditionally) FTS5 if scale demands.
 - **v1.0** — npm distribution with pre-built per-platform binaries (no Rust required); SemVer freeze on the tool surface; public Claude Skill on the marketplace.
 
@@ -135,7 +198,7 @@ See [`ROADMAP.md`](./ROADMAP.md) for the full picture and [`docs/`](./docs/) for
 
 ## Design
 
-The visual identity nods to Korean cultural exports of the 2020s — geometric mask symbols ○ △ □, the hidden-judgment / front-man metaphor for the wedge gate, hot pink + teal accent palette. The squid mascot does triple duty: Squid Game (the gate-or-eliminated framing), cephalopod cognition (distributed nervous system → memory as substrate), and the brain-with-arms metaphor for opensquid orchestrating other MCPs (v1.1+).
+The squid mascot is a cephalopod-cognition reference. Roughly two-thirds of an octopus's neurons live in its arms, not its central brain — distributed cognition with a coordinating core. opensquid takes the same shape: the wedge gate sits at the center, the memory substrate flows through it, and v1.1+ extends the arms to orchestrate other MCPs as the central brain coordinating tools across an agent's runtime.
 
 ---
 
