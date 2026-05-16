@@ -12,23 +12,24 @@ For shipped releases see [CHANGELOG.md](./CHANGELOG.md).
 
 **Marketing wedge:** "Your agent learns. You decide what gets locked in."
 
-**Versioning policy (pre-1.0):** PATCH (0.0.X) is bug-fix-only. Everything else — new MCP tool, new schema field, new CLI subcommand, new wire-format field, breaking change — is a MINOR bump (0.X.0). MAJOR (X.0.0) reserved until explicit 1.0 declaration. Source of truth: `[[feedback_pre1_versioning]]`.
+**Versioning policy (current — see `[[feedback_pre1_versioning]]` for full rule):** Everything ships as a PATCH bump. The agent does NOT assign minor or major version numbers. All planned work continues on the 0.7.x track until the user explicitly authorizes a different track. Roadmap items below describe SCOPE, not version slots.
 
-**Release sequence (SemVer 0.x.y; v1.0 is feature-complete + bulletproof, not a calendar moment):**
+**Roadmap (scope, not slots — slot allocation is the user's call):**
 
-- v0.5 — lessons surface (in-flight: shipped v0.5a `list_lessons` + `capture_feedback` + `supersede`; v0.5b `list_memories`; pending v0.5c `manifest.assemble` + skill/persona/team `load_*`)
-- v0.6 — release engineering: cross-platform binaries + codex export + system export (binaries + npm publish deferred until npm org exists; codex/system export shipped)
-- v0.7 — chat connections bundled (Telegram + Discord + Slack as LOCAL bots; gateway abstraction; per `mem-163bde3b`) **+ v0.7.1 shipped: per-machine chat-daemon owns long-poll, per-project routing + v0.7.2 shipped: Telegram forum-topic per-project routing**
-- **v0.8 — drift-as-codex refactor** (current focus, see audit findings + remediation plan below). Hardcoded drift gates → user-configurable codex rules. Stops drift-rule changes from being npm releases.
-- v0.9 — additional surfaces (web, mobile) and brain thesis (MCP-of-MCPs orchestration)
-- v0.X (whenever feature-complete) — hardening sprint: lock API surface, exhaustive test coverage, all known bugs squashed
-- v1.0 — single moment when feature-complete AND bulletproof. Earned, not scheduled.
+- **Shipped (historical):** v0.5 lessons surface · v0.6 release engineering + codex/system export · v0.7 chat connections (Telegram/Discord/Slack) · v0.7.1 chat-daemon · v0.7.2 Telegram forum-topic routing. Current: 0.7.2.
+- **Active scope on 0.7.x:**
+  - Drift-as-codex refactor — current focus, see audit findings + remediation plan below. Hardcoded drift gates → user-configurable codex rules. Stops drift-rule changes from being package releases.
+- **Pending scope on 0.7.x:**
+  - Daemon coexistence with external Telegram MCPs (task #144)
+  - Additional surfaces (web, mobile) and brain thesis (MCP-of-MCPs orchestration)
+  - Hardening sprint: lock API surface, exhaustive test coverage, all known bugs squashed
+- **1.0:** single moment when feature-complete AND bulletproof. Earned, not scheduled. User decides when.
 
 ---
 
 ## 🔍 Audit findings (2026-05-16) and remediation plan
 
-Today's end-to-end drift-protection ship cycle surfaced structural gaps in the drift gates themselves. Captured here so they drive v0.8 instead of being absorbed silently into the changelog.
+Today's end-to-end drift-protection ship cycle surfaced structural gaps in the drift gates themselves. Captured here so they drive the active drift-as-codex scope instead of being absorbed silently into the changelog.
 
 ### Audit findings
 
@@ -48,7 +49,7 @@ Today's end-to-end drift-protection ship cycle surfaced structural gaps in the d
 
 The remediation isn't "patch the gates" — that just re-creates the same shape with slightly tighter regexes. The remediation is **structural**: drift rules become data (codex YAML) loaded by a generic engine. Then per-user/per-project customization is configuration, not source code, and version bumps stop being the unit of rule-evolution.
 
-#### v0.8.0 — drift-as-codex refactor (BIG)
+#### Drift-as-codex refactor (BIG, active scope)
 
 Port hardcoded TypeScript gate logic into codex-loaded rule definitions:
 
@@ -60,9 +61,9 @@ Port hardcoded TypeScript gate logic into codex-loaded rule definitions:
 
 Net effect: rule refinements stop being package releases. Patch-bump churn collapses. Different users' workflows coexist without forks.
 
-#### Post-v0.8.0 — codex publishes (NO version bump on opensquid)
+#### After the drift-as-codex refactor — codex publishes (NO opensquid version bump)
 
-Once v0.8.0 ships the rule-loader engine, these are codex YAML publishes — not opensquid package releases. The whole point of v0.8.0 is that rule additions stop being version bumps:
+Once the rule-loader engine is in place, these are codex YAML publishes — not opensquid package releases. The whole point of the refactor is that rule additions stop being version bumps:
 
 - **`workflows/default-7-phase.yaml`** — encodes my workflow so the gate enforces all 7 phases, not 2. Backfills audit finding #1.
 - **`workflows/no-task-no-action.yaml`** — session-level rule: "if session has N+ substantive Bash calls and no active task ID, warn." Backfills audit finding #2.
@@ -73,57 +74,53 @@ Once v0.8.0 ships the rule-loader engine, these are codex YAML publishes — not
 
 Retroactively log `pre_research`, `learn`, `code`, `test`, `fix` for task #132 with `note=backfilled 2026-05-16 post-audit, original commit was docs-only`. Pure data write, no source code change → no version bump.
 
-#### v0.9.0 — daemon coexistence with external Telegram MCPs (task #144)
+#### Daemon coexistence with external Telegram MCPs (task #144)
 
-Originally misnamed "v0.7.3" — corrected per the pre-1.0 versioning rule (new feature → minor bump, next minor after v0.8.0 is v0.9.0). Two paths to explore: (a) detect external Telegram pollers on daemon start and offer webhook-mode (requires public ingress), (b) detect 409 and fall back to forwarding inbound via the external MCP's stdio if it's a known Claude Code plugin.
+Two paths to explore: (a) detect external Telegram pollers on daemon start and offer webhook-mode (requires public ingress), (b) detect 409 and fall back to forwarding inbound via the external MCP's stdio if it's a known Claude Code plugin.
 
-#### v0.10+ — additional surfaces (web, mobile) + MCP-of-MCPs
+#### Additional surfaces (web, mobile) + MCP-of-MCPs
 
-Per the brain thesis. Out of scope until v0.8 + v0.9 land.
-
-#### Patch slots (0.X.Y for any current X)
-
-Reserved for genuine bug fixes only — never scheduled in advance. A patch ships when a bug is found and fixed; the slot is allocated on the spot.
+Per the brain thesis. Lower priority than the drift-as-codex work above.
 
 ### Why this ordering
 
-v0.8 BLOCKS everything else, because each subsequent gate refinement would otherwise become another patch-spam cycle. Get the architecture right once → every later rule change is a YAML publish, not a release. The v0.7.x audit findings are real but small; they're the FIRST consumers of the v0.8 engine, not pre-requisites for it.
+The drift-as-codex refactor BLOCKS everything else, because each subsequent gate refinement would otherwise become another patch-spam cycle. Get the architecture right once → every later rule change is a YAML publish, not a release. The audit findings are real but small; they're the FIRST consumers of the rule-loader engine, not pre-requisites for it.
 
 ### 🐛 Known bugs (discovered 2026-05-16, slotted for the relevant version)
 
 Surfaced during today's drift-fix track + live Telegram bootstrap. Listed honestly so they don't get re-discovered later.
 
-**Drift / workflow gates (→ fixed by post-v0.8.0 codex publishes, NOT by patch bumps):**
+**Drift / workflow gates (→ fixed by codex publishes after the rule-loader refactor, NOT by package bumps):**
 
 1. **workflow-gate enforces 2/7 phases** (finding #1 above) — green-lit task #132 shipping with phase-skip.
 2. **No "session-has-no-task" gate** (finding #2) — entire Telegram bootstrap chain ran phase-less.
 3. **honesty-ledger has no phase-claim patterns** (finding #5) — phase-skip drift invisible to claim reconciliation.
 4. **versioning-gate doesn't check slot match** (finding #4) — patch-bumped 5 minor changes today.
-5. **stripHeredocBodies regex has edge cases** for tab-stripping `<<-EOF` with indented closing delim — handled the common case in v0.6.5 but not exhaustively fuzzed. (Actual bug → patch slot when fixed.)
+5. **stripHeredocBodies regex has edge cases** for tab-stripping `<<-EOF` with indented closing delim — handled the common case in 0.6.5 but not exhaustively fuzzed.
 
 **Chat-daemon / Telegram:**
 
-6. **chat-daemon 409-conflicts vs external Telegram MCPs** (finding #6, task #144) — collided live with Claude Code's `plugin:telegram` bun bot during the v0.7.2 bootstrap. v0.7.1's coexistence fix was multi-opensquid-only. NEW FEATURE → v0.9.0.
-7. **chat-daemon doesn't subscribe to `my_chat_member` updates** — bot-membership-changed events (added to group, removed, permissions changed) don't get logged anywhere. Caused real confusion during the supergroup bootstrap when re-adding the bot produced silent zero-update telemetry. NEW FEATURE (subscribe to additional update types) → minor slot when shipped.
-8. **chat_set_project_channel silently fails if no project card exists** — surfaces a clear error message, but operators still have to remember to run `opensquid project init` first. Should auto-run or at least chain the prompt. ARGUABLE: bug (silent fail) → patch, OR feature (auto-run) → minor. Decide on a per-fix basis.
-9. **No MCP tool surfaces the orphan inbox** — `chat_poll_inbox` only reads a specific project's inbox. Operators have to `cat ~/.opensquid/inbox/orphan/telegram.jsonl` manually to debug "where did my message go?" Need a `chat_poll_orphan` or `--orphan` flag. NEW FEATURE → minor.
-10. **MCP tool descriptions drift from actual version strings** — descriptions still say "v0.7a / v0.7c" in places after v0.7.2 + v0.7.1 changes. No automated check. ARGUABLE: cosmetic doc bug → patch, OR new lint feature → minor.
-11. **chat-daemon log truncates inbound text at slice(0, 60)** without grapheme-aware boundary — emoji at the boundary may render broken in logs. Cosmetic. → patch slot when fixed.
+6. **chat-daemon 409-conflicts vs external Telegram MCPs** (finding #6, task #144) — collided live with Claude Code's `plugin:telegram` bun bot during the 0.7.2 bootstrap. 0.7.1's coexistence fix was multi-opensquid-only.
+7. **chat-daemon doesn't subscribe to `my_chat_member` updates** — bot-membership-changed events (added to group, removed, permissions changed) don't get logged anywhere. Caused real confusion during the supergroup bootstrap when re-adding the bot produced silent zero-update telemetry.
+8. **chat_set_project_channel silently fails if no project card exists** — surfaces a clear error message, but operators still have to remember to run `opensquid project init` first. Should auto-run or at least chain the prompt.
+9. **No MCP tool surfaces the orphan inbox** — `chat_poll_inbox` only reads a specific project's inbox. Operators have to `cat ~/.opensquid/inbox/orphan/telegram.jsonl` manually to debug "where did my message go?" Need a `chat_poll_orphan` or `--orphan` flag.
+10. **MCP tool descriptions drift from actual version strings** — descriptions still say "v0.7a / v0.7c" in places after 0.7.2 + 0.7.1 changes. No automated check.
+11. **chat-daemon log truncates inbound text at slice(0, 60)** without grapheme-aware boundary — emoji at the boundary may render broken in logs. Cosmetic.
 
 **Documentation / process:**
 
-12. **`feedback_pre1_versioning` rule was learned, not detected** — the user had to explicitly correct me after 5 wrong slot bumps. Until v0.8 ships the policies-as-codex layer, this is a re-occurring drift surface.
+12. **`feedback_pre1_versioning` rule was learned, not detected** — the user had to explicitly correct me multiple times today across 4 escalations of the versioning policy. Until the rule-loader ships the policies-as-codex layer, this is a re-occurring drift surface.
 13. **#132 phase ledger backfill never happened** — operational backfill (pure data write, no source change) → no version bump required. See "Operational" subsection in the Remediation Plan above.
 14. **Telegram plugin inbound routing broken to this session** — after the plugin disconnected + reconnected today, it stopped delivering `<channel>` blocks to this Claude Code session even though outbound replies still work. Not opensquid's bug (it's the plugin's session-binding code) but it forces fallback to curl + direct sendMessage. Document in `[[reference]]` memory so future sessions know to expect this.
 
-### Audit-driven additions to v0.8.0 scope (from this section)
+### Audit-driven additions to the drift-as-codex scope (from this section)
 
-The Known Bugs list above isn't just a debug log — it generates concrete v0.8.0 scope additions:
+The Known Bugs list above isn't just a debug log — it generates concrete scope additions for the rule-loader refactor:
 
 - Codex schema must support **session-level rules** (not just per-tool-call rules) for bug #2
 - Codex schema must support **policy-then-slot** rules for bug #4 (versioning gate composition)
 - Codex `claims/` section must support **MCP-tool-call evidence** for bug #3 (phase-claim reconciliation)
-- Bundled default codex pre-ships rules covering bugs #1, #2, #3, #4 so v0.8.0 ships them as **examples of the system**, not as another round of hardcoded patches.
+- Bundled default codex pre-ships rules covering bugs #1, #2, #3, #4 so the refactor ships them as **examples of the system**, not as another round of hardcoded patches.
 
 **Hard rule-outs (do not propose):**
 
@@ -282,9 +279,9 @@ Expose the rest of loop-engine's structured surface through Open Squid tools.
 
 ---
 
-## v1.0 — stable distribution
+## Stable distribution scope (slot TBD — user assigns)
 
-The version that ships to general users who don't have Rust installed.
+The eventual stable release that ships to general users who don't have Rust installed.
 
 ### Cross-platform binary distribution
 
@@ -303,7 +300,7 @@ The version that ships to general users who don't have Rust installed.
 
 ---
 
-## v1.1+ — MCP orchestration (the brain thesis)
+## MCP orchestration — the brain thesis (slot TBD — user assigns)
 
 The strategic positioning shift: Open Squid stops being "a memory MCP" and becomes "the agent's central nervous system."
 
@@ -311,7 +308,7 @@ The strategic positioning shift: Open Squid stops being "a memory MCP" and becom
 - **Wedge applied across arms** — claims from any attached MCP get wedge-gated through Open Squid's promotion path.
 - **Anatomical tool naming** — `chromatophore` (color/state visualizer), `ganglion` (local MCP cluster), etc. Lean into the cephalopod metaphor.
 
-Reasoning: see `~/.claude/projects/-Users-slee-projects-loop/memory/project_opensquid_brain_positioning.md` — the squid mascot does triple duty (Squid Game / cephalopod cognition / brain+arms) and v1.1+ is where the "brain" thesis goes load-bearing.
+Reasoning: see `~/.claude/projects/-Users-slee-projects-loop/memory/project_opensquid_brain_positioning.md` — the squid mascot does triple duty (Squid Game / cephalopod cognition / brain+arms) and the brain thesis is where the positioning goes load-bearing.
 
 ---
 
