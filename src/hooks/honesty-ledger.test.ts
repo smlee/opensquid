@@ -207,9 +207,195 @@ describe("CLAIM_PATTERNS catalog", () => {
     expect(ids).toContain("starting-now");
   });
 
+  it("v0.6.4: includes 5 new claim patterns from today's drift catalog", () => {
+    const ids = CLAIM_PATTERNS.map((p) => p.id);
+    expect(ids).toContain("telegram-sent");
+    expect(ids).toContain("pushed");
+    expect(ids).toContain("tagged");
+    expect(ids).toContain("phase-logged");
+    expect(ids).toContain("fmt-clippy");
+  });
+
   it("every pattern has a valid regex", () => {
     for (const p of CLAIM_PATTERNS) {
       expect(() => new RegExp(p.text_regex, "i")).not.toThrow();
     }
+  });
+});
+
+// =====================================================================
+// v0.6.4 — new claim patterns from today's drift catalog. Each test
+// asserts BOTH the unfulfilled case (broken promise) AND the fulfilled
+// case (evidence satisfied → no broken promise). Pattern-detection
+// false-positives are low-cost (one nag) but false-negatives let the
+// drift slip — these tests pin both directions.
+// =====================================================================
+
+describe("reconcile — telegram-sent (v0.6.4)", () => {
+  it("flags 'Telegram report sent' without any chat tool call", () => {
+    const broken = reconcile("🦑 Telegram report sent.", ledger(["Bash", "ls"]));
+    expect(broken.map((b) => b.claim_id)).toContain("telegram-sent");
+  });
+
+  it("satisfies when mcp__plugin_telegram_telegram__reply was called", () => {
+    const broken = reconcile(
+      "🦑 Telegram report sent.",
+      ledger(["mcp__plugin_telegram_telegram__reply", "{}"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("telegram-sent");
+  });
+
+  it("satisfies when mcp__opensquid__chat_send was called (any_of evidence)", () => {
+    const broken = reconcile(
+      "Pinged you via telegram.",
+      ledger(["mcp__opensquid__chat_send", "{}"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("telegram-sent");
+  });
+
+  it("matches 'sent to telegram' / 'pinged you' phrasings", () => {
+    const broken = reconcile("Sent to Telegram successfully.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("telegram-sent");
+    const broken2 = reconcile("Pinged you on Telegram.", ledger());
+    expect(broken2.map((b) => b.claim_id)).toContain("telegram-sent");
+  });
+});
+
+describe("reconcile — pushed (v0.6.4 — expanded alternation)", () => {
+  it("flags 'pushed to origin' without git push", () => {
+    const broken = reconcile("Pushed to origin main.", ledger(["Bash", "git status"]));
+    expect(broken.map((b) => b.claim_id)).toContain("pushed");
+  });
+
+  it("satisfies with git push call", () => {
+    const broken = reconcile("Pushed to main.", ledger(["Bash", "git push origin main"]));
+    expect(broken.map((b) => b.claim_id)).not.toContain("pushed");
+  });
+
+  it("matches 'pushing the engine' phrasing", () => {
+    const broken = reconcile("Pushing the engine commit now.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("pushed");
+  });
+
+  // v0.6.4 audit-LOW expansion: common phrasings the previous regex missed.
+  it("matches 'pushed it'", () => {
+    const broken = reconcile("Pushed it to remote.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("pushed");
+  });
+
+  it("matches 'pushed the branch'", () => {
+    const broken = reconcile("Pushed the branch.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("pushed");
+  });
+
+  it("matches 'pushed the PR'", () => {
+    const broken = reconcile("Pushed the PR.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("pushed");
+  });
+
+  it("matches 'pushed the changes'", () => {
+    const broken = reconcile("Pushed the changes upstream.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("pushed");
+  });
+});
+
+describe("reconcile — tagged (v0.6.4 — requires version-shaped token)", () => {
+  it("flags 'just tagged v0.5.0' without git tag", () => {
+    const broken = reconcile("Just tagged v0.5.0.", ledger(["Bash", "git log"]));
+    expect(broken.map((b) => b.claim_id)).toContain("tagged");
+  });
+
+  it("satisfies with git tag call", () => {
+    const broken = reconcile("Tagged v0.5.0.", ledger(["Bash", "git tag -a v0.5.0 -m 'release'"]));
+    expect(broken.map((b) => b.claim_id)).not.toContain("tagged");
+  });
+
+  // v0.6.4 audit-MED tightening: false-positive reduction. Bare
+  // "tagged" without a version-shaped token (`tagged for review`,
+  // `tagged as P0`, `tagged the file`) no longer triggers.
+  it("does NOT flag 'tagged for review' (prose, no version)", () => {
+    const broken = reconcile("This PR is tagged for review.", ledger());
+    expect(broken.map((b) => b.claim_id)).not.toContain("tagged");
+  });
+
+  it("does NOT flag 'tagged this as P0' (label prose)", () => {
+    const broken = reconcile("I tagged this issue as P0.", ledger());
+    expect(broken.map((b) => b.claim_id)).not.toContain("tagged");
+  });
+
+  it("matches 'tagged 0.5.0' (no v-prefix)", () => {
+    const broken = reconcile("Tagged 0.5.0 just now.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("tagged");
+  });
+});
+
+describe("reconcile — phase-logged (v0.6.4 — tightened to require 'phase' keyword)", () => {
+  it("flags 'logged audit phase' without mcp__opensquid__log_phase call", () => {
+    const broken = reconcile("Logged audit phase + post_research phase.", ledger(["Bash", "ls"]));
+    expect(broken.map((b) => b.claim_id)).toContain("phase-logged");
+  });
+
+  it("satisfies with mcp__opensquid__log_phase call", () => {
+    const broken = reconcile(
+      "Logging audit phase now.",
+      ledger(["mcp__opensquid__log_phase", "{}"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("phase-logged");
+  });
+
+  it("matches 'phases logged' (passive voice)", () => {
+    const broken = reconcile("Both phases logged for the task.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("phase-logged");
+  });
+
+  it("matches literal 'log_phase' MCP tool reference", () => {
+    const broken = reconcile("Called log_phase for audit.", ledger());
+    expect(broken.map((b) => b.claim_id)).toContain("phase-logged");
+  });
+
+  // v0.6.4 audit-MED tightening: false-positive reduction. Prose that
+  // uses "logged" + a phase-name word but NOT the word "phase" no
+  // longer triggers (e.g. "logged audit results" in debug discussion).
+  it("does NOT flag 'logged audit results' (debug prose, not phase ceremony)", () => {
+    const broken = reconcile("Logged audit results to the journal.", ledger());
+    expect(broken.map((b) => b.claim_id)).not.toContain("phase-logged");
+  });
+});
+
+describe("reconcile — fmt-clippy (v0.6.4)", () => {
+  it("flags 'fmt + clippy clean' without running them", () => {
+    const broken = reconcile(
+      "fmt + clippy clean, ready to commit.",
+      ledger(["Bash", "git status"]),
+    );
+    expect(broken.map((b) => b.claim_id)).toContain("fmt-clippy");
+  });
+
+  it("satisfies with cargo fmt call", () => {
+    const broken = reconcile("fmt clean.", ledger(["Bash", "cargo fmt --check"]));
+    expect(broken.map((b) => b.claim_id)).not.toContain("fmt-clippy");
+  });
+
+  it("satisfies with prettier call", () => {
+    const broken = reconcile("prettier passes.", ledger(["Bash", "npx prettier --check src/"]));
+    expect(broken.map((b) => b.claim_id)).not.toContain("fmt-clippy");
+  });
+});
+
+// =====================================================================
+// New evidence kinds (any_of + input_contains)
+// =====================================================================
+
+describe("hasEvidence — any_of (v0.6.4)", () => {
+  it("satisfies when ANY option's evidence matches", () => {
+    // claim with any_of [tool_called: A, tool_called: B]
+    // ledger has B → should be satisfied
+    const broken = reconcile("Telegram report sent.", ledger(["mcp__opensquid__chat_send", "{}"]));
+    expect(broken.map((b) => b.claim_id)).not.toContain("telegram-sent");
+  });
+
+  it("breaks when NONE of the options match", () => {
+    const broken = reconcile("Telegram report sent.", ledger(["Bash", "ls"], ["Read", "/tmp/foo"]));
+    expect(broken.map((b) => b.claim_id)).toContain("telegram-sent");
   });
 });

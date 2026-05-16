@@ -9,6 +9,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.4 — claim catalog expansion #135)
+
+**Honesty-ledger expanded with 5 new claim patterns + 2 evidence kinds.** Third item in the drift-fix track after #131 (workflow-gate active-task detection) + #134 (versioning gate). Each new pattern targets a specific "said it / didn't do it" drift shape observed in today's session.
+
+**New patterns:**
+- `telegram-sent` — claim of "Telegram report sent / sent to Telegram / pinged you" must be satisfied by either `mcp__plugin_telegram_telegram__reply` OR `mcp__opensquid__chat_send` (whichever path is wired). Caught today's silent skip when the plugin MCP disconnected.
+- `pushed` — claim of "pushed to origin / pushing the engine / pushed it / pushed the branch / pushed the PR / pushed the changes" must be satisfied by `git push` Bash call.
+- `tagged` — claim of "tagged v0.5.0 / created the tag v0.5.0 / new tag v0.5.0" must be satisfied by `git tag` Bash call. Requires a version-shaped token nearby to avoid false-positives on prose like "tagged for review."
+- `phase-logged` — claim of "logged audit phase / phases logged / log_phase" must be satisfied by `mcp__opensquid__log_phase` MCP tool call. Tightened to require "phase" keyword or literal `log_phase` to avoid false-positives on debug prose like "logged audit results."
+- `fmt-clippy` — claim of "fmt clean / clippy passes / prettier clean" must be satisfied by cargo fmt / cargo clippy / prettier / npm run format Bash call.
+
+**New evidence kinds:**
+- `any_of` — composable evidence. Satisfied when ANY listed option matches. Lets multi-tool claims (Telegram via plugin OR via opensquid) resolve correctly.
+- `input_contains` — substring match against a non-Bash tool's input_summary. Reserved for future patterns like "bumped Cargo.toml" (Edit tool + needle "Cargo.toml").
+
+**Audit-driven tightening (caught pre-commit):**
+- MED — `tagged` regex fired on prose like "tagged for review" / "tagged as P0." Now requires `tagged\s+v?\d+\.\d+` shape.
+- MED — `phase-logged` fired on "logged audit results" / "logging test results." Now requires "phase" keyword or literal `log_phase`. False-negative cost acceptable since workflow-gate is the primary defense.
+- LOW — `pushed` missed common phrasings ("pushed it", "pushed the branch"). Expanded alternation.
+
+**Coverage:** 49 honesty-ledger tests (22 existing + 27 new across the 5 patterns + audit-tightening assertions). Full suite: 429/429.
+
 ### Added — 2026-05-16 (v0.6.3 — versioning-discipline gate)
 
 **Per-commit version bump enforcement (#134).** New `versioning-gate` PreToolUse hook intercepts `git commit` calls and blocks them when source code is staged without a Cargo.toml / package.json version bump in the same commit. Structural fix for the "batching multiple fixes into one minor bump" pattern (`mem-d2cc0e78`).

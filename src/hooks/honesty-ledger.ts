@@ -31,7 +31,13 @@ export type ClaimEvidenceShape =
   | { kind: "any_tool" }
   | { kind: "bash_contains"; needle: string }
   | { kind: "bash_regex"; pattern: string }
-  | { kind: "tool_called"; tool: string };
+  | { kind: "tool_called"; tool: string }
+  // v0.6.4: composable + tool-agnostic shapes for claim patterns that
+  // can be satisfied by multiple MCP tools (e.g. telegram via plugin
+  // OR opensquid chat_send) or that match against an Edit/Write file
+  // path (e.g. "bumped Cargo.toml" → input_contains Edit + Cargo.toml).
+  | { kind: "any_of"; options: ClaimEvidenceShape[] }
+  | { kind: "input_contains"; tool: string; needle: string };
 
 export interface ClaimPattern {
   /** Stable id (e.g. "research-start"). */
@@ -93,6 +99,92 @@ export const CLAIM_PATTERNS: ClaimPattern[] = [
     text_regex: "\\b(?:audit\\s+(?:done|complete|✅)|Phase\\s+\\d+\\s*[—-]\\s*Audit)\\b",
     evidence: { kind: "any_tool" },
     promise_label: "do the audit (any inspection tool call)",
+  },
+
+  // ---- v0.6.4 expansion (drift catalog from 2026-05-16 cycle) -----
+  //
+  // Five additional patterns covering claim shapes that silently
+  // slipped today. Each was a real "said it / didn't do it" gap
+  // observed in the session transcript. Per the discipline check
+  // (`mem-3cf66f39`), structural visibility > self-correction prompts.
+
+  {
+    // Claim: "Telegram report sent" / "pinged you" / "sent to Telegram"
+    // Evidence: EITHER the external plugin's reply tool OR Open Squid's
+    // own chat_send (both can fulfill the same intent). Caught today's
+    // silent skip when the plugin MCP was disconnected.
+    id: "telegram-sent",
+    text_regex:
+      "\\b(?:telegram(?:\\s+(?:report|message))?\\s+(?:sent|delivered)|sent\\s+(?:to|via)\\s+telegram|pinged\\s+(?:you|telegram))\\b",
+    evidence: {
+      kind: "any_of",
+      options: [
+        { kind: "tool_called", tool: "mcp__plugin_telegram_telegram__reply" },
+        { kind: "tool_called", tool: "mcp__opensquid__chat_send" },
+      ],
+    },
+    promise_label: "call mcp__plugin_telegram_telegram__reply or mcp__opensquid__chat_send",
+  },
+
+  {
+    // Claim: "pushed / pushing" with a git-push-shaped object. v0.6.4
+    // audit-LOW: expanded alternation to catch "pushed it" / "pushed up"
+    // / "pushed the changes/branch/release/PR" — previous regex only
+    // matched specific objects (origin/main/remote/commit/engine/etc.)
+    // and let common phrasings slip as false negatives.
+    id: "pushed",
+    text_regex:
+      "\\b(?:pushed|pushing)\\s+(?:to\\s+(?:origin|main|remote|github)|it|up|the\\s+(?:commit|engine|opensquid|tag|fix|changes?|branch|release|PR|update))\\b",
+    evidence: { kind: "bash_regex", pattern: "git\\s+push\\b" },
+    promise_label: "git push origin <branch>",
+  },
+
+  {
+    // Claim: "tagged v0.5.0 / created the tag v0.5.0 / new tag v0.5.0"
+    // Evidence: `git tag` Bash command.
+    //
+    // v0.6.4 audit-MED tightening: require a version-shaped token
+    // (`v0.5`, `0.5.0`, `1.0.0`, etc.) near the verb. Previous
+    // `\btagged\b` alone fired on prose like "tagged for review" /
+    // "I tagged this as P0" / "the file is tagged" → noisy false
+    // positives.
+    id: "tagged",
+    text_regex:
+      "\\b(?:just\\s+)?tagged\\s+v?\\d+\\.\\d+(?:\\.\\d+)?\\b|\\bcreated\\s+(?:the\\s+|a\\s+)?tag\\s+v?\\d+\\.\\d+\\b|\\bnew\\s+tag\\s+v?\\d+\\.\\d+\\b",
+    evidence: { kind: "bash_regex", pattern: "git\\s+tag\\b" },
+    promise_label: "git tag <name>",
+  },
+
+  {
+    // Claim: phase-ceremony language (must include "phase" keyword OR
+    // explicit log_phase reference). Evidence: mcp__opensquid__log_phase
+    // call.
+    //
+    // v0.6.4 audit-MED tightening: previous regex matched "logged audit"
+    // bare, which fires on prose like "logging test results" or "logged
+    // fix details to the journal." Require the word "phase(s)" near
+    // the verb OR the literal `log_phase` identifier. False-negative
+    // cost ("logged audit + post_research" without saying "phase"
+    // won't trigger) is acceptable because the workflow-gate is the
+    // primary defense — this is the secondary visibility check.
+    id: "phase-logged",
+    text_regex:
+      "\\b(?:logged|logging)\\s+(?:the\\s+)?(?:audit|post[_-]?research|fix|test|code|learn|pre[_-]?research)\\s+phase\\b|\\bphases?\\s+logged\\b|\\blog_phase\\b",
+    evidence: { kind: "tool_called", tool: "mcp__opensquid__log_phase" },
+    promise_label: "call mcp__opensquid__log_phase",
+  },
+
+  {
+    // Claim: "fmt clean / clippy clean / prettier clean / formatting passes"
+    // Evidence: ran fmt/clippy/prettier via Bash. Catches the pattern
+    // where I assert cleanliness without verification.
+    id: "fmt-clippy",
+    text_regex: "\\b(?:fmt|clippy|prettier|formatting)\\s+(?:clean|passes?|passing|green|ok|✅)\\b",
+    evidence: {
+      kind: "bash_regex",
+      pattern: "(cargo\\s+(?:fmt|clippy)|prettier|npm\\s+run\\s+(?:format|lint))",
+    },
+    promise_label: "run cargo fmt / cargo clippy / prettier / npm run format",
   },
 ];
 
@@ -268,6 +360,10 @@ function hasEvidence(ev: ClaimEvidenceShape, ledger: TurnLedgerEntry[]): boolean
       }
       return ledger.some((e) => e.tool === "Bash" && re.test(e.input_summary));
     }
+    case "any_of":
+      return ev.options.some((opt) => hasEvidence(opt, ledger));
+    case "input_contains":
+      return ledger.some((e) => e.tool === ev.tool && e.input_summary.includes(ev.needle));
   }
 }
 
