@@ -9,6 +9,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.11 — daemon auto-spawn from MCP server, Phase D of v0.7.1 #141)
+
+**MCP server now opportunistically ensures the chat-daemon is running** so users never have to remember `opensquid chat-daemon start`. Fire-and-forget on every MCP server boot — non-blocking, errors land in stderr.
+
+**Decision tree (`ensureDaemonRunning`):**
+
+1. `no_config` — no `chat_connections` in `~/.opensquid/config.json` → skip
+2. `already_running` — `status()` reports the daemon up → done (every steady-state startup hits this)
+3. Try to acquire `~/.opensquid/chat-daemon.spawn.lock` atomically via `fs.open(path, 'wx')`:
+   - **Lock acquired:** re-check status (race window) → call `startDaemon` → release lock in finally
+   - **Lock NOT acquired:** another MCP server is mid-spawn → poll `status()` for up to 8s for the peer's pidfile → `waited_for_peer`
+4. Stale lock cleanup: lockfile older than 15s is unlinked + retried (covers the case where a previous spawner crashed mid-init)
+5. Errors: surface as `status: 'error'`, MCP server boot continues regardless
+
+**Cross-platform note:** atomic O_CREAT|O_EXCL via Node's 'wx' flag works on POSIX AND Windows. Signal-driven shutdown is still Unix-only; Windows users may need to manually `opensquid chat-daemon stop` if the daemon ever needs killing.
+
+**Tests:** 5 new autospawn tests covering no_config decision branch, lock release after attempt regardless of spawn outcome, stale-lock cleanup, no-throw on corrupt config (degrades to no_config), already_running detection against a peer-spawned daemon. Full suite: 493/493.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.10 → 0.6.11.
+
 ### Added — 2026-05-16 (v0.6.10 — per-project chat-routing + inbound inboxes, Phase C of v0.7.1 #140)
 
 **Per-project chat-routing.json schema** lets each project declare its own outbound report channel + inbound channel/chat allowlist on a single bot token. The daemon reads all routing files on boot, builds a `<platform>:<chat_id>` → `project_uuid` index, and on each inbound message looks the source channel up and appends to the matching project's JSONL inbox. No match → orphan inbox catch-all.

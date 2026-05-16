@@ -1293,6 +1293,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
+// v0.7.1 Phase D: opportunistically ensure the chat-daemon is running
+// so chat_send routes through it and inbound Telegram/Discord/Slack
+// messages land in per-project inboxes. Fire-and-forget — never block
+// the MCP server's stdio loop on daemon spawn. No-op when no chat
+// platforms are configured.
+void (async () => {
+  try {
+    const { ensureDaemonRunning } = await import("./chat/daemon/autospawn.js");
+    const res = await ensureDaemonRunning();
+    if (res.status === "spawned" || res.status === "waited_for_peer") {
+      process.stderr.write(
+        `[opensquid] chat-daemon ${res.status === "spawned" ? "started" : "found peer"} (pid ${res.pid})\n`,
+      );
+    } else if (res.status === "error") {
+      process.stderr.write(`[opensquid] chat-daemon autospawn error: ${res.error}\n`);
+    }
+    // "already_running" / "no_config" → silent
+  } catch (err) {
+    process.stderr.write(
+      `[opensquid] chat-daemon autospawn import failed: ${err instanceof Error ? err.message : err}\n`,
+    );
+  }
+})();
+
 // Clean engine shutdown when MCP transport closes.
 process.on("SIGTERM", () => {
   engine.shutdown();
