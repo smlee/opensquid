@@ -9,6 +9,36 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (0.7.3 — drift-as-codex chunk 1: schema + bundled-default #146)
+
+**Foundation for the drift-as-codex refactor.** Hardcoded drift gates (drift-patterns, workflow-gate, honesty-ledger, versioning-gate) will become generic loaders reading rule definitions from codex YAML. This chunk ships the schema + a bundled-default codex encoding today's rules. No loader yet (chunk 2). No removal of hardcoded TS (chunk 3, after behavioral equivalence is proven).
+
+**New codex sections on `FocusedCodex` (all optional, additive):**
+
+- `drifts` — port of `DriftPattern` shape. Each entry: `id`, `tool` (Bash/Edit/Write/\*), `trigger` (bash_contains/bash_regex/text_regex), `lesson`, `message`, `severity` (block/warn).
+- `workflows` — new shape. Each workflow has `id`, ordered `phases` (each with `name`, `required` flag, optional `description`), and `enforce_on` list of terminal tool calls that trigger gate enforcement.
+- `default_workflow_id` — codex-level pointer to the default workflow when multiple are defined.
+- `claims` — port of honesty-ledger pattern shape. `id`, `claim_pattern` (regex), `evidence` (discriminated union: `tool_call` / `bash_contains` / `bash_regex` / `input_contains` / recursive `any_of`), `unfulfilled_message`, `severity`.
+- `policies` — declarative rules. Two kinds in v1: `versioning` (per_commit_required, allowed_slots, slot_for) and `phase_logged` (workflow_id, enforce_on).
+
+**Bundled-default codex** (`src/codex/bundled-default/codex.yaml`):
+
+- 4 standard drifts: never-amend, no-implicit-push, substrate-purity, no-force-push-main
+- `standard-7-phase` workflow with all 7 phases (pre_research → learn → code → test → audit → post_research → fix); `fix` marked optional
+- 5 honesty-ledger claims (telegram-sent, pushed, tagged, phase-logged, fmt-clippy) — full ~12-pattern catalog ports in a later chunk
+- `versioning-pre1-patch-only` policy encoding the PATCH-ONLY rule from `[[feedback_pre1_versioning]]`
+- `phase-logged-7-phase` policy referencing the standard workflow
+
+Added to npm `files` array so it ships with the published package.
+
+**Design doc** (`docs/drift-as-codex-design.md`) covers schema decisions, deferred decisions for chunk 2, backward compatibility guarantees.
+
+**Tests:** 13 new tests in `src/codex/bundled-default/bundled-default.test.ts`: round-trip parse, focused-codex id check, presence of 4 drifts + 7-phase workflow + 5 claims + both policies, schema rejection of bad severity / empty phases / empty allowed_slots, backward compat (codex without any new sections still parses). Full suite: 516/516.
+
+**Backward compatibility:** all four new fields are optional on `FocusedCodex` — existing codexes parse unchanged. Hooks still use hardcoded TS until chunk 2 (loader) and chunk 3 (cutover) land.
+
+Per [[feedback_pre1_versioning]] v4 PATCH-ONLY rule: src change → patch bump. 0.7.2 → 0.7.3.
+
 ### Added — 2026-05-16 (v0.7.2 — Telegram forum-topic support #143)
 
 **One supergroup, per-project topics, one bot.** v0.7.1 already let multiple Claude Code projects share a bot token via the chat-daemon; v0.7.2 adds the cleaner UX of having each project as a Telegram **forum topic** inside a single shared supergroup, instead of N separate channels.

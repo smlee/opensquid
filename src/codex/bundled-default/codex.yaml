@@ -1,0 +1,237 @@
+# =====================================================================
+# Open Squid bundled-default codex (drift-as-codex chunk 1, 0.7.3+)
+#
+# Encodes today's hardcoded drift gates as YAML data:
+#   - `drifts/`     — ports DRIFT_PATTERNS from src/hooks/drift-patterns.ts
+#   - `workflows/`  — encodes the locked 7-phase workflow as a CodexWorkflowEntry
+#   - `claims/`     — ports the honesty-ledger catalog (subset; full catalog ports later)
+#   - `policies/`   — encodes the PATCH-ONLY pre-1.0 versioning policy
+#                     ([[feedback_pre1_versioning]]) + the workflow-gate
+#                     phase-logged requirement
+#
+# The hooks still use their hardcoded TypeScript today. The loader
+# (next chunk) will: read the active project's codex, merge with THIS
+# bundled-default, expose typed lists. Until then this file is
+# documentation-of-intent + the schema-parser fixture for tests.
+#
+# Anyone disagreeing with these defaults can ship their own codex
+# overriding any section — that's the whole point of the refactor.
+# =====================================================================
+
+id: opensquid-default
+version: "1.0.0"
+author:
+  name: "Open Squid"
+  contact: "https://github.com/smlee/opensquid"
+license: "MIT"
+description: |
+  Default drift-protection codex bundled with Open Squid. Encodes the
+  rules the project author runs in their own sessions: 7-phase
+  workflow, PATCH-ONLY pre-1.0 versioning, the standard drift catalog
+  (never-amend, no-implicit-push, substrate-purity, no-force-push-main),
+  honesty-ledger claim catalog. Override sections in your own codex to
+  customize without forking the npm package.
+
+# ---------------------------------------------------------------------
+# Drifts — port of DRIFT_PATTERNS in src/hooks/drift-patterns.ts
+# ---------------------------------------------------------------------
+
+drifts:
+  - id: never-amend
+    tool: Bash
+    trigger:
+      kind: bash_regex
+      pattern: 'git\s+commit\b[^\n]*\s--amend\b'
+    lesson: auto-commit
+    severity: block
+    message: >-
+      BLOCKED: `git commit --amend` violates the never-amend rule
+      (CLAUDE.md claude-overrides:v1, feedback_auto_commit). Even on
+      unpushed commits — make a follow-up commit instead. Override
+      only if the user explicitly requested an amend in THIS turn.
+
+  - id: no-implicit-push
+    tool: Bash
+    trigger:
+      kind: bash_regex
+      pattern: 'git\s+push\b'
+    lesson: auto-commit
+    severity: block
+    message: >-
+      BLOCKED: `git push` requires explicit user authorization. Commits
+      stay local until the user says push. If the user just said to
+      push (or has pre-authorized pushes per CLAUDE.md), bypass with
+      OPENSQUID_SKIP_DRIFT=1 for this command.
+
+  - id: substrate-purity
+    tool: Bash
+    trigger:
+      kind: bash_regex
+      pattern: 'loop/engine.*git\s+commit[^\n]*-m[^\n]*(codex|opensquid|MindCraftor)'
+      strip_quotes: false
+    lesson: code-quality
+    severity: warn
+    message: >-
+      WARN: engine commit message appears to reference a
+      consumer-product concept (codex / opensquid / MindCraftor).
+      Engine commit messages must stay substrate-pure — engine speaks
+      in engine types only. Re-word using Pack provenance / lesson /
+      authorship terminology.
+
+  - id: no-force-push-main
+    tool: Bash
+    trigger:
+      kind: bash_regex
+      pattern: 'git\s+push\b[^\n]*(--force|-f)\b[^\n]*\b(main|master)\b'
+    lesson: auto-commit
+    severity: block
+    message: >-
+      BLOCKED: force-push to main/master is destructive. Requires
+      explicit user request — and even then, prefer a regular push or
+      a new branch.
+
+# ---------------------------------------------------------------------
+# Workflows — the locked 7-phase rule per [[feedback_workflow_cycle]]
+# ---------------------------------------------------------------------
+
+workflows:
+  - id: standard-7-phase
+    description: >-
+      The locked 7-phase workflow. Every substantive task runs
+      pre_research → learn → code → test → audit → post_research →
+      fix before its terminal action (commit). Phase entries live in
+      ~/.opensquid/phase_ledger/<session>/<task>/<phase>.yaml.
+    enforce_on:
+      - git_commit
+    phases:
+      - name: pre_research
+        required: true
+        description: >-
+          Survey state, identify what's safe to ship, scope the work
+          before writing code.
+      - name: learn
+        required: true
+        description: >-
+          Confirm conventions, language idioms, framework patterns
+          relevant to the task.
+      - name: code
+        required: true
+        description: >-
+          Make the actual change. Logging skip allowed for
+          docs-only or operational tasks.
+      - name: test
+        required: true
+        description: >-
+          Run the locked pre-push checklist (typecheck + prettier +
+          build + test for opensquid; fmt + clippy + nightly
+          public-api + test for engine).
+      - name: audit
+        required: true
+        description: >-
+          Review the diff for issues — versioning compliance, drift
+          patterns, edge cases. Frequently catches real defects.
+      - name: post_research
+        required: true
+        description: >-
+          Validate the approach against memory + locked rules before
+          shipping. Catches "drift from intent."
+      - name: fix
+        required: false
+        description: >-
+          Address findings from audit / post_research. Skip-with-
+          reason allowed when audit found nothing actionable; log
+          `note: not needed, audit clean` for the skip.
+
+default_workflow_id: standard-7-phase
+
+# ---------------------------------------------------------------------
+# Claims — port of honesty-ledger catalog (subset; full port lands in
+# a later chunk so the schema can be validated first)
+# ---------------------------------------------------------------------
+
+claims:
+  - id: telegram-sent
+    claim_pattern: '(?:Telegram report sent|sent to Telegram|pinged you on Telegram)'
+    evidence:
+      kind: any_of
+      options:
+        - kind: tool_call
+          tool: mcp__plugin_telegram_telegram__reply
+        - kind: tool_call
+          tool: mcp__opensquid__chat_send
+    unfulfilled_message: >-
+      Said the Telegram report was sent but no chat_send or telegram
+      reply tool call was made this turn.
+    severity: warn
+
+  - id: pushed
+    claim_pattern: '(?:pushed to origin|pushed the (?:engine|branch|PR|changes)|pushed it)'
+    evidence:
+      kind: bash_regex
+      pattern: 'git\s+push\b'
+    unfulfilled_message: >-
+      Said a push happened but no `git push` Bash call was made this
+      turn.
+    severity: warn
+
+  - id: tagged
+    claim_pattern: 'tagged\s+v?\d+\.\d+'
+    evidence:
+      kind: bash_regex
+      pattern: 'git\s+tag\b'
+    unfulfilled_message: >-
+      Said a version tag was created but no `git tag` Bash call was
+      made this turn.
+    severity: warn
+
+  - id: phase-logged
+    claim_pattern: '(?:logged\s+\w+\s+phase|phases?\s+logged|log_phase)'
+    evidence:
+      kind: tool_call
+      tool: mcp__opensquid__log_phase
+    unfulfilled_message: >-
+      Said a phase was logged but no log_phase MCP call was made this
+      turn.
+    severity: warn
+
+  - id: fmt-clippy
+    claim_pattern: '(?:fmt clean|clippy passes|prettier (?:check |)clean)'
+    evidence:
+      kind: any_of
+      options:
+        - kind: bash_regex
+          pattern: 'cargo\s+(?:fmt|clippy)'
+        - kind: bash_regex
+          pattern: 'prettier\s+--(?:check|write)'
+        - kind: bash_regex
+          pattern: 'npm\s+run\s+(?:format|lint)'
+    unfulfilled_message: >-
+      Claimed lint/format clean but no cargo fmt/clippy or prettier
+      run was observed this turn.
+    severity: warn
+
+# ---------------------------------------------------------------------
+# Policies — declarative rules higher-level gates enforce
+# ---------------------------------------------------------------------
+
+policies:
+  - id: versioning-pre1-patch-only
+    kind: versioning
+    params:
+      # Pre-1.0 PATCH-ONLY rule per [[feedback_pre1_versioning]] v4.
+      # The agent may only bump patch. Minor/major slot allocation is
+      # exclusively the user's call.
+      per_commit_required: true
+      allowed_slots:
+        - patch
+      slot_for:
+        bug_fix: patch
+        feature: patch
+        breaking: patch
+
+  - id: phase-logged-7-phase
+    kind: phase_logged
+    params:
+      workflow_id: standard-7-phase
+      enforce_on:
+        - git_commit

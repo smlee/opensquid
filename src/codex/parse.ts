@@ -15,7 +15,16 @@ import type {
   Codex,
   CodexActivationScope,
   CodexBankStrategy,
+  CodexClaimEntry,
+  CodexClaimEvidence,
   CodexDetection,
+  CodexDriftEntry,
+  CodexDriftSeverity,
+  CodexDriftToolMatch,
+  CodexDriftTrigger,
+  CodexPolicyEntry,
+  CodexWorkflowEntry,
+  CodexWorkflowPhase,
   CompositeCodex,
   FocusedCodex,
 } from "./types.js";
@@ -178,6 +187,107 @@ const CompositeCodexSchema = HeaderSchema.extend({
     .min(1),
 });
 
+// ---------------------------------------------------------------------
+// Drift-as-codex section schemas (0.7.3+, additive)
+// ---------------------------------------------------------------------
+
+const DriftSeveritySchema: z.ZodType<CodexDriftSeverity> = z.enum(["block", "warn"]);
+
+const DriftToolMatchSchema: z.ZodType<CodexDriftToolMatch> = z.enum(["Bash", "Edit", "Write", "*"]);
+
+const DriftTriggerSchema: z.ZodType<CodexDriftTrigger> = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("bash_contains"),
+    needle: z.string().min(1),
+    strip_quotes: z.boolean().optional(),
+  }),
+  z.object({
+    kind: z.literal("bash_regex"),
+    pattern: z.string().min(1),
+    strip_quotes: z.boolean().optional(),
+  }),
+  z.object({
+    kind: z.literal("text_regex"),
+    pattern: z.string().min(1),
+    field: z.string().min(1),
+  }),
+]);
+
+const DriftEntrySchema: z.ZodType<CodexDriftEntry> = z.object({
+  id: z.string().min(1),
+  tool: DriftToolMatchSchema,
+  trigger: DriftTriggerSchema,
+  lesson: z.string().min(1),
+  message: z.string().min(1),
+  severity: DriftSeveritySchema,
+});
+
+const WorkflowPhaseSchema: z.ZodType<CodexWorkflowPhase> = z.object({
+  name: z.string().min(1),
+  required: z.boolean(),
+  description: z.string().optional(),
+});
+
+const WorkflowEntrySchema: z.ZodType<CodexWorkflowEntry> = z.object({
+  id: z.string().min(1),
+  phases: z.array(WorkflowPhaseSchema).min(1),
+  enforce_on: z.array(z.string().min(1)).min(1),
+  description: z.string().optional(),
+});
+
+const ClaimEvidenceSchema: z.ZodType<CodexClaimEvidence> = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("tool_call"), tool: z.string().min(1) }),
+    z.object({ kind: z.literal("bash_contains"), needle: z.string().min(1) }),
+    z.object({ kind: z.literal("bash_regex"), pattern: z.string().min(1) }),
+    z.object({
+      kind: z.literal("input_contains"),
+      tool: z.string().min(1),
+      field: z.string().min(1),
+      needle: z.string().min(1),
+    }),
+    z.object({ kind: z.literal("any_of"), options: z.array(ClaimEvidenceSchema).min(1) }),
+  ]),
+);
+
+const ClaimEntrySchema: z.ZodType<CodexClaimEntry> = z.object({
+  id: z.string().min(1),
+  claim_pattern: z.string().min(1),
+  evidence: ClaimEvidenceSchema,
+  unfulfilled_message: z.string().min(1),
+  severity: DriftSeveritySchema,
+});
+
+const VersioningPolicySchema = z.object({
+  per_commit_required: z.boolean(),
+  allowed_slots: z.array(z.enum(["patch", "minor", "major"])).min(1),
+  slot_for: z
+    .object({
+      bug_fix: z.enum(["patch", "minor", "major"]).optional(),
+      feature: z.enum(["patch", "minor", "major"]).optional(),
+      breaking: z.enum(["patch", "minor", "major"]).optional(),
+    })
+    .optional(),
+});
+
+const PhaseLoggedPolicySchema = z.object({
+  workflow_id: z.string().min(1),
+  enforce_on: z.array(z.string().min(1)).min(1),
+});
+
+const PolicyEntrySchema: z.ZodType<CodexPolicyEntry> = z.discriminatedUnion("kind", [
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal("versioning"),
+    params: VersioningPolicySchema,
+  }),
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal("phase_logged"),
+    params: PhaseLoggedPolicySchema,
+  }),
+]);
+
 const FocusedCodexSchema = HeaderSchema.extend({
   kind: z.literal("focused").optional(),
   foundation: CodexFoundationSchema.optional(),
@@ -188,6 +298,11 @@ const FocusedCodexSchema = HeaderSchema.extend({
   memory_templates: z.array(MemoryTemplateSchema).optional(),
   doc_fetch: z.array(DocFetchSchema).optional(),
   reference_docs: z.array(ReferenceDocSchema).optional(),
+  drifts: z.array(DriftEntrySchema).optional(),
+  workflows: z.array(WorkflowEntrySchema).optional(),
+  default_workflow_id: z.string().min(1).optional(),
+  claims: z.array(ClaimEntrySchema).optional(),
+  policies: z.array(PolicyEntrySchema).optional(),
   evolves: z.boolean().optional(),
 });
 

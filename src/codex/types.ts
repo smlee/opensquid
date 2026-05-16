@@ -178,6 +178,164 @@ export interface CodexReferenceDoc {
 }
 
 // ---------------------------------------------------------------------
+// Drift-as-codex sections (chunk 1, 0.7.3+)
+// ---------------------------------------------------------------------
+//
+// Today's hardcoded drift gates (drift-patterns.ts, workflow-gate.ts,
+// honesty-ledger.ts, versioning-gate.ts) move into codex YAML so users
+// with different workflows don't have to fork the npm package. The
+// loader (next chunk) reads the active project's codex + the bundled
+// default + composes the live catalog. This chunk only adds the
+// schema + a bundled-default codex; the hooks still use their
+// hardcoded TS until the loader chunk lands.
+
+/** Severity for drift / workflow / claim findings. */
+export type CodexDriftSeverity = "block" | "warn";
+
+/** Which tool a drift pattern matches against. */
+export type CodexDriftToolMatch = "Bash" | "Edit" | "Write" | "*";
+
+/** Drift pattern trigger — same shape as DriftTrigger in drift-patterns.ts. */
+export type CodexDriftTrigger =
+  | { kind: "bash_contains"; needle: string; strip_quotes?: boolean }
+  | { kind: "bash_regex"; pattern: string; strip_quotes?: boolean }
+  | { kind: "text_regex"; pattern: string; field: string };
+
+/**
+ * A drift pattern entry — port of DriftPattern (drift-patterns.ts:20).
+ * The loader composes a catalog from all codex `drifts/` entries +
+ * the bundled-default's entries.
+ */
+export interface CodexDriftEntry {
+  id: string;
+  tool: CodexDriftToolMatch;
+  trigger: CodexDriftTrigger;
+  /** Lesson id in the workflow codex that owns this rule. */
+  lesson: string;
+  /** Agent-facing explanation surfaced when triggered. */
+  message: string;
+  severity: CodexDriftSeverity;
+}
+
+/**
+ * A single phase in a workflow. The `name` is the user's identifier
+ * (e.g. "pre_research", "learn", "code", "test", "audit",
+ * "post_research", "fix" for the locked 7-phase rule, or whatever
+ * sequence another user prefers).
+ */
+export interface CodexWorkflowPhase {
+  name: string;
+  /**
+   * When false, the phase may be skipped if the agent logs a
+   * `skip` entry with a reason in the phase ledger. When true, the
+   * workflow-gate refuses to allow the task's terminal action (commit,
+   * push, etc.) without a non-skip phase entry.
+   */
+  required: boolean;
+  /** Optional short description shown in error messages. */
+  description?: string;
+}
+
+/**
+ * Workflow definition — ordered phase sequence + which terminal action
+ * triggers gate enforcement. Multiple workflows can be defined per
+ * codex (e.g. one for "ship a feature", a shorter one for "ship a docs
+ * fix"); active workflow is selected by `default_workflow_id` or by
+ * an explicit `workflow_id` on the task.
+ */
+export interface CodexWorkflowEntry {
+  id: string;
+  phases: CodexWorkflowPhase[];
+  /**
+   * Tool calls that trigger the gate (e.g. ["git_commit", "git_push"]).
+   * The loader maps these to PreToolUse hook triggers.
+   */
+  enforce_on: string[];
+  description?: string;
+}
+
+/**
+ * Evidence shape for a claim — what tool call (or call composition)
+ * counts as fulfilling the claim. Mirrors honesty-ledger.ts evidence
+ * kinds. `any_of` is recursive so claims like "telegram-sent" can
+ * resolve via either of two MCP tools.
+ */
+export type CodexClaimEvidence =
+  | { kind: "tool_call"; tool: string }
+  | { kind: "bash_contains"; needle: string }
+  | { kind: "bash_regex"; pattern: string }
+  | { kind: "input_contains"; tool: string; field: string; needle: string }
+  | { kind: "any_of"; options: CodexClaimEvidence[] };
+
+/**
+ * A claim pattern — port of HonestyLedger pattern shape. Loader
+ * composes the active project's catalog + bundled-default.
+ */
+export interface CodexClaimEntry {
+  id: string;
+  /** Regex matched against assistant text since last user turn. */
+  claim_pattern: string;
+  /** Evidence shape that fulfills the claim. */
+  evidence: CodexClaimEvidence;
+  /** User-facing message when the claim is unfulfilled. */
+  unfulfilled_message: string;
+  severity: CodexDriftSeverity;
+}
+
+/**
+ * A policy entry — declarative rules the versioning-gate / other
+ * higher-level gates enforce. v1 ships two policy kinds:
+ *
+ *   - `versioning`: per-commit version bump policy (slot rules, etc.)
+ *   - `phase_logged`: require N phases logged before a terminal action
+ *
+ * The `params` shape is per-policy-kind; loader narrows by `kind`.
+ */
+export type CodexPolicyEntry =
+  | {
+      id: string;
+      kind: "versioning";
+      params: CodexVersioningPolicy;
+    }
+  | {
+      id: string;
+      kind: "phase_logged";
+      params: CodexPhaseLoggedPolicy;
+    };
+
+export interface CodexVersioningPolicy {
+  /**
+   * When true, any commit touching src/** must include a version-line
+   * change in Cargo.toml / package.json. The existing versioning-gate
+   * v0.6.3 behavior. Pre-1.0 PATCH-ONLY rule defaults this to true.
+   */
+  per_commit_required: boolean;
+  /**
+   * Which slot the agent may bump. Pre-1.0 PATCH-ONLY rule restricts
+   * this to ["patch"]. A future stable codex may allow ["patch",
+   * "minor"] etc.
+   */
+  allowed_slots: Array<"patch" | "minor" | "major">;
+  /**
+   * Optional finer-grained policy: for a given change type, which slot
+   * is expected. Used by a future v0.8 lint-style check that detects
+   * "diff looks like a feature, was bumped as patch → block".
+   */
+  slot_for?: {
+    bug_fix?: "patch" | "minor" | "major";
+    feature?: "patch" | "minor" | "major";
+    breaking?: "patch" | "minor" | "major";
+  };
+}
+
+export interface CodexPhaseLoggedPolicy {
+  /** Workflow id whose phases must be logged. */
+  workflow_id: string;
+  /** Which terminal tool calls trigger this policy. */
+  enforce_on: string[];
+}
+
+// ---------------------------------------------------------------------
 // Two codex kinds (focused vs composite)
 // ---------------------------------------------------------------------
 
@@ -240,6 +398,16 @@ export interface FocusedCodex extends CodexBaseHeader {
   memory_templates?: CodexMemoryTemplate[];
   doc_fetch?: CodexDocFetch[];
   reference_docs?: CodexReferenceDoc[];
+  /**
+   * Drift-as-codex sections (0.7.3+, additive). Hooks consume these
+   * via the loader (next chunk); existing codexes without them parse
+   * unchanged.
+   */
+  drifts?: CodexDriftEntry[];
+  workflows?: CodexWorkflowEntry[];
+  default_workflow_id?: string;
+  claims?: CodexClaimEntry[];
+  policies?: CodexPolicyEntry[];
   /** When true, engine refines this codex via gated lesson promotion. */
   evolves?: boolean;
 }
