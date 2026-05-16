@@ -1,9 +1,11 @@
-# 🦑 opensquid
+# 🦑 Open Squid
 
 > **Your agent learns. You decide what gets locked in.**
 > The MCP server that stops your AI agent from grading its own homework.
 
-opensquid is the user-facing MCP layer over [`loop-engine`](https://github.com/MindcraftorAI/loop-engine) — a Rust cognitive-memory substrate with an **anti-self-grading promotion gate** at its core. Your agent proposes lessons; you decide which ones graduate.
+Open Squid is the user-facing MCP layer over [`loop-engine`](https://github.com/MindcraftorAI/loop-engine) — a Rust cognitive-memory substrate with an **anti-self-grading promotion gate** at its core. Your agent proposes lessons; you decide which ones graduate.
+
+> **Naming note:** "Open Squid" is the display brand. `opensquid` (one word, lowercase) is the technical artifact — the npm package, the CLI binary, the MCP server name, the config directory `~/.opensquid/`. When you read prose, you'll see "Open Squid"; when you read code, file paths, or commands, you'll see `opensquid`.
 
 No self-promotion. No vibes. External evidence only.
 
@@ -17,7 +19,7 @@ No self-promotion. No vibes. External evidence only.
 
 ## What it does
 
-opensquid surfaces these tools to your AI agent via MCP.
+Open Squid surfaces these tools to your AI agent via MCP.
 
 ### Memory layer
 
@@ -55,7 +57,7 @@ Behind those tools sits the full `loop-engine` machinery: causal-narrative gener
 
 ## The wedge
 
-Every promotion through opensquid runs an external-evidence check. A lesson cannot graduate to `promoted` based on the originating agent's own thumbs-up — it must carry:
+Every promotion through Open Squid runs an external-evidence check. A lesson cannot graduate to `promoted` based on the originating agent's own thumbs-up — it must carry:
 
 - Structured causal narrative (`trigger / failure_mode / correction`)
 - Confidence level (observed / inferred / speculative)
@@ -69,7 +71,7 @@ User authorship is load-bearing. If you (the human) explicitly endorse a lesson,
 
 ## Hooks (v0.4)
 
-opensquid installs four Claude Code hooks that work even when the agent forgets to call its tools.
+Open Squid installs four Claude Code hooks that work even when the agent forgets to call its tools.
 
 | Hook                      | What it catches                                                                                                                                                                                                             |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -91,7 +93,7 @@ node dist/index.js hooks uninstall   # idempotent
 
 Once published, `npm install opensquid` will bring the `loop-engine` Rust binary along automatically via npm `optionalDependencies` — same pattern esbuild / biomejs / swc use. Six per-platform packages (`opensquid-engine-{darwin,linux,win32}-{x64,arm64}`) each ship a single native binary; npm's `os` / `cpu` fields ensure only the right one installs on a given host.
 
-Until then (and for git-clone / monorepo dev), opensquid falls through a 5-step discovery chain that locates the engine binary at:
+Until then (and for git-clone / monorepo dev), Open Squid falls through a 5-step discovery chain that locates the engine binary at:
 
 1. `OPENSQUID_ENGINE_BIN` env var
 2. The path persisted in `~/.opensquid/config.json` `engine_bin`
@@ -105,11 +107,11 @@ The first auto-discovery hit persists itself back to `config.json` so subsequent
 
 ## Codex packs (v0.4)
 
-opensquid speaks a YAML pack format called **codex** — portable bundles of foundation (tools/domains/methodologies), lessons, and detection rules.
+Open Squid speaks a YAML pack format called **codex** — portable bundles of foundation (tools/domains/methodologies), lessons, and detection rules.
 
 - **Reads** Anthropic / superpowers / ECC / Hermes `SKILL.md` as input — the existing skill ecosystem is accessible day-1 (v0.6d).
-- **Writes** opensquid's richer native codex format with explicit activation rules and wedge-gated lessons.
-- **Exports** `.claude-plugin/plugin.json` + per-host shims so a codex runs in vanilla Claude Code with opensquid uninstalled. Your packs aren't locked to your runtime.
+- **Writes** Open Squid's richer native codex format with explicit activation rules and wedge-gated lessons.
+- **Exports** `.claude-plugin/plugin.json` + per-host shims so a codex runs in vanilla Claude Code with Open Squid uninstalled. Your packs aren't locked to your runtime.
 
 ```bash
 node dist/index.js codex list
@@ -139,7 +141,7 @@ Conversion is 100% deterministic — no LLM call. Anthropic frontmatter (`name`,
 
 ## Portability: import / export across projects and machines
 
-opensquid has end-to-end import/export at two granularities so the same rules / lessons / memories work across projects, machines, and team handoffs.
+Open Squid has end-to-end import/export at two granularities so the same rules / lessons / memories work across projects, machines, and team handoffs.
 
 **Codex-level** (per skill pack — share a curated rule pack with a teammate or with another project):
 
@@ -151,7 +153,7 @@ node dist/index.js codex install ~/rules-bundle/ --force
 
 The bundle round-trips through the same install path. Engine v1.2 upsert by `(pack_id, external_id)` means re-installing the same codex updates rows in place — no duplicate engine lessons, no duplicate CLAUDE.md lines.
 
-**System-level** (entire opensquid state — for backup or machine migration):
+**System-level** (entire Open Squid state — for backup or machine migration):
 
 ```bash
 node dist/index.js export --output ~/opensquid-backup.tar.gz
@@ -178,7 +180,7 @@ Register with Claude Code (user scope = available across all sessions):
 claude mcp add --scope user opensquid -- node /absolute/path/to/opensquid/dist/index.js
 ```
 
-Restart Claude Code. The tools appear under the `opensquid` server in `/mcp`.
+Restart Claude Code. The tools appear under the `opensquid` server in `/mcp` (the server registers itself by its technical name).
 
 ### Idempotent CLAUDE.md installer
 
@@ -191,11 +193,11 @@ node dist/index.js doctor          # check what's installed
 node dist/index.js uninstall       # strip the block, leave the rest intact
 ```
 
-Detect-don't-replace: existing CLAUDE.md content is preserved; only opensquid's sentinel-bracketed block is touched. Promoted lessons publish themselves into the `<!-- opensquid-rules -->` sub-block on every `promote` call.
+Detect-don't-replace: existing CLAUDE.md content is preserved; only Open Squid's sentinel-bracketed block is touched. Promoted lessons publish themselves into the `<!-- opensquid-rules -->` sub-block on every `promote` call.
 
 ### Project ID card + engine binary registry (v0.4)
 
-opensquid writes a `.opensquid/project.json` ID card into each project so identity survives folder moves and renames. A global `~/.opensquid/config.json` records where the engine binary lives, so opensquid keeps working when you relocate the engine checkout.
+Open Squid writes a `.opensquid/project.json` ID card into each project so identity survives folder moves and renames. A global `~/.opensquid/config.json` records where the engine binary lives, so Open Squid keeps working when you relocate the engine checkout.
 
 ```bash
 node dist/index.js project doctor
@@ -206,7 +208,7 @@ node dist/index.js engine doctor
 
 ## Pairing with Hermes Agent
 
-If you use [Hermes Agent](https://github.com/NousResearch/hermes-agent), opensquid is additive — it sits alongside your existing memory backend (mem0 / hindsight / openviking / etc.) and adds a wedge-gated rule layer on top.
+If you use [Hermes Agent](https://github.com/NousResearch/hermes-agent), Open Squid is additive — it sits alongside your existing memory backend (mem0 / hindsight / openviking / etc.) and adds a wedge-gated rule layer on top.
 
 Hermes is already an MCP client. One command:
 
@@ -214,7 +216,7 @@ Hermes is already an MCP client. One command:
 hermes mcp add opensquid -- node /absolute/path/to/opensquid/dist/index.js
 ```
 
-Your existing Hermes setup is untouched. Now your agent has `remember` / `promote` / `recall` as MCP tools, with the wedge invariants opensquid enforces:
+Your existing Hermes setup is untouched. Now your agent has `remember` / `promote` / `recall` as MCP tools, with the wedge invariants Open Squid enforces:
 
 - Only the human can promote a candidate to a rule. The agent proposes; the user endorses; the engine refuses to self-promote.
 - User-authored content is eviction-immune. Background curation can't silently rewrite what you wrote.
@@ -257,21 +259,21 @@ Set `LOOP_HOME=/some/path` to relocate storage (handy for testing).
 
 ### Why `~/.opensquid/` not `~/.loop/` (storage root architecture)
 
-`loop-engine` (the Rust substrate) defaults to `~/.loop/` when invoked standalone. **opensquid intentionally overrides this** by spawning the engine subprocess with `LOOP_HOME=~/.opensquid/` (see `src/engine-client.ts:84`). This is by design, not a bug:
+`loop-engine` (the Rust substrate) defaults to `~/.loop/` when invoked standalone. **Open Squid intentionally overrides this** by spawning the engine subprocess with `LOOP_HOME=~/.opensquid/` (see `src/engine-client.ts:84`). This is by design, not a bug:
 
 - **`~/.loop/`** = the engine's own data root when you run `loop-engine serve` directly (testing, debugging, manual smoke tests)
-- **`~/.opensquid/`** = the engine's data root when opensquid's MCP server spawns it (production agent path)
+- **`~/.opensquid/`** = the engine's data root when Open Squid's MCP server spawns it (production agent path)
 
-The two trees do NOT share state. Lessons / memories / phase ledger entries written under one are invisible to the other. This intentional split lets a single `loop-engine` binary serve multiple consumers (opensquid, future TS/Python launchers, manual operator) without their data colliding. Each consumer gets its own root.
+The two trees do NOT share state. Lessons / memories / phase ledger entries written under one are invisible to the other. This intentional split lets a single `loop-engine` binary serve multiple consumers (Open Squid, future TS/Python launchers, manual operator) without their data colliding. Each consumer gets its own root.
 
 **Practical implications:**
 
-- If you smoke-test the engine binary directly (`loop-engine serve` from a shell) and write a phase entry, it goes to `~/.loop/phase_ledger/...`. opensquid's MCP layer will never see it.
-- To inspect what opensquid actually wrote, always look under `~/.opensquid/`.
-- To force the engine binary to use opensquid's root in manual testing: `LOOP_HOME=~/.opensquid loop-engine serve`.
+- If you smoke-test the engine binary directly (`loop-engine serve` from a shell) and write a phase entry, it goes to `~/.loop/phase_ledger/...`. Open Squid's MCP layer will never see it.
+- To inspect what Open Squid actually wrote, always look under `~/.opensquid/`.
+- To force the engine binary to use Open Squid's root in manual testing: `LOOP_HOME=~/.opensquid loop-engine serve`.
 - The split is enforced at spawn time, not at compile time. The engine binary itself is consumer-agnostic.
 
-This convention was decided 2026-05-16 (per task #132) after a smoke-test surprised the maintainer who wrote phases to `~/.loop/` via direct binary RPC then expected to see them via the opensquid `chat_list_channels` MCP path. Both worked correctly — they just pointed at different roots.
+This convention was decided 2026-05-16 (per task #132) after a smoke-test surprised the maintainer who wrote phases to `~/.loop/` via direct binary RPC then expected to see them via the Open Squid `chat_list_channels` MCP path. Both worked correctly — they just pointed at different roots.
 
 ---
 
@@ -285,7 +287,7 @@ Recent releases:
 - **v0.5 hybrid recall** (interim) — every memory query runs both semantic and text-match in parallel, RRF-merges, items in both lists get a score boost. Fixes the false-negative on proper-noun queries.
 - **v0.4 Phase 1** — origination metadata (host/session/model/cwd attached to every memory), memory lifecycle (`update_memory` / `forget`), recall quality (`min_similarity` threshold).
 - **v0.3.1** — daily-work milestone: `include_body` recall (no more truncated previews), `MemoryScope` per-project isolation, sentinel-bracketed CLAUDE.md installer.
-- **v0.3.0** — opensquid pivoted to a thin RPC client over `loop-engine serve`; the Rust engine owns all wedge logic, storage, and embedding. Powered by Qwen3-Embedding-4B via Ollama by default.
+- **v0.3.0** — Open Squid pivoted to a thin RPC client over `loop-engine serve`; the Rust engine owns all wedge logic, storage, and embedding. Powered by Qwen3-Embedding-4B via Ollama by default.
 
 Next:
 
@@ -299,7 +301,7 @@ See [`ROADMAP.md`](./ROADMAP.md) for the full picture and [`docs/`](./docs/) for
 
 ## Design
 
-The squid mascot is a cephalopod-cognition reference. Roughly two-thirds of an octopus's neurons live in its arms, not its central brain — distributed cognition with a coordinating core. opensquid takes the same shape: the wedge gate sits at the center, the memory substrate flows through it, and v1.1+ extends the arms to orchestrate other MCPs as the central brain coordinating tools across an agent's runtime.
+The squid mascot is a cephalopod-cognition reference. Roughly two-thirds of an octopus's neurons live in its arms, not its central brain — distributed cognition with a coordinating core. Open Squid takes the same shape: the wedge gate sits at the center, the memory substrate flows through it, and v1.1+ extends the arms to orchestrate other MCPs as the central brain coordinating tools across an agent's runtime.
 
 ---
 
@@ -312,5 +314,5 @@ MIT. See [LICENSE](./LICENSE).
 ## Project family
 
 - **`loop-engine`** — Rust substrate. The cognitive memory + wedge gate. https://github.com/MindcraftorAI/loop-engine
-- **`opensquid`** — this repo. MCP server, user-facing surface.
+- **Open Squid** (`opensquid` package) — this repo. MCP server, user-facing surface.
 - **MindCraftor** — the product brand. https://mindcraftor.ai (coming)

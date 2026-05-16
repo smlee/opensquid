@@ -1,4 +1,4 @@
-# 🦑 opensquid roadmap
+# 🦑 Open Squid roadmap
 
 Living doc. Reflects current product thinking; items shift as we ship + learn. Each release section uses [SemVer 2.0](https://semver.org/).
 
@@ -8,13 +8,13 @@ For shipped releases see [CHANGELOG.md](./CHANGELOG.md).
 
 ## Current direction (2026-05-16)
 
-**Audience:** Hermes Agent users (primary), Claude Code / Cursor / Codex power users who use opensquid directly via MCP (secondary). opensquid is additive — it sits alongside an agent's existing memory backend and adds a wedge-gated rule layer on top. Integration is via MCP; Hermes is already an MCP client. See README → *Pairing with Hermes Agent*.
+**Audience:** Hermes Agent users (primary), Claude Code / Cursor / Codex power users who use Open Squid directly via MCP (secondary). Open Squid is additive — it sits alongside an agent's existing memory backend and adds a wedge-gated rule layer on top. Integration is via MCP; Hermes is already an MCP client. See README → _Pairing with Hermes Agent_.
 
 **Marketing wedge:** "Your agent learns. You decide what gets locked in."
 
 **Release sequence (SemVer 0.x.y; v1.0 is feature-complete + bulletproof, not a calendar moment):**
 
-- v0.5 — lessons surface (in-flight: shipped v0.5a list_lessons + capture_feedback + supersede; v0.5b list_memories; pending v0.5c manifest.assemble + skill/persona/team load_*)
+- v0.5 — lessons surface (in-flight: shipped v0.5a `list_lessons` + `capture_feedback` + `supersede`; v0.5b `list_memories`; pending v0.5c `manifest.assemble` + skill/persona/team `load_*`)
 - v0.6 — release engineering: cross-platform binaries + codex export + system export (binaries + npm publish deferred until npm org exists; codex/system export shipped)
 - v0.7 — chat connections bundled (Telegram + Discord + Slack as LOCAL bots; gateway abstraction; per `mem-163bde3b`)
 - v0.8+ — additional surfaces (web, mobile) and brain thesis (MCP-of-MCPs orchestration)
@@ -24,7 +24,7 @@ For shipped releases see [CHANGELOG.md](./CHANGELOG.md).
 **Hard rule-outs (do not propose):**
 
 - No Python adapter in Hermes' `plugins/memory/` tree (per `mem-e3e03010`) — MCP integration only
-- No "replace Hermes" framing — opensquid is additive
+- No "replace Hermes" framing — Open Squid is additive
 - No enterprise SaaS pivot
 - No silent provider auto-detect for the auto-classifier (no `auto-classifier` exists anymore — replaced by token-threshold heartbeat in #124; the agent does classification inline)
 
@@ -84,18 +84,20 @@ fixes that turn v0.3 from a demo into a tool you reach for unconsciously.
 
 ### Memory drift / re-recall ergonomics
 
-- **Full-body recall option** — `recall` currently truncates `body_preview` at 240 chars. For longer memories, the LLM's re-anchoring is incomplete. Add `include_body: true` parameter (engine already supports it; expose through opensquid).
+- **Full-body recall option** — `recall` currently truncates `body_preview` at 240 chars. For longer memories, the LLM's re-anchoring is incomplete. Add `include_body: true` parameter (engine already supports it; expose through Open Squid).
 - **`get_memory` tool** — explicit fetch by id, returns full memory. Used after `recall` surfaces a hit and the agent wants the canonical content (not just preview).
 - **CLAUDE.md installer (`npx opensquid install`)** — idempotent installer that adds our automation directives to `~/.claude/CLAUDE.md` (or `./CLAUDE.md` with `--project`). Critical rules:
   1. **Detect, don't replace.** If a CLAUDE.md already exists, APPEND our block; don't overwrite the user's existing content.
   2. **Sentinel-marked block** lets future installs find + update without duplicating:
      ```markdown
      <!-- opensquid-automation:start v0.3.1 -->
+
      Use opensquid recall before answering substantive questions — your in-
      context memory drifts after ~10 unrelated turns. Use memorize when the
      user states a non-trivial fact, preference, or observation. Don't
      auto-call remember / promote / eliminate — those require explicit user
      intent (the wedge invariant).
+
      <!-- opensquid-automation:end -->
      ```
   3. **Idempotent on re-install** — same version → no-op; new version → replace between sentinels.
@@ -138,13 +140,13 @@ Make the auto-recall + auto-memorize feel native rather than CLAUDE.md-suggested
 ### New in v0.4 scope (added 2026-05-14)
 
 - **Origination metadata** — every memory carries `origin: { host,
-  session_id, model, cwd_basename, written_at }`. Strengthens the
+session_id, model, cwd_basename, written_at }`. Strengthens the
   wedge gate's external-signal count (multi-session reproducibility =
   harder to fake) and unlocks session-aware recall biasing.
 
 ### Hooks-based automation
 
-- Ship opensquid as a **Claude Skill plus MCP server**, with `UserPromptSubmit` and `Stop` hooks baked in.
+- Ship Open Squid as a **Claude Skill plus MCP server**, with `UserPromptSubmit` and `Stop` hooks baked in.
   - `UserPromptSubmit` → calls `recall` with the user's query → injects results into the prompt context before the model responds.
   - `Stop` → analyzes the just-finished turn for novel facts → prompts the model to consider calling `memorize`.
 - Manual override: users can disable specific hooks via env vars (`OPENSQUID_AUTORECALL=0` etc.) for testing.
@@ -164,7 +166,7 @@ Make the auto-recall + auto-memorize feel native rather than CLAUDE.md-suggested
 
 ## v0.5 — Lessons surface + skills/personas/teams
 
-Expose the rest of loop-engine's structured surface through opensquid tools.
+Expose the rest of loop-engine's structured surface through Open Squid tools.
 
 - `list_lessons` / `list_memories` (paginated)
 - `capture_feedback` (thumbs up/down → wedge gate inputs)
@@ -197,10 +199,10 @@ The version that ships to general users who don't have Rust installed.
 
 ## v1.1+ — MCP orchestration (the brain thesis)
 
-The strategic positioning shift: opensquid stops being "a memory MCP" and becomes "the agent's central nervous system."
+The strategic positioning shift: Open Squid stops being "a memory MCP" and becomes "the agent's central nervous system."
 
-- **MCP-of-MCPs** — opensquid acts as an MCP client to *other* MCPs (Notion, GitHub, Telegram, etc.), presents a unified tool surface, routes requests, aggregates context.
-- **Wedge applied across arms** — claims from any attached MCP get wedge-gated through opensquid's promotion path.
+- **MCP-of-MCPs** — Open Squid acts as an MCP client to _other_ MCPs (Notion, GitHub, Telegram, etc.), presents a unified tool surface, routes requests, aggregates context.
+- **Wedge applied across arms** — claims from any attached MCP get wedge-gated through Open Squid's promotion path.
 - **Anatomical tool naming** — `chromatophore` (color/state visualizer), `ganglion` (local MCP cluster), etc. Lean into the cephalopod metaphor.
 
 Reasoning: see `~/.claude/projects/-Users-slee-projects-loop/memory/project_opensquid_brain_positioning.md` — the squid mascot does triple duty (Squid Game / cephalopod cognition / brain+arms) and v1.1+ is where the "brain" thesis goes load-bearing.
@@ -212,7 +214,7 @@ Reasoning: see `~/.claude/projects/-Users-slee-projects-loop/memory/project_open
 Ideas that don't have a release slot yet:
 
 - **Telegram feedback channel** — user reactions on Telegram bot messages feed `capture_feedback` for the wedge gate (Sangmin's product insight 2026-05-14). Probably v0.5+ once the lesson surface is up.
-- **Multi-tenant context** — engine's `Context` already supports tenant/team/user IDs; opensquid is single-user today. v1.x+ when there's product demand.
+- **Multi-tenant context** — engine's `Context` already supports tenant/team/user IDs; Open Squid is single-user today. v1.x+ when there's product demand.
 - **Voyage AI fallback** — second-tier paid embedder per the architecture decision. Already supported by the engine's OpenAI-compatible Embedder via config; just needs documentation.
 - **Embedded loop-engine** — switch from subprocess to napi-rs native bindings for lower latency. Engineering call: probably not worth it unless profiling shows IPC is a bottleneck.
 
