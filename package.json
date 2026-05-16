@@ -50,12 +50,13 @@
     "zod": "^3.23.0"
   },
   "optionalDependencies": {
-    "opensquid-engine-darwin-x64": "0.6.0",
+    "grammy": "^1.42.0",
     "opensquid-engine-darwin-arm64": "0.6.0",
-    "opensquid-engine-linux-x64": "0.6.0",
+    "opensquid-engine-darwin-x64": "0.6.0",
     "opensquid-engine-linux-arm64": "0.6.0",
-    "opensquid-engine-win32-x64": "0.6.0",
-    "opensquid-engine-win32-arm64": "0.6.0"
+    "opensquid-engine-linux-x64": "0.6.0",
+    "opensquid-engine-win32-arm64": "0.6.0",
+    "opensquid-engine-win32-x64": "0.6.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

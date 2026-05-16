@@ -9,6 +9,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.7a)
+
+**Chat connections — gateway abstraction + Telegram adapter (#121)**
+
+First slice of v0.7 chat connections. Three-platform plan (Telegram + Discord + Slack ship together as v0.7); this drop lands the foundation + the first adapter. Discord and Slack are stubbed in the factory and warn at startup until v0.7b / v0.7c add their adapters.
+
+- `src/chat/gateway.ts` — `ChatGateway` orchestrator + adapter contract. Normalizes every inbound message to a single `ChatMessage` shape (`{platform, channel, sender, text, mentionsBot, ...}`). Routes outbound by `<platform>:<native_id>` channel id prefix. One handler stack across all platforms.
+- `src/chat/config.ts` — per-platform config blocks stored under `chat_connections.{telegram,discord,slack}` in `~/.opensquid/config.json`. Each block has its own `bot_token` (Slack also needs `app_token` for Socket Mode) + optional `allowlist_*_ids` for sender whitelisting. Validation surfaces shape errors before opening a connection.
+- `src/chat/adapters/telegram.ts` — long-polling adapter via `grammy` (new optional dep). Dynamically imported only when the telegram block is configured, so non-telegram installs don't pay the cost. Allowlist enforcement at adapter boundary — silent drop, no bot echo of policy decisions. `@-mention` + `/cmd@bot` detection rolled in.
+- `src/chat/factory.ts` — builds a `ChatGateway` from config. Skips platforms whose adapters aren't implemented yet (warn, don't crash) so users can pre-configure Discord/Slack tokens in anticipation of v0.7b/c without breaking opensquid. Throws only when a configured + implemented platform has a real validation issue.
+- New MCP tools: `chat_send` (route outbound by channel id) + `chat_list_channels` (report active platforms + allowlists + validation issues).
+- Lazy-init pattern in `src/index.ts`: chat gateway opens on first chat_* tool call, cached for the rest of the MCP session. Non-chat sessions pay zero cost.
+- 32 new tests (18 gateway, 9 telegram-adapter constructor + mention detection, 5 factory).
+- Connection mechanism choices (per research): Telegram long-poll (grammy `bot.start()`), Discord Gateway WebSocket (discord.js, v0.7b), Slack Socket Mode (@slack/socket-mode + @slack/web-api directly, skipping Bolt to avoid the Express drag, v0.7c). All three are outbound-only — no public webhook required.
+
+Outstanding for v0.7 completion:
+- v0.7b: Discord adapter + `discord.js` optional dep
+- v0.7c: Slack adapter + `@slack/web-api` + `@slack/socket-mode` optional deps + chat inbox bridge (inbound messages → MCP context surfacing)
+
 ### Added — 2026-05-16 (v0.6c)
 
 **Cross-platform binary distribution scaffolding (#125)**

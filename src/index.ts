@@ -222,6 +222,38 @@ const engine = new OpenSquidEngine();
 
 const server = new Server({ name: "opensquid", version: VERSION }, { capabilities: { tools: {} } });
 
+// ---- Chat gateway (lazy) -------------------------------------------
+// Initialized on first chat_* MCP tool call so non-chat sessions don't
+// pay the import / connection cost. Cached across the MCP session.
+
+let chatGatewayPromise: Promise<{
+  gateway: import("./chat/gateway.js").ChatGateway;
+  config: import("./chat/config.js").ChatConnectionsConfig;
+  issues: Array<{ platform: string; field: string; problem: string }>;
+}> | null = null;
+
+async function ensureChatGatewayWithMeta(): Promise<{
+  gateway: import("./chat/gateway.js").ChatGateway;
+  config: import("./chat/config.js").ChatConnectionsConfig;
+  issues: Array<{ platform: string; field: string; problem: string }>;
+}> {
+  if (!chatGatewayPromise) {
+    chatGatewayPromise = (async () => {
+      const { buildChatGateway } = await import("./chat/factory.js");
+      const { loadChatConfig } = await import("./chat/config.js");
+      const config = await loadChatConfig();
+      const built = await buildChatGateway({ config });
+      await built.gateway.start();
+      return { gateway: built.gateway, config, issues: built.issues };
+    })();
+  }
+  return chatGatewayPromise;
+}
+
+async function ensureChatGateway(): Promise<import("./chat/gateway.js").ChatGateway> {
+  return (await ensureChatGatewayWithMeta()).gateway;
+}
+
 // ---- Tool catalogue ------------------------------------------------
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -642,6 +674,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["old_lesson_id", "new_lesson_id"],
       },
     },
+    {
+      name: "chat_send",
+      description:
+        "Send a text message to a configured chat channel (v0.7). Channel id format: " +
+        "`<platform>:<native_id>` — e.g. `telegram:8075471258`, `discord:1234567890`, " +
+        "`slack:C012345`. The platform must be configured in " +
+        "~/.opensquid/config.json `chat_connections` block. v0.7a ships Telegram only; " +
+        "Discord (v0.7b) + Slack (v0.7c) are stubbed in the gateway and will activate as their adapters land.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel: {
+            type: "string",
+            description: "Channel id, format `<platform>:<native_id>`.",
+          },
+          text: { type: "string", description: "Message body — text only in v0.7." },
+          reply_to: {
+            type: "string",
+            description: "Optional source message id to thread under (best-effort per platform).",
+          },
+        },
+        required: ["channel", "text"],
+      },
+    },
+    {
+      name: "chat_list_channels",
+      description:
+        "List currently active chat platforms and any pre-configured channel allowlists. " +
+        "Returns `{ active_platforms: [...], allowlists: { platform: [chat_id_or_user_id...] }, " +
+        "issues: [...] }`. Empty platforms array = no chat connections configured yet.",
+      inputSchema: { type: "object", properties: {} },
+    },
   ],
 }));
 
@@ -1059,6 +1123,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           force: a.force === true,
         });
         return textResult(result);
+      }
+
+      case "chat_send": {
+        const channel = typeof a.channel === "string" ? a.channel.trim() : "";
+        const text = typeof a.text === "string" ? a.text : "";
+        if (!channel || !text) {
+          return textResult({ error: "channel + text (both strings) required" });
+        }
+        const gw = await ensureChatGateway();
+        const result = await gw.send({
+          channel,
+          text,
+          replyTo: typeof a.reply_to === "string" ? a.reply_to : undefined,
+        });
+        return textResult({ ok: true, ...result });
+      }
+
+      case "chat_list_channels": {
+        const { gateway, config, issues } = await ensureChatGatewayWithMeta();
+        const allowlists: Record<string, string[]> = {};
+        if (config.telegram?.allowlist_chat_ids) {
+          allowlists.telegram = config.telegram.allowlist_chat_ids;
+        }
+        if (config.discord?.allowlist_user_ids) {
+          allowlists.discord = config.discord.allowlist_user_ids;
+        }
+        if (config.slack?.allowlist_user_ids) {
+          allowlists.slack = config.slack.allowlist_user_ids;
+        }
+        return textResult({
+          active_platforms: gateway.activePlatforms(),
+          allowlists,
+          issues,
+        });
       }
 
       default:
