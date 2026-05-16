@@ -28,11 +28,15 @@ import { promises as fs } from "node:fs";
 
 import { buildChatGateway } from "../factory.js";
 import type { ChatGateway } from "../gateway.js";
+import { appendToInbox } from "./inbox.js";
 import { daemonPaths } from "./lifecycle.js";
+import { type RoutingIndex, buildRoutingIndex, loadAllProjectChatRouting } from "./routing.js";
 import { RpcServer } from "./rpc-server.js";
 
 let gateway: ChatGateway | null = null;
 let rpcServer: RpcServer | null = null;
+let routingIndex: RoutingIndex = new Map();
+let routingPollTimer: NodeJS.Timeout | null = null;
 let pidFile: string | null = null;
 let shuttingDown = false;
 
@@ -60,13 +64,51 @@ export async function runDaemonWorker(dataRoot?: string): Promise<never> {
         log(`[chat-daemon] config issue ${i.platform}.${i.field}: ${i.problem}`);
       }
     }
+    // Phase C: load per-project chat-routing.json files and build the
+    // chat_id → project_uuid index BEFORE attaching the inbound
+    // handler. The handler uses this index to route messages to
+    // per-project inboxes.
+    routingIndex = await rebuildRoutingIndex(dataRoot);
+    log(`[chat-daemon] routing index built: ${routingIndex.size} inbound channels mapped`);
+    gateway.onMessage(async (msg) => {
+      const projectUuid = routingIndex.get(msg.channel) ?? null;
+      try {
+        const r = await appendToInbox(msg, projectUuid, dataRoot);
+        log(
+          `[chat-daemon] inbox ← ${msg.channel} (${msg.text.slice(0, 60).replace(/\n/g, " ")}…) → ${r.destination}${r.project_uuid ? "/" + r.project_uuid : ""}`,
+        );
+      } catch (err) {
+        log(
+          `[chat-daemon] inbox append failed for ${msg.channel}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    });
     await gateway.start();
     log(`[chat-daemon] gateway start complete`);
     // RPC server listens for outbound send() calls from per-project
     // MCP servers. Starting it AFTER gateway.start() means clients
     // that connect successfully are guaranteed a fully-warmed gateway.
-    rpcServer = new RpcServer({ gateway, dataRoot, version: "v0.7.1-phase-b" });
+    rpcServer = new RpcServer({ gateway, dataRoot, version: "v0.7.1-phase-c" });
     await rpcServer.listen();
+    // Poll the routing files every 30s so operators can edit a
+    // chat-routing.json and have the daemon pick it up without a full
+    // restart. Polling is the most portable option (fs.watch behavior
+    // varies across macOS/Linux/Windows + recursive support).
+    routingPollTimer = setInterval(() => {
+      void (async () => {
+        try {
+          const next = await rebuildRoutingIndex(dataRoot);
+          if (!sameIndex(routingIndex, next)) {
+            routingIndex = next;
+            log(`[chat-daemon] routing reload: ${routingIndex.size} inbound channels mapped`);
+          }
+        } catch (err) {
+          log(
+            `[chat-daemon] routing reload failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      })();
+    }, 30_000);
     log(`[chat-daemon] rpc server listening; entering park loop`);
   } catch (err) {
     log(`[chat-daemon] FATAL: gateway start failed: ${err instanceof Error ? err.stack : err}`);
@@ -100,6 +142,7 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log(`[chat-daemon] ${signal} received, shutting down...`);
+  if (routingPollTimer) clearInterval(routingPollTimer);
   try {
     if (rpcServer) await rpcServer.close();
   } catch (err) {
@@ -131,4 +174,17 @@ function log(line: string): void {
   // stdio is already redirected to the log file by the parent's spawn
   // options; plain console.log lands in the right place.
   process.stdout.write(`${new Date().toISOString()} ${line}\n`);
+}
+
+async function rebuildRoutingIndex(dataRoot?: string): Promise<RoutingIndex> {
+  const cfgs = await loadAllProjectChatRouting(dataRoot);
+  return buildRoutingIndex(cfgs, (msg) => log(`[chat-daemon] routing warn: ${msg}`));
+}
+
+function sameIndex(a: RoutingIndex, b: RoutingIndex): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    if (b.get(k) !== v) return false;
+  }
+  return true;
 }

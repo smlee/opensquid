@@ -48,6 +48,9 @@ class StubAdapter implements ChatAdapter {
       deliveredAt: new Date(),
     });
   }
+  identity(): Promise<{ username: string; nativeId: string }> {
+    return Promise.resolve({ username: `stub-${this.platform}`, nativeId: "0" });
+  }
 }
 
 let tmpRoot: string;

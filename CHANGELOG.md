@@ -9,6 +9,44 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.10 — per-project chat-routing + inbound inboxes, Phase C of v0.7.1 #140)
+
+**Per-project chat-routing.json schema** lets each project declare its own outbound report channel + inbound channel/chat allowlist on a single bot token. The daemon reads all routing files on boot, builds a `<platform>:<chat_id>` → `project_uuid` index, and on each inbound message looks the source channel up and appends to the matching project's JSONL inbox. No match → orphan inbox catch-all.
+
+**Schema** (`~/.opensquid/projects/<uuid>/chat-routing.json`):
+
+```jsonc
+{
+  "telegram": {
+    "report_channel": "telegram:-1001234567890",
+    "inbound_chat_ids": ["-1001234567890"],
+  },
+  "discord": { "report_channel": "...", "inbound_channel_ids": ["..."] },
+  "slack": { "report_channel": "...", "inbound_channel_ids": ["..."] },
+}
+```
+
+UUID is the stable primary key because the project's human-friendly `id` can be renamed without rewriting routing files.
+
+**Inbox format** (`~/.opensquid/projects/<uuid>/inbox/<platform>.jsonl`):
+
+- One JSON line per inbound message (NDJSON)
+- Schema `v: 1` for future evolution
+- Carries: id, platform, channel, sender + sender_id, text, received_at, enqueued_at, mentions_bot
+- Atomic appends via POSIX O_APPEND (small writes are atomic; lines are typically <1KB)
+- Orphan inbox at `~/.opensquid/inbox/orphan/<platform>.jsonl` for messages from allowed-but-unrouted channels
+
+**Lifecycle:**
+
+- Routing is loaded on daemon start
+- 30-second polling loop rebuilds the index — operators can edit routing files and the daemon picks it up without `chat-daemon restart`
+- Collision warn: if two projects claim the same inbound chat_id, the daemon logs a warning and the later one wins (Map insertion order)
+- `saveProjectChatRouting` writes via tmp + rename so partial writes never leave corrupt files
+
+**Tests:** 20 new tests across routing.test.ts (path derivation, load null/valid/malformed, collectInboundChannels per platform, buildRoutingIndex correctness + collision warn, saveProjectChatRouting overwrite) and inbox.test.ts (project + orphan paths, JSONL line format, mentions_bot/sender_id preservation, multi-line text framing safety). Daemon module total: 42 tests, 1.85s. Full suite: 488/488.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.9 → 0.6.10.
+
 ### Added — 2026-05-16 (v0.6.9 — chat-daemon outbound RPC, Phase B of v0.7.1 #139)
 
 **MCP `chat_send` now routes through the chat-daemon when one is running**, falling back transparently to the in-process gateway when not. This is the load-bearing fix for the v0.7 "last-connected wins" Telegram bug: multiple Claude Code projects can share a bot token because they all hand the actual `bot.api.sendMessage` call off to the single per-machine daemon (which owns the only long-poll connection per token).
