@@ -91,14 +91,31 @@ If nothing substantive: { "utterances": [] }`;
 // ---------------------------------------------------------------------
 
 export interface ClassifyOptions {
-  /** Provider override; defaults to env or "ollama". */
-  provider?: "ollama" | "off";
-  /** Ollama model id; defaults to env `OPENSQUID_CLASSIFIER_MODEL` or "llama3.2:3b". */
+  /**
+   * Provider override.
+   * - `auto` (default): tiered detect — Anthropic if ANTHROPIC_API_KEY is set,
+   *   else Ollama if reachable, else silent.
+   * - `anthropic`: force Anthropic Haiku via @anthropic-ai/sdk (requires
+   *   ANTHROPIC_API_KEY env or `apiKey` option).
+   * - `ollama`: force local Ollama at `host`.
+   * - `off`: disable entirely (returns empty without making any call).
+   *
+   * Env override: `OPENSQUID_CLASSIFIER_PROVIDER` set to one of these strings.
+   */
+  provider?: "auto" | "anthropic" | "ollama" | "off";
+  /**
+   * Model id. For Anthropic, defaults to `claude-haiku-4-5` (cheap + fast for
+   * one-shot classification, and uses the user's Max plan if they have one).
+   * For Ollama, defaults to `llama3.2:3b` (env `OPENSQUID_CLASSIFIER_MODEL`
+   * overrides for either provider).
+   */
   model?: string;
   /** Ollama host URL; defaults to env `OLLAMA_HOST` or "http://localhost:11434". */
   host?: string;
   /** Hard timeout ms; defaults to 1500. */
   timeoutMs?: number;
+  /** Anthropic API key. Defaults to env `ANTHROPIC_API_KEY`. */
+  apiKey?: string;
 }
 
 /**
@@ -113,16 +130,30 @@ export async function classifyWithLLM(
   if (!userText || !userText.trim()) {
     return { utterances: [] };
   }
-  const provider =
+  const requested =
     options.provider ??
-    (process.env.OPENSQUID_CLASSIFIER_PROVIDER as "ollama" | "off" | undefined) ??
-    "ollama";
-  if (provider === "off") {
+    (process.env.OPENSQUID_CLASSIFIER_PROVIDER as ClassifyOptions["provider"]) ??
+    "auto";
+  if (requested === "off") {
     return { utterances: [] };
   }
 
+  const apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
+
+  // Tiered auto-detect (the default): Anthropic if API key is set, else Ollama.
+  // Explicit "anthropic" / "ollama" forces that path even if the other is
+  // reachable. Both transports return raw JSON string or null on failure;
+  // downstream parsing + Zod validation is shared.
   const timeoutMs = options.timeoutMs ?? 1500;
-  const raw = await Promise.race([callOllama(userText, options), timeoutAfter(timeoutMs)]);
+  let raw: string | null = null;
+  if (requested === "anthropic" || (requested === "auto" && apiKey)) {
+    raw = await Promise.race([
+      callAnthropic(userText, { ...options, apiKey }),
+      timeoutAfter(timeoutMs),
+    ]);
+  } else {
+    raw = await Promise.race([callOllama(userText, options), timeoutAfter(timeoutMs)]);
+  }
   if (raw === null) return { utterances: [] };
 
   const parsed = safeParseJson(raw);
@@ -192,6 +223,46 @@ function safeParseJson(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Anthropic transport (Haiku 4.5 by default — cheap + fast classification)
+// ---------------------------------------------------------------------
+
+const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5";
+
+async function callAnthropic(
+  userText: string,
+  options: ClassifyOptions & { apiKey?: string },
+): Promise<string | null> {
+  if (!options.apiKey) return null;
+  // Lazy import — keeps the SDK out of the cold-start path when the user
+  // isn't using Anthropic and out of bundle size for Ollama-only deploys.
+  let Anthropic: typeof import("@anthropic-ai/sdk").default;
+  try {
+    Anthropic = (await import("@anthropic-ai/sdk")).default;
+  } catch {
+    return null;
+  }
+  const client = new Anthropic({ apiKey: options.apiKey });
+  const model = options.model ?? process.env.OPENSQUID_CLASSIFIER_MODEL ?? ANTHROPIC_DEFAULT_MODEL;
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 512,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userText }],
+    });
+    // Haiku response is a list of content blocks; we asked for plain text JSON.
+    for (const block of response.content) {
+      if (block.type === "text") return block.text;
+    }
+    return null;
+  } catch {
+    // Auth failure, rate limit, network — all collapse to "no classification
+    // this turn" per the fail-open contract.
     return null;
   }
 }
