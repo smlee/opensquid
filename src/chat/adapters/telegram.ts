@@ -90,10 +90,19 @@ export class TelegramAdapter implements ChatAdapter {
         Bot: new (token: string) => GrammyBot;
       };
       Bot = grammy.Bot;
-    } catch {
+    } catch (err) {
+      // v0.7 audit fix (M5): distinguish "not installed" from "installed
+      // but threw on load" — different remediation each case.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+        throw new ChatGatewayError(
+          "telegram adapter: 'grammy' SDK not installed",
+          "run `npm install grammy` (or reinstall opensquid without --omit=optional)",
+        );
+      }
       throw new ChatGatewayError(
-        "telegram adapter: failed to load 'grammy' SDK",
-        "run `npm install grammy` (or reinstall opensquid without --omit=optional)",
+        `telegram adapter: 'grammy' SDK failed to load: ${err instanceof Error ? err.message : String(err)}`,
+        "the SDK is installed but threw on import — check node version compatibility",
       );
     }
 
@@ -140,7 +149,21 @@ export class TelegramAdapter implements ChatAdapter {
 
     // `bot.start()` resolves only on bot.stop(). Fire-and-track via a
     // promise we keep around for shutdown, but don't await it here.
-    this.startPromise = bot.start();
+    // v0.7 audit fix (H1): the 409 Conflict from a second polling
+    // consumer surfaces as a rejection on this promise AFTER start()
+    // has already resolved. Attach a catch so the rejection is observed
+    // and surfaced; we tear down the adapter and clear bot so callers
+    // get a useful error on next send() instead of silent dead-bot.
+    this.startPromise = bot.start().catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const is409 = /409|Conflict/.test(msg);
+      // eslint-disable-next-line no-console
+      console.error(
+        `[telegram adapter] long-poll loop ${is409 ? "lost: 409 Conflict — another polling consumer holds this token" : "errored"}: ${msg}`,
+      );
+      this.bot = null;
+      this.startPromise = null;
+    });
     // Yield once so the polling loop has a tick to register before the
     // gateway moves on to dispatch outbound messages.
     await new Promise((r) => setImmediate(r));

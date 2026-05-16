@@ -102,10 +102,18 @@ export class DiscordAdapter implements ChatAdapter {
       };
       Client = discord.Client;
       GatewayIntentBits = discord.GatewayIntentBits;
-    } catch {
+    } catch (err) {
+      // v0.7 audit fix (M5): distinguish not-installed from installed-but-threw.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+        throw new ChatGatewayError(
+          "discord adapter: 'discord.js' SDK not installed",
+          "run `npm install discord.js` (or reinstall opensquid without --omit=optional)",
+        );
+      }
       throw new ChatGatewayError(
-        "discord adapter: failed to load 'discord.js' SDK",
-        "run `npm install discord.js` (or reinstall opensquid without --omit=optional)",
+        `discord adapter: 'discord.js' SDK failed to load: ${err instanceof Error ? err.message : String(err)}`,
+        "the SDK is installed but threw on import — check node version compatibility",
       );
     }
 
@@ -163,7 +171,25 @@ export class DiscordAdapter implements ChatAdapter {
     });
 
     // login() rejects on bad token; ready resolves after the handshake.
-    await client.login(this.config.bot_token);
+    // v0.7 audit fix (H2): the `MessageContent` intent is privileged and
+    // requires explicit enablement in the Discord Developer Portal. Without
+    // it, login() throws `DisallowedIntents` with a cryptic message. Catch
+    // and rethrow with an actionable hint pointing at the Dev Portal toggle.
+    try {
+      await client.login(this.config.bot_token);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/disallowed intent|used disallowed/i.test(msg)) {
+        // discard the half-built client
+        this.client = null;
+        throw new ChatGatewayError(
+          "discord adapter: bot is requesting privileged intents that aren't enabled",
+          "go to https://discord.com/developers/applications → your app → Bot → Privileged Gateway Intents → toggle ON 'MESSAGE CONTENT INTENT'. DMs and @-mentions are exempt but channel content needs the toggle.",
+        );
+      }
+      this.client = null;
+      throw err;
+    }
     await ready;
   }
 

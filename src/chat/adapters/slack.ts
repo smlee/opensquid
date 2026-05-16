@@ -110,10 +110,18 @@ export class SlackAdapter implements ChatAdapter {
         WebClient: new (token: string) => SlackWebClient;
       };
       WebClient = web.WebClient;
-    } catch {
+    } catch (err) {
+      // v0.7 audit fix (M5): distinguish not-installed from installed-but-threw.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+        throw new ChatGatewayError(
+          "slack adapter: '@slack/web-api' SDK not installed",
+          "run `npm install @slack/web-api @slack/socket-mode` (or reinstall without --omit=optional)",
+        );
+      }
       throw new ChatGatewayError(
-        "slack adapter: failed to load '@slack/web-api' SDK",
-        "run `npm install @slack/web-api @slack/socket-mode` (or reinstall without --omit=optional)",
+        `slack adapter: '@slack/web-api' SDK failed to load: ${err instanceof Error ? err.message : String(err)}`,
+        "the SDK is installed but threw on import — check node version compatibility",
       );
     }
     try {
@@ -121,10 +129,17 @@ export class SlackAdapter implements ChatAdapter {
         SocketModeClient: new (opts: { appToken: string }) => SlackSocketModeClient;
       };
       SocketModeClient = sm.SocketModeClient;
-    } catch {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+        throw new ChatGatewayError(
+          "slack adapter: '@slack/socket-mode' SDK not installed",
+          "run `npm install @slack/socket-mode`",
+        );
+      }
       throw new ChatGatewayError(
-        "slack adapter: failed to load '@slack/socket-mode' SDK",
-        "run `npm install @slack/socket-mode`",
+        `slack adapter: '@slack/socket-mode' SDK failed to load: ${err instanceof Error ? err.message : String(err)}`,
+        "the SDK is installed but threw on import — check node version compatibility",
       );
     }
 

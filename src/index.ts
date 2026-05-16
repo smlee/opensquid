@@ -680,8 +680,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Send a text message to a configured chat channel (v0.7). Channel id format: " +
         "`<platform>:<native_id>` — e.g. `telegram:8075471258`, `discord:1234567890`, " +
         "`slack:C012345`. The platform must be configured in " +
-        "~/.opensquid/config.json `chat_connections` block. v0.7a ships Telegram only; " +
-        "Discord (v0.7b) + Slack (v0.7c) are stubbed in the gateway and will activate as their adapters land.",
+        "~/.opensquid/config.json `chat_connections` block. All three adapters (Telegram, " +
+        "Discord, Slack) are live as of v0.7c — they activate when their config block is " +
+        "present.",
       inputSchema: {
         type: "object",
         properties: {
