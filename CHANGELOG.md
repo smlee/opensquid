@@ -9,6 +9,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.7.1 — chat-daemon RELEASE — Phase E of v0.7.1 #142)
+
+**v0.7.1 chat-daemon shipped end-to-end.** Multiple Claude Code projects can now share one bot token without the "last-connected wins" Telegram bug. The per-machine daemon owns the long-poll; per-project `chat-routing.json` declares each project's outbound channel + inbound chat allowlist; agent-side MCP tools route through the daemon transparently.
+
+**New MCP tools:**
+
+- **`chat_set_project_channel(platform, report_channel?, inbound_chat_ids?)`** — write the active project's chat-routing.json. Detects the project via the existing `.opensquid/project.json` card (or `OPENSQUID_PROJECT_UUID` env var). Patches in place: omitted fields preserve existing values.
+- **`chat_poll_inbox(platform?, limit?, since?)`** — read recent inbound messages from the active project's inbox JSONL. Default limit 20; `since` filters strict-greater-than on `enqueued_at`. Skips malformed lines safely.
+- **`chat_daemon_status()`** — report whether the daemon is running, its pid + version + active platforms + uptime. Hits the daemon RPC for live data; falls back to pidfile-only when RPC is unavailable.
+
+**`chat_send` magic value:**
+
+- `channel: "project:<platform>"` auto-resolves to the active project's report_channel
+- Lets agents say "send my report to my chat" without knowing the chat_id literally
+- Falls back to error if no card exists or no report_channel configured for that platform
+
+**Phase rollup** (every Phase A-D commit was independently shippable; Phase E is the user-facing surface + release):
+
+- **Phase A** (v0.6.8 #138) — `opensquid chat-daemon {start|stop|status|restart}` lifecycle + PID file + fork-detach + stdin-resume gotcha fix
+- **Phase B** (v0.6.9 #139) — JSON-RPC 2.0 outbound socket; `chat_send` daemon-first with in-process fallback; cross-platform socket address (Unix sockets / Windows named pipes)
+- **Phase C** (v0.6.10 #140) — per-project chat-routing.json schema, chat_id → uuid lookup, JSONL inbox writer with project + orphan paths, 30s routing polling reload
+- **Phase D** (v0.6.11 #141) — MCP-side auto-spawn via atomic fs.open(lock,'wx'), stale-lock cleanup, fire-and-forget on MCP boot so stdio never waits
+- **Phase E** (v0.7.1 #142, this commit) — MCP tools, README architecture section, ROADMAP update, version bump to 0.7.1
+
+**Docs:**
+
+- README new "Chat-daemon — multi-project Telegram / Discord / Slack" section with architecture diagram, lifecycle table, per-project routing example, full MCP tool surface
+- ROADMAP updated to mark v0.7.1 shipped
+- This CHANGELOG entry rolls up the full release
+
+**Tests:** 7 new inbox-read tests (single platform / all platforms / restricted platform / limit / since / malformed-line resilience / empty-inbox); existing 49 daemon tests still pass. Full opensquid suite: **500/500**.
+
+**Compatibility:** v0.7.1 is fully backward compatible with v0.7.x — single-project users without the daemon get identical behavior via the in-process fallback path. The daemon only spawns when `chat_connections` is configured.
+
+**Version bump** 0.6.11 → 0.7.1 (minor — new public MCP tools + new user-visible architecture, but no removed surface).
+
 ### Added — 2026-05-16 (v0.6.11 — daemon auto-spawn from MCP server, Phase D of v0.7.1 #141)
 
 **MCP server now opportunistically ensures the chat-daemon is running** so users never have to remember `opensquid chat-daemon start`. Fire-and-forget on every MCP server boot — non-blocking, errors land in stderr.

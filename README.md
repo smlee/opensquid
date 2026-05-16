@@ -89,6 +89,74 @@ node dist/index.js hooks uninstall   # idempotent
 
 ---
 
+## Chat-daemon — multi-project Telegram / Discord / Slack (v0.7.1)
+
+Open Squid runs a single per-machine background process (the **chat-daemon**) that owns each chat platform's connection. Why: Telegram (and any long-poll bot API) only allows one consumer per bot token at a time — without the daemon, the "last-connected" Claude Code project would steal the bot from every other project. The daemon fixes this by holding the only long-poll and multiplexing outbound `chat_send` calls + per-project inbound routing.
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────────────────────┐
+│ opensquid chat-daemon (per-machine, auto-spawned)   │
+│                                                       │
+│ - Owns single long-poll per platform                 │
+│ - Reads ~/.opensquid/projects/<uuid>/chat-routing.json │
+│ - Inbound: routes by chat_id → per-project inbox     │
+│ - Outbound: receives via Unix socket / named pipe    │
+└──────────────────────────────────────────────────────┘
+        ▲                          ▲
+        │ outbound                 │ outbound
+┌────────────────────┐   ┌────────────────────┐
+│ MCP server (proj A)│   │ MCP server (proj B)│
+│ chat_send → daemon │   │ chat_send → daemon │
+│ chat_poll_inbox    │   │ chat_poll_inbox    │
+└────────────────────┘   └────────────────────┘
+```
+
+**Lifecycle:**
+
+- Auto-spawned on MCP server boot when any `chat_connections` block is configured (no-op when nothing is configured)
+- Manual control: `opensquid chat-daemon {start|stop|status|restart}`
+- Atomic spawn via `~/.opensquid/chat-daemon.spawn.lock` so racing project starts don't double-launch
+- Pidfile at `~/.opensquid/chat-daemon.pid`, log at `~/.opensquid/chat-daemon.log`
+- Survives MCP server restarts; manually stop only when needed
+- Cross-platform: Unix sockets on macOS/Linux, named pipes (`\\.\pipe\opensquid-chat-daemon-...`) on Windows
+
+**Per-project routing:**
+
+Each project declares its outbound channel + inbound chat allowlist:
+
+```bash
+# Via MCP tool (typical usage):
+chat_set_project_channel({
+  platform: "telegram",
+  report_channel: "telegram:-1001234567890",
+  inbound_chat_ids: ["-1001234567890"]
+})
+```
+
+Writes to `~/.opensquid/projects/<uuid>/chat-routing.json`. The daemon picks up changes within 30s via polling — no `chat-daemon restart` required for routine edits.
+
+**MCP tool surface (v0.7.1):**
+
+| Tool                           | What it does                                                                                                                                                                                                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`chat_send`**                | Send a text message. `channel: "project:<platform>"` magic value auto-resolves to the active project's report_channel; explicit `<platform>:<native_id>` still works. Response includes `via: "daemon" \| "in_process"` so you can see which path served the call.    |
+| **`chat_list_channels`**       | List which platforms are active (configured + adapters started) and any pre-configured allowlists.                                                                                                                                                                    |
+| **`chat_set_project_channel`** | Write the active project's `chat-routing.json` — declare which channel to send reports to + which inbound chat_ids belong to this project.                                                                                                                            |
+| **`chat_poll_inbox`**          | Read recent inbound messages from the active project's inbox JSONL. Supports `platform`, `limit`, and `since` (ISO timestamp) filters. Each message carries `id`, `platform`, `channel`, `sender`, `sender_id`, `text`, `received_at`, `enqueued_at`, `mentions_bot`. |
+| **`chat_daemon_status`**       | Report whether the daemon is running, its pid, version, active platforms, and uptime.                                                                                                                                                                                 |
+
+**Inbox format** (`~/.opensquid/projects/<uuid>/inbox/<platform>.jsonl`):
+
+One JSON message per line (NDJSON). Stable schema `v: 1`. Atomic POSIX appends; consumers split on `\n` safely.
+
+**Orphan inbox** (`~/.opensquid/inbox/orphan/<platform>.jsonl`):
+
+Catch-all for allowed-but-unrouted messages. Useful for diagnosing "where did my message go?" — if it's not in your project's inbox, check orphan.
+
+---
+
 ## Engine binary distribution (v0.6c)
 
 Once published, `npm install opensquid` will bring the `loop-engine` Rust binary along automatically via npm `optionalDependencies` — same pattern esbuild / biomejs / swc use. Six per-platform packages (`opensquid-engine-{darwin,linux,win32}-{x64,arm64}`) each ship a single native binary; npm's `os` / `cpu` fields ensure only the right one installs on a given host.

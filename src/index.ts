@@ -743,6 +743,73 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {} },
     },
     {
+      name: "chat_set_project_channel",
+      description:
+        "v0.7.1: declare the active project's outbound chat channel + inbound chat_ids for a " +
+        "platform. Writes ~/.opensquid/projects/<uuid>/chat-routing.json. The chat-daemon picks " +
+        "the change up within ~30s (or restart `opensquid chat-daemon` to apply immediately). " +
+        "Subsequent `chat_send` calls with channel='project:<platform>' auto-resolve to this " +
+        "channel; inbound messages from listed chat_ids land in this project's inbox.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          platform: {
+            type: "string",
+            enum: ["telegram", "discord", "slack"],
+            description: "Which platform's routing to write.",
+          },
+          report_channel: {
+            type: "string",
+            description:
+              "Outbound default channel id (`<platform>:<native_id>`), e.g. `telegram:-1001234567890`.",
+          },
+          inbound_chat_ids: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Native chat/channel ids whose inbound messages should route to this project's inbox.",
+          },
+        },
+        required: ["platform"],
+      },
+    },
+    {
+      name: "chat_poll_inbox",
+      description:
+        "v0.7.1: read recent inbound chat messages from the active project's inbox. Inbox is " +
+        "populated by the chat-daemon as messages arrive on any configured platform. Returns " +
+        "`{ messages: [...], scanned_platforms: [...] }`. Each message carries id, platform, " +
+        "channel, sender, sender_id, text, received_at, enqueued_at, mentions_bot.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          platform: {
+            type: "string",
+            enum: ["telegram", "discord", "slack"],
+            description: "Restrict to this platform; omit to read all platforms' inboxes.",
+          },
+          limit: {
+            type: "number",
+            description: "Max messages to return. Default 20.",
+          },
+          since: {
+            type: "string",
+            description:
+              "ISO 8601 timestamp; return only messages enqueued strictly AFTER this time.",
+          },
+        },
+      },
+    },
+    {
+      name: "chat_daemon_status",
+      description:
+        "v0.7.1: report whether the chat-daemon is running and which platforms it has active. " +
+        "Returns `{ running: bool, pid?, version?, active_platforms?, uptime_ms? }`. When " +
+        "`running: false`, the daemon may auto-spawn on the next MCP server startup if any " +
+        "chat_connections are configured.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "log_phase",
       description:
         "Record a workflow phase completion in the loop-engine phase ledger (v0.6.1). " +
@@ -1196,12 +1263,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "chat_send": {
-        const channel = typeof a.channel === "string" ? a.channel.trim() : "";
+        let channel = typeof a.channel === "string" ? a.channel.trim() : "";
         const text = typeof a.text === "string" ? a.text : "";
         if (!channel || !text) {
           return textResult({ error: "channel + text (both strings) required" });
         }
         const replyTo = typeof a.reply_to === "string" ? a.reply_to : undefined;
+        // v0.7.1 Phase E: `project:<platform>` magic value resolves to
+        // the active project's chat-routing.json report_channel for
+        // that platform. Lets agents send "to my chat" without having
+        // to know the chat_id literally.
+        if (channel.startsWith("project:")) {
+          const platform = channel.slice("project:".length) as "telegram" | "discord" | "slack";
+          const { resolveActiveProjectUuid } = await import("./chat/daemon/active-project.js");
+          const { loadProjectChatRouting } = await import("./chat/daemon/routing.js");
+          const uuid = await resolveActiveProjectUuid();
+          if (!uuid) {
+            return textResult({
+              error:
+                "project:<platform> requires a project card — run `opensquid project init` first",
+            });
+          }
+          const routing = await loadProjectChatRouting(uuid);
+          const resolved = routing?.[platform]?.report_channel;
+          if (!resolved) {
+            return textResult({
+              error: `no report_channel configured for ${platform} in project ${uuid} — call chat_set_project_channel first`,
+            });
+          }
+          channel = resolved;
+        }
         // v0.7.1 Phase B: try the chat-daemon first. The daemon owns
         // the single long-poll per platform so multiple Claude Code
         // projects can share a bot token. Fall back to the in-process
@@ -1253,6 +1344,97 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           allowlists,
           issues,
         });
+      }
+
+      case "chat_set_project_channel": {
+        const platform = typeof a.platform === "string" ? a.platform : "";
+        if (platform !== "telegram" && platform !== "discord" && platform !== "slack") {
+          return textResult({ error: "platform must be 'telegram' | 'discord' | 'slack'" });
+        }
+        const report_channel =
+          typeof a.report_channel === "string" ? a.report_channel.trim() : undefined;
+        const inbound_chat_ids = Array.isArray(a.inbound_chat_ids)
+          ? (a.inbound_chat_ids.filter((x) => typeof x === "string") as string[])
+          : undefined;
+        const { resolveActiveProjectUuid } = await import("./chat/daemon/active-project.js");
+        const { loadProjectChatRouting, saveProjectChatRouting } =
+          await import("./chat/daemon/routing.js");
+        const uuid = await resolveActiveProjectUuid();
+        if (!uuid) {
+          return textResult({
+            error: "no project card in cwd — run `opensquid project init` first",
+          });
+        }
+        const current = (await loadProjectChatRouting(uuid)) ?? {};
+        const platformBlock: Record<string, unknown> = { ...(current[platform] ?? {}) };
+        if (report_channel !== undefined) platformBlock.report_channel = report_channel;
+        if (inbound_chat_ids !== undefined) {
+          // telegram uses inbound_chat_ids; discord/slack use inbound_channel_ids
+          if (platform === "telegram") platformBlock.inbound_chat_ids = inbound_chat_ids;
+          else platformBlock.inbound_channel_ids = inbound_chat_ids;
+        }
+        const next = { ...current, [platform]: platformBlock };
+        const { path: writtenPath } = await saveProjectChatRouting(uuid, next, undefined);
+        return textResult({
+          ok: true,
+          project_uuid: uuid,
+          path: writtenPath,
+          routing: next,
+        });
+      }
+
+      case "chat_poll_inbox": {
+        const platform =
+          a.platform === "telegram" || a.platform === "discord" || a.platform === "slack"
+            ? a.platform
+            : undefined;
+        const limit = typeof a.limit === "number" && a.limit > 0 ? Math.floor(a.limit) : 20;
+        const since = typeof a.since === "string" ? a.since : undefined;
+        const { resolveActiveProjectUuid } = await import("./chat/daemon/active-project.js");
+        const { pollInbox } = await import("./chat/daemon/inbox-read.js");
+        const uuid = await resolveActiveProjectUuid();
+        if (!uuid) {
+          return textResult({
+            error: "no project card in cwd — run `opensquid project init` first",
+            messages: [],
+          });
+        }
+        const res = await pollInbox({ projectUuid: uuid, platform, limit, since });
+        return textResult({
+          project_uuid: uuid,
+          messages: res.messages,
+          scanned_platforms: res.scanned_platforms,
+        });
+      }
+
+      case "chat_daemon_status": {
+        const { status: daemonStatus } = await import("./chat/daemon/lifecycle.js");
+        const s = await daemonStatus();
+        if (!s.running) {
+          return textResult({
+            running: false,
+            stale_pid: "stale_pid" in s ? s.stale_pid : undefined,
+          });
+        }
+        // If the daemon is up, hit it via RPC for active_platforms + version.
+        try {
+          const { DaemonClient } = await import("./chat/daemon/rpc-client.js");
+          const client = new DaemonClient();
+          const [pong, list] = await Promise.all([client.ping(), client.listChannels()]);
+          return textResult({
+            running: true,
+            pid: s.pid,
+            version: pong.version,
+            active_platforms: list.active_platforms,
+            uptime_ms: list.uptime_ms,
+          });
+        } catch (rpcErr) {
+          return textResult({
+            running: true,
+            pid: s.pid,
+            rpc_error: rpcErr instanceof Error ? rpcErr.message : String(rpcErr),
+          });
+        }
       }
 
       case "log_phase": {

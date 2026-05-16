@@ -16,7 +16,7 @@ For shipped releases see [CHANGELOG.md](./CHANGELOG.md).
 
 - v0.5 — lessons surface (in-flight: shipped v0.5a `list_lessons` + `capture_feedback` + `supersede`; v0.5b `list_memories`; pending v0.5c `manifest.assemble` + skill/persona/team `load_*`)
 - v0.6 — release engineering: cross-platform binaries + codex export + system export (binaries + npm publish deferred until npm org exists; codex/system export shipped)
-- v0.7 — chat connections bundled (Telegram + Discord + Slack as LOCAL bots; gateway abstraction; per `mem-163bde3b`)
+- v0.7 — chat connections bundled (Telegram + Discord + Slack as LOCAL bots; gateway abstraction; per `mem-163bde3b`) **+ v0.7.1 shipped: per-machine chat-daemon owns long-poll, per-project routing**
 - v0.8+ — additional surfaces (web, mobile) and brain thesis (MCP-of-MCPs orchestration)
 - v0.X (whenever feature-complete) — hardening sprint: lock API surface, exhaustive test coverage, all known bugs squashed
 - v1.0 — single moment when feature-complete AND bulletproof. Earned, not scheduled.
@@ -89,6 +89,7 @@ fixes that turn v0.3 from a demo into a tool you reach for unconsciously.
 - **CLAUDE.md installer (`npx opensquid install`)** — idempotent installer that adds our automation directives to `~/.claude/CLAUDE.md` (or `./CLAUDE.md` with `--project`). Critical rules:
   1. **Detect, don't replace.** If a CLAUDE.md already exists, APPEND our block; don't overwrite the user's existing content.
   2. **Sentinel-marked block** lets future installs find + update without duplicating:
+
      ```markdown
      <!-- opensquid-automation:start v0.3.1 -->
 
@@ -100,6 +101,7 @@ fixes that turn v0.3 from a demo into a tool you reach for unconsciously.
 
      <!-- opensquid-automation:end -->
      ```
+
   3. **Idempotent on re-install** — same version → no-op; new version → replace between sentinels.
   4. **Reversible** — `npx opensquid uninstall` strips our block, leaves the rest intact.
   5. **Doctor command** — `npx opensquid doctor` reports what's installed, where, which version.
