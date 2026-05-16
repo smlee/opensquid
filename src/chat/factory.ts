@@ -45,25 +45,26 @@ export async function buildChatGateway(opts: BuildOptions = {}): Promise<BuildRe
     adapters.push(new TelegramAdapter(config.telegram));
     activated.push("telegram");
   }
-  // Discord adapter ships in v0.7b — placeholder branch keeps the factory
-  // forward-compatible without a hard failure on configured-but-not-yet-
-  // implemented platforms.
   if (config.discord && !issues.some((i) => i.platform === "discord")) {
-    // eslint-disable-next-line no-console
-    console.warn("[chat factory] discord adapter not yet implemented (v0.7b) — skipping");
+    const { DiscordAdapter } = await import("./adapters/discord.js");
+    adapters.push(new DiscordAdapter(config.discord));
+    activated.push("discord");
   }
-  // Slack adapter ships in v0.7c.
   if (config.slack && !issues.some((i) => i.platform === "slack")) {
-    // eslint-disable-next-line no-console
-    console.warn("[chat factory] slack adapter not yet implemented (v0.7c) — skipping");
+    const { SlackAdapter } = await import("./adapters/slack.js");
+    adapters.push(new SlackAdapter(config.slack));
+    activated.push("slack");
   }
 
-  // Throw ONLY when the user clearly mis-configured a token (validation
-  // issue against a platform whose adapter we DO have). Unimplemented
-  // platforms (v0.7a: discord, slack) are silent-skipped with a warning
-  // because the user may have pre-configured them in anticipation of
-  // v0.7b/c — crashing opensquid would punish forward-looking setup.
-  const blockingIssues = issues.filter((i) => i.platform === "telegram" && !!config.telegram);
+  // Throw when the user clearly mis-configured a token. All three
+  // platforms are now implemented (v0.7c), so any validation issue
+  // against a configured platform is a real problem.
+  const blockingIssues = issues.filter(
+    (i) =>
+      (i.platform === "telegram" && !!config.telegram) ||
+      (i.platform === "discord" && !!config.discord) ||
+      (i.platform === "slack" && !!config.slack),
+  );
   if (blockingIssues.length > 0 && adapters.length === 0) {
     throw new ChatGatewayError(
       "chat connections configured but failed validation — see issues",

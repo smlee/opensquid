@@ -9,6 +9,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.7 complete — v0.7b + v0.7c)
+
+**Discord + Slack adapters land — v0.7 chat connections feature-complete (#121)**
+
+Building on v0.7a's gateway + Telegram. Both new adapters follow the same shape — dynamic-import the SDK, validate identity/token in one round-trip, attach a message handler, normalize to the shared `ChatMessage` shape, enforce allowlists at the adapter boundary.
+
+**v0.7b — Discord adapter (`src/chat/adapters/discord.ts`)**
+- SDK: `discord.js` v14 (new optional dep). Heavyweight but standard — rolling our own Gateway WebSocket client would be ~500 LOC of fragile protocol code (heartbeats, resume tokens, sharding, identify backoff, zlib decompression).
+- Intents declared: `Guilds`, `GuildMessages`, `MessageContent`, `DirectMessages` — forgetting `DirectMessages` silently drops DM events (a known newcomer gotcha).
+- Outbound: `channel.send()` for channel messages, threaded replies via `reply: { messageReference }`.
+- Identity captured on `ready` event; bot's own messages filtered via `author.bot`.
+
+**v0.7c — Slack adapter (`src/chat/adapters/slack.ts`)**
+- SDK: `@slack/web-api` + `@slack/socket-mode` (new optional deps). Intentionally skips `@slack/bolt` to avoid the Express runtime drag — Bolt v4 pulls in `express@5` even when only using Socket Mode.
+- Two tokens: `bot_token` (xoxb-...) for Web API, `app_token` (xapp-...) for the Socket Mode WebSocket. Validator catches prefix swaps before connection.
+- Ack-first message handling — Slack's 3-second retry clock is unforgiving even in Socket Mode. We `await ack()` before dispatching to handlers.
+- Filters out subtypes (channel_join, bot_message, message_changed) and bot-authored messages.
+- `<@bot_id>` mention detection.
+
+**Factory wiring** — `src/chat/factory.ts` now activates all three platforms when their config blocks are valid. Validation issues against any configured platform are blocking — no more "silent skip" for unimplemented platforms because everything's implemented.
+
+**Tests** — 5 new Discord adapter tests + 6 new Slack adapter tests + 2 updated factory tests (3-platform activation + discord-only + slack-only paths). Full suite: 347/347 passing.
+
+**v0.7 closeout** — the chat-connections feature is feature-complete per the user's "telegram, discord, slack should be 0.7 together" direction. Three platforms, three adapters, one gateway, two MCP tools. Bot tokens slot into `~/.opensquid/config.json` `chat_connections.<platform>` when the user is ready (per the user direction "you can get to bot token later").
+
 ### Added — 2026-05-16 (v0.7a)
 
 **Chat connections — gateway abstraction + Telegram adapter (#121)**

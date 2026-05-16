@@ -11,20 +11,25 @@ describe("buildChatGateway", () => {
     expect(result.issues).toEqual([]);
   });
 
-  it("skips discord + slack with a warning (v0.7a — not yet implemented)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("v0.7c: activates all three platforms when all are validly configured", async () => {
+    const result = await buildChatGateway({
+      config: {
+        telegram: { bot_token: "123456:ABC-DEF1234" },
+        discord: { bot_token: "MTAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
+        slack: { bot_token: "xoxb-1-2-3", app_token: "xapp-1-2-3" },
+      },
+    });
+    expect(result.activated.sort()).toEqual(["discord", "slack", "telegram"]);
+  });
+
+  it("v0.7c: activates discord + slack independently of telegram", async () => {
     const result = await buildChatGateway({
       config: {
         discord: { bot_token: "MTAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
-        slack: {
-          bot_token: "xoxb-1-2-3",
-          app_token: "xapp-1-2-3",
-        },
+        slack: { bot_token: "xoxb-1-2-3", app_token: "xapp-1-2-3" },
       },
     });
-    expect(result.activated).toEqual([]);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(result.activated.sort()).toEqual(["discord", "slack"]);
   });
 
   it("activates telegram when its config block is valid", async () => {
