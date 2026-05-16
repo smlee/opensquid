@@ -9,6 +9,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — 2026-05-16 (v0.6.2 — workflow gate active-task detection)
+
+**The v0.6.1 workflow gate silently allowed every commit (#131).** The hook called `readActiveTaskId(transcriptPath)` which only recognized `TodoWrite` tool_use blocks. Claude Code's harness `TaskCreate` / `TaskUpdate` tools serialize as delta events (not snapshots) with the assigned task id coming back in the matching `tool_result` text ("Task #N created successfully"). Sessions using TaskCreate/Update exclusively — including my own dogfood session — silently returned null → no active task → fail-open allow → gate never fired. Five today's commits went through without check.
+
+Caught by smoke-testing the v0.6.1 release against the actual hook flow.
+
+**Fix:** extended `readActiveTaskId` to recognize all three shapes via single forward pass. State map `{task_id → {status, lastTouchedIdx}}`, chronology IS the sort key (latest write per id wins naturally, no special-case ordering).
+
+- TodoWrite (snapshot) → each todo's status written at the snapshot's line index
+- TaskUpdate (delta) → taskId → status at line index
+- TaskCreate (delta) → tool_use_id lookup in pre-indexed `toolResultText` map → extract id from `"Task #N created"` via loose regex `/Task\s+#?[\w-]+/i` (survives future wording drift)
+
+**Audit caught + fixed pre-commit** (real audit cycle, not skipped this time):
+- HIGH — stale docstring referenced the discarded two-pass design
+- MED — fragile regex would miss future Claude Code wording variants
+- MED — no real-world fixture test (the same testing gap that let v0.6.1 ship broken). Captured 3 real events from an actual Claude Code session into `src/hooks/__fixtures__/real-task-shape.jsonl`; test asserts the fix detects "1" as active.
+
+**Coverage:** 23 transcript tests (12 TodoWrite + 5 TaskUpdate + 3 TaskCreate + 2 mixed-mode + 1 real-fixture). Full suite 383 pass.
+
+Per the patch-vs-minor discipline (`mem-d2cc0e78`): this is **PATCH** — fix to existing v0.6.1 workflow-gate feature, no new MCP tool, no API change.
+
 ### Added — 2026-05-16 (v0.6.1 — workflow enforcement)
 
 **Phase ledger commit gate — turn the 7-phase rule into a real block (#128)**
