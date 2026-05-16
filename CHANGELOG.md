@@ -9,6 +9,53 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.7.2 — Telegram forum-topic support #143)
+
+**One supergroup, per-project topics, one bot.** v0.7.1 already let multiple Claude Code projects share a bot token via the chat-daemon; v0.7.2 adds the cleaner UX of having each project as a Telegram **forum topic** inside a single shared supergroup, instead of N separate channels.
+
+**User-facing flow:**
+
+1. User creates a supergroup → Group Info → toggle "Topics" ON
+2. User adds the bot as admin with "Manage Topics" permission
+3. User gives chat_id to the agent
+4. Agent calls `chat_create_topic({chat_id, name})` — creates the topic via grammy `api.createForumTopic` AND auto-writes the new `message_thread_id` to the active project's `chat-routing.json` as `report_topic_id` + adds it to `inbound_topic_ids`
+5. Subsequent `chat_send({channel: "project:telegram", ...})` posts into that topic; inbound messages from that topic route to this project's inbox
+
+**New MCP tool:**
+
+- **`chat_create_topic(chat_id, name, icon_color?, icon_custom_emoji_id?, project?)`** — creates a forum topic and (default) writes the routing automatically. `project: false` to just return the id without writing.
+
+**chat-routing.json schema additions** (Telegram only):
+
+- `report_topic_id` — `message_thread_id` outbound `chat_send` posts to
+- `inbound_topic_ids` — when set, ONLY inbound messages with these thread_ids route here (strict; falls through to orphan if not matched). When unset, all messages from `inbound_chat_ids` route here (legacy v0.7.1 behavior preserved)
+
+**Wire-format additions:**
+
+- `OutboundMessage.threadId` — adapters that don't support threading ignore it
+- `ChatMessage.threadId` — populated on inbound for Telegram topic messages
+- `InboxMessage.thread_id` — persisted in JSONL inbox lines (v=1 schema unchanged; new field is additive)
+- RPC `send` method gains `threadId` param
+- New RPC method `create_topic({platform:"telegram", chat_id, name, ...})` → `{message_thread_id, name}`
+
+**Routing index:**
+
+`buildRoutingIndex` now emits composite keys `<platform>:<chat_id>:<thread_id>` when `inbound_topic_ids` is set, so two projects can share a supergroup but get distinct inbound routing by topic. Daemon's onMessage handler tries the topic-specific key first, falls back to chat-only.
+
+**Telegram adapter:**
+
+- New `createTopic(chatId, name, opts)` wraps `grammy.api.createForumTopic`
+- Inbound handler reads `message_thread_id` from `ctx.message` into `ChatMessage.threadId`
+- Outbound `send` passes `message_thread_id` to `grammy.api.sendMessage` when `OutboundMessage.threadId` is set
+
+**Backward compat:** projects with no `inbound_topic_ids` continue to route by chat_id alone (legacy v0.7.1 behavior tested explicitly). `chat_send` without `project:` magic still works exactly as before. v0.7.1 users see zero behavior change until they opt into topics.
+
+**Tests:** 3 new routing tests for topic-aware index keys (topic-specific emission, two-projects-one-supergroup distinction, legacy chat-only fallback). Full suite: 503/503.
+
+**Permissions / errors:** bot needs "Manage Topics" admin right; failure surfaces as a clear API error on the `chat_create_topic` call. The supergroup needs Topics enabled in settings — Telegram surfaces "CHAT_FORUM_REQUIRED" if not.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. MINOR 0.7.1 → 0.7.2 (new public MCP tool + new public schema field).
+
 ### Added — 2026-05-16 (v0.7.1 — chat-daemon RELEASE — Phase E of v0.7.1 #142)
 
 **v0.7.1 chat-daemon shipped end-to-end.** Multiple Claude Code projects can now share one bot token without the "last-connected wins" Telegram bug. The per-machine daemon owns the long-poll; per-project `chat-routing.json` declares each project's outbound channel + inbound chat allowlist; agent-side MCP tools route through the daemon transparently.

@@ -45,7 +45,21 @@ import { resolveDataRoot } from "../../codex/store.js";
 
 export interface TelegramRouting {
   report_channel?: string;
+  /**
+   * v0.7.2 — forum-topic id within the supergroup (`report_channel`)
+   * that outbound reports for this project should post to. When set,
+   * outbound `chat_send` via `project:telegram` includes the
+   * `message_thread_id` so the message lands in the right topic.
+   */
+  report_topic_id?: number;
   inbound_chat_ids?: string[];
+  /**
+   * v0.7.2 — when set, ONLY inbound messages with one of these
+   * `message_thread_id` values route to this project. Empty/unset means
+   * accept any topic (legacy v0.7.1 behavior — accepts all messages
+   * from the listed `inbound_chat_ids`).
+   */
+  inbound_topic_ids?: number[];
 }
 
 export interface DiscordRouting {
@@ -185,7 +199,18 @@ export function buildRoutingIndex(
 export function collectInboundChannels(cfg: ProjectChatRouting): string[] {
   const out: string[] = [];
   if (cfg.telegram?.inbound_chat_ids) {
-    for (const id of cfg.telegram.inbound_chat_ids) out.push(`telegram:${id}`);
+    // v0.7.2: if inbound_topic_ids is set, emit a more-specific key per
+    // (chat_id, topic_id) tuple so the routing index can distinguish
+    // multiple projects sharing one supergroup. Otherwise emit the
+    // chat-only key (v0.7.1 behavior).
+    const topicIds = cfg.telegram.inbound_topic_ids;
+    for (const chatId of cfg.telegram.inbound_chat_ids) {
+      if (topicIds && topicIds.length > 0) {
+        for (const tid of topicIds) out.push(`telegram:${chatId}:${tid}`);
+      } else {
+        out.push(`telegram:${chatId}`);
+      }
+    }
   }
   if (cfg.discord?.inbound_channel_ids) {
     for (const id of cfg.discord.inbound_channel_ids) out.push(`discord:${id}`);

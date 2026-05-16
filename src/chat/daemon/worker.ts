@@ -71,7 +71,14 @@ export async function runDaemonWorker(dataRoot?: string): Promise<never> {
     routingIndex = await rebuildRoutingIndex(dataRoot);
     log(`[chat-daemon] routing index built: ${routingIndex.size} inbound channels mapped`);
     gateway.onMessage(async (msg) => {
-      const projectUuid = routingIndex.get(msg.channel) ?? null;
+      // v0.7.2: prefer the topic-specific routing key when the message
+      // carries a threadId (Telegram forum topic). Fall back to the
+      // channel-only key for legacy (no-topic) routing.
+      const specificKey = msg.threadId ? `${msg.channel}:${msg.threadId}` : null;
+      const projectUuid =
+        (specificKey ? routingIndex.get(specificKey) : undefined) ??
+        routingIndex.get(msg.channel) ??
+        null;
       try {
         const r = await appendToInbox(msg, projectUuid, dataRoot);
         log(

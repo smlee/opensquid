@@ -34,6 +34,22 @@ export interface SendParams {
   channel: string; // e.g. "telegram:8075471258"
   text: string;
   replyTo?: string;
+  /** Telegram forum topic id (v0.7.2). Ignored by adapters that don't support threading. */
+  threadId?: string;
+}
+
+/** v0.7.2 — Create a Telegram forum topic via the daemon's owned bot. */
+export interface CreateTopicParams {
+  platform: "telegram";
+  chat_id: string;
+  name: string;
+  icon_color?: number;
+  icon_custom_emoji_id?: string;
+}
+
+export interface CreateTopicResult {
+  message_thread_id: number;
+  name: string;
 }
 
 export interface SendResult {
@@ -64,7 +80,7 @@ export interface PingResult {
   version: string;
 }
 
-export type DaemonMethod = "send" | "list_channels" | "ping";
+export type DaemonMethod = "send" | "list_channels" | "ping" | "create_topic";
 
 // ---------------------------------------------------------------------
 // JSON-RPC 2.0 envelopes

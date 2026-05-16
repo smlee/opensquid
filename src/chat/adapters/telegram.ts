@@ -40,14 +40,22 @@ interface GrammyBotApi {
   sendMessage(
     chat_id: string | number,
     text: string,
-    other?: { reply_to_message_id?: number },
+    other?: { reply_to_message_id?: number; message_thread_id?: number },
   ): Promise<{ message_id: number; date: number }>;
   getMe(): Promise<{ id: number; username?: string; first_name?: string; is_bot: boolean }>;
+  /** v0.7.2 — forum-topic creation (supergroup with Topics enabled + Manage Topics admin right). */
+  createForumTopic(
+    chat_id: string | number,
+    name: string,
+    other?: { icon_color?: number; icon_custom_emoji_id?: string },
+  ): Promise<{ message_thread_id: number; name: string; icon_color: number }>;
 }
 
 interface GrammyContext {
   message?: {
     message_id: number;
+    /** Forum topic thread id when the message arrived in a topic (v0.7.2). */
+    message_thread_id?: number;
     text?: string;
     chat: { id: number; type: string };
     from?: { id: number; username?: string; first_name?: string };
@@ -128,6 +136,7 @@ export class TelegramAdapter implements ChatAdapter {
       }
       const normalized: ChatMessage = {
         id: String(m.message_id),
+        threadId: m.message_thread_id !== undefined ? String(m.message_thread_id) : undefined,
         platform: "telegram",
         channel: formatChannelId("telegram", chatIdStr),
         sender: m.from?.username ?? m.from?.first_name ?? String(m.from?.id ?? "unknown"),
@@ -197,10 +206,14 @@ export class TelegramAdapter implements ChatAdapter {
       );
     }
     const chatId = nativeChatIdFromChannel(message.channel);
-    const opts: { reply_to_message_id?: number } = {};
+    const opts: { reply_to_message_id?: number; message_thread_id?: number } = {};
     if (message.replyTo) {
       const n = Number(message.replyTo);
       if (Number.isFinite(n)) opts.reply_to_message_id = n;
+    }
+    if (message.threadId) {
+      const n = Number(message.threadId);
+      if (Number.isFinite(n)) opts.message_thread_id = n;
     }
     const sent = await this.bot.api.sendMessage(chatId, message.text, opts);
     return {
@@ -208,6 +221,31 @@ export class TelegramAdapter implements ChatAdapter {
       messageId: String(sent.message_id),
       deliveredAt: new Date(sent.date * 1000),
     };
+  }
+
+  /**
+   * v0.7.2 — Create a forum topic in a supergroup. Requires the bot
+   * to be admin with "Manage Topics" permission and the supergroup to
+   * have Topics enabled in settings. Returns the topic's
+   * `message_thread_id` for storage in chat-routing.json.
+   */
+  async createTopic(
+    chatId: string,
+    name: string,
+    options: { iconColor?: number; iconCustomEmojiId?: string } = {},
+  ): Promise<{ message_thread_id: number; name: string }> {
+    if (!this.bot) {
+      throw new ChatGatewayError(
+        "telegram adapter: not started",
+        "call gateway.start() before createTopic()",
+      );
+    }
+    const apiOpts: { icon_color?: number; icon_custom_emoji_id?: string } = {};
+    if (options.iconColor !== undefined) apiOpts.icon_color = options.iconColor;
+    if (options.iconCustomEmojiId !== undefined)
+      apiOpts.icon_custom_emoji_id = options.iconCustomEmojiId;
+    const res = await this.bot.api.createForumTopic(chatId, name, apiOpts);
+    return { message_thread_id: res.message_thread_id, name: res.name };
   }
 
   async identity(): Promise<{ username: string; nativeId: string }> {

@@ -19,6 +19,8 @@
 import { connect, type Socket } from "node:net";
 
 import {
+  type CreateTopicParams,
+  type CreateTopicResult,
   type JsonRpcRequest,
   type JsonRpcResponse,
   type ListChannelsResult,
@@ -76,6 +78,10 @@ export class DaemonClient {
 
   send(params: SendParams): Promise<SendResult> {
     return this.call("send", params);
+  }
+
+  createTopic(params: CreateTopicParams): Promise<CreateTopicResult> {
+    return this.call("create_topic", params);
   }
 
   async call<R>(method: string, params: unknown): Promise<R> {

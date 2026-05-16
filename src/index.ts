@@ -769,8 +769,50 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description:
               "Native chat/channel ids whose inbound messages should route to this project's inbox.",
           },
+          report_topic_id: {
+            type: "number",
+            description:
+              "v0.7.2 Telegram only: forum topic id (`message_thread_id`) within the report_channel supergroup. When set, outbound `chat_send` with `channel:'project:telegram'` posts to this topic.",
+          },
+          inbound_topic_ids: {
+            type: "array",
+            items: { type: "number" },
+            description:
+              "v0.7.2 Telegram only: when set, only inbound messages with one of these message_thread_id values route to this project. Empty/unset = accept all topics from the listed inbound_chat_ids.",
+          },
         },
         required: ["platform"],
+      },
+    },
+    {
+      name: "chat_create_topic",
+      description:
+        "v0.7.2 Telegram only: create a new forum topic inside a supergroup (the bot must be admin with 'Manage Topics' permission and the group must have Topics enabled). When `project: true` (default), the new topic_id is automatically written to the active project's chat-routing.json as `report_topic_id`. Returns `{ message_thread_id, name }`.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          chat_id: {
+            type: "string",
+            description:
+              "Supergroup chat_id where the topic will be created (e.g. `-1001234567890`).",
+          },
+          name: { type: "string", description: "Topic name (visible in Telegram UI)." },
+          icon_color: {
+            type: "number",
+            description:
+              "Optional icon color code (one of: 7322096, 16766590, 13338331, 9367192, 16749490, 16478047).",
+          },
+          icon_custom_emoji_id: {
+            type: "string",
+            description: "Optional custom emoji file id (premium feature).",
+          },
+          project: {
+            type: "boolean",
+            description:
+              "If true (default), write the new topic_id to the active project's chat-routing.json as report_topic_id. Set false to just return the id without writing.",
+          },
+        },
+        required: ["chat_id", "name"],
       },
     },
     {
@@ -1273,6 +1315,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // the active project's chat-routing.json report_channel for
         // that platform. Lets agents send "to my chat" without having
         // to know the chat_id literally.
+        // v0.7.2: also resolve report_topic_id (Telegram forum topics)
+        // and thread it through as the outbound threadId so the message
+        // lands in the right topic within the supergroup.
+        let resolvedThreadId: string | undefined;
         if (channel.startsWith("project:")) {
           const platform = channel.slice("project:".length) as "telegram" | "discord" | "slack";
           const { resolveActiveProjectUuid } = await import("./chat/daemon/active-project.js");
@@ -1285,13 +1331,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             });
           }
           const routing = await loadProjectChatRouting(uuid);
-          const resolved = routing?.[platform]?.report_channel;
+          const platformBlock = routing?.[platform];
+          const resolved = platformBlock?.report_channel;
           if (!resolved) {
             return textResult({
               error: `no report_channel configured for ${platform} in project ${uuid} — call chat_set_project_channel first`,
             });
           }
           channel = resolved;
+          if (
+            platform === "telegram" &&
+            platformBlock &&
+            "report_topic_id" in platformBlock &&
+            typeof platformBlock.report_topic_id === "number"
+          ) {
+            resolvedThreadId = String(platformBlock.report_topic_id);
+          }
         }
         // v0.7.1 Phase B: try the chat-daemon first. The daemon owns
         // the single long-poll per platform so multiple Claude Code
@@ -1303,7 +1358,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             await import("./chat/daemon/rpc-client.js");
           const client = new DaemonClient();
           try {
-            const res = await client.send({ channel, text, replyTo });
+            const res = await client.send({
+              channel,
+              text,
+              replyTo,
+              threadId: resolvedThreadId,
+            });
             return textResult({
               ok: true,
               platform: res.platform,
@@ -1323,7 +1383,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
         const gw = await ensureChatGateway();
-        const result = await gw.send({ channel, text, replyTo });
+        const result = await gw.send({ channel, text, replyTo, threadId: resolvedThreadId });
         return textResult({ ok: true, ...result, via: "in_process" });
       }
 
@@ -1356,6 +1416,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const inbound_chat_ids = Array.isArray(a.inbound_chat_ids)
           ? (a.inbound_chat_ids.filter((x) => typeof x === "string") as string[])
           : undefined;
+        const report_topic_id =
+          typeof a.report_topic_id === "number" ? a.report_topic_id : undefined;
+        const inbound_topic_ids = Array.isArray(a.inbound_topic_ids)
+          ? (a.inbound_topic_ids.filter((x) => typeof x === "number") as number[])
+          : undefined;
         const { resolveActiveProjectUuid } = await import("./chat/daemon/active-project.js");
         const { loadProjectChatRouting, saveProjectChatRouting } =
           await import("./chat/daemon/routing.js");
@@ -1373,6 +1438,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (platform === "telegram") platformBlock.inbound_chat_ids = inbound_chat_ids;
           else platformBlock.inbound_channel_ids = inbound_chat_ids;
         }
+        // v0.7.2 Telegram-only topic fields.
+        if (platform === "telegram") {
+          if (report_topic_id !== undefined) platformBlock.report_topic_id = report_topic_id;
+          if (inbound_topic_ids !== undefined) platformBlock.inbound_topic_ids = inbound_topic_ids;
+        } else if (report_topic_id !== undefined || inbound_topic_ids !== undefined) {
+          return textResult({
+            error: "report_topic_id / inbound_topic_ids only apply to platform='telegram'",
+          });
+        }
         const next = { ...current, [platform]: platformBlock };
         const { path: writtenPath } = await saveProjectChatRouting(uuid, next, undefined);
         return textResult({
@@ -1380,6 +1454,105 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           project_uuid: uuid,
           path: writtenPath,
           routing: next,
+        });
+      }
+
+      case "chat_create_topic": {
+        const chatId = typeof a.chat_id === "string" ? a.chat_id.trim() : "";
+        const name = typeof a.name === "string" ? a.name : "";
+        if (!chatId || !name) {
+          return textResult({ error: "chat_id + name (both strings) required" });
+        }
+        const iconColor = typeof a.icon_color === "number" ? a.icon_color : undefined;
+        const iconCustomEmojiId =
+          typeof a.icon_custom_emoji_id === "string" ? a.icon_custom_emoji_id : undefined;
+        const writeToProject = a.project !== false; // default true
+        const { DaemonClient, DaemonUnreachableError } =
+          await import("./chat/daemon/rpc-client.js");
+        let topicResult: { message_thread_id: number; name: string };
+        try {
+          const client = new DaemonClient();
+          topicResult = await client.createTopic({
+            platform: "telegram",
+            chat_id: chatId,
+            name,
+            icon_color: iconColor,
+            icon_custom_emoji_id: iconCustomEmojiId,
+          });
+        } catch (err) {
+          if (!(err instanceof DaemonUnreachableError)) {
+            return textResult({ error: err instanceof Error ? err.message : String(err) });
+          }
+          const gw = await ensureChatGateway();
+          const adapter = gw.getAdapter("telegram");
+          if (
+            !adapter ||
+            typeof (adapter as { createTopic?: unknown }).createTopic !== "function"
+          ) {
+            return textResult({
+              error: "telegram adapter not active or doesn't support createTopic",
+            });
+          }
+          const adapterAny = adapter as unknown as {
+            createTopic: (
+              chatId: string,
+              name: string,
+              opts: { iconColor?: number; iconCustomEmojiId?: string },
+            ) => Promise<{ message_thread_id: number; name: string }>;
+          };
+          topicResult = await adapterAny.createTopic(chatId, name, {
+            iconColor,
+            iconCustomEmojiId,
+          });
+        }
+        if (writeToProject) {
+          const { resolveActiveProjectUuid } = await import("./chat/daemon/active-project.js");
+          const { loadProjectChatRouting, saveProjectChatRouting } =
+            await import("./chat/daemon/routing.js");
+          const uuid = await resolveActiveProjectUuid();
+          if (!uuid) {
+            return textResult({
+              ok: true,
+              message_thread_id: topicResult.message_thread_id,
+              name: topicResult.name,
+              warning:
+                "topic created but no project card in cwd — couldn't write to chat-routing.json. Run `opensquid project init` then chat_set_project_channel manually.",
+            });
+          }
+          const current = (await loadProjectChatRouting(uuid)) ?? {};
+          const telegramBlock: Record<string, unknown> = { ...(current.telegram ?? {}) };
+          telegramBlock.report_channel = `telegram:${chatId}`;
+          telegramBlock.report_topic_id = topicResult.message_thread_id;
+          const existingInboundChats = Array.isArray(telegramBlock.inbound_chat_ids)
+            ? (telegramBlock.inbound_chat_ids as string[])
+            : [];
+          if (!existingInboundChats.includes(chatId)) {
+            telegramBlock.inbound_chat_ids = [...existingInboundChats, chatId];
+          }
+          const existingInboundTopics = Array.isArray(telegramBlock.inbound_topic_ids)
+            ? (telegramBlock.inbound_topic_ids as number[])
+            : [];
+          if (!existingInboundTopics.includes(topicResult.message_thread_id)) {
+            telegramBlock.inbound_topic_ids = [
+              ...existingInboundTopics,
+              topicResult.message_thread_id,
+            ];
+          }
+          const next = { ...current, telegram: telegramBlock };
+          await saveProjectChatRouting(uuid, next, undefined);
+          return textResult({
+            ok: true,
+            message_thread_id: topicResult.message_thread_id,
+            name: topicResult.name,
+            project_uuid: uuid,
+            wrote_routing: true,
+          });
+        }
+        return textResult({
+          ok: true,
+          message_thread_id: topicResult.message_thread_id,
+          name: topicResult.name,
+          wrote_routing: false,
         });
       }
 

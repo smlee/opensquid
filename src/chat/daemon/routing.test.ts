@@ -132,6 +132,46 @@ describe("collectInboundChannels", () => {
   });
 });
 
+describe("buildRoutingIndex — v0.7.2 topic-aware keys", () => {
+  it("emits topic-specific keys when inbound_topic_ids is set", () => {
+    const cfgs = new Map([
+      [
+        "uuid-a",
+        {
+          telegram: {
+            inbound_chat_ids: ["-1001234567890"],
+            inbound_topic_ids: [5, 12],
+          },
+        },
+      ],
+    ]);
+    const idx = buildRoutingIndex(cfgs);
+    expect(idx.get("telegram:-1001234567890:5")).toBe("uuid-a");
+    expect(idx.get("telegram:-1001234567890:12")).toBe("uuid-a");
+    // Chat-only key NOT registered when topic_ids are set — we want
+    // routing to be topic-strict.
+    expect(idx.get("telegram:-1001234567890")).toBeUndefined();
+  });
+
+  it("two projects sharing one supergroup but different topics get distinct routing", () => {
+    const cfgs = new Map([
+      ["uuid-a", { telegram: { inbound_chat_ids: ["-100common"], inbound_topic_ids: [5] } }],
+      ["uuid-b", { telegram: { inbound_chat_ids: ["-100common"], inbound_topic_ids: [10] } }],
+    ]);
+    const idx = buildRoutingIndex(cfgs);
+    expect(idx.get("telegram:-100common:5")).toBe("uuid-a");
+    expect(idx.get("telegram:-100common:10")).toBe("uuid-b");
+    expect(idx.size).toBe(2);
+  });
+
+  it("falls back to chat-only key when inbound_topic_ids is empty/unset (legacy v0.7.1)", () => {
+    const cfgs = new Map([["uuid-legacy", { telegram: { inbound_chat_ids: ["-100legacy"] } }]]);
+    const idx = buildRoutingIndex(cfgs);
+    expect(idx.get("telegram:-100legacy")).toBe("uuid-legacy");
+    expect(idx.size).toBe(1);
+  });
+});
+
 describe("buildRoutingIndex", () => {
   it("builds a chat_id → uuid map", () => {
     const cfgs = new Map([

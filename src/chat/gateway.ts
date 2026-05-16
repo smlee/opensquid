@@ -55,6 +55,13 @@ export type ChannelId = string;
 export interface ChatMessage {
   /** Stable id from the platform (snowflake / message_id / ts). */
   id: string;
+  /**
+   * Optional thread / topic id for platforms that support sub-threads
+   * within a single channel (Telegram forum topics, Discord threads).
+   * Preserved on inbound so the daemon can route to per-topic projects;
+   * preserved on outbound so replies thread correctly. v0.7.2.
+   */
+  threadId?: string;
   /** Which platform delivered this. */
   platform: ChatPlatform;
   /** Channel the message was posted in (DM, group, server channel). */
@@ -81,6 +88,19 @@ export interface OutboundMessage {
   text: string;
   /** Source message id to reply-thread under (best-effort per platform). */
   replyTo?: string;
+  /**
+   * Optional thread / topic id for platforms that support sub-threads
+   * within a single channel:
+   *
+   * - **Telegram**: `message_thread_id` for forum topics (a supergroup
+   *   with Topics enabled has multiple topic threads, each one a
+   *   separate logical channel within the same chat_id). v0.7.2.
+   * - **Discord**: thread id for thread messages.
+   * - **Slack**: not used (Slack threading is via `replyTo` only).
+   *
+   * Adapters that don't support thread_id ignore it.
+   */
+  threadId?: string;
 }
 
 /** Result of a single send. Adapter-defined fields preserved opaquely. */
@@ -191,6 +211,16 @@ export class ChatGateway {
   /** List the platforms currently wired up. Used by `chat.list_channels`. */
   activePlatforms(): ChatPlatform[] {
     return [...this.adapters.keys()];
+  }
+
+  /**
+   * v0.7.2 — get the active adapter for a platform so daemon-internal
+   * code paths (e.g. `chat-daemon-worker` RPC dispatch) can reach
+   * platform-specific methods like Telegram's `createTopic`. Returns
+   * undefined when the platform isn't activated.
+   */
+  getAdapter(platform: ChatPlatform): ChatAdapter | undefined {
+    return this.adapters.get(platform);
   }
 
   private async dispatch(msg: ChatMessage): Promise<void> {

@@ -32,6 +32,8 @@ export interface InboxMessage {
   v: 1;
   /** Platform-stable message id (Telegram message_id, Slack ts, etc.). */
   id: string;
+  /** Optional thread / topic id for sub-threaded platforms (v0.7.2). */
+  thread_id?: string;
   /** Stable platform identifier. */
   platform: string;
   /** Full channel id (`<platform>:<native>`) the message arrived on. */
@@ -76,6 +78,7 @@ export async function appendToInbox(
   const line: InboxMessage = {
     v: 1,
     id: msg.id,
+    thread_id: msg.threadId,
     platform: msg.platform,
     channel: msg.channel,
     sender: msg.sender,

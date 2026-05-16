@@ -16,6 +16,8 @@ import { existsSync, unlinkSync } from "node:fs";
 
 import type { ChatGateway } from "../gateway.js";
 import {
+  type CreateTopicParams,
+  type CreateTopicResult,
   type JsonRpcFailure,
   type JsonRpcRequest,
   type JsonRpcSuccess,
@@ -170,6 +172,7 @@ export class RpcServer {
             channel: p.channel,
             text: p.text,
             replyTo: p.replyTo,
+            threadId: p.threadId,
           });
           return success<SendResult>(req.id, {
             ok: true,
@@ -177,6 +180,44 @@ export class RpcServer {
             message_id: result.messageId,
             delivered_at: result.deliveredAt.toISOString(),
           });
+        }
+        case "create_topic": {
+          const p = req.params as CreateTopicParams | undefined;
+          if (
+            !p ||
+            p.platform !== "telegram" ||
+            typeof p.chat_id !== "string" ||
+            typeof p.name !== "string"
+          ) {
+            return failure(
+              req.id,
+              JSON_RPC_INVALID_PARAMS,
+              "create_topic: platform='telegram', chat_id, name required",
+            );
+          }
+          const adapter = this.opts.gateway.getAdapter(p.platform);
+          if (
+            !adapter ||
+            typeof (adapter as { createTopic?: unknown }).createTopic !== "function"
+          ) {
+            return failure(
+              req.id,
+              JSON_RPC_INTERNAL_ERROR,
+              `${p.platform} adapter does not support topic creation (or not active)`,
+            );
+          }
+          const adapterAny = adapter as unknown as {
+            createTopic: (
+              chatId: string,
+              name: string,
+              opts: { iconColor?: number; iconCustomEmojiId?: string },
+            ) => Promise<{ message_thread_id: number; name: string }>;
+          };
+          const res = await adapterAny.createTopic(p.chat_id, p.name, {
+            iconColor: p.icon_color,
+            iconCustomEmojiId: p.icon_custom_emoji_id,
+          });
+          return success<CreateTopicResult>(req.id, res);
         }
         default:
           return failure(req.id, JSON_RPC_METHOD_NOT_FOUND, `unknown method: ${req.method}`);
