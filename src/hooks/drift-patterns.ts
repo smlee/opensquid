@@ -166,19 +166,60 @@ function matches(trigger: DriftTrigger, call: ToolCallInput): boolean {
 }
 
 /**
- * Remove single- and double-quoted string contents from a shell command
- * so drift patterns match REAL shell tokens, not text that happens to
- * appear inside `echo "..."`, `grep '...'`, etc.
+ * Remove single- and double-quoted string contents PLUS HEREDOC bodies
+ * from a shell command so drift patterns match REAL shell tokens, not
+ * text that happens to appear inside `echo "..."`, `grep '...'`, or a
+ * `git commit -m "$(cat <<'EOF' ... EOF)"` body.
  *
- * Approximate: doesn't handle backslash-escaped quotes, here-docs,
- * `$(...)` nesting. Sufficient for the false-positive cases we've
- * observed; tighten if a real-world counter-example surfaces.
+ * Approximate: doesn't handle backslash-escaped quotes or `$(...)`
+ * nesting beyond the HEREDOC. Sufficient for the false-positive cases
+ * observed in real Claude Code sessions; tighten if a real-world
+ * counter-example surfaces.
+ *
+ * v0.6.5 (#136) — added HEREDOC body stripping. Previously, a
+ * `git commit -m` with a HEREDOC message body containing the literal
+ * string "git push" would false-fire the no-implicit-push drift block
+ * because the entire HEREDOC body was part of the bash command string.
+ * Now the body is stripped before pattern matching. Caught dogfooding
+ * the v0.6.4 commit (commit message described regex patterns containing
+ * the word "git push" and the drift-block fired against itself).
  *
  * Replacement is empty rather than a placeholder so adjacent tokens
  * still parse correctly (e.g. `cmd "literal" && more` → `cmd  && more`).
  */
 function stripQuotedStrings(s: string): string {
-  return s.replace(/'[^']*'/g, "").replace(/"[^"]*"/g, "");
+  return stripHeredocBodies(s)
+    .replace(/'[^']*'/g, "")
+    .replace(/"[^"]*"/g, "");
+}
+
+/**
+ * Strip HEREDOC bodies (`<<DELIM ... DELIM` and variants) from a
+ * shell command.
+ *
+ * Recognizes:
+ *   <<EOF ... \nEOF        (unquoted delimiter, expansion-allowing)
+ *   <<'EOF' ... \nEOF      (single-quoted, literal body)
+ *   <<"EOF" ... \nEOF      (double-quoted, literal body)
+ *   <<-EOF ... \nEOF       (tab-stripping mode)
+ *   <<-'EOF' ... \nEOF     (combined)
+ *
+ * Delimiter is any word-char sequence (EOF, END, HERE, MARKER, etc.).
+ * Lazy `[\s\S]*?` matches across newlines; `\b` after the backref
+ * ensures `EOFX` doesn't close an `<<EOF` block.
+ *
+ * If a HEREDOC has no closing delimiter (truncated input), regex
+ * doesn't match and the body stays intact — fail-open behavior.
+ *
+ * Exported for direct unit testing.
+ */
+export function stripHeredocBodies(s: string): string {
+  // `\n[ \t]*\1\b` — allow leading whitespace before the closing
+  // delimiter so the `<<-DELIM` (tab-stripping) variant matches its
+  // indented closing line (`\t\tEOF`). The permissive whitespace
+  // also covers the plain `<<DELIM` case where users sometimes
+  // accidentally indent the closing line — no real harm.
+  return s.replace(/<<-?\s*['"]?(\w+)['"]?[\s\S]*?\n[ \t]*\1\b/g, "");
 }
 
 function stringField(input: Record<string, unknown>, field: string): string | null {

@@ -9,6 +9,16 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — 2026-05-16 (v0.6.5 — drift-block HEREDOC false-positive #136)
+
+**Drift-block hook false-fired against my own commit during v0.6.4 dogfood.** The `no-implicit-push` rule's regex matched against the entire bash command string, including HEREDOC commit message bodies. When the v0.6.4 commit message described regex patterns containing the literal upload-verb string, the drift-block fired against itself.
+
+**Fix:** new `stripHeredocBodies` helper runs before `stripQuotedStrings` so HEREDOC bodies (`<<DELIM ... DELIM` and variants) are removed before any drift regex sees them. Recognizes: unquoted (`<<EOF`), single-quoted (`<<'EOF'`), double-quoted (`<<"EOF"`), tab-stripping (`<<-EOF`), and combined variants. Fail-open on truncated HEREDOCs.
+
+**Tests:** 9 new drift-patterns tests (5 stripHeredocBodies variants + 3 false-positive resistance scenarios + 1 regression assertion against the exact v0.6.4 commit shape that bit me). Full drift-patterns suite: 29/29. Full opensquid suite: 438/438.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.4 → 0.6.5.
+
 ### Added — 2026-05-16 (v0.6.4 — claim catalog expansion #135)
 
 **Honesty-ledger expanded with 5 new claim patterns + 2 evidence kinds.** Third item in the drift-fix track after #131 (workflow-gate active-task detection) + #134 (versioning gate). Each new pattern targets a specific "said it / didn't do it" drift shape observed in today's session.

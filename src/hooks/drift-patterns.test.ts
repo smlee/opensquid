@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decide, findDrifts, type ToolCallInput } from "./drift-patterns.js";
+import { decide, findDrifts, stripHeredocBodies, type ToolCallInput } from "./drift-patterns.js";
 
 function bash(command: string): ToolCallInput {
   return { tool: "Bash", input: { command } };
@@ -144,5 +144,103 @@ describe("false-positive resistance — patterns inside quoted strings", () => {
     expect(findDrifts(bash("foo; git commit --amend")).map((h) => h.pattern.id)).toContain(
       "never-amend",
     );
+  });
+});
+
+// =====================================================================
+// v0.6.5 (#136) — HEREDOC body stripping. Caught while dogfooding the
+// v0.6.4 commit: the no-implicit-push drift fired against a `git commit`
+// whose HEREDOC commit message body contained the literal string
+// describing a regex pattern (the words `git push` appeared in prose
+// describing a pattern). The hook scanned the entire bash command
+// string including HEREDOC bodies → false-positive block.
+//
+// Fix: stripHeredocBodies runs before stripQuotedStrings so the body
+// is removed before any drift regex sees it.
+// =====================================================================
+
+describe("stripHeredocBodies (v0.6.5)", () => {
+  it("strips single-quoted-delimiter HEREDOC body", () => {
+    const cmd = `git commit -m "$(cat <<'EOF'
+This body contains git push origin main
+EOF
+)"`;
+    expect(stripHeredocBodies(cmd)).not.toContain("git push");
+  });
+
+  it("strips unquoted-delimiter HEREDOC body", () => {
+    const cmd = `cat <<MARKER
+inner content with git push verbatim
+MARKER`;
+    expect(stripHeredocBodies(cmd)).not.toContain("git push");
+  });
+
+  it("strips double-quoted-delimiter HEREDOC body", () => {
+    const cmd = `cat <<"END"
+git push --force here
+END`;
+    expect(stripHeredocBodies(cmd)).not.toContain("git push");
+  });
+
+  it("strips tab-stripping (<<-) variant", () => {
+    const cmd = `cat <<-EOF
+\t\tgit push danger
+\tEOF`;
+    expect(stripHeredocBodies(cmd)).not.toContain("git push");
+  });
+
+  it("strips multiple HEREDOCs in one command", () => {
+    const cmd = `cat <<'A'
+contains git push
+A
+echo "between"
+cat <<'B'
+contains git commit --amend
+B`;
+    const stripped = stripHeredocBodies(cmd);
+    expect(stripped).not.toContain("git push");
+    expect(stripped).not.toContain("git commit --amend");
+  });
+
+  it("leaves a truncated HEREDOC (no closing delimiter) intact (fail-open)", () => {
+    const cmd = `cat <<EOF
+truncated body with git push but no EOF closing`;
+    // No \nEOF\b on its own → regex doesn't match → fail-open
+    expect(stripHeredocBodies(cmd)).toContain("git push");
+  });
+});
+
+describe("drift catalog — HEREDOC false-positive resistance (v0.6.5 #136)", () => {
+  it("no-implicit-push does NOT fire when 'git push' appears only in a HEREDOC commit message", () => {
+    // This is the exact pattern that bit me during the v0.6.4 commit.
+    const cmd = `git -c commit.gpgsign=false commit -m "$(cat <<'EOF'
+feat: blah
+
+- pushed (bash_regex git push) — this LITERAL string in the message
+  body would have tripped the no-implicit-push drift block before
+  the v0.6.5 fix.
+EOF
+)"`;
+    const hits = findDrifts(bash(cmd));
+    expect(hits.map((h) => h.pattern.id)).not.toContain("no-implicit-push");
+  });
+
+  it("never-amend does NOT fire on 'git commit --amend' in HEREDOC commit body", () => {
+    const cmd = `git commit -m "$(cat <<'EOF'
+Mentioning git commit --amend in the message body for context.
+EOF
+)"`;
+    const hits = findDrifts(bash(cmd));
+    expect(hits.map((h) => h.pattern.id)).not.toContain("never-amend");
+  });
+
+  it("STILL fires when 'git push' is the actual command after a HEREDOC", () => {
+    // The HEREDOC ends, then a real git push follows. Must still block.
+    const cmd = `cat <<'EOF'
+some prose
+EOF
+git push origin main`;
+    const hits = findDrifts(bash(cmd));
+    expect(hits.map((h) => h.pattern.id)).toContain("no-implicit-push");
   });
 });
