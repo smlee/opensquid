@@ -73,6 +73,14 @@ describe("parseSkillMd", () => {
     const { frontmatter } = parseSkillMd("---\r\nname: foo\r\ndescription: bar\r\n---\r\nbody\r\n");
     expect(frontmatter.name).toBe("foo");
   });
+  it("strips UTF-8 BOM at start of file (v0.6d audit L1)", () => {
+    const bom = "﻿";
+    const { frontmatter, body } = parseSkillMd(
+      `${bom}---\nname: bom-test\ndescription: leading BOM\n---\nbody\n`,
+    );
+    expect(frontmatter.name).toBe("bom-test");
+    expect(body).toBe("body");
+  });
 });
 
 // ---------------------------------------------------------------------

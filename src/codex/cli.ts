@@ -204,38 +204,49 @@ async function loadCodexFromSkillMd(
     throw err;
   }
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opensquid-skill-import-"));
-  // Materialize the codex.yaml + each lesson body in the same layout
-  // installCodex expects (codex.yaml at root, lessons/<id>/lesson.md).
-  // Pure structural mapping — no schema re-validation here; parseCodex
-  // runs on the just-written yaml when we re-read it below.
-  const yamlOut = stringifyYaml(converted.codex);
-  await fs.writeFile(path.join(tmpRoot, "codex.yaml"), yamlOut, "utf8");
-  for (const lesson of converted.lessons) {
-    const bodyAbs = path.join(tmpRoot, lesson.bodyPath);
-    await fs.mkdir(path.dirname(bodyAbs), { recursive: true });
-    await fs.writeFile(bodyAbs, lesson.body, "utf8");
-  }
-  // Re-parse via parseCodexYaml so the downstream install path validates
-  // exactly what will land on disk — guards against any drift between
-  // the in-memory shape and the YAML serializer's output.
-  const written = await fs.readFile(path.join(tmpRoot, "codex.yaml"), "utf8");
-  let codex: Codex;
+  // v0.6d audit fix (H1): any failure between mkdtemp and the return
+  // would orphan tmpRoot forever. Wrap the materialize+revalidate block
+  // and rm tmpRoot on throw before rethrowing. Cleanup-on-success is
+  // still the caller's responsibility via the returned `cleanup` fn.
   try {
-    codex = parseCodexYaml(written);
+    // Materialize the codex.yaml + each lesson body in the same layout
+    // installCodex expects (codex.yaml at root, lessons/<id>/lesson.md).
+    const yamlOut = stringifyYaml(converted.codex);
+    await fs.writeFile(path.join(tmpRoot, "codex.yaml"), yamlOut, "utf8");
+    for (const lesson of converted.lessons) {
+      const bodyAbs = path.join(tmpRoot, lesson.bodyPath);
+      await fs.mkdir(path.dirname(bodyAbs), { recursive: true });
+      await fs.writeFile(bodyAbs, lesson.body, "utf8");
+    }
+    // Re-parse via parseCodexYaml so the downstream install path
+    // validates exactly what will land on disk — guards against drift
+    // between the in-memory shape and the YAML serializer's output.
+    const written = await fs.readFile(path.join(tmpRoot, "codex.yaml"), "utf8");
+    let codex: Codex;
+    try {
+      codex = parseCodexYaml(written);
+    } catch (err) {
+      throw new CodexCliError(
+        `converted SKILL.md failed validation: ${err instanceof Error ? err.message : String(err)}`,
+        "this is a converter bug — please file an issue with the source SKILL.md attached",
+      );
+    }
+    const cleanup = async () => {
+      try {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+      } catch {
+        // tmpdir cleanup is best-effort
+      }
+    };
+    return { codex, sourceRoot: tmpRoot, cleanup };
   } catch (err) {
-    throw new CodexCliError(
-      `converted SKILL.md failed validation: ${err instanceof Error ? err.message : String(err)}`,
-      "this is a converter bug — please file an issue with the source SKILL.md attached",
-    );
-  }
-  const cleanup = async () => {
     try {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     } catch {
-      // tmpdir cleanup is best-effort
+      // best-effort
     }
-  };
-  return { codex, sourceRoot: tmpRoot, cleanup };
+    throw err;
+  }
 }
 
 /**

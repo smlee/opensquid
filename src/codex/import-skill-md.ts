@@ -82,7 +82,11 @@ export function parseSkillMd(source: string): SkillMdParseResult {
       "SKILL.md must have a YAML frontmatter block + body",
     );
   }
-  const match = source.match(FRONTMATTER_FENCE_RE);
+  // v0.6d audit fix (L1): strip UTF-8 BOM if present. The fence regex
+  // requires `---` at the very start; a BOM-prefixed file (common from
+  // Windows editors) would silently fail the match.
+  const stripped = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
+  const match = stripped.match(FRONTMATTER_FENCE_RE);
   if (!match) {
     throw new SkillMdImportError(
       "SKILL.md missing YAML frontmatter (--- ... ---) at top",
