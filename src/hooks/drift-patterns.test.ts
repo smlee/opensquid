@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { decide, findDrifts, stripHeredocBodies, type ToolCallInput } from "./drift-patterns.js";
 
@@ -242,5 +242,54 @@ EOF
 git push origin main`;
     const hits = findDrifts(bash(cmd));
     expect(hits.map((h) => h.pattern.id)).toContain("no-implicit-push");
+  });
+});
+
+// =====================================================================
+// v0.6.6 (#137) — OPENSQUID_SKIP_DRIFT emergency bypass. Mirrors
+// OPENSQUID_SKIP_VERSION_GATE / OPENSQUID_SKIP_WORKFLOW_GATE shape so
+// the operator only has one mental model for "this hook is wrong, get
+// out of my way". The documented uninstall-hooks workaround doesn't
+// actually work mid-session because Claude Code caches the settings.json
+// hook command at session start.
+// =====================================================================
+
+describe("OPENSQUID_SKIP_DRIFT bypass (v0.6.6)", () => {
+  // Vitest runs tests serially within a file by default; we restore the
+  // env var after each test so other tests aren't tainted.
+  afterEach(() => {
+    delete process.env.OPENSQUID_SKIP_DRIFT;
+  });
+
+  it("ALLOWS (exit 0) with bypass warning when OPENSQUID_SKIP_DRIFT=1 and a block would fire", () => {
+    process.env.OPENSQUID_SKIP_DRIFT = "1";
+    const hits = findDrifts(bash("git push origin main"));
+    expect(hits.length).toBeGreaterThan(0);
+    const { exit, stderr } = decide(hits);
+    expect(exit).toBe(0);
+    expect(stderr).toContain("BYPASSED via OPENSQUID_SKIP_DRIFT=1");
+    expect(stderr).toContain("no-implicit-push");
+  });
+
+  it("includes ALL hit ids in the bypass message (operator audit trail)", () => {
+    process.env.OPENSQUID_SKIP_DRIFT = "1";
+    const hits = findDrifts(bash("git push --force origin main"));
+    const { stderr } = decide(hits);
+    expect(stderr).toContain("no-implicit-push");
+    expect(stderr).toContain("no-force-push-main");
+  });
+
+  it("does NOT bypass when env var is unset or != '1'", () => {
+    process.env.OPENSQUID_SKIP_DRIFT = "true";
+    const hits = findDrifts(bash("git push origin main"));
+    const { exit } = decide(hits);
+    expect(exit).toBe(2);
+  });
+
+  it("emits nothing on empty hits regardless of env var", () => {
+    process.env.OPENSQUID_SKIP_DRIFT = "1";
+    const { exit, stderr } = decide([]);
+    expect(exit).toBe(0);
+    expect(stderr).toBe("");
   });
 });

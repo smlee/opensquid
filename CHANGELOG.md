@@ -9,6 +9,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.6 — drift-patterns emergency bypass #137)
+
+**`OPENSQUID_SKIP_DRIFT=1` now downgrades every drift block to an audit-trail warning.** Mirrors the existing `OPENSQUID_SKIP_VERSION_GATE` and `OPENSQUID_SKIP_WORKFLOW_GATE` env vars so operators have one consistent "this hook is wrong, get out of my way" mental model across all three gates.
+
+**Why:** the documented "uninstall hooks → push → reinstall" workaround for the `no-implicit-push` block doesn't actually work mid-session — Claude Code caches the settings.json hook command at session start, so editing it mid-session has no effect. The bypass env var is the only path that works without a session restart. Discovered while pushing the #132 storage-root docs commits.
+
+**Behavior:**
+
+- Env unset → drift hits behave as before (blocks exit 2, warns exit 0)
+- `OPENSQUID_SKIP_DRIFT=1` → all hits collapsed to single stderr line listing the bypassed pattern ids, exit 0
+- `OPENSQUID_SKIP_DRIFT=true` / any other value → no bypass (matches the strict `==="1"` parsing of the other two gates)
+
+**Tests:** 4 new bypass tests (bypass downgrades to exit 0 / includes all hit ids in audit trail / strict `===\"1\"` parsing / empty-hits stays silent). Full suite: 442/442.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.5 → 0.6.6.
+
 ### Fixed — 2026-05-16 (v0.6.5 — drift-block HEREDOC false-positive #136)
 
 **Drift-block hook false-fired against my own commit during v0.6.4 dogfood.** The `no-implicit-push` rule's regex matched against the entire bash command string, including HEREDOC commit message bodies. When the v0.6.4 commit message described regex patterns containing the literal upload-verb string, the drift-block fired against itself.
@@ -24,6 +40,7 @@ Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.4
 **Honesty-ledger expanded with 5 new claim patterns + 2 evidence kinds.** Third item in the drift-fix track after #131 (workflow-gate active-task detection) + #134 (versioning gate). Each new pattern targets a specific "said it / didn't do it" drift shape observed in today's session.
 
 **New patterns:**
+
 - `telegram-sent` — claim of "Telegram report sent / sent to Telegram / pinged you" must be satisfied by either `mcp__plugin_telegram_telegram__reply` OR `mcp__opensquid__chat_send` (whichever path is wired). Caught today's silent skip when the plugin MCP disconnected.
 - `pushed` — claim of "pushed to origin / pushing the engine / pushed it / pushed the branch / pushed the PR / pushed the changes" must be satisfied by `git push` Bash call.
 - `tagged` — claim of "tagged v0.5.0 / created the tag v0.5.0 / new tag v0.5.0" must be satisfied by `git tag` Bash call. Requires a version-shaped token nearby to avoid false-positives on prose like "tagged for review."
@@ -31,10 +48,12 @@ Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.4
 - `fmt-clippy` — claim of "fmt clean / clippy passes / prettier clean" must be satisfied by cargo fmt / cargo clippy / prettier / npm run format Bash call.
 
 **New evidence kinds:**
+
 - `any_of` — composable evidence. Satisfied when ANY listed option matches. Lets multi-tool claims (Telegram via plugin OR via opensquid) resolve correctly.
 - `input_contains` — substring match against a non-Bash tool's input_summary. Reserved for future patterns like "bumped Cargo.toml" (Edit tool + needle "Cargo.toml").
 
 **Audit-driven tightening (caught pre-commit):**
+
 - MED — `tagged` regex fired on prose like "tagged for review" / "tagged as P0." Now requires `tagged\s+v?\d+\.\d+` shape.
 - MED — `phase-logged` fired on "logged audit results" / "logging test results." Now requires "phase" keyword or literal `log_phase`. False-negative cost acceptable since workflow-gate is the primary defense.
 - LOW — `pushed` missed common phrasings ("pushed it", "pushed the branch"). Expanded alternation.
@@ -46,6 +65,7 @@ Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.4
 **Per-commit version bump enforcement (#134).** New `versioning-gate` PreToolUse hook intercepts `git commit` calls and blocks them when source code is staged without a Cargo.toml / package.json version bump in the same commit. Structural fix for the "batching multiple fixes into one minor bump" pattern (`mem-d2cc0e78`).
 
 Logic:
+
 1. `git diff --cached --name-only` → list staged files
 2. No `src/**` files staged → allow (docs/CI/config commits don't need bumps)
 3. `src/**` staged → require a manifest (Cargo.toml or package.json) to also be staged WITH a `version` line diff
@@ -56,6 +76,7 @@ Logic:
 Composition: two gates now run sequentially on `git commit` — workflow-gate (audit + post_research must be logged) then versioning-gate (version bump must be in this commit). First gate to block exits non-zero.
 
 **Audit-driven fix (caught pre-commit):**
+
 - HIGH — original `^"version"` anchor on the package.json regex false-blocked legitimate bumps in MINIFIED package.json. Dropped the anchor on the package.json branch; kept Cargo's anchor since TOML is line-oriented.
 
 **Coverage:** 19 versioning-gate tests against REAL tmp git repos (same lesson as v0.6.2's real-fixture pattern — don't synthesize, exercise the actual surface). Cases include docs-only allow, Cargo bump allow, both pretty + minified package.json allow, src-only block, manifest-without-version-line block, workspace any-bump policy, override bypass, fail-open on non-repo cwd. Full suite: 402/402 passing.
@@ -73,6 +94,7 @@ Caught by smoke-testing the v0.6.1 release against the actual hook flow.
 - TaskCreate (delta) → tool_use_id lookup in pre-indexed `toolResultText` map → extract id from `"Task #N created"` via loose regex `/Task\s+#?[\w-]+/i` (survives future wording drift)
 
 **Audit caught + fixed pre-commit** (real audit cycle, not skipped this time):
+
 - HIGH — stale docstring referenced the discarded two-pass design
 - MED — fragile regex would miss future Claude Code wording variants
 - MED — no real-world fixture test (the same testing gap that let v0.6.1 ship broken). Captured 3 real events from an actual Claude Code session into `src/hooks/__fixtures__/real-task-shape.jsonl`; test asserts the fix detects "1" as active.
@@ -88,10 +110,12 @@ Per the patch-vs-minor discipline (`mem-d2cc0e78`): this is **PATCH** — fix to
 The 7-phase workflow (`pre_research → learn → code → test → audit → post_research → fix`) has been a top-priority promoted rule for weeks, but it lived only as text in `CLAUDE.md`. Today proved that surfacing ≠ enforcement: I drift-skipped audit + post-research on five features shipped this morning, retroactive audits surfaced 5 HIGH bugs. This release wires the rule into a PreToolUse hook backed by the engine's new phase-ledger store. Requires loop-engine 0.5.0+.
 
 **`log_phase` MCP tool**
+
 - New tool surface: `{task_id, phase, note?, session_id?}` → records the phase entry in the engine ledger. Idempotent (re-logging returns `newly_recorded: false`). Agent calls this as each phase completes.
 - `session_id` defaults to `mcp-<pid>-<ts>` if the caller omits it.
 
 **`workflow-gate` PreToolUse hook extension** (`src/hooks/workflow-gate.ts`)
+
 - Wired into the existing PreToolUse hook (no new event registration). Fires ONLY when the planned tool is `Bash` and the command matches `git\s+commit\b` (excluding `--amend` which has its own gate). Avoids paying the engine-spawn cost on every Bash call.
 - Active-task detection via `readActiveTaskId` (transcript JSONL walker → most-recent `TodoWrite` `in_progress` item). Fall-through to allow when no active task — supports ad-hoc commits outside any task flow.
 - Required phases: `audit` + `post_research` (per user direction — the two empirically skipped phases that target today's failure mode). Pre-research / learn / code / test / fix are not gated.
@@ -99,10 +123,12 @@ The 7-phase workflow (`pre_research → learn → code → test → audit → po
 - Emergency override: `OPENSQUID_SKIP_WORKFLOW_GATE=1` bypasses with a loud stderr warning. For genuine emergencies only.
 
 **Engine-client bridge methods**
+
 - `OpenSquidEngine.logPhase` → `task.log_phase` RPC
 - `OpenSquidEngine.getTaskLedger` → `task.get_ledger` RPC
 
 **Tests**
+
 - 12 workflow-gate tests (fail-open inputs, active-task drives decision, fail-open on engine error, emergency override).
 - 12 transcript-active-task tests (no transcript, no TodoWrite, no in_progress, single TodoWrite, MOST RECENT wins, stale fallback prevention, mixed events, numeric ids, malformed JSON).
 - Full suite: 372/372 passing.
@@ -114,12 +140,14 @@ The 7-phase workflow (`pre_research → learn → code → test → audit → po
 Building on v0.7a's gateway + Telegram. Both new adapters follow the same shape — dynamic-import the SDK, validate identity/token in one round-trip, attach a message handler, normalize to the shared `ChatMessage` shape, enforce allowlists at the adapter boundary.
 
 **v0.7b — Discord adapter (`src/chat/adapters/discord.ts`)**
+
 - SDK: `discord.js` v14 (new optional dep). Heavyweight but standard — rolling our own Gateway WebSocket client would be ~500 LOC of fragile protocol code (heartbeats, resume tokens, sharding, identify backoff, zlib decompression).
 - Intents declared: `Guilds`, `GuildMessages`, `MessageContent`, `DirectMessages` — forgetting `DirectMessages` silently drops DM events (a known newcomer gotcha).
 - Outbound: `channel.send()` for channel messages, threaded replies via `reply: { messageReference }`.
 - Identity captured on `ready` event; bot's own messages filtered via `author.bot`.
 
 **v0.7c — Slack adapter (`src/chat/adapters/slack.ts`)**
+
 - SDK: `@slack/web-api` + `@slack/socket-mode` (new optional deps). Intentionally skips `@slack/bolt` to avoid the Express runtime drag — Bolt v4 pulls in `express@5` even when only using Socket Mode.
 - Two tokens: `bot_token` (xoxb-...) for Web API, `app_token` (xapp-...) for the Socket Mode WebSocket. Validator catches prefix swaps before connection.
 - Ack-first message handling — Slack's 3-second retry clock is unforgiving even in Socket Mode. We `await ack()` before dispatching to handlers.
@@ -143,11 +171,12 @@ First slice of v0.7 chat connections. Three-platform plan (Telegram + Discord + 
 - `src/chat/adapters/telegram.ts` — long-polling adapter via `grammy` (new optional dep). Dynamically imported only when the telegram block is configured, so non-telegram installs don't pay the cost. Allowlist enforcement at adapter boundary — silent drop, no bot echo of policy decisions. `@-mention` + `/cmd@bot` detection rolled in.
 - `src/chat/factory.ts` — builds a `ChatGateway` from config. Skips platforms whose adapters aren't implemented yet (warn, don't crash) so users can pre-configure Discord/Slack tokens in anticipation of v0.7b/c without breaking opensquid. Throws only when a configured + implemented platform has a real validation issue.
 - New MCP tools: `chat_send` (route outbound by channel id) + `chat_list_channels` (report active platforms + allowlists + validation issues).
-- Lazy-init pattern in `src/index.ts`: chat gateway opens on first chat_* tool call, cached for the rest of the MCP session. Non-chat sessions pay zero cost.
+- Lazy-init pattern in `src/index.ts`: chat gateway opens on first chat\_\* tool call, cached for the rest of the MCP session. Non-chat sessions pay zero cost.
 - 32 new tests (18 gateway, 9 telegram-adapter constructor + mention detection, 5 factory).
 - Connection mechanism choices (per research): Telegram long-poll (grammy `bot.start()`), Discord Gateway WebSocket (discord.js, v0.7b), Slack Socket Mode (@slack/socket-mode + @slack/web-api directly, skipping Bolt to avoid the Express drag, v0.7c). All three are outbound-only — no public webhook required.
 
 Outstanding for v0.7 completion:
+
 - v0.7b: Discord adapter + `discord.js` optional dep
 - v0.7c: Slack adapter + `@slack/web-api` + `@slack/socket-mode` optional deps + chat inbox bridge (inbound messages → MCP context surfacing)
 
@@ -181,6 +210,7 @@ The infrastructure for shipping the `loop-engine` Rust binary alongside `opensqu
 ### Added — 2026-05-15 → 2026-05-16 ship cycle
 
 **Codex format + auto-publish (#100-#106, #116, #117)**
+
 - Codex pack format: YAML manifest (foundation/lessons/detection rules), portable across MCP hosts, exports `.claude-plugin/plugin.json` shims for vanilla Claude Code compat
 - `opensquid codex install|list|remove|doctor|export` CLI
 - Project ID card at `.opensquid/project.json` (identity survives folder moves)
@@ -189,6 +219,7 @@ The infrastructure for shipping the `loop-engine` Rust binary alongside `opensqu
 - Engine v1.2: `lesson.create` upserts by `(pack_id, external_id)` — re-installing the same codex updates rows in place instead of minting new ids (#117)
 
 **Drift detection + honesty ledger + heartbeat (#110, #113-#115, #118, #124)**
+
 - PreToolUse hook intercepts known anti-patterns (`git commit --amend`, force-push, substrate-purity violations, implicit `git push`)
 - Stop hook reconciles claims-vs-action against the session tool-call ledger ("agent said 'running tests' but no Bash test call this turn")
 - UserPromptSubmit surfaces broken promises + heartbeat nudges
@@ -197,6 +228,7 @@ The infrastructure for shipping the `loop-engine` Rust binary alongside `opensqu
 - Token-threshold heartbeat (#124) replaces the original auto-classifier subprocess: counts transcript tokens, arms a re-anchor nudge when delta crosses `OPENSQUID_HEARTBEAT_TOKENS` (default 20K). Agent does classification work inline per CLAUDE.md classify-and-act rules. Net delta: dropped ~1200 LOC + @anthropic-ai/sdk dependency; added ~340 LOC. In-MCP-ecosystem, no subprocess, no external LLM, no SDK.
 
 **Lessons surface v0.5 (#119)**
+
 - v0.5a (7ffc82b): `list_lessons` MCP tool (paginated, status-filtered, deterministic sort) + `capture_feedback` (thumbs_up/down → wedge gate signal-diversity input) + `supersede` (point old at new, causal chain preserved)
 - v0.5b (2707df1): `list_memories` MCP tool (paginated, scope-filtered, frontmatter-only response)
 - v0.5c (e390444): `manifest` MCP tool — central RAG-style assembly returning active lessons (deterministic-sorted, gate-annotated) + memory recall + assembly_stats in one call. Engine v1.4: `manifest.assemble` RPC handler.
@@ -206,22 +238,26 @@ The infrastructure for shipping the `loop-engine` Rust binary alongside `opensqu
 opensquid now has end-to-end import/export at two granularities — a single skill pack (codex) and the entire opensquid state — so the same rules / lessons / memories work across projects, machines, and team handoffs.
 
 Codex-level (per skill pack):
+
 - `opensquid codex install <path>` — IMPORT from a local directory containing `codex.yaml` + `lessons/`. Seeds lessons into the engine as promoted (pack-authored = user-equivalent, eviction-immune). Auto-publishes one line per lesson into the user's CLAUDE.md `<!-- opensquid-rules -->` block. Engine v1.2 upsert by `(pack_id, external_id)` means re-installing the same codex updates rows in place — no duplicate engine rows, no duplicate CLAUDE.md lines.
 - `opensquid codex export <id> [--output <path>] [--force]` — EXPORT to a portable directory bundle. Output layout matches the install-source so a freshly installed bundle round-trips cleanly: `export on A → copy bundle → install on B` is the cross-machine/cross-project workflow. Bundle includes `.opensquid-export.json` provenance manifest (timestamp + opensquid version + source codex id).
 - `opensquid codex list|remove|doctor` — round out the lifecycle.
 
 System-level (entire opensquid state):
+
 - `opensquid export [--output <path>] [--force]` — EXPORT the entire `~/.opensquid/` tree (every codex, every lesson in all status dirs, every memory with `.vec` sidecar, sessions, logs, config.json, projects.json) as a single tar.gz archive. Default filename `./opensquid-<timestamp>.tar.gz`.
 - `opensquid import <archive> [--merge|--replace]` — IMPORT the archive back. `--merge` (default) layers on top of existing data, last-write-wins per file. `--replace` extracts to a tmp staging dir then atomic-renames over the destination — corrupt input never half-deletes your data.
 - Validates that an input archive looks like an opensquid export (checks for `.opensquid/` root entry via `tar -tzf`) before doing anything destructive.
 - Format: tar.gz via system `tar` (preinstalled on macOS, Linux, Windows 10+). Zero new runtime dependency. Encryption deferred — pipe through `gpg -c` externally for sensitive memories.
 
 **Positioning + find-simple-solutions rule**
+
 - README: new "Pairing with Hermes Agent" section with one-line `hermes mcp add opensquid` recipe; opensquid is additive (sits alongside Hermes' existing memory backend)
 - ROADMAP: "Current direction" section locks the release sequence (v0.5 → v0.6 → v0.7 → v1.0 = feature-complete + bulletproof, earned not scheduled) and hard rule-outs
 - `sangmin-personal-rules` codex gains find-simple-solutions promoted lesson — meta-rule from the #112 → #124 arc: build simplest thing that solves actual user need; add complexity only when simple version provably insufficient
 
 **Sole-author trailer convention**
+
 - All commits authored solely by Sangmin Lee. No `Co-Authored-By: Claude` trailers on this repo.
 
 ### Added — v0.5 hybrid recall
@@ -318,7 +354,7 @@ manual prompting each session).
   env var or the git repo's basename, falling back to `User`.
 
 - **`recall` accepts `include_body` + `scope_filter`** — `include_body:
-  true` returns the FULL memory body in `body_preview` (no 240-char
+true` returns the FULL memory body in `body_preview` (no 240-char
   truncation), critical for re-anchoring on long memories after
   context drift. `scope_filter` restricts results to memories matching
   a `MemoryScopeFilter` (default: `any_of([user, <detected-project>])`).
@@ -360,7 +396,7 @@ bridge.
 - **`recall`** extended to fan out across lessons (text-match) +
   memories (semantic). Returns mixed results ranked by similarity.
 - **`engine-client.ts`** — JSON-RPC 2.0 client that spawns `loop-engine
-  serve` as a subprocess. Handles lazy-spawn, crash-recovery, lifetime
+serve` as a subprocess. Handles lazy-spawn, crash-recovery, lifetime
   pinning to the MCP session.
 - Engine binary discovery via `OPENSQUID_ENGINE_BIN` env var.
 

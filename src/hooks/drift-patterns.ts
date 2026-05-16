@@ -64,7 +64,8 @@ export const DRIFT_PATTERNS: DriftPattern[] = [
     message:
       "BLOCKED: `git push` requires explicit user authorization. " +
       "Commits stay local until the user says push. If the user just said " +
-      "to push, override (re-run with a comment explaining).",
+      "to push (or has pre-authorized pushes per CLAUDE.md), bypass with " +
+      "OPENSQUID_SKIP_DRIFT=1 for this command.",
   },
 
   // 3. Engine commit subject containing consumer-product strings
@@ -233,12 +234,28 @@ function stringField(input: Record<string, unknown>, field: string): string | nu
  * - Any "block" hit → exit 2 with all blocking messages
  * - Only "warn" hits → exit 0, print warnings to stderr
  * - No hits → exit 0 silently
+ *
+ * Emergency bypass: `OPENSQUID_SKIP_DRIFT=1` downgrades every block to
+ * an audit-trail warning (exit 0, stderr explains the bypass). Used when
+ * the user has explicitly authorized a normally-blocked action (e.g.
+ * `git push` is pre-authorized per CLAUDE.md but the regex can't know
+ * that from inside the hook). Matches the shape of the version-gate
+ * (`OPENSQUID_SKIP_VERSION_GATE=1`) and workflow-gate
+ * (`OPENSQUID_SKIP_WORKFLOW_GATE=1`) bypasses so the operator only has
+ * one mental model to remember.
  */
 export function decide(hits: DriftHit[]): {
   exit: 0 | 2;
   stderr: string;
 } {
   if (hits.length === 0) return { exit: 0, stderr: "" };
+  if (isDriftBypassed()) {
+    const ids = hits.map((h) => h.pattern.id).join(", ");
+    return {
+      exit: 0,
+      stderr: `🦑 [opensquid drift-patterns] BYPASSED via OPENSQUID_SKIP_DRIFT=1 (hits: ${ids})\n`,
+    };
+  }
   const blocks = hits.filter((h) => h.pattern.severity === "block");
   const warns = hits.filter((h) => h.pattern.severity === "warn");
   const lines: string[] = [];
@@ -252,4 +269,8 @@ export function decide(hits: DriftHit[]): {
     exit: blocks.length > 0 ? 2 : 0,
     stderr: lines.join("\n") + "\n",
   };
+}
+
+function isDriftBypassed(): boolean {
+  return process.env.OPENSQUID_SKIP_DRIFT === "1";
 }
