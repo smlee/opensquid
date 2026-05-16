@@ -6,7 +6,8 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CodexCliError, runCodexCli } from "./cli.js";
-import { codexDir, codexesDir } from "./store.js";
+import { codexDir, codexesDir, getCodex } from "./store.js";
+import { isFocusedCodex } from "./types.js";
 
 // ---------------------------------------------------------------------
 // Isolation
@@ -224,5 +225,124 @@ describe("flag parsing", () => {
     await runCodexCli("install", [sourceRoot, "--root", tmpRoot, "--no-seed"]);
     // Codex should be in tmpRoot, NOT in the user's actual ~/.opensquid.
     expect((await fs.stat(codexesDir(tmpRoot))).isDirectory()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------
+// v0.6d — SKILL.md foreign-format auto-detect + install
+// ---------------------------------------------------------------------
+
+const ANTHROPIC_SKILL_MD = `---
+name: pdf
+description: Use when extracting text or tables from PDF files.
+license: Apache-2.0
+---
+
+# PDF Skill
+
+Use pdfplumber for text, PyMuPDF for images.
+`;
+
+const HERMES_SKILL_MD = `---
+name: google_meet
+description: Schedule and join Google Meet calls.
+version: 1.2.0
+author: Hermes Team
+license: MIT
+platforms:
+  - hermes
+metadata:
+  hermes:
+    tags: [calendar, meetings]
+---
+
+# google_meet
+
+Hermes integration for Meet.
+`;
+
+describe("install — SKILL.md auto-detect", () => {
+  it("converts a directory containing SKILL.md and installs as native codex", async () => {
+    await fs.writeFile(path.join(sourceRoot, "SKILL.md"), ANTHROPIC_SKILL_MD, "utf8");
+    await runCodexCli("install", [sourceRoot, "--root", tmpRoot, "--no-seed"]);
+
+    const installed = await getCodex("pdf", { rootDir: tmpRoot });
+    expect(installed.id).toBe("pdf");
+    expect(installed.version).toBe("1.0.0");
+    expect(installed.license).toBe("Apache-2.0");
+    if (!isFocusedCodex(installed)) throw new Error("expected focused codex");
+    expect(installed.source?.kind).toBe("skill_md");
+    expect(installed.source?.original_variant).toBe("anthropic");
+    expect(installed.source?.original_name).toBe("pdf");
+
+    // Lesson body got materialized.
+    const lessonBody = await fs.readFile(
+      path.join(codexDir("pdf", tmpRoot), "lessons", "pdf", "lesson.md"),
+      "utf8",
+    );
+    expect(lessonBody).toContain("Use pdfplumber for text");
+  });
+
+  it("converts a SKILL.md file path directly (not a directory)", async () => {
+    const filePath = path.join(sourceRoot, "SKILL.md");
+    await fs.writeFile(filePath, ANTHROPIC_SKILL_MD, "utf8");
+    await runCodexCli("install", [filePath, "--root", tmpRoot, "--no-seed"]);
+    const installed = await getCodex("pdf", { rootDir: tmpRoot });
+    expect(installed.id).toBe("pdf");
+  });
+
+  it("rewrites underscore names to hyphens (google_meet → google-meet)", async () => {
+    await fs.writeFile(path.join(sourceRoot, "SKILL.md"), HERMES_SKILL_MD, "utf8");
+    await runCodexCli("install", [sourceRoot, "--root", tmpRoot, "--no-seed"]);
+
+    const installed = await getCodex("google-meet", { rootDir: tmpRoot });
+    expect(installed.id).toBe("google-meet");
+    expect(installed.version).toBe("1.2.0");
+    if (!isFocusedCodex(installed)) throw new Error("expected focused codex");
+    expect(installed.source?.original_variant).toBe("hermes");
+    expect(installed.source?.original_name).toBe("google_meet");
+    expect(installed.metadata?.platforms).toEqual(["hermes"]);
+  });
+
+  it("prefers codex.yaml over SKILL.md when both exist (auto-detect)", async () => {
+    // Native codex says id=react-19; SKILL.md says id=pdf. Auto-detect
+    // picks codex.yaml. --source skill_md would override.
+    await makeSourceCodex({ withLessonBody: true });
+    await fs.writeFile(path.join(sourceRoot, "SKILL.md"), ANTHROPIC_SKILL_MD, "utf8");
+    await runCodexCli("install", [sourceRoot, "--root", tmpRoot, "--no-seed"]);
+
+    const installed = await getCodex("react-19", { rootDir: tmpRoot });
+    expect(installed.id).toBe("react-19");
+    // pdf should NOT be installed.
+    await expect(getCodex("pdf", { rootDir: tmpRoot })).rejects.toThrow();
+  });
+
+  it("--source skill_md forces SKILL.md branch when both files exist", async () => {
+    await makeSourceCodex({ withLessonBody: true });
+    await fs.writeFile(path.join(sourceRoot, "SKILL.md"), ANTHROPIC_SKILL_MD, "utf8");
+    await runCodexCli("install", [
+      sourceRoot,
+      "--root",
+      tmpRoot,
+      "--no-seed",
+      "--source",
+      "skill_md",
+    ]);
+    const installed = await getCodex("pdf", { rootDir: tmpRoot });
+    expect(installed.id).toBe("pdf");
+  });
+
+  it("rejects invalid --source value", async () => {
+    await fs.writeFile(path.join(sourceRoot, "SKILL.md"), ANTHROPIC_SKILL_MD, "utf8");
+    await expect(
+      runCodexCli("install", [sourceRoot, "--root", tmpRoot, "--no-seed", "--source", "yaml"]),
+    ).rejects.toThrow(CodexCliError);
+  });
+
+  it("reports a clear error for malformed SKILL.md (missing description)", async () => {
+    await fs.writeFile(path.join(sourceRoot, "SKILL.md"), "---\nname: broken\n---\nbody\n", "utf8");
+    await expect(
+      runCodexCli("install", [sourceRoot, "--root", tmpRoot, "--no-seed"]),
+    ).rejects.toThrow(/description/);
   });
 });

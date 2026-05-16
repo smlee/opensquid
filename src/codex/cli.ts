@@ -13,14 +13,24 @@
  * authored_by: Pack(<id>)) happens at activation time via the
  * orchestrator (O3), not here. This CLI is filesystem-only.
  *
- * Source kinds in v0.4:
- *   - local path (relative or absolute) — implemented here
+ * Source kinds in v0.6:
+ *   - local path (relative or absolute) — codex.yaml native format
+ *   - local SKILL.md (file path or dir containing SKILL.md) — v0.6d
+ *     auto-detected; converted via import-skill-md.ts then routed through
+ *     the native install pipeline. Supports Anthropic / superpowers / ECC /
+ *     Hermes flavors transparently.
  *   - git URL          — deferred to O3 (clone-then-install)
  *   - http URL         — deferred to O3
- *   - foreign format   — deferred to O3 (LLM-mediated conversion)
  *   - --from "<desc>"  — deferred to O3 (LLM-generated)
+ *
+ * Detection precedence (loadCodexFromPath):
+ *   1. opts.source explicit override ("skill_md" | "native") wins
+ *   2. file ends in SKILL.md (case-insensitive) → skill_md
+ *   3. directory contains SKILL.md but no codex.yaml → skill_md
+ *   4. else → native (parse codex.yaml)
  */
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import { appendPromotedLessonToClaudeMd } from "../claude-md.js";
@@ -35,7 +45,9 @@ import {
   removeCodex,
   resolveDataRoot,
 } from "./store.js";
+import { convertSkillMdToCodex, SkillMdImportError } from "./import-skill-md.js";
 import { parseCodexYaml } from "./parse.js";
+import { stringify as stringifyYaml } from "yaml";
 import { type Codex, type CodexSeedLesson, isCompositeCodex, isFocusedCodex } from "./types.js";
 
 // ---------------------------------------------------------------------
@@ -57,10 +69,15 @@ export class CodexCliError extends Error {
 // ---------------------------------------------------------------------
 
 /**
- * Read + parse codex.yaml from a local directory or file path.
- * Returns the parsed codex + the resolved root directory of the source.
+ * Read + parse codex.yaml from a local directory or file path. v0.6d
+ * also auto-detects SKILL.md foreign format and converts it via
+ * import-skill-md.ts before returning. The downstream pipeline
+ * (`installCodex` + `copyCodexContent`) sees only the native shape.
  */
-async function loadCodexFromPath(source: string): Promise<{ codex: Codex; sourceRoot: string }> {
+async function loadCodexFromPath(
+  source: string,
+  sourceOverride?: "skill_md" | "native",
+): Promise<{ codex: Codex; sourceRoot: string; cleanup?: () => Promise<void> }> {
   const abs = path.resolve(source);
   let stat;
   try {
@@ -68,10 +85,17 @@ async function loadCodexFromPath(source: string): Promise<{ codex: Codex; source
   } catch {
     throw new CodexCliError(
       `source path not found: ${abs}`,
-      "pass a directory containing codex.yaml, or a path to codex.yaml directly",
+      "pass a directory containing codex.yaml or SKILL.md, or a path to codex.yaml / SKILL.md directly",
     );
   }
 
+  // ----- foreign-format detection (SKILL.md) -----
+  const detected = await detectSourceKind(abs, stat.isDirectory(), sourceOverride);
+  if (detected.kind === "skill_md") {
+    return loadCodexFromSkillMd(detected.skillMdPath);
+  }
+
+  // ----- native codex.yaml path (unchanged) -----
   let manifestPath: string;
   let sourceRoot: string;
   if (stat.isDirectory()) {
@@ -88,7 +112,7 @@ async function loadCodexFromPath(source: string): Promise<{ codex: Codex; source
   } catch {
     throw new CodexCliError(
       `codex.yaml not found at ${manifestPath}`,
-      "the source must contain codex.yaml at the root",
+      "the source must contain codex.yaml at the root (or SKILL.md for foreign-format import)",
     );
   }
 
@@ -103,6 +127,115 @@ async function loadCodexFromPath(source: string): Promise<{ codex: Codex; source
   }
 
   return { codex, sourceRoot };
+}
+
+interface DetectedSource {
+  kind: "skill_md" | "native";
+  /** For skill_md: absolute path to the SKILL.md file. */
+  skillMdPath: string;
+}
+
+async function detectSourceKind(
+  abs: string,
+  isDirectory: boolean,
+  override?: "skill_md" | "native",
+): Promise<DetectedSource> {
+  if (override === "native") {
+    return { kind: "native", skillMdPath: abs };
+  }
+  // File path: case-insensitive SKILL.md detection on the basename.
+  if (!isDirectory) {
+    const base = path.basename(abs).toLowerCase();
+    if (override === "skill_md" || base === "skill.md") {
+      return { kind: "skill_md", skillMdPath: abs };
+    }
+    return { kind: "native", skillMdPath: abs };
+  }
+  // Directory: prefer codex.yaml if present (native wins on collision —
+  // a directory with BOTH means the author already converted natively).
+  // Else look for SKILL.md / skill.md.
+  if (override !== "skill_md") {
+    const codexPath = path.join(abs, "codex.yaml");
+    try {
+      await fs.access(codexPath);
+      return { kind: "native", skillMdPath: abs };
+    } catch {
+      // fall through to SKILL.md probe
+    }
+  }
+  for (const candidate of ["SKILL.md", "skill.md", "Skill.md"]) {
+    const probe = path.join(abs, candidate);
+    try {
+      await fs.access(probe);
+      return { kind: "skill_md", skillMdPath: probe };
+    } catch {
+      // try next
+    }
+  }
+  // Neither — let downstream codex.yaml read produce the "not found" error.
+  return { kind: "native", skillMdPath: abs };
+}
+
+/**
+ * Convert a SKILL.md file into the native codex install shape by writing
+ * the converted codex.yaml + lessons/<id>/lesson.md into a tmp dir, then
+ * returning that tmp dir as the sourceRoot so the unchanged install
+ * pipeline (`installCodex` + `copyCodexContent`) materializes it normally.
+ * The caller invokes the returned `cleanup` after install completes.
+ */
+async function loadCodexFromSkillMd(
+  skillMdPath: string,
+): Promise<{ codex: Codex; sourceRoot: string; cleanup: () => Promise<void> }> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(skillMdPath, "utf8");
+  } catch (err) {
+    throw new CodexCliError(
+      `failed to read SKILL.md at ${skillMdPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  let converted;
+  try {
+    converted = convertSkillMdToCodex(raw, { originalPath: skillMdPath });
+  } catch (err) {
+    if (err instanceof SkillMdImportError) {
+      throw new CodexCliError(`SKILL.md import failed: ${err.message}`, err.hint);
+    }
+    throw err;
+  }
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opensquid-skill-import-"));
+  // Materialize the codex.yaml + each lesson body in the same layout
+  // installCodex expects (codex.yaml at root, lessons/<id>/lesson.md).
+  // Pure structural mapping — no schema re-validation here; parseCodex
+  // runs on the just-written yaml when we re-read it below.
+  const yamlOut = stringifyYaml(converted.codex);
+  await fs.writeFile(path.join(tmpRoot, "codex.yaml"), yamlOut, "utf8");
+  for (const lesson of converted.lessons) {
+    const bodyAbs = path.join(tmpRoot, lesson.bodyPath);
+    await fs.mkdir(path.dirname(bodyAbs), { recursive: true });
+    await fs.writeFile(bodyAbs, lesson.body, "utf8");
+  }
+  // Re-parse via parseCodexYaml so the downstream install path validates
+  // exactly what will land on disk — guards against any drift between
+  // the in-memory shape and the YAML serializer's output.
+  const written = await fs.readFile(path.join(tmpRoot, "codex.yaml"), "utf8");
+  let codex: Codex;
+  try {
+    codex = parseCodexYaml(written);
+  } catch (err) {
+    throw new CodexCliError(
+      `converted SKILL.md failed validation: ${err instanceof Error ? err.message : String(err)}`,
+      "this is a converter bug — please file an issue with the source SKILL.md attached",
+    );
+  }
+  const cleanup = async () => {
+    try {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    } catch {
+      // tmpdir cleanup is best-effort
+    }
+  };
+  return { codex, sourceRoot: tmpRoot, cleanup };
 }
 
 /**
@@ -155,35 +288,52 @@ interface CliOptions {
    * `./<id>-v<version>.codex/` in the current working directory.
    */
   exportOutput?: string;
+  /**
+   * v0.6d: explicit source-format override for `codex install`. Omitted
+   * defaults to auto-detection (codex.yaml → native, SKILL.md → skill_md).
+   * Useful when a directory contains BOTH files and you want to force the
+   * non-default branch.
+   */
+  sourceKind?: "skill_md" | "native";
 }
 
 async function cmdInstall(args: string[], opts: CliOptions): Promise<void> {
   const source = args[0];
   if (!source) {
     throw new CodexCliError(
-      "usage: opensquid codex install <path>",
-      "pass a directory containing codex.yaml",
+      "usage: opensquid codex install <path> [--source skill_md|native]",
+      "pass a directory containing codex.yaml or a SKILL.md file",
     );
   }
-  const { codex, sourceRoot } = await loadCodexFromPath(source);
-  const { id, path: destDir } = await installCodex(codex, opts);
-  // Composite codexes have no companion content; skip the copy.
-  if (isFocusedCodex(codex)) {
-    await copyCodexContent(sourceRoot, destDir);
-  }
-  console.log(`[opensquid codex install] installed ${id} v${codex.version} at ${destDir}`);
-
-  // v0.4: seed lessons into the engine's lesson store so recall surfaces
-  // them. Composite codexes have no own lessons — the includes are
-  // independent installs (recursive install is a future enhancement).
-  if (isFocusedCodex(codex) && codex.seed_lessons && codex.seed_lessons.length > 0) {
-    if (opts.skipSeed) {
-      console.log(
-        `  [seed skipped] ${codex.seed_lessons.length} lesson(s) — pass --no-seed to skip`,
-      );
-      return;
+  const { codex, sourceRoot, cleanup } = await loadCodexFromPath(source, opts.sourceKind);
+  try {
+    const { id, path: destDir } = await installCodex(codex, opts);
+    // Composite codexes have no companion content; skip the copy.
+    if (isFocusedCodex(codex)) {
+      await copyCodexContent(sourceRoot, destDir);
     }
-    await seedLessonsIntoEngine(codex.seed_lessons, codex.id, destDir, opts);
+    const provenance =
+      isFocusedCodex(codex) && codex.source?.kind === "skill_md"
+        ? ` (imported from SKILL.md/${codex.source.original_variant ?? "unknown"})`
+        : "";
+    console.log(
+      `[opensquid codex install] installed ${id} v${codex.version} at ${destDir}${provenance}`,
+    );
+
+    // v0.4: seed lessons into the engine's lesson store so recall surfaces
+    // them. Composite codexes have no own lessons — the includes are
+    // independent installs (recursive install is a future enhancement).
+    if (isFocusedCodex(codex) && codex.seed_lessons && codex.seed_lessons.length > 0) {
+      if (opts.skipSeed) {
+        console.log(
+          `  [seed skipped] ${codex.seed_lessons.length} lesson(s) — pass --no-seed to skip`,
+        );
+        return;
+      }
+      await seedLessonsIntoEngine(codex.seed_lessons, codex.id, destDir, opts);
+    }
+  } finally {
+    if (cleanup) await cleanup();
   }
 }
 
@@ -479,6 +629,15 @@ function parseFlags(argv: string[]): { args: string[]; opts: CliOptions } {
       opts.rootDir = argv[++i];
     } else if ((a === "--output" || a === "-o") && argv[i + 1]) {
       opts.exportOutput = argv[++i];
+    } else if (a === "--source" && argv[i + 1]) {
+      const v = argv[++i];
+      if (v !== "skill_md" && v !== "native") {
+        throw new CodexCliError(
+          `--source must be 'skill_md' or 'native', got '${v}'`,
+          "omit --source for auto-detection (codex.yaml → native, SKILL.md → skill_md)",
+        );
+      }
+      opts.sourceKind = v;
     } else {
       args.push(a);
     }

@@ -181,6 +181,32 @@ export interface CodexReferenceDoc {
 // Two codex kinds (focused vs composite)
 // ---------------------------------------------------------------------
 
+/**
+ * v0.6d — provenance metadata attached when a codex is imported from
+ * a foreign format (SKILL.md from Anthropic skills / superpowers / ECC /
+ * Hermes skill directories). Absent on natively-authored codexes.
+ *
+ * Purpose: lets `opensquid codex doctor` / `list` surface the import
+ * lineage without scanning the body, and lets future exports note
+ * "this was originally a SKILL.md from <variant>".
+ */
+export interface CodexSource {
+  /** Format the codex was converted from. */
+  kind: "skill_md" | "native";
+  /**
+   * Variant flavor when known. Detection heuristic in
+   * import-skill-md.ts. Diagnostic only — does not change runtime
+   * behavior.
+   */
+  original_variant?: "anthropic" | "superpowers" | "ecc" | "hermes" | "unknown";
+  /** SKILL.md's original `name` frontmatter field (before slugify). */
+  original_name?: string;
+  /** Absolute path at import time (diagnostic). */
+  original_path?: string;
+  /** ISO 8601 timestamp the import ran. */
+  imported_at?: string;
+}
+
 /** Common header fields shared by both kinds. */
 interface CodexBaseHeader {
   id: string;
@@ -188,6 +214,16 @@ interface CodexBaseHeader {
   author?: { name?: string; contact?: string };
   license?: string;
   description?: string;
+  /** v0.6d: import provenance. Absent on natively-authored codexes. */
+  source?: CodexSource;
+  /**
+   * v0.6d: extensibility bucket. Used by the SKILL.md importer to
+   * preserve non-standard frontmatter fields (Hermes `platforms`,
+   * `metadata.hermes.tags`, ECC `origin`, etc.) so round-trip
+   * inspection is lossless. Natively-authored codexes can also use
+   * this for ad-hoc tags.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**

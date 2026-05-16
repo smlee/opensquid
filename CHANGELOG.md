@@ -9,6 +9,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6d)
+
+**SKILL.md foreign-format import (#126)**
+
+`opensquid codex install <path>` now auto-detects when the source is a SKILL.md file (Anthropic skills, obra/superpowers, everything-claude-code (ECC), Hermes Agent skills) and converts it on-the-fly to opensquid's native codex format. No `--source` flag needed in the common case — pass any SKILL.md (file or containing directory) and the right thing happens.
+
+- Auto-detection precedence: `--source skill_md|native` override → `*.md` basename ends in `SKILL.md` → directory contains `SKILL.md` but no `codex.yaml` → fall back to native `codex.yaml` (codex.yaml wins on collision; pass `--source skill_md` to force).
+- Variant heuristic: `origin: ECC` → ecc · `platforms:` or `metadata.hermes.*` → hermes · path includes `superpowers/skills/` or `/superpowers/` → superpowers · else → anthropic (pure spec) or unknown (non-standard fields present).
+- Field mapping: `name` → slugified codex `id` (with the original preserved at `source.original_name`) · `description` → codex `description` + lesson `trigger` · `version` → codex `version` (defaults `1.0.0` with `metadata.imported.synthesized_version: true`) · `author` → `author.name` · `license` → `license` · Anthropic experimental `allowed-tools` → `foundation.tools[]` · Hermes `platforms` / `metadata.hermes.{tags,related_skills}` / ECC `origin` and every other non-standard key → preserved verbatim under `metadata.*` (Postel's-law catch-all so foreign fields aren't dropped). Body → verbatim at `lessons/<id>/lesson.md`.
+- Provenance: every imported codex gets a `source: { kind: skill_md, original_variant, original_name, original_path, imported_at }` block so `codex list / doctor` and future exports can surface the lineage.
+- 100% deterministic — no LLM call. Sub-skill body splitting deferred until a real corpus demands it (per find-simple-solutions).
+- 28 unit tests + 7 CLI integration tests + 6 real-world fixtures (Anthropic skill-creator, Anthropic pdf, superpowers TDD, ECC tdd-workflow, Hermes dogfood, Hermes google_meet underscore-rewrite).
+
 ### Added — 2026-05-15 → 2026-05-16 ship cycle
 
 **Codex format + auto-publish (#100-#106, #116, #117)**

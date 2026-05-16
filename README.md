@@ -91,7 +91,7 @@ node dist/index.js hooks uninstall   # idempotent
 
 opensquid speaks a YAML pack format called **codex** — portable bundles of foundation (tools/domains/methodologies), lessons, and detection rules.
 
-- **Reads** superpowers / ECC `SKILL.md` as input — the existing skill ecosystem is accessible day-1.
+- **Reads** Anthropic / superpowers / ECC / Hermes `SKILL.md` as input — the existing skill ecosystem is accessible day-1 (v0.6d).
 - **Writes** opensquid's richer native codex format with explicit activation rules and wedge-gated lessons.
 - **Exports** `.claude-plugin/plugin.json` + per-host shims so a codex runs in vanilla Claude Code with opensquid uninstalled. Your packs aren't locked to your runtime.
 
@@ -100,6 +100,24 @@ node dist/index.js codex list
 node dist/index.js codex install <path-or-id>
 node dist/index.js codex export <id>   # → .claude-plugin/plugin.json
 ```
+
+### Importing existing SKILL.md skills (v0.6d)
+
+`codex install <path>` auto-detects when the source is a SKILL.md file (Anthropic skills, obra/superpowers, everything-claude-code, or Hermes Agent skills) and converts it to native codex format on the fly:
+
+```bash
+# Directory containing SKILL.md (the obra/superpowers / ECC layout):
+node dist/index.js codex install ~/repos/superpowers/skills/test-driven-development
+
+# Single SKILL.md file path also works:
+node dist/index.js codex install ~/repos/superpowers/skills/test-driven-development/SKILL.md
+
+# A directory with BOTH codex.yaml AND SKILL.md prefers codex.yaml. Force
+# the SKILL.md branch with --source skill_md:
+node dist/index.js codex install ~/mixed-pack --source skill_md
+```
+
+Conversion is 100% deterministic — no LLM call. Anthropic frontmatter (`name`, `description`, optional `license`, optional `allowed-tools`) maps to first-class codex fields; Hermes extensions (`version`, `author`, `platforms`, `metadata.hermes.*`), ECC `origin: ECC`, and any other non-standard keys are preserved verbatim under the codex `metadata` bucket so nothing is silently dropped. Import provenance lives at `codex.source.{kind, original_variant, original_name, original_path, imported_at}` and is surfaced by `codex list` / `codex doctor`.
 
 ---
 

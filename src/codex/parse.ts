@@ -135,6 +135,16 @@ const ReferenceDocSchema = z.object({
   bank_strategy: BankStrategySchema.optional(),
 });
 
+// v0.6d: import provenance (set by the SKILL.md converter; absent on
+// natively-authored codexes).
+const SourceSchema = z.object({
+  kind: z.enum(["skill_md", "native"]),
+  original_variant: z.enum(["anthropic", "superpowers", "ecc", "hermes", "unknown"]).optional(),
+  original_name: z.string().optional(),
+  original_path: z.string().optional(),
+  imported_at: z.string().optional(),
+});
+
 const HeaderSchema = z.object({
   id: z.string().min(1),
   version: z.string().min(1),
@@ -146,6 +156,10 @@ const HeaderSchema = z.object({
     .optional(),
   license: z.string().optional(),
   description: z.string().optional(),
+  // v0.6d: optional import provenance + extensibility bucket. Both
+  // additive; pre-v0.6d codex.yaml files parse unchanged.
+  source: SourceSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 // ---------------------------------------------------------------------
