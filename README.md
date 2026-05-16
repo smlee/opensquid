@@ -36,13 +36,18 @@ opensquid surfaces these tools to your AI agent via MCP.
 | **`remember`** | Capture a candidate lesson (`proposed`). Must pass the promotion gate before it graduates. |
 | **`promote`** | Run the wedge gate. `active` → `promoted`, or blocked with structured reasons. Auto-publishes promoted lessons into your CLAUDE.md `<!-- opensquid-rules -->` block. |
 | **`eliminate`** | Discard a lesson (terminal). User-authored lessons immune to engine-initiated elimination — explicit intent required. |
-| **`pending_candidates`** | List unpromoted lesson candidates so the agent (or user) can review what's waiting at the gate. |
+| **`supersede`** | Point an old lesson at a new replacement. Old lesson moves to `superseded/`, causal chain preserved via `superseded_by`. User-authored lessons protected unless `force: true`. |
+| **`capture_feedback`** | Record thumbs_up / thumbs_down on a lesson. Feeds the wedge gate's signal-diversity input. Idempotent on `source_signal_id`. Does NOT auto-promote — records evidence only. |
+| **`list_lessons`** | Paginated list across the four non-discarded status dirs. Deterministic sort by (status, id). Default limit 50, capped at 500. Optional `statuses` filter. |
+| **`pending_candidates`** | Companion to `list_lessons` — shorthand for `list_lessons({statuses:["pending"]})`. |
 
-### Auto-observation layer (v0.4)
+### Aggregate + classification
 
 | Tool | What it does |
 |------|--------------|
-| **`classify_utterance`** | Pattern-classify a user-said line as `fact` / `preference` / `correction` / `workflow_lock`, with a suggested follow-up action (`memorize`, `remember`, `update_memory`). Lets the agent auto-capture context without explicit prompting. |
+| **`manifest`** | Central RAG-style assembly: returns active lessons (deterministic-sorted, gate-annotated, applied_count bumped) + optional memory recall + assembly stats in one call. Preferred entrypoint when you want "what rules apply right now" instead of stitching `list_lessons` + `recall`. |
+| **`list_memories`** | Paginated memory enumeration. Filter-optional via `scope_filter`. Default limit 50. |
+| **`classify_utterance`** | Pattern-classify a user-said line as `fact` / `preference` / `correction` / `workflow_lock`, with a suggested follow-up action. Regex catalog — no LLM call. |
 
 Behind those tools sits the full `loop-engine` machinery: causal-narrative generation, vector-embedded memory store with HNSW + rehydration across restarts, citation-chain-preserving compression, skill + persona + team scoping, lifecycle transitions, and the 4-layer wedge ratchet (gate → compression → skill immunity → lesson decrement).
 
@@ -95,6 +100,32 @@ node dist/index.js codex list
 node dist/index.js codex install <path-or-id>
 node dist/index.js codex export <id>   # → .claude-plugin/plugin.json
 ```
+
+---
+
+## Portability: import / export across projects and machines
+
+opensquid has end-to-end import/export at two granularities so the same rules / lessons / memories work across projects, machines, and team handoffs.
+
+**Codex-level** (per skill pack — share a curated rule pack with a teammate or with another project):
+
+```bash
+node dist/index.js codex export sangmin-personal-rules --output ~/rules-bundle/
+# copy ~/rules-bundle/ to another machine, then:
+node dist/index.js codex install ~/rules-bundle/ --force
+```
+
+The bundle round-trips through the same install path. Engine v1.2 upsert by `(pack_id, external_id)` means re-installing the same codex updates rows in place — no duplicate engine lessons, no duplicate CLAUDE.md lines.
+
+**System-level** (entire opensquid state — for backup or machine migration):
+
+```bash
+node dist/index.js export --output ~/opensquid-backup.tar.gz
+# on a new machine:
+node dist/index.js import ~/opensquid-backup.tar.gz --replace
+```
+
+Bundles every codex, every lesson in all status dirs, every memory with its `.vec` sidecar, sessions, logs, `config.json`, `projects.json`. `--replace` extracts to a tmp staging dir then atomic-renames over the destination — corrupt input never half-deletes your data. `--merge` (default) layers on top of existing data, last-write-wins per file. Format is tar.gz via system `tar` (preinstalled on macOS / Linux / Windows 10+) — zero new runtime dependency.
 
 ---
 
