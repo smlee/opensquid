@@ -9,8 +9,11 @@ import * as crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { readActiveTaskId } from "./transcript.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let tmpDir: string;
 let transcriptPath: string;
@@ -165,5 +168,161 @@ describe("readActiveTaskId", () => {
       "utf8",
     );
     expect(await readActiveTaskId(transcriptPath)).toBe("active");
+  });
+});
+
+// =====================================================================
+// v0.6.2 — TaskCreate + TaskUpdate recognition (the real-world Claude
+// Code shape; TodoWrite was the v0.6.1 shape). My own dogfood session
+// today used TaskCreate/TaskUpdate exclusively → workflow gate silent-
+// allowed every commit because readActiveTaskId only recognized
+// TodoWrite. This block is the regression coverage for the fix.
+// =====================================================================
+
+function assistantToolUse(name: string, blockId: string, input: unknown): unknown {
+  return {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: blockId,
+          name,
+          input,
+          caller: { type: "direct" },
+        },
+      ],
+    },
+  };
+}
+
+function toolResult(toolUseId: string, content: string): unknown {
+  return {
+    type: "user",
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          content,
+        },
+      ],
+    },
+  };
+}
+
+describe("readActiveTaskId — TaskUpdate (v0.6.2 fix)", () => {
+  it("returns the taskId from TaskUpdate(status=in_progress)", async () => {
+    await writeEvents([
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "131", status: "in_progress" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("131");
+  });
+
+  it("does not return tasks marked completed by a later TaskUpdate", async () => {
+    await writeEvents([
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "131", status: "in_progress" }),
+      assistantToolUse("TaskUpdate", "tu-2", { taskId: "131", status: "completed" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBeNull();
+  });
+
+  it("picks the most-recently-touched in_progress task when multiple are active", async () => {
+    await writeEvents([
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "100", status: "in_progress" }),
+      assistantToolUse("TaskUpdate", "tu-2", { taskId: "200", status: "in_progress" }),
+      assistantToolUse("TaskUpdate", "tu-3", { taskId: "300", status: "in_progress" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("300");
+  });
+
+  it("coerces numeric taskId to string", async () => {
+    await writeEvents([
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: 131, status: "in_progress" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("131");
+  });
+
+  it("ignores TaskUpdate with deleted status", async () => {
+    await writeEvents([
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "131", status: "in_progress" }),
+      assistantToolUse("TaskUpdate", "tu-2", { taskId: "131", status: "deleted" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBeNull();
+  });
+});
+
+describe("readActiveTaskId — TaskCreate (v0.6.2 fix)", () => {
+  it("does NOT return TaskCreate'd tasks (default status = pending, not in_progress)", async () => {
+    // TaskCreate alone leaves the task as pending. Active-task detection
+    // requires an explicit TaskUpdate(in_progress) — otherwise no gate
+    // for tasks that were created but never started.
+    await writeEvents([
+      assistantToolUse("TaskCreate", "tc-1", {
+        subject: "Some task",
+        description: "...",
+      }),
+      toolResult("tc-1", "Task #131 created successfully: Some task"),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBeNull();
+  });
+
+  it("returns the assigned id when TaskCreate is followed by TaskUpdate(in_progress)", async () => {
+    await writeEvents([
+      assistantToolUse("TaskCreate", "tc-1", { subject: "X", description: "..." }),
+      toolResult("tc-1", "Task #131 created successfully: X"),
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "131", status: "in_progress" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("131");
+  });
+
+  it("handles TaskCreate without a matching tool_result (truncated transcript)", async () => {
+    await writeEvents([
+      assistantToolUse("TaskCreate", "tc-1", { subject: "X", description: "..." }),
+      // No tool_result follows
+    ]);
+    // No id assigned, no in_progress → null.
+    expect(await readActiveTaskId(transcriptPath)).toBeNull();
+  });
+});
+
+// =====================================================================
+// Real-world fixture — captured from an actual Claude Code session.
+// The fixture lives at __fixtures__/real-task-shape.jsonl. If Claude
+// Code ever changes the wire format for TaskCreate / TaskUpdate, this
+// test fails BEFORE the workflow gate silently regresses in
+// production. Earlier audit recommendation (v0.6.2 audit MED): synthesized
+// tests passed in v0.6.1 but real-world shape didn't match — the same
+// failure mode would have been caught here.
+// =====================================================================
+describe("readActiveTaskId — real Claude Code transcript fixture", () => {
+  it("recognizes TaskCreate + tool_result + TaskUpdate captured from a real session", async () => {
+    const fixturePath = path.resolve(__dirname, "__fixtures__", "real-task-shape.jsonl");
+    // The fixture is 3 events: TaskCreate "X" → tool_result "Task #1 created" →
+    // TaskUpdate(taskId=1, status=in_progress). Expected active task: "1".
+    const active = await readActiveTaskId(fixturePath);
+    expect(active).toBe("1");
+  });
+});
+
+describe("readActiveTaskId — mixed TodoWrite + TaskUpdate", () => {
+  it("latest write wins per id, regardless of which tool", async () => {
+    // TodoWrite snapshot says id=5 is in_progress; later TaskUpdate
+    // marks id=5 completed. TaskUpdate is later → wins.
+    await writeEvents([
+      todoWriteEvent([{ id: "5", status: "in_progress" }]),
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "5", status: "completed" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBeNull();
+  });
+
+  it("TodoWrite snapshot can revive an id that TaskUpdate marked completed if it comes later", async () => {
+    await writeEvents([
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "5", status: "completed" }),
+      todoWriteEvent([{ id: "5", status: "in_progress" }]),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("5");
   });
 });

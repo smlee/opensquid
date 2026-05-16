@@ -55,56 +55,149 @@ export async function readLastAssistantText(transcriptPath: string): Promise<str
 }
 
 /**
- * v0.6.1 — find the most-recently-marked in_progress task id from a
- * `TodoWrite` block in the transcript. Used by the pre-tool-use hook
- * to figure out which task's phase ledger to gate `git commit` against.
+ * v0.6.2 — find the most-recently-marked in_progress task id from the
+ * transcript. Used by the pre-tool-use hook to figure out which task's
+ * phase ledger to gate `git commit` against.
  *
- * Claude Code's task system serializes as TodoWrite tool_use blocks
- * whose `input.todos` array contains `{id, status, ...}` items.
- * Walks transcript backwards, picks the first TodoWrite, returns the
- * id of the first item with `status: "in_progress"`. Returns null when
- * no in_progress task is found (graceful — hook falls back to
- * allow-commit, per the fail-open invariant).
+ * Claude Code exposes three task-tracking surfaces; all are recognized:
+ *
+ * 1. **TodoWrite** (snapshot semantic) — `input.todos[]` is the full
+ *    list with explicit ids + statuses. Each todo's status is applied
+ *    at the snapshot's line index.
+ *
+ * 2. **TaskCreate** (delta) — `input.{subject,description,...}`. The
+ *    assigned id comes back in the matching tool_result text
+ *    ("Task #N created successfully"). Default status = pending.
+ *    Active-task detection looks up tool_use_id → tool_result content.
+ *
+ * 3. **TaskUpdate** (delta) — `input.taskId` (string or number) +
+ *    `input.status` ("in_progress"|"completed"|...). Direct mutation.
+ *
+ * Implementation: single forward pass over the transcript building a
+ * `{task_id → {status, lastTouchedIdx}}` map. The forward pass means
+ * chronology IS the sort key — latest write per id naturally wins,
+ * no extra ordering logic needed. Returns the id with status =
+ * "in_progress" and the highest lastTouchedIdx.
+ *
+ * v0.6.1 only recognized #1; my own session today used #2 + #3
+ * exclusively, so the workflow gate silent-allowed every commit
+ * (active task = null → no gate fires). This is the v0.6.2 fix.
+ *
+ * Returns null when no in_progress task is detected (graceful —
+ * hook falls back to allow, per the fail-open invariant).
  */
 export async function readActiveTaskId(transcriptPath: string): Promise<string | null> {
   const lines = await readTranscriptLines(transcriptPath);
-  for (let i = lines.length - 1; i >= 0; i--) {
+
+  // Walk forward, building per-id state from TaskCreate / TaskUpdate
+  // events. TodoWrite (snapshot) is handled in a second pass after.
+  // The lastTouchedIdx is the line position of the most recent event
+  // that set this task's status — used to break ties between multiple
+  // in_progress tasks (most-recently-touched wins).
+  interface TaskState {
+    status: string;
+    lastTouchedIdx: number;
+  }
+  const stateByTask = new Map<string, TaskState>();
+
+  // Pre-index user events by tool_use_id so TaskCreate's id-extraction
+  // doesn't N-squared scan. The tool_result block lives in a later
+  // user event referencing the tool_use's id.
+  const toolResultText = new Map<string, string>();
+  for (let i = 0; i < lines.length; i++) {
     const event = safeParseLine(lines[i]);
-    if (!event || event.type !== "assistant") continue;
+    if (!event || event.type !== "user") continue;
     const content = event.message?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (
         !block ||
         typeof block !== "object" ||
-        (block as { type?: string }).type !== "tool_use" ||
-        (block as { name?: string }).name !== "TodoWrite"
+        (block as { type?: string }).type !== "tool_result"
       ) {
         continue;
       }
-      const input = (block as { input?: unknown }).input;
-      if (!input || typeof input !== "object") continue;
-      const todos = (input as { todos?: unknown }).todos;
-      if (!Array.isArray(todos)) continue;
-      for (const todo of todos) {
-        if (
-          todo &&
-          typeof todo === "object" &&
-          (todo as { status?: string }).status === "in_progress"
-        ) {
-          const id = (todo as { id?: unknown }).id;
-          if (typeof id === "string" && id) return id;
-          // Some encodings use numeric ids — coerce to string.
-          if (typeof id === "number") return String(id);
-        }
+      const tuId = (block as { tool_use_id?: unknown }).tool_use_id;
+      const c = (block as { content?: unknown }).content;
+      if (typeof tuId === "string" && typeof c === "string") {
+        toolResultText.set(tuId, c);
       }
-      // First TodoWrite walked (most recent) had no in_progress —
-      // stop, don't keep walking back to stale older TodoWrites that
-      // may have been overwritten.
-      return null;
     }
   }
-  return null;
+
+  // Single forward pass — chronological order is the line index, so
+  // "latest write per id wins" is enforced naturally.
+  for (let i = 0; i < lines.length; i++) {
+    const event = safeParseLine(lines[i]);
+    if (!event || event.type !== "assistant") continue;
+    const content = event.message?.content;
+    if (!Array.isArray(content)) continue;
+
+    for (const block of content) {
+      if (!block || typeof block !== "object" || (block as { type?: string }).type !== "tool_use") {
+        continue;
+      }
+      const name = (block as { name?: string }).name;
+      const input = (block as { input?: unknown }).input;
+      if (!input || typeof input !== "object") continue;
+
+      if (name === "TaskUpdate") {
+        const taskId = (input as { taskId?: unknown }).taskId;
+        const status = (input as { status?: unknown }).status;
+        const idStr =
+          typeof taskId === "string" ? taskId : typeof taskId === "number" ? String(taskId) : "";
+        if (idStr && typeof status === "string") {
+          stateByTask.set(idStr, { status, lastTouchedIdx: i });
+        }
+      } else if (name === "TaskCreate") {
+        // Extract assigned id from the matching tool_result. The regex
+        // is intentionally loose — Claude Code's exact wording has
+        // varied across versions ("Task #131 created", "Task 131 created",
+        // future UUIDs?). We accept optional `#`, any word-char id.
+        // If the wording changes more drastically, the regression test
+        // against the real-transcript fixture will fail first instead
+        // of the gate silently regressing in production.
+        const blockId = (block as { id?: unknown }).id;
+        if (typeof blockId !== "string") continue;
+        const resultText = toolResultText.get(blockId);
+        if (!resultText) continue;
+        const m = resultText.match(/Task\s+#?([\w-]+)/i);
+        if (m) {
+          // Default status for newly-created tasks is "pending".
+          stateByTask.set(m[1], { status: "pending", lastTouchedIdx: i });
+        }
+      } else if (name === "TodoWrite") {
+        // Snapshot semantic — apply each todo's status at this chrono idx.
+        // The list IS canonical for the ids it mentions, but only at
+        // this point in time; a later TaskUpdate against the same id
+        // would override (it'd happen at a higher idx, so naturally wins).
+        const todos = (input as { todos?: unknown }).todos;
+        if (!Array.isArray(todos)) continue;
+        for (const todo of todos) {
+          if (!todo || typeof todo !== "object") continue;
+          const todoId = (todo as { id?: unknown }).id;
+          const todoStatus = (todo as { status?: unknown }).status;
+          const idStr =
+            typeof todoId === "string" ? todoId : typeof todoId === "number" ? String(todoId) : "";
+          if (idStr && typeof todoStatus === "string") {
+            stateByTask.set(idStr, { status: todoStatus, lastTouchedIdx: i });
+          }
+        }
+      }
+    }
+  }
+
+  // Find the most-recently-touched in_progress task. Ties broken by
+  // higher line index = more recent.
+  let bestId: string | null = null;
+  let bestIdx = -1;
+  for (const [id, s] of stateByTask) {
+    if (s.status === "in_progress" && s.lastTouchedIdx > bestIdx) {
+      bestId = id;
+      bestIdx = s.lastTouchedIdx;
+    }
+  }
+  return bestId;
 }
 
 export async function readTranscriptLines(transcriptPath: string): Promise<string[]> {
