@@ -615,4 +615,40 @@ export class OpenSquidEngine {
   }> {
     return this.client.call("memory.delete", args);
   }
+
+  // ---- v0.6.1 — phase ledger (engine 0.5.0+) ----------------------
+
+  /**
+   * Record a phase entry for `(session_id, task_id)`. Idempotent:
+   * re-logging the same phase returns `newly_recorded: false`.
+   * `phase` must be one of: pre_research, learn, code, test, audit,
+   * post_research, fix.
+   */
+  logPhase(args: { session_id: string; task_id: string; phase: string; note?: string }): Promise<{
+    ok: true;
+    session_id: string;
+    task_id: string;
+    phase: string;
+    newly_recorded: boolean;
+  }> {
+    return this.client.call("task.log_phase", args);
+  }
+
+  /**
+   * Fetch the workflow phase ledger for a `(session_id, task_id)`.
+   * Returns the set of phases logged + the entries with timestamps,
+   * sorted chronologically.
+   */
+  getTaskLedger(args: { session_id: string; task_id: string }): Promise<{
+    session_id: string;
+    task_id: string;
+    phases_logged: string[];
+    entries: Array<{
+      phase: string;
+      logged_at: string;
+      note: string | null;
+    }>;
+  }> {
+    return this.client.call("task.get_ledger", args);
+  }
 }

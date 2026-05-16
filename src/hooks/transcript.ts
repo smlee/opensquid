@@ -54,7 +54,60 @@ export async function readLastAssistantText(transcriptPath: string): Promise<str
   return "";
 }
 
-async function readTranscriptLines(transcriptPath: string): Promise<string[]> {
+/**
+ * v0.6.1 — find the most-recently-marked in_progress task id from a
+ * `TodoWrite` block in the transcript. Used by the pre-tool-use hook
+ * to figure out which task's phase ledger to gate `git commit` against.
+ *
+ * Claude Code's task system serializes as TodoWrite tool_use blocks
+ * whose `input.todos` array contains `{id, status, ...}` items.
+ * Walks transcript backwards, picks the first TodoWrite, returns the
+ * id of the first item with `status: "in_progress"`. Returns null when
+ * no in_progress task is found (graceful — hook falls back to
+ * allow-commit, per the fail-open invariant).
+ */
+export async function readActiveTaskId(transcriptPath: string): Promise<string | null> {
+  const lines = await readTranscriptLines(transcriptPath);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const event = safeParseLine(lines[i]);
+    if (!event || event.type !== "assistant") continue;
+    const content = event.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        !block ||
+        typeof block !== "object" ||
+        (block as { type?: string }).type !== "tool_use" ||
+        (block as { name?: string }).name !== "TodoWrite"
+      ) {
+        continue;
+      }
+      const input = (block as { input?: unknown }).input;
+      if (!input || typeof input !== "object") continue;
+      const todos = (input as { todos?: unknown }).todos;
+      if (!Array.isArray(todos)) continue;
+      for (const todo of todos) {
+        if (
+          todo &&
+          typeof todo === "object" &&
+          (todo as { status?: string }).status === "in_progress"
+        ) {
+          const id = (todo as { id?: unknown }).id;
+          if (typeof id === "string" && id) return id;
+          // Some encodings use numeric ids — coerce to string.
+          if (typeof id === "number") return String(id);
+        }
+      }
+      // First TodoWrite walked (most recent) had no in_progress —
+      // stop, don't keep walking back to stale older TodoWrites that
+      // may have been overwritten.
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function readTranscriptLines(transcriptPath: string): Promise<string[]> {
   try {
     const raw = await fs.readFile(transcriptPath, "utf8");
     return raw.split("\n").filter((l) => l.trim());

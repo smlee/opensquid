@@ -28,6 +28,7 @@
 
 import { decide, findDrifts, type ToolCallInput } from "./drift-patterns.js";
 import { recordToolCall } from "./honesty-ledger.js";
+import { evaluateWorkflowGate } from "./workflow-gate.js";
 
 interface ClaudeHookInput {
   /** Tool name (e.g. "Bash", "Edit", "Write"). */
@@ -36,7 +37,11 @@ interface ClaudeHookInput {
   tool_input?: Record<string, unknown>;
   /** Claude Code session id — used to scope the honesty ledger. */
   session_id?: string;
-  // Other fields Claude Code may send (transcript_path etc.) are ignored.
+  /** v0.6.1 — path to the session's JSONL transcript. Used by the
+   * workflow gate to detect the active task id from the most-recent
+   * TodoWrite in_progress entry. Absent on some hook configurations;
+   * gate is fail-open in that case. */
+  transcript_path?: string;
 }
 
 /**
@@ -88,7 +93,54 @@ export async function runPreToolUseHook(): Promise<void> {
   const hits = findDrifts(call);
   const { exit, stderr } = decide(hits);
   if (stderr) process.stderr.write(stderr);
-  process.exit(exit);
+  if (exit !== 0) {
+    // Existing drift gate already blocking; don't spend RPC budget on
+    // the workflow gate.
+    process.exit(exit);
+  }
+
+  // v0.6.1 workflow gate — when the tool call is `git commit` (not
+  // --amend, which has its own gate), check that the active task's
+  // phase ledger has the required phases logged. Engine-RPC-backed,
+  // so only fires when the engine binary is reachable. Fail-open on
+  // any error (per [[honesty-ledger]] precedent — never block on
+  // opensquid's own bug). Spawning the engine just for this check is
+  // expensive (~hundreds of ms per hook), so it's scoped tightly to
+  // commit commands.
+  if (looksLikeGitCommit(call)) {
+    try {
+      const gateResult = await evaluateWorkflowGate({
+        sessionId: payload.session_id,
+        transcriptPath: payload.transcript_path,
+      });
+      if (gateResult.block) {
+        process.stderr.write(gateResult.stderr);
+        process.exit(2);
+      } else if (gateResult.stderr) {
+        // Warning only — proceed.
+        process.stderr.write(gateResult.stderr);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook] workflow-gate failed (proceeding): ${err instanceof Error ? err.message : err}\n`,
+      );
+    }
+  }
+  process.exit(0);
+}
+
+function looksLikeGitCommit(call: ToolCallInput): boolean {
+  if (call.tool !== "Bash") return false;
+  const cmd = (call.input as { command?: unknown }).command;
+  if (typeof cmd !== "string") return false;
+  // Match `git commit ...` but NOT `git commit --amend` (handled by
+  // existing drift pattern). Also skip cases where the command is
+  // clearly a comment or inside quotes (drift-patterns.ts uses the
+  // same quote-stripping; we duplicate the minimal version here).
+  const stripped = cmd.replace(/"[^"]*"/g, "").replace(/'[^']*'/g, "");
+  if (!/\bgit\s+commit\b/.test(stripped)) return false;
+  if (/\bgit\s+commit\b[^|;&]*--amend/.test(stripped)) return false;
+  return true;
 }
 
 /**

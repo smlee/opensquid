@@ -9,6 +9,32 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.1 — workflow enforcement)
+
+**Phase ledger commit gate — turn the 7-phase rule into a real block (#128)**
+
+The 7-phase workflow (`pre_research → learn → code → test → audit → post_research → fix`) has been a top-priority promoted rule for weeks, but it lived only as text in `CLAUDE.md`. Today proved that surfacing ≠ enforcement: I drift-skipped audit + post-research on five features shipped this morning, retroactive audits surfaced 5 HIGH bugs. This release wires the rule into a PreToolUse hook backed by the engine's new phase-ledger store. Requires loop-engine 0.5.0+.
+
+**`log_phase` MCP tool**
+- New tool surface: `{task_id, phase, note?, session_id?}` → records the phase entry in the engine ledger. Idempotent (re-logging returns `newly_recorded: false`). Agent calls this as each phase completes.
+- `session_id` defaults to `mcp-<pid>-<ts>` if the caller omits it.
+
+**`workflow-gate` PreToolUse hook extension** (`src/hooks/workflow-gate.ts`)
+- Wired into the existing PreToolUse hook (no new event registration). Fires ONLY when the planned tool is `Bash` and the command matches `git\s+commit\b` (excluding `--amend` which has its own gate). Avoids paying the engine-spawn cost on every Bash call.
+- Active-task detection via `readActiveTaskId` (transcript JSONL walker → most-recent `TodoWrite` `in_progress` item). Fall-through to allow when no active task — supports ad-hoc commits outside any task flow.
+- Required phases: `audit` + `post_research` (per user direction — the two empirically skipped phases that target today's failure mode). Pre-research / learn / code / test / fix are not gated.
+- **Fail-open invariant**: any error reaching the engine, parsing the transcript, or detecting the active task → allow with a stderr warning. The gate is best-effort drift protection, not a hard safety wall.
+- Emergency override: `OPENSQUID_SKIP_WORKFLOW_GATE=1` bypasses with a loud stderr warning. For genuine emergencies only.
+
+**Engine-client bridge methods**
+- `OpenSquidEngine.logPhase` → `task.log_phase` RPC
+- `OpenSquidEngine.getTaskLedger` → `task.get_ledger` RPC
+
+**Tests**
+- 12 workflow-gate tests (fail-open inputs, active-task drives decision, fail-open on engine error, emergency override).
+- 12 transcript-active-task tests (no transcript, no TodoWrite, no in_progress, single TodoWrite, MOST RECENT wins, stale fallback prevention, mixed events, numeric ids, malformed JSON).
+- Full suite: 372/372 passing.
+
 ### Added — 2026-05-16 (v0.7 complete — v0.7b + v0.7c)
 
 **Discord + Slack adapters land — v0.7 chat connections feature-complete (#121)**
