@@ -6,6 +6,49 @@ For shipped releases see [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
+## Current direction (2026-05-16)
+
+**Audience:** Hermes Agent users (primary), Claude Code / Cursor / Codex power users who use opensquid directly via MCP (secondary). opensquid is **the rule-discipline layer Hermes is missing**. Integration is via MCP — Hermes is already an MCP client; one command (`hermes mcp add opensquid -- node /path/to/dist/index.js`) wires opensquid alongside Hermes' existing memory backend. opensquid is additive, never a replacement. See README → *Pairing with Hermes Agent*.
+
+**Marketing wedge:** "Your agent learns. You decide what gets locked in." Lead against the specific Hermes user complaints opensquid uniquely solves: [#6051](https://github.com/NousResearch/hermes-agent/issues/6051) learned-helplessness, [#17583](https://github.com/NousResearch/hermes-agent/issues/17583) no user-vs-agent skill distinction, [#22563](https://github.com/NousResearch/hermes-agent/issues/22563) memory pollution.
+
+**Release sequence (SemVer 0.x.y; v1.0 is feature-complete + bulletproof, not a calendar moment):**
+
+- v0.5 — lessons surface (in-flight: shipped v0.5a list_lessons + capture_feedback + supersede; v0.5b list_memories; pending v0.5c manifest.assemble + skill/persona/team load_*)
+- v0.6 — release engineering: cross-platform binaries + codex export + system export (binaries + npm publish deferred until npm org exists; codex/system export shipped)
+- v0.7 — chat connections bundled (Telegram + Discord + Slack as LOCAL bots; gateway abstraction; per `mem-163bde3b`)
+- v0.8+ — additional surfaces (web, mobile) and brain thesis (MCP-of-MCPs orchestration)
+- v0.X (whenever feature-complete) — hardening sprint: lock API surface, exhaustive test coverage, all known bugs squashed
+- v1.0 — single moment when feature-complete AND bulletproof. Earned, not scheduled.
+
+**Hard rule-outs (do not propose):**
+
+- No Python adapter in Hermes' `plugins/memory/` tree (per `mem-e3e03010`) — MCP integration only
+- No "replace Hermes" framing — opensquid is additive
+- No enterprise SaaS pivot
+- No silent provider auto-detect for the auto-classifier (no `auto-classifier` exists anymore — replaced by token-threshold heartbeat in #124; the agent does classification inline)
+
+**v0.4 — shipped (24 commits as of 2026-05-16):**
+
+The "in-ecosystem ship cycle" milestone. Highlights:
+
+- Codex pack format (foundation/lessons/detection rules; portable; exports `.claude-plugin/plugin.json` shims for vanilla Claude Code compat)
+- Project ID card (`.opensquid/project.json`); engine binary registry (`~/.opensquid/config.json`)
+- Drift-detection PreToolUse hook (catches anti-patterns before commit)
+- Honesty ledger (Stop hook reconciles claims vs tool calls; UserPromptSubmit surfaces broken promises; SessionEnd cleanup)
+- CLAUDE.md auto-rule publishing on `promote` (and on codex install upsert per #117)
+- Pattern-based `classify_utterance` MCP tool + `pending_candidates`
+- Engine v1.2 pack-lesson upsert by `(pack_id, external_id)`
+- Engine v1.3 lesson surface RPCs (list, capture_feedback, supersede); memory.list
+- `opensquid codex export` (portable round-trip bundle)
+- `opensquid export / import` (entire `~/.opensquid/` as tar.gz for machine migration)
+- Hooks-cli legacy-entry detection + per-event HOOK_IDs (#118)
+- Token-threshold heartbeat replaces auto-classifier subprocess (#124) — agent does classification inline; ~1200 LOC + @anthropic-ai/sdk dropped
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full per-commit history.
+
+---
+
 ## Shipped — v0.3.1 (2026-05-14)
 
 The "actually usable for daily work" milestone. Three load-bearing
