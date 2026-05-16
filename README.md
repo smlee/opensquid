@@ -21,33 +21,33 @@ opensquid surfaces these tools to your AI agent via MCP.
 
 ### Memory layer
 
-| Tool | What it does |
-|------|--------------|
-| **`memorize`** | Store a raw memory (observation, snippet, fact). Embedded via Qwen3-Embedding-4B for semantic recall. Auto-attaches origin metadata (host, session, model, project) and detects project scope from your git repo. |
-| **`recall`** | Surface relevant lessons + memories for the current task. Runs **hybrid recall** (semantic + text + RRF fusion) so proper-noun queries like *"Gianna"* surface their memory even when cosine similarity would miss. Scope-aware by default (filters to current project + user-scope). |
-| **`get_memory`** | Fetch a single memory by id with the FULL body — no truncation. Companion to `recall` when a preview hit looks load-bearing. |
-| **`update_memory`** | Edit description / content / scope on an existing memory. Identity (id, citation counter, origin) always preserved. Re-embeds on content change. |
-| **`forget`** | Delete a memory. User-immunity-respecting by default — memories cited by user-authored lessons are protected unless `force=true`. |
+| Tool                | What it does                                                                                                                                                                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`memorize`**      | Store a raw memory (observation, snippet, fact). Embedded via Qwen3-Embedding-4B for semantic recall. Auto-attaches origin metadata (host, session, model, project) and detects project scope from your git repo.                                                                     |
+| **`recall`**        | Surface relevant lessons + memories for the current task. Runs **hybrid recall** (semantic + text + RRF fusion) so proper-noun queries like _"Gianna"_ surface their memory even when cosine similarity would miss. Scope-aware by default (filters to current project + user-scope). |
+| **`get_memory`**    | Fetch a single memory by id with the FULL body — no truncation. Companion to `recall` when a preview hit looks load-bearing.                                                                                                                                                          |
+| **`update_memory`** | Edit description / content / scope on an existing memory. Identity (id, citation counter, origin) always preserved. Re-embeds on content change.                                                                                                                                      |
+| **`forget`**        | Delete a memory. User-immunity-respecting by default — memories cited by user-authored lessons are protected unless `force=true`.                                                                                                                                                     |
 
 ### Lesson layer (wedge-gated)
 
-| Tool | What it does |
-|------|--------------|
-| **`remember`** | Capture a candidate lesson (`proposed`). Must pass the promotion gate before it graduates. |
-| **`promote`** | Run the wedge gate. `active` → `promoted`, or blocked with structured reasons. Auto-publishes promoted lessons into your CLAUDE.md `<!-- opensquid-rules -->` block. |
-| **`eliminate`** | Discard a lesson (terminal). User-authored lessons immune to engine-initiated elimination — explicit intent required. |
-| **`supersede`** | Point an old lesson at a new replacement. Old lesson moves to `superseded/`, causal chain preserved via `superseded_by`. User-authored lessons protected unless `force: true`. |
-| **`capture_feedback`** | Record thumbs_up / thumbs_down on a lesson. Feeds the wedge gate's signal-diversity input. Idempotent on `source_signal_id`. Does NOT auto-promote — records evidence only. |
-| **`list_lessons`** | Paginated list across the four non-discarded status dirs. Deterministic sort by (status, id). Default limit 50, capped at 500. Optional `statuses` filter. |
-| **`pending_candidates`** | Companion to `list_lessons` — shorthand for `list_lessons({statuses:["pending"]})`. |
+| Tool                     | What it does                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`remember`**           | Capture a candidate lesson (`proposed`). Must pass the promotion gate before it graduates.                                                                                     |
+| **`promote`**            | Run the wedge gate. `active` → `promoted`, or blocked with structured reasons. Auto-publishes promoted lessons into your CLAUDE.md `<!-- opensquid-rules -->` block.           |
+| **`eliminate`**          | Discard a lesson (terminal). User-authored lessons immune to engine-initiated elimination — explicit intent required.                                                          |
+| **`supersede`**          | Point an old lesson at a new replacement. Old lesson moves to `superseded/`, causal chain preserved via `superseded_by`. User-authored lessons protected unless `force: true`. |
+| **`capture_feedback`**   | Record thumbs_up / thumbs_down on a lesson. Feeds the wedge gate's signal-diversity input. Idempotent on `source_signal_id`. Does NOT auto-promote — records evidence only.    |
+| **`list_lessons`**       | Paginated list across the four non-discarded status dirs. Deterministic sort by (status, id). Default limit 50, capped at 500. Optional `statuses` filter.                     |
+| **`pending_candidates`** | Companion to `list_lessons` — shorthand for `list_lessons({statuses:["pending"]})`.                                                                                            |
 
 ### Aggregate + classification
 
-| Tool | What it does |
-|------|--------------|
-| **`manifest`** | Central RAG-style assembly: returns active lessons (deterministic-sorted, gate-annotated, applied_count bumped) + optional memory recall + assembly stats in one call. Preferred entrypoint when you want "what rules apply right now" instead of stitching `list_lessons` + `recall`. |
-| **`list_memories`** | Paginated memory enumeration. Filter-optional via `scope_filter`. Default limit 50. |
-| **`classify_utterance`** | Pattern-classify a user-said line as `fact` / `preference` / `correction` / `workflow_lock`, with a suggested follow-up action. Regex catalog — no LLM call. |
+| Tool                     | What it does                                                                                                                                                                                                                                                                           |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`manifest`**           | Central RAG-style assembly: returns active lessons (deterministic-sorted, gate-annotated, applied_count bumped) + optional memory recall + assembly stats in one call. Preferred entrypoint when you want "what rules apply right now" instead of stitching `list_lessons` + `recall`. |
+| **`list_memories`**      | Paginated memory enumeration. Filter-optional via `scope_filter`. Default limit 50.                                                                                                                                                                                                    |
+| **`classify_utterance`** | Pattern-classify a user-said line as `fact` / `preference` / `correction` / `workflow_lock`, with a suggested follow-up action. Regex catalog — no LLM call.                                                                                                                           |
 
 Behind those tools sits the full `loop-engine` machinery: causal-narrative generation, vector-embedded memory store with HNSW + rehydration across restarts, citation-chain-preserving compression, skill + persona + team scoping, lifecycle transitions, and the 4-layer wedge ratchet (gate → compression → skill immunity → lesson decrement).
 
@@ -71,12 +71,12 @@ User authorship is load-bearing. If you (the human) explicitly endorse a lesson,
 
 opensquid installs four Claude Code hooks that work even when the agent forgets to call its tools.
 
-| Hook | What it catches |
-|------|-----------------|
-| **PreToolUse — drift** | Blocks known anti-patterns before they execute — `git commit --amend`, force-push to `main`, substrate-purity violations, implicit `git push`, etc. Catalogued in `src/hooks/drift-patterns.ts`. Surfaces with a 🦑 prefix. |
-| **Stop — honesty ledger** | Reconciles claim-vs-action: if the agent said "running tests" but never invoked a test tool, the gap is recorded as a broken promise. Session-scoped, so end-of-turn recap text doesn't false-positive. |
-| **UserPromptSubmit** | Surfaces last turn's broken promises to the user at the start of the next prompt. |
-| **SessionEnd** | Clears the session-scoped ledger so disk usage stays bounded. |
+| Hook                      | What it catches                                                                                                                                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PreToolUse — drift**    | Blocks known anti-patterns before they execute — `git commit --amend`, force-push to `main`, substrate-purity violations, implicit `git push`, etc. Catalogued in `src/hooks/drift-patterns.ts`. Surfaces with a 🦑 prefix. |
+| **Stop — honesty ledger** | Reconciles claim-vs-action: if the agent said "running tests" but never invoked a test tool, the gap is recorded as a broken promise. Session-scoped, so end-of-turn recap text doesn't false-positive.                     |
+| **UserPromptSubmit**      | Surfaces last turn's broken promises to the user at the start of the next prompt.                                                                                                                                           |
+| **SessionEnd**            | Clears the session-scoped ledger so disk usage stays bounded.                                                                                                                                                               |
 
 Install all four:
 
@@ -245,15 +245,33 @@ All MCP hosts on the same machine share `~/.opensquid/` — a memory created in 
 
 In any MCP-enabled chat, ask the model to:
 
-- *"Remember that I prefer pnpm over npm in this project."* → `memorize` with project scope auto-detected from the git repo.
-- *"What did I tell you about my kids?"* → `recall` runs hybrid (semantic + text), surfaces the family memory even on partial-token queries.
-- *"Show me the full text of mem-a0cdce30."* → `get_memory` returns the full body, scope, and provenance.
-- *"Update that memory — Teddy also loves being chased."* → `update_memory` mutates content + re-embeds.
-- *"Forget that one."* → `forget`, user-immunity respected.
+- _"Remember that I prefer pnpm over npm in this project."_ → `memorize` with project scope auto-detected from the git repo.
+- _"What did I tell you about my kids?"_ → `recall` runs hybrid (semantic + text), surfaces the family memory even on partial-token queries.
+- _"Show me the full text of mem-a0cdce30."_ → `get_memory` returns the full body, scope, and provenance.
+- _"Update that memory — Teddy also loves being chased."_ → `update_memory` mutates content + re-embeds.
+- _"Forget that one."_ → `forget`, user-immunity respected.
 
 Storage lives at `~/.opensquid/` (lessons + memories, both with YAML frontmatter + sidecar files for embeddings). Inspect with `ls ~/.opensquid/memories/`.
 
 Set `LOOP_HOME=/some/path` to relocate storage (handy for testing).
+
+### Why `~/.opensquid/` not `~/.loop/` (storage root architecture)
+
+`loop-engine` (the Rust substrate) defaults to `~/.loop/` when invoked standalone. **opensquid intentionally overrides this** by spawning the engine subprocess with `LOOP_HOME=~/.opensquid/` (see `src/engine-client.ts:84`). This is by design, not a bug:
+
+- **`~/.loop/`** = the engine's own data root when you run `loop-engine serve` directly (testing, debugging, manual smoke tests)
+- **`~/.opensquid/`** = the engine's data root when opensquid's MCP server spawns it (production agent path)
+
+The two trees do NOT share state. Lessons / memories / phase ledger entries written under one are invisible to the other. This intentional split lets a single `loop-engine` binary serve multiple consumers (opensquid, future TS/Python launchers, manual operator) without their data colliding. Each consumer gets its own root.
+
+**Practical implications:**
+
+- If you smoke-test the engine binary directly (`loop-engine serve` from a shell) and write a phase entry, it goes to `~/.loop/phase_ledger/...`. opensquid's MCP layer will never see it.
+- To inspect what opensquid actually wrote, always look under `~/.opensquid/`.
+- To force the engine binary to use opensquid's root in manual testing: `LOOP_HOME=~/.opensquid loop-engine serve`.
+- The split is enforced at spawn time, not at compile time. The engine binary itself is consumer-agnostic.
+
+This convention was decided 2026-05-16 (per task #132) after a smoke-test surprised the maintainer who wrote phases to `~/.loop/` via direct binary RPC then expected to see them via the opensquid `chat_list_channels` MCP path. Both worked correctly — they just pointed at different roots.
 
 ---
 
