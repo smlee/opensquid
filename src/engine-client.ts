@@ -491,6 +491,61 @@ export class OpenSquidEngine {
   }
 
   /**
+   * v0.5 / engine v1.4: central RAG-style assembly. Returns active
+   * lessons (deterministic-sorted, gate-annotated, applied_count
+   * bumped) + optional memory recall in one shot. This is what a host
+   * like Hermes calls to get "what rules apply right now" instead of
+   * stitching together listLessons + searchMemory.
+   *
+   * Skill/persona/team activation IDs are not threaded through in v0.5
+   * (deferred to a later release per find-simple-solutions). The
+   * active_skills / active_personas / active_teams arrays in the
+   * response ship empty.
+   */
+  assembleManifest(args: {
+    statuses?: Array<"pending" | "active" | "promoted" | "discarded" | "superseded">;
+    lesson_limit?: number;
+    body_preview_len?: number;
+    annotate_with_gate?: boolean;
+    record_applied?: boolean;
+    memory_query?: string;
+    memory_limit?: number;
+    memory_scope_filter?: MemoryScopeFilter;
+  }): Promise<{
+    active_lessons: Array<{
+      id: string;
+      description: string;
+      status: string;
+      body_preview: string;
+      applied_count: number;
+      last_applied_at: string | null;
+      target_skill: string | null;
+      gate?: { kind: "promote" | "block"; reason_count: number };
+    }>;
+    memories: Array<{
+      id: string;
+      description: string;
+      body_preview: string;
+      similarity: number;
+    }>;
+    active_skills: unknown[];
+    active_personas: unknown[];
+    active_teams: unknown[];
+    assembly_stats: {
+      assembled_at: string;
+      total_listed: number;
+      skipped_count: number;
+      gate_skip_count: number;
+      record_applied_failures: number;
+      memories_returned: number | null;
+      memory_search_failures: number;
+      session_section_skips: number;
+    };
+  }> {
+    return this.client.call("manifest.assemble", args);
+  }
+
+  /**
    * v0.5 / engine v1.3: paginated memory enumeration. Filter-optional
    * via scope_filter (same wire shape as searchMemory). Default limit
    * 50, capped at 500. Order is deterministic (id ascending — memory

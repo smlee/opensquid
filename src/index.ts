@@ -559,6 +559,67 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "manifest",
+      description:
+        "v0.5: central RAG-style assembly — returns active lessons (deterministic-sorted, " +
+        "gate-annotated, applied_count bumped) + optional memory recall in one shot. " +
+        "Use this to get 'what rules apply right now' for the current task. The " +
+        "preferred entrypoint for a host like Hermes that wants the agent's full " +
+        "system context payload in a single call instead of stitching together " +
+        "list_lessons + recall.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          statuses: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["pending", "active", "promoted", "discarded", "superseded"],
+            },
+            description: 'Lesson statuses to include. Default ["active"].',
+          },
+          lesson_limit: {
+            type: "number",
+            description: "Max lessons to return after sorting. Default 5.",
+            default: 5,
+          },
+          body_preview_len: {
+            type: "number",
+            description: "Char count for each lesson's body preview. Default 200.",
+            default: 200,
+          },
+          annotate_with_gate: {
+            type: "boolean",
+            description: "Attach the wedge-gate decision per lesson. Default true.",
+            default: true,
+          },
+          record_applied: {
+            type: "boolean",
+            description:
+              "Bump applied_count + last_applied_at on each surfaced lesson. Default true.",
+            default: true,
+          },
+          memory_query: {
+            type: "string",
+            description:
+              "Text query for the memory section. When present, the engine runs vector " +
+              "search via the configured embedder and populates `memories`. Omit to skip.",
+          },
+          memory_limit: {
+            type: "number",
+            description: "Max memories to return when memory_query is set. Default 5.",
+            default: 5,
+          },
+          memory_scope_filter: {
+            description:
+              "Optional scope filter for the memory section. Same wire shape as recall: " +
+              '`{kind:"exact",scope:<MemoryScope>}`, `{kind:"kind",kind_name:"project"|...}`, ' +
+              'or `{kind:"any_of",scopes:[...]}`.',
+          },
+        },
+      },
+    },
+    {
       name: "supersede",
       description:
         "v0.5: point an old lesson at a new replacement. Old lesson moves to " +
@@ -928,6 +989,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const limit = typeof a.limit === "number" ? a.limit : undefined;
         const offset = typeof a.offset === "number" ? a.offset : undefined;
         const result = await engine.listLessons({ statuses, limit, offset });
+        return textResult(result);
+      }
+
+      case "manifest": {
+        const statuses = Array.isArray(a.statuses)
+          ? (a.statuses as Array<"pending" | "active" | "promoted" | "discarded" | "superseded">)
+          : undefined;
+        const scopeFilter =
+          a.memory_scope_filter && typeof a.memory_scope_filter === "object"
+            ? (a.memory_scope_filter as MemoryScopeFilter)
+            : undefined;
+        const result = await engine.assembleManifest({
+          statuses,
+          lesson_limit: typeof a.lesson_limit === "number" ? a.lesson_limit : undefined,
+          body_preview_len: typeof a.body_preview_len === "number" ? a.body_preview_len : undefined,
+          annotate_with_gate:
+            typeof a.annotate_with_gate === "boolean" ? a.annotate_with_gate : undefined,
+          record_applied: typeof a.record_applied === "boolean" ? a.record_applied : undefined,
+          memory_query: typeof a.memory_query === "string" ? a.memory_query : undefined,
+          memory_limit: typeof a.memory_limit === "number" ? a.memory_limit : undefined,
+          memory_scope_filter: scopeFilter,
+        });
         return textResult(result);
       }
 
