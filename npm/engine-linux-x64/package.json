@@ -1,0 +1,21 @@
+{
+  "name": "opensquid-engine-linux-x64",
+  "version": "0.6.0",
+  "description": "loop-engine binary for opensquid on Linux x64. Installed automatically as an optional dependency of opensquid; not intended for direct consumption.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/smlee/opensquid.git",
+    "directory": "npm/engine-linux-x64"
+  },
+  "homepage": "https://github.com/smlee/opensquid#readme",
+  "bugs": "https://github.com/smlee/opensquid/issues",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": [
+    "bin/loop-engine",
+    "README.md",
+    "LICENSE"
+  ],
+  "preferUnplugged": true
+}

@@ -6,15 +6,20 @@
  * uses it to remember the engine binary path so moving the loop-engine
  * checkout doesn't silently break opensquid.
  *
- * Resolution order for the engine binary:
+ * Resolution order for the engine binary (v0.6c):
  *   1. `OPENSQUID_ENGINE_BIN` env var — explicit override, always wins
  *   2. `<data-root>/config.json` `engine_bin` field — persisted choice
- *   3. Auto-search common dev paths (~/projects/{,*}/{loop/engine,engine}/target/release/loop-engine)
- *   4. `loop-engine` on $PATH (future: installed binary)
- *   5. `null` — caller surfaces a helpful error
+ *   3. Bundled npm optional dep (`opensquid-engine-<platform>-<arch>`) —
+ *      shipped with `opensquid` for published installs (v0.6c)
+ *   4. Auto-search common dev paths (~/projects/{,*}/{loop/engine,engine}/target/release/loop-engine)
+ *   5. `loop-engine` on $PATH (manually-installed binary)
+ *   6. `null` — caller surfaces a helpful error
  *
  * The first successful resolution writes itself back to config.json so
- * the next session picks up the same path immediately.
+ * the next session picks up the same path immediately. Bundled-binary
+ * hits are NOT persisted to config because the path is deterministic
+ * from the npm install layout — re-resolving is free and stale-safe
+ * across opensquid upgrades.
  */
 
 import { promises as fs } from "node:fs";
@@ -22,6 +27,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { resolveDataRoot } from "./codex/store.js";
+import { resolveBundledEngineBin } from "./engine-binary-resolver.js";
 
 // ---------------------------------------------------------------------
 // Schema
@@ -87,7 +93,19 @@ export async function resolveEngineBin(dataRoot?: string): Promise<string | null
     return config.engine_bin;
   }
 
-  // 3. Auto-search common dev paths.
+  // 3. v0.6c: bundled npm optional dependency. Only present in npm
+  //    installs of `opensquid` once we start publishing the engine
+  //    binary packages. Returns null in local-dev / git-clone setups,
+  //    so the older discovery branches still cover that case. We
+  //    intentionally do NOT persist this to config.json — the path is
+  //    deterministic from the npm layout, and persisting it would
+  //    point at a stale node_modules path after upgrades.
+  const bundled = resolveBundledEngineBin();
+  if (bundled && (await isExecutable(bundled))) {
+    return bundled;
+  }
+
+  // 4. Auto-search common dev paths.
   const found = await searchCommonPaths();
   if (found) {
     config.engine_bin = found;
@@ -96,7 +114,7 @@ export async function resolveEngineBin(dataRoot?: string): Promise<string | null
     return found;
   }
 
-  // 4. $PATH (in case the user installed loop-engine system-wide).
+  // 5. $PATH (in case the user installed loop-engine system-wide).
   const onPath = await whichBinary(ENGINE_BIN_NAME);
   if (onPath) {
     config.engine_bin = onPath;

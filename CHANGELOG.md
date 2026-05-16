@@ -9,6 +9,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6c)
+
+**Cross-platform binary distribution scaffolding (#125)**
+
+The infrastructure for shipping the `loop-engine` Rust binary alongside `opensquid` via npm `optionalDependencies` (esbuild / biomejs / swc pattern). No user-visible behavior change in this drop — local dev still resolves the binary via the existing 5-step discovery chain — but the publish-day flip is now a one-liner away.
+
+- Engine repo (`MindcraftorAI/loop-engine`): `.github/workflows/release.yml` — triggers on `v*` tag, builds 6 target triples in a matrix (`{x86_64,aarch64}-apple-darwin`, `{x86_64,aarch64}-unknown-linux-gnu`, `{x86_64,aarch64}-pc-windows-msvc`), packages each as a tar.gz or zip with sha256, uploads to a GitHub Release. Linux arm64 uses the gcc-aarch64-linux-gnu cross-toolchain on the x86 ubuntu runner. All native runners for the rest.
+- opensquid repo: 6 platform-specific stub packages at `npm/engine-<platform>-<arch>/package.json` with the correct `os` / `cpu` / `preferUnplugged` fields per the esbuild pattern. Each ships exactly one binary at `bin/loop-engine` (or `.exe`).
+- Main `opensquid/package.json` adds an `optionalDependencies` block listing all 6 — npm filters by `os`/`cpu` so only the right one installs per host.
+- Bootstrap resolver at `src/engine-binary-resolver.ts` — pure, sync, side-effect-free. Maps `(process.platform, process.arch)` → optional-dep name → resolves the package's `package.json` via `createRequire` → returns the `bin/<name>` path. Returns null cleanly when the dep isn't installed (pre-publish dev, `--no-optional`, wrong-platform install), so the legacy discovery chain stays the fallback.
+- `src/config.ts::resolveEngineBin` inserts the bundled-binary check at slot 3 (between persisted config and ~/projects search). Bundled hits intentionally NOT persisted to config.json — the path is deterministic from npm layout, persisting it would point at stale node_modules paths across upgrades.
+- 14 new unit tests for the resolver (platform→package map, binary name per platform, unsupported platform null, current-platform null pre-publish).
+- Publish step is deferred — when ready, `git tag v1.x.y` in the engine repo runs the release workflow, then a script populates each `npm/engine-*/bin/` with the matching artifact, bumps versions in lockstep, and runs `npm publish` for each platform pkg + the main one.
+
 ### Added — 2026-05-16 (v0.6d)
 
 **SKILL.md foreign-format import (#126)**

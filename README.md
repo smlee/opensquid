@@ -87,6 +87,22 @@ node dist/index.js hooks uninstall   # idempotent
 
 ---
 
+## Engine binary distribution (v0.6c)
+
+Once published, `npm install opensquid` will bring the `loop-engine` Rust binary along automatically via npm `optionalDependencies` — same pattern esbuild / biomejs / swc use. Six per-platform packages (`opensquid-engine-{darwin,linux,win32}-{x64,arm64}`) each ship a single native binary; npm's `os` / `cpu` fields ensure only the right one installs on a given host.
+
+Until then (and for git-clone / monorepo dev), opensquid falls through a 5-step discovery chain that locates the engine binary at:
+
+1. `OPENSQUID_ENGINE_BIN` env var
+2. The path persisted in `~/.opensquid/config.json` `engine_bin`
+3. A bundled npm optional dep (the v0.6c path, no-op pre-publish)
+4. `~/projects/*/{engine,}/target/release/loop-engine` auto-search
+5. `loop-engine` on `$PATH`
+
+The first auto-discovery hit persists itself back to `config.json` so subsequent sessions start instantly. Move your loop-engine checkout and the next launch silently re-discovers.
+
+---
+
 ## Codex packs (v0.4)
 
 opensquid speaks a YAML pack format called **codex** — portable bundles of foundation (tools/domains/methodologies), lessons, and detection rules.
