@@ -9,6 +9,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.3 — versioning-discipline gate)
+
+**Per-commit version bump enforcement (#134).** New `versioning-gate` PreToolUse hook intercepts `git commit` calls and blocks them when source code is staged without a Cargo.toml / package.json version bump in the same commit. Structural fix for the "batching multiple fixes into one minor bump" pattern (`mem-d2cc0e78`).
+
+Logic:
+1. `git diff --cached --name-only` → list staged files
+2. No `src/**` files staged → allow (docs/CI/config commits don't need bumps)
+3. `src/**` staged → require a manifest (Cargo.toml or package.json) to also be staged WITH a `version` line diff
+4. Otherwise block with actionable stderr listing the offending files
+
+**Fail-open invariant** + emergency env override (`OPENSQUID_SKIP_VERSION_GATE=1` with loud BYPASS warning) — mirrors the v0.6.1 workflow-gate shape.
+
+Composition: two gates now run sequentially on `git commit` — workflow-gate (audit + post_research must be logged) then versioning-gate (version bump must be in this commit). First gate to block exits non-zero.
+
+**Audit-driven fix (caught pre-commit):**
+- HIGH — original `^"version"` anchor on the package.json regex false-blocked legitimate bumps in MINIFIED package.json. Dropped the anchor on the package.json branch; kept Cargo's anchor since TOML is line-oriented.
+
+**Coverage:** 19 versioning-gate tests against REAL tmp git repos (same lesson as v0.6.2's real-fixture pattern — don't synthesize, exercise the actual surface). Cases include docs-only allow, Cargo bump allow, both pretty + minified package.json allow, src-only block, manifest-without-version-line block, workspace any-bump policy, override bypass, fail-open on non-repo cwd. Full suite: 402/402 passing.
+
 ### Fixed — 2026-05-16 (v0.6.2 — workflow gate active-task detection)
 
 **The v0.6.1 workflow gate silently allowed every commit (#131).** The hook called `readActiveTaskId(transcriptPath)` which only recognized `TodoWrite` tool_use blocks. Claude Code's harness `TaskCreate` / `TaskUpdate` tools serialize as delta events (not snapshots) with the assigned task id coming back in the matching `tool_result` text ("Task #N created successfully"). Sessions using TaskCreate/Update exclusively — including my own dogfood session — silently returned null → no active task → fail-open allow → gate never fired. Five today's commits went through without check.

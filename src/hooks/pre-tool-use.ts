@@ -28,6 +28,7 @@
 
 import { decide, findDrifts, type ToolCallInput } from "./drift-patterns.js";
 import { recordToolCall } from "./honesty-ledger.js";
+import { evaluateVersioningGate } from "./versioning-gate.js";
 import { evaluateWorkflowGate } from "./workflow-gate.js";
 
 interface ClaudeHookInput {
@@ -123,6 +124,23 @@ export async function runPreToolUseHook(): Promise<void> {
     } catch (err) {
       process.stderr.write(
         `[opensquid hook] workflow-gate failed (proceeding): ${err instanceof Error ? err.message : err}\n`,
+      );
+    }
+
+    // v0.6.3 versioning gate — enforce per-commit patch bumps. Local
+    // git diff inspection only (no RPC), so cheap. Same fail-open
+    // invariant as the workflow gate.
+    try {
+      const versionResult = await evaluateVersioningGate();
+      if (versionResult.block) {
+        process.stderr.write(versionResult.stderr);
+        process.exit(2);
+      } else if (versionResult.stderr) {
+        process.stderr.write(versionResult.stderr);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook] versioning-gate failed (proceeding): ${err instanceof Error ? err.message : err}\n`,
       );
     }
   }
