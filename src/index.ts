@@ -162,6 +162,25 @@ if (subcommand === "project") {
     process.exit(1);
   }
 }
+if (subcommand === "chat-daemon") {
+  const sub = process.argv[3] ?? "status";
+  const { runChatDaemonCli } = await import("./chat/daemon/cli.js");
+  try {
+    const code = await runChatDaemonCli(sub, process.argv.slice(4));
+    process.exit(code);
+  } catch (e) {
+    console.error(`[chat-daemon ${sub}] error: ${e instanceof Error ? e.message : e}`);
+    process.exit(1);
+  }
+}
+if (subcommand === "chat-daemon-worker") {
+  // Internal entrypoint — invoked by lifecycle.startDaemon's spawn.
+  // Never returns (parks on stdin); signal handlers drive shutdown.
+  const { runChatDaemonWorker } = await import("./chat/daemon/cli.js");
+  await runChatDaemonWorker();
+  // unreachable
+  process.exit(0);
+}
 if (subcommand === "engine") {
   const engineCmd = process.argv[3];
   if (engineCmd !== "doctor" && engineCmd !== "set-path" && engineCmd !== "forget") {

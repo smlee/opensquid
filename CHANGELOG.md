@@ -9,6 +9,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.8 — chat-daemon binary skeleton, Phase A of v0.7.1 #138)
+
+**New `opensquid chat-daemon {start|stop|status|restart}` subcommand.** First step toward fixing the v0.7 "last-connected wins" Telegram bug: a per-machine daemon will own the single long-poll connection so multiple Claude Code projects can run their own opensquid MCP servers without colliding on the bot token. This commit ships only the lifecycle layer (process management); outbound RPC is Phase B, per-project routing is Phase C, MCP auto-spawn is Phase D, full release is Phase E.
+
+**Lifecycle primitives:**
+
+- PID file at `~/.opensquid/chat-daemon.pid`, log file at `~/.opensquid/chat-daemon.log`
+- `start` spawns a detached child via `child_process.spawn(..., {detached: true, stdio: ['ignore', logFd, logFd]})` + `child.unref()` — standard Node fork-detach
+- Worker writes its own pidfile on boot, installs SIGTERM/SIGINT handlers, parks on a `setInterval(()=>{}, 1<<30)` no-op timer (NOT `process.stdin.resume()` — that doesn't work when stdio[0] is 'ignore')
+- `status` reads the pidfile and checks `process.kill(pid, 0)` for liveness; reports `stale_pid` when the pidfile points at a dead process
+- `stop` sends SIGTERM, waits a grace period, falls back to SIGKILL; cleans up pidfile
+- Idempotent: `start` against a running daemon returns `already_running:true` without spawning a second process; `stop` against a not-running daemon returns `stopped:false` without error
+- Pidfile cleanup: graceful path via the worker's shutdown handler; SIGKILL fallback in the parent's stop()
+- Stale pidfile handling: `startDaemon` clears stale pidfiles before spawning so a crashed previous daemon doesn't block startup
+
+**Cross-platform note:** signals (SIGTERM/SIGINT) work on macOS/Linux. Windows process model lacks proper signals — `process.kill` on Windows is a forceful terminate. Phase D's auto-spawn + socket layer will use Node's path-based net API (Unix sockets on macOS/Linux, named pipes `\\.\pipe\opensquid-chat-daemon` on Windows) for cross-platform coverage.
+
+**Internal worker entrypoint:** `opensquid chat-daemon-worker` is the long-running process spawned by `start` — never invoke it manually. It's wired into argv routing in src/index.ts but documented as internal.
+
+**Tests:** 10 new lifecycle tests against real detached child processes (status-not-running x3, stop-idempotency x2, end-to-end start/status/stop x4, plus daemonPaths derivation). Full suite: 456/456.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.7 → 0.6.8.
+
 ### Fixed — 2026-05-16 (v0.6.7 — drift-patterns inline-prefix bypass #137 follow-up)
 
 **v0.6.6's bypass didn't actually work because env vars set inline (`OPENSQUID_SKIP_DRIFT=1 git push ...`) don't propagate to the hook process.** The hook is a sibling subprocess spawned by Claude Code, not a child of the would-be Bash subprocess, so it reads its own `process.env` (which doesn't see the prefix). Discovered immediately on the v0.6.6 push — bypass set inline, hook still fired.
