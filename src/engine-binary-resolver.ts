@@ -23,6 +23,7 @@
  */
 
 import { createRequire } from "node:module";
+import * as path from "node:path";
 
 // ---------------------------------------------------------------------
 // Platform → optional-dep name map (static, exhaustive over supported
@@ -126,8 +127,11 @@ export function resolveBundledEngineBin(probe: PlatformProbe = currentPlatform()
     const pkgJson = req.resolve(`${pkg}/package.json`);
     // pkgJson = /absolute/path/to/node_modules/<pkg>/package.json
     // binary  = /absolute/path/to/node_modules/<pkg>/bin/<name>
-    const pkgRoot = pkgJson.slice(0, pkgJson.length - "/package.json".length);
-    return `${pkgRoot}/bin/${binName}`;
+    // v0.6c audit fix (H1): use path.join not string slice. On Windows
+    // require.resolve returns `\` separators; slicing on "/package.json".length
+    // would silently mis-strip the suffix and concatenating with "/bin/..."
+    // would mix separators. path.dirname + path.join is the portable primitive.
+    return path.join(path.dirname(pkgJson), "bin", binName);
   } catch {
     // MODULE_NOT_FOUND — optional dep wasn't installed for this host.
     return null;
