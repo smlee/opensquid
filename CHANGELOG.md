@@ -9,6 +9,16 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — 2026-05-16 (v0.6.7 — drift-patterns inline-prefix bypass #137 follow-up)
+
+**v0.6.6's bypass didn't actually work because env vars set inline (`OPENSQUID_SKIP_DRIFT=1 git push ...`) don't propagate to the hook process.** The hook is a sibling subprocess spawned by Claude Code, not a child of the would-be Bash subprocess, so it reads its own `process.env` (which doesn't see the prefix). Discovered immediately on the v0.6.6 push — bypass set inline, hook still fired.
+
+**Fix:** `decide()` now also accepts the original `ToolCallInput` and inspects the command string for an inline `OPENSQUID_SKIP_DRIFT=1` prefix (regex: `(^|\\s|;|&&)\\s*OPENSQUID_SKIP_DRIFT=1(\\s|$)`). Either the parent process env OR the command-string prefix triggers the bypass; both paths produce the same audit-trail stderr line. Defensive: substring match (e.g. `MY_OPENSQUID_SKIP_DRIFT=1`) is rejected by the word-boundary anchor.
+
+**Tests:** 3 new bypass paths (inline prefix in plain command, inline prefix after `cd ... &&`, substring rejection) + value-strictness for inline (`OPENSQUID_SKIP_DRIFT=true` still blocks). Full suite: 446/446.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.6 → 0.6.7.
+
 ### Added — 2026-05-16 (v0.6.6 — drift-patterns emergency bypass #137)
 
 **`OPENSQUID_SKIP_DRIFT=1` now downgrades every drift block to an audit-trail warning.** Mirrors the existing `OPENSQUID_SKIP_VERSION_GATE` and `OPENSQUID_SKIP_WORKFLOW_GATE` env vars so operators have one consistent "this hook is wrong, get out of my way" mental model across all three gates.

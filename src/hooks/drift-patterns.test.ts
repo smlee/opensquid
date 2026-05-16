@@ -261,28 +261,63 @@ describe("OPENSQUID_SKIP_DRIFT bypass (v0.6.6)", () => {
     delete process.env.OPENSQUID_SKIP_DRIFT;
   });
 
-  it("ALLOWS (exit 0) with bypass warning when OPENSQUID_SKIP_DRIFT=1 and a block would fire", () => {
+  it("ALLOWS (exit 0) with bypass warning when OPENSQUID_SKIP_DRIFT=1 is in parent env and a block would fire", () => {
     process.env.OPENSQUID_SKIP_DRIFT = "1";
-    const hits = findDrifts(bash("git push origin main"));
+    const call = bash("git push origin main");
+    const hits = findDrifts(call);
     expect(hits.length).toBeGreaterThan(0);
-    const { exit, stderr } = decide(hits);
+    const { exit, stderr } = decide(hits, call);
     expect(exit).toBe(0);
     expect(stderr).toContain("BYPASSED via OPENSQUID_SKIP_DRIFT=1");
     expect(stderr).toContain("no-implicit-push");
   });
 
+  it("ALLOWS via INLINE prefix `OPENSQUID_SKIP_DRIFT=1 git push ...` even when parent env unset", () => {
+    delete process.env.OPENSQUID_SKIP_DRIFT;
+    const call = bash("OPENSQUID_SKIP_DRIFT=1 git push origin main");
+    const hits = findDrifts(call);
+    expect(hits.length).toBeGreaterThan(0);
+    const { exit, stderr } = decide(hits, call);
+    expect(exit).toBe(0);
+    expect(stderr).toContain("BYPASSED via OPENSQUID_SKIP_DRIFT=1");
+  });
+
+  it("ALLOWS via inline prefix after `cd ... &&` chain", () => {
+    const call = bash("cd /tmp && OPENSQUID_SKIP_DRIFT=1 git push origin main");
+    const hits = findDrifts(call);
+    const { exit } = decide(hits, call);
+    expect(exit).toBe(0);
+  });
+
   it("includes ALL hit ids in the bypass message (operator audit trail)", () => {
     process.env.OPENSQUID_SKIP_DRIFT = "1";
-    const hits = findDrifts(bash("git push --force origin main"));
-    const { stderr } = decide(hits);
+    const call = bash("git push --force origin main");
+    const hits = findDrifts(call);
+    const { stderr } = decide(hits, call);
     expect(stderr).toContain("no-implicit-push");
     expect(stderr).toContain("no-force-push-main");
   });
 
   it("does NOT bypass when env var is unset or != '1'", () => {
     process.env.OPENSQUID_SKIP_DRIFT = "true";
-    const hits = findDrifts(bash("git push origin main"));
-    const { exit } = decide(hits);
+    const call = bash("git push origin main");
+    const hits = findDrifts(call);
+    const { exit } = decide(hits, call);
+    expect(exit).toBe(2);
+  });
+
+  it("does NOT bypass when inline prefix value != '1'", () => {
+    const call = bash("OPENSQUID_SKIP_DRIFT=true git push origin main");
+    const hits = findDrifts(call);
+    const { exit } = decide(hits, call);
+    expect(exit).toBe(2);
+  });
+
+  it("does NOT bypass when var name appears only as substring", () => {
+    // Defensive: `MY_OPENSQUID_SKIP_DRIFT=1` shouldn't match (leading word-boundary).
+    const call = bash("MY_OPENSQUID_SKIP_DRIFT=1 git push origin main");
+    const hits = findDrifts(call);
+    const { exit } = decide(hits, call);
     expect(exit).toBe(2);
   });
 

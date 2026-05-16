@@ -236,20 +236,30 @@ function stringField(input: Record<string, unknown>, field: string): string | nu
  * - No hits → exit 0 silently
  *
  * Emergency bypass: `OPENSQUID_SKIP_DRIFT=1` downgrades every block to
- * an audit-trail warning (exit 0, stderr explains the bypass). Used when
- * the user has explicitly authorized a normally-blocked action (e.g.
- * `git push` is pre-authorized per CLAUDE.md but the regex can't know
- * that from inside the hook). Matches the shape of the version-gate
- * (`OPENSQUID_SKIP_VERSION_GATE=1`) and workflow-gate
- * (`OPENSQUID_SKIP_WORKFLOW_GATE=1`) bypasses so the operator only has
- * one mental model to remember.
+ * an audit-trail warning (exit 0, stderr explains the bypass). Two ways
+ * to set it:
+ *
+ *   1. Parent process env — useful for whole-session bypass (e.g. set
+ *      before launching Claude Code).
+ *   2. Inline command prefix — e.g. `OPENSQUID_SKIP_DRIFT=1 git push`.
+ *      The hook reads the COMMAND STRING from the Bash tool input and
+ *      sees the prefix even though the env var never reaches the hook's
+ *      own process.env (the hook is a sibling subprocess spawned by
+ *      Claude Code, not a child of the would-be Bash subprocess).
+ *
+ * Matches the shape of the version-gate (`OPENSQUID_SKIP_VERSION_GATE=1`)
+ * and workflow-gate (`OPENSQUID_SKIP_WORKFLOW_GATE=1`) bypasses so the
+ * operator only has one mental model — except those two only check
+ * process.env (their hooks happen before any command runs); drift-
+ * patterns additionally checks the command-string prefix so the bypass
+ * can be requested per-command from within an existing session.
  */
-export function decide(hits: DriftHit[]): {
+export function decide(hits: DriftHit[], call?: ToolCallInput): {
   exit: 0 | 2;
   stderr: string;
 } {
   if (hits.length === 0) return { exit: 0, stderr: "" };
-  if (isDriftBypassed()) {
+  if (isDriftBypassed(call)) {
     const ids = hits.map((h) => h.pattern.id).join(", ");
     return {
       exit: 0,
@@ -271,6 +281,13 @@ export function decide(hits: DriftHit[]): {
   };
 }
 
-function isDriftBypassed(): boolean {
-  return process.env.OPENSQUID_SKIP_DRIFT === "1";
+function isDriftBypassed(call?: ToolCallInput): boolean {
+  if (process.env.OPENSQUID_SKIP_DRIFT === "1") return true;
+  if (!call) return false;
+  const cmd = stringField(call.input, "command");
+  if (cmd === null) return false;
+  // Inline prefix: zero or more env-var assignments may precede the
+  // bypass var. Permissive on whitespace; strict on the value (must be
+  // literally "1" to match the env-var semantics).
+  return /(^|\s|;|&&)\s*OPENSQUID_SKIP_DRIFT=1(\s|$)/.test(cmd);
 }

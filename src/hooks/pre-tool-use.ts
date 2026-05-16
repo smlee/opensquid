@@ -92,7 +92,7 @@ export async function runPreToolUseHook(): Promise<void> {
   }
 
   const hits = findDrifts(call);
-  const { exit, stderr } = decide(hits);
+  const { exit, stderr } = decide(hits, call);
   if (stderr) process.stderr.write(stderr);
   if (exit !== 0) {
     // Existing drift gate already blocking; don't spend RPC budget on
