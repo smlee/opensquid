@@ -9,6 +9,34 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (v0.6.9 — chat-daemon outbound RPC, Phase B of v0.7.1 #139)
+
+**MCP `chat_send` now routes through the chat-daemon when one is running**, falling back transparently to the in-process gateway when not. This is the load-bearing fix for the v0.7 "last-connected wins" Telegram bug: multiple Claude Code projects can share a bot token because they all hand the actual `bot.api.sendMessage` call off to the single per-machine daemon (which owns the only long-poll connection per token).
+
+**Wire protocol:**
+
+- JSON-RPC 2.0 over newline-delimited JSON
+- Methods: `ping` (liveness + version), `list_channels` (active platforms + uptime), `send` (channel, text, replyTo?)
+- Standard JSON-RPC error codes (-32700 / -32600 / -32601 / -32602 / -32603)
+- Per-request connection (no pooling) — keeps the implementation under 100 LOC; fine for the expected traffic profile
+
+**Cross-platform socket address (`daemonSockAddress`):**
+
+- macOS / Linux → `~/.opensquid/chat-daemon.sock` (Unix domain socket)
+- Windows → `\\.\pipe\opensquid-chat-daemon-<root-basename>` (named pipe)
+- Node's `net.createServer({path})` and `net.connect({path})` accept both shapes — no platform branching at the call site, just at the address derivation
+
+**MCP integration:**
+
+- `chat_send` tries `DaemonClient.send()` first
+- On `DaemonUnreachableError` (ENOENT / ECONNREFUSED / EACCES) falls back to the in-process gateway with no visible behavior change
+- Response includes `via: "daemon" | "in_process"` so the operator can diagnose which path served the call
+- Backward compatible: single-project users without the daemon get identical v0.6.x behavior
+
+**Tests:** 10 new RPC integration tests against real sockets (no transport mocks): daemonSockAddress shape per OS, ping/list_channels/send happy paths, INVALID_PARAMS + METHOD_NOT_FOUND error codes, 3-way concurrent pipelining, DaemonUnreachableError on no-listener + post-close paths, DaemonRpcError surfaces message + code. End-to-end smoke verified: real daemon + real DaemonClient roundtrip cleanly with platform=telegram active. Full suite: 466/466.
+
+Per v0.6.3 versioning-gate: src change → version bump same commit. PATCH 0.6.8 → 0.6.9.
+
 ### Added — 2026-05-16 (v0.6.8 — chat-daemon binary skeleton, Phase A of v0.7.1 #138)
 
 **New `opensquid chat-daemon {start|stop|status|restart}` subcommand.** First step toward fixing the v0.7 "last-connected wins" Telegram bug: a per-machine daemon will own the single long-poll connection so multiple Claude Code projects can run their own opensquid MCP servers without colliding on the bot token. This commit ships only the lifecycle layer (process management); outbound RPC is Phase B, per-project routing is Phase C, MCP auto-spawn is Phase D, full release is Phase E.

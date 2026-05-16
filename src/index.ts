@@ -1201,13 +1201,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!channel || !text) {
           return textResult({ error: "channel + text (both strings) required" });
         }
+        const replyTo = typeof a.reply_to === "string" ? a.reply_to : undefined;
+        // v0.7.1 Phase B: try the chat-daemon first. The daemon owns
+        // the single long-poll per platform so multiple Claude Code
+        // projects can share a bot token. Fall back to the in-process
+        // gateway if no daemon is running (single-project users get
+        // identical behavior to v0.6.x).
+        try {
+          const { DaemonClient, DaemonUnreachableError } =
+            await import("./chat/daemon/rpc-client.js");
+          const client = new DaemonClient();
+          try {
+            const res = await client.send({ channel, text, replyTo });
+            return textResult({
+              ok: true,
+              platform: res.platform,
+              messageId: res.message_id,
+              deliveredAt: res.delivered_at,
+              via: "daemon",
+            });
+          } catch (err) {
+            if (!(err instanceof DaemonUnreachableError)) throw err;
+            // fall through to in-process path below
+          }
+        } catch (importErr) {
+          // dynamic import itself failed — extremely unlikely; fall
+          // through so the user still gets a send attempt.
+          process.stderr.write(
+            `[chat_send] daemon-client import failed: ${importErr instanceof Error ? importErr.message : importErr}\n`,
+          );
+        }
         const gw = await ensureChatGateway();
-        const result = await gw.send({
-          channel,
-          text,
-          replyTo: typeof a.reply_to === "string" ? a.reply_to : undefined,
-        });
-        return textResult({ ok: true, ...result });
+        const result = await gw.send({ channel, text, replyTo });
+        return textResult({ ok: true, ...result, via: "in_process" });
       }
 
       case "chat_list_channels": {

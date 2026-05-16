@@ -29,8 +29,10 @@ import { promises as fs } from "node:fs";
 import { buildChatGateway } from "../factory.js";
 import type { ChatGateway } from "../gateway.js";
 import { daemonPaths } from "./lifecycle.js";
+import { RpcServer } from "./rpc-server.js";
 
 let gateway: ChatGateway | null = null;
+let rpcServer: RpcServer | null = null;
 let pidFile: string | null = null;
 let shuttingDown = false;
 
@@ -59,7 +61,13 @@ export async function runDaemonWorker(dataRoot?: string): Promise<never> {
       }
     }
     await gateway.start();
-    log(`[chat-daemon] gateway start complete; entering park loop`);
+    log(`[chat-daemon] gateway start complete`);
+    // RPC server listens for outbound send() calls from per-project
+    // MCP servers. Starting it AFTER gateway.start() means clients
+    // that connect successfully are guaranteed a fully-warmed gateway.
+    rpcServer = new RpcServer({ gateway, dataRoot, version: "v0.7.1-phase-b" });
+    await rpcServer.listen();
+    log(`[chat-daemon] rpc server listening; entering park loop`);
   } catch (err) {
     log(`[chat-daemon] FATAL: gateway start failed: ${err instanceof Error ? err.stack : err}`);
     await cleanup();
@@ -92,6 +100,11 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log(`[chat-daemon] ${signal} received, shutting down...`);
+  try {
+    if (rpcServer) await rpcServer.close();
+  } catch (err) {
+    log(`[chat-daemon] rpc close error (non-fatal): ${err instanceof Error ? err.message : err}`);
+  }
   try {
     if (gateway) await gateway.shutdown();
   } catch (err) {
