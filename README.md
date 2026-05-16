@@ -172,30 +172,19 @@ node dist/index.js engine doctor
 
 ## Pairing with Hermes Agent
 
-If you use [Hermes Agent](https://github.com/NousResearch/hermes-agent), opensquid is the rule-discipline layer Hermes is missing.
+If you use [Hermes Agent](https://github.com/NousResearch/hermes-agent), opensquid is additive — it sits alongside your existing memory backend (mem0 / hindsight / openviking / etc.) and adds a wedge-gated rule layer on top.
 
-Hermes handles the agent runtime — multi-platform gateways, skill libraries, model routing. Its memory layer (mem0 / hindsight / openviking / etc.) captures observations. What Hermes does NOT have is a strict user-only promotion gate, which produces a class of bugs Hermes users have reported repeatedly:
-
-- [#6051](https://github.com/NousResearch/hermes-agent/issues/6051) — "Skill auto-creation learns from transient failures, causing persistent tool avoidance (learned helplessness)." The agent wrote a `browser-tool-launch-issue` skill from a one-time install failure; then refused browser tools forever. *"After manually deleting the negative skill ... the agent immediately resumed normal browser tool usage."*
-- [#17583](https://github.com/NousResearch/hermes-agent/issues/17583) — "Self-improvement overrides manual instructions ... there is no distinction between 'user authored this, do not touch it' and 'agent generated this, fair game to refine.'"
-- [#22563](https://github.com/NousResearch/hermes-agent/issues/22563) — Memory pollution: irrelevant memories injected into the system prompt caused model misunderstanding. *"Some memories were incorrectly saved (e.g., `_priority_key()` was wrongly recorded as a 'bug' when it was actually a new feature)."*
-- [Kilo aggregator review (1,300 Reddit comments)](https://kilo.ai/openclaw/vs-hermes) — *"The system that auto-generates skills also overwrites manual customizations — a dealbreaker for power users."*
-
-opensquid sits alongside Hermes' chosen memory backend (no replacement) and adds the rule-discipline layer:
-
-- **Only the human can promote a candidate to a rule.** Agent can propose; user endorses; engine enforces.
-- **User-authored content is eviction-immune.** Background curation can never touch what you wrote.
-- **Memories cited by promoted lessons inherit immunity.** The wedge gate's signal-diversity check prevents the kind of single-incident "lesson" #6051 documents.
-
-### Install opensquid into your existing Hermes setup
-
-Hermes is already an MCP client ([`tools/mcp_tool.py`](https://github.com/NousResearch/hermes-agent/blob/main/tools/mcp_tool.py)). One command:
+Hermes is already an MCP client. One command:
 
 ```bash
 hermes mcp add opensquid -- node /absolute/path/to/opensquid/dist/index.js
 ```
 
-That's it. Hermes' existing memory / skill / persona surface is untouched. Now your agent has a wedge-gated `remember` / `promote` flow on top, and `recall` returns both fuzzy-recall memories (via your existing Hermes backend if you wire it) and promoted rules (only what you, the human, endorsed). The agent cannot self-promote.
+Your existing Hermes setup is untouched. Now your agent has `remember` / `promote` / `recall` as MCP tools, with the wedge invariants opensquid enforces:
+
+- Only the human can promote a candidate to a rule. The agent proposes; the user endorses; the engine refuses to self-promote.
+- User-authored content is eviction-immune. Background curation can't silently rewrite what you wrote.
+- Memories cited by promoted lessons inherit immunity.
 
 ---
 

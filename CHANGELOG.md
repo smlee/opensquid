@@ -47,9 +47,9 @@ System-level (entire opensquid state):
 - Validates that an input archive looks like an opensquid export (checks for `.opensquid/` root entry via `tar -tzf`) before doing anything destructive.
 - Format: tar.gz via system `tar` (preinstalled on macOS, Linux, Windows 10+). Zero new runtime dependency. Encryption deferred — pipe through `gpg -c` externally for sensitive memories.
 
-**Hermes positioning + find-simple-solutions rule**
-- README: new "Pairing with Hermes Agent" section leads with verbatim issue quotes (#6051 learned-helplessness, #17583 user-vs-agent skill blur, #22563 memory pollution, Kilo "dealbreaker for power users") + one-line `hermes mcp add opensquid` recipe
-- ROADMAP: "Current direction (2026-05-16)" section locks audience (Hermes primary), marketing wedge, release sequence (v0.5 → v0.6 → v0.7 → v1.0 = feature-complete + bulletproof, earned not scheduled), hard rule-outs
+**Positioning + find-simple-solutions rule**
+- README: new "Pairing with Hermes Agent" section with one-line `hermes mcp add opensquid` recipe; opensquid is additive (sits alongside Hermes' existing memory backend)
+- ROADMAP: "Current direction" section locks the release sequence (v0.5 → v0.6 → v0.7 → v1.0 = feature-complete + bulletproof, earned not scheduled) and hard rule-outs
 - `sangmin-personal-rules` codex gains find-simple-solutions promoted lesson — meta-rule from the #112 → #124 arc: build simplest thing that solves actual user need; add complexity only when simple version provably insufficient
 
 **Sole-author trailer convention**

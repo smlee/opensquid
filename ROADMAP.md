@@ -8,9 +8,9 @@ For shipped releases see [CHANGELOG.md](./CHANGELOG.md).
 
 ## Current direction (2026-05-16)
 
-**Audience:** Hermes Agent users (primary), Claude Code / Cursor / Codex power users who use opensquid directly via MCP (secondary). opensquid is **the rule-discipline layer Hermes is missing**. Integration is via MCP — Hermes is already an MCP client; one command (`hermes mcp add opensquid -- node /path/to/dist/index.js`) wires opensquid alongside Hermes' existing memory backend. opensquid is additive, never a replacement. See README → *Pairing with Hermes Agent*.
+**Audience:** Hermes Agent users (primary), Claude Code / Cursor / Codex power users who use opensquid directly via MCP (secondary). opensquid is additive — it sits alongside an agent's existing memory backend and adds a wedge-gated rule layer on top. Integration is via MCP; Hermes is already an MCP client. See README → *Pairing with Hermes Agent*.
 
-**Marketing wedge:** "Your agent learns. You decide what gets locked in." Lead against the specific Hermes user complaints opensquid uniquely solves: [#6051](https://github.com/NousResearch/hermes-agent/issues/6051) learned-helplessness, [#17583](https://github.com/NousResearch/hermes-agent/issues/17583) no user-vs-agent skill distinction, [#22563](https://github.com/NousResearch/hermes-agent/issues/22563) memory pollution.
+**Marketing wedge:** "Your agent learns. You decide what gets locked in."
 
 **Release sequence (SemVer 0.x.y; v1.0 is feature-complete + bulletproof, not a calendar moment):**
 

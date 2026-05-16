@@ -1,0 +1,61 @@
+id: hermes-starter
+version: 1.0.0
+description: >
+  Starter rule pack for Hermes Agent users who installed opensquid as
+  an MCP server. Captures the wedge-gated discipline that addresses
+  Hermes' known pain points (auto-skill learned-helplessness #6051,
+  no-user-vs-agent-distinction #17583, memory pollution #22563). One
+  command — `opensquid codex install hermes-starter` — and the agent
+  starts speaking Hermes' specific patterns.
+author:
+  name: opensquid
+  contact: https://github.com/smlee/opensquid
+license: MIT
+
+foundation:
+  methodologies:
+    - wedge-gated-promotion
+    - user-authored-immunity
+    - thumbs-feedback-signal-diversity
+  domains:
+    - ai-agent-collaboration
+    - hermes-integration
+
+# Always-on for Hermes users.
+activation_scope: user
+
+detected_by:
+  - { kind: user_pinned }
+
+seed_lessons:
+  - id: prefer-wedge-over-auto-skill
+    trigger: "before letting Hermes auto-create a skill from an observation"
+    priority: high
+    bank_strategy: full
+    body_path: "lessons/prefer-wedge-over-auto-skill/lesson.md"
+
+  - id: user-content-immune
+    trigger: "before modifying or deleting anything the user authored or endorsed"
+    priority: high
+    bank_strategy: full
+    body_path: "lessons/user-content-immune/lesson.md"
+
+  - id: beware-transient-failures
+    trigger: "when a tool fails for the first time"
+    priority: high
+    bank_strategy: full
+    body_path: "lessons/beware-transient-failures/lesson.md"
+
+  - id: memory-not-rule
+    trigger: "before treating a fuzzy memory recall as if it were a rule"
+    priority: high
+    bank_strategy: full
+    body_path: "lessons/memory-not-rule/lesson.md"
+
+  - id: thumbs-feedback-strengthens-gate
+    trigger: "after the user reacts to a lesson's effect (positively or negatively)"
+    priority: medium
+    bank_strategy: full
+    body_path: "lessons/thumbs-feedback-strengthens-gate/lesson.md"
+
+evolves: true
