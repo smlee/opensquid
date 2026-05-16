@@ -8,11 +8,12 @@
  *      Any unfulfilled claim is recorded as a broken promise that the
  *      next turn's UserPromptSubmit hook surfaces back to the agent.
  *
- *   2. Auto-classify spawn: launch a DETACHED subprocess that runs the
- *      LLM utterance classifier on the user's most recent message.
- *      The subprocess writes candidates to a session file that
- *      UserPromptSubmit surfaces next turn. Detached so the agent's
- *      response latency is unaffected.
+ *   2. Token-threshold heartbeat: estimate transcript token count, and
+ *      if the conversation has grown past the configured threshold
+ *      since the last checkpoint, arm a pending heartbeat marker so
+ *      the next UserPromptSubmit hook injects a re-anchor nudge into
+ *      the agent's context. The agent (already authenticated and in
+ *      the loop) does the actual recall + classify work inline.
  *
  * Exit 0 always — Stop hook is observational, not blocking.
  *
@@ -24,14 +25,13 @@
  *       "command": "node /path/to/opensquid/dist/index.js hook stop"
  *     }] }
  *   ]
+ *
+ * Pre-#124: this hook also spawned a detached LLM-classifier subprocess.
+ * Removed in favor of the heartbeat path — opensquid stays in-MCP-ecosystem
+ * (no external LLM dependency, no subprocess), and the agent does the
+ * classification work inline per CLAUDE.md classify-and-act rules.
  */
 
-import { spawn } from "node:child_process";
-import { promises as fsp } from "node:fs";
-import * as fs from "node:fs";
-import * as path from "node:path";
-
-import { resolveDataRoot } from "../codex/store.js";
 import {
   reconcile,
   readBrokenPromises,
@@ -39,6 +39,7 @@ import {
   recordBrokenPromise,
   type BrokenPromise,
 } from "./honesty-ledger.js";
+import { checkAndMaybeArm } from "./heartbeat.js";
 import { readLastAssistantText } from "./transcript.js";
 
 interface StopHookInput {
@@ -95,76 +96,21 @@ export async function runStopHook(): Promise<void> {
     }
   }
 
-  // -- (2) Auto-classify (detached) ----------------------------------
+  // -- (2) Token-threshold heartbeat ---------------------------------
   if (payload.transcript_path) {
-    spawnAutoClassify(sessionId, payload.transcript_path);
+    try {
+      const armed = await checkAndMaybeArm(sessionId, payload.transcript_path);
+      if (armed) {
+        // Surface to stderr too so the user sees that opensquid noticed
+        // drift (in addition to the agent seeing it next turn via UPS).
+        process.stderr.write(`🦑 [opensquid heartbeat-armed] ${armed}\n`);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook stop] heartbeat check failed (non-fatal): ${err instanceof Error ? err.message : err}\n`,
+      );
+    }
   }
 
   process.exit(0);
-}
-
-/**
- * Launch the auto-classifier as a fully detached child. We do not
- * await it, but we DO redirect stdout+stderr to a per-session log file
- * (#112-audit finding 5) so engine panics, Ollama errors, and Zod
- * failures are recoverable instead of silenced.
- *
- * Best-effort: if the log file can't be opened, fall back to `ignore`.
- */
-function spawnAutoClassify(sessionId: string, transcriptPath: string): void {
-  if (process.env.OPENSQUID_AUTO_CLASSIFY === "off") return;
-  const cli = process.argv[1];
-  if (!cli) return;
-
-  try {
-    const logFd = openSessionLog(sessionId);
-    const stdio: ("ignore" | number)[] =
-      logFd === null ? ["ignore", "ignore", "ignore"] : ["ignore", logFd, logFd];
-    const child = spawn(
-      process.execPath,
-      [path.resolve(cli), "hook", "auto-classify", sessionId, transcriptPath],
-      {
-        detached: true,
-        stdio,
-        env: process.env,
-      },
-    );
-    if (typeof logFd === "number") {
-      // Parent doesn't need its handle once spawn inherits it.
-      try {
-        fs.closeSync(logFd);
-      } catch {
-        // ignore
-      }
-      // Surface the PID into the log so a stuck subprocess can be found.
-      void appendLogLine(
-        sessionId,
-        `[opensquid stop] spawned auto-classify pid=${child.pid ?? "?"}`,
-      );
-    }
-    child.unref();
-  } catch {
-    // Fail-open: the agent's response is more important than the
-    // classifier running.
-  }
-}
-
-function openSessionLog(sessionId: string): number | null {
-  try {
-    const dir = path.join(resolveDataRoot(), "sessions", sessionId);
-    fs.mkdirSync(dir, { recursive: true });
-    const logPath = path.join(dir, "auto-classify.log");
-    return fs.openSync(logPath, "a");
-  } catch {
-    return null;
-  }
-}
-
-async function appendLogLine(sessionId: string, line: string): Promise<void> {
-  try {
-    const p = path.join(resolveDataRoot(), "sessions", sessionId, "auto-classify.log");
-    await fsp.appendFile(p, line + "\n", "utf8");
-  } catch {
-    // ignore
-  }
 }

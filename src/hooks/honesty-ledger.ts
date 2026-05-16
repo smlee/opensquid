@@ -189,7 +189,7 @@ export async function clearTurnLedger(
 /**
  * Explicit session-end clear: wipes everything opensquid wrote under
  * this session's directory — turn ledger, broken promises, plus the
- * auto-classify candidate file and hash set. Files are removed
+ * heartbeat checkpoint and pending marker (#124). Files are removed
  * individually so unrelated files in the session dir survive (in case
  * a future hook drops something else there).
  */
@@ -200,8 +200,8 @@ export async function clearSession(
   const sessionFiles = [
     ledgerPath(sessionId, options.dataRoot),
     brokenPromisesPath(sessionId, options.dataRoot),
-    path.join(sessionDir(sessionId, options.dataRoot), "auto-classify-candidates.jsonl"),
-    path.join(sessionDir(sessionId, options.dataRoot), "auto-classified-hashes.jsonl"),
+    path.join(sessionDir(sessionId, options.dataRoot), "heartbeat-checkpoint.json"),
+    path.join(sessionDir(sessionId, options.dataRoot), "heartbeat-pending.txt"),
   ];
   for (const p of sessionFiles) {
     try {
