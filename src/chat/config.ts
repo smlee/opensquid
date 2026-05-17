@@ -25,6 +25,7 @@
 import type { OpensquidConfig } from "../config.js";
 import { loadConfig, saveConfig } from "../config.js";
 
+import { resolveToken, type EnvSource } from "./env-token.js";
 import type { ChatPlatform } from "./gateway.js";
 
 // ---------------------------------------------------------------------
@@ -78,7 +79,80 @@ interface ConfigWithChat extends OpensquidConfig {
 
 export async function loadChatConfig(dataRoot?: string): Promise<ChatConnectionsConfig> {
   const raw = (await loadConfig(dataRoot)) as ConfigWithChat;
-  return raw.chat_connections ?? {};
+  // 0.7.5 (#148): overlay env-var + .env tokens atop config.json. Lets
+  // the user park a Telegram bot token in ~/.loop/.env so opensquid
+  // uses a DIFFERENT bot than Claude Code's plugin:telegram (no 409
+  // collision possible — they're different bots). Priority is
+  // env > .env > config.json (per resolveToken).
+  return overlayEnvTokens(raw.chat_connections ?? {});
+}
+
+export interface ChatTokenSources {
+  telegram?: EnvSource;
+  discord?: EnvSource;
+  slack_bot?: EnvSource;
+  slack_app?: EnvSource;
+  env_file_path?: string;
+}
+
+/**
+ * Like loadChatConfig but also returns which source each token came
+ * from. The chat-daemon uses this to log "[chat-daemon] telegram
+ * bot_token source: env-file (~/.loop/.env)" so operators can debug
+ * "which bot is this daemon actually using" without exposing the
+ * secret.
+ */
+export async function loadChatConfigWithSources(dataRoot?: string): Promise<{
+  config: ChatConnectionsConfig;
+  sources: ChatTokenSources;
+}> {
+  const raw = (await loadConfig(dataRoot)) as ConfigWithChat;
+  return overlayEnvTokensWithSources(raw.chat_connections ?? {});
+}
+
+async function overlayEnvTokens(base: ChatConnectionsConfig): Promise<ChatConnectionsConfig> {
+  const { config } = await overlayEnvTokensWithSources(base);
+  return config;
+}
+
+async function overlayEnvTokensWithSources(
+  base: ChatConnectionsConfig,
+): Promise<{ config: ChatConnectionsConfig; sources: ChatTokenSources }> {
+  const out: ChatConnectionsConfig = { ...base };
+  const sources: ChatTokenSources = {};
+
+  // Telegram
+  const tg = await resolveToken("OPENSQUID_TELEGRAM_BOT_TOKEN", base.telegram?.bot_token);
+  if (tg.value) {
+    out.telegram = { ...(base.telegram ?? {}), bot_token: tg.value };
+    sources.telegram = tg.source;
+    if (tg.env_file_path) sources.env_file_path = tg.env_file_path;
+  }
+
+  // Discord
+  const dc = await resolveToken("OPENSQUID_DISCORD_BOT_TOKEN", base.discord?.bot_token);
+  if (dc.value) {
+    out.discord = { ...(base.discord ?? {}), bot_token: dc.value };
+    sources.discord = dc.source;
+    if (dc.env_file_path && !sources.env_file_path) sources.env_file_path = dc.env_file_path;
+  }
+
+  // Slack: needs both bot_token + app_token
+  const sb = await resolveToken("OPENSQUID_SLACK_BOT_TOKEN", base.slack?.bot_token);
+  const sa = await resolveToken("OPENSQUID_SLACK_APP_TOKEN", base.slack?.app_token);
+  if (sb.value || sa.value || base.slack) {
+    out.slack = {
+      ...(base.slack ?? { bot_token: "", app_token: "" }),
+      bot_token: sb.value ?? base.slack?.bot_token ?? "",
+      app_token: sa.value ?? base.slack?.app_token ?? "",
+    };
+    sources.slack_bot = sb.source;
+    sources.slack_app = sa.source;
+    if (sb.env_file_path && !sources.env_file_path) sources.env_file_path = sb.env_file_path;
+    if (sa.env_file_path && !sources.env_file_path) sources.env_file_path = sa.env_file_path;
+  }
+
+  return { config: out, sources };
 }
 
 export async function saveChatConfig(

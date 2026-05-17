@@ -56,6 +56,27 @@ export async function runDaemonWorker(dataRoot?: string): Promise<never> {
   // activate and the daemon parks idle — useful for testing the
   // lifecycle without configuring a real bot token.
   try {
+    // 0.7.5 (#148): log which source each platform's token came from
+    // (env / env-file / config-json) so operators can debug "which
+    // bot is this daemon actually using" without exposing the secret.
+    try {
+      const { loadChatConfigWithSources } = await import("../config.js");
+      const { sources } = await loadChatConfigWithSources(dataRoot);
+      const lines: string[] = [];
+      if (sources.telegram) lines.push(`telegram=${sources.telegram}`);
+      if (sources.discord) lines.push(`discord=${sources.discord}`);
+      if (sources.slack_bot) lines.push(`slack_bot=${sources.slack_bot}`);
+      if (sources.slack_app) lines.push(`slack_app=${sources.slack_app}`);
+      if (lines.length) {
+        log(
+          `[chat-daemon] token sources: ${lines.join(" ")}${sources.env_file_path ? ` (env-file: ${sources.env_file_path})` : ""}`,
+        );
+      }
+    } catch (logErr) {
+      log(
+        `[chat-daemon] could not log token sources (non-fatal): ${logErr instanceof Error ? logErr.message : logErr}`,
+      );
+    }
     const built = await buildChatGateway({ dataRoot });
     gateway = built.gateway;
     log(`[chat-daemon] activating platforms: ${built.activated.join(",") || "(none)"}`);

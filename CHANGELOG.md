@@ -9,6 +9,35 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-16 (0.7.5 — telegram/discord/slack bot_token from .env or env var #148)
+
+**Bot tokens can now live in `.env` files or env vars** instead of being inlined in `~/.opensquid/config.json`. The motivation: the user wanted opensquid to run a DIFFERENT Telegram bot than Claude Code's `plugin:telegram` MCP (which holds its own bot's long-poll). Storing the new bot's token in `~/.loop/.env` lets opensquid pick a different bot at startup without any config.json edit — no more 409 collision because they're different bots, not the same one being fought over.
+
+**Priority order (highest first):**
+
+1. `process.env.OPENSQUID_TELEGRAM_BOT_TOKEN` (or `_DISCORD_`, `_SLACK_BOT_`, `_SLACK_APP_`)
+2. `.env` file in search order: `$OPENSQUID_ENV_FILE` → `~/.loop/.env` → `~/.opensquid/.env` → `<cwd>/.env` (first match wins)
+3. `~/.opensquid/config.json` `chat_connections.<platform>.bot_token` (legacy fallback)
+
+**`.env` parser** supports:
+
+- Standard `KEY=VALUE` lines
+- Single + double-quoted values
+- `#` comments + blank lines
+- **Bare-token fallback**: a single non-comment line that matches the Telegram bot-token shape (`<digits>:<base64-ish>`) is treated as `OPENSQUID_TELEGRAM_BOT_TOKEN`. Covers the "I just saved the raw token" case without forcing reformatting.
+
+**Operator observability:** chat-daemon logs which source each platform's token came from at startup:
+
+```
+[chat-daemon] token sources: telegram=env-file (env-file: /Users/slee/.loop/.env)
+```
+
+Token VALUE is never logged. Just the source. So you can debug "which bot is this daemon actually using" without leaking the secret.
+
+**Tests:** 15 new in `src/chat/env-token.test.ts`: parsing (KEY=VALUE, quotes, comments, bare-token fallback, bare-token rejected when KEY=VALUE present), `locateEnvFile` search order, all 5 priority cases (env > file > config-json > missing, env-wins-over-file, file-wins-over-config). Fixed 2 autospawn tests that broke from picking up the real `~/.loop/.env` — same HOME-override isolation pattern. Full suite 536/536.
+
+Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.4 → 0.7.5.
+
 ### Fixed — 2026-05-16 (0.7.4 — telegram daemon 409 outbound-only fallback #147)
 
 **Telegram chat-daemon no longer dies on a 409 Conflict with external pollers.** When the daemon's long-poll loses to another consumer (typically Claude Code's `plugin:telegram` bun bot), the adapter now degrades to OUTBOUND-ONLY mode instead of nulling the bot reference. `sendMessage` keeps working via HTTPS API; only inbound is yielded. A periodic 60-second retry attempts to reclaim the long-poll, so if the competing consumer disconnects, inbound resumes transparently.

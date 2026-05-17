@@ -21,11 +21,18 @@ const ENTRYPOINT = path.join(REPO_ROOT, "dist", "index.js");
 
 let tmpRoot: string;
 let prevHome: string | undefined;
+let prevOsHome: string | undefined;
 
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opensquid-autospawn-test-"));
   prevHome = process.env.OPENSQUID_HOME;
+  prevOsHome = process.env.HOME;
   process.env.OPENSQUID_HOME = tmpRoot;
+  // 0.7.5 (#148): override HOME so the env-token .env candidate paths
+  // (~/.loop/.env etc) point at the empty tmpdir, not the real home
+  // where a user-saved .env would synthesize a telegram config and
+  // turn what should be `no_config` into `spawned`.
+  process.env.HOME = tmpRoot;
 });
 
 afterEach(async () => {
@@ -37,6 +44,8 @@ afterEach(async () => {
   }
   if (prevHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = prevHome;
+  if (prevOsHome === undefined) delete process.env.HOME;
+  else process.env.HOME = prevOsHome;
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
