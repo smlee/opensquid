@@ -67,6 +67,13 @@ export interface ListChannelsParams {
 export interface ListChannelsResult {
   active_platforms: string[];
   uptime_ms: number | null;
+  /**
+   * 0.7.4 (#147): platforms whose long-poll lost to a 409 Conflict
+   * and degraded to outbound-only mode. Surfaced via
+   * `chat_daemon_status` so operators can diagnose "where did my
+   * inbound message go?"
+   */
+  outbound_only_platforms?: string[];
 }
 
 /** Liveness probe for the auto-spawn path. */

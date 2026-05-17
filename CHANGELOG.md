@@ -9,6 +9,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — 2026-05-16 (0.7.4 — telegram daemon 409 outbound-only fallback #147)
+
+**Telegram chat-daemon no longer dies on a 409 Conflict with external pollers.** When the daemon's long-poll loses to another consumer (typically Claude Code's `plugin:telegram` bun bot), the adapter now degrades to OUTBOUND-ONLY mode instead of nulling the bot reference. `sendMessage` keeps working via HTTPS API; only inbound is yielded. A periodic 60-second retry attempts to reclaim the long-poll, so if the competing consumer disconnects, inbound resumes transparently.
+
+**Symptom this fixes:** earlier today the user couldn't reliably receive Telegram messages because the daemon's long-poll kept losing to the plugin's bun bot. Workaround was killing the plugin's bun process. Now the daemon gracefully shares — outbound always works, inbound reclaims when possible.
+
+**New observability:** `chat_daemon_status` MCP tool now reports `outbound_only_platforms: [...]` so operators can see which platforms are degraded. Direct answer to the "where did my inbound message go?" debug question.
+
+**Non-409 errors still tear down** as before (those are genuine adapter failures, not coexistence).
+
+**Tests:** 5 new in `src/chat/adapters/telegram.test.ts`: fresh adapter starts in long-poll mode; 409 degrades to outbound-only without nulling bot; both "409" and "Conflict" substrings trigger detection; non-409 errors still tear down; retry timer scheduled on outbound-only entry. Full suite 521/521.
+
+Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.3 → 0.7.4.
+
 ### Added — 2026-05-16 (0.7.3 — drift-as-codex chunk 1: schema + bundled-default #146)
 
 **Foundation for the drift-as-codex refactor.** Hardcoded drift gates (drift-patterns, workflow-gate, honesty-ledger, versioning-gate) will become generic loaders reading rule definitions from codex YAML. This chunk ships the schema + a bundled-default codex encoding today's rules. No loader yet (chunk 2). No removal of hardcoded TS (chunk 3, after behavioral equivalence is proven).

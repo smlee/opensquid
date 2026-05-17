@@ -80,6 +80,17 @@ export class TelegramAdapter implements ChatAdapter {
   private botUsername = "";
   private botId = "";
   private startPromise: Promise<void> | null = null;
+  /**
+   * 0.7.4 (#147): true when the long-poll lost to a 409 Conflict
+   * (another consumer holds the token — typically the Claude Code
+   * `plugin:telegram` bun bot). Outbound sendMessage still works via
+   * HTTPS, only inbound is dead. A periodic retry attempts to reclaim.
+   */
+  private outboundOnly = false;
+  /** 0.7.4 (#147): handle for the periodic long-poll retry timer. */
+  private retryTimer: NodeJS.Timeout | null = null;
+  /** Retry cadence — long enough that flapping doesn't burn API quota. */
+  private static readonly RETRY_INTERVAL_MS = 60_000;
 
   constructor(private readonly config: TelegramConfig) {
     if (!config.bot_token?.trim()) {
@@ -158,28 +169,125 @@ export class TelegramAdapter implements ChatAdapter {
 
     // `bot.start()` resolves only on bot.stop(). Fire-and-track via a
     // promise we keep around for shutdown, but don't await it here.
-    // v0.7 audit fix (H1): the 409 Conflict from a second polling
-    // consumer surfaces as a rejection on this promise AFTER start()
-    // has already resolved. Attach a catch so the rejection is observed
-    // and surfaced; we tear down the adapter and clear bot so callers
-    // get a useful error on next send() instead of silent dead-bot.
-    this.startPromise = bot.start().catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      const is409 = /409|Conflict/.test(msg);
-      // eslint-disable-next-line no-console
-      console.error(
-        `[telegram adapter] long-poll loop ${is409 ? "lost: 409 Conflict — another polling consumer holds this token" : "errored"}: ${msg}`,
-      );
-      this.bot = null;
-      this.startPromise = null;
-    });
+    // 0.7.4 (#147) fix: rejection handler delegates to
+    // handleStartRejection() so tests can exercise the 409 path
+    // without spinning up grammy.
+    this.startPromise = bot.start().catch((err) => this.handleStartRejection(err));
     // Yield once so the polling loop has a tick to register before the
     // gateway moves on to dispatch outbound messages.
     await new Promise((r) => setImmediate(r));
   }
 
+  /**
+   * 0.7.4 (#147): handle a rejection from `bot.start()`. Extracted
+   * from inline catch handler so tests can simulate 409 without
+   * needing a live grammy + colliding bot. EXPORTED VIA PROTECTED for
+   * test-only direct invocation; not part of the public adapter API.
+   */
+  handleStartRejection(err: unknown): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    const is409 = /409|Conflict/.test(msg);
+    if (is409) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[telegram adapter] long-poll lost to 409 Conflict — degrading to OUTBOUND-ONLY (outbound sendMessage still works); periodic retry every ${TelegramAdapter.RETRY_INTERVAL_MS / 1000}s`,
+      );
+      this.outboundOnly = true;
+      this.startPromise = null;
+      this.scheduleRetry();
+    } else {
+      // eslint-disable-next-line no-console
+      console.error(`[telegram adapter] long-poll loop errored: ${msg}`);
+      this.bot = null;
+      this.startPromise = null;
+    }
+  }
+
+  /**
+   * 0.7.4 (#147): test-only seed — install a fake bot reference + mark
+   * outbound-only so tests can verify isOutboundOnly() + retry timer
+   * without spinning up grammy. Must be called before any
+   * handleStartRejection in test context.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  _testSeed(fakeBot: any): void {
+    this.bot = fakeBot as GrammyBot;
+  }
+
+  /**
+   * 0.7.4 (#147): test-only — clear the retry timer so tests don't
+   * leak intervals after a 409 simulation.
+   */
+  _testClearRetryTimer(): void {
+    if (this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  /**
+   * 0.7.4 (#147): periodically retry the long-poll while in outbound-
+   * only mode. If the competing consumer disconnects, we reclaim
+   * inbound transparently.
+   */
+  private scheduleRetry(): void {
+    if (this.retryTimer) return;
+    this.retryTimer = setInterval(() => {
+      void this.tryReclaim();
+    }, TelegramAdapter.RETRY_INTERVAL_MS);
+  }
+
+  private async tryReclaim(): Promise<void> {
+    if (!this.outboundOnly || !this.bot) return;
+    const bot = this.bot;
+    // Fire bot.start() again; same rejection handling as the initial
+    // start. If 409, stay outbound-only. If success (no rejection
+    // observable yet — start() resolves only on stop()), clear the
+    // outboundOnly flag and stop the retry timer.
+    const next = bot.start().catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const is409 = /409|Conflict/.test(msg);
+      if (!is409) {
+        // eslint-disable-next-line no-console
+        console.error(`[telegram adapter] retry start() errored: ${msg}`);
+      }
+      // Stay outbound-only; retry timer keeps running.
+      return;
+    });
+    // Yield to let the long-poll register if it's going to succeed.
+    await new Promise((r) => setImmediate(r));
+    // If the bot reference is still alive and no rejection fired yet,
+    // assume the long-poll is back. Reclaim inbound.
+    if (this.bot && this.outboundOnly) {
+      // Heuristic check: getMe still succeeds (the bot can still talk
+      // to the API). If 409 already rejected `next`, that handler will
+      // have run by now. We can't directly observe "start succeeded"
+      // because start() doesn't resolve on success — it stays pending.
+      // So we look for the absence of a fresh 409.
+      try {
+        await bot.api.getMe();
+        this.outboundOnly = false;
+        this.startPromise = next;
+        if (this.retryTimer) {
+          clearInterval(this.retryTimer);
+          this.retryTimer = null;
+        }
+        // eslint-disable-next-line no-console
+        console.error(`[telegram adapter] long-poll RECLAIMED — inbound restored`);
+      } catch {
+        // getMe failed → keep outbound-only, retry on next tick
+      }
+    }
+  }
+
   async shutdown(): Promise<void> {
     if (!this.bot) return;
+    // 0.7.4 (#147): stop the retry timer first so it doesn't fire
+    // mid-shutdown and resurrect a dead adapter.
+    if (this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
+    }
     try {
       await this.bot.stop();
     } catch {
@@ -192,6 +300,16 @@ export class TelegramAdapter implements ChatAdapter {
     }
     this.bot = null;
     this.startPromise = null;
+    this.outboundOnly = false;
+  }
+
+  /**
+   * 0.7.4 (#147): introspection accessor for tests + the
+   * `chat_daemon_status` MCP tool to surface "outbound-only" state to
+   * operators trying to diagnose "where did my message go?"
+   */
+  isOutboundOnly(): boolean {
+    return this.outboundOnly;
   }
 
   onMessage(handler: MessageHandler): void {

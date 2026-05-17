@@ -158,11 +158,27 @@ export class RpcServer {
             pid: this.opts.pid ?? process.pid,
             version: this.opts.version ?? "unknown",
           });
-        case "list_channels":
+        case "list_channels": {
+          // 0.7.4 (#147): walk active adapters and ask which are
+          // outbound-only (degraded due to 409 collision with an
+          // external poller). Only the telegram adapter currently
+          // exposes isOutboundOnly(); duck-type test so other
+          // platforms can opt in later without changing this code.
+          const platforms = this.opts.gateway.activePlatforms();
+          const outboundOnly: string[] = [];
+          for (const p of platforms) {
+            const adapter = this.opts.gateway.getAdapter(p);
+            const maybe = adapter as unknown as { isOutboundOnly?: () => boolean };
+            if (typeof maybe?.isOutboundOnly === "function" && maybe.isOutboundOnly()) {
+              outboundOnly.push(p);
+            }
+          }
           return success<ListChannelsResult>(req.id, {
-            active_platforms: this.opts.gateway.activePlatforms(),
+            active_platforms: platforms,
             uptime_ms: Date.now() - this.startedAt,
+            outbound_only_platforms: outboundOnly,
           });
+        }
         case "send": {
           const p = req.params as SendParams | undefined;
           if (!p || typeof p.channel !== "string" || typeof p.text !== "string") {

@@ -1600,6 +1600,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             version: pong.version,
             active_platforms: list.active_platforms,
             uptime_ms: list.uptime_ms,
+            // 0.7.4 (#147): surface platforms degraded to outbound-only
+            // (long-poll lost to a 409 conflict with an external poller
+            // like Claude Code's plugin:telegram). Diagnostic for
+            // "where did my inbound message go?"
+            outbound_only_platforms: list.outbound_only_platforms ?? [],
           });
         } catch (rpcErr) {
           return textResult({
