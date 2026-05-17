@@ -86,6 +86,14 @@ export async function readLastAssistantText(transcriptPath: string): Promise<str
  * Returns null when no in_progress task is detected (graceful —
  * hook falls back to allow, per the fail-open invariant).
  */
+/**
+ * 0.7.9 (#163): how stale an `in_progress` task can be before it's
+ * demoted as the active-task pick. Captures the "I forgot to mark
+ * yesterday's task completed, but I'm working on a new one now"
+ * scenario observed in #160's resume-drift investigation.
+ */
+const STALE_TASK_MS = 60 * 60 * 1000; // 1 hour
+
 export async function readActiveTaskId(transcriptPath: string): Promise<string | null> {
   const lines = await readTranscriptLines(transcriptPath);
 
@@ -94,11 +102,17 @@ export async function readActiveTaskId(transcriptPath: string): Promise<string |
   // The lastTouchedIdx is the line position of the most recent event
   // that set this task's status — used to break ties between multiple
   // in_progress tasks (most-recently-touched wins).
+  //
+  // 0.7.9 (#163): also track lastTouchedAt (the event's wall-clock
+  // timestamp) so we can demote stale `in_progress` tasks that the
+  // agent forgot to mark completed long ago.
   interface TaskState {
     status: string;
     lastTouchedIdx: number;
+    lastTouchedAt: number; // epoch ms; 0 if event had no timestamp
   }
   const stateByTask = new Map<string, TaskState>();
+  let latestTimestampMs = 0;
 
   // Pre-index user events by tool_use_id so TaskCreate's id-extraction
   // doesn't N-squared scan. The tool_result block lives in a later
@@ -129,9 +143,24 @@ export async function readActiveTaskId(transcriptPath: string): Promise<string |
   // "latest write per id wins" is enforced naturally.
   for (let i = 0; i < lines.length; i++) {
     const event = safeParseLine(lines[i]);
-    if (!event || event.type !== "assistant") continue;
+    if (!event) continue;
+    // 0.7.9 (#163): track the latest event timestamp across ANY event
+    // type (not just assistant tool_use). Used to decide if the most
+    // recent in_progress task pick is stale relative to current
+    // session activity.
+    const tsStr = (event as { timestamp?: unknown }).timestamp;
+    if (typeof tsStr === "string") {
+      const ms = Date.parse(tsStr);
+      if (Number.isFinite(ms) && ms > latestTimestampMs) latestTimestampMs = ms;
+    }
+    if (event.type !== "assistant") continue;
     const content = event.message?.content;
     if (!Array.isArray(content)) continue;
+
+    // Capture this event's timestamp once for the task-touch logic
+    // below.
+    const eventTs = typeof tsStr === "string" ? Date.parse(tsStr) : Number.NaN;
+    const eventTsMs = Number.isFinite(eventTs) ? eventTs : 0;
 
     for (const block of content) {
       if (!block || typeof block !== "object" || (block as { type?: string }).type !== "tool_use") {
@@ -147,7 +176,7 @@ export async function readActiveTaskId(transcriptPath: string): Promise<string |
         const idStr =
           typeof taskId === "string" ? taskId : typeof taskId === "number" ? String(taskId) : "";
         if (idStr && typeof status === "string") {
-          stateByTask.set(idStr, { status, lastTouchedIdx: i });
+          stateByTask.set(idStr, { status, lastTouchedIdx: i, lastTouchedAt: eventTsMs });
         }
       } else if (name === "TaskCreate") {
         // Extract assigned id from the matching tool_result. The regex
@@ -164,7 +193,7 @@ export async function readActiveTaskId(transcriptPath: string): Promise<string |
         const m = resultText.match(/Task\s+#?([\w-]+)/i);
         if (m) {
           // Default status for newly-created tasks is "pending".
-          stateByTask.set(m[1], { status: "pending", lastTouchedIdx: i });
+          stateByTask.set(m[1], { status: "pending", lastTouchedIdx: i, lastTouchedAt: eventTsMs });
         }
       } else if (name === "TodoWrite") {
         // Snapshot semantic — apply each todo's status at this chrono idx.
@@ -180,7 +209,11 @@ export async function readActiveTaskId(transcriptPath: string): Promise<string |
           const idStr =
             typeof todoId === "string" ? todoId : typeof todoId === "number" ? String(todoId) : "";
           if (idStr && typeof todoStatus === "string") {
-            stateByTask.set(idStr, { status: todoStatus, lastTouchedIdx: i });
+            stateByTask.set(idStr, {
+              status: todoStatus,
+              lastTouchedIdx: i,
+              lastTouchedAt: eventTsMs,
+            });
           }
         }
       }
@@ -191,11 +224,28 @@ export async function readActiveTaskId(transcriptPath: string): Promise<string |
   // higher line index = more recent.
   let bestId: string | null = null;
   let bestIdx = -1;
+  let bestAt = 0;
   for (const [id, s] of stateByTask) {
     if (s.status === "in_progress" && s.lastTouchedIdx > bestIdx) {
       bestId = id;
       bestIdx = s.lastTouchedIdx;
+      bestAt = s.lastTouchedAt;
     }
+  }
+
+  // 0.7.9 (#163): demote stale in_progress picks. If the best
+  // in_progress task was last touched more than STALE_TASK_MS before
+  // the latest transcript activity, assume the agent forgot to mark
+  // it completed; return null so the workflow-gate doesn't enforce
+  // against the wrong task. The fail-open invariant keeps the gate
+  // permissive in this case — better than enforcing wrongly.
+  //
+  // Only applies when BOTH timestamps are available. If either is 0
+  // (events lacked timestamps), fall back to the line-idx-based
+  // pick like pre-0.7.9.
+  if (bestId !== null && bestAt > 0 && latestTimestampMs > 0) {
+    const ageMs = latestTimestampMs - bestAt;
+    if (ageMs > STALE_TASK_MS) return null;
   }
   return bestId;
 }

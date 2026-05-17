@@ -307,6 +307,71 @@ describe("readActiveTaskId — real Claude Code transcript fixture", () => {
   });
 });
 
+// =====================================================================
+// 0.7.9 (#163) — stale in_progress demotion
+// =====================================================================
+
+function assistantToolUseAt(
+  name: string,
+  blockId: string,
+  input: unknown,
+  timestamp: string,
+): unknown {
+  return {
+    type: "assistant",
+    timestamp,
+    message: {
+      role: "assistant",
+      content: [{ type: "tool_use", id: blockId, name, input, caller: { type: "direct" } }],
+    },
+  };
+}
+
+function userEventAt(timestamp: string, text = "hello"): unknown {
+  return { type: "user", timestamp, message: { role: "user", content: text } };
+}
+
+describe("readActiveTaskId — stale-task demotion (#163)", () => {
+  const oldDay = "2026-05-16T08:00:00Z"; // ~24h before latest
+  const today = "2026-05-17T08:00:00Z"; // latest activity
+
+  it("returns null when the only in_progress task is >1hr stale relative to latest activity", async () => {
+    await writeEvents([
+      assistantToolUseAt("TaskUpdate", "tu-1", { taskId: "999", status: "in_progress" }, oldDay),
+      // Many later events with newer timestamps — none touch task 999.
+      userEventAt(today, "new conversation today"),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBeNull();
+  });
+
+  it("keeps the in_progress task when it was recently touched", async () => {
+    const recent = "2026-05-17T07:30:00Z"; // 30 min before latest
+    await writeEvents([
+      assistantToolUseAt("TaskUpdate", "tu-1", { taskId: "42", status: "in_progress" }, recent),
+      userEventAt(today),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("42");
+  });
+
+  it("picks the more-recent in_progress when two exist (one stale, one fresh)", async () => {
+    const recent = "2026-05-17T07:45:00Z";
+    await writeEvents([
+      assistantToolUseAt("TaskUpdate", "tu-1", { taskId: "X", status: "in_progress" }, oldDay),
+      assistantToolUseAt("TaskUpdate", "tu-2", { taskId: "Y", status: "in_progress" }, recent),
+      userEventAt(today),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("Y");
+  });
+
+  it("falls back to line-idx pick (no demotion) when events have no timestamps", async () => {
+    // Pre-existing behavior preserved when timestamps aren't available.
+    await writeEvents([
+      assistantToolUse("TaskUpdate", "tu-1", { taskId: "no-ts", status: "in_progress" }),
+    ]);
+    expect(await readActiveTaskId(transcriptPath)).toBe("no-ts");
+  });
+});
+
 describe("readActiveTaskId — mixed TodoWrite + TaskUpdate", () => {
   it("latest write wins per id, regardless of which tool", async () => {
     // TodoWrite snapshot says id=5 is in_progress; later TaskUpdate

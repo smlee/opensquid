@@ -9,6 +9,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — 2026-05-17 (0.7.9 — readActiveTaskId demotes stale in_progress tasks #163)
+
+Third of three load-bearing fixes from the resume-drift investigation (#160). Workflow-gate's "what task am I working on?" picks the most-recently-touched `in_progress` task by transcript line index. But if I marked task X `in_progress` yesterday and forgot to mark it completed, X stays the "active task" today even when I'm working on Y. Result: gate enforces against X's phase ledger when it should enforce against Y's (or nothing).
+
+**The fix:** track `lastTouchedAt` (epoch ms from the transcript event's `timestamp` field) alongside `lastTouchedIdx`. After picking the best in_progress task, compare its timestamp to the latest transcript activity. If the gap exceeds 1 hour, return null instead — workflow-gate fails open (no enforcement) rather than enforcing against the wrong task.
+
+**Backward compat:** when events lack timestamps, the function falls back to its original line-idx behavior. Existing tests still pass without modification.
+
+**Tests:** 4 new (stale-only → null, recent kept, mixed stale+recent picks recent, no-timestamps falls back to original). Full suite 565/565.
+
+Combined with 0.7.7 (heartbeat estimator) and 0.7.8 (turn-ledger per-turn reset), the three load-bearing resume-drift causes from #160 are now all addressed. FIX-D (auto-rule-reload on resume) and FIX-E (MCP session-id verification) remain queued.
+
+Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.8 → 0.7.9.
+
 ### Fixed — 2026-05-17 (0.7.8 — turn-ledger resets per-turn at Stop, not per-session #162)
 
 Companion to 0.7.7's heartbeat fix; addresses the second of the two load-bearing causes from the resume-drift investigation (#160).
