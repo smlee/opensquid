@@ -24,8 +24,30 @@ import { OpenSquidEngine } from "../engine-client.js";
 
 import { readActiveTaskId } from "./transcript.js";
 
-/** Phases that must be logged before `git commit` is allowed. */
-const REQUIRED_PHASES = ["audit", "post_research"] as const;
+/**
+ * Phases that must be logged before `git commit` is allowed.
+ *
+ * 0.7.6 (#150): expanded from ["audit", "post_research"] to the full
+ * locked 7-phase set MINUS `fix`. `fix` is intentionally soft —
+ * audit often finds nothing actionable, and forcing a fix entry
+ * would either inflate the ledger with no-op rows or push the agent
+ * to fabricate "fix" entries. Matches the bundled-default codex's
+ * standard-7-phase workflow (src/codex/bundled-default/codex.yaml)
+ * exactly, so drift-as-codex chunk 2/3 cutover is a clean deletion
+ * of this hardcoded array.
+ *
+ * Per [[feedback_workflow_cycle]] — the 7-phase rule is the user's
+ * top-tier drift-protection mechanism; enforcing only 2 of 7 was
+ * the load-bearing reason #132 shipped with most phases unlogged.
+ */
+const REQUIRED_PHASES = [
+  "pre_research",
+  "learn",
+  "code",
+  "test",
+  "audit",
+  "post_research",
+] as const;
 
 export interface WorkflowGateInput {
   /** Claude Code session id. Optional — gate is no-op without it. */

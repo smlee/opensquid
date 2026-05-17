@@ -254,7 +254,10 @@ function stringField(input: Record<string, unknown>, field: string): string | nu
  * patterns additionally checks the command-string prefix so the bypass
  * can be requested per-command from within an existing session.
  */
-export function decide(hits: DriftHit[], call?: ToolCallInput): {
+export function decide(
+  hits: DriftHit[],
+  call?: ToolCallInput,
+): {
   exit: 0 | 2;
   stderr: string;
 } {

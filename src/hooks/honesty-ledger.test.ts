@@ -399,3 +399,99 @@ describe("hasEvidence — any_of (v0.6.4)", () => {
     expect(broken.map((b) => b.claim_id)).toContain("telegram-sent");
   });
 });
+
+// ---------------------------------------------------------------------
+// 0.7.6 (#150) drift-fix patterns
+// ---------------------------------------------------------------------
+
+describe("reconcile — version-slot-assignment (#150)", () => {
+  it("flags 'v0.8' mention without AskUserQuestion / Task call", () => {
+    const broken = reconcile("This ships as v0.8 next.", ledger(["Bash", "git status"]));
+    expect(broken.map((b) => b.claim_id)).toContain("version-slot-assignment");
+  });
+
+  it("flags 'next minor' phrasing", () => {
+    const broken = reconcile("Bumping to next minor.", ledger(["Read", "x.ts"]));
+    expect(broken.map((b) => b.claim_id)).toContain("version-slot-assignment");
+  });
+
+  it("flags 'v1.0' assignment", () => {
+    const broken = reconcile("This will ship as v1.0.", []);
+    expect(broken.map((b) => b.claim_id)).toContain("version-slot-assignment");
+  });
+
+  it("clears when AskUserQuestion was called", () => {
+    const broken = reconcile(
+      "Going to ship as v0.8.",
+      ledger(["AskUserQuestion", '{"slot": "v0.8"}']),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("version-slot-assignment");
+  });
+
+  it("clears when TaskUpdate happened (e.g. user-authorized task subject rename)", () => {
+    const broken = reconcile("Renaming task to v0.9.", ledger(["TaskUpdate", '{"taskId":"144"}']));
+    expect(broken.map((b) => b.claim_id)).not.toContain("version-slot-assignment");
+  });
+
+  it("does NOT flag patch-slot strings (v0.7.6 etc.)", () => {
+    const broken = reconcile("Patch bumps to v0.7.6.", []);
+    expect(broken.map((b) => b.claim_id)).not.toContain("version-slot-assignment");
+  });
+});
+
+describe("reconcile — phase-claim-forward (#150)", () => {
+  it("flags 'Phase 3/7 — code' without log_phase call", () => {
+    const broken = reconcile("Phase 3/7 — code: editing files now.", ledger(["Edit", "x.ts"]));
+    expect(broken.map((b) => b.claim_id)).toContain("phase-claim-forward");
+  });
+
+  it("flags 'now in phase audit' without log_phase", () => {
+    const broken = reconcile("Now in phase audit.", ledger(["Bash", "git diff"]));
+    expect(broken.map((b) => b.claim_id)).toContain("phase-claim-forward");
+  });
+
+  it("clears when log_phase was called", () => {
+    const broken = reconcile(
+      "Phase 4/7 — test: running suite.",
+      ledger(["mcp__opensquid__log_phase", '{"phase":"test"}'], ["Bash", "npm test"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("phase-claim-forward");
+  });
+});
+
+describe("reconcile — session-no-task (#150)", () => {
+  it("flags 'now I'll wire it up' with no Task tool call", () => {
+    const broken = reconcile("Now I'll run the migration.", ledger(["Bash", "ls"]));
+    expect(broken.map((b) => b.claim_id)).toContain("session-no-task");
+  });
+
+  it("flags 'executing' verbiage with no task surface touched", () => {
+    const broken = reconcile("Executing the plan.", ledger(["Edit", "x.ts"]));
+    expect(broken.map((b) => b.claim_id)).toContain("session-no-task");
+  });
+
+  it("clears when TaskCreate happened in this turn", () => {
+    const broken = reconcile(
+      "Now I'll implement the fix.",
+      ledger(["TaskCreate", '{"subject":"fix x"}'], ["Edit", "x.ts"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("session-no-task");
+  });
+
+  it("clears when TaskUpdate touched anything", () => {
+    const broken = reconcile(
+      "Let me build the thing.",
+      ledger(["TaskUpdate", '{"taskId":"5","status":"in_progress"}']),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("session-no-task");
+  });
+});
+
+describe("CLAIM_PATTERNS catalog — 0.7.6 expansion (#150)", () => {
+  it("registers the three new patterns", () => {
+    const ids = CLAIM_PATTERNS.map((p) => p.id);
+    expect(ids).toContain("version-slot-assignment");
+    expect(ids).toContain("phase-claim-forward");
+    expect(ids).toContain("session-no-task");
+  });
+});

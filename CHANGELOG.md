@@ -9,6 +9,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Changed — 2026-05-17 (0.7.6 — drift-fix track: workflow-gate now enforces 6/7 phases + 3 new honesty-ledger claims #150)
+
+Addresses the largest drift-source share (60%) from yesterday's session retro: agent classification errors. Two changes go together:
+
+**workflow-gate.ts — REQUIRED_PHASES expanded** from `["audit", "post_research"]` to `["pre_research", "learn", "code", "test", "audit", "post_research"]`. `fix` stays soft (skip-with-reason allowed; audit often finds nothing actionable). This matches the bundled-default codex's standard-7-phase workflow exactly, so drift-as-codex chunk 2/3 cutover becomes a clean deletion of the hardcoded array.
+
+**Why this matters:** yesterday's #132 (storage root docs) shipped with only 2 of 7 phases logged because the gate only required those 2. Pre-research, learn, code, and test were silently skipped. The expanded gate would have blocked that commit and demanded the missing phases be logged first.
+
+**honesty-ledger.ts — 3 new claim patterns:**
+
+1. **`version-slot-assignment`** — catches assistant text like "v0.8", "v0.9", "v1.0", "next minor", "bumping to minor", "ships as v0.X.Y" without an AskUserQuestion / TaskCreate / TaskUpdate tool call providing evidence of user authorization. Direct response to yesterday's 6+ unauthorized slot allocations that drove the user to escalate the versioning rule to v4 (PATCH-ONLY).
+2. **`phase-claim-forward`** — catches forward-tense phase announcements (`Phase 3/7 — code:`, `now in phase audit`, `starting test`) without a `mcp__opensquid__log_phase` call in the same turn. Today's `phase-logged` pattern only catches past-tense; this catches the announcement-before-the-work gap.
+3. **`session-no-task`** — catches substantive-work verbiage ("executing", "now I'll", "let me build") without TaskCreate / TaskUpdate / TaskGet evidence. Catches the Telegram bootstrap shape from yesterday where ~20 substantive Bash/curl/edit calls ran with no active task ID, making the workflow-gate unenforceable.
+
+**Operational (no code) — backfilled #132's 5 missing phases** via `log_phase` calls with `note: BACKFILLED 2026-05-17`. The phase ledger for #132 now shows all 7 phases honestly, with the backfill provenance explicit.
+
+**Tests:** 15 new (13 honesty-ledger covering each new pattern's fire + clear paths + the 2-pattern-overlap negative-test for catalog sanity; 2 workflow-gate covering the new BLOCKS-on-missing-pre_research case + the all-6-required ALLOW case). 36 existing workflow-gate test cases updated to match the 6-phase expansion. Full suite: 551/551.
+
+**Backward compatibility:** OPENSQUID_SKIP_WORKFLOW_GATE=1 emergency bypass still works. The bundled-default codex from 0.7.3 (#146) was already designed against this shape, so its workflow definition needs no edits.
+
+**Drift-as-codex sequencing:** these rules are hardcoded in TS today because the loader (chunk 2) doesn't exist yet. When chunk 2 lands, this commit's patterns port to YAML and the hardcoded copies disappear in chunk 3 (cutover).
+
+Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.5 → 0.7.6.
+
 ### Added — 2026-05-16 (0.7.5 — telegram/discord/slack bot_token from .env or env var #148)
 
 **Bot tokens can now live in `.env` files or env vars** instead of being inlined in `~/.opensquid/config.json`. The motivation: the user wanted opensquid to run a DIFFERENT Telegram bot than Claude Code's `plugin:telegram` MCP (which holds its own bot's long-poll). Storing the new bot's token in `~/.loop/.env` lets opensquid pick a different bot at startup without any config.json edit — no more 409 collision because they're different bots, not the same one being fought over.

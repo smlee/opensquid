@@ -125,7 +125,12 @@ describe("evaluateWorkflowGate — fail-open inputs", () => {
 // ---------------------------------------------------------------------
 
 describe("evaluateWorkflowGate — with active task", () => {
-  it("BLOCKS when audit + post_research are both missing", async () => {
+  // 0.7.6 (#150): REQUIRED_PHASES expanded from ["audit",
+  // "post_research"] to all 6 required (fix stays soft). Tests
+  // updated accordingly. The 2-phase variant used to allow #132 to
+  // ship with most of its workflow unlogged.
+
+  it("BLOCKS when most required phases are missing", async () => {
     await writeTranscriptWithActiveTask("127");
     mockLedger(["code", "test"]);
     const result = await evaluateWorkflowGate({
@@ -134,13 +139,15 @@ describe("evaluateWorkflowGate — with active task", () => {
     });
     expect(result.block).toBe(true);
     expect(result.stderr).toContain("commit blocked");
-    expect(result.stderr).toContain("audit, post_research");
+    expect(result.stderr).toContain("pre_research");
+    expect(result.stderr).toContain("audit");
+    expect(result.stderr).toContain("post_research");
     expect(result.stderr).toContain("127");
   });
 
-  it("BLOCKS when only audit is missing", async () => {
+  it("BLOCKS when only audit is missing (6-of-6 expansion)", async () => {
     await writeTranscriptWithActiveTask("127");
-    mockLedger(["code", "test", "post_research"]);
+    mockLedger(["pre_research", "learn", "code", "test", "post_research"]);
     const result = await evaluateWorkflowGate({
       sessionId: "s1",
       transcriptPath,
@@ -151,7 +158,7 @@ describe("evaluateWorkflowGate — with active task", () => {
 
   it("BLOCKS when only post_research is missing", async () => {
     await writeTranscriptWithActiveTask("127");
-    mockLedger(["audit"]);
+    mockLedger(["pre_research", "learn", "code", "test", "audit"]);
     const result = await evaluateWorkflowGate({
       sessionId: "s1",
       transcriptPath,
@@ -160,9 +167,22 @@ describe("evaluateWorkflowGate — with active task", () => {
     expect(result.stderr).toContain("missing phases: post_research");
   });
 
-  it("ALLOWS when both required phases are logged", async () => {
+  it("BLOCKS when only pre_research is missing (catches #132's shape)", async () => {
+    // #132 shipped today with only audit + post_research logged.
+    // The pre-#150 gate let it through. New gate catches it.
+    await writeTranscriptWithActiveTask("132");
+    mockLedger(["learn", "code", "test", "audit", "post_research"]);
+    const result = await evaluateWorkflowGate({
+      sessionId: "s1",
+      transcriptPath,
+    });
+    expect(result.block).toBe(true);
+    expect(result.stderr).toContain("missing phases: pre_research");
+  });
+
+  it("ALLOWS when all 6 required phases are logged (fix stays optional)", async () => {
     await writeTranscriptWithActiveTask("127");
-    mockLedger(["audit", "post_research"]);
+    mockLedger(["pre_research", "learn", "code", "test", "audit", "post_research"]);
     const result = await evaluateWorkflowGate({
       sessionId: "s1",
       transcriptPath,
@@ -173,7 +193,7 @@ describe("evaluateWorkflowGate — with active task", () => {
 
   it("ALLOWS when more than the required phases are logged (extra is fine)", async () => {
     await writeTranscriptWithActiveTask("127");
-    mockLedger(["pre_research", "code", "audit", "post_research", "fix"]);
+    mockLedger(["pre_research", "learn", "code", "test", "audit", "post_research", "fix"]);
     const result = await evaluateWorkflowGate({
       sessionId: "s1",
       transcriptPath,
