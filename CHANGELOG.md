@@ -9,6 +9,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-17 (0.7.10 — resumed-session detection + auto-reanchor prompt #164)
+
+Fourth of five fixes from the resume-drift investigation (#160). When a Claude Code session resumes after a long gap (process restart, `claude --resume`, user came back from lunch), the agent doesn't auto-load memory/rules — that only happens on first session start. Result: resumed sessions silently inherit yesterday's state without re-anchoring.
+
+**Fix:** UserPromptSubmit hook now tracks a per-session `ups-last-at.txt` marker. On each firing, computes the gap since the last UPS. If >5 minutes, treats this as a resumed session and injects a re-anchor prompt at the top of the next turn: "🦑 Session resumed (Xm since last activity). Before continuing, re-anchor: call `recall` for the active task, scan recent assistant turns for any unfulfilled commitments, re-read any locked rule the next action would touch."
+
+**First firing of a session:** writes the marker but doesn't inject (no resume has happened yet).
+
+**Tests:** 8 new in `src/hooks/user-prompt-submit.test.ts` (first-firing-null, gap<5min null, gap>=5min injects, multi-hour gap shows correct minutes, marker updates each firing, exactly-boundary case, corrupt marker tolerated, per-session isolation). Full suite 573/573.
+
+Combined with 0.7.7 (heartbeat), 0.7.8 (turn-ledger), 0.7.9 (active-task staleness), the resume-drift cluster from #160 is 4-of-5 addressed. FIX-E (verify session-id stability across resume) is research-only and remains queued.
+
+Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.9 → 0.7.10.
+
 ### Fixed — 2026-05-17 (0.7.9 — readActiveTaskId demotes stale in_progress tasks #163)
 
 Third of three load-bearing fixes from the resume-drift investigation (#160). Workflow-gate's "what task am I working on?" picks the most-recently-touched `in_progress` task by transcript line index. But if I marked task X `in_progress` yesterday and forgot to mark it completed, X stays the "active task" today even when I'm working on Y. Result: gate enforces against X's phase ledger when it should enforce against Y's (or nothing).

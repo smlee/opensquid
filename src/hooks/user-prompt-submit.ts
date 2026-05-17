@@ -31,6 +31,14 @@ import { resolveDataRoot } from "../codex/store.js";
 import { consumePendingHeartbeat } from "./heartbeat.js";
 import { type BrokenPromise } from "./honesty-ledger.js";
 
+/**
+ * 0.7.10 (#164): minimum gap between consecutive UserPromptSubmit
+ * firings before we consider the session "resumed" rather than
+ * continuous. 5 minutes is short enough that a coffee-break doesn't
+ * trigger, long enough that genuine process restarts always do.
+ */
+const RESUME_GAP_MS = 5 * 60 * 1000;
+
 interface UserPromptSubmitInput {
   session_id?: string;
   prompt?: string;
@@ -54,6 +62,13 @@ export async function runUserPromptSubmitHook(): Promise<void> {
   if (!sessionId) process.exit(0);
 
   const out: string[] = [];
+
+  // 0.7.10 (#164): detect resumed sessions and inject a re-anchor
+  // prompt. The signal is "gap since last UPS firing for this session
+  // > RESUME_GAP_MS." First firing ever writes the marker without
+  // injecting (the session just started; no resume happened yet).
+  const resumeMsg = await detectResumeAndUpdateMarker(sessionId);
+  if (resumeMsg) out.push(resumeMsg);
 
   // #112-audit finding 1: read+clear is racy if a writer appends concurrently.
   // Rename-then-read atomically claims the file contents — any bytes that
@@ -87,6 +102,57 @@ export async function runUserPromptSubmitHook(): Promise<void> {
   }
 
   process.exit(0);
+}
+
+/**
+ * 0.7.10 (#164): detect resumed sessions by tracking the wall-clock
+ * gap between consecutive UPS firings. Returns a re-anchor message
+ * when a gap exceeds RESUME_GAP_MS, OR null when continuous /
+ * first-ever firing.
+ *
+ * Marker file: ~/.opensquid/sessions/<sid>/ups-last-at.txt
+ *   Contents: ISO 8601 timestamp of the last UPS firing.
+ *
+ * On EVERY call: read prior timestamp → write current timestamp.
+ * First call: marker missing → write current; return null (no resume
+ * happened, just the session starting).
+ * Subsequent call: gap < RESUME_GAP_MS → continuous (return null).
+ * Subsequent call: gap >= RESUME_GAP_MS → resumed (return message).
+ *
+ * Exported for direct testing.
+ */
+export async function detectResumeAndUpdateMarker(
+  sessionId: string,
+  options: { dataRoot?: string; now?: number } = {},
+): Promise<string | null> {
+  const root = resolveDataRoot(options.dataRoot);
+  const dir = path.join(root, "sessions", sessionId);
+  const markerPath = path.join(dir, "ups-last-at.txt");
+  const nowMs = options.now ?? Date.now();
+
+  let prior: number | null = null;
+  try {
+    const raw = (await fs.readFile(markerPath, "utf8")).trim();
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) prior = parsed;
+  } catch {
+    /* no marker — first firing */
+  }
+
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(markerPath, new Date(nowMs).toISOString() + "\n", "utf8");
+
+  if (prior === null) return null; // first firing for this session
+  const gapMs = nowMs - prior;
+  if (gapMs < RESUME_GAP_MS) return null;
+
+  const gapMin = Math.round(gapMs / 60000);
+  return (
+    `🦑 [opensquid] Session resumed (${gapMin}m since last activity). ` +
+    `Before continuing, re-anchor: call \`recall\` for the active task, ` +
+    `scan recent assistant turns for any unfulfilled commitments, and ` +
+    `re-read any locked rule the next action would touch.`
+  );
 }
 
 /**
