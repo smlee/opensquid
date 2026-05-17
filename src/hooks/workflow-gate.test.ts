@@ -61,7 +61,6 @@ async function writeTranscriptWithActiveTask(taskId: string): Promise<void> {
 /** Mock OpenSquidEngine.getTaskLedger to return a specific phase set. */
 function mockLedger(phasesLogged: string[]): void {
   vi.spyOn(engineClient.OpenSquidEngine.prototype, "getTaskLedger").mockResolvedValue({
-    session_id: "test-session",
     task_id: "127",
     phases_logged: phasesLogged,
     entries: phasesLogged.map((p) => ({
@@ -87,31 +86,21 @@ function mockLedgerError(message: string): void {
 // ---------------------------------------------------------------------
 
 describe("evaluateWorkflowGate — fail-open inputs", () => {
-  it("returns allow when sessionId is missing", async () => {
-    const result = await evaluateWorkflowGate({ transcriptPath });
-    expect(result.block).toBe(false);
-    expect(result.stderr).toBe("");
-  });
-
   it("returns allow with warning when transcriptPath is missing", async () => {
-    const result = await evaluateWorkflowGate({ sessionId: "s1" });
+    const result = await evaluateWorkflowGate({});
     expect(result.block).toBe(false);
     expect(result.stderr).toContain("no transcript_path");
   });
 
   it("returns allow when transcript has no in_progress task", async () => {
     await fs.writeFile(transcriptPath, "", "utf8");
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(false);
     expect(result.stderr).toBe("");
   });
 
   it("returns allow with warning when transcript path doesn't exist", async () => {
     const result = await evaluateWorkflowGate({
-      sessionId: "s1",
       transcriptPath: path.join(tmpDir, "nonexistent.jsonl"),
     });
     expect(result.block).toBe(false);
@@ -133,10 +122,7 @@ describe("evaluateWorkflowGate — with active task", () => {
   it("BLOCKS when most required phases are missing", async () => {
     await writeTranscriptWithActiveTask("127");
     mockLedger(["code", "test"]);
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(true);
     expect(result.stderr).toContain("commit blocked");
     expect(result.stderr).toContain("pre_research");
@@ -148,10 +134,7 @@ describe("evaluateWorkflowGate — with active task", () => {
   it("BLOCKS when only audit is missing (6-of-6 expansion)", async () => {
     await writeTranscriptWithActiveTask("127");
     mockLedger(["pre_research", "learn", "code", "test", "post_research"]);
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(true);
     expect(result.stderr).toContain("missing phases: audit");
   });
@@ -159,10 +142,7 @@ describe("evaluateWorkflowGate — with active task", () => {
   it("BLOCKS when only post_research is missing", async () => {
     await writeTranscriptWithActiveTask("127");
     mockLedger(["pre_research", "learn", "code", "test", "audit"]);
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(true);
     expect(result.stderr).toContain("missing phases: post_research");
   });
@@ -172,10 +152,7 @@ describe("evaluateWorkflowGate — with active task", () => {
     // The pre-#150 gate let it through. New gate catches it.
     await writeTranscriptWithActiveTask("132");
     mockLedger(["learn", "code", "test", "audit", "post_research"]);
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(true);
     expect(result.stderr).toContain("missing phases: pre_research");
   });
@@ -183,10 +160,7 @@ describe("evaluateWorkflowGate — with active task", () => {
   it("ALLOWS when all 6 required phases are logged (fix stays optional)", async () => {
     await writeTranscriptWithActiveTask("127");
     mockLedger(["pre_research", "learn", "code", "test", "audit", "post_research"]);
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(false);
     expect(result.stderr).toBe("");
   });
@@ -194,10 +168,7 @@ describe("evaluateWorkflowGate — with active task", () => {
   it("ALLOWS when more than the required phases are logged (extra is fine)", async () => {
     await writeTranscriptWithActiveTask("127");
     mockLedger(["pre_research", "learn", "code", "test", "audit", "post_research", "fix"]);
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(false);
   });
 });
@@ -210,10 +181,7 @@ describe("evaluateWorkflowGate — fail-open invariant", () => {
   it("ALLOWS with stderr warning when engine RPC throws", async () => {
     await writeTranscriptWithActiveTask("127");
     mockLedgerError("ECONNREFUSED: engine not running");
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(false);
     expect(result.stderr).toContain("engine unreachable");
     expect(result.stderr).toContain("ECONNREFUSED");
@@ -231,10 +199,7 @@ describe("evaluateWorkflowGate — emergency override", () => {
     // Should bypass even if all the other signals say block.
     await writeTranscriptWithActiveTask("127");
     mockLedger(["code"]); // would otherwise block
-    const result = await evaluateWorkflowGate({
-      sessionId: "s1",
-      transcriptPath,
-    });
+    const result = await evaluateWorkflowGate({ transcriptPath });
     expect(result.block).toBe(false);
     expect(result.stderr).toContain("BYPASSED");
   });

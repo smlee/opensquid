@@ -619,14 +619,18 @@ export class OpenSquidEngine {
   // ---- v0.6.1 — phase ledger (engine 0.5.0+) ----------------------
 
   /**
-   * Record a phase entry for `(session_id, task_id)`. Idempotent:
-   * re-logging the same phase returns `newly_recorded: false`.
-   * `phase` must be one of: pre_research, learn, code, test, audit,
-   * post_research, fix.
+   * Record a phase entry for `task_id`. Idempotent: re-logging the
+   * same phase returns `newly_recorded: false`. `phase` must be one
+   * of: pre_research, learn, code, test, audit, post_research, fix.
+   *
+   * Pre-#166 this also took a `session_id`, but the writer's MCP
+   * session id and the reader's Claude Code session UUID were two
+   * different id surfaces — the ledger was unreadable across them.
+   * Dropped in favor of per-task scoping; a task that spans multiple
+   * sessions now accumulates phases correctly.
    */
-  logPhase(args: { session_id: string; task_id: string; phase: string; note?: string }): Promise<{
+  logPhase(args: { task_id: string; phase: string; note?: string }): Promise<{
     ok: true;
-    session_id: string;
     task_id: string;
     phase: string;
     newly_recorded: boolean;
@@ -635,12 +639,11 @@ export class OpenSquidEngine {
   }
 
   /**
-   * Fetch the workflow phase ledger for a `(session_id, task_id)`.
-   * Returns the set of phases logged + the entries with timestamps,
-   * sorted chronologically.
+   * Fetch the workflow phase ledger for `task_id`. Returns the set of
+   * phases logged + the entries with timestamps, sorted
+   * chronologically.
    */
-  getTaskLedger(args: { session_id: string; task_id: string }): Promise<{
-    session_id: string;
+  getTaskLedger(args: { task_id: string }): Promise<{
     task_id: string;
     phases_logged: string[];
     entries: Array<{

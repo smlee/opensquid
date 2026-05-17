@@ -111,7 +111,6 @@ export async function runPreToolUseHook(): Promise<void> {
   if (looksLikeGitCommit(call)) {
     try {
       const gateResult = await evaluateWorkflowGate({
-        sessionId: payload.session_id,
         transcriptPath: payload.transcript_path,
       });
       if (gateResult.block) {

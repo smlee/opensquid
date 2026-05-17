@@ -273,22 +273,6 @@ async function ensureChatGateway(): Promise<import("./chat/gateway.js").ChatGate
   return (await ensureChatGatewayWithMeta()).gateway;
 }
 
-/**
- * Derive a stable session id for the MCP server's own process. Used as
- * the default `session_id` for `log_phase` when the caller doesn't
- * supply one. Format mirrors the engine's `MemoryOrigin.session_id`
- * convention: short hex derived from process pid + start time.
- */
-let cachedSessionId: string | null = null;
-function currentSessionId(): string {
-  if (cachedSessionId) return cachedSessionId;
-  // Path-safe per the engine's [A-Za-z0-9_-]{1,128} validator.
-  const pid = process.pid;
-  const startMs = Math.floor(Date.now() / 1000);
-  cachedSessionId = `mcp-${pid}-${startMs.toString(36)}`;
-  return cachedSessionId;
-}
-
 // ---- Tool catalogue ------------------------------------------------
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -854,13 +838,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "log_phase",
       description:
-        "Record a workflow phase completion in the loop-engine phase ledger (v0.6.1). " +
-        "Used by the agent to mark phases as they complete during a task — pre_research, " +
-        "learn, code, test, audit, post_research, fix. The PreToolUse hook gates `git commit` " +
-        "on the active task having `audit` + `post_research` logged. Idempotent: re-logging " +
-        "the same phase returns `newly_recorded: false`. `task_id` should be the active " +
-        "Claude Code task id (the numeric id from `TaskCreate` / `TodoWrite`). `session_id` " +
-        "defaults to the MCP session's claude_code session id when omitted.",
+        "Record a workflow phase completion in the loop-engine phase ledger. Used by the " +
+        "agent to mark phases as they complete during a task — pre_research, learn, code, " +
+        "test, audit, post_research, fix. The PreToolUse hook gates `git commit` on the " +
+        "active task having `audit` + `post_research` logged. Idempotent: re-logging the " +
+        "same phase returns `newly_recorded: false`. `task_id` should be the active Claude " +
+        "Code task id (the numeric id from `TaskCreate` / `TodoWrite`); a task spanning " +
+        "multiple sessions (e.g. after `/resume`) accumulates phases across them.",
       inputSchema: {
         type: "object",
         properties: {
@@ -876,10 +860,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           note: {
             type: "string",
             description: "Optional free-text note (1-2 sentences). Max 16 KB.",
-          },
-          session_id: {
-            type: "string",
-            description: "Optional. Override the auto-detected session id. Useful for testing.",
           },
         },
         required: ["task_id", "phase"],
@@ -1619,20 +1599,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const taskId = typeof a.task_id === "string" ? a.task_id.trim() : "";
         const phase = typeof a.phase === "string" ? a.phase.trim() : "";
         const note = typeof a.note === "string" ? a.note : undefined;
-        // session_id is a path-segment in the engine, so fall back to
-        // the agent's MCP session id when the caller omits it. Per
-        // [[reference_github_auth_setup]] context, default to a stable
-        // string when unavailable (the engine's validator will still
-        // reject anything malformed).
-        const sessionId =
-          typeof a.session_id === "string" && a.session_id.trim()
-            ? a.session_id.trim()
-            : currentSessionId();
         if (!taskId || !phase) {
           return textResult({ error: "task_id + phase (both strings) required" });
         }
         const result = await engine.logPhase({
-          session_id: sessionId,
           task_id: taskId,
           phase,
           note,

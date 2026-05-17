@@ -50,8 +50,6 @@ const REQUIRED_PHASES = [
 ] as const;
 
 export interface WorkflowGateInput {
-  /** Claude Code session id. Optional — gate is no-op without it. */
-  sessionId?: string;
   /** Path to the session's JSONL transcript. Optional — gate falls
    * back to allow-commit when absent (can't detect active task). */
   transcriptPath?: string;
@@ -77,10 +75,6 @@ export async function evaluateWorkflowGate(input: WorkflowGateInput): Promise<Wo
       block: false,
       stderr: "🦑 [opensquid workflow-gate] BYPASSED via OPENSQUID_SKIP_WORKFLOW_GATE=1\n",
     };
-  }
-  if (!input.sessionId) {
-    // Hook didn't get a session id — can't query the ledger. Allow.
-    return { block: false, stderr: "" };
   }
   if (!input.transcriptPath) {
     // Can't detect active task. Allow with a debug-level warn so the
@@ -110,7 +104,6 @@ export async function evaluateWorkflowGate(input: WorkflowGateInput): Promise<Wo
   let ledger: { phases_logged: string[] } | null = null;
   try {
     ledger = await engine.getTaskLedger({
-      session_id: input.sessionId,
       task_id: taskId,
     });
   } catch (err) {

@@ -9,6 +9,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — workflow-gate session_id mismatch (#166)
+
+**The headline drift gate was a no-op for the entire 2026-05-17
+evening session, and would have stayed that way indefinitely.**
+
+`log_phase` (writer) supplied a PID-derived MCP session id
+(`mcp-<pid>-<startMs36>`) while the workflow-gate hook (reader)
+supplied Claude Code's session UUID. The engine indexed entries by
+session_id as a path segment, so the two id surfaces never matched.
+Writes went into `~/.opensquid/phase_ledger/mcp-19117-tf4ul0/...`
+while reads looked under `~/.opensquid/phase_ledger/26e0203a-.../...`
+— different filesystem locations entirely. Gate found an empty
+ledger and would have blocked every commit, except other fail-open
+paths (no transcript, no in_progress task, engine RPC errors) were
+the dominant code path so the brokenness was invisible.
+
+**Fix:** drop `session_id` from the phase-ledger storage scheme
+entirely. The ledger is now keyed by `task_id` alone. A task that
+spans multiple sessions (e.g. after `claude --resume`) accumulates
+phases across them correctly, which matches the actual semantics of
+the 7-phase workflow.
+
+**Breaking change for direct engine RPC consumers** (none exist
+outside opensquid). The engine ships matching changes; both packages
+ship in lockstep.
+
+**Migration:** `~/.opensquid/phase_ledger/mcp-*` subdirectories from
+before the fix become orphaned. They aren't read by the new code and
+can be deleted with `rm -rf ~/.opensquid/phase_ledger/mcp-*` (the
+new layout writes directly under `phase_ledger/<task_id>/`).
+
+**Tests:** 12 workflow-gate tests + 9 engine RPC tests updated. One
+test (`task_get_ledger_isolates_sessions`) deleted — sessions no
+longer isolate by design. Full opensquid suite 572/572, engine suite
+587/587.
+
 ### Added — 2026-05-17 (0.7.10 — resumed-session detection + auto-reanchor prompt #164)
 
 Fourth of five fixes from the resume-drift investigation (#160). When a Claude Code session resumes after a long gap (process restart, `claude --resume`, user came back from lunch), the agent doesn't auto-load memory/rules — that only happens on first session start. Result: resumed sessions silently inherit yesterday's state without re-anchoring.
