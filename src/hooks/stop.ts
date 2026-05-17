@@ -33,6 +33,7 @@
  */
 
 import {
+  clearTurnLedger,
   reconcile,
   readBrokenPromises,
   readTurnLedger,
@@ -94,6 +95,19 @@ export async function runStopHook(): Promise<void> {
     for (const p of fresh) {
       process.stderr.write(`🦑 [opensquid honesty] ${p.claim_id}: ${p.reason}\n`);
     }
+  }
+
+  // 0.7.8 (#162): clear the turn-ledger AFTER reconciliation so the
+  // next turn's claims reconcile against ONLY that turn's tool calls.
+  // Previously the ledger only cleared at SessionEnd, which meant
+  // yesterday's git push satisfied today's "I'll push" claim on long
+  // resumed sessions — the load-bearing #160 finding for ledger drift.
+  try {
+    await clearTurnLedger(sessionId);
+  } catch (err) {
+    process.stderr.write(
+      `[opensquid hook stop] turn-ledger clear failed (non-fatal): ${err instanceof Error ? err.message : err}\n`,
+    );
   }
 
   // -- (2) Token-threshold heartbeat ---------------------------------

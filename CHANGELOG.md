@@ -9,6 +9,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — 2026-05-17 (0.7.8 — turn-ledger resets per-turn at Stop, not per-session #162)
+
+Companion to 0.7.7's heartbeat fix; addresses the second of the two load-bearing causes from the resume-drift investigation (#160).
+
+**The bug:** honesty-ledger reconciled assistant claims in the LATEST turn against tool calls from the ENTIRE session's `turn-ledger.jsonl`. The ledger only cleared at `SessionEnd`. On long resumed sessions, a `git push` from yesterday satisfied today's "I'll push" claim — false-negative on broken-promise detection. The ledger silently grew unbounded and dragged claim-reconciliation precision with it.
+
+**The fix:** Stop hook now calls `clearTurnLedger(sessionId)` after reconciliation completes. Each turn's claims reconcile against ONLY that turn's tool calls. `SessionEnd` clear stays as the cleanup path for when the session actually ends (it's a no-op at that point if Stop ran).
+
+**No new tests:** `clearTurnLedger` is already unit-tested in honesty-ledger.test.ts; the wiring change is a 2-line import + call in stop.ts. Full suite still 561/561.
+
+Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.7 → 0.7.8.
+
 ### Fixed — 2026-05-17 (0.7.7 — heartbeat estimator counts conversation only, not whole-file char/4 #161)
 
 Resume-drift investigation (#160) identified that long sessions were getting heartbeat reminders against inflated token counts — `char_count / 4` of the WHOLE transcript JSONL file, which includes tool_result bodies, base64 images, JSON envelope overhead, thinking blocks, system frames, etc. On this very session's 125 MB transcript the old estimator reported 31 million tokens; the new one reports 1.5 million — **20.5x deflation**, matching what actually represents context-window pressure.
