@@ -17,6 +17,29 @@ No self-promotion. No vibes. External evidence only.
 
 ---
 
+## 5-minute setup
+
+```bash
+# 1. Clone + build
+git clone git@github.com:smlee/opensquid.git && cd opensquid
+npm install && npm run build
+
+# 2. Register with Claude Code (user scope — available everywhere)
+claude mcp add --scope user opensquid -- node "$(pwd)/dist/index.js"
+
+# 3. (Optional) Install drift-protection hooks
+node dist/index.js hooks install
+
+# 4. Restart Claude Code, then verify
+claude mcp list   # opensquid should appear
+```
+
+Storage lives at `~/.opensquid/`. The agent now has `memorize` / `recall` / `remember` / `promote` etc. as MCP tools, and (if you installed hooks) drift protection on common `git` mishaps. Other MCP hosts (Claude Desktop, Cursor, Windsurf) use [the JSON config form](#quick-start-claude-desktop--cursor--any-mcp-host) instead.
+
+See **[Drift protection (optional)](#drift-protection-optional)** below for what each hook does and how to skip a single gate.
+
+---
+
 ## What it does
 
 Open Squid surfaces these tools to your AI agent via MCP.
@@ -69,23 +92,43 @@ User authorship is load-bearing. If you (the human) explicitly endorse a lesson,
 
 ---
 
-## Hooks (v0.4)
+## Drift protection (optional)
 
-Open Squid installs four Claude Code hooks that work even when the agent forgets to call its tools.
+Open Squid ships a set of Claude Code hooks that catch common agent-drift patterns even when the agent forgets to call its tools. All hooks are **opt-in** via `hooks install`, and every blocking gate fails open on opensquid's own internal errors — they never break real work because of an opensquid bug.
 
-| Hook                      | What it catches                                                                                                                                                                                                             |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PreToolUse — drift**    | Blocks known anti-patterns before they execute — `git commit --amend`, force-push to `main`, substrate-purity violations, implicit `git push`, etc. Catalogued in `src/hooks/drift-patterns.ts`. Surfaces with a 🦑 prefix. |
-| **Stop — honesty ledger** | Reconciles claim-vs-action: if the agent said "running tests" but never invoked a test tool, the gap is recorded as a broken promise. Session-scoped, so end-of-turn recap text doesn't false-positive.                     |
-| **UserPromptSubmit**      | Surfaces last turn's broken promises to the user at the start of the next prompt.                                                                                                                                           |
-| **SessionEnd**            | Clears the session-scoped ledger so disk usage stays bounded.                                                                                                                                                               |
+| Hook                                  | What it catches                                                                                                                                                                                              | Skip env var                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| **PreToolUse — drift patterns**       | Blocks known anti-patterns before they execute: `git commit --amend`, force-push to `main`, substrate-purity violations, implicit `git push`, etc. Catalogued in `src/hooks/drift-patterns.ts`. 🦑 prefix.   | `OPENSQUID_SKIP_DRIFT=1`                                   |
+| **PreToolUse — workflow gate** (#166) | Blocks `git commit` when the active task's 7-phase ledger is missing required phases (`pre_research`, `learn`, `code`, `test`, `audit`, `post_research`). Per-task scoping; survives `/resume`.              | `OPENSQUID_SKIP_WORKFLOW_GATE=1`                           |
+| **PreToolUse — versioning gate**      | Blocks `git commit` when staged code touches `src/` without a matching `package.json` / `Cargo.toml` version bump. PATCH-only by default.                                                                    | `OPENSQUID_SKIP_VERSION_GATE=1`                            |
+| **Stop — honesty ledger**             | Reconciles claim-vs-action across a session: if the agent said "running tests" but never invoked a test tool, the gap is recorded as a broken promise. End-of-turn recap text doesn't false-positive (#169). | (passive recording — no skip)                              |
+| **UserPromptSubmit**                  | Surfaces last turn's broken promises + heartbeat re-anchor + resume-detection (>5 min gap) at the start of the next prompt.                                                                                  | `OPENSQUID_HEARTBEAT_TOKENS=999999999` mutes the heartbeat |
+| **SessionEnd**                        | Clears the session-scoped ledger so disk usage stays bounded.                                                                                                                                                | (cleanup only — no skip)                                   |
 
-Install all four:
+### Install / uninstall
 
 ```bash
-node dist/index.js hooks install
-node dist/index.js hooks uninstall   # idempotent
+node dist/index.js hooks install     # writes opensquid entries into ~/.claude/settings.json
+node dist/index.js hooks uninstall   # idempotent — strips opensquid's entries, leaves others
 ```
+
+The installer is sentinel-bracketed: re-installing the same version is a no-op, upgrading rewrites only the opensquid block, and uninstalling leaves the rest of `settings.json` intact.
+
+### Skipping a single gate
+
+Inline command prefix is the standard pattern — flips off the gate for ONE command, no global state to forget:
+
+```bash
+OPENSQUID_SKIP_WORKFLOW_GATE=1 git commit -m "wip"        # commit without phase-ledger coverage
+OPENSQUID_SKIP_DRIFT=1 git push origin main               # bypass the no-implicit-push drift
+OPENSQUID_SKIP_VERSION_GATE=1 git commit -m "docs only"   # commit without a version bump
+```
+
+Each bypass logs a loud `🦑 [opensquid <gate>] BYPASSED via …=1` line to stderr so the override stays visible in scrollback / CI logs. Genuinely-emergency only — the gates exist because skipping them tends to land you in the broken state they're guarding against.
+
+### What's NOT a hook
+
+`opensquid` is primarily an MCP server. The MCP tools (`memorize`, `recall`, `remember`, `promote`, etc.) work without any hooks installed. Drift protection is the bolt-on safety net for `git`-driven workflows; if you're using opensquid purely for memory + lessons, you can skip the hooks entirely.
 
 ---
 

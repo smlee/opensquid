@@ -9,6 +9,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Docs — README rewrite for public release (B4)
+
+Added a 5-minute setup block near the top of the README (4-step bash:
+clone+build, claude mcp add, hooks install, restart+verify). Replaced
+the terse "Hooks (v0.4)" section with an expanded "Drift protection
+(optional)" section covering all 6 hooks (drift-patterns + workflow-
+gate + versioning-gate + honesty-ledger + UserPromptSubmit + SessionEnd)
+with their skip env-vars (`OPENSQUID_SKIP_DRIFT`,
+`OPENSQUID_SKIP_WORKFLOW_GATE`, `OPENSQUID_SKIP_VERSION_GATE`,
+`OPENSQUID_HEARTBEAT_TOKENS`), install/uninstall idempotency notes, an
+inline-prefix skip pattern with 3 examples, and a "what's NOT a hook"
+disclaimer so users who only want the memory MCP know they can skip
+hook installation entirely.
+
 ### Fixed — honesty-ledger prose false-positives in 3 patterns (#169)
 
 Three claim patterns from #150 were firing on prose that describes
