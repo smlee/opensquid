@@ -9,7 +9,7 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
-### Fixed — engine-client stuck after subprocess exit (#170, SHIP-BLOCKER)
+### Fixed — 2026-05-17 (0.7.14 — engine-client stuck after subprocess exit, SHIP-BLOCKER #170)
 
 `EngineClient` was permanently broken after any external engine
 subprocess exit (crash / OOM / pkill / signal). The cause:
@@ -45,7 +45,7 @@ correctly when the subprocess dies. 589/589 full suite.
 4. Pre-#170: permanent `"engine subprocess not running"` until Claude
    restart. Post-#170: respawn transparently, call succeeds.
 
-### Docs — README rewrite for public release (B4)
+### Docs — 2026-05-17 (0.7.13 — README rewrite for public release, B4)
 
 Added a 5-minute setup block near the top of the README (4-step bash:
 clone+build, claude mcp add, hooks install, restart+verify). Replaced
@@ -59,7 +59,7 @@ inline-prefix skip pattern with 3 examples, and a "what's NOT a hook"
 disclaimer so users who only want the memory MCP know they can skip
 hook installation entirely.
 
-### Fixed — honesty-ledger prose false-positives in 3 patterns (#169)
+### Fixed — 2026-05-17 (0.7.12 — honesty-ledger prose false-positives in 3 patterns #169)
 
 Three claim patterns from #150 were firing on prose that describes
 the system rather than on first-person commitments. Six+ false-
@@ -93,7 +93,7 @@ new behavior (1 flipped from `toContain` to `not.toContain` for the
 bare-`log_phase` case; 1 changed "Executing" → "I'm executing"). Full
 suite 587/587.
 
-### Fixed — workflow-gate session_id mismatch (#166)
+### Fixed — 2026-05-17 (0.7.11 — workflow-gate session_id mismatch #166, engine 0.5.2 lockstep)
 
 **The headline drift gate was a no-op for the entire 2026-05-17
 evening session, and would have stayed that way indefinitely.**
