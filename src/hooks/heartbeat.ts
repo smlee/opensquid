@@ -69,18 +69,97 @@ export function estimateTokens(text: string): number {
 }
 
 /**
- * Read the Claude Code transcript file and estimate its total token
- * count. Each JSONL line is a transcript event (user, assistant, tool
- * result, etc.) — we count the raw bytes of the file as the proxy for
- * "everything the agent has seen." Returns 0 on any read failure.
+ * Read the Claude Code transcript file and estimate the agent-facing
+ * token count for "did the conversation drift since last checkpoint."
+ *
+ * 0.7.7 (#161) — replaces the previous whole-file char/4 estimate
+ * which inflated massively on long sessions because the transcript
+ * JSONL contains tool_result bodies (file reads, base64 images, git
+ * logs), thinking blocks, attachments, system frames, and
+ * permission-mode entries that don't represent conversation pressure.
+ *
+ * On a real session today this dropped a 125 MB transcript from
+ * reporting "31 million tokens" to a number that actually reflects
+ * the user+assistant exchange, so heartbeat fires when it should
+ * instead of constantly off inflated numbers.
+ *
+ * Counts:
+ *   - user message text/string content
+ *   - assistant text content
+ *   - tool_result content — capped at 2000 chars per result, since
+ *     the agent does read these but they shouldn't dominate
+ *
+ * Skips:
+ *   - thinking blocks (agent internal CoT)
+ *   - tool_use args (compact, plus they're outbound work not context)
+ *   - system / file-history-snapshot / permission-mode / ai-title /
+ *     last-prompt / attachment frames
+ *
+ * Returns 0 on any read failure (graceful, gate stays open).
  */
+const TOOL_RESULT_CAP_CHARS = 2000;
+
+interface TranscriptLine {
+  type?: string;
+  message?: {
+    role?: string;
+    content?: unknown;
+  };
+}
+
 export async function estimateTranscriptTokens(transcriptPath: string): Promise<number> {
   try {
     const raw = await fs.readFile(transcriptPath, "utf8");
-    return estimateTokens(raw);
+    let total = 0;
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      let parsed: TranscriptLine;
+      try {
+        parsed = JSON.parse(line) as TranscriptLine;
+      } catch {
+        continue;
+      }
+      if (parsed.type !== "user" && parsed.type !== "assistant") continue;
+      total += countContentChars(parsed.message?.content);
+    }
+    return Math.ceil(total / 4);
   } catch {
     return 0;
   }
+}
+
+function countContentChars(content: unknown): number {
+  if (typeof content === "string") return content.length;
+  if (!Array.isArray(content)) return 0;
+  let chars = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as { type?: string; text?: string; content?: unknown };
+    switch (b.type) {
+      case "text":
+        if (typeof b.text === "string") chars += b.text.length;
+        break;
+      case "tool_result": {
+        // tool_result content can be a string OR an array of blocks
+        const c = b.content;
+        if (typeof c === "string") {
+          chars += Math.min(c.length, TOOL_RESULT_CAP_CHARS);
+        } else if (Array.isArray(c)) {
+          let inner = 0;
+          for (const part of c) {
+            if (part && typeof part === "object") {
+              const p = part as { text?: string };
+              if (typeof p.text === "string") inner += p.text.length;
+            }
+          }
+          chars += Math.min(inner, TOOL_RESULT_CAP_CHARS);
+        }
+        break;
+      }
+      // thinking / tool_use / image / etc. — intentionally not counted
+    }
+  }
+  return chars;
 }
 
 // ---------------------------------------------------------------------
@@ -164,7 +243,18 @@ export async function checkAndMaybeArm(
   if (currentTokens === 0) return null;
 
   const previous = await readCheckpoint(sessionId, { dataRoot: options.dataRoot });
-  const baseline = previous?.last_token_count ?? 0;
+  let baseline = previous?.last_token_count ?? 0;
+  // 0.7.7 (#161, audit MED #3): the estimator was rewritten in 0.7.7
+  // to count only conversation bodies (not whole-file char/4) — typical
+  // 20x deflation vs the old value. Existing checkpoints written by
+  // the old estimator now show wildly higher numbers than the new
+  // estimator returns, which would make `delta = current - baseline`
+  // permanently negative → heartbeat never fires. Detect that case
+  // (baseline > 10x current) and reset the baseline to 0 so the next
+  // crossing is the first under the new regime.
+  if (baseline > currentTokens * 10) {
+    baseline = 0;
+  }
   const delta = currentTokens - baseline;
   if (delta < threshold) return null;
 

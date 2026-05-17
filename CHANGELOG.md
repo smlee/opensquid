@@ -9,6 +9,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — 2026-05-17 (0.7.7 — heartbeat estimator counts conversation only, not whole-file char/4 #161)
+
+Resume-drift investigation (#160) identified that long sessions were getting heartbeat reminders against inflated token counts — `char_count / 4` of the WHOLE transcript JSONL file, which includes tool_result bodies, base64 images, JSON envelope overhead, thinking blocks, system frames, etc. On this very session's 125 MB transcript the old estimator reported 31 million tokens; the new one reports 1.5 million — **20.5x deflation**, matching what actually represents context-window pressure.
+
+**Counts:** user `string`/`text` content + assistant `text` blocks + `tool_result` content (capped at 2000 chars per result so big file-reads don't dominate).
+
+**Skips:** `thinking` blocks (agent internal CoT), `tool_use` args (compact + outbound), `attachment`/`system`/`file-history-snapshot`/`permission-mode`/`ai-title`/`last-prompt` frames (not conversation).
+
+**Stale-checkpoint reset (audit MED #3):** when an existing checkpoint shows >10x the current estimator's value, it's an artifact of the old whole-file estimator — reset baseline to 0 so the next crossing fires cleanly instead of being permanently stuck under a wildly inflated baseline.
+
+**Tests:** 10 new (8 for the new estimator: string/text/thinking-skipped/tool_use-skipped/tool_result-capped/nested-tool_result/non-conversation-skipped/malformed-JSON-tolerated; 2 for the stale-reset path). Existing 4 checkAndMaybeArm tests updated to write valid JSONL envelopes. Full suite: 561/561.
+
+**Real-world verification:** ran the new estimator against this session's 125 MB transcript live during the cycle — 1,523,123 tokens vs old 31,186,763. Heartbeat will now fire when conversation pressure ACTUALLY crosses 20k, not when noise crosses it.
+
+Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.6 → 0.7.7.
+
 ### Changed — 2026-05-17 (0.7.6 — drift-fix track: workflow-gate now enforces 6/7 phases + 3 new honesty-ledger claims #150)
 
 Addresses the largest drift-source share (60%) from yesterday's session retro: agent classification errors. Two changes go together:

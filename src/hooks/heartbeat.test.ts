@@ -75,18 +75,144 @@ describe("heartbeatThresholdTokens", () => {
 // estimateTranscriptTokens
 // ---------------------------------------------------------------------
 
-describe("estimateTranscriptTokens", () => {
+describe("estimateTranscriptTokens (0.7.7 #161)", () => {
   it("returns 0 when transcript file is missing", async () => {
     const r = await estimateTranscriptTokens(path.join(tmpRoot, "nope.jsonl"));
     expect(r).toBe(0);
   });
 
-  it("estimates tokens from raw file bytes", async () => {
+  it("returns 0 for an empty file", async () => {
+    const p = path.join(tmpRoot, "empty.jsonl");
+    await fs.writeFile(p, "");
+    expect(await estimateTranscriptTokens(p)).toBe(0);
+  });
+
+  it("counts user.string content", async () => {
     const p = path.join(tmpRoot, "transcript.jsonl");
-    // 4000 chars -> ~1000 tokens
-    await fs.writeFile(p, "x".repeat(4000));
-    const r = await estimateTranscriptTokens(p);
-    expect(r).toBe(1000);
+    const line = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: "x".repeat(400) },
+    });
+    await fs.writeFile(p, line + "\n");
+    // 400 chars / 4 = 100 tokens
+    expect(await estimateTranscriptTokens(p)).toBe(100);
+  });
+
+  it("counts assistant text blocks", async () => {
+    const p = path.join(tmpRoot, "transcript.jsonl");
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "a".repeat(400) },
+          { type: "text", text: "b".repeat(400) },
+        ],
+      },
+    });
+    await fs.writeFile(p, line + "\n");
+    // 800 chars / 4 = 200 tokens
+    expect(await estimateTranscriptTokens(p)).toBe(200);
+  });
+
+  it("SKIPS thinking blocks (agent internal CoT)", async () => {
+    const p = path.join(tmpRoot, "transcript.jsonl");
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "x".repeat(10000), signature: "sig" },
+          { type: "text", text: "hello" },
+        ],
+      },
+    });
+    await fs.writeFile(p, line + "\n");
+    // Only "hello" (5 chars) counted → 2 tokens (ceiling)
+    expect(await estimateTranscriptTokens(p)).toBe(2);
+  });
+
+  it("SKIPS tool_use blocks (compact + outbound work)", async () => {
+    const p = path.join(tmpRoot, "transcript.jsonl");
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", id: "x", name: "Bash", input: { command: "ls" } },
+          { type: "text", text: "after the tool" },
+        ],
+      },
+    });
+    await fs.writeFile(p, line + "\n");
+    // Only the text block (14 chars) → 4 tokens
+    expect(await estimateTranscriptTokens(p)).toBe(4);
+  });
+
+  it("CAPS tool_result content at 2000 chars (prevents tool-result inflation)", async () => {
+    const p = path.join(tmpRoot, "transcript.jsonl");
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "x",
+            content: "z".repeat(50000), // huge file read
+          },
+        ],
+      },
+    });
+    await fs.writeFile(p, line + "\n");
+    // Capped at 2000 chars / 4 = 500 tokens (NOT 12,500)
+    expect(await estimateTranscriptTokens(p)).toBe(500);
+  });
+
+  it("counts tool_result content array form (nested blocks)", async () => {
+    const p = path.join(tmpRoot, "transcript.jsonl");
+    const line = JSON.stringify({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "x",
+            content: [
+              { type: "text", text: "y".repeat(800) },
+              { type: "text", text: "y".repeat(800) },
+            ],
+          },
+        ],
+      },
+    });
+    await fs.writeFile(p, line + "\n");
+    // 1600 chars total (under 2000 cap) → 400 tokens
+    expect(await estimateTranscriptTokens(p)).toBe(400);
+  });
+
+  it("SKIPS non-conversation line types (system / permission-mode / file-history-snapshot / etc)", async () => {
+    const p = path.join(tmpRoot, "transcript.jsonl");
+    const lines = [
+      JSON.stringify({ type: "permission-mode", permissionMode: "default" }),
+      JSON.stringify({ type: "system", text: "x".repeat(10000) }),
+      JSON.stringify({ type: "file-history-snapshot", snapshot: {} }),
+      JSON.stringify({ type: "attachment", message: { content: "x".repeat(10000) } }),
+      JSON.stringify({ type: "ai-title", title: "Hello" }),
+      JSON.stringify({ type: "last-prompt", prompt: "x".repeat(10000) }),
+    ].join("\n");
+    await fs.writeFile(p, lines);
+    expect(await estimateTranscriptTokens(p)).toBe(0);
+  });
+
+  it("tolerates malformed JSON lines (skips them)", async () => {
+    const p = path.join(tmpRoot, "transcript.jsonl");
+    const lines = [
+      "not json at all",
+      JSON.stringify({ type: "user", message: { content: "hello" } }),
+      "{partial json",
+    ].join("\n");
+    await fs.writeFile(p, lines);
+    // Only "hello" counted (5 chars) → 2 tokens (ceiling)
+    expect(await estimateTranscriptTokens(p)).toBe(2);
   });
 });
 
@@ -137,9 +263,17 @@ describe("checkpoint IO", () => {
 // ---------------------------------------------------------------------
 
 describe("checkAndMaybeArm", () => {
+  // 0.7.7 (#161): estimator now counts only user/assistant message bodies
+  // from valid JSONL lines, not raw file bytes. Helper writes a synthetic
+  // user message whose content has the requested char-count so existing
+  // crossing-math tests still work without reading a real transcript.
   async function writeTranscript(chars: number): Promise<string> {
     const p = path.join(tmpRoot, "transcript.jsonl");
-    await fs.writeFile(p, "x".repeat(chars));
+    const line = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: "x".repeat(chars) },
+    });
+    await fs.writeFile(p, line + "\n");
     return p;
   }
 
@@ -186,6 +320,42 @@ describe("checkAndMaybeArm", () => {
     expect(cp?.last_token_count).toBe(20000);
   });
 
+  it("resets stale baseline when checkpoint > 10x current (post-0.7.7 estimator migration)", async () => {
+    // Simulate a checkpoint left by the old estimator: 31M tokens for a
+    // 1.5M-token-real transcript. New estimator returns ~1.5M, baseline
+    // says 31M → naive delta is negative → would never fire. Reset
+    // logic must zero the baseline so the next crossing arms.
+    await writeCheckpoint(
+      SESSION,
+      { last_token_count: 31_000_000, last_checkpoint_at: "2026-05-17T00:00:00Z" },
+      { dataRoot: tmpRoot },
+    );
+    const tpath = await writeTranscript(80000); // 20K tokens
+    const nudge = await checkAndMaybeArm(SESSION, tpath, {
+      dataRoot: tmpRoot,
+      thresholdTokens: 20000,
+    });
+    expect(nudge).not.toBeNull();
+    const cp = await readCheckpoint(SESSION, { dataRoot: tmpRoot });
+    expect(cp?.last_token_count).toBe(20000);
+  });
+
+  it("does NOT reset baseline when checkpoint is within reasonable range", async () => {
+    // Baseline only 2x current — not stale, just slow growth (or
+    // transcript shrunk via compaction). Don't reset.
+    await writeCheckpoint(
+      SESSION,
+      { last_token_count: 40000, last_checkpoint_at: "2026-05-17T00:00:00Z" },
+      { dataRoot: tmpRoot },
+    );
+    const tpath = await writeTranscript(80000); // 20K tokens, baseline 40K, delta = -20K
+    const nudge = await checkAndMaybeArm(SESSION, tpath, {
+      dataRoot: tmpRoot,
+      thresholdTokens: 20000,
+    });
+    expect(nudge).toBeNull(); // negative delta, but no reset → no fire
+  });
+
   it("arms again on each subsequent threshold crossing", async () => {
     // First crossing at 20K tokens.
     let tpath = await writeTranscript(80000);
@@ -225,9 +395,11 @@ describe("consumePendingHeartbeat", () => {
   });
 
   it("returns the armed nudge and removes the marker (one-shot)", async () => {
-    // Arm.
+    // Arm. 0.7.7 (#161): estimator now requires valid JSONL; wrap the
+    // body content so the line parses as a user message.
     const tpath = path.join(tmpRoot, "transcript.jsonl");
-    await fs.writeFile(tpath, "x".repeat(80000));
+    const line = JSON.stringify({ type: "user", message: { content: "x".repeat(80000) } });
+    await fs.writeFile(tpath, line + "\n");
     await checkAndMaybeArm(SESSION, tpath, { dataRoot: tmpRoot, thresholdTokens: 20000 });
 
     const first = await consumePendingHeartbeat(SESSION, { dataRoot: tmpRoot });
