@@ -348,9 +348,14 @@ describe("reconcile — phase-logged (v0.6.4 — tightened to require 'phase' ke
     expect(broken.map((b) => b.claim_id)).toContain("phase-logged");
   });
 
-  it("matches literal 'log_phase' MCP tool reference", () => {
+  // #169 (S2): the bare `\\blog_phase\\b` alternation was removed —
+  // it fired on any prose mention of the tool name. "Called log_phase
+  // for audit" without saying "phase" now no longer fires. The phase-
+  // word-aware alternations ("logged the audit phase", "phases
+  // logged") still fire and are the legitimate promises.
+  it("does NOT flag 'Called log_phase for audit' bare identifier (#169)", () => {
     const broken = reconcile("Called log_phase for audit.", ledger());
-    expect(broken.map((b) => b.claim_id)).toContain("phase-logged");
+    expect(broken.map((b) => b.claim_id)).not.toContain("phase-logged");
   });
 
   // v0.6.4 audit-MED tightening: false-positive reduction. Prose that
@@ -465,8 +470,10 @@ describe("reconcile — session-no-task (#150)", () => {
     expect(broken.map((b) => b.claim_id)).toContain("session-no-task");
   });
 
-  it("flags 'executing' verbiage with no task surface touched", () => {
-    const broken = reconcile("Executing the plan.", ledger(["Edit", "x.ts"]));
+  it("flags 'I'm executing' first-person verbiage with no task surface touched", () => {
+    // #169 (S2): bare "Executing" was over-broad and fired on passive
+    // descriptions. Now requires first-person framing.
+    const broken = reconcile("I'm executing the plan.", ledger(["Edit", "x.ts"]));
     expect(broken.map((b) => b.claim_id)).toContain("session-no-task");
   });
 
@@ -493,5 +500,115 @@ describe("CLAIM_PATTERNS catalog — 0.7.6 expansion (#150)", () => {
     expect(ids).toContain("version-slot-assignment");
     expect(ids).toContain("phase-claim-forward");
     expect(ids).toContain("session-no-task");
+  });
+});
+
+// ---------------------------------------------------------------------
+// #169 (S2) — prose false-positive tightening
+//
+// Three patterns kept firing on prose that describes the system rather
+// than on first-person commitments. Each block below pairs a TRUE-
+// positive test (still fires for the real commitment) with a FALSE-
+// positive eliminator (no longer fires for the prose form).
+// ---------------------------------------------------------------------
+
+describe("reconcile — phase-logged false-positive on bare `log_phase` (#169)", () => {
+  it("does NOT flag prose mention of `log_phase` (e.g. tool documentation)", () => {
+    const broken = reconcile(
+      "The log_phase tool writes phase entries under ~/.opensquid/.",
+      ledger(["Bash", "ls"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("phase-logged");
+  });
+
+  it("does NOT flag MCP tool identifier in code reference (`mcp__opensquid__log_phase`)", () => {
+    const broken = reconcile(
+      "Updated `mcp__opensquid__log_phase` evidence in CLAIM_PATTERNS.",
+      ledger(["Edit", "honesty-ledger.ts"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("phase-logged");
+  });
+
+  it("STILL flags 'logged audit phase' past-tense claim without evidence", () => {
+    const broken = reconcile("Just logged the audit phase.", ledger(["Bash", "ls"]));
+    expect(broken.map((b) => b.claim_id)).toContain("phase-logged");
+  });
+
+  it("STILL flags 'phases logged' past-tense claim without evidence", () => {
+    const broken = reconcile("Phases logged: audit, post_research.", []);
+    expect(broken.map((b) => b.claim_id)).toContain("phase-logged");
+  });
+});
+
+describe("reconcile — version-slot-assignment false-positive on user-named slot (#169)", () => {
+  it("does NOT flag agent referencing a slot the USER mentioned in prose", () => {
+    // Agent discussing a roadmap or user statement — no first-person
+    // commitment verb near the version string.
+    const broken = reconcile(
+      "The user mentioned v0.8 in yesterday's session as the target.",
+      ledger(["Read", "TASKS.md"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("version-slot-assignment");
+  });
+
+  it("does NOT flag prose describing the audit doc citing v0.9", () => {
+    const broken = reconcile(
+      "ROADMAP.md mentions v0.9 as a possible target.",
+      ledger(["Read", "ROADMAP.md"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("version-slot-assignment");
+  });
+
+  it("STILL flags 'I'll bump to v0.8' first-person commitment", () => {
+    const broken = reconcile("I'll bump to v0.8 next.", ledger(["Bash", "git status"]));
+    expect(broken.map((b) => b.claim_id)).toContain("version-slot-assignment");
+  });
+
+  it("STILL flags 'shipping v0.9' first-person commitment", () => {
+    const broken = reconcile("Shipping v0.9 today.", ledger(["Bash", "git status"]));
+    expect(broken.map((b) => b.claim_id)).toContain("version-slot-assignment");
+  });
+
+  it("STILL flags inherently-committal 'next minor' phrasing", () => {
+    const broken = reconcile("Bumping to next minor.", []);
+    expect(broken.map((b) => b.claim_id)).toContain("version-slot-assignment");
+  });
+
+  it("STILL flags inherently-committal 'ships as vX.Y.Z' phrasing", () => {
+    const broken = reconcile("This ships as v1.0.0.", []);
+    expect(broken.map((b) => b.claim_id)).toContain("version-slot-assignment");
+  });
+});
+
+describe("reconcile — session-no-task false-positive on bare 'executing' (#169)", () => {
+  it("does NOT flag passive 'the script is executing X' description", () => {
+    const broken = reconcile(
+      "The script is executing the migration in the background.",
+      ledger(["Read", "logs.txt"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("session-no-task");
+  });
+
+  it("does NOT flag 'opensquid is executing the codex' system description", () => {
+    const broken = reconcile(
+      "While opensquid is executing the codex check, the gate logs to stderr.",
+      ledger(["Read", "honesty-ledger.ts"]),
+    );
+    expect(broken.map((b) => b.claim_id)).not.toContain("session-no-task");
+  });
+
+  it("STILL flags first-person 'I'm executing the plan'", () => {
+    const broken = reconcile("I'm executing the plan.", ledger(["Edit", "x.ts"]));
+    expect(broken.map((b) => b.claim_id)).toContain("session-no-task");
+  });
+
+  it("STILL flags 'now I'll' first-person framing", () => {
+    const broken = reconcile("Now I'll run the migration.", ledger(["Bash", "ls"]));
+    expect(broken.map((b) => b.claim_id)).toContain("session-no-task");
+  });
+
+  it("STILL flags 'let me run' / 'let me build' / etc. first-person framing", () => {
+    const broken = reconcile("Let me build the thing.", ledger(["Bash", "ls"]));
+    expect(broken.map((b) => b.claim_id)).toContain("session-no-task");
   });
 });

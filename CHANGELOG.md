@@ -9,6 +9,40 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — honesty-ledger prose false-positives in 3 patterns (#169)
+
+Three claim patterns from #150 were firing on prose that describes
+the system rather than on first-person commitments. Six+ false-
+positive nags observed during 2026-05-17 evening conversation.
+
+**`phase-logged`** — dropped the bare `\blog_phase\b` alternation.
+Fired on any mention of the tool name in prose ("the log_phase tool
+writes to...", "mcp__opensquid__log_phase" in code references). The
+phase-word-aware alternations ("logged the audit phase", "phases
+logged") still fire and catch the legitimate promises.
+
+**`version-slot-assignment`** — split into two alternations:
+inherently-committal phrasings (`next minor`, `next major`, `bumping
+to (minor|major)`, `ships as vX.Y.Z`) fire on any match; bare version
+strings (v0.8, v0.9, v1.0) now REQUIRE a first-person commitment verb
+within ~40 chars before. Solves the false-positive where the agent
+references a slot the USER previously named ("the user wants v0.8 to
+do X") or quotes a roadmap line in scoping prose. Verb list also
+extended to plurals (ships/bumps/releases/tags/names/picks).
+
+**`session-no-task`** — tightened bare `\bexecuting\b` to require
+first-person framing: `(?:I'?(?:'?m|'?ll)|now\s+i'?(?:m|ll))\s+executing`.
+Was firing on passive descriptions like "the script is executing
+the migration" or "while opensquid is executing the codex". Other
+alternations (`now i'll`, `let me X`, `i'll X`) already required
+first-person; only `executing` was over-broad.
+
+**Tests:** 15 new tests (3 false-positive eliminators + 12 true-
+positive retention cases). 2 existing tests updated to reflect the
+new behavior (1 flipped from `toContain` to `not.toContain` for the
+bare-`log_phase` case; 1 changed "Executing" → "I'm executing"). Full
+suite 587/587.
+
 ### Fixed — workflow-gate session_id mismatch (#166)
 
 **The headline drift gate was a no-op for the entire 2026-05-17

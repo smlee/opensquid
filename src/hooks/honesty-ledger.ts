@@ -163,13 +163,19 @@ export const CLAIM_PATTERNS: ClaimPattern[] = [
     // v0.6.4 audit-MED tightening: previous regex matched "logged audit"
     // bare, which fires on prose like "logging test results" or "logged
     // fix details to the journal." Require the word "phase(s)" near
-    // the verb OR the literal `log_phase` identifier. False-negative
-    // cost ("logged audit + post_research" without saying "phase"
-    // won't trigger) is acceptable because the workflow-gate is the
-    // primary defense — this is the secondary visibility check.
+    // the verb.
+    //
+    // #169 (S2 tightening): dropped the bare `\\blog_phase\\b`
+    // alternation. It fired on any mention of the tool name in prose
+    // ("the log_phase tool writes to...", "mcp__opensquid__log_phase"
+    // in a code reference). Legitimate first-person promises about
+    // calling log_phase ("calling log_phase audit now") are caught
+    // by the past-tense alternation when the agent says "logged
+    // X phase" or by phase-claim-forward's forward-tense alternation.
+    // The bare-identifier match was almost entirely prose-noise.
     id: "phase-logged",
     text_regex:
-      "\\b(?:logged|logging)\\s+(?:the\\s+)?(?:audit|post[_-]?research|fix|test|code|learn|pre[_-]?research)\\s+phase\\b|\\bphases?\\s+logged\\b|\\blog_phase\\b",
+      "\\b(?:logged|logging)\\s+(?:the\\s+)?(?:audit|post[_-]?research|fix|test|code|learn|pre[_-]?research)\\s+phase\\b|\\bphases?\\s+logged\\b",
     evidence: { kind: "tool_called", tool: "mcp__opensquid__log_phase" },
     promise_label: "call mcp__opensquid__log_phase",
   },
@@ -206,13 +212,25 @@ export const CLAIM_PATTERNS: ClaimPattern[] = [
     // 6+ incidents on 2026-05-16. Each cost a TASKS.md / ROADMAP.md
     // rollback edit. Cheaper to nag at next turn than to clean up.
     //
-    // Regex is conservative: requires a literal v0.X / v1.X / "minor
-    // bump" / "next minor"-shaped phrase. False positives on prose
-    // ("v0.1 of the spec") are acceptable — false-negative cost is
-    // another roadmap edit-and-revert.
+    // #169 (S2 tightening): split into two alternations.
+    //
+    // (A) Inherently agent-committal phrasings — fire on any match,
+    //     no first-person framing required: `next minor`, `next major`,
+    //     `bumping to (minor|major)`, `ships as v0.X.Y`. These phrases
+    //     only appear when the agent is making the assignment.
+    //
+    // (B) Bare version strings (v0.8, v0.9, v1.0, etc.) — REQUIRE a
+    //     first-person commitment verb within ~40 chars before. Solves
+    //     the false-positive where the agent references a slot the
+    //     USER previously named ("the user wants v0.8 to do X") or
+    //     quotes a roadmap line in scoping prose ("ROADMAP.md mentions
+    //     v0.9"). Those have no first-person commit verb so they
+    //     stop firing.
     id: "version-slot-assignment",
     text_regex:
-      "\\b(?:v?0\\.[89]\\b|v?0\\.1[0-9]\\b|v?1\\.[0-9]+\\b|next\\s+minor\\b|next\\s+major\\b|bump(?:ing)?\\s+(?:to\\s+)?(?:minor|major)\\b|ships?\\s+as\\s+v?[0-9]+\\.[0-9]+\\.[0-9]+\\b)",
+      "\\b(?:next\\s+minor|next\\s+major|bump(?:ing)?\\s+(?:to\\s+)?(?:minor|major)|ships?\\s+as\\s+v?[0-9]+\\.[0-9]+\\.[0-9]+)\\b" +
+      "|" +
+      "(?:\\bI'?(?:ll| will|m| am)\\b|\\blet'?s\\b|\\blet\\s+me\\b|\\bgoing\\s+to\\b|\\bgonna\\b|\\bbump(?:ing|s)?\\s+(?:to\\s+)?|\\bship(?:ping|s)?\\s+(?:as\\s+|to\\s+)?|\\breleas(?:e|es|ing)\\s+(?:as\\s+)?|\\btag(?:ging|s)?\\s+(?:as\\s+)?|\\bnam(?:e|es|ing)\\b|\\bpick(?:ing|s)?\\s+(?:slot\\s+)?)[^.\\n\\r]{0,40}?\\bv?(?:0\\.[89]|0\\.1[0-9]|1\\.[0-9]+)(?:\\.[0-9]+)?\\b",
     evidence: {
       kind: "any_of",
       options: [
@@ -266,9 +284,14 @@ export const CLAIM_PATTERNS: ClaimPattern[] = [
     // X" as a one-liner) get nagged. Acceptable per the same trade-
     // off as other claim patterns — better to nag than to let a
     // 20-call substantive chain run unscoped.
+    //
+    // #169 (S2 tightening): bare `\\bexecuting\\b` was over-broad —
+    // fired on passive descriptions like "the script is executing
+    // the migration" or "while opensquid is executing the codex".
+    // Tightened to require first-person subject: `(?:I'?(?:'?m|'?ll)|now\\s+i'?(?:m|ll))\\s+executing`.
     id: "session-no-task",
     text_regex:
-      "\\b(?:executing|now\\s+i'?ll|let\\s+me\\s+(?:run|execute|implement|fix|build|wire)|i'?ll\\s+(?:run|implement|fix|build|wire))\\b",
+      "\\b(?:(?:I'?(?:'?m|'?ll)|now\\s+i'?(?:m|ll))\\s+executing|now\\s+i'?ll|let\\s+me\\s+(?:run|execute|implement|fix|build|wire)|i'?ll\\s+(?:run|implement|fix|build|wire))\\b",
     evidence: {
       kind: "any_of",
       options: [
