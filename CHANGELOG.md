@@ -9,6 +9,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Fixed — engine-client stuck after subprocess exit (#170, SHIP-BLOCKER)
+
+`EngineClient` was permanently broken after any external engine
+subprocess exit (crash / OOM / pkill / signal). The cause:
+`ensureStarted()` memoizes its initial-ping promise in
+`this.startupAck`, but `proc.on("exit")` only cleared `proc` and
+`reader` — `startupAck` stayed resolved. Next call: `ensureStarted()`
+saw the cached resolved promise and returned without respawning;
+`call()` then saw `proc === null` and rejected with
+`"engine subprocess not running"`. Permanent until opensquid (and
+therefore Claude Code) restarted.
+
+This violates the explicit "Survive crashes: if the subprocess exits,
+the next call respawns" invariant documented in the engine-client
+header — the architecture was supposed to be self-healing across
+engine crashes. The bug surfaced during #166 validation when `pkill`
+was used to flush the running engine binary after rebuild; the same
+failure mode hits any public user who ever sees their engine crash.
+
+**Fix:** add `this.startupAck = null;` in the `proc.on("exit")`
+handler. 3 LOC in `src/engine-client.ts:108-110`.
+
+**Tests:** new `src/engine-client.test.ts` — first tests for this
+file. Mocks `node:child_process.spawn`, simulates subprocess exit
+deterministically, verifies (a) a second call after exit respawns
+into a fresh subprocess and (b) in-flight pending calls reject
+correctly when the subprocess dies. 589/589 full suite.
+
+**Manual repro (for reference if the test ever regresses):**
+
+1. Start any opensquid MCP session
+2. `pkill -f 'loop-engine serve'`
+3. Call any opensquid MCP tool that uses the engine (e.g. `log_phase`)
+4. Pre-#170: permanent `"engine subprocess not running"` until Claude
+   restart. Post-#170: respawn transparently, call succeeds.
+
 ### Docs — README rewrite for public release (B4)
 
 Added a 5-minute setup block near the top of the README (4-step bash:
@@ -31,7 +67,7 @@ positive nags observed during 2026-05-17 evening conversation.
 
 **`phase-logged`** — dropped the bare `\blog_phase\b` alternation.
 Fired on any mention of the tool name in prose ("the log_phase tool
-writes to...", "mcp__opensquid__log_phase" in code references). The
+writes to...", "mcp**opensquid**log_phase" in code references). The
 phase-word-aware alternations ("logged the audit phase", "phases
 logged") still fire and catch the legitimate promises.
 

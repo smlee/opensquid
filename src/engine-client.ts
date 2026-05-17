@@ -100,6 +100,12 @@ export class EngineClient {
       console.error(`[opensquid] ${reason}`);
       this.proc = null;
       this.reader = null;
+      // #170: clear the cached startup promise so the next call's
+      // `ensureStarted()` actually respawns instead of returning the
+      // stale resolved promise from the previous lifetime. Honors the
+      // "Survive crashes: if the subprocess exits, the next call
+      // respawns" invariant in this file's header docstring.
+      this.startupAck = null;
       // Reject all in-flight calls so callers can retry.
       for (const [, pending] of this.pending) {
         pending.reject(new Error(reason));
