@@ -221,6 +221,26 @@ if (subcommand === "hook") {
   console.error("usage: opensquid hook pre-tool-use|stop|user-prompt-submit|session-end");
   process.exit(2);
 }
+if (subcommand === "anti-drift") {
+  // 0.7.35 cutover: unified entrypoint for the rules-based evaluator.
+  // hooks-cli's install command registers Claude Code hooks pointing
+  // here instead of `hook <event>`. The legacy `hook <event>` entries
+  // are preserved for backward compat with existing settings.json
+  // entries that haven't been re-installed yet.
+  const event = process.argv[3];
+  if (
+    event !== "pre-tool-use" &&
+    event !== "stop" &&
+    event !== "user-prompt-submit" &&
+    event !== "session-end"
+  ) {
+    console.error("usage: opensquid anti-drift pre-tool-use|stop|user-prompt-submit|session-end");
+    process.exit(2);
+  }
+  const { runEvaluator } = await import("./anti-drift/evaluator.js");
+  await runEvaluator(event);
+  process.exit(0);
+}
 if (subcommand === "hooks") {
   const hooksCmd = process.argv[3];
   if (hooksCmd !== "install" && hooksCmd !== "uninstall" && hooksCmd !== "doctor") {

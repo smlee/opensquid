@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.7.34",
+  "version": "0.7.35",
   "description": "Open Squid — the MCP server that decides which of your agent's memories survive. Powered by loop-engine.",
   "type": "module",
   "main": "dist/index.js",

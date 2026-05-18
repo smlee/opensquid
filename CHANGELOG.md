@@ -9,6 +9,74 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Changed — 2026-05-18 (0.7.35 — anti-drift rewrite: ATOMIC CUTOVER)
+
+Fourth and final patch of the architectural rewrite per
+`loop/docs/opensquid-anti-drift-unified-evaluator-design.md`. **Cutover
+is now live**: `opensquid hooks install` registers Claude Code hooks
+pointing at `node <bin> anti-drift <event>` (the new unified
+evaluator) instead of `node <bin> hook <event>` (the legacy per-file
+handlers).
+
+Changes:
+1. **`src/anti-drift/evaluator.ts`** — runners now incorporate the
+   legacy side effects that aren't yet expressed as rules:
+   - `runPreToolUseEvaluator` calls `recordToolCall` to populate the
+     turn-ledger for Stop reconciliation
+   - `runStopEvaluator` runs honesty-ledger reconciliation +
+     turn-ledger clear + heartbeat `checkAndMaybeArm`, alongside the
+     Stop-rule walk (inline-report-missing-phases)
+   - `runUserPromptSubmitEvaluator` runs resume-detection +
+     broken-promises consume + heartbeat-pending consume +
+     `markRecallRequired`, alongside the UPS-rule walk (multi-task
+     plan-mirror)
+   - `runSessionEndEvaluator` walks SessionEnd rules (drift-catalog
+     scan + session-state-cleanup) which already cover the legacy
+     `clearSession` behavior
+2. **`src/index.ts`** — new top-level subcommand `anti-drift <event>`
+   that calls `runEvaluator(event)`. Legacy `hook <event>` dispatch
+   preserved for backward compat with un-reinstalled settings.json
+   entries.
+3. **`src/hooks-cli.ts`** — `buildHookCommand` now returns
+   `anti-drift <event>` instead of `hook <event>`. After
+   `opensquid hooks install`, settings.json points at the new entry.
+4. **`COMMAND_FINGERPRINT`** broadened from `/opensquid/dist/index.js hook `
+   to `/opensquid/dist/index.js` so `isOurHook` recognizes BOTH legacy
+   `hook <event>` AND new `anti-drift <event>` entries.
+
+After this patch lands:
+- New installs use the unified evaluator
+- Existing installs that don't re-run `opensquid hooks install`
+  continue working via the legacy `hook <event>` dispatch (which
+  remains in index.ts)
+- The legacy per-file handlers in `src/hooks/pre-tool-use.ts`,
+  `stop.ts`, `user-prompt-submit.ts`, `session-end.ts` are no longer
+  registered by `hooks install` but their CODE still exists; deleting
+  the files is queued for a follow-up patch once dogfood-validation
+  confirms the new evaluator behaves identically across all hook
+  events.
+
+Tests: full suite 751/751 (no test changes — runners are wired
+internally; existing tests cover the same code paths via legacy entry
+points + the new test suites cover the anti-drift internals).
+Typecheck + prettier + build green.
+
+User action required: re-run `opensquid hooks install` and restart
+Claude Code to pick up the cutover. Without re-install, legacy
+`hook <event>` continues to fire (still functional).
+
+This completes the design-doc-defined architectural rewrite. All
+4 anti-drift files exist (`state.ts`, `rules.ts`, `evaluator.ts` +
+inline types). Outstanding items now scoped as small follow-ups:
+- `rules.yaml` export for codex chunk-1 schema integration
+- Delete legacy `src/hooks/{pre-tool-use,stop,user-prompt-submit,session-end}.ts`
+  files (after dogfood-validation)
+- D8 full Haiku-parser (current regex heuristic shipped)
+- D4 HEREDOC bundled-commit gate
+- Engine-side #172 consumer-name scrub
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.34 → 0.7.35 patch bump.
+
 ### Added — 2026-05-18 (0.7.34 — anti-drift rewrite: evaluator.ts orchestrator)
 
 Third patch of the architectural rewrite per

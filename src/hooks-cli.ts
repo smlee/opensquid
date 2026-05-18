@@ -50,9 +50,11 @@ const LEGACY_HOOK_ID = "opensquid-drift-pretooluse";
 /**
  * Path-substring fallback that identifies opensquid hook entries even
  * when no `_id` marker is present (older installs, manual edits, etc.).
- * Matches anything that runs `opensquid/dist/index.js hook <event>`.
+ * Matches anything that runs `opensquid/dist/index.js`, regardless of
+ * whether the subcommand is the legacy `hook <event>` (≤0.7.34) or the
+ * new unified `anti-drift <event>` (0.7.35+).
  */
-const COMMAND_FINGERPRINT = "/opensquid/dist/index.js hook ";
+const COMMAND_FINGERPRINT = "/opensquid/dist/index.js";
 
 /**
  * D9 false-stop guard prompt — fires as a `type: "prompt"` Stop hook
@@ -147,7 +149,12 @@ function opensquidBinPath(): string {
 function buildHookCommand(
   hookName: "pre-tool-use" | "stop" | "user-prompt-submit" | "session-end",
 ): string {
-  return `node ${opensquidBinPath()} hook ${hookName}`;
+  // 0.7.35 cutover: register hooks pointing at the unified anti-drift
+  // evaluator (src/anti-drift/evaluator.ts) instead of the per-file
+  // legacy handlers (src/hooks/<event>.ts). The legacy `hook <event>`
+  // dispatch is preserved in index.ts for backward compat with
+  // settings.json entries that haven't been re-installed yet.
+  return `node ${opensquidBinPath()} anti-drift ${hookName}`;
 }
 
 /** True when a hook entry is recognizably opensquid's. */
