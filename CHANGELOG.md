@@ -9,6 +9,57 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.33 — anti-drift rewrite: rules.ts declarative rule list)
+
+Second patch of the architectural rewrite per
+`loop/docs/opensquid-anti-drift-unified-evaluator-design.md`. Adds
+`src/anti-drift/rules.ts` (~310 LOC) — the declarative rule list
+that replaces the per-file hook orchestration in `src/hooks/`.
+
+18-rule catalog covering all 10 drift D-entries (D1–D10) plus the
+preexisting drift-patterns (never-amend, no-implicit-push,
+no-force-push-main, substrate-purity, plus auto-actions
+honesty-reconcile, heartbeat-arm, session-state-cleanup).
+
+Rule shape per the design doc:
+- `id` / `catches` / `hook` (lifecycle event) — metadata
+- `when(ctx)` — cheap sync gate that short-circuits before
+  expensive check work
+- `check(ctx)` — async, returns a `Verdict` (`pass` / `block` /
+  `warn` / `surface`)
+- `bypass` (optional) — env var that emergency-disables the rule
+- `rationale` — agent-facing one-line reason for the error message
+
+Today the `check` functions DELEGATE to existing `src/hooks/*`
+helpers (engine-vocab-gate, versioning-gate, workflow-gate,
+drift-patterns, inline-report-check, heartbeat, drift-catalog).
+This patch ships the declarative SURFACE without re-implementing
+every gate; the 0.7.35 cutover migrates the helper bodies into
+`src/anti-drift/*` and deletes the old per-hook files.
+
+Public exports:
+- `RULES: Rule[]` — the 18-entry catalog
+- `rulesForEvent(event)` — filters by hook event + env-var bypass
+- `evaluateRules(ctx)` — walks applicable rules, short-circuits on
+  the first PreToolUse `block` (most-restrictive-wins), accumulates
+  surfaces/warns for Stop/UPS/SessionEnd
+- types: `Rule`, `Verdict`, `HookContext`, `HookEvent`
+
+Tests: 20 new in `src/anti-drift/rules.test.ts` covering catalog
+shape (every rule has required fields, ids unique, D1-D10 covered),
+`rulesForEvent` (filter by event, bypass env var, strict '1' value),
+specific `when()` predicates for 7 rules, `evaluateRules`
+short-circuit + accumulate semantics, `Verdict` shape contracts,
+hook-event coverage. Full suite: 743/743 (was 723 + 20 new).
+
+Next patches:
+- 0.7.34 → `evaluator.ts` single orchestrator (binds PreToolUse /
+  Stop / UPS / SessionEnd to `evaluateRules`)
+- 0.7.35 → atomic cutover (delete `src/hooks/`, point `hooks-cli.ts`
+  at `anti-drift/evaluator.ts`)
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.32 → 0.7.33 patch bump.
+
 ### Added — 2026-05-18 (0.7.32 — anti-drift unified evaluator scaffold: state.ts foundation)
 
 User directive: "yes that is what I want a full delivery." Beginning
