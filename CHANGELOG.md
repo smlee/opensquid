@@ -9,6 +9,45 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.34 — anti-drift rewrite: evaluator.ts orchestrator)
+
+Third patch of the architectural rewrite per
+`loop/docs/opensquid-anti-drift-unified-evaluator-design.md`. Adds
+`src/anti-drift/evaluator.ts` (~230 LOC) — the single orchestrator
+that binds the 4 Claude Code hook events to the declarative rule
+list from rules.ts.
+
+Each event's runner:
+- **PreToolUse**: walks PreToolUse rules; first block-verdict short-
+  circuits exit 2; warns accumulate to stderr; pass through otherwise.
+- **Stop**: walks Stop rules; surfaces → violations.log (next UPS
+  picks up); always exit 0 (avoids D9 re-prompt-loop territory).
+- **UserPromptSubmit**: walks UPS rules; surfaces → stdout (Claude
+  Code injects into agent context); always exit 0.
+- **SessionEnd**: walks SessionEnd rules (auto-actions: drift catalog
+  scan + state cleanup); always exit 0.
+
+Public exports:
+- `runEvaluator(event: HookEventName)` — unified CLI dispatch (reads
+  stdin, runs the right runner, writes output, exits)
+- `runPreToolUseEvaluator(payload)` / `runStopEvaluator(payload)` /
+  `runUserPromptSubmitEvaluator(payload)` / `runSessionEndEvaluator(payload)`
+  — exported for direct testing
+- `aggregatePreToolUse(verdicts)` — pure aggregation function
+  (exit + stderr decision from a list of verdicts)
+
+Tests: 8 new in `src/anti-drift/evaluator.test.ts` covering
+aggregatePreToolUse contract (pass/block/warn ordering, exit codes,
+trailing newline, surface-exclusion-from-PreToolUse). Full suite:
+751/751 (was 743 + 8 new).
+
+The evaluator is now functionally complete but not yet wired as the
+production entrypoint. The 0.7.35 cutover updates `hooks-cli.ts` to
+register hooks pointing at `anti-drift/evaluator.ts` (instead of the
+per-file `hooks/*.ts` handlers) AND deletes the legacy handlers.
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.33 → 0.7.34 patch bump.
+
 ### Added — 2026-05-18 (0.7.33 — anti-drift rewrite: rules.ts declarative rule list)
 
 Second patch of the architectural rewrite per
