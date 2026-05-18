@@ -9,6 +9,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-17 (0.7.15 — drift-as-codex chunk 2: bundled-default codex loader #168)
+
+New module `src/codex/loader.ts` reads `src/codex/bundled-default/codex.yaml`
+once per process and returns the parsed `FocusedCodex`. Singleton
+cache; cross-platform path resolution that works in both the src tree
+(vitest direct execution) and the dist build (published npm package).
+A test-only `__resetCachedCodexForTesting()` clears the cache for
+deterministic unit tests.
+
+This is the substrate piece of drift-as-codex — chunks 3a (workflow-
+gate cutover) and 3b (honesty-ledger schema bridge + cutover) consume
+this loader to source their rule lists from the codex instead of
+hard-coded TypeScript constants. Without this loader, the chunk-1
+schema + bundled YAML were a hill of unused infrastructure; with it,
+the bundled codex becomes the source of truth.
+
+**Tests:** `src/codex/loader.test.ts` (NEW, 6 tests) — loads + parses,
+exposes drift/workflow/claim/policy sections, singleton cache, reset-
+for-testing semantics, standard-7-phase workflow shape, versioning-
+pre1-patch-only policy shape. Full suite 595/595 (was 589 before).
+
 ### Fixed — 2026-05-17 (0.7.14 — engine-client stuck after subprocess exit, SHIP-BLOCKER #170)
 
 `EngineClient` was permanently broken after any external engine
