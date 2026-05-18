@@ -21,7 +21,9 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
+import { loadBundledDefaultCodex } from "../codex/loader.js";
 import { resolveDataRoot } from "../codex/store.js";
+import { CodexClaimEntry, CodexClaimEvidence } from "../codex/types.js";
 
 // ---------------------------------------------------------------------
 // Claim → required-evidence catalog
@@ -51,259 +53,67 @@ export interface ClaimPattern {
 }
 
 /**
- * Catalog of common claim phrases observed in the 2026-05-15 build
- * session. Each pattern is conservative — false positive cost is
- * "the agent gets nagged once" while false negative cost is
- * "the lie slips through."
+ * Bridge: convert a codex CodexClaimEvidence into the ledger-side
+ * ClaimEvidenceShape. The two shapes overlap but differ in two ways:
+ * codex uses `tool_call` while the ledger uses `tool_called` (a
+ * legacy past-participle name); and codex `input_contains` carries
+ * an extra `field` parameter that the ledger doesn't use.
+ *
+ * The bridge is the single seam where the two vocabularies are
+ * reconciled — keeping it in one place means the rest of the file
+ * can keep using its existing `ClaimEvidenceShape`.
  */
-export const CLAIM_PATTERNS: ClaimPattern[] = [
-  {
-    id: "research-start",
-    text_regex: "\\b(pre-?research|research)\\s+(starting|begins?)\\b",
-    evidence: { kind: "tool_called", tool: "Agent" },
-    promise_label: "spawn a research agent or do explicit reading",
-  },
-  {
-    id: "research-spawning",
-    text_regex: "\\bspawn(?:ing)?\\s+(?:a\\s+)?(?:research\\s+)?agent\\b",
-    evidence: { kind: "tool_called", tool: "Agent" },
-    promise_label: "spawn a research agent",
-  },
-  {
-    id: "starting-now",
-    text_regex: "\\b(?:starting|kicking off)\\s+(?:#?\\w+\\s+)?now\\b",
-    evidence: { kind: "any_tool" },
-    promise_label: "actually start the work (any tool call counts)",
-  },
-  {
-    id: "running-tests",
-    text_regex: "\\brunning\\s+(?:the\\s+)?tests?\\b|\\btests?\\s+pass(?:ing|ed|es)?\\b",
-    evidence: { kind: "bash_regex", pattern: "(npm\\s+test|cargo\\s+test|vitest|jest)" },
-    promise_label: "run npm test / cargo test",
-  },
-  {
-    id: "running-build",
-    text_regex:
-      "\\brunning\\s+(?:the\\s+)?build\\b|\\bbuild\\s+(?:pass(?:ing|es|ed)?|clean|green)\\b",
-    evidence: { kind: "bash_regex", pattern: "(npm\\s+run\\s+build|cargo\\s+build|tsc)" },
-    promise_label: "run the build",
-  },
-  {
-    id: "committed",
-    text_regex: "\\b(?:committed|just committed|committing)\\b",
-    evidence: { kind: "bash_regex", pattern: "git\\s+commit\\b" },
-    promise_label: "git commit",
-  },
-  {
-    id: "audit-done",
-    text_regex: "\\b(?:audit\\s+(?:done|complete|✅)|Phase\\s+\\d+\\s*[—-]\\s*Audit)\\b",
-    evidence: { kind: "any_tool" },
-    promise_label: "do the audit (any inspection tool call)",
-  },
+function codexEvidenceToLedgerEvidence(c: CodexClaimEvidence): ClaimEvidenceShape {
+  switch (c.kind) {
+    case "any_tool":
+      return { kind: "any_tool" };
+    case "tool_call":
+      return { kind: "tool_called", tool: c.tool };
+    case "bash_contains":
+      return { kind: "bash_contains", needle: c.needle };
+    case "bash_regex":
+      return { kind: "bash_regex", pattern: c.pattern };
+    case "input_contains":
+      // Drop `field` — the ledger's input_contains matches against
+      // the whole input_summary, not a specific field.
+      return { kind: "input_contains", tool: c.tool, needle: c.needle };
+    case "any_of":
+      return {
+        kind: "any_of",
+        options: c.options.map(codexEvidenceToLedgerEvidence),
+      };
+  }
+}
 
-  // ---- v0.6.4 expansion (drift catalog from 2026-05-16 cycle) -----
-  //
-  // Five additional patterns covering claim shapes that silently
-  // slipped today. Each was a real "said it / didn't do it" gap
-  // observed in the session transcript. Per the discipline check
-  // (`mem-3cf66f39`), structural visibility > self-correction prompts.
+function codexClaimToLedgerPattern(c: CodexClaimEntry): ClaimPattern {
+  return {
+    id: c.id,
+    text_regex: c.claim_pattern,
+    evidence: codexEvidenceToLedgerEvidence(c.evidence),
+    promise_label: c.unfulfilled_message,
+  };
+}
 
-  {
-    // Claim: "Telegram report sent" / "pinged you" / "sent to Telegram"
-    // Evidence: EITHER the external plugin's reply tool OR Open Squid's
-    // own chat_send (both can fulfill the same intent). Caught today's
-    // silent skip when the plugin MCP was disconnected.
-    id: "telegram-sent",
-    text_regex:
-      "\\b(?:telegram(?:\\s+(?:report|message))?\\s+(?:sent|delivered)|sent\\s+(?:to|via)\\s+telegram|pinged\\s+(?:you|telegram))\\b",
-    evidence: {
-      kind: "any_of",
-      options: [
-        { kind: "tool_called", tool: "mcp__plugin_telegram_telegram__reply" },
-        { kind: "tool_called", tool: "mcp__opensquid__chat_send" },
-      ],
-    },
-    promise_label: "call mcp__plugin_telegram_telegram__reply or mcp__opensquid__chat_send",
-  },
-
-  {
-    // Claim: "pushed / pushing" with a git-push-shaped object. v0.6.4
-    // audit-LOW: expanded alternation to catch "pushed it" / "pushed up"
-    // / "pushed the changes/branch/release/PR" — previous regex only
-    // matched specific objects (origin/main/remote/commit/engine/etc.)
-    // and let common phrasings slip as false negatives.
-    id: "pushed",
-    text_regex:
-      "\\b(?:pushed|pushing)\\s+(?:to\\s+(?:origin|main|remote|github)|it|up|the\\s+(?:commit|engine|opensquid|tag|fix|changes?|branch|release|PR|update))\\b",
-    evidence: { kind: "bash_regex", pattern: "git\\s+push\\b" },
-    promise_label: "git push origin <branch>",
-  },
-
-  {
-    // Claim: "tagged v0.5.0 / created the tag v0.5.0 / new tag v0.5.0"
-    // Evidence: `git tag` Bash command.
-    //
-    // v0.6.4 audit-MED tightening: require a version-shaped token
-    // (`v0.5`, `0.5.0`, `1.0.0`, etc.) near the verb. Previous
-    // `\btagged\b` alone fired on prose like "tagged for review" /
-    // "I tagged this as P0" / "the file is tagged" → noisy false
-    // positives.
-    id: "tagged",
-    text_regex:
-      "\\b(?:just\\s+)?tagged\\s+v?\\d+\\.\\d+(?:\\.\\d+)?\\b|\\bcreated\\s+(?:the\\s+|a\\s+)?tag\\s+v?\\d+\\.\\d+\\b|\\bnew\\s+tag\\s+v?\\d+\\.\\d+\\b",
-    evidence: { kind: "bash_regex", pattern: "git\\s+tag\\b" },
-    promise_label: "git tag <name>",
-  },
-
-  {
-    // Claim: phase-ceremony language (must include "phase" keyword OR
-    // explicit log_phase reference). Evidence: mcp__opensquid__log_phase
-    // call.
-    //
-    // v0.6.4 audit-MED tightening: previous regex matched "logged audit"
-    // bare, which fires on prose like "logging test results" or "logged
-    // fix details to the journal." Require the word "phase(s)" near
-    // the verb.
-    //
-    // #169 (S2 tightening): dropped the bare `\\blog_phase\\b`
-    // alternation. It fired on any mention of the tool name in prose
-    // ("the log_phase tool writes to...", "mcp__opensquid__log_phase"
-    // in a code reference). Legitimate first-person promises about
-    // calling log_phase ("calling log_phase audit now") are caught
-    // by the past-tense alternation when the agent says "logged
-    // X phase" or by phase-claim-forward's forward-tense alternation.
-    // The bare-identifier match was almost entirely prose-noise.
-    id: "phase-logged",
-    text_regex:
-      "\\b(?:logged|logging)\\s+(?:the\\s+)?(?:audit|post[_-]?research|fix|test|code|learn|pre[_-]?research)\\s+phase\\b|\\bphases?\\s+logged\\b",
-    evidence: { kind: "tool_called", tool: "mcp__opensquid__log_phase" },
-    promise_label: "call mcp__opensquid__log_phase",
-  },
-
-  {
-    // Claim: "fmt clean / clippy clean / prettier clean / formatting passes"
-    // Evidence: ran fmt/clippy/prettier via Bash. Catches the pattern
-    // where I assert cleanliness without verification.
-    id: "fmt-clippy",
-    text_regex: "\\b(?:fmt|clippy|prettier|formatting)\\s+(?:clean|passes?|passing|green|ok|✅)\\b",
-    evidence: {
-      kind: "bash_regex",
-      pattern: "(cargo\\s+(?:fmt|clippy)|prettier|npm\\s+run\\s+(?:format|lint))",
-    },
-    promise_label: "run cargo fmt / cargo clippy / prettier / npm run format",
-  },
-
-  // ---- 0.7.6 expansion (#150 drift-fix track) ---------------------
-  //
-  // Three patterns addressing the 60% agent-classification drift
-  // share from the 2026-05-16 session retro. Each came from a real
-  // repeated incident; warn-only by design (Stop hook surfaces them
-  // at next turn START via UserPromptSubmit). Block-level
-  // enforcement waits for drift-as-codex chunk 2.
-
-  {
-    // Claim: assistant assigns a minor/major version slot in any
-    // surface ("v0.8", "v0.9", "ships as v1.0", "next minor", "bump
-    // to v0.8.0"). Per the PATCH-ONLY rule ([[feedback_pre1_versioning]]
-    // v4), the agent is FORBIDDEN from picking these slots. Evidence:
-    // either an AskUserQuestion tool call (asked for authorization)
-    // OR the user already said the same version string in this turn.
-    //
-    // 6+ incidents on 2026-05-16. Each cost a TASKS.md / ROADMAP.md
-    // rollback edit. Cheaper to nag at next turn than to clean up.
-    //
-    // #169 (S2 tightening): split into two alternations.
-    //
-    // (A) Inherently agent-committal phrasings — fire on any match,
-    //     no first-person framing required: `next minor`, `next major`,
-    //     `bumping to (minor|major)`, `ships as v0.X.Y`. These phrases
-    //     only appear when the agent is making the assignment.
-    //
-    // (B) Bare version strings (v0.8, v0.9, v1.0, etc.) — REQUIRE a
-    //     first-person commitment verb within ~40 chars before. Solves
-    //     the false-positive where the agent references a slot the
-    //     USER previously named ("the user wants v0.8 to do X") or
-    //     quotes a roadmap line in scoping prose ("ROADMAP.md mentions
-    //     v0.9"). Those have no first-person commit verb so they
-    //     stop firing.
-    id: "version-slot-assignment",
-    text_regex:
-      "\\b(?:next\\s+minor|next\\s+major|bump(?:ing)?\\s+(?:to\\s+)?(?:minor|major)|ships?\\s+as\\s+v?[0-9]+\\.[0-9]+\\.[0-9]+)\\b" +
-      "|" +
-      "(?:\\bI'?(?:ll| will|m| am)\\b|\\blet'?s\\b|\\blet\\s+me\\b|\\bgoing\\s+to\\b|\\bgonna\\b|\\bbump(?:ing|s)?\\s+(?:to\\s+)?|\\bship(?:ping|s)?\\s+(?:as\\s+|to\\s+)?|\\breleas(?:e|es|ing)\\s+(?:as\\s+)?|\\btag(?:ging|s)?\\s+(?:as\\s+)?|\\bnam(?:e|es|ing)\\b|\\bpick(?:ing|s)?\\s+(?:slot\\s+)?)[^.\\n\\r]{0,40}?\\bv?(?:0\\.[89]|0\\.1[0-9]|1\\.[0-9]+)(?:\\.[0-9]+)?\\b",
-    evidence: {
-      kind: "any_of",
-      options: [
-        // Agent asked the user — the right path.
-        { kind: "tool_called", tool: "AskUserQuestion" },
-        // Agent referenced TaskCreate/TaskUpdate (acceptable: those
-        // ops may legitimately name a version in a task subject the
-        // user already authorized).
-        { kind: "tool_called", tool: "TaskCreate" },
-        { kind: "tool_called", tool: "TaskUpdate" },
-      ],
-    },
-    promise_label:
-      "ASK the user before naming a non-patch version slot (call AskUserQuestion); never pick v0.8/v0.9/v1.0 unilaterally",
-  },
-
-  {
-    // Claim: assistant declares "starting <phase>" / "now in phase X"
-    // / "moving to phase Y". Evidence: log_phase MCP call within the
-    // same turn. Catches the forward-tense gap that today's
-    // "phase-logged" pattern (past-tense only) misses.
-    //
-    // Example: I say "Phase 3/7 — code:" then immediately make file
-    // edits without ever calling log_phase(code). Today's gate only
-    // catches the past-tense version ("logged code phase"); this
-    // catches the announcement before the work.
-    id: "phase-claim-forward",
-    // Two alternations: (a) "Phase N/7 — <phasename>" / "Phase N — <phasename>"
-    // (b) verb-prefixed: "starting <phasename>" / "entering phase X" /
-    // "moving to phase X" / "now in phase X" / "Phase X:" inline.
-    // Phase-name list matches the locked 7-phase set; allows `_` or `-`
-    // separators (post_research / post-research).
-    text_regex:
-      "(?:\\bPhase\\s+[1-7](?:\\s*\\/\\s*7)?\\s*[—\\-:]\\s*(?:pre[_-]?research|learn|code|test|audit|post[_-]?research|fix)\\b)|(?:\\b(?:starting|entering|moving\\s+to|now\\s+in)\\s+(?:phase\\s+)?(?:pre[_-]?research|learn|code|test|audit|post[_-]?research|fix)\\b)",
-    evidence: { kind: "tool_called", tool: "mcp__opensquid__log_phase" },
-    promise_label: "call mcp__opensquid__log_phase for the phase you announced",
-  },
-
-  {
-    // Claim: assistant says "executing", "running", "now I'll", etc.
-    // — implying substantive work — while no active task exists.
-    // The 2026-05-16 Telegram bootstrap chain ran ~20 substantive
-    // tool calls (curl, kill, edit) with no TaskCreate. Workflow-
-    // gate had nothing to enforce against.
-    //
-    // Evidence: TaskCreate, TaskUpdate, or TaskGet within this turn.
-    // Wider than "tool_called X" because any task-touching call
-    // means the agent is at least aware of the task layer.
-    //
-    // False-positive risk: legitimate quick replies ("now I'll check
-    // X" as a one-liner) get nagged. Acceptable per the same trade-
-    // off as other claim patterns — better to nag than to let a
-    // 20-call substantive chain run unscoped.
-    //
-    // #169 (S2 tightening): bare `\\bexecuting\\b` was over-broad —
-    // fired on passive descriptions like "the script is executing
-    // the migration" or "while opensquid is executing the codex".
-    // Tightened to require first-person subject: `(?:I'?(?:'?m|'?ll)|now\\s+i'?(?:m|ll))\\s+executing`.
-    id: "session-no-task",
-    text_regex:
-      "\\b(?:(?:I'?(?:'?m|'?ll)|now\\s+i'?(?:m|ll))\\s+executing|now\\s+i'?ll|let\\s+me\\s+(?:run|execute|implement|fix|build|wire)|i'?ll\\s+(?:run|implement|fix|build|wire))\\b",
-    evidence: {
-      kind: "any_of",
-      options: [
-        { kind: "tool_called", tool: "TaskCreate" },
-        { kind: "tool_called", tool: "TaskUpdate" },
-        { kind: "tool_called", tool: "TaskGet" },
-      ],
-    },
-    promise_label:
-      "create or update a task (TaskCreate/TaskUpdate) before doing substantive work — keeps the workflow-gate enforceable",
-  },
-];
+/**
+ * Claim catalog — sourced from the bundled-default codex (0.7.17,
+ * drift-as-codex chunk 3b). Previously a hand-maintained TS array;
+ * now loaded once at module init from
+ * `src/codex/bundled-default/codex.yaml` via the chunk-2 loader.
+ *
+ * Fail-open: if the codex is unloadable, the catalog is empty and
+ * no claims fire. Better silent under-enforcement than a hook crash.
+ */
+export const CLAIM_PATTERNS: ClaimPattern[] = (() => {
+  try {
+    const codex = loadBundledDefaultCodex();
+    return (codex.claims ?? []).map(codexClaimToLedgerPattern);
+  } catch (err) {
+    process.stderr.write(
+      `[opensquid honesty-ledger] codex unloadable, claim catalog empty: ${err instanceof Error ? err.message : err}\n`,
+    );
+    return [];
+  }
+})();
 
 // ---------------------------------------------------------------------
 // Session-scoped ledger

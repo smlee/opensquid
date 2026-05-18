@@ -247,6 +247,10 @@ const ClaimEvidenceSchema: z.ZodType<CodexClaimEvidence> = z.lazy(() =>
       needle: z.string().min(1),
     }),
     z.object({ kind: z.literal("any_of"), options: z.array(ClaimEvidenceSchema).min(1) }),
+    // 0.7.17 (chunk 3b): "any_tool" fulfills the claim if any tool
+    // was called this turn. Used by claim patterns like "audit-done"
+    // / "starting-now" where the proof of action is just doing work.
+    z.object({ kind: z.literal("any_tool") }),
   ]),
 );
 

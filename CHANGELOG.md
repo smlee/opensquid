@@ -9,6 +9,41 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Changed — 2026-05-17 (0.7.17 — drift-as-codex chunk 3b: honesty-ledger claim catalog moves to codex #168)
+
+`honesty-ledger.ts`'s 15-entry `CLAIM_PATTERNS` array was previously
+maintained directly in TypeScript. Now it's sourced from
+`src/codex/bundled-default/codex.yaml` under the `claims:` section,
+loaded once at module init via the chunk-2 loader, and bridged into
+the existing `ClaimEvidenceShape` shape so the rest of the file is
+unchanged.
+
+**Schema extension:** added `{ kind: "any_tool" }` to
+`CodexClaimEvidence` (types.ts + parse.ts zod). Two of the 15
+patterns (`starting-now`, `audit-done`) use this evidence kind and
+required the schema to support it. The codex catalog now matches
+the honesty-ledger semantics 1:1.
+
+**Bridge function:** `codexEvidenceToLedgerEvidence()` maps codex
+evidence kinds (`tool_call`) to the ledger's legacy names
+(`tool_called`); also drops codex's `input_contains.field`
+parameter, which the ledger doesn't use. Single seam between the
+two vocabularies.
+
+**Fail-open:** if the codex is unloadable, `CLAIM_PATTERNS` is the
+empty array and no claims fire. Stderr warning emitted at module
+init for visibility. Same fail-open posture as workflow-gate
+(chunk 3a).
+
+**Behavior preserved:** all 15 patterns ported byte-for-byte from
+the previous TS array — same regex, same evidence shapes, same
+promise labels (codex `unfulfilled_message`). The 78 honesty-ledger
+tests pass unchanged; full suite 597/597.
+
+**Dead code removed:** the previous TS-hard-coded array was deleted
+from honesty-ledger.ts. Git history preserves it; no value to
+keeping a 250-line dead reference in the source.
+
 ### Changed — 2026-05-17 (0.7.16 — drift-as-codex chunk 3a: workflow-gate reads required phases from codex #168)
 
 `workflow-gate.ts` previously had its required-phase list hard-coded

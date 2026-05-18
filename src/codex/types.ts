@@ -265,7 +265,8 @@ export type CodexClaimEvidence =
   | { kind: "bash_contains"; needle: string }
   | { kind: "bash_regex"; pattern: string }
   | { kind: "input_contains"; tool: string; field: string; needle: string }
-  | { kind: "any_of"; options: CodexClaimEvidence[] };
+  | { kind: "any_of"; options: CodexClaimEvidence[] }
+  | { kind: "any_tool" };
 
 /**
  * A claim pattern — port of HonestyLedger pattern shape. Loader
