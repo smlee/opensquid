@@ -9,6 +9,37 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.24 — D2 Telegram routing redirect)
+
+New drift pattern `telegram-redirect-report` fires when the agent
+calls `mcp__plugin_telegram_telegram__reply` with a body starting
+with `🦑 #<N>` (the established task-completion report marker).
+Surfaces a WARN telling the agent these reports go via
+`mcp__opensquid__chat_send` to the project's `report_channel`
+(supergroup + topic) per `[[feedback_telegram_reports]]`, not via
+plugin:telegram reply (which is the user's DM).
+
+Catches D2 in the catalog: the agent's first 0.7.10 #170 completion
+report this session was sent via plugin:telegram reply to the
+RaumPilates DM instead of the squidbot supergroup, leaking
+opensquid-internal content into a cross-purpose channel.
+
+Implementation:
+- `DriftPattern.tool` type broadened from
+  `"Bash" | "Edit" | "Write" | "*"` → `string` so MCP tool names
+  match directly. Existing patterns unchanged; new pattern matches
+  exactly `mcp__plugin_telegram_telegram__reply`.
+- Trigger uses `text_regex` on the `text` field of the tool input
+  (`^\s*🦑\s+#\d`). Severity `warn` (non-blocking) because the user
+  may legitimately want to reply with the squid emoji + a hash; the
+  warn re-routes intent without preventing the call.
+
+Tests: 4 new in `drift-patterns.test.ts`
+(`drift catalog — telegram-redirect-report (D2)`). Full suite:
+663/663 (was 659 + 4 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.23 → 0.7.24 patch bump.
+
 ### Added — 2026-05-18 (0.7.23 — D5 multi-patch catch-up bump detection in versioning-gate)
 
 D5 root cause was actually the versioning-gate not firing during

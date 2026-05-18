@@ -6,6 +6,13 @@ function bash(command: string): ToolCallInput {
   return { tool: "Bash", input: { command } };
 }
 
+function telegramReply(text: string): ToolCallInput {
+  return {
+    tool: "mcp__plugin_telegram_telegram__reply",
+    input: { chat_id: "8075471258", text },
+  };
+}
+
 describe("drift catalog — never-amend", () => {
   it("blocks `git commit --amend`", () => {
     const hits = findDrifts(bash('git commit --amend -m "fix typo"'));
@@ -326,5 +333,31 @@ describe("OPENSQUID_SKIP_DRIFT bypass (v0.6.6)", () => {
     const { exit, stderr } = decide([]);
     expect(exit).toBe(0);
     expect(stderr).toBe("");
+  });
+});
+
+describe("drift catalog — telegram-redirect-report (D2)", () => {
+  it("warns when plugin:telegram reply starts with `🦑 #N` task-report marker", () => {
+    const hits = findDrifts(telegramReply("🦑 #170 — engine-client startupAck fix\n\nshipped"));
+    expect(hits.map((h) => h.pattern.id)).toContain("telegram-redirect-report");
+    expect(decide(hits).exit).toBe(0); // warn-severity = non-blocking
+  });
+
+  it("warns with leading whitespace before the marker", () => {
+    const hits = findDrifts(telegramReply("  🦑 #4 — cleanup commit"));
+    expect(hits.map((h) => h.pattern.id)).toContain("telegram-redirect-report");
+  });
+
+  it("does NOT fire on regular plugin:telegram replies", () => {
+    const hits = findDrifts(telegramReply("ok, working on it now"));
+    expect(hits.map((h) => h.pattern.id)).not.toContain("telegram-redirect-report");
+  });
+
+  it("does NOT fire on chat_send (the correct tool for reports)", () => {
+    const hits = findDrifts({
+      tool: "mcp__opensquid__chat_send",
+      input: { text: "🦑 #170 — full 7-phase report goes here" },
+    });
+    expect(hits.map((h) => h.pattern.id)).not.toContain("telegram-redirect-report");
   });
 });

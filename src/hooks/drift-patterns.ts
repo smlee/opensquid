@@ -19,8 +19,11 @@ export type DriftSeverity = "block" | "warn";
 
 export interface DriftPattern {
   id: string;
-  /** Tool name to match (e.g. "Bash", "Edit", "Write"). */
-  tool: "Bash" | "Edit" | "Write" | "*";
+  /** Tool name to match. "*" matches any tool; specific names match
+   * one exact tool. 0.7.24 / D2: broadened from a fixed union to
+   * `string` so MCP tool names like `mcp__plugin_telegram_telegram__reply`
+   * can be matched directly. */
+  tool: string;
   /** Matcher applied to the relevant tool input field. */
   trigger: DriftTrigger;
   /** Lesson id (in the workflow codex) that owns this rule. */
@@ -105,6 +108,23 @@ export const DRIFT_PATTERNS: DriftPattern[] = [
     message:
       "BLOCKED: force-push to main/master is destructive. Requires explicit " +
       "user request — and even then, prefer a regular push or a new branch.",
+  },
+
+  // 5. Telegram routing — task-completion reports sent to plugin:telegram
+  //    reply (DM) instead of opensquid chat_send (supergroup). 0.7.24 / D2.
+  //    Heuristic: the text starts with the agent's report marker `🦑 #<N>`.
+  {
+    id: "telegram-redirect-report",
+    tool: "mcp__plugin_telegram_telegram__reply",
+    trigger: { kind: "text_regex", pattern: "^\\s*🦑\\s+#\\d", field: "text" },
+    lesson: "telegram-reports",
+    severity: "warn",
+    message:
+      "WARN: this message looks like a task-completion report (starts with `🦑 #N`). " +
+      "Per [[feedback_telegram_reports]], reports go via `mcp__opensquid__chat_send` " +
+      "to the project's `report_channel` (supergroup + topic), not via " +
+      "plugin:telegram reply (which is the user's DM). Re-route via chat_send if " +
+      "this is meant to be a task report. Catches drift D2.",
   },
 ];
 
