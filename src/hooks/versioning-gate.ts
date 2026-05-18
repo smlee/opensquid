@@ -100,16 +100,40 @@ export async function evaluateVersioningGate(
   // At least one manifest is staged — check that at least one has a
   // version-line diff (just touching the manifest without bumping
   // version doesn't count).
+  let bumpedManifest: { path: string; jump: VersionJump | null } | null = null;
   for (const m of manifests) {
-    if (await manifestHasVersionBump(cwd, m)) {
-      return { block: false, stderr: "" };
+    const jump = await readManifestVersionBump(cwd, m);
+    if (jump) {
+      bumpedManifest = { path: m, jump };
+      break;
     }
   }
 
-  return {
-    block: true,
-    stderr: buildBlockMessage(sourceFiles, manifests),
-  };
+  if (!bumpedManifest) {
+    return {
+      block: true,
+      stderr: buildBlockMessage(sourceFiles, manifests),
+    };
+  }
+
+  // 0.7.23 / D5 — catch-up bump detection. The PATCH-ONLY rule
+  // ([[feedback_pre1_versioning]] v4) says every src commit = exactly
+  // one patch bump. A jump like 0.7.10 → 0.7.14 in a single commit
+  // means previous src commits skipped their bumps. Don't BLOCK
+  // (legitimate explicit catch-ups exist), but surface a loud warning
+  // so the skip is visible.
+  const { jump } = bumpedManifest;
+  if (jump && isMultiPatchJump(jump)) {
+    return {
+      block: false,
+      stderr:
+        `🦑 [opensquid versioning-gate] WARN: catch-up bump detected (${jump.from} → ${jump.to})\n` +
+        `  PATCH-ONLY rule says one patch per commit. A multi-patch jump in one\n` +
+        `  commit usually means earlier src commits shipped without bumps. Drift D5.\n`,
+    };
+  }
+
+  return { block: false, stderr: "" };
 }
 
 /**
@@ -128,11 +152,28 @@ export function isManifestFile(p: string): boolean {
 }
 
 /**
- * Look at the staged diff of a manifest and return true iff the diff
- * touches a `version = "..."` (Cargo.toml) or `"version": "..."`
- * (package.json) line.
+ * Parsed version jump from a manifest's staged diff.
+ *
+ * 0.7.23 / D5 — added so the gate can surface multi-patch catch-up
+ * jumps (e.g. 0.7.10 → 0.7.14) which indicate previous src commits
+ * shipped without bumps.
  */
-async function manifestHasVersionBump(cwd: string, manifestPath: string): Promise<boolean> {
+export interface VersionJump {
+  from: string;
+  to: string;
+}
+
+/**
+ * Look at the staged diff of a manifest and return the version jump
+ * (from → to). Returns null when the diff doesn't touch a `version`
+ * line at all.
+ *
+ * Exported for direct testing.
+ */
+export async function readManifestVersionBump(
+  cwd: string,
+  manifestPath: string,
+): Promise<VersionJump | null> {
   let diff: string;
   try {
     const { stdout } = await exec(
@@ -141,26 +182,75 @@ async function manifestHasVersionBump(cwd: string, manifestPath: string): Promis
     );
     diff = stdout;
   } catch {
-    return false;
+    return null;
   }
-  // Look for added lines (start with `+` but not `+++`) that contain
-  // a version assignment. Cargo: `version = "..."`. package.json:
-  // `"version": "..."`. Match both shapes loosely.
-  //
-  // Anchor discipline:
-  //   - Cargo (TOML, line-oriented) → anchor `^version` so we don't
-  //     match a dep with `version = "..."` in `[dependencies.foo]`.
-  //   - package.json (JSON, can be MINIFIED single-line) → do NOT
-  //     anchor; `"version"` can appear mid-line in minified JSON.
-  //     Audit fix v0.6.3: original `^"version"` regex false-blocked
-  //     legitimate bumps in minified package.json.
+  return parseVersionJumpFromDiff(diff);
+}
+
+/**
+ * Parse `+`/`-` lines from a manifest diff and extract the version
+ * jump. Cargo: `version = "..."`. package.json: `"version": "..."`.
+ *
+ * Anchor discipline:
+ *   - Cargo (TOML, line-oriented) → anchor `^version` so we don't
+ *     match a dep with `version = "..."` in `[dependencies.foo]`.
+ *   - package.json (JSON, can be MINIFIED single-line) → do NOT
+ *     anchor; `"version"` can appear mid-line in minified JSON.
+ *
+ * Exported for direct testing.
+ */
+export function parseVersionJumpFromDiff(diff: string): VersionJump | null {
+  let oldVersion: string | null = null;
+  let newVersion: string | null = null;
   for (const line of diff.split("\n")) {
-    if (!line.startsWith("+") || line.startsWith("+++")) continue;
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    const sign = line[0];
+    if (sign !== "+" && sign !== "-") continue;
     const body = line.slice(1).trim();
-    if (/^version\s*=\s*"[^"]+"/.test(body)) return true; // Cargo.toml
-    if (/"version"\s*:\s*"[^"]+"/.test(body)) return true; // package.json (line-anchorless)
+    let v: string | null = null;
+    const cargoMatch = body.match(/^version\s*=\s*"([^"]+)"/);
+    if (cargoMatch) v = cargoMatch[1];
+    if (v === null) {
+      const npmMatch = body.match(/"version"\s*:\s*"([^"]+)"/);
+      if (npmMatch) v = npmMatch[1];
+    }
+    if (v === null) continue;
+    if (sign === "+") newVersion = v;
+    else oldVersion = v;
   }
-  return false;
+  if (!newVersion) return null;
+  // New-version only (e.g. brand-new manifest with no prior `version`
+  // line) is still a valid "version bump" — treat oldVersion as empty.
+  return { from: oldVersion ?? "", to: newVersion };
+}
+
+/**
+ * Detect a multi-patch jump: same major.minor, but patch advances by
+ * more than 1 (catch-up bump).
+ *
+ * Returns false for:
+ *   - First-time bumps (from === "")
+ *   - Same-patch (no actual jump, shouldn't happen with proper diff)
+ *   - Minor/major bumps (those are user-authorized; PATCH-ONLY rule
+ *     forbids the agent from naming them but doesn't make them "drift")
+ *   - Non-SemVer version strings (best-effort parse)
+ *
+ * Exported for direct testing.
+ */
+export function isMultiPatchJump(jump: VersionJump): boolean {
+  const oldParts = parseSemver(jump.from);
+  const newParts = parseSemver(jump.to);
+  if (!oldParts || !newParts) return false;
+  // Only flag same-major.minor with patch jump > 1.
+  if (oldParts.major !== newParts.major) return false;
+  if (oldParts.minor !== newParts.minor) return false;
+  return newParts.patch > oldParts.patch + 1;
+}
+
+function parseSemver(v: string): { major: number; minor: number; patch: number } | null {
+  const m = v.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
 }
 
 function quoteShell(s: string): string {

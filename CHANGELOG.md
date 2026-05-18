@@ -9,6 +9,44 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.23 — D5 multi-patch catch-up bump detection in versioning-gate)
+
+D5 root cause was actually the versioning-gate not firing during
+broken-D1 sessions (the workflow-gate session_id mismatch took down
+the surrounding hook chain). #173 fix structurally prevents D5 going
+forward — every src commit now triggers the existing gate, which
+already requires a matching version-line diff in the same commit.
+
+This patch adds a complementary signal: WARN (non-blocking) when the
+manifest's version diff is a multi-patch jump (e.g., 0.7.10 → 0.7.14
+in one commit). Per `[[feedback_pre1_versioning]]` v4: every src
+commit = exactly one patch bump. A multi-patch jump in a single
+commit usually means earlier src commits shipped without bumps —
+which is the exact D5 incident shape.
+
+Implementation:
+- `manifestHasVersionBump` → `readManifestVersionBump` (returns the
+  parsed `{from, to}` jump or null)
+- New `parseVersionJumpFromDiff` pure fn handles Cargo + package.json
+  shapes (anchored vs unanchored regex per existing v0.6.3 audit fix)
+- New `isMultiPatchJump` pure fn — same major.minor, patch advances
+  by > 1
+- Only flags same-major.minor patch jumps; minor/major bumps are
+  user-authorized (PATCH-ONLY rule forbids agent from naming them,
+  not from observing them)
+
+12 new tests in `versioning-gate.test.ts`:
+- 4 for `parseVersionJumpFromDiff` (Cargo, package.json, multi-patch,
+  null on non-version diff)
+- 6 for `isMultiPatchJump` (D5 shape, 2-step, normal +1, minor bump,
+  first-time, non-SemVer)
+- 2 end-to-end via real tmpdir git fixtures (warns on jump, silent
+  on +1)
+
+Full suite: 659/659 (was 647 + 12 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.22 → 0.7.23 patch bump.
+
 ### Added — 2026-05-18 (0.7.22 — D10 automated drift catalog at SessionEnd)
 
 New SessionEnd-time scanner that walks the session's JSONL transcript

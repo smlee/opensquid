@@ -18,7 +18,9 @@ import {
   checkOverrideEnv,
   evaluateVersioningGate,
   isManifestFile,
+  isMultiPatchJump,
   isSourceFile,
+  parseVersionJumpFromDiff,
 } from "./versioning-gate.js";
 
 // ---------------------------------------------------------------------
@@ -285,6 +287,114 @@ describe("evaluateVersioningGate — emergency override", () => {
     expect(checkOverrideEnv()).toBe(false);
     process.env.OPENSQUID_SKIP_VERSION_GATE = "1";
     expect(checkOverrideEnv()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------
+// 0.7.23 / D5 — multi-patch catch-up jump detection
+// ---------------------------------------------------------------------
+
+describe("parseVersionJumpFromDiff", () => {
+  it("parses a Cargo.toml patch bump", () => {
+    const diff = `--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1 +1 @@
+-version = "0.7.10"
++version = "0.7.11"
+`;
+    expect(parseVersionJumpFromDiff(diff)).toEqual({ from: "0.7.10", to: "0.7.11" });
+  });
+
+  it("parses a package.json patch bump", () => {
+    const diff = `--- a/package.json
++++ b/package.json
+@@ -2 +2 @@
+-  "version": "0.7.10",
++  "version": "0.7.11",
+`;
+    expect(parseVersionJumpFromDiff(diff)).toEqual({ from: "0.7.10", to: "0.7.11" });
+  });
+
+  it("parses a multi-patch jump (D5 incident shape)", () => {
+    const diff = `--- a/package.json
++++ b/package.json
+-  "version": "0.7.10",
++  "version": "0.7.14",
+`;
+    expect(parseVersionJumpFromDiff(diff)).toEqual({ from: "0.7.10", to: "0.7.14" });
+  });
+
+  it("returns null when no version line is touched", () => {
+    const diff = `--- a/package.json
++++ b/package.json
++  "description": "updated text",
+-  "description": "old text",
+`;
+    expect(parseVersionJumpFromDiff(diff)).toBeNull();
+  });
+});
+
+describe("isMultiPatchJump", () => {
+  it("flags 0.7.10 → 0.7.14 (D5 catch-up)", () => {
+    expect(isMultiPatchJump({ from: "0.7.10", to: "0.7.14" })).toBe(true);
+  });
+
+  it("flags 0.7.10 → 0.7.12 (2-step jump)", () => {
+    expect(isMultiPatchJump({ from: "0.7.10", to: "0.7.12" })).toBe(true);
+  });
+
+  it("does NOT flag a normal 0.7.10 → 0.7.11 patch bump", () => {
+    expect(isMultiPatchJump({ from: "0.7.10", to: "0.7.11" })).toBe(false);
+  });
+
+  it("does NOT flag a minor bump (0.7.x → 0.8.0)", () => {
+    // Minor/major bumps are user-authorized; not the agent's drift to warn about.
+    expect(isMultiPatchJump({ from: "0.7.20", to: "0.8.0" })).toBe(false);
+  });
+
+  it("does NOT flag a first-time version (from empty)", () => {
+    expect(isMultiPatchJump({ from: "", to: "0.1.0" })).toBe(false);
+  });
+
+  it("does NOT flag non-SemVer strings", () => {
+    expect(isMultiPatchJump({ from: "wip", to: "wip-2" })).toBe(false);
+  });
+});
+
+describe("evaluateVersioningGate — multi-patch warning end-to-end (D5)", () => {
+  it("ALLOWS but WARNS when commit bumps version by >1 patch", async () => {
+    await seedInitial();
+    await writeFile("Cargo.toml", 'version = "0.7.10"\n');
+    await writeFile("src/lib.rs", "// initial\n");
+    stage("Cargo.toml");
+    stage("src/lib.rs");
+    commit("initial");
+    // Now jump 0.7.10 → 0.7.14 in one commit alongside a src change
+    await writeFile("Cargo.toml", 'version = "0.7.14"\n');
+    await writeFile("src/lib.rs", "// changed\n");
+    stage("Cargo.toml");
+    stage("src/lib.rs");
+    const r = await evaluateVersioningGate({ cwd: repoDir });
+    expect(r.block).toBe(false);
+    expect(r.stderr).toContain("catch-up bump detected");
+    expect(r.stderr).toContain("0.7.10 → 0.7.14");
+    expect(r.stderr).toContain("Drift D5");
+  });
+
+  it("does NOT warn on a clean +1 patch bump", async () => {
+    await seedInitial();
+    await writeFile("Cargo.toml", 'version = "0.7.10"\n');
+    await writeFile("src/lib.rs", "// initial\n");
+    stage("Cargo.toml");
+    stage("src/lib.rs");
+    commit("initial");
+    await writeFile("Cargo.toml", 'version = "0.7.11"\n');
+    await writeFile("src/lib.rs", "// changed\n");
+    stage("Cargo.toml");
+    stage("src/lib.rs");
+    const r = await evaluateVersioningGate({ cwd: repoDir });
+    expect(r.block).toBe(false);
+    expect(r.stderr).toBe("");
   });
 });
 
