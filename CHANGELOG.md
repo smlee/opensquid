@@ -9,6 +9,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.26 — D7 heartbeat-recall block via recall-required flag)
+
+The heartbeat mechanism (Stop hook arms a nudge when the transcript
+grows past the threshold; UPS surfaces the nudge to the agent's
+context next turn) previously had no teeth: the agent could
+acknowledge the nudge and continue without calling `recall`, which
+is exactly drift D7 from the catalog.
+
+This patch adds a per-session `recall-required.flag` file:
+
+- **Set** by UPS after `consumePendingHeartbeat` returns a nudge
+- **Checked** by pre-tool-use before any `mcp__opensquid__*` call
+- **Cleared** by pre-tool-use when the agent actually calls
+  `mcp__opensquid__recall`
+
+When the flag is set, ANY `mcp__opensquid__*` tool other than
+`recall` is blocked (exit 2) with an actionable stderr message.
+The agent must call recall first; only then are subsequent MCP
+calls allowed.
+
+Implementation:
+- New `markRecallRequired` / `isRecallRequired` / `clearRecallRequired`
+  exported from `heartbeat.ts` (the flag is heartbeat-related state)
+- `heartbeatSessionFiles` now includes the flag path so SessionEnd
+  cleanup catches it
+- pre-tool-use.ts wires the check + clear into its orchestrator
+- Bypass: `OPENSQUID_SKIP_RECALL_GATE=1` for genuine emergencies
+  (e.g. engine unreachable, recall genuinely not callable)
+
+Tests: 6 new in `heartbeat.test.ts` (`recall-required flag (D7)`):
+flag absence default, mark/check, clear, idempotent clear,
+per-session isolation, SessionEnd cleanup inclusion. Full suite:
+675/675 (was 669 + 6 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.25 → 0.7.26 patch bump.
+
 ### Added — 2026-05-18 (0.7.25 — D3 7-phase report format check on chat_send)
 
 New `checkChatSendReportFormat` in pre-tool-use.ts fires when

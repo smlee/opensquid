@@ -28,6 +28,7 @@
 
 import { decide, findDrifts, type ToolCallInput } from "./drift-patterns.js";
 import { evaluateEngineVocabGate } from "./engine-vocab-gate.js";
+import { clearRecallRequired, isRecallRequired } from "./heartbeat.js";
 import { recordToolCall } from "./honesty-ledger.js";
 import { readActiveTaskId } from "./transcript.js";
 import { evaluateVersioningGate } from "./versioning-gate.js";
@@ -178,6 +179,29 @@ export async function runPreToolUseHook(): Promise<void> {
     process.stderr.write(formatWarning);
   }
 
+  // 0.7.26 / D7 — heartbeat-recall enforcement. When UPS surfaced a
+  // heartbeat nudge this turn, the recall-required flag is set; block
+  // any mcp__opensquid__* tool other than `recall` until the agent
+  // actually calls recall. On a recall call, clear the flag.
+  if (payload.session_id) {
+    try {
+      if (call.tool === "mcp__opensquid__recall" && (await isRecallRequired(payload.session_id))) {
+        await clearRecallRequired(payload.session_id);
+      } else if (
+        call.tool.startsWith("mcp__opensquid__") &&
+        !checkRecallBypassEnv() &&
+        (await isRecallRequired(payload.session_id))
+      ) {
+        process.stderr.write(buildRecallRequiredBlockMessage(call.tool));
+        process.exit(2);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook] recall-required check failed (proceeding): ${err instanceof Error ? err.message : err}\n`,
+      );
+    }
+  }
+
   // v0.4: append to the honesty ledger so the Stop hook can reconcile
   // assistant claims against tool calls. Best-effort — never block the
   // call on a ledger write failure.
@@ -272,6 +296,26 @@ export async function runPreToolUseHook(): Promise<void> {
 function stringField(input: Record<string, unknown>, field: string): string | null {
   const v = input[field];
   return typeof v === "string" ? v : null;
+}
+
+/**
+ * 0.7.26 / D7 — emergency bypass for the recall-required block. For
+ * cases where the engine is unreachable and the agent can't call
+ * recall through normal channels.
+ */
+function checkRecallBypassEnv(): boolean {
+  return process.env.OPENSQUID_SKIP_RECALL_GATE === "1";
+}
+
+function buildRecallRequiredBlockMessage(tool: string): string {
+  return (
+    `🦑 [opensquid recall-gate] ${tool} blocked — heartbeat was surfaced ` +
+    `this turn but recall hasn't been called yet.\n` +
+    `Call \`mcp__opensquid__recall\` first to re-anchor on the active task, ` +
+    `then retry. Drift D7.\n` +
+    `Override (genuine emergency, e.g. engine unreachable): set ` +
+    `OPENSQUID_SKIP_RECALL_GATE=1 for this command.\n`
+  );
 }
 
 function looksLikeGitCommit(call: ToolCallInput): boolean {

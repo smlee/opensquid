@@ -296,5 +296,71 @@ export async function consumePendingHeartbeat(
 
 /** Test/SessionEnd helper — paths the cleanup phase removes. */
 export function heartbeatSessionFiles(sessionId: string, dataRoot?: string): string[] {
-  return [checkpointPath(sessionId, dataRoot), pendingPath(sessionId, dataRoot)];
+  return [
+    checkpointPath(sessionId, dataRoot),
+    pendingPath(sessionId, dataRoot),
+    recallRequiredFlagPath(sessionId, dataRoot),
+  ];
+}
+
+// =====================================================================
+// 0.7.26 / D7 — recall-required flag
+//
+// After the heartbeat nudge is consumed (surfaced to the agent via
+// UserPromptSubmit), set a per-session flag that BLOCKS any
+// mcp__opensquid__* tool call other than `recall` until the agent
+// actually calls recall.
+//
+// Catches D7: heartbeat fires, agent acknowledges, agent continues
+// without calling recall. The mechanism exists, the agent's compliance
+// was the failure point. Make it teeth.
+//
+// Lifecycle:
+//   - markRecallRequired: called from UPS after consumePendingHeartbeat
+//     returns a nudge
+//   - isRecallRequired: checked from pre-tool-use before any
+//     mcp__opensquid__* tool call
+//   - clearRecallRequired: called from pre-tool-use when the agent
+//     calls mcp__opensquid__recall
+// =====================================================================
+
+function recallRequiredFlagPath(sessionId: string, dataRoot?: string): string {
+  return path.join(resolveDataRoot(dataRoot), "sessions", sessionId, "recall-required.flag");
+}
+
+/** Set the flag — called after the heartbeat nudge is surfaced. */
+export async function markRecallRequired(
+  sessionId: string,
+  options: { dataRoot?: string } = {},
+): Promise<void> {
+  const p = recallRequiredFlagPath(sessionId, options.dataRoot);
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  await fs.writeFile(p, new Date().toISOString() + "\n", "utf8");
+}
+
+/** Check whether the flag is set for this session. */
+export async function isRecallRequired(
+  sessionId: string,
+  options: { dataRoot?: string } = {},
+): Promise<boolean> {
+  const p = recallRequiredFlagPath(sessionId, options.dataRoot);
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Clear the flag — called after the agent calls recall. */
+export async function clearRecallRequired(
+  sessionId: string,
+  options: { dataRoot?: string } = {},
+): Promise<void> {
+  const p = recallRequiredFlagPath(sessionId, options.dataRoot);
+  try {
+    await fs.rm(p);
+  } catch {
+    /* already gone */
+  }
 }

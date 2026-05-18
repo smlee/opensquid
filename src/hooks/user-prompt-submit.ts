@@ -28,7 +28,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import { resolveDataRoot } from "../codex/store.js";
-import { consumePendingHeartbeat } from "./heartbeat.js";
+import { consumePendingHeartbeat, markRecallRequired } from "./heartbeat.js";
 import { type BrokenPromise } from "./honesty-ledger.js";
 
 /**
@@ -95,6 +95,17 @@ export async function runUserPromptSubmitHook(): Promise<void> {
   if (heartbeat) {
     if (out.length > 0) out.push("");
     out.push(heartbeat);
+    // 0.7.26 / D7 — set the recall-required flag. pre-tool-use will
+    // block any mcp__opensquid__* tool call (other than recall) until
+    // the agent actually calls recall. Catches the "heartbeat fires,
+    // agent acknowledges, continues without complying" drift.
+    try {
+      await markRecallRequired(sessionId);
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook user-prompt-submit] markRecallRequired failed (non-fatal): ${err instanceof Error ? err.message : err}\n`,
+      );
+    }
   }
 
   if (out.length > 0) {

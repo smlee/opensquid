@@ -423,3 +423,56 @@ describe("heartbeatSessionFiles", () => {
     expect(files.some((p) => p.endsWith("heartbeat-pending.txt"))).toBe(true);
   });
 });
+
+// =====================================================================
+// 0.7.26 / D7 — recall-required flag (heartbeat → block until recall)
+// =====================================================================
+
+describe("recall-required flag (D7)", () => {
+  let tmp: string;
+  beforeEach(async () => {
+    tmp = path.join(os.tmpdir(), `opensquid-recall-flag-${crypto.randomUUID()}`);
+    await fs.mkdir(tmp, { recursive: true });
+  });
+  afterEach(async () => {
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+
+  it("isRecallRequired returns false when flag was never set", async () => {
+    const { isRecallRequired } = await import("./heartbeat.js");
+    expect(await isRecallRequired("sess-1", { dataRoot: tmp })).toBe(false);
+  });
+
+  it("markRecallRequired creates the flag; isRecallRequired returns true", async () => {
+    const { markRecallRequired, isRecallRequired } = await import("./heartbeat.js");
+    await markRecallRequired("sess-2", { dataRoot: tmp });
+    expect(await isRecallRequired("sess-2", { dataRoot: tmp })).toBe(true);
+  });
+
+  it("clearRecallRequired removes the flag", async () => {
+    const { markRecallRequired, clearRecallRequired, isRecallRequired } =
+      await import("./heartbeat.js");
+    await markRecallRequired("sess-3", { dataRoot: tmp });
+    expect(await isRecallRequired("sess-3", { dataRoot: tmp })).toBe(true);
+    await clearRecallRequired("sess-3", { dataRoot: tmp });
+    expect(await isRecallRequired("sess-3", { dataRoot: tmp })).toBe(false);
+  });
+
+  it("clearRecallRequired is idempotent (clear without prior mark is fine)", async () => {
+    const { clearRecallRequired } = await import("./heartbeat.js");
+    await expect(clearRecallRequired("sess-never", { dataRoot: tmp })).resolves.toBeUndefined();
+  });
+
+  it("flags are per-session — setting one session doesn't affect another", async () => {
+    const { markRecallRequired, isRecallRequired } = await import("./heartbeat.js");
+    await markRecallRequired("sess-A", { dataRoot: tmp });
+    expect(await isRecallRequired("sess-A", { dataRoot: tmp })).toBe(true);
+    expect(await isRecallRequired("sess-B", { dataRoot: tmp })).toBe(false);
+  });
+
+  it("heartbeatSessionFiles includes the recall-required flag path for SessionEnd cleanup", async () => {
+    const { heartbeatSessionFiles } = await import("./heartbeat.js");
+    const files = heartbeatSessionFiles("sess-1", tmp);
+    expect(files.some((p) => p.endsWith("recall-required.flag"))).toBe(true);
+  });
+});
