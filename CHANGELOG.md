@@ -9,6 +9,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.30 — D3 inline-report variant: Stop-hook check for in-session reports lacking PHASES)
+
+D3's existing `checkChatSendReportFormat` (0.7.25) only fires on
+`mcp__opensquid__chat_send` calls. The agent can also write a
+completion-shaped status report INLINE in session text — that
+escapes D3 entirely. Surfaced this turn: the user had to ask
+"where are my 7 phases in the report?" after I posted a chain-ship
+summary table without the PHASES heading.
+
+This patch closes the gap with a Stop-hook side check
+(`inline-report-check.ts`):
+
+- **Trigger**: assistant text contains 2+ version refs (`0.X.Y`
+  shape) OR 2+ commit hashes (`[0-9a-f]{7,}` with at least one
+  a-f to exclude decimal IDs)
+- **Violation**: trigger fired AND text lacks `PHASES` heading
+- **Surface**: writes a `BrokenPromise` entry that UPS injects
+  into the next turn (existing pipeline; no new accumulator)
+
+Conservative on purpose: single-version prose mentions don't fire,
+single-commit-hash mentions don't fire. The dogfood test exercises
+the exact "where are my 7 phases" incident shape (10 versions +
+10 hashes, no PHASES) and confirms the check catches it.
+
+New pure helpers: `countVersionRefs`, `countCommitHashes`,
+`hasPhasesBlock`, `checkInlineReportFormat`.
+
+`stop.ts` wires the check after honesty reconciliation; uses the
+existing `recordBrokenPromise` + UPS surface pipeline. Non-fatal
+on any error (consistent with Stop hook being cleanup, not blocking).
+
+Tests: 20 new in `inline-report-check.test.ts`. Full suite: 706/706
+(was 686 + 20 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.29 → 0.7.30 patch bump.
+
 ### Changed — 2026-05-18 (0.7.29 — D1 active-task gate upgraded from WARN to BLOCK)
 
 `pre-tool-use.ts` orchestrator now EXITS with code 2 when an

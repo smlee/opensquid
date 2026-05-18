@@ -41,6 +41,7 @@ import {
   type BrokenPromise,
 } from "./honesty-ledger.js";
 import { checkAndMaybeArm } from "./heartbeat.js";
+import { checkInlineReportFormat } from "./inline-report-check.js";
 import { readLastAssistantText } from "./transcript.js";
 
 interface StopHookInput {
@@ -94,6 +95,35 @@ export async function runStopHook(): Promise<void> {
   if (fresh.length > 0) {
     for (const p of fresh) {
       process.stderr.write(`🦑 [opensquid honesty] ${p.claim_id}: ${p.reason}\n`);
+    }
+  }
+
+  // 0.7.30 / D3 follow-up — when the agent writes a completion-report-
+  // shaped status update inline (vs. via mcp__opensquid__chat_send),
+  // D3's chat_send check doesn't fire. Catch the inline case here at
+  // Stop time and surface as a broken-promise next turn.
+  if (assistantText) {
+    const inlineViolation = checkInlineReportFormat(assistantText);
+    if (inlineViolation) {
+      const broken: BrokenPromise = {
+        ts: new Date().toISOString(),
+        claim_id: "inline-report-missing-phases",
+        claim_label: "PHASES block per [[feedback_telegram_reports]]",
+        matched_text: inlineViolation.matched_text,
+        reason:
+          `inline message shape suggests a completion report ` +
+          `(version_refs=${inlineViolation.signals.version_refs}, ` +
+          `commit_hashes=${inlineViolation.signals.hash_refs}) but the ` +
+          `PHASES heading is missing. Catches D3 inline variant.`,
+      };
+      try {
+        await recordBrokenPromise(sessionId, broken);
+        process.stderr.write(`🦑 [opensquid honesty] ${broken.claim_id}: ${broken.reason}\n`);
+      } catch (err) {
+        process.stderr.write(
+          `[opensquid hook stop] inline-report check write failed: ${err instanceof Error ? err.message : err}\n`,
+        );
+      }
     }
   }
 
