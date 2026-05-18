@@ -39,6 +39,7 @@ export class HooksCliError extends Error {
 const HOOK_IDS = {
   PreToolUse: "opensquid-pre-tool-use",
   Stop: "opensquid-stop",
+  StopFalseStopGuard: "opensquid-stop-false-stop-guard",
   UserPromptSubmit: "opensquid-user-prompt-submit",
   SessionEnd: "opensquid-session-end",
 } as const;
@@ -53,12 +54,50 @@ const LEGACY_HOOK_ID = "opensquid-drift-pretooluse";
  */
 const COMMAND_FINGERPRINT = "/opensquid/dist/index.js hook ";
 
-interface ClaudeHook {
+/**
+ * D9 false-stop guard prompt — fires as a `type: "prompt"` Stop hook
+ * alongside the existing `type: "command"` Stop hook. Claude Code
+ * evaluates this prompt against the assistant's just-completed turn
+ * via the configured model and uses the YES/NO answer to allow or
+ * block the stop. When blocked, the agent is re-prompted to continue.
+ *
+ * The prompt is intentionally framed so the default (YES, allow stop)
+ * fires on the vast majority of turns; only trailing politeness
+ * reflexes ("Run it?", "Want me to start B4?", "Should I continue?")
+ * tip it to NO.
+ *
+ * Catches drift D9 per loop/docs/opensquid-anti-drift-unified-evaluator-design.md
+ * rule #10b. Locked 2026-05-17 — user requirement: complete prevention.
+ */
+const FALSE_STOP_GUARD_PROMPT = `The assistant just finished a turn with this message:
+
+$ARGUMENTS
+
+Did the assistant message above end with a REAL blocking question that requires user input before the agent can continue? Most messages end normally (no question, or with a question mark that's part of a real decision the user must make) and should answer YES (allow the stop).
+
+Only answer NO when the message ends with a politeness reflex or suggestion the agent should just execute past — patterns like "Run it?", "Want me to do X?", "Should I continue?", "Ready for the next step?", "Want me to start Y?". These are forbidden by the user's locked automation-mode rule.
+
+Respond YES to allow the stop (real blocker, user must respond) or NO to block the stop and re-prompt the agent to continue (politeness reflex, agent should execute instead of asking).`;
+
+const FALSE_STOP_GUARD_MODEL = "claude-haiku-4-5";
+
+interface ClaudeCommandHook {
   type: "command";
   command: string;
   /** Custom non-standard marker so we can find our own hook later. */
   _id?: string;
 }
+
+interface ClaudePromptHook {
+  type: "prompt";
+  prompt: string;
+  model?: string;
+  /** Optional timeout in seconds — Claude Code default is 30s for prompt hooks. */
+  timeout?: number;
+  _id?: string;
+}
+
+type ClaudeHook = ClaudeCommandHook | ClaudePromptHook;
 
 interface ClaudeMatcher {
   matcher?: string;
@@ -117,7 +156,11 @@ export function isOurHook(h: ClaudeHook): boolean {
   // that purgeOurHook used to silently skip (the bug from #118 dogfood).
   // Case-insensitive — macOS APFS default is case-preserving but case-
   // insensitive, so an install at /projects/OpenSquid/ should match too.
+  // Prompt-typed hooks have no command field — they're recognized only
+  // by their _id (handled above); manual / unmarked prompt entries are
+  // not our concern (no installer wrote them).
   if (
+    h.type === "command" &&
     typeof h.command === "string" &&
     h.command.toLowerCase().includes(COMMAND_FINGERPRINT.toLowerCase())
   ) {
@@ -163,6 +206,23 @@ async function cmdInstall(): Promise<void> {
   stop.push({
     hooks: [{ type: "command", command: buildHookCommand("stop"), _id: HOOK_IDS.Stop }],
   });
+  // D9 false-stop guard — fires as a native `type: "prompt"` hook so
+  // Claude Code's framework handles the LLM evaluation (no subprocess
+  // wrapper needed in opensquid). Catches trailing politeness reflexes
+  // like "Run it?" / "Want me to start B4?" and blocks the stop,
+  // re-prompting the agent to continue per the user's locked
+  // automation-mode rule. Counts against the user's Claude Code
+  // subscription model quota (haiku-class, cheap). 0.7.20 / drift D9.
+  stop.push({
+    hooks: [
+      {
+        type: "prompt",
+        prompt: FALSE_STOP_GUARD_PROMPT,
+        model: FALSE_STOP_GUARD_MODEL,
+        _id: HOOK_IDS.StopFalseStopGuard,
+      },
+    ],
+  });
 
   // UserPromptSubmit — surface previous turn's broken promises +
   // auto-classify candidates at the start of the next turn.
@@ -202,6 +262,7 @@ async function cmdInstall(): Promise<void> {
   console.log(`[opensquid hooks install] wrote ${settingsPath()}`);
   console.log(`  PreToolUse       → ${buildHookCommand("pre-tool-use")}`);
   console.log(`  Stop             → ${buildHookCommand("stop")}`);
+  console.log(`  Stop (D9 guard)  → type:prompt model:${FALSE_STOP_GUARD_MODEL}`);
   console.log(`  UserPromptSubmit → ${buildHookCommand("user-prompt-submit")}`);
   console.log(`  SessionEnd       → ${buildHookCommand("session-end")}`);
   console.log(`  next: restart Claude Code so the new settings load.`);

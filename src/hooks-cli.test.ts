@@ -121,6 +121,39 @@ describe("isOurHook — command-path fallback (un-marked legacy entries)", () =>
   });
 });
 
+describe("isOurHook — prompt-type Stop guard (0.7.20 / drift D9)", () => {
+  it("recognizes the false-stop guard prompt hook by _id", () => {
+    expect(
+      isOurHook({
+        type: "prompt",
+        prompt: "any prompt text",
+        model: "claude-haiku-4-5",
+        _id: "opensquid-stop-false-stop-guard",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a prompt-type entry with a foreign _id (no command fingerprint to fall back on)", () => {
+    expect(
+      isOurHook({
+        type: "prompt",
+        prompt: "some other prompt",
+        model: "claude-haiku-4-5",
+        _id: "other-tool-prompt-hook",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an unmarked prompt-type entry (no _id, no command field)", () => {
+    expect(
+      isOurHook({
+        type: "prompt",
+        prompt: "unmarked prompt",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("isOurHook — rejection of foreign hooks", () => {
   it("rejects entries with a different _id and a non-matching command", () => {
     expect(

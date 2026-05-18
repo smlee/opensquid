@@ -9,6 +9,44 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-17 (0.7.20 — D9 false-stop guard via Claude Code native prompt hook)
+
+`opensquid hooks install` now writes a second Stop hook entry of
+`type: "prompt"` alongside the existing `type: "command"` Stop hook.
+Claude Code evaluates the prompt against the assistant's just-finished
+turn using `claude-haiku-4-5`; YES allows the stop, NO blocks it and
+re-prompts the agent.
+
+Drift D9 (false stops — trailing "Run it?" / "Want me to start B4?" /
+"Should I continue?" politeness reflexes) is now caught and rolled back
+to a recovery turn without user intervention. Catches the patterns
+catalogued in `loop/TASKS.md` D9 + violations of
+`feedback_full_automation_mode`.
+
+Implementation choices per research synthesis 2026-05-17:
+
+- Uses Claude Code's **native** `type: "prompt"` hook primitive — no
+  `claude --print` subprocess wrapper in opensquid code. Auth, latency
+  budget, and lifecycle are framework-managed.
+- Prompt is framed so the default (YES, allow stop) fires on most
+  turns; only trailing politeness reflexes tip to NO.
+- Subscription-bound (model = `claude-haiku-4-5`); counts against
+  Claude Code subscription quota per `project_llm_provider_via_claude_code`.
+
+`isOurHook` recognizes the new entry by `_id`
+(`opensquid-stop-false-stop-guard`); `uninstall` removes it cleanly;
+`doctor` counts it under Stop. Tests: 3 new in `hooks-cli.test.ts`
+covering recognition + foreign-id rejection + unmarked rejection.
+Suite: 606/606.
+
+**This is one rule of the broader anti-drift rewrite designed in
+`loop/docs/opensquid-anti-drift-unified-evaluator-design.md`.** D9 ships
+first because the user explicitly flagged it as the most painful drift.
+Rules for D1 (already partially shipped 0.7.18), D2, D3, D4, D5, D6,
+D7, D8, D10 land in subsequent patches per the same design doc.
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.19 → 0.7.20 patch bump.
+
 ### Cleanup — 2026-05-17 (0.7.19 — relocate internal planning out of public repo)
 
 Per directive "nothing internal should be public-facing": removed all
