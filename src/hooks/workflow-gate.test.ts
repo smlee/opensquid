@@ -13,7 +13,11 @@ import * as path from "node:path";
 
 import * as engineClient from "../engine-client.js";
 
-import { checkOverrideEnv, evaluateWorkflowGate } from "./workflow-gate.js";
+import {
+  checkOverrideEnv,
+  evaluateWorkflowGate,
+  getRequiredPhasesFromCodex,
+} from "./workflow-gate.js";
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -191,6 +195,22 @@ describe("evaluateWorkflowGate — fail-open invariant", () => {
 // ---------------------------------------------------------------------
 // Emergency override
 // ---------------------------------------------------------------------
+
+// ---------------------------------------------------------------------
+// Codex-driven required-phases (drift-as-codex chunk 3a, 0.7.16)
+// ---------------------------------------------------------------------
+
+describe("getRequiredPhasesFromCodex", () => {
+  it("returns the 6 required phases from the bundled-default codex's standard-7-phase workflow", () => {
+    const phases = getRequiredPhasesFromCodex();
+    expect(phases).toEqual(["pre_research", "learn", "code", "test", "audit", "post_research"]);
+  });
+
+  it("excludes the `fix` phase (required: false in the codex)", () => {
+    const phases = getRequiredPhasesFromCodex();
+    expect(phases).not.toContain("fix");
+  });
+});
 
 describe("evaluateWorkflowGate — emergency override", () => {
   it("ALLOWS with bypass warning when OPENSQUID_SKIP_WORKFLOW_GATE=1", async () => {

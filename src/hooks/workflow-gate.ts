@@ -20,34 +20,38 @@
  * pre-tool-use.ts).
  */
 
+import { loadBundledDefaultCodex } from "../codex/loader.js";
 import { OpenSquidEngine } from "../engine-client.js";
 
 import { readActiveTaskId } from "./transcript.js";
 
 /**
- * Phases that must be logged before `git commit` is allowed.
+ * Resolve the set of phases that must be logged before `git commit`
+ * is allowed.
  *
- * 0.7.6 (#150): expanded from ["audit", "post_research"] to the full
- * locked 7-phase set MINUS `fix`. `fix` is intentionally soft —
- * audit often finds nothing actionable, and forcing a fix entry
- * would either inflate the ledger with no-op rows or push the agent
- * to fabricate "fix" entries. Matches the bundled-default codex's
- * standard-7-phase workflow (src/codex/bundled-default/codex.yaml)
- * exactly, so drift-as-codex chunk 2/3 cutover is a clean deletion
- * of this hardcoded array.
+ * 0.7.16 (drift-as-codex chunk 3a): the required-phase list now comes
+ * from `bundled-default/codex.yaml`'s `default_workflow_id` workflow,
+ * filtered to phases with `required: true`. Previously this was a
+ * hard-coded `REQUIRED_PHASES` array; the codex is now the single
+ * source of truth, which is what drift-as-codex was for.
  *
- * Per [[feedback_workflow_cycle]] — the 7-phase rule is the user's
- * top-tier drift-protection mechanism; enforcing only 2 of 7 was
- * the load-bearing reason #132 shipped with most phases unlogged.
+ * Fail-open: if the codex can't be loaded (missing file, parse error,
+ * missing workflow id), the gate disables itself with a stderr
+ * warning rather than blocking every commit. The codex is bundled
+ * in the npm package so this should be unreachable in normal use.
  */
-const REQUIRED_PHASES = [
-  "pre_research",
-  "learn",
-  "code",
-  "test",
-  "audit",
-  "post_research",
-] as const;
+export function getRequiredPhasesFromCodex(): readonly string[] {
+  const codex = loadBundledDefaultCodex();
+  const workflowId = codex.default_workflow_id;
+  if (!workflowId) {
+    throw new Error("bundled-default codex has no default_workflow_id");
+  }
+  const workflow = (codex.workflows ?? []).find((w) => w.id === workflowId);
+  if (!workflow) {
+    throw new Error(`bundled-default codex has no workflow with id=${workflowId}`);
+  }
+  return workflow.phases.filter((p) => p.required).map((p) => p.name);
+}
 
 export interface WorkflowGateInput {
   /** Path to the session's JSONL transcript. Optional — gate falls
@@ -100,6 +104,18 @@ export async function evaluateWorkflowGate(input: WorkflowGateInput): Promise<Wo
     return { block: false, stderr: "" };
   }
 
+  let requiredPhases: readonly string[];
+  try {
+    requiredPhases = getRequiredPhasesFromCodex();
+  } catch (err) {
+    // Codex unloadable (missing bundled YAML, parse error, etc.).
+    // Fail-open consistent with the gate's other failure modes.
+    return {
+      block: false,
+      stderr: `[opensquid workflow-gate] codex unloadable (proceeding): ${err instanceof Error ? err.message : err}\n`,
+    };
+  }
+
   const engine = new OpenSquidEngine();
   let ledger: { phases_logged: string[] } | null = null;
   try {
@@ -123,7 +139,7 @@ export async function evaluateWorkflowGate(input: WorkflowGateInput): Promise<Wo
   }
 
   const logged = new Set(ledger.phases_logged);
-  const missing = REQUIRED_PHASES.filter((p) => !logged.has(p));
+  const missing = requiredPhases.filter((p) => !logged.has(p));
   if (missing.length === 0) {
     return { block: false, stderr: "" };
   }

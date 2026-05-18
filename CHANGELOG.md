@@ -9,6 +9,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Changed — 2026-05-17 (0.7.16 — drift-as-codex chunk 3a: workflow-gate reads required phases from codex #168)
+
+`workflow-gate.ts` previously had its required-phase list hard-coded
+as a `REQUIRED_PHASES` const. Now it derives the list at gate-check
+time by calling `loadBundledDefaultCodex()` (from chunk 2) and
+filtering `default_workflow_id`'s phases to those with
+`required: true`. Same 6 phases as before (pre_research, learn, code,
+test, audit, post_research — `fix` stays soft), but sourced from
+YAML, not TypeScript.
+
+New exported function `getRequiredPhasesFromCodex()` for direct
+testing. Fail-open behavior added: if the codex is unloadable (parse
+error, missing file, missing default_workflow_id), the gate emits a
+stderr warning and allows the commit, consistent with the other
+fail-open paths (engine-unreachable, no-transcript, no-active-task).
+
+**Tests:** 2 new tests in `src/hooks/workflow-gate.test.ts` —
+codex-sourced phase list matches expected 6, `fix` excluded. The
+12 pre-existing tests pass unchanged (semantics preserved). Full
+suite 597/597 (was 595).
+
+This is the first real consumer of the chunk-2 loader. Chunk 3b
+(honesty-ledger cutover) follows next.
+
 ### Added — 2026-05-17 (0.7.15 — drift-as-codex chunk 2: bundled-default codex loader #168)
 
 New module `src/codex/loader.ts` reads `src/codex/bundled-default/codex.yaml`
