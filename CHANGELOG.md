@@ -9,6 +9,43 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.32 — anti-drift unified evaluator scaffold: state.ts foundation)
+
+User directive: "yes that is what I want a full delivery." Beginning
+the architectural rewrite described in
+`loop/docs/opensquid-anti-drift-unified-evaluator-design.md`.
+
+This patch lays the foundation: `src/anti-drift/state.ts` — the
+filesystem-backed state primitives that the upcoming `rules.ts` +
+`evaluator.ts` will read/write. No behavior change to existing
+hooks; the new module lives alongside `src/hooks/` until the cutover.
+
+Three state primitives:
+- **active-task.json** (per-session) — single source of truth for
+  the in_progress task signal. Replaces fragile transcript-parsing
+  reliance once the cutover ships. Read returns null on file-absent
+  OR malformed (fail-safe).
+- **violations.log** (per-session, append-only) — rule firings
+  surfaced to UPS via atomic rename-and-consume.
+- **drift-catalog.jsonl** (per-project, durable across sessions) —
+  audit trail; project-scoped path with session-scoped fallback.
+
+Exports: `readActiveTask`, `writeActiveTask`, `clearActiveTask`,
+`appendViolation`, `consumeViolations`, `driftCatalogPath`,
+`sessionStateFiles` (SessionEnd cleanup helper).
+
+Tests: 16 new in `src/anti-drift/state.test.ts` (tmpdir-isolated
+to keep tests hermetic). Full suite: 723/723 (was 707 + 16 new).
+
+This is the first patch of a multi-patch sequence completing the
+architectural rewrite. Subsequent patches:
+- 0.7.33 → `rules.ts` declarative rule list (18 entries)
+- 0.7.34 → `evaluator.ts` single-binding orchestrator
+- 0.7.35 → atomic cutover (delete `src/hooks/`, update `hooks-cli.ts`
+  to point at `anti-drift/`)
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.31 → 0.7.32 patch bump.
+
 ### Changed — 2026-05-18 (0.7.31 — D9 prompt-hook: squid emoji prefix for user visibility)
 
 User directive: "you need to put a squid emoji so users can tell."
