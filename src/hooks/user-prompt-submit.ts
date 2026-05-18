@@ -91,6 +91,17 @@ export async function runUserPromptSubmitHook(): Promise<void> {
   // sees this at the top of its context for the new turn and acts on it
   // inline (calls recall, scans for substantive recent user turns, calls
   // memorize/remember/promote per CLAUDE.md classify-and-act).
+  // 0.7.27 / D8 — surface a plan-mirror reminder when the user's
+  // prompt contains multiple task identifiers in sequence. Catches the
+  // "166 then 168" → agent does 166 + defers 168 misread.
+  if (typeof payload.prompt === "string") {
+    const mirror = detectMultiTaskDirective(payload.prompt);
+    if (mirror) {
+      if (out.length > 0) out.push("");
+      out.push(mirror);
+    }
+  }
+
   const heartbeat = await consumePendingHeartbeat(sessionId);
   if (heartbeat) {
     if (out.length > 0) out.push("");
@@ -113,6 +124,68 @@ export async function runUserPromptSubmitHook(): Promise<void> {
   }
 
   process.exit(0);
+}
+
+/**
+ * 0.7.27 / D8 — detect a multi-task directive in the user's prompt
+ * and return a "mirror back your parsed plan" reminder message.
+ *
+ * Trigger patterns (case-insensitive):
+ *   - "<num1> then <num2>" — bare-number sequencing (the D8 incident
+ *     shape: user said "166 then 168" — agent did 166 + deferred 168)
+ *   - "first <ref> then <ref>"
+ *   - "after <ref> do <ref>" / "after X then Y"
+ *   - Two or more `#<num>` references
+ *
+ * Returns the surface message when a match fires, null otherwise.
+ * Exported for direct testing.
+ */
+export function detectMultiTaskDirective(prompt: string): string | null {
+  const refs = extractTaskRefs(prompt);
+  if (refs.length < 2) return null;
+  return (
+    `🦑 [opensquid] multi-task directive detected (refs: ${refs.slice(0, 5).join(", ")}). ` +
+    `Per [[feedback_user_words_have_top_weight]] + drift D8: BEFORE executing, ` +
+    `mirror back your parsed plan ("read as: do X, then do Y") so we catch a ` +
+    `misread before it ships. Don't auto-defer items the user listed in parallel.`
+  );
+}
+
+/**
+ * Extract probable task references from a user prompt. Returns the
+ * distinct references in document order, capped at 10.
+ *
+ * Heuristics (intentionally narrow to keep false-positives low):
+ *   - `#\d+` shapes always count
+ *   - bare 2-4-digit numbers count IF they're connected by a
+ *     sequencing word ("then" / "after" / "first" / "and then")
+ *
+ * Exported for testing.
+ */
+export function extractTaskRefs(prompt: string): string[] {
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  // Pass 1: explicit #N references
+  for (const m of prompt.matchAll(/#\d+/g)) {
+    if (!seen.has(m[0])) {
+      refs.push(m[0]);
+      seen.add(m[0]);
+    }
+  }
+  // Pass 2: bare-number sequences via "then" / "after" / "first ... then"
+  // Pattern: two 2-4-digit numbers separated by "then"/"after"/"and then".
+  for (const m of prompt.matchAll(
+    /\b(\d{2,4})\s*(?:,\s*|\s+(?:then|after|and then|and)\s+)(\d{2,4})\b/gi,
+  )) {
+    for (const num of [m[1], m[2]]) {
+      const key = `#${num}`;
+      if (!seen.has(key)) {
+        refs.push(key);
+        seen.add(key);
+      }
+    }
+  }
+  return refs.slice(0, 10);
 }
 
 /**

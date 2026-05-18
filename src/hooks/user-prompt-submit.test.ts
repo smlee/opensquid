@@ -9,7 +9,11 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { detectResumeAndUpdateMarker } from "./user-prompt-submit.js";
+import {
+  detectMultiTaskDirective,
+  detectResumeAndUpdateMarker,
+  extractTaskRefs,
+} from "./user-prompt-submit.js";
 
 let tmpRoot: string;
 const SESSION = "test-session";
@@ -104,5 +108,41 @@ describe("detectResumeAndUpdateMarker (#164)", () => {
     const tLater = t0 + 6 * 60 * 60 * 1000;
     const msgB = await detectResumeAndUpdateMarker("B", { dataRoot: tmpRoot, now: tLater });
     expect(msgB).toBeNull();
+  });
+});
+
+describe("detectMultiTaskDirective — D8 (0.7.27)", () => {
+  it("fires on '166 then 168' (bare-number sequencing — D8 incident shape)", () => {
+    const m = detectMultiTaskDirective("166 then 168");
+    expect(m).not.toBeNull();
+    expect(m).toContain("#166");
+    expect(m).toContain("#168");
+  });
+
+  it("fires on '#171 then #172' (explicit references)", () => {
+    expect(detectMultiTaskDirective("#171 then #172")).not.toBeNull();
+  });
+
+  it("fires on '166, 168' comma-separated", () => {
+    expect(detectMultiTaskDirective("166, 168")).not.toBeNull();
+  });
+
+  it("does NOT fire on a single task reference", () => {
+    expect(detectMultiTaskDirective("work on #170")).toBeNull();
+    expect(detectMultiTaskDirective("can you do 168")).toBeNull();
+  });
+
+  it("does NOT fire on unrelated number prose", () => {
+    // No sequencing connector → no D8 risk.
+    expect(detectMultiTaskDirective("we shipped 5 patches in 30 minutes")).toBeNull();
+  });
+
+  it("extractTaskRefs returns refs in document order", () => {
+    expect(extractTaskRefs("166 then 168")).toEqual(["#166", "#168"]);
+    expect(extractTaskRefs("#171 and #172")).toEqual(["#171", "#172"]);
+  });
+
+  it("extractTaskRefs dedupes references", () => {
+    expect(extractTaskRefs("#170 then #170")).toEqual(["#170"]);
   });
 });

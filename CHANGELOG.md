@@ -9,6 +9,36 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.27 — D8 multi-task plan-mirror reminder in UPS)
+
+New `detectMultiTaskDirective` + `extractTaskRefs` in user-prompt-submit.ts.
+When the user's prompt contains 2+ task references in a sequencing
+pattern ("166 then 168", "#171 and #172", "166, 168", etc.), inject
+a reminder at next UPS asking the agent to mirror back its parsed
+plan before executing.
+
+Catches D8: user said "166 then 168", agent did 166 then marked
+168 deferred per stale memory. The plan-mirror requirement makes
+the misread visible BEFORE the agent commits to the wrong reading.
+
+Detection (intentionally narrow — false-positives in UPS are tolerable
+but we don't want to fire on unrelated number prose):
+- Explicit `#N` references always count
+- Bare 2-4-digit numbers count only when connected by a sequencing
+  word (then / after / and then / and / comma)
+
+Soft surface (non-blocking). Agent reads the reminder and is expected
+to mirror plan in its next response. Future tightening (Haiku-parsed
+structured plan injection per the design doc rule #14) deferred to
+a later patch — regex catches the common D8 incident shape and is
+cheap.
+
+Tests: 7 new in `user-prompt-submit.test.ts`
+(`detectMultiTaskDirective — D8 (0.7.27)`). Full suite: 682/682
+(was 675 + 7 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.26 → 0.7.27 patch bump.
+
 ### Added — 2026-05-18 (0.7.26 — D7 heartbeat-recall block via recall-required flag)
 
 The heartbeat mechanism (Stop hook arms a nudge when the transcript
