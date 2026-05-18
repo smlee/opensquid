@@ -9,6 +9,45 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-17 (0.7.18 — pre-tool-use warns when active-task-gated MCP tool called without in_progress task #173 / drift D1)
+
+The workflow-gate silently fail-opens when no `in_progress` TodoWrite
+task exists in the transcript (workflow-gate.ts:97-100). That's
+correct behavior for legitimate ad-hoc commits — but it also masks
+the failure mode "agent never calls TaskCreate." During the
+2026-05-17 evening session, the agent shipped #166/#168/#170 with
+phase ledger entries written but the workflow-gate disengaged the
+whole time because no in_progress task existed.
+
+This commit adds visibility: when the planned tool is
+`mcp__opensquid__log_phase` or `mcp__opensquid__chat_send` AND
+`readActiveTaskId(transcript_path)` returns null, the PreToolUse
+hook emits a loud stderr warning:
+
+```
+🦑 [opensquid] mcp__opensquid__log_phase called without an in_progress TodoWrite task —
+the entries it writes WON'T be validated by the workflow-gate.
+Call TaskCreate (and set in_progress) first so the gate has an
+active task to enforce against.
+```
+
+Non-blocking — legitimate ad-hoc MCP usage still works. Transcript-
+read failures are swallowed so the hook never blocks on its own bug.
+
+New exported helper `checkActiveTaskRequirement(call, transcriptPath)`
+for direct testing. `pre-tool-use.test.ts` is NEW — pre-tool-use.ts
+previously had no direct test coverage despite being the most
+load-bearing hook.
+
+**Why this is the headline drift fix:** before this commit, the
+gate's silent fail-open mode meant the entire drift-protection
+track could be visually green (phases logged, ledger written) while
+actually validating nothing. Now the gap surfaces at the call site,
+not at end-of-session.
+
+**Tests:** 6 new tests in `src/hooks/pre-tool-use.test.ts`. Full
+suite 603/603 (was 597). Pre-push checklist green.
+
 ### Changed — 2026-05-17 (0.7.17 — drift-as-codex chunk 3b: honesty-ledger claim catalog moves to codex #168)
 
 `honesty-ledger.ts`'s 15-entry `CLAIM_PATTERNS` array was previously

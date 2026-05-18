@@ -28,8 +28,56 @@
 
 import { decide, findDrifts, type ToolCallInput } from "./drift-patterns.js";
 import { recordToolCall } from "./honesty-ledger.js";
+import { readActiveTaskId } from "./transcript.js";
 import { evaluateVersioningGate } from "./versioning-gate.js";
 import { evaluateWorkflowGate } from "./workflow-gate.js";
+
+/**
+ * MCP tools that participate in the drift-protection track. When any
+ * of these is called WITHOUT an in_progress TodoWrite task in the
+ * transcript, the workflow-gate / chat-routing signals end up writing
+ * to a ledger that no gate validates against. We can't BLOCK these
+ * calls (legitimate ad-hoc usage exists), but emit a loud stderr
+ * warning so the gap is visible. #173 / drift D1 structural fix
+ * (locked 2026-05-17).
+ */
+const ACTIVE_TASK_GATED_MCP_TOOLS: ReadonlySet<string> = new Set([
+  "mcp__opensquid__log_phase",
+  "mcp__opensquid__chat_send",
+]);
+
+/**
+ * #173 — return a warning string when an active-task-gated MCP tool is
+ * about to be called without an in_progress TodoWrite task in the
+ * transcript. Returns `null` when the tool isn't gated, no transcript
+ * path is available, or an active task is detected.
+ *
+ * Transcript-read failures (missing file, malformed JSONL) swallow to
+ * null — the hook must never block a legitimate call on its own bug.
+ * The workflow-gate fail-opens silently in this case
+ * (workflow-gate.ts:97-100); this surface makes that fail-open
+ * observable from the call site.
+ *
+ * Exported for direct testing.
+ */
+export async function checkActiveTaskRequirement(
+  call: ToolCallInput,
+  transcriptPath: string | undefined,
+): Promise<string | null> {
+  if (!ACTIVE_TASK_GATED_MCP_TOOLS.has(call.tool)) return null;
+  if (!transcriptPath) return null;
+  try {
+    const activeTaskId = await readActiveTaskId(transcriptPath);
+    if (activeTaskId) return null;
+  } catch {
+    return null;
+  }
+  return (
+    `🦑 [opensquid] ${call.tool} called without an in_progress TodoWrite task — ` +
+    `the entries it writes WON'T be validated by the workflow-gate. ` +
+    `Call TaskCreate (and set in_progress) first so the gate has an active task to enforce against.\n`
+  );
+}
 
 interface ClaudeHookInput {
   /** Tool name (e.g. "Bash", "Edit", "Write"). */
@@ -76,6 +124,14 @@ export async function runPreToolUseHook(): Promise<void> {
     tool: payload.tool_name,
     input: payload.tool_input ?? {},
   };
+
+  // #173 (D1 fix): when an active-task-gated MCP tool is called
+  // without an in_progress TodoWrite task in the transcript, warn
+  // loudly so the gap is visible. Non-blocking.
+  const taskWarning = await checkActiveTaskRequirement(call, payload.transcript_path);
+  if (taskWarning) {
+    process.stderr.write(taskWarning);
+  }
 
   // v0.4: append to the honesty ledger so the Stop hook can reconcile
   // assistant claims against tool calls. Best-effort — never block the
