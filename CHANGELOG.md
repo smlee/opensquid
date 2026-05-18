@@ -9,6 +9,48 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.21 — D6 engine-vocabulary gate — cwd-aware, scans -m message + staged diff)
+
+New `engine-vocab-gate` fires in the PreToolUse hook for `git commit`
+when the working directory looks like an engine repo
+(`*/engine` or `*-engine`). Two-layer scan:
+
+1. **Commit message** — parses the `-m` flag from the bash command
+   (including HEREDOC bodies) and rejects matches for
+   `opensquid|claude[._\- ]code|open[._\- ]squid` (case-insensitive,
+   word-bounded).
+2. **Staged diff** — runs `git diff --cached --unified=0` and scans
+   added lines for the same consumer-name pattern. Excludes paths
+   under `src/host/claude_code/**` (structurally consumer-specific)
+   and lines that look like MIT/Copyright attribution comments.
+
+Replaces the prior `substrate-purity` drift pattern (in
+`drift-patterns.ts`), which only matched commit messages where the
+bash command itself contained the path `loop/engine` — which it
+basically never does in real engine work (cwd is the engine dir, the
+command is just `git commit -m "..."`). The new gate uses the
+hook-payload `cwd` directly.
+
+Catches drift D6 in the catalog: engine commit `dfe7480` (0.5.2)
+message + CHANGELOG referenced "opensquid" repeatedly when both
+should have stayed substrate-pure per
+`[[feedback_engine_vocabulary_discipline]]`.
+
+Override: `OPENSQUID_SKIP_ENGINE_VOCAB_GATE=1` for genuine
+emergencies (migration notes etc.). Loud stderr warning on bypass.
+
+Tests: 23 new in `engine-vocab-gate.test.ts` covering
+`isEngineRepoCwd` (7), `scanCommitMessage` (6), `parseDiffForConsumerNames` (7),
+`checkOverrideEnv` (3). Full suite: 629/629.
+
+Wiring: `pre-tool-use.ts` adds `cwd?: string` to its `ClaudeHookInput`
+type (provided by Claude Code's hook payload per the official hooks
+reference) and threads it into both the new gate AND the existing
+versioning-gate (which previously defaulted to `process.cwd()`, fine
+in practice but the explicit threading is cleaner).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.20 → 0.7.21 patch bump.
+
 ### Added — 2026-05-17 (0.7.20 — D9 false-stop guard via Claude Code native prompt hook)
 
 `opensquid hooks install` now writes a second Stop hook entry of

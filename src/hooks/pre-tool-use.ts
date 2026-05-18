@@ -27,6 +27,7 @@
  */
 
 import { decide, findDrifts, type ToolCallInput } from "./drift-patterns.js";
+import { evaluateEngineVocabGate } from "./engine-vocab-gate.js";
 import { recordToolCall } from "./honesty-ledger.js";
 import { readActiveTaskId } from "./transcript.js";
 import { evaluateVersioningGate } from "./versioning-gate.js";
@@ -91,6 +92,10 @@ interface ClaudeHookInput {
    * TodoWrite in_progress entry. Absent on some hook configurations;
    * gate is fail-open in that case. */
   transcript_path?: string;
+  /** Working directory the tool will execute in. Provided by Claude
+   * Code's hook payload (per the official hooks reference). Used by
+   * engine-vocab-gate (0.7.21 / D6) to detect engine-repo commits. */
+  cwd?: string;
 }
 
 /**
@@ -186,7 +191,7 @@ export async function runPreToolUseHook(): Promise<void> {
     // git diff inspection only (no RPC), so cheap. Same fail-open
     // invariant as the workflow gate.
     try {
-      const versionResult = await evaluateVersioningGate();
+      const versionResult = await evaluateVersioningGate({ cwd: payload.cwd });
       if (versionResult.block) {
         process.stderr.write(versionResult.stderr);
         process.exit(2);
@@ -198,8 +203,35 @@ export async function runPreToolUseHook(): Promise<void> {
         `[opensquid hook] versioning-gate failed (proceeding): ${err instanceof Error ? err.message : err}\n`,
       );
     }
+
+    // 0.7.21 / D6 — engine vocabulary gate. Blocks engine commits whose
+    // -m message OR staged diff content references consumer-product
+    // names (opensquid, claude code, etc.). Early-exits on non-engine
+    // cwd; cheap when not applicable.
+    try {
+      const bashCmd = stringField(call.input, "command");
+      const vocabResult = await evaluateEngineVocabGate({
+        cwd: payload.cwd,
+        bashCommand: bashCmd ?? undefined,
+      });
+      if (vocabResult.block) {
+        process.stderr.write(vocabResult.stderr);
+        process.exit(2);
+      } else if (vocabResult.stderr) {
+        process.stderr.write(vocabResult.stderr);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[opensquid hook] engine-vocab-gate failed (proceeding): ${err instanceof Error ? err.message : err}\n`,
+      );
+    }
   }
   process.exit(0);
+}
+
+function stringField(input: Record<string, unknown>, field: string): string | null {
+  const v = input[field];
+  return typeof v === "string" ? v : null;
 }
 
 function looksLikeGitCommit(call: ToolCallInput): boolean {
