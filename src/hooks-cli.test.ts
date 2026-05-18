@@ -121,6 +121,21 @@ describe("isOurHook — command-path fallback (un-marked legacy entries)", () =>
   });
 });
 
+describe("FALSE_STOP_GUARD_PROMPT content (0.7.31 — squid emoji prefix)", () => {
+  it("install writes a Stop prompt hook whose prompt instructs Haiku to prefix with 🦑 [opensquid D9-guard]", async () => {
+    // Indirect: re-load the source file content via the install module
+    // and verify the embedded prompt string contains the marker. Avoids
+    // monkeypatching ~/.claude/settings.json in CI.
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const url = await import("node:url");
+    const here = url.fileURLToPath(import.meta.url);
+    const sourcePath = path.join(path.dirname(here), "hooks-cli.ts");
+    const src = await fs.readFile(sourcePath, "utf8");
+    expect(src).toContain("🦑 [opensquid D9-guard]");
+  });
+});
+
 describe("isOurHook — prompt-type Stop guard (0.7.20 / drift D9)", () => {
   it("recognizes the false-stop guard prompt hook by _id", () => {
     expect(

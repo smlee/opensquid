@@ -9,6 +9,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Changed — 2026-05-18 (0.7.31 — D9 prompt-hook: squid emoji prefix for user visibility)
+
+User directive: "you need to put a squid emoji so users can tell."
+The D9 Stop-hook prompt (0.7.20) currently returns Haiku's response
+without a visual marker, so the user can't immediately distinguish
+the automated hook output from agent text in their UI. Other
+opensquid hooks (UPS, honesty-ledger, heartbeat) all prefix with
+🦑 — D9 should match.
+
+Updated `FALSE_STOP_GUARD_PROMPT` to require Haiku begin its response
+with the literal prefix `🦑 [opensquid D9-guard] ` followed by YES/NO
+and a one-sentence justification. Added concrete example responses to
+the prompt so Haiku's format compliance is high.
+
+User must re-run `opensquid hooks install` (writes the updated prompt
+to ~/.claude/settings.json) + restart Claude Code for the change to
+take effect. dist/ rebuilt; install command picks up the new constant
+automatically.
+
+Tests: 1 new in `hooks-cli.test.ts` — verifies the source file embeds
+the `🦑 [opensquid D9-guard]` marker (proxy for the prompt content).
+Full suite: 707/707 (was 706 + 1 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.30 → 0.7.31 patch bump.
+
 ### Added — 2026-05-18 (0.7.30 — D3 inline-report variant: Stop-hook check for in-session reports lacking PHASES)
 
 D3's existing `checkChatSendReportFormat` (0.7.25) only fires on

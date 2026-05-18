@@ -77,7 +77,11 @@ Did the assistant message above end with a REAL blocking question that requires 
 
 Only answer NO when the message ends with a politeness reflex or suggestion the agent should just execute past — patterns like "Run it?", "Want me to do X?", "Should I continue?", "Ready for the next step?", "Want me to start Y?". These are forbidden by the user's locked automation-mode rule.
 
-Respond YES to allow the stop (real blocker, user must respond) or NO to block the stop and re-prompt the agent to continue (politeness reflex, agent should execute instead of asking).`;
+OUTPUT FORMAT (required): Begin your response with the literal prefix "🦑 [opensquid D9-guard] " so the user can visually identify this as an automated hook output (not agent text). After the prefix, respond YES or NO followed by a one-sentence justification.
+
+Examples of well-formed responses:
+- "🦑 [opensquid D9-guard] YES — message ends with a factual statement of completion, not a question."
+- "🦑 [opensquid D9-guard] NO — message ends with 'Want me to start B4?' which is a politeness reflex the agent should execute past."`;
 
 const FALSE_STOP_GUARD_MODEL = "claude-haiku-4-5";
 
