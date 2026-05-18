@@ -9,6 +9,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Cleanup — 2026-05-17 (0.7.19 — relocate internal planning out of public repo)
+
+Per directive "nothing internal should be public-facing": removed all
+internal-planning content from the opensquid repo. Functionally a no-op
+for consumers.
+
+Removed from repo (relocated to internal monorepo):
+
+- `docs/drift-as-codex-design.md`
+- `docs/v0.4-design.md`
+- `docs/v0.5-hybrid-recall-design.md`
+- `ROADMAP.md`
+
+Edited (dropped broken refs to the moved files):
+
+- `CHANGELOG.md` — removed two doc-link sentences inside historical 0.7.3
+  and v0.5 entries
+- `src/index.ts` — comment in the hybrid-recall block no longer points at
+  the moved design doc
+
+Added:
+
+- `.gitignore` entry for `.opensquid/` so local runtime state doesn't leak
+  into the public repo
+
 ### Added — 2026-05-17 (0.7.18 — pre-tool-use warns when active-task-gated MCP tool called without in_progress task #173 / drift D1)
 
 The workflow-gate silently fail-opens when no `in_progress` TodoWrite
@@ -392,8 +417,6 @@ Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.3 → 0.7.4.
 - `phase-logged-7-phase` policy referencing the standard workflow
 
 Added to npm `files` array so it ships with the published package.
-
-**Design doc** (`docs/drift-as-codex-design.md`) covers schema decisions, deferred decisions for chunk 2, backward compatibility guarantees.
 
 **Tests:** 13 new tests in `src/codex/bundled-default/bundled-default.test.ts`: round-trip parse, focused-codex id check, presence of 4 drifts + 7-phase workflow + 5 claims + both policies, schema rejection of bad severity / empty phases / empty allowed_slots, backward compat (codex without any new sections still parses). Full suite: 516/516.
 
@@ -874,8 +897,6 @@ System-level (entire opensquid state):
 Solves the v0.4 false-negative on proper-noun queries (e.g. `"Gianna"` —
 semantic 0.486 < 0.5 threshold but description literally contains the name).
 Dogfood-verified end-to-end against the family memory.
-
-See `docs/v0.5-hybrid-recall-design.md` for the locked design.
 
 ### Added — v0.4 Phase 1 (origination metadata)
 

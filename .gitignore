@@ -11,3 +11,6 @@ coverage/
 .idea/
 .vscode/
 *.tsbuildinfo
+
+# Local runtime state — never ship internal state to public repo
+.opensquid/

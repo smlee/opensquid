@@ -1025,10 +1025,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // engine runs both semantic and text-match sub-searches and
         // RRF-merges by id. Solves the v0.4 false-negative on
         // proper-noun queries that scored below the semantic
-        // threshold despite a literal description match (see
-        // docs/v0.5-hybrid-recall-design.md). Callers can override
-        // by setting `mode` on a future tool surface; default stays
-        // hybrid because that's the strictly-better behavior.
+        // threshold despite a literal description match.
+        // Callers can override by setting `mode` on a future tool
+        // surface; default stays hybrid because that's the
+        // strictly-better behavior.
         //
         // Threshold semantics: opensquid passes `min_similarity`
         // down to the engine, which applies it to RAW per-source
