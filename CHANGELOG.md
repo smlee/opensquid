@@ -9,6 +9,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Changed — 2026-05-18 (0.7.29 — D1 active-task gate upgraded from WARN to BLOCK)
+
+`pre-tool-use.ts` orchestrator now EXITS with code 2 when an
+active-task-gated MCP tool (`mcp__opensquid__log_phase`,
+`mcp__opensquid__chat_send`) is called without an in_progress
+TodoWrite task. Previously the check (`checkActiveTaskRequirement`,
+#173 / 0.7.18) only WARNed to stderr; the agent could ignore it
+freely (and empirically did — every time).
+
+Catches the D1 headline drift in its strongest form: the agent
+MUST call TaskCreate before log_phase / chat_send. Without an
+active task, the workflow-gate has no task to validate phases
+against, so the entire drift-protection chain falls over —
+exactly what happened in the 2026-05-17 evening session per the
+TASKS.md drift catalog.
+
+Bypass: `OPENSQUID_SKIP_ACTIVE_TASK_GATE=1` for legitimate
+non-task-scoped MCP calls (ad-hoc one-shot chat ping etc.). Loud
+stderr warning on bypass.
+
+`checkActiveTaskRequirement` pure function unchanged (still returns
+warning string + null). Existing tests (12 in pre-tool-use.test.ts)
+still pass — the change is to the orchestrator's response to a
+non-null return.
+
+This closes the full anti-drift rewrite sequence shipped in this
+session: D9 (0.7.20), D6 (0.7.21), D10 (0.7.22), D5 (0.7.23),
+D2 (0.7.24), D3 (0.7.25), D7 (0.7.26), D8 (0.7.27), D4 (0.7.28),
+and D1 BLOCK upgrade (this patch). All 10 drifts in the
+loop/TASKS.md catalog now have structural protection per
+loop/docs/opensquid-anti-drift-unified-evaluator-design.md.
+
+Full suite: 686/686 (unchanged — pure function behavior unchanged).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.28 → 0.7.29 patch bump.
+
 ### Added — 2026-05-18 (0.7.28 — D4 bundled-commit drift pattern)
 
 New `bundled-commit` drift pattern fires when a `git commit -m`

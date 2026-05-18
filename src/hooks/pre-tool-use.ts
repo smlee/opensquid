@@ -164,12 +164,27 @@ export async function runPreToolUseHook(): Promise<void> {
     input: payload.tool_input ?? {},
   };
 
-  // #173 (D1 fix): when an active-task-gated MCP tool is called
-  // without an in_progress TodoWrite task in the transcript, warn
-  // loudly so the gap is visible. Non-blocking.
+  // #173 / 0.7.29 — D1 BLOCK upgrade. When an active-task-gated MCP
+  // tool is called without an in_progress TodoWrite task in the
+  // transcript, BLOCK (was: WARN). The design doc rule #1 says BLOCK
+  // is the right semantic: log_phase / chat_send without an active
+  // task is exactly the failure mode the workflow-gate exists to
+  // prevent, and a soft warning was empirically ignored every time.
+  // Bypass: OPENSQUID_SKIP_ACTIVE_TASK_GATE=1 for legitimate
+  // non-task-scoped calls.
   const taskWarning = await checkActiveTaskRequirement(call, payload.transcript_path);
   if (taskWarning) {
     process.stderr.write(taskWarning);
+    if (!checkActiveTaskBypassEnv()) {
+      process.stderr.write(
+        `  This is a BLOCK (was WARN through 0.7.28). Call TaskCreate first.\n` +
+          `  Override (genuine non-task-scoped call): set OPENSQUID_SKIP_ACTIVE_TASK_GATE=1.\n`,
+      );
+      process.exit(2);
+    }
+    process.stderr.write(
+      `  🦑 [opensquid active-task-gate] BYPASSED via OPENSQUID_SKIP_ACTIVE_TASK_GATE=1\n`,
+    );
   }
 
   // 0.7.25 / D3 — when chat_send body looks like a report but is missing
@@ -305,6 +320,15 @@ function stringField(input: Record<string, unknown>, field: string): string | nu
  */
 function checkRecallBypassEnv(): boolean {
   return process.env.OPENSQUID_SKIP_RECALL_GATE === "1";
+}
+
+/**
+ * 0.7.29 / D1 BLOCK upgrade — emergency bypass for the active-task
+ * requirement. For legitimate non-task-scoped log_phase / chat_send
+ * calls (e.g. an ad-hoc one-shot ping to the user).
+ */
+function checkActiveTaskBypassEnv(): boolean {
+  return process.env.OPENSQUID_SKIP_ACTIVE_TASK_GATE === "1";
 }
 
 function buildRecallRequiredBlockMessage(tool: string): string {
