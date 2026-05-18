@@ -9,6 +9,49 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.22 — D10 automated drift catalog at SessionEnd)
+
+New SessionEnd-time scanner that walks the session's JSONL transcript
+and records three classes of drift markers to a per-project (or
+per-session fallback) JSONL log:
+
+1. **User-correction phrases** in user messages — "you drifted",
+   "stop X-ing", "don't repeat", "no not that"
+2. **Locked-rule citations** in user OR assistant messages —
+   `feedback_*`, `mem-<hex>`, `drift D\d+`
+3. **Agent mea-culpa phrases** in assistant messages — "I should have",
+   "I drifted", "I false-stopped", "my mistake"
+
+Entries land at `<dataRoot>/projects/<uuid>/drift-catalog.jsonl` when
+the project UUID resolves from cwd (via the same
+`findProjectCard` walk used elsewhere), or
+`<dataRoot>/sessions/<id>/drift-catalog.jsonl` as fallback so data
+isn't lost on no-card sessions.
+
+Entry schema: `{timestamp, session_id, kind, evidence, context}` —
+context is ±100 chars surrounding the match for retroactive analysis.
+
+Catches drift D10 in the catalog: previously the agent only catalogued
+its drifts AFTER the user prompted "please put in all the drifting
+issues found recently." This makes the cataloguing automatic — the
+dogfood proof writes itself.
+
+Fail-open: any error (missing transcript, parse failure, write
+failure) is swallowed with a stderr warning. SessionEnd is cleanup,
+not blocking.
+
+`session-end.ts` now reads `transcript_path` + `cwd` from the hook
+payload (previously only `session_id`) and runs the scan before
+`clearSession` (so any session-scoped state used for context is still
+available).
+
+Tests: 18 new in `drift-catalog.test.ts` covering each marker class,
+malformed-line handling, entry-shape verification, and
+`resolveCatalogPath` for both project-card and session-fallback
+branches. Full suite: 647/647.
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.21 → 0.7.22 patch bump.
+
 ### Added — 2026-05-18 (0.7.21 — D6 engine-vocabulary gate — cwd-aware, scans -m message + staged diff)
 
 New `engine-vocab-gate` fires in the PreToolUse hook for `git commit`
