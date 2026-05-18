@@ -9,6 +9,35 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.25 — D3 7-phase report format check on chat_send)
+
+New `checkChatSendReportFormat` in pre-tool-use.ts fires when
+`mcp__opensquid__chat_send` is called with text starting with the
+`🦑 #<N>` task-completion report marker but missing the `PHASES`
+heading. Non-blocking WARN telling the agent that reports must list
+each of the 7 phases (pre_research, learn, code, test, audit,
+post_research, fix) with a concrete one-line finding per
+`[[feedback_telegram_reports]]` — not just ✅ or a paragraph summary.
+
+Catches D3: the #170 first Telegram message this session was a
+free-form summary; user had to ask "where is the 7 layer report?"
+to prompt the proper format.
+
+Implementation is a tiny pure function alongside
+`checkActiveTaskRequirement` (#173 / D1 partial fix), wired into
+the orchestrator next to it. Heuristic: any chat_send body matching
+`^\s*🦑\s+#\d` is interpreted as a task report; absence of the
+literal `PHASES` keyword surfaces the warning. Accepted noise: a
+genuine non-report message starting with the squid + hash pattern
+will false-fire — rare in practice, easy to bypass by not opening
+with the marker.
+
+Tests: 6 new in `pre-tool-use.test.ts`
+(`checkChatSendReportFormat — 0.7.25 / drift D3`). Full suite:
+669/669 (was 663 + 6 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.24 → 0.7.25 patch bump.
+
 ### Added — 2026-05-18 (0.7.24 — D2 Telegram routing redirect)
 
 New drift pattern `telegram-redirect-report` fires when the agent

@@ -80,6 +80,39 @@ export async function checkActiveTaskRequirement(
   );
 }
 
+/**
+ * 0.7.25 / D3 — when `chat_send` is called with a body that looks like
+ * a task-completion report (starts with the agent's `🦑 #<N>` marker),
+ * verify the body includes a `PHASES` heading + at least 7 phase
+ * lines per `[[feedback_telegram_reports]]`. Returns a non-blocking
+ * warning string when the format is missing, null otherwise.
+ *
+ * Catches D3: paragraph summary sent instead of the locked 7-phase
+ * format. Detection is heuristic (the agent could write a real
+ * non-report message starting with `🦑 #N` — accepted noise).
+ *
+ * Exported for direct testing.
+ */
+export function checkChatSendReportFormat(call: ToolCallInput): string | null {
+  if (call.tool !== "mcp__opensquid__chat_send") return null;
+  const text = (call.input as { text?: unknown }).text;
+  if (typeof text !== "string") return null;
+  // Trigger: message starts with the report marker `🦑 #N`.
+  if (!/^\s*🦑\s+#\d/.test(text)) return null;
+  // Format requirement: must include a PHASES heading and the 7 phase
+  // names. The phase names match the codex's default workflow.
+  if (!/\bPHASES\b/.test(text)) {
+    return (
+      `🦑 [opensquid] chat_send body looks like a task-completion report ` +
+      `(starts with \`🦑 #N\`) but is missing the \`PHASES\` block. ` +
+      `Per [[feedback_telegram_reports]] reports must list each phase ` +
+      `(pre_research, learn, code, test, audit, post_research, fix) ` +
+      `with a concrete one-line finding — not just ✅. Catches drift D3.\n`
+    );
+  }
+  return null;
+}
+
 interface ClaudeHookInput {
   /** Tool name (e.g. "Bash", "Edit", "Write"). */
   tool_name?: string;
@@ -136,6 +169,13 @@ export async function runPreToolUseHook(): Promise<void> {
   const taskWarning = await checkActiveTaskRequirement(call, payload.transcript_path);
   if (taskWarning) {
     process.stderr.write(taskWarning);
+  }
+
+  // 0.7.25 / D3 — when chat_send body looks like a report but is missing
+  // the 7-phase format, warn. Non-blocking.
+  const formatWarning = checkChatSendReportFormat(call);
+  if (formatWarning) {
+    process.stderr.write(formatWarning);
   }
 
   // v0.4: append to the honesty ledger so the Stop hook can reconcile
