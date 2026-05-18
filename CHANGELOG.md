@@ -9,6 +9,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ## [Unreleased]
 
+### Added — 2026-05-18 (0.7.28 — D4 bundled-commit drift pattern)
+
+New `bundled-commit` drift pattern fires when a `git commit -m`
+message references 2+ `#N` task numbers on the same line. WARN
+(non-blocking) — bundled commits aren't always bad, but the
+auto-commit rule (CLAUDE.md) says prefer multiple small logical
+commits over one large catchall, and 2+ task refs in a message is
+the typical bundle shape.
+
+Catches D4: commit `bef7eff` bundled "close #166 + defer #168 +
+section-header rewrite" into one commit. Future bundles like that
+will get warned before commit lands.
+
+Known limitation: HEREDOC commit message bodies are stripped before
+pattern matching (per `stripHeredocBodies` from v0.6.5), so refs
+inside a HEREDOC body don't fire this pattern. Adding staged-content-
+aware detection via a dedicated `bundled-commit-gate` (similar shape
+to engine-vocab-gate) is deferred to a later patch — most bundled
+commits use inline `-m`.
+
+Tests: 4 new in `drift-patterns.test.ts`. Full suite: 686/686
+(was 682 + 4 new).
+
+Per `[[feedback_pre1_versioning]]` v4: 0.7.27 → 0.7.28 patch bump.
+
 ### Added — 2026-05-18 (0.7.27 — D8 multi-task plan-mirror reminder in UPS)
 
 New `detectMultiTaskDirective` + `extractTaskRefs` in user-prompt-submit.ts.

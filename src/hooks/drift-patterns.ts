@@ -126,6 +126,30 @@ export const DRIFT_PATTERNS: DriftPattern[] = [
       "plugin:telegram reply (which is the user's DM). Re-route via chat_send if " +
       "this is meant to be a task report. Catches drift D2.",
   },
+
+  // 6. Bundled multi-purpose commit — `git commit -m` message that
+  //    references 2+ distinct task numbers. The D4 incident was commit
+  //    bef7eff bundling "close #166 + defer #168 + section-header
+  //    rewrite" into one commit. The 2-task-ref heuristic is narrow
+  //    enough to avoid most legitimate single-purpose commits while
+  //    catching the typical bundle shape ("close #X and defer #Y").
+  //    0.7.28 / D4. strip_quotes=false so the -m body is scanned.
+  {
+    id: "bundled-commit",
+    tool: "Bash",
+    trigger: {
+      kind: "bash_regex",
+      pattern: "git\\s+commit\\b[^\\n]*-m\\b[^\\n]*#\\d+[^\\n]*#\\d+",
+      strip_quotes: false,
+    },
+    lesson: "auto-commit",
+    severity: "warn",
+    message:
+      "WARN: commit message references 2+ task numbers (`#N`). Per the auto-commit " +
+      "rule (CLAUDE.md), prefer multiple small logical commits over one large " +
+      "catchall. If these task numbers are genuinely one logical unit (e.g. one " +
+      "task closing two others as duplicates), proceed. Catches drift D4.",
+  },
 ];
 
 // ---------------------------------------------------------------------

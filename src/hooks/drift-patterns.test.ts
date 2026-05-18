@@ -361,3 +361,30 @@ describe("drift catalog — telegram-redirect-report (D2)", () => {
     expect(hits.map((h) => h.pattern.id)).not.toContain("telegram-redirect-report");
   });
 });
+
+describe("drift catalog — bundled-commit (D4)", () => {
+  it("warns on a commit message that references 2+ task numbers", () => {
+    const hits = findDrifts(bash('git commit -m "close #166 and defer #168"'));
+    expect(hits.map((h) => h.pattern.id)).toContain("bundled-commit");
+    expect(decide(hits).exit).toBe(0); // warn-severity = non-blocking
+  });
+
+  it('warns on inline `-m "..."` with 2 #N refs on one line', () => {
+    const hits = findDrifts(bash('git commit -m "release: #166 + #168 + cleanup"'));
+    expect(hits.map((h) => h.pattern.id)).toContain("bundled-commit");
+  });
+  // Known limitation: HEREDOC commit message bodies are stripped by
+  // stripHeredocBodies BEFORE pattern matching, so refs inside the
+  // HEREDOC body don't fire this pattern. Adding staged-content-aware
+  // detection (via a dedicated bundled-commit-gate) is deferred.
+
+  it("does NOT fire on a single-task commit", () => {
+    const hits = findDrifts(bash('git commit -m "fix(workflow-gate): session_id mismatch (#166)"'));
+    expect(hits.map((h) => h.pattern.id)).not.toContain("bundled-commit");
+  });
+
+  it("does NOT fire on commits with no task ref at all", () => {
+    const hits = findDrifts(bash('git commit -m "refactor: drift-patterns.ts"'));
+    expect(hits.map((h) => h.pattern.id)).not.toContain("bundled-commit");
+  });
+});
