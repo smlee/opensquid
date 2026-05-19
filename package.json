@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -59,7 +59,7 @@
   "dependencies": {
     "@clack/prompts": "^0.7.0",
     "@libsql/client": "^0.14.0",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "commander": "^12.1.0",
     "minimatch": "^10.0.0",
     "picocolors": "^1.0.0",
