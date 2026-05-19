@@ -10,3 +10,4 @@ export type { SecretBackend, SecretResolver } from './types.js';
 export { createResolver } from './resolver.js';
 export { dotenvBackend, type DotenvBackendOptions } from './backends/dotenv.js';
 export { opBackend, type OpBackendOptions } from './backends/op.js';
+export { keychainBackend, type KeychainBackendOptions } from './backends/keychain.js';
