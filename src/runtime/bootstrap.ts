@@ -55,6 +55,7 @@
  * Imported by: runtime/hooks/*.ts (per-hook binaries), runtime/index.ts (re-export).
  */
 
+import { registerDestinationCheckFunction } from '../functions/destination_check.js';
 import { registerEventFunctions } from '../functions/event.js';
 import { registerLlmFunctions } from '../functions/llm.js';
 import { FunctionRegistry } from '../functions/registry.js';
@@ -70,6 +71,12 @@ export function buildRegistry(): FunctionRegistry {
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   registerLlmFunctions(r);
+  // Phase 4: `check_destination` is the destination-side anti-drift
+  // primitive. It composes `llm_classify` (registered just above) so the
+  // ordering matters — register it last among the LLM-dependent primitives.
+  // Future destination_check rules and the Phase-4.3 scheduler call into
+  // this primitive name.
+  registerDestinationCheckFunction(r);
   // RAG primitives intentionally not registered in Phase 1 — see header.
   return r;
 }

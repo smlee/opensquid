@@ -14,3 +14,7 @@ export { registerLlmFunctions } from './llm.js';
 export { registerRagFunctions } from './rag.js';
 export { registerStateFunctions } from './state.js';
 export { registerVerdictFunctions } from './verdict.js';
+export {
+  registerDestinationCheckFunction,
+  type CheckDestinationResult,
+} from './destination_check.js';
