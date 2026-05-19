@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./src.legacy",
+    "sourceMap": true,
+    "tsBuildInfoFile": ".tsbuildinfo"
+  },
+  "include": ["src.legacy/**/*"],
+  "exclude": ["node_modules", "dist", "src.legacy/**/*.test.ts"]
+}
