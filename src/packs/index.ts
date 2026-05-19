@@ -5,4 +5,5 @@
  * Imports from: functions/ (for validation), runtime/ types only.
  * Imported by: runtime/, setup/, mcp/.
  */
-export {};
+
+export * from './schemas/index.js';
