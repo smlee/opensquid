@@ -6,3 +6,4 @@
  * Imported by: mcp/, setup/.
  */
 export * from './types.js';
+export { evaluateProcess } from './evaluator.js';
