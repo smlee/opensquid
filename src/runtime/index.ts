@@ -19,3 +19,4 @@ export {
   type TickState,
 } from './unload_conditions.js';
 export { createTick, advanceTick, resetTick } from './tick.js';
+export { prefilterSkills, type PrefilterOptions } from './skill_prefilter.js';
