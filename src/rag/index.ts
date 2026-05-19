@@ -12,7 +12,7 @@
  * Imported by: runtime/, setup/, mcp/.
  */
 
-export type { BackendConfig } from './backend_factory.js';
-export { createBackend } from './backend_factory.js';
+export type { BackendConfig, QwenWithFallbackOpts } from './backend_factory.js';
+export { createBackend, libsqlQwen3WithLexicalFallback } from './backend_factory.js';
 export { rrfFuse } from './rrf.js';
 export type { Lesson, RagBackend, RecallHit } from './types.js';
