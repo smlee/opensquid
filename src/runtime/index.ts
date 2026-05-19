@@ -10,3 +10,4 @@ export { evaluateProcess } from './evaluator.js';
 export { applyDriftResponse } from './drift_response.js';
 export { buildRegistry, loadActivePacks } from './bootstrap.js';
 export { dispatchEvent, type DispatchResult } from './hooks/dispatch.js';
+export { notifyAndPause, isPaused, readPauseState } from './failure_handling.js';
