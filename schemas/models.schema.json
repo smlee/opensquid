@@ -1,0 +1,58 @@
+{
+  "$ref": "#/definitions/models",
+  "definitions": {
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "default": ""
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["subscription", "api", "local", "mcp"]
+          },
+          "impl": {
+            "type": "string",
+            "enum": ["cli", "sdk"]
+          },
+          "cli": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "sdk": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": ["mode"],
+        "additionalProperties": false
+      },
+      "default": {}
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

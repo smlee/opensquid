@@ -1,0 +1,39 @@
+{
+  "$ref": "#/definitions/drift_response",
+  "definitions": {
+    "drift_response": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": "string",
+          "enum": [
+            "block_tool",
+            "warn",
+            "full_stop_and_redo",
+            "notify_and_pause",
+            "auto_correct",
+            "escalate"
+          ],
+          "default": "block_tool"
+        },
+        "per_rule": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "block_tool",
+              "warn",
+              "full_stop_and_redo",
+              "notify_and_pause",
+              "auto_correct",
+              "escalate"
+            ]
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

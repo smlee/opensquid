@@ -1,0 +1,46 @@
+{
+  "$ref": "#/definitions/notifications",
+  "definitions": {
+    "notifications": {
+      "type": "object",
+      "properties": {
+        "severity_tiers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "propertyNames": {
+            "enum": ["critical", "error", "warning", "info"]
+          },
+          "default": {
+            "critical": ["alerts"],
+            "error": ["alerts"],
+            "warning": ["chat"],
+            "info": ["chat"]
+          }
+        },
+        "per_project_override": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "enum": ["critical", "error", "warning", "info"]
+            }
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

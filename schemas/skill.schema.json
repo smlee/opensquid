@@ -1,0 +1,107 @@
+{
+  "$ref": "#/definitions/skill",
+  "definitions": {
+    "skill": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "load": {
+          "type": "string",
+          "enum": ["preload", "lazy"],
+          "default": "lazy"
+        },
+        "when_to_load": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "default": []
+        },
+        "unloads_when": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["track_check", "destination_check"],
+                "default": "track_check"
+              },
+              "process": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "args": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    "as": {
+                      "type": "string"
+                    },
+                    "if": {
+                      "type": "string"
+                    },
+                    "on_empty": {
+                      "type": "string",
+                      "enum": ["pass", "block", "continue"]
+                    }
+                  },
+                  "required": ["call"],
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              },
+              "interval": {
+                "type": "object",
+                "properties": {
+                  "every_n_tool_calls": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": ["every_n_tool_calls"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["id", "process"],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "prose": {
+          "type": "string"
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
