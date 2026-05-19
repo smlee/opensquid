@@ -1,0 +1,22 @@
+# `docs` skill — destination-check that nudges when goal drifts toward writing docs.
+name: docs
+load: lazy
+when_to_load:
+  - tool: Write
+unloads_when:
+  - session_end
+rules:
+  - id: prefer-edit-over-write
+    kind: track_check
+    process:
+      - call: regex_match
+        args:
+          pattern: '\.md$'
+        as: is_markdown
+      - call: verdict
+        if: is_markdown
+        args:
+          level: warn
+          message: editing existing docs is preferred over writing new ones
+prose: |
+  When the agent reaches for Write on a .md file, prefer Edit if the file exists.

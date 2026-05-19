@@ -1,0 +1,6 @@
+# Minimum-viable pack: four required fields, no skills, no side-files.
+# Exists to prove `loadPack` works against the smallest legal pack.
+name: minimal
+version: 0.1.0
+scope: workflow
+goal: smoke test

@@ -1,0 +1,16 @@
+# `git` skill — track-check that blocks dangerous git commands.
+name: git
+load: preload
+rules:
+  - id: block-force-push
+    kind: track_check
+    process:
+      - call: regex_match
+        args:
+          pattern: '^git push.*--force\b'
+        as: hit
+      - call: verdict
+        if: hit
+        args:
+          level: block
+          message: never force-push without explicit confirmation

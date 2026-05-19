@@ -13,3 +13,8 @@ export * from './schemas/index.js';
 // data + the underlying `Document.Parsed` for comment-preserving writeback.
 export { parseYamlFile, parseYamlString, serializeYamlDocument } from './yaml.js';
 export type { ParsedYaml } from './yaml.js';
+
+// Pack folder loader (Task 2.3) — read a directory on disk into a typed `Pack`.
+// Reads `manifest.yaml` + scans `skills/<name>/skill.yaml`. Side-files
+// (models/channels/notifications/drift_response) live in separate consumers.
+export { loadPack } from './loader.js';

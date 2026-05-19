@@ -1,0 +1,14 @@
+# Full-form pack: every manifest field populated, two skills under skills/,
+# plus optional side-files (models.yaml, channels.yaml). Side-files are
+# parsed by separate config consumers — `loadPack` does NOT fold them into
+# the returned Pack (see loader.ts header comment).
+name: full
+version: 0.2.0
+scope: project
+goal: exercise every manifest field + multi-skill load order
+description: full pack fixture exercising all manifest fields and skill ordering
+requires:
+  - some-other-pack
+conflicts:
+  - clashing-pack
+evolves: false

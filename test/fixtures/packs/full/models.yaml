@@ -1,0 +1,7 @@
+# Side-file fixture — exists to prove `loadPack` does NOT consume models.yaml
+# (it belongs to a separate config consumer landing in Phase 2.4+).
+aliases:
+  fast_classifier:
+    mode: subscription
+    command: claude
+    args: ['--print', '--model', 'claude-haiku-4-5']

@@ -1,0 +1,4 @@
+# Side-file fixture — same purpose as models.yaml above (not consumed by loadPack).
+channels:
+  alerts:
+    uri: chat://default
