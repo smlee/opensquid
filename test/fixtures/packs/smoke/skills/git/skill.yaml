@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../../../../../../schemas/skill.schema.json
+#
+# `git` skill — single track-check rule that blocks `git commit --amend`.
+#
+# Mirrors the Phase-1 inline `neverAmendPack` exactly, just expressed as
+# real YAML on disk. The pack uses only `match_command` + `verdict`
+# primitives — both pure in-memory functions — so the smoke test stays
+# hermetic (no Ollama, no `claude` CLI, no libsql, no network).
+name: git
+load: preload
+rules:
+  - id: never-amend
+    kind: track_check
+    process:
+      - call: match_command
+        args:
+          pattern: 'git\s+commit.*--amend'
+          target: tool_args.command
+        as: hit
+      - call: verdict
+        if: hit
+        args:
+          level: block
+          message: amend forbidden

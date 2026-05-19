@@ -28,17 +28,30 @@
  *   rag primitive, the evaluator surfaces `unknown_function` cleanly via the
  *   normal error path — not a silent miss.
  *
- * `OPENSQUID_TEST_PACK` env var (Phase 1 test seam):
- *   When the runtime is launched as a subprocess (e.g. the e2e smoke test
- *   spawning `dist/runtime/hooks/pre-tool-use.js`), the parent test process
- *   cannot reach the child's `activePacks` module state. Setting
- *   `OPENSQUID_TEST_PACK` to a JSON-encoded `Pack` object lets the child
- *   self-seed at module-load time. Malformed JSON is silently ignored
- *   (returns `[]`) — the seam is test-only, fail-safe, and removed in
- *   Phase 2 alongside `setActivePacks`. NEVER document this in user-facing
- *   docs — it is a temporary scaffold, not API.
+ * Two env-var test seams (subprocess hook bridge):
  *
- * Imports from: functions/.
+ *   `OPENSQUID_TEST_PACK` (Phase-1 legacy seam, kept for backward compat):
+ *     A JSON-encoded `Pack` object the child self-seeds at module-load.
+ *     Phase 2.7 keeps this so existing call sites and any in-flight tests
+ *     that hand-build a pack still work. Malformed JSON is silently ignored
+ *     (returns `[]`) — fail-safe, test-only. NEVER document in user docs.
+ *
+ *   `OPENSQUID_TEST_PACK_DIR` (Phase-2.7 seam, preferred):
+ *     An absolute path to an on-disk YAML pack folder (`manifest.yaml` +
+ *     `skills/*\/skill.yaml`). The child invokes the real `loadPack` from
+ *     `src/packs/loader.ts` synchronously at module load via a promise +
+ *     `await` chain handed to `loadActivePacks`. Errors are swallowed at
+ *     the same fail-safe contract as the JSON seam — a missing folder or
+ *     malformed YAML yields `[]`, surfacing as the empty-active-packs
+ *     "allow everything" path. That keeps the seam a strict superset of
+ *     Phase-1 behavior so tests can flip from inline → on-disk without
+ *     changing assertions.
+ *
+ *   Both seams compose: if `OPENSQUID_TEST_PACK_DIR` is set, its loaded
+ *   pack is appended to whatever `OPENSQUID_TEST_PACK` produced. In
+ *   practice tests use exactly one of the two.
+ *
+ * Imports from: functions/, packs/loader.
  * Imported by: runtime/hooks/*.ts (per-hook binaries), runtime/index.ts (re-export).
  */
 
@@ -47,6 +60,7 @@ import { registerLlmFunctions } from '../functions/llm.js';
 import { FunctionRegistry } from '../functions/registry.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
+import { loadPack } from '../packs/loader.js';
 
 import type { Pack } from './types.js';
 
@@ -79,15 +93,34 @@ function loadFromEnv(): Pack[] {
   }
 }
 
-let activePacks: Pack[] = loadFromEnv();
+// Sync constant — the JSON env-var path is read at module load (no I/O).
+const envPacks: Pack[] = loadFromEnv();
+
+// Async future-state — the on-disk YAML path requires fs reads. Resolved at
+// module load too; `loadActivePacks` awaits the same promise on every call
+// so the load happens exactly once per hook subprocess. Errors are swallowed
+// per the seam contract (see header) — a broken fixture yields the empty
+// "allow everything" path rather than crashing the hook binary mid-tool-call.
+const diskPacksPromise: Promise<Pack[]> = (async () => {
+  const dir = process.env.OPENSQUID_TEST_PACK_DIR;
+  if (dir === undefined || dir === '') return [];
+  try {
+    return [await loadPack(dir)];
+  } catch {
+    return [];
+  }
+})();
+
+let activePacks: Pack[] = envPacks;
 
 export function setActivePacks(packs: Pack[]): void {
   activePacks = packs;
 }
 
-// Async signature pinned for Phase 2 — see header. The trivial `await`
-// satisfies @typescript-eslint/require-await without adding real overhead.
+// Async signature pinned for Phase 2 — see header. `setActivePacks` always
+// wins (in-process tests override env-var seams); on top of that the env-var
+// JSON path and the on-disk YAML path compose (concatenated).
 export async function loadActivePacks(_sessionId: string): Promise<Pack[]> {
-  await Promise.resolve();
-  return activePacks;
+  const disk = await diskPacksPromise;
+  return [...activePacks, ...disk];
 }

@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../../../../schemas/manifest.schema.json
+#
+# Smoke-test pack — proves the runtime loads a real on-disk YAML pack
+# (manifest + skill files) end-to-end, replacing the Phase-1 inline
+# `neverAmendPack` fixture.
+#
+# Doubles as the minimum-viable example we'd ship in onboarding docs:
+# four required manifest fields + one skill folder under `skills/`.
+name: smoke-pack
+version: 0.1.0
+scope: workflow
+goal: smoke test for runtime

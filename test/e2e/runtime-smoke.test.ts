@@ -1,48 +1,64 @@
 /**
- * Phase 1 capstone — end-to-end runtime smoke test.
+ * Phase 2 capstone — end-to-end runtime smoke test (on-disk YAML pack).
  *
- * Proves the substrate wires together: a fixture pack with a `never-amend`
- * rule is dispatched through the real compiled hook binary (`pre-tool-use.js`)
- * launched as a subprocess. The block path returns exit code 2 with a stderr
- * message; the allow path returns exit code 0 with empty stderr.
+ * Proves the substrate wires together when a real on-disk YAML pack is
+ * loaded by `loadPack` and dispatched through the compiled hook binary
+ * (`pre-tool-use.js`) launched as a subprocess. Same assertions as the
+ * Phase-1 version (Task 1.19): block path returns exit code 2 with a
+ * stderr message; allow path returns exit code 0 with empty stderr.
+ *
+ * Why on-disk YAML (replaces Phase-1 inline `neverAmendPack`):
+ *   The Phase-2 contract is that packs are folders on disk parsed via
+ *   `src/packs/loader.ts`. The smoke test that proves end-to-end runtime
+ *   wiring has to exercise that contract — otherwise we'd be testing a
+ *   bypass path that ships nothing real to users. The fixture pack at
+ *   `test/fixtures/packs/smoke/` is intentionally minimal so it doubles
+ *   as a copy-pasteable onboarding example (4-field manifest + one skill).
  *
  * Why a subprocess (not in-process): the Claude Code hook protocol is a
  * subprocess contract — Claude Code spawns `opensquid-hook-pretooluse` with
  * stdin = tool-call JSON and reads exit code + stderr. Testing in-process
- * would short-circuit the whole hook surface. The subprocess test is the
- * only one that proves "Claude Code → opensquid → block decision" works.
+ * would short-circuit the whole hook surface.
  *
- * Pack injection seam (Phase 1 only — deleted in Phase 2):
- *   The child subprocess has its own module state, so `setActivePacks` in
- *   this parent test process is invisible to the child. Bootstrap reads
- *   `OPENSQUID_TEST_PACK` env var at module-load time when it's set;
- *   that's how the never-amend pack reaches the child. See bootstrap.ts
- *   header for the seam's design rationale.
+ * Pack injection seam (`OPENSQUID_TEST_PACK_DIR`):
+ *   The child subprocess has its own module state, so a parent `loadPack`
+ *   call is invisible to it. Bootstrap reads `OPENSQUID_TEST_PACK_DIR` at
+ *   module-load time and runs the real `loadPack` against it. The legacy
+ *   `OPENSQUID_TEST_PACK` JSON seam stays in bootstrap for any in-flight
+ *   tests that hand-build a pack — see bootstrap.ts header for both seams.
+ *   We pass an absolute path so the child's cwd (inherited from this test
+ *   process, but a future runner may change cwd) doesn't matter.
  *
  * Build prerequisite: the test reads `dist/runtime/hooks/pre-tool-use.js`,
  * which `pnpm build` produces. `beforeAll` invokes `pnpm build` (synchronously
- * in the child process) so the test is self-contained — a clean checkout
- * plus `pnpm test` works without a manual build step. The build is cheap
- * (~3s) and runs once per test file.
+ * in the child process) so the test is self-contained.
  *
- * Hermeticity: the never-amend pack uses only `match_command` + `verdict`
+ * Hermeticity: the smoke pack uses only `match_command` + `verdict`
  * primitives — both pure functions over in-memory Event state. No Ollama,
  * no `claude` CLI, no libsql, no network. The subprocess inherits an env
- * scrubbed of `CLAUDE_SESSION_ID` (would otherwise leak into pack scoping).
+ * scrubbed of `CLAUDE_SESSION_ID`.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { neverAmendPack } from '../fixtures/test-pack.js';
-
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..');
 const HOOK_BIN = resolve(REPO_ROOT, 'dist', 'runtime', 'hooks', 'pre-tool-use.js');
+const SMOKE_PACK_DIR = resolve(REPO_ROOT, 'test', 'fixtures', 'packs', 'smoke');
 const HOOK_TIMEOUT_MS = 10_000;
 
 beforeAll(() => {
+  // The fixture pack folder must exist before we let `pnpm build` run — a
+  // missing folder would surface as a confusing "no skills loaded" silent
+  // pass downstream. Failing here points the developer straight at the
+  // fixture, not at the hook binary or the runtime.
+  if (!existsSync(SMOKE_PACK_DIR)) {
+    throw new Error(`smoke pack fixture missing at ${SMOKE_PACK_DIR}`);
+  }
+
   // Rebuild so dist/ matches the current src/ (bootstrap.ts in particular).
   // `pnpm build` is the contract documented in package.json — using it here
   // (rather than calling `tsc` directly) means any future build-script
@@ -93,21 +109,22 @@ function runHook(payload: Record<string, unknown>, env: NodeJS.ProcessEnv): Prom
   });
 }
 
-function envWithPack(pack: unknown): NodeJS.ProcessEnv {
+function envWithSmokePack(): NodeJS.ProcessEnv {
   // Inherit PATH/HOME/etc. so `node` resolves, but strip CLAUDE_SESSION_ID
-  // (would scope pack loading in Phase 2 and leaks parent intent). Inject
-  // OPENSQUID_TEST_PACK as the seam.
+  // (would scope pack loading and leaks parent intent). Inject the on-disk
+  // pack folder via the OPENSQUID_TEST_PACK_DIR seam.
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.CLAUDE_SESSION_ID;
-  env.OPENSQUID_TEST_PACK = JSON.stringify(pack);
+  delete env.OPENSQUID_TEST_PACK;
+  env.OPENSQUID_TEST_PACK_DIR = SMOKE_PACK_DIR;
   return env;
 }
 
-describe('runtime smoke (subprocess hook + fixture pack)', () => {
+describe('runtime smoke (subprocess hook + on-disk YAML pack)', () => {
   it('blocks git commit --amend with exit code 2 + stderr', async () => {
     const result = await runHook(
       { tool: 'Bash', args: { command: 'git commit --amend -m "oops"' } },
-      envWithPack(neverAmendPack),
+      envWithSmokePack(),
     );
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toMatch(/amend/i);
@@ -116,18 +133,20 @@ describe('runtime smoke (subprocess hook + fixture pack)', () => {
   it('allows safe git commands with exit code 0 + empty stderr', async () => {
     const result = await runHook(
       { tool: 'Bash', args: { command: 'git status' } },
-      envWithPack(neverAmendPack),
+      envWithSmokePack(),
     );
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
   });
 
   it('allows everything when no pack is injected', async () => {
-    // No OPENSQUID_TEST_PACK in env → loadFromEnv returns []. Proves the
-    // empty-active-packs path of the dispatcher (Phase 1 default state).
+    // No OPENSQUID_TEST_PACK / OPENSQUID_TEST_PACK_DIR in env → both seams
+    // return []. Proves the empty-active-packs path of the dispatcher
+    // (default state when no pack is configured).
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.CLAUDE_SESSION_ID;
     delete env.OPENSQUID_TEST_PACK;
+    delete env.OPENSQUID_TEST_PACK_DIR;
     const result = await runHook(
       { tool: 'Bash', args: { command: 'git commit --amend -m "oops"' } },
       env,
