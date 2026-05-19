@@ -10,14 +10,94 @@
         },
         "load": {
           "type": "string",
-          "enum": ["preload", "lazy"],
+          "enum": [
+            "preload",
+            "lazy"
+          ],
           "default": "lazy"
         },
         "when_to_load": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": {}
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "tool_match"
+                  },
+                  "tool": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tool"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "command_pattern"
+                  },
+                  "pattern": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pattern"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "file_glob"
+                  },
+                  "glob": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "glob"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "event_type"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "tool_call",
+                      "prompt_submit",
+                      "stop",
+                      "session_end"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "type"
+                ],
+                "additionalProperties": false
+              }
+            ]
           },
           "default": []
         },
@@ -39,7 +119,10 @@
               },
               "kind": {
                 "type": "string",
-                "enum": ["track_check", "destination_check"],
+                "enum": [
+                  "track_check",
+                  "destination_check"
+                ],
                 "default": "track_check"
               },
               "process": {
@@ -63,10 +146,16 @@
                     },
                     "on_empty": {
                       "type": "string",
-                      "enum": ["pass", "block", "continue"]
+                      "enum": [
+                        "pass",
+                        "block",
+                        "continue"
+                      ]
                     }
                   },
-                  "required": ["call"],
+                  "required": [
+                    "call"
+                  ],
                   "additionalProperties": false
                 },
                 "minItems": 1
@@ -79,11 +168,16 @@
                     "exclusiveMinimum": 0
                   }
                 },
-                "required": ["every_n_tool_calls"],
+                "required": [
+                  "every_n_tool_calls"
+                ],
                 "additionalProperties": false
               }
             },
-            "required": ["id", "process"],
+            "required": [
+              "id",
+              "process"
+            ],
             "additionalProperties": false
           },
           "default": []
@@ -99,7 +193,9 @@
           "type": "string"
         }
       },
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "additionalProperties": false
     }
   },

@@ -2,7 +2,7 @@
 name: docs
 load: lazy
 when_to_load:
-  - tool: Write
+  - tool_match: Write
 unloads_when:
   - session_end
 rules:

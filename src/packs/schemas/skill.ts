@@ -16,16 +16,19 @@
  * an unknown field is meaningful or noise. Manifest is the only file where
  * `.strict()` makes sense — pack identity must not silently typo.
  *
- * `when_to_load` and `unloads_when` stay as `z.array(z.record(z.unknown()))` /
- * `z.array(z.string())` respectively, matching `runtime/types.ts`. Phase 3
- * (Task 3.1) refines `when_to_load` into a discriminated union once the
- * matcher primitives are spec'd.
+ * `when_to_load` is refined to a `Matcher` discriminated union (Phase 3 Task
+ * 3.1). Pack authors can use shorthand single-key objects
+ * (`- tool_match: Bash`) — the schema's preprocess hook normalizes to
+ * canonical discriminated form. `unloads_when` remains a string array
+ * for Phase 3.1; Phase 3.2 refines to a typed discriminated union.
  *
- * Imports from: zod only (self-contained per audit constraint).
+ * Imports from: zod, ../../runtime/load_matchers.
  * Imported by: src/packs/schemas/index.ts.
  */
 
 import { z } from 'zod';
+
+import { Matcher } from '../../runtime/load_matchers.js';
 
 // ---------------------------------------------------------------------------
 // ProcessStep — one step inside a rule's process.
@@ -97,7 +100,7 @@ export type LoadModeEnum = z.infer<typeof LoadModeEnum>;
 export const Skill = z.object({
   name: z.string().min(1),
   load: LoadModeEnum.default('lazy'),
-  when_to_load: z.array(z.record(z.unknown())).default([]),
+  when_to_load: z.array(Matcher).default([]),
   unloads_when: z.array(z.string()).default([]),
   rules: z.array(Rule).default([]),
   tools: z.array(z.string()).default([]),

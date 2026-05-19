@@ -44,12 +44,23 @@ describe('Skill schema', () => {
     expect(result.rules[0]?.process).toHaveLength(2);
   });
 
-  it('permits opaque when_to_load shapes (Phase 3 refines)', () => {
+  it('normalizes when_to_load shorthand to canonical Matcher form (Phase 3)', () => {
+    const result = Skill.parse({
+      name: 'x',
+      when_to_load: [{ tool_match: 'Bash' }, { command_pattern: '^git' }],
+    });
+    expect(result.when_to_load).toEqual([
+      { kind: 'tool_match', tool: 'Bash' },
+      { kind: 'command_pattern', pattern: '^git' },
+    ]);
+  });
+
+  it('rejects an unknown when_to_load matcher kind (Phase 3 refines)', () => {
     const result = Skill.safeParse({
       name: 'x',
       when_to_load: [{ some_future_matcher: 42, nested: { keys: 'allowed' } }],
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it('rejects a rule with empty process array (.min(1))', () => {
