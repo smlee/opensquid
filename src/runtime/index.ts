@@ -22,3 +22,4 @@ export { createTick, advanceTick, resetTick } from './tick.js';
 export { prefilterSkills, type PrefilterOptions } from './skill_prefilter.js';
 export { routeSkills } from './skill_router.js';
 export { partitionSkills, type SkillSet } from './pinned_skills.js';
+export { maybeRunDestinationChecks, destinationRuleKey } from './destination_scheduler.js';
