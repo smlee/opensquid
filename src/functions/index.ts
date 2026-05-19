@@ -9,4 +9,5 @@
  * Imported by: runtime/, packs/.
  */
 export * from './registry.js';
+export { registerEventFunctions } from './event.js';
 export { registerStateFunctions } from './state.js';
