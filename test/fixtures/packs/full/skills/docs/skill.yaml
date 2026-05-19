@@ -4,7 +4,7 @@ load: lazy
 when_to_load:
   - tool_match: Write
 unloads_when:
-  - session_end
+  - session_ends
 rules:
   - id: prefer-edit-over-write
     kind: track_check
