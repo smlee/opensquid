@@ -1,7 +1,7 @@
 /**
  * RAG: pluggable backend dispatching abstract primitives (recall, embed,
  * store_lesson) to libsql-qwen3 default, libsql-lexical fallback (Task 1.11),
- * or adapters (Task 1.12).
+ * or the claude-auto-memory adapter (Task 1.12).
  *
  * Public surface: types, the factory, and RRF (so consumers can fuse
  * additional ranked lists if they extend recall). Backends themselves

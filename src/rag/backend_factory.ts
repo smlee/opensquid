@@ -24,6 +24,7 @@
  * Imported by: src/runtime/ (Phase 1 wiring), tests.
  */
 
+import { claudeAutoMemoryBackend } from './backends/claude_auto_memory.js';
 import { libsqlLexicalBackend } from './backends/libsql_lexical.js';
 import { libsqlQwen3Backend } from './backends/libsql_qwen3.js';
 
@@ -39,6 +40,13 @@ export type BackendConfig =
   | {
       kind: 'libsql-lexical';
       dbUrl: string;
+    }
+  | {
+      // claude-auto-memory needs no opts — `CLAUDE_PROJECT_DIR` env var
+      // is read at init time. Keeping the variant as a marker object
+      // means future per-pack overrides (e.g. custom memory subdir) drop
+      // in without changing the dispatch signature.
+      kind: 'claude-auto-memory';
     };
 
 export function createBackend(config: BackendConfig): RagBackend {
@@ -51,6 +59,8 @@ export function createBackend(config: BackendConfig): RagBackend {
       });
     case 'libsql-lexical':
       return libsqlLexicalBackend({ dbUrl: config.dbUrl });
+    case 'claude-auto-memory':
+      return claudeAutoMemoryBackend();
     default: {
       // Exhaustive check: if `BackendConfig` gains a variant and this arm
       // isn't updated, TS flags `_exhaustive` as not-`never`.
