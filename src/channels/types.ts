@@ -27,3 +27,22 @@ export interface ChannelAdapter {
   /** Deliver the message; never throws — failure is surfaced via SendResult. */
   send(uri: string, message: ChannelMessage): Promise<SendResult>;
 }
+
+/**
+ * Notification routing configuration — declared by the codex, mapped to
+ * concrete URIs by the user's runtime config.
+ *
+ * - `severityTiers`: per-severity list of abstract channel names (e.g.
+ *   `['alerts', 'audit_log']`) that the codex wants notified.
+ * - `perProjectOverride`: optional per-project override keyed by project
+ *   id, layered on top of severity tiers. Checked first when present.
+ * - `channelMapping`: abstract-name → concrete-URI mapping the user
+ *   provides (e.g. `alerts` → `telegram://chat_id/topic_id`). The router
+ *   special-cases the abstract name `'chat'` to `chat://`, so it does
+ *   not need an explicit entry here.
+ */
+export interface RoutingConfig {
+  severityTiers: Record<Severity, string[]>;
+  perProjectOverride?: Record<string, Record<Severity, string[]>>;
+  channelMapping: Record<string, string>;
+}

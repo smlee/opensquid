@@ -10,5 +10,12 @@
  * Imported by: runtime/, setup/, mcp/.
  */
 
-export type { ChannelAdapter, ChannelMessage, SendResult, Severity } from './types.js';
+export type {
+  ChannelAdapter,
+  ChannelMessage,
+  RoutingConfig,
+  SendResult,
+  Severity,
+} from './types.js';
 export { chatAdapter } from './chat.js';
+export { NotificationRouter, type MulticastResult } from './router.js';
