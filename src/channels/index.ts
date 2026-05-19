@@ -18,4 +18,9 @@ export type {
   Severity,
 } from './types.js';
 export { chatAdapter } from './chat.js';
+export {
+  telegramAdapter,
+  type TelegramAdapter,
+  type TelegramAdapterOpts,
+} from './adapters/telegram.js';
 export { NotificationRouter, type MulticastResult } from './router.js';
