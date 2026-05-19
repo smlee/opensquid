@@ -19,6 +19,7 @@ evaluator) instead of `node <bin> hook <event>` (the legacy per-file
 handlers).
 
 Changes:
+
 1. **`src/anti-drift/evaluator.ts`** — runners now incorporate the
    legacy side effects that aren't yet expressed as rules:
    - `runPreToolUseEvaluator` calls `recordToolCall` to populate the
@@ -45,6 +46,7 @@ Changes:
    `hook <event>` AND new `anti-drift <event>` entries.
 
 After this patch lands:
+
 - New installs use the unified evaluator
 - Existing installs that don't re-run `opensquid hooks install`
   continue working via the legacy `hook <event>` dispatch (which
@@ -68,6 +70,7 @@ Claude Code to pick up the cutover. Without re-install, legacy
 This completes the design-doc-defined architectural rewrite. All
 4 anti-drift files exist (`state.ts`, `rules.ts`, `evaluator.ts` +
 inline types). Outstanding items now scoped as small follow-ups:
+
 - `rules.yaml` export for codex chunk-1 schema integration
 - Delete legacy `src/hooks/{pre-tool-use,stop,user-prompt-submit,session-end}.ts`
   files (after dogfood-validation)
@@ -86,6 +89,7 @@ that binds the 4 Claude Code hook events to the declarative rule
 list from rules.ts.
 
 Each event's runner:
+
 - **PreToolUse**: walks PreToolUse rules; first block-verdict short-
   circuits exit 2; warns accumulate to stderr; pass through otherwise.
 - **Stop**: walks Stop rules; surfaces → violations.log (next UPS
@@ -96,6 +100,7 @@ Each event's runner:
   scan + state cleanup); always exit 0.
 
 Public exports:
+
 - `runEvaluator(event: HookEventName)` — unified CLI dispatch (reads
   stdin, runs the right runner, writes output, exits)
 - `runPreToolUseEvaluator(payload)` / `runStopEvaluator(payload)` /
@@ -129,6 +134,7 @@ no-force-push-main, substrate-purity, plus auto-actions
 honesty-reconcile, heartbeat-arm, session-state-cleanup).
 
 Rule shape per the design doc:
+
 - `id` / `catches` / `hook` (lifecycle event) — metadata
 - `when(ctx)` — cheap sync gate that short-circuits before
   expensive check work
@@ -145,6 +151,7 @@ every gate; the 0.7.35 cutover migrates the helper bodies into
 `src/anti-drift/*` and deletes the old per-hook files.
 
 Public exports:
+
 - `RULES: Rule[]` — the 18-entry catalog
 - `rulesForEvent(event)` — filters by hook event + env-var bypass
 - `evaluateRules(ctx)` — walks applicable rules, short-circuits on
@@ -160,6 +167,7 @@ short-circuit + accumulate semantics, `Verdict` shape contracts,
 hook-event coverage. Full suite: 743/743 (was 723 + 20 new).
 
 Next patches:
+
 - 0.7.34 → `evaluator.ts` single orchestrator (binds PreToolUse /
   Stop / UPS / SessionEnd to `evaluateRules`)
 - 0.7.35 → atomic cutover (delete `src/hooks/`, point `hooks-cli.ts`
@@ -179,6 +187,7 @@ filesystem-backed state primitives that the upcoming `rules.ts` +
 hooks; the new module lives alongside `src/hooks/` until the cutover.
 
 Three state primitives:
+
 - **active-task.json** (per-session) — single source of truth for
   the in_progress task signal. Replaces fragile transcript-parsing
   reliance once the cutover ships. Read returns null on file-absent
@@ -197,6 +206,7 @@ to keep tests hermetic). Full suite: 723/723 (was 707 + 16 new).
 
 This is the first patch of a multi-patch sequence completing the
 architectural rewrite. Subsequent patches:
+
 - 0.7.33 → `rules.ts` declarative rule list (18 entries)
 - 0.7.34 → `evaluator.ts` single-binding orchestrator
 - 0.7.35 → atomic cutover (delete `src/hooks/`, update `hooks-cli.ts`
@@ -340,6 +350,7 @@ the misread visible BEFORE the agent commits to the wrong reading.
 
 Detection (intentionally narrow — false-positives in UPS are tolerable
 but we don't want to fire on unrelated number prose):
+
 - Explicit `#N` references always count
 - Bare 2-4-digit numbers count only when connected by a sequencing
   word (then / after / and then / and / comma)
@@ -377,6 +388,7 @@ The agent must call recall first; only then are subsequent MCP
 calls allowed.
 
 Implementation:
+
 - New `markRecallRequired` / `isRecallRequired` / `clearRecallRequired`
   exported from `heartbeat.ts` (the flag is heartbeat-related state)
 - `heartbeatSessionFiles` now includes the flag path so SessionEnd
@@ -437,6 +449,7 @@ RaumPilates DM instead of the squidbot supergroup, leaking
 opensquid-internal content into a cross-purpose channel.
 
 Implementation:
+
 - `DriftPattern.tool` type broadened from
   `"Bash" | "Edit" | "Write" | "*"` → `string` so MCP tool names
   match directly. Existing patterns unchanged; new pattern matches
@@ -468,6 +481,7 @@ commit usually means earlier src commits shipped without bumps —
 which is the exact D5 incident shape.
 
 Implementation:
+
 - `manifestHasVersionBump` → `readManifestVersionBump` (returns the
   parsed `{from, to}` jump or null)
 - New `parseVersionJumpFromDiff` pure fn handles Cargo + package.json
@@ -479,6 +493,7 @@ Implementation:
   not from observing them)
 
 12 new tests in `versioning-gate.test.ts`:
+
 - 4 for `parseVersionJumpFromDiff` (Cargo, package.json, multi-patch,
   null on non-version diff)
 - 6 for `isMultiPatchJump` (D5 shape, 2-step, normal +1, minor bump,

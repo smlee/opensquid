@@ -1,0 +1,13 @@
+# format-all baseline excludes legacy; new code (src/, test/) follows current prettier rules
+dist/
+node_modules/
+src.legacy/
+pnpm-lock.yaml
+*.log
+.tsbuildinfo
+
+# vendored / generated subtrees outside the new core
+npm/
+
+# test fixtures are sample inputs — keep as-authored
+test/fixtures/
