@@ -24,3 +24,9 @@ export { loadPack } from './loader.js';
 // suggestions); never throws so the orchestrator can collect across packs.
 export { validatePackFunctions } from './validate_functions.js';
 export type { ValidationIssue } from './validate_functions.js';
+
+// Skill-name uniqueness validation (Task 2.5) — run at load-orchestrator time
+// over every loaded pack; surfaces collisions without auto-resolving per
+// design doc §"Conflict resolution policy".
+export { validateUniqueSkillNames } from './validate_uniqueness.js';
+export type { UniquenessIssue } from './validate_uniqueness.js';
