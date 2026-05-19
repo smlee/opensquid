@@ -1,0 +1,28 @@
+// tsconfig.legacy.json — relaxed config for src.legacy/.
+//
+// src.legacy/ is frozen 0.7.x code preserved as reference during the
+// Phase 0 reset (see docs/tasks/phase-0-reset.md). It predates the
+// strict flags in the root tsconfig and will be deleted as src/ catches
+// up. Until then, type-check it under loose flags so it doesn't gate
+// `pnpm typecheck` on the new strict surface.
+//
+// Loosened vs. root tsconfig.json:
+//   noUncheckedIndexedAccess  : false   — legacy uses arr[i] freely
+//   exactOptionalPropertyTypes: false   — legacy uses { x?: T } loosely
+//   verbatimModuleSyntax      : false   — legacy mixes value/type imports
+//   esModuleInterop           : true    — legacy assumes default-import wrappers
+//
+// Run with: tsc -p tsconfig.legacy.json --noEmit
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "noEmit": true
+  },
+  "include": ["src.legacy/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

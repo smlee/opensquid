@@ -1,18 +1,39 @@
+// opensquid root tsconfig — strict ESM, type-check everything (incl. legacy).
+// Build emit happens via tsconfig.build.json (rootDir=src, emits to dist/).
+//
+// Non-default flag rationale (one line each):
+//   target/module/moduleResolution=NodeNext — Node 20+ ESM, .js extensions in TS imports.
+//   lib=["ES2022"]                         — Node-only runtime; no DOM types.
+//   noUncheckedIndexedAccess               — arr[i] is T | undefined; forces bounds checks.
+//   exactOptionalPropertyTypes             — { x?: T } ≠ { x: T | undefined }; no implicit undefined passing.
+//   noFallthroughCasesInSwitch             — every case must break/return/throw.
+//   noImplicitReturns                      — all paths in a function must return.
+//   isolatedModules                        — each file compiles standalone (bundler / vitest / swc).
+//   verbatimModuleSyntax                   — `import type` required for type-only; no emit ambiguity.
+//   esModuleInterop=false                  — ESM-only project; no synthetic default wrappers for CJS.
+//   forceConsistentCasingInFileNames       — block macOS-dev / Linux-CI casing mismatches.
+//   skipLibCheck                           — don't typecheck node_modules (noise).
 {
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
+    "lib": ["ES2022"],
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "esModuleInterop": false,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["src/**/*", "src.legacy/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist", "src.legacy"]
 }

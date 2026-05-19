@@ -1,13 +1,14 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "noEmit": false,
+    "outDir": "dist",
     "declaration": true,
-    "outDir": "./dist",
-    "rootDir": "./src.legacy",
+    "declarationMap": true,
     "sourceMap": true,
+    "rootDir": "src",
+    "noEmit": false,
     "tsBuildInfoFile": ".tsbuildinfo"
   },
-  "include": ["src.legacy/**/*"],
-  "exclude": ["node_modules", "dist", "src.legacy/**/*.test.ts"]
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts", "src.legacy/**", "test/**"]
 }
