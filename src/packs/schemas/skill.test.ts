@@ -3,7 +3,8 @@
  *
  * Coverage: minimum-viable skill (just name) with defaults, full skill with
  * rules + process steps, rule kind default, missing process rejection,
- * permissive `when_to_load` (no Phase-3 refinement yet).
+ * permissive `when_to_load` (no Phase-3 refinement yet), Phase-4
+ * destination_check discriminated-union parsing.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -41,7 +42,9 @@ describe('Skill schema', () => {
     });
     expect(result.rules[0]?.id).toBe('never-amend');
     expect(result.rules[0]?.kind).toBe('track_check');
-    expect(result.rules[0]?.process).toHaveLength(2);
+    const rule0 = result.rules[0];
+    if (rule0?.kind !== 'track_check') throw new Error('unreachable');
+    expect(rule0.process).toHaveLength(2);
   });
 
   it('normalizes when_to_load shorthand to canonical Matcher form (Phase 3)', () => {
@@ -75,6 +78,104 @@ describe('Skill schema', () => {
     const result = Rule.safeParse({
       id: 'r',
       process: [{ call: '' }],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4 — destination_check discriminated-union coverage
+// ---------------------------------------------------------------------------
+
+describe('Rule schema — Phase 4 destination_check', () => {
+  it('parses a fully-populated destination_check rule', () => {
+    const result = Rule.parse({
+      id: 'g1',
+      kind: 'destination_check',
+      interval: { every_n_tool_calls: 5 },
+      model_alias: 'reasoning',
+      prompt_template: 'On goal?',
+    });
+    expect(result.kind).toBe('destination_check');
+    if (result.kind !== 'destination_check') throw new Error('unreachable');
+    expect(result.interval.every_n_tool_calls).toBe(5);
+    expect(result.model_alias).toBe('reasoning');
+    expect(result.prompt_template).toBe('On goal?');
+  });
+
+  it("defaults `model_alias` to 'reasoning' when omitted", () => {
+    const result = Rule.parse({
+      id: 'g1',
+      kind: 'destination_check',
+      interval: { every_n_tool_calls: 5 },
+      prompt_template: 'On goal?',
+    });
+    if (result.kind !== 'destination_check') throw new Error('unreachable');
+    expect(result.model_alias).toBe('reasoning');
+  });
+
+  it('accepts an empty `prompt_template` (runtime surfaces empty-prompt errors)', () => {
+    const result = Rule.safeParse({
+      id: 'g1',
+      kind: 'destination_check',
+      interval: { every_n_tool_calls: 5 },
+      prompt_template: '',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a destination_check rule missing `interval`', () => {
+    const result = Rule.safeParse({
+      id: 'g1',
+      kind: 'destination_check',
+      prompt_template: 'On goal?',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.includes('interval'))).toBe(true);
+    }
+  });
+
+  it('rejects a destination_check rule missing `prompt_template`', () => {
+    const result = Rule.safeParse({
+      id: 'g1',
+      kind: 'destination_check',
+      interval: { every_n_tool_calls: 5 },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.includes('prompt_template'))).toBe(true);
+    }
+  });
+
+  it('rejects a destination_check rule with non-positive `every_n_tool_calls`', () => {
+    const result = Rule.safeParse({
+      id: 'g1',
+      kind: 'destination_check',
+      interval: { every_n_tool_calls: 0 },
+      prompt_template: 'On goal?',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('routes by `kind`: track_check default still works without `kind` field', () => {
+    // Regression: Phase 1–3 packs wrote rules without `kind:` at all.
+    // The preprocess shim must keep that working alongside the new
+    // discriminated union.
+    const result = Rule.parse({
+      id: 'r1',
+      process: [{ call: 'verdict', args: { level: 'pass', message: '' } }],
+    });
+    expect(result.kind).toBe('track_check');
+    if (result.kind !== 'track_check') throw new Error('unreachable');
+    expect(result.process).toHaveLength(1);
+  });
+
+  it('rejects an unknown `kind`', () => {
+    const result = Rule.safeParse({
+      id: 'r1',
+      kind: 'reflection_check',
+      process: [{ call: 'verdict' }],
     });
     expect(result.success).toBe(false);
   });

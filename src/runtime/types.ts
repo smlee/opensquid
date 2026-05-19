@@ -103,11 +103,55 @@ export type ProcessStep = z.infer<typeof ProcessStep>;
 export const RuleKind = z.enum(['track_check', 'destination_check']);
 export type RuleKind = z.infer<typeof RuleKind>;
 
-export const Rule = z.object({
+// ---------------------------------------------------------------------------
+// Rule — runtime view of a pack rule.
+//
+// Phase 4 splits this into a discriminated union to match the YAML schema in
+// `src/packs/schemas/skill.ts`. Track-check rules carry `process` (a sequence
+// of primitive calls walked by `evaluateProcess`). Destination-check rules
+// carry `interval` + `model_alias` + `prompt_template` — they fire through the
+// dedicated `check_destination` primitive (Task 4.2) on the scheduler tick
+// (Task 4.3), not through the process evaluator.
+//
+// Why duplicate the YAML schema here: the YAML schema validates pack files
+// on disk; the runtime schema is the cross-process contract (env-var test
+// seam, MCP tool args, future RAG-side state writes). Both must stay aligned;
+// drift between them is caught by the schema cross-test plus the
+// `validatePackFunctions` walker which type-checks against this `Rule`.
+// ---------------------------------------------------------------------------
+
+export const TrackCheckRule = z.object({
   id: z.string(),
-  kind: RuleKind.default('track_check'),
+  kind: z.literal('track_check').default('track_check'),
   process: z.array(ProcessStep),
 });
+export type TrackCheckRule = z.infer<typeof TrackCheckRule>;
+
+export const DestinationCheckRule = z.object({
+  id: z.string(),
+  kind: z.literal('destination_check'),
+  interval: z.object({ every_n_tool_calls: z.number().int().positive() }),
+  model_alias: z.string().default('reasoning'),
+  prompt_template: z.string(),
+});
+export type DestinationCheckRule = z.infer<typeof DestinationCheckRule>;
+
+// `kind` defaults to `'track_check'` when missing (Phase 1–3 ergonomic) via
+// the same preprocess shim used in the YAML schema. Keeps the env-var test
+// seam (which feeds pre-parsed pack JSON) working without explicit `kind`.
+export const Rule = z.preprocess(
+  (input) => {
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      return input;
+    }
+    const obj = input as Record<string, unknown>;
+    if (obj.kind === undefined) {
+      return { ...obj, kind: 'track_check' };
+    }
+    return obj;
+  },
+  z.discriminatedUnion('kind', [TrackCheckRule, DestinationCheckRule]),
+);
 export type Rule = z.infer<typeof Rule>;
 
 // ---------------------------------------------------------------------------

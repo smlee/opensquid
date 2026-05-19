@@ -126,16 +126,24 @@ describe('Rule', () => {
       process: [{ call: 'regex_match', args: { pattern: 'x' } }],
     });
     expect(parsed.kind).toBe('track_check');
+    if (parsed.kind !== 'track_check') throw new Error('unreachable');
     expect(parsed.process).toHaveLength(1);
   });
 
-  it('accepts destination_check kind explicitly', () => {
+  it('accepts destination_check kind explicitly with Phase-4 fields', () => {
+    // Phase 4 split: destination_check rules no longer carry `process` — they
+    // carry `interval` + `model_alias` + `prompt_template` and fire via the
+    // dedicated `check_destination` primitive on the scheduler tick.
     const parsed = Rule.parse({
       id: 'r-2',
       kind: 'destination_check',
-      process: [{ call: 'llm_classify' }],
+      interval: { every_n_tool_calls: 5 },
+      prompt_template: 'On goal?',
     });
     expect(parsed.kind).toBe('destination_check');
+    if (parsed.kind !== 'destination_check') throw new Error('unreachable');
+    expect(parsed.interval.every_n_tool_calls).toBe(5);
+    expect(parsed.model_alias).toBe('reasoning');
   });
 });
 

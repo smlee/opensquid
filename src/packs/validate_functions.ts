@@ -46,6 +46,10 @@ export function validatePackFunctions(pack: Pack, registry: FunctionRegistry): V
   const known = registry.list();
   for (const skill of pack.skills) {
     for (const rule of skill.rules) {
+      // Phase 4: destination_check rules don't carry a `process` field —
+      // they fire via the dedicated `check_destination` primitive on the
+      // scheduler tick. There are no per-step `call` names to validate.
+      if (rule.kind === 'destination_check') continue;
       rule.process.forEach((step, i) => {
         if (!registry.has(step.call)) {
           const suggestion = closest(step.call, known, 2);

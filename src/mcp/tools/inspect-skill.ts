@@ -30,6 +30,17 @@ export interface InspectSkillArgs {
 }
 
 function formatRule(rule: Rule): string {
+  if (rule.kind === 'destination_check') {
+    // Phase 4: destination_check rules don't have a process step list — they
+    // fire via the dedicated `check_destination` primitive on the scheduler
+    // tick. Surface the interval + model alias so MCP triage shows the
+    // periodic firing cadence at a glance.
+    return [
+      `  - id: ${rule.id} (${rule.kind})`,
+      `    every: ${String(rule.interval.every_n_tool_calls)} tool calls`,
+      `    model: ${rule.model_alias}`,
+    ].join('\n');
+  }
   const stepLines = rule.process.map((step, i) => `    ${i}. ${step.call}`);
   return `  - id: ${rule.id} (${rule.kind})\n${stepLines.join('\n')}`;
 }

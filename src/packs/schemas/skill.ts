@@ -58,25 +58,98 @@ export type ProcessStep = z.infer<typeof ProcessStep>;
 // `track_check`       — deterministic workflow rule (regex, count, sequence).
 // `destination_check` — LLM-judged goal-alignment check via model alias.
 // Default: track_check (the more common case).
+//
+// Phase 4 splits the formerly-flat `Rule` schema into a discriminated union on
+// `kind` so each flavor carries only the fields it actually uses
+// (track_check has `process`, destination_check has `interval` +
+// `model_alias` + `prompt_template`). The enum is kept as a public re-export
+// for callers that want the union-of-literal-strings as a single type.
 // ---------------------------------------------------------------------------
 
 export const RuleKindEnum = z.enum(['track_check', 'destination_check']);
 export type RuleKindEnum = z.infer<typeof RuleKindEnum>;
 
 // ---------------------------------------------------------------------------
-// Rule — one process inside a skill.
+// TrackCheckRule — deterministic workflow rule.
 //
-// `interval` — when a rule is periodic rather than per-event. The runtime
-// evaluator (Task 1.5) reads this and gates execution accordingly. Optional
-// because most rules run on every triggering event.
+// `kind` keeps its `.default('track_check')` so existing pack YAML that omits
+// the field (the Phase 1–3 common case) continues to parse. Combined with the
+// `Rule`-level preprocess (below), pack authors can author a rule without any
+// `kind:` field at all and still land in this branch.
+//
+// `process` is required (`min(1)`): a track_check with no steps is a no-op
+// that would silently never fire — almost always a YAML mistake.
 // ---------------------------------------------------------------------------
 
-export const Rule = z.object({
+export const TrackCheckRule = z.object({
   id: z.string().min(1),
-  kind: RuleKindEnum.default('track_check'),
+  kind: z.literal('track_check').default('track_check'),
   process: z.array(ProcessStep).min(1),
-  interval: z.object({ every_n_tool_calls: z.number().int().positive() }).optional(),
 });
+export type TrackCheckRule = z.infer<typeof TrackCheckRule>;
+
+// ---------------------------------------------------------------------------
+// DestinationCheckRule — LLM-judged goal-alignment check.
+//
+// `interval`         — required. Periodic firing cadence (per N tool calls).
+//                      The scheduler (Task 4.3) reads this and counts events.
+// `model_alias`      — defaults to `'reasoning'` (cheapest model-neutral
+//                      label for a judgement call; user maps to a concrete
+//                      backend in `models.yaml`).
+// `prompt_template`  — required string. Pack-authored prompt. Empty string
+//                      parses (loosest validation) but the runtime primitive
+//                      (Task 4.2) surfaces it on first invoke; we deliberately
+//                      let typos through so the failure mode is loud at runtime
+//                      rather than silently rejected at load.
+//
+// Note: no `process` field — destination_check fires through a dedicated
+// primitive (`check_destination`), not the generic process evaluator. Adding
+// `process` here would be a footgun (pack authors would mix `process` with
+// `prompt_template` and expect both to do something).
+// ---------------------------------------------------------------------------
+
+export const DestinationCheckRule = z.object({
+  id: z.string().min(1),
+  kind: z.literal('destination_check'),
+  interval: z.object({ every_n_tool_calls: z.number().int().positive() }),
+  model_alias: z.string().default('reasoning'),
+  prompt_template: z.string(),
+});
+export type DestinationCheckRule = z.infer<typeof DestinationCheckRule>;
+
+// ---------------------------------------------------------------------------
+// Rule — discriminated union on `kind`.
+//
+// `z.discriminatedUnion` is strict about presence: it requires the discriminant
+// field to be a literal string. That collides with the Phase 1–3 convention
+// where pack authors author track_check rules without writing `kind:` at all
+// (defaulting to track_check). We compensate via a `z.preprocess` shim that
+// fills in `kind: 'track_check'` when missing, BEFORE the discriminated union
+// runs. The shim is a no-op for any input that already declares `kind`, so
+// destination_check rules pass through unchanged.
+//
+// The preprocess input is `unknown` (not a typed object) because Zod's
+// discriminated-union signature accepts `unknown` and any narrower type would
+// reject legitimate YAML shapes (e.g. arrays accidentally placed where an
+// object should be — we want those to surface as proper Zod errors, not type
+// crashes inside the shim).
+// ---------------------------------------------------------------------------
+
+export const Rule = z.preprocess(
+  (input) => {
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      // Non-object input — pass through so the discriminated union rejects with
+      // a sensible "expected object" error instead of throwing in the shim.
+      return input;
+    }
+    const obj = input as Record<string, unknown>;
+    if (obj.kind === undefined) {
+      return { ...obj, kind: 'track_check' };
+    }
+    return obj;
+  },
+  z.discriminatedUnion('kind', [TrackCheckRule, DestinationCheckRule]),
+);
 export type Rule = z.infer<typeof Rule>;
 
 // ---------------------------------------------------------------------------

@@ -10,10 +10,7 @@
         },
         "load": {
           "type": "string",
-          "enum": [
-            "preload",
-            "lazy"
-          ],
+          "enum": ["preload", "lazy"],
           "default": "lazy"
         },
         "when_to_load": {
@@ -32,10 +29,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "tool"
-                ],
+                "required": ["kind", "tool"],
                 "additionalProperties": false
               },
               {
@@ -50,10 +44,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "pattern"
-                ],
+                "required": ["kind", "pattern"],
                 "additionalProperties": false
               },
               {
@@ -68,10 +59,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "glob"
-                ],
+                "required": ["kind", "glob"],
                 "additionalProperties": false
               },
               {
@@ -83,18 +71,10 @@
                   },
                   "type": {
                     "type": "string",
-                    "enum": [
-                      "tool_call",
-                      "prompt_submit",
-                      "stop",
-                      "session_end"
-                    ]
+                    "enum": ["tool_call", "prompt_submit", "stop", "session_end"]
                   }
                 },
-                "required": [
-                  "kind",
-                  "type"
-                ],
+                "required": ["kind", "type"],
                 "additionalProperties": false
               }
             ]
@@ -113,9 +93,7 @@
                     "const": "active_task_completes"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -126,9 +104,7 @@
                     "const": "session_ends"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -143,10 +119,7 @@
                     "exclusiveMinimum": 0
                   }
                 },
-                "required": [
-                  "kind",
-                  "n"
-                ],
+                "required": ["kind", "n"],
                 "additionalProperties": false
               }
             ]
@@ -156,74 +129,86 @@
         "rules": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "track_check",
-                  "destination_check"
-                ],
-                "default": "track_check"
-              },
-              "process": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "call": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "args": {
-                      "type": "object",
-                      "additionalProperties": {}
-                    },
-                    "as": {
-                      "type": "string"
-                    },
-                    "if": {
-                      "type": "string"
-                    },
-                    "on_empty": {
-                      "type": "string",
-                      "enum": [
-                        "pass",
-                        "block",
-                        "continue"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "call"
-                  ],
-                  "additionalProperties": false
-                },
-                "minItems": 1
-              },
-              "interval": {
+            "anyOf": [
+              {
                 "type": "object",
                 "properties": {
-                  "every_n_tool_calls": {
-                    "type": "integer",
-                    "exclusiveMinimum": 0
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "track_check",
+                    "default": "track_check"
+                  },
+                  "process": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "call": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "args": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "as": {
+                          "type": "string"
+                        },
+                        "if": {
+                          "type": "string"
+                        },
+                        "on_empty": {
+                          "type": "string",
+                          "enum": ["pass", "block", "continue"]
+                        }
+                      },
+                      "required": ["call"],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1
                   }
                 },
-                "required": [
-                  "every_n_tool_calls"
-                ],
+                "required": ["id", "process"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "destination_check"
+                  },
+                  "interval": {
+                    "type": "object",
+                    "properties": {
+                      "every_n_tool_calls": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": ["every_n_tool_calls"],
+                    "additionalProperties": false
+                  },
+                  "model_alias": {
+                    "type": "string",
+                    "default": "reasoning"
+                  },
+                  "prompt_template": {
+                    "type": "string"
+                  }
+                },
+                "required": ["id", "kind", "interval", "prompt_template"],
                 "additionalProperties": false
               }
-            },
-            "required": [
-              "id",
-              "process"
-            ],
-            "additionalProperties": false
+            ]
           },
           "default": []
         },
@@ -238,9 +223,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "name"
-      ],
+      "required": ["name"],
       "additionalProperties": false
     }
   },

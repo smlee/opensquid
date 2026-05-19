@@ -59,6 +59,11 @@ export async function dispatchEvent(
   for (const pack of packs) {
     for (const skill of pack.skills) {
       for (const rule of skill.rules) {
+        // Phase 4: destination_check rules fire on the scheduler tick
+        // (`destination_scheduler.ts` → `check_destination` primitive), not
+        // through the per-event process walker. Skip them here so the
+        // dispatcher only walks track_check processes.
+        if (rule.kind === 'destination_check') continue;
         const ctx: EvalCtx = {
           event,
           bindings: new Map(),
