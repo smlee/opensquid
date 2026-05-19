@@ -18,3 +18,9 @@ export type { ParsedYaml } from './yaml.js';
 // Reads `manifest.yaml` + scans `skills/<name>/skill.yaml`. Side-files
 // (models/channels/notifications/drift_response) live in separate consumers.
 export { loadPack } from './loader.js';
+
+// Function-reference validation (Task 2.4) — confirm every `process[*].call`
+// resolves to a registered primitive. Returns issues (with optional typo
+// suggestions); never throws so the orchestrator can collect across packs.
+export { validatePackFunctions } from './validate_functions.js';
+export type { ValidationIssue } from './validate_functions.js';
