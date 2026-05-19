@@ -7,3 +7,4 @@
  */
 export * from './types.js';
 export { evaluateProcess } from './evaluator.js';
+export { applyDriftResponse } from './drift_response.js';

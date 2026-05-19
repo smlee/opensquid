@@ -11,3 +11,4 @@
 export * from './registry.js';
 export { registerEventFunctions } from './event.js';
 export { registerStateFunctions } from './state.js';
+export { registerVerdictFunctions } from './verdict.js';

@@ -165,3 +165,38 @@ export type RuleResult =
   | { kind: 'verdict'; verdict: Verdict }
   | { kind: 'no_verdict' }
   | { kind: 'error'; error: string; step: number };
+
+// ---------------------------------------------------------------------------
+// DriftPolicy + RuntimeAction — what the runtime does once a rule fires.
+//
+// TS-only union (no Zod). These descriptors never cross a serialization
+// boundary: a rule produces a `Verdict`, the dispatcher (`drift_response.ts`)
+// maps `(Verdict, DriftPolicy) → RuntimeAction`, and the hook layer (Task 1.7)
+// turns the action into a process exit-code / channel notification / state
+// write. Adding/removing variants is a runtime concern, not a YAML one.
+//
+// Phase 1 ships 4 of 6 policies per design doc §"Drift response policies":
+//   block_tool          — refuse the pending tool call with a message
+//   warn                — let the tool through but surface a message
+//   full_stop_and_redo  — halt the entire task, restart from entry skill
+//   notify_and_pause    — pause + multicast the verdict to channels
+//
+// `auto_correct` and `escalate` are intentionally deferred — they require
+// the auto-correction skill loop + escalation routing primitives that land
+// in later phases. The dispatcher fail-safe (in drift_response.ts) catches
+// unknown policy strings and degrades to `notify_pause` with severity
+// 'critical' rather than silently fail-opening (constraint C10).
+//
+// `RuntimeAction.kind: 'halt'` carries an optional `entrySkill` so the
+// `full_stop_and_redo` policy can declare a restart entry; the field stays
+// optional because the hook layer can substitute the pack's default entry
+// skill when the verdict doesn't pin one.
+// ---------------------------------------------------------------------------
+
+export type DriftPolicy = 'block_tool' | 'warn' | 'full_stop_and_redo' | 'notify_and_pause';
+
+export type RuntimeAction =
+  | { kind: 'block_tool'; message: string }
+  | { kind: 'warn'; message: string }
+  | { kind: 'halt'; reason: string; entrySkill?: string }
+  | { kind: 'notify_pause'; reason: string; severity: 'critical' | 'error' | 'warning' };
