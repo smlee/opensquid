@@ -1,0 +1,45 @@
+# lesson-capture — Stage 1 of the wedge gate, run on every prompt_submit.
+#
+# Triage is a model-aliased classification (the model is declared in the
+# user's models.yaml — `fast_classifier` resolves to whatever cheap model
+# they've configured). If the classifier emits a known lesson type, the
+# downstream cycle (validate → persist → proceed) takes over via the
+# capture + buffer primitives. Otherwise the rule emits a pass verdict.
+name: lesson-capture
+load: preload
+when_to_load:
+  - event_type: prompt_submit
+rules:
+  - id: triage
+    kind: track_check
+    process:
+      - call: llm_classify
+        args:
+          model: fast_classifier
+          prompt: |
+            Inspect the user's last few turns. Identify candidate lessons
+            (workflow, preference, skill_upgrade) suitable for offload to
+            RAG via the wedge gate. Emit one label.
+          allowed_labels:
+            - WORKFLOW
+            - PREFERENCE
+            - SKILL_UPGRADE
+            - NONE
+        as: candidates
+      - call: verdict
+        if: candidates == "NONE"
+        args:
+          level: pass
+          message: nothing to capture
+prose: |
+  This skill drives the opensquid context-clearing cycle. On every prompt
+  submit, the agent should:
+
+  1. Look back at the recent turns.
+  2. Identify whether a workflow, preference, or skill upgrade was
+     surfaced that the agent should remember.
+  3. Surface the candidate to the user for validation BEFORE persisting
+     anything to long-term memory.
+
+  Validation is mandatory — silent persistence breaks the anti-self-
+  grading discipline that anchors opensquid's strategic moat.

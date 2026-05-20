@@ -1,0 +1,20 @@
+# cycle-pack — built-in opensquid context-clearing cycle.
+#
+# Authoritative source: docs/opensquid-real-design.md §"Context-clearing
+# cycle" + §"Two-stage wedge gate" Stage 1.
+#
+# Ships with the npm package (see package.json `files` field). Loaded
+# universal scope so it's active in every session unless explicitly
+# disabled by the user's setup.
+name: cycle-pack
+version: 0.1.0
+scope: universal
+goal: free up context by offloading lessons to RAG via the wedge gate
+description: |
+  Built-in opensquid context-clearing cycle.
+
+  Implements the four-step cycle (triage → validate → persist → proceed)
+  on every prompt_submit event. Candidate lessons are surfaced for the
+  user to validate before they enter the wedge-gate pipeline; nothing
+  is promoted silently.
+evolves: false
