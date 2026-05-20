@@ -11,13 +11,17 @@
  * directly with `appendFile`, then aggregate + assert ordering + provenance.
  */
 
-import { appendFile, mkdir, rm, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { readAllDriftCatalogs } from './drift_catalog.js';
+import {
+  readAllDriftCatalogs,
+  recordSubagentDrifts,
+  type DriftEventWithProvenance,
+} from './drift_catalog.js';
 import { packLogFile, sessionLogFile } from './paths.js';
 
 let tempHome: string;
@@ -141,5 +145,73 @@ describe('readAllDriftCatalogs', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]?.pack).toBe('pack-present');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 6.4 — recordSubagentDrifts: writes to parent session-level catalog
+// with subagentId + professionPack provenance fields.
+// ---------------------------------------------------------------------------
+
+describe('recordSubagentDrifts', () => {
+  it('appends each drift to the parent session catalog with provenance', async () => {
+    const parentSessionId = 'parent-sess';
+    await recordSubagentDrifts(parentSessionId, 'subagent-1', 'code-reviewer', [
+      {
+        timestamp: '2026-05-19T10:00:00Z',
+        pack: 'profession/code-reviewer',
+        ruleId: 'r1',
+        level: 'block',
+        message: 'drifted',
+      },
+    ]);
+
+    const path = sessionLogFile(parentSessionId, 'drift-catalog');
+    const raw = await readFile(path, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const parsed = JSON.parse(lines[0] ?? '{}') as DriftEventWithProvenance;
+    expect(parsed.subagentId).toBe('subagent-1');
+    expect(parsed.professionPack).toBe('code-reviewer');
+    expect(parsed.message).toBe('drifted');
+    expect(parsed.pack).toBe('profession/code-reviewer');
+  });
+
+  it('writes nothing when drifts array is empty (no file created)', async () => {
+    await recordSubagentDrifts('empty-sess', 'subagent-X', 'profession/x', []);
+    const path = sessionLogFile('empty-sess', 'drift-catalog');
+    await expect(readFile(path, 'utf8')).rejects.toThrow();
+  });
+
+  it('coerces missing fields to empty strings + falls back to professionPack on missing pack', async () => {
+    await recordSubagentDrifts('coerce-sess', 'subagent-Y', 'code-reviewer', [
+      // No `pack` / `ruleId` — should coerce + fall back.
+      { timestamp: '2026-05-19T10:00:00Z', level: 'warn', message: 'partial' },
+    ]);
+
+    const raw = await readFile(sessionLogFile('coerce-sess', 'drift-catalog'), 'utf8');
+    const parsed = JSON.parse(raw.split('\n')[0] ?? '{}') as DriftEventWithProvenance;
+    expect(parsed.pack).toBe('code-reviewer');
+    expect(parsed.ruleId).toBe('');
+    expect(parsed.message).toBe('partial');
+    expect(parsed.subagentId).toBe('subagent-Y');
+  });
+
+  it('appends across multiple calls (does not truncate prior entries)', async () => {
+    const sessionId = 'append-sess';
+    await recordSubagentDrifts(sessionId, 'sub-1', 'code-reviewer', [
+      { timestamp: '2026-05-19T10:00:00Z', ruleId: 'r1', level: 'warn', message: 'first' },
+    ]);
+    await recordSubagentDrifts(sessionId, 'sub-2', 'docs-reviewer', [
+      { timestamp: '2026-05-19T11:00:00Z', ruleId: 'r2', level: 'block', message: 'second' },
+    ]);
+
+    const raw = await readFile(sessionLogFile(sessionId, 'drift-catalog'), 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(2);
+    const p0 = JSON.parse(lines[0] ?? '{}') as DriftEventWithProvenance;
+    const p1 = JSON.parse(lines[1] ?? '{}') as DriftEventWithProvenance;
+    expect(p0.subagentId).toBe('sub-1');
+    expect(p1.subagentId).toBe('sub-2');
   });
 });

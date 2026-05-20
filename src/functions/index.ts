@@ -18,3 +18,11 @@ export {
   registerDestinationCheckFunction,
   type CheckDestinationResult,
 } from './destination_check.js';
+export {
+  registerSubagentFunction,
+  type RegisterSubagentOptions,
+  type SpawnSubagentResult,
+  type SubagentDrift,
+  type SubagentSdk,
+  type SubagentSdkRunResult,
+} from './subagent.js';

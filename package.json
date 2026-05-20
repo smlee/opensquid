@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.44",
+  "version": "0.5.45",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -84,5 +84,13 @@
     "typescript-eslint": "^8.59.4",
     "vitest": "^2.0.0",
     "zod-to-json-schema": "^3.23.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    }
   }
 }

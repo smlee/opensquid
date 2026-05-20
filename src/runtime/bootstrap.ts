@@ -60,6 +60,7 @@ import { registerEventFunctions } from '../functions/event.js';
 import { registerLlmFunctions } from '../functions/llm.js';
 import { FunctionRegistry } from '../functions/registry.js';
 import { registerStateFunctions } from '../functions/state.js';
+import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { loadPack } from '../packs/loader.js';
 
@@ -77,6 +78,13 @@ export function buildRegistry(): FunctionRegistry {
   // Future destination_check rules and the Phase-4.3 scheduler call into
   // this primitive name.
   registerDestinationCheckFunction(r);
+  // Phase 6: `spawn_subagent` is the Mode-A orchestration primitive. SDK is
+  // loaded lazily inside the primitive (optional peer dep), so registering
+  // here adds zero startup cost when no pack actually invokes it. Tests can
+  // override the SDK via `registerSubagentFunction(r, { sdk: stub })` against
+  // a separate registry; the production bootstrap always uses the lazy
+  // dynamic-import path.
+  registerSubagentFunction(r);
   // RAG primitives intentionally not registered in Phase 1 — see header.
   return r;
 }
