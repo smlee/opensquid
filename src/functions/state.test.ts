@@ -18,7 +18,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ok } from '../runtime/result.js';
-import { sessionLogFile, sessionStateDir, sessionStateFile } from '../runtime/paths.js';
+import {
+  packStateFile,
+  sessionLogFile,
+  sessionStateDir,
+  sessionStateFile,
+} from '../runtime/paths.js';
 import type { Event } from '../runtime/types.js';
 
 import { type EvalCtx, FunctionRegistry } from './registry.js';
@@ -197,5 +202,83 @@ describe('paths via OPENSQUID_HOME', () => {
     expect(path.startsWith(tempHome)).toBe(true);
     const raw = await readFile(path, 'utf8');
     expect(JSON.parse(raw)).toEqual({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 5.3: per-pack state namespacing
+//
+// `read_state` / `write_state` accept an optional `pack` arg that routes
+// the file to `~/.opensquid/packs/<id>/state/<key>.json` instead of the
+// session-scoped location. Two packs must produce two separate files,
+// path-traversal pack ids must sanitize away, and the no-`pack` path must
+// continue to land in the session directory exactly as before.
+// ---------------------------------------------------------------------------
+
+describe('per-pack state namespacing', () => {
+  it('isolates state per pack — two packs writing key `foo` produce two files', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+
+    await reg.call('write_state', { key: 'foo', value: { from: 'a' }, pack: 'pack-a' }, ctx);
+    await reg.call('write_state', { key: 'foo', value: { from: 'b' }, pack: 'pack-b' }, ctx);
+
+    const a = await reg.call('read_state', { key: 'foo', pack: 'pack-a' }, ctx);
+    const b = await reg.call('read_state', { key: 'foo', pack: 'pack-b' }, ctx);
+
+    expect(a).toEqual(ok({ from: 'a' }));
+    expect(b).toEqual(ok({ from: 'b' }));
+
+    // And the files genuinely live at the pack-state paths, not the session one.
+    expect(packStateFile('pack-a', 'foo').startsWith(tempHome)).toBe(true);
+    const rawA = await readFile(packStateFile('pack-a', 'foo'), 'utf8');
+    const rawB = await readFile(packStateFile('pack-b', 'foo'), 'utf8');
+    expect(JSON.parse(rawA)).toEqual({ from: 'a' });
+    expect(JSON.parse(rawB)).toEqual({ from: 'b' });
+  });
+
+  it('sanitizes a traversal pack id (../etc/passwd) — file lands inside the pack root', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+
+    const evilId = '../etc/passwd';
+    const write = await reg.call(
+      'write_state',
+      { key: 'k', value: { trapped: true }, pack: evilId },
+      ctx,
+    );
+    expect(write).toEqual(ok(undefined));
+
+    // Sanitized form is `___etc_passwd`. The file MUST be under tempHome.
+    const resolved = packStateFile(evilId, 'k');
+    expect(resolved.startsWith(tempHome)).toBe(true);
+    expect(resolved).toContain('___etc_passwd');
+
+    const read = await reg.call('read_state', { key: 'k', pack: evilId }, ctx);
+    expect(read).toEqual(ok({ trapped: true }));
+  });
+
+  it('falls back to session-scoped state when no pack arg is supplied', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+
+    await reg.call('write_state', { key: 'session-key', value: { mode: 'session' } }, ctx);
+
+    // Session file exists.
+    const sessionPath = sessionStateFile(ctx.sessionId, 'session-key');
+    const raw = await readFile(sessionPath, 'utf8');
+    expect(JSON.parse(raw)).toEqual({ mode: 'session' });
+
+    // And the same key, when read WITH a pack, returns null (separate namespace).
+    const packRead = await reg.call('read_state', { key: 'session-key', pack: 'some-pack' }, ctx);
+    expect(packRead).toEqual(ok(null));
+  });
+
+  it('returns ok(null) for a missing pack-namespaced key', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+
+    const r = await reg.call('read_state', { key: 'absent', pack: 'pack-x' }, ctx);
+    expect(r).toEqual(ok(null));
   });
 });

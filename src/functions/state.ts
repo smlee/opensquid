@@ -31,7 +31,7 @@ import { dirname } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { z } from 'zod';
 
-import { sessionLogFile, sessionStateFile } from '../runtime/paths.js';
+import { packStateFile, sessionLogFile, sessionStateFile } from '../runtime/paths.js';
 import { err, ok } from '../runtime/result.js';
 
 import type { FunctionRegistry } from './registry.js';
@@ -40,10 +40,19 @@ import type { FunctionRegistry } from './registry.js';
 // Zod arg schemas — `min(1)` on key/name to block empty-string foot-guns.
 // `z.unknown()` on value/entry: state primitives are JSON-shape-agnostic by
 // design; per-skill refinement happens at the YAML layer if needed.
+//
+// Optional `pack` (Task 5.3) — when present, state is namespaced under
+// `~/.opensquid/packs/<id>/state/<key>.json`; when absent, falls back to
+// session-scoped state under `~/.opensquid/sessions/<session-id>/state/`.
+// Pack-id sanitization happens inside `packStateFile` (no `.` / `/` etc.).
 // ---------------------------------------------------------------------------
 
-const ReadStateArgs = z.object({ key: z.string().min(1) });
-const WriteStateArgs = z.object({ key: z.string().min(1), value: z.unknown() });
+const ReadStateArgs = z.object({ key: z.string().min(1), pack: z.string().min(1).optional() });
+const WriteStateArgs = z.object({
+  key: z.string().min(1),
+  value: z.unknown(),
+  pack: z.string().min(1).optional(),
+});
 const AppendLogArgs = z.object({ name: z.string().min(1), entry: z.unknown() });
 
 // ---------------------------------------------------------------------------
@@ -80,8 +89,10 @@ export function registerStateFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'read_state',
     argSchema: ReadStateArgs,
-    execute: async ({ key }, ctx) => {
-      const path = sessionStateFile(ctx.sessionId, key);
+    execute: async ({ key, pack }, ctx) => {
+      // Optional `pack` arg routes to `~/.opensquid/packs/<id>/state/...`;
+      // omitted = session-scoped fallback (unchanged Phase 1 semantics).
+      const path = pack ? packStateFile(pack, key) : sessionStateFile(ctx.sessionId, key);
       try {
         const raw = await readFile(path, 'utf8');
         return ok(JSON.parse(raw) as unknown);
@@ -99,8 +110,8 @@ export function registerStateFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'write_state',
     argSchema: WriteStateArgs,
-    execute: async ({ key, value }, ctx) => {
-      const path = sessionStateFile(ctx.sessionId, key);
+    execute: async ({ key, value, pack }, ctx) => {
+      const path = pack ? packStateFile(pack, key) : sessionStateFile(ctx.sessionId, key);
       try {
         await atomicWriteJson(path, value);
         return ok(undefined);
