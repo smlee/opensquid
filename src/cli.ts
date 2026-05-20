@@ -19,6 +19,7 @@ import { Command } from 'commander';
 
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
+import { registerAudit } from './setup/cli/audit.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
@@ -28,7 +29,7 @@ import { registerWebhooks } from './setup/cli/webhooks.js';
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.81');
+  .version('0.5.82');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -124,6 +125,13 @@ registerWebhooks(program);
 // `audit` reads `~/.opensquid/permission_audit.jsonl` (file-based);
 // CLI.5 ships the libsql `audit_log` table that supersedes this sink.
 registerPermissions(program);
+
+// CLI.5 — `opensquid audit list|shell|channels|pending|tail|approve|reject`.
+// Unified libsql `audit_log` table that consolidates capability_gate +
+// webhook + schedule + resume + channel_send + pending_shell producers.
+// `approve` / `reject` close the SEC.6 queued-shell-exec approval loop
+// via an atomic `prompted → approved|rejected` UPDATE.
+registerAudit(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
