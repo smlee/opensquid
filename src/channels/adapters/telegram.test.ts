@@ -75,9 +75,11 @@ beforeEach(() => {
   mockState.sendMessage.mockResolvedValue({ message_id: 1, date: 0 });
   mockState.deleteWebhook.mockResolvedValue(true);
   // Default: start hangs (resolves only on shutdown).
-  mockState.start.mockReturnValue(new Promise<void>(() => {
+  mockState.start.mockReturnValue(
+    new Promise<void>(() => {
       /* never resolves — bot.start() resolves on shutdown only */
-    }));
+    }),
+  );
   mockState.stop.mockResolvedValue(undefined);
 });
 
@@ -178,11 +180,11 @@ describe('telegramAdapter — start()', () => {
   it('start() retries on 409 with exponential backoff', async () => {
     vi.useFakeTimers();
     // First start attempt rejects with 409; second hangs (success path).
-    mockState.start
-      .mockRejectedValueOnce(new FakeGrammyError(409, 'Conflict'))
-      .mockReturnValueOnce(new Promise<void>(() => {
-      /* never resolves — bot.start() resolves on shutdown only */
-    }));
+    mockState.start.mockRejectedValueOnce(new FakeGrammyError(409, 'Conflict')).mockReturnValueOnce(
+      new Promise<void>(() => {
+        /* never resolves — bot.start() resolves on shutdown only */
+      }),
+    );
     const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
     await a.start();
     // Let the rejected promise + scheduled setTimeout fire.
