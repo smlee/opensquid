@@ -35,4 +35,5 @@ export {
   type SlackInboundEvent,
   type SlackInboundEnvelope,
 } from './adapters/slack.js';
+export { webhookAdapter, type WebhookAdapterOpts } from './adapters/webhook.js';
 export { NotificationRouter, type MulticastResult } from './router.js';
