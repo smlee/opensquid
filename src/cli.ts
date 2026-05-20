@@ -19,11 +19,12 @@ import { Command } from 'commander';
 
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
+import { InvalidCronError, InvalidScheduleInputError, nlToCron } from './setup/schedule_nl.js';
 
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.65');
+  .version('0.5.67');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -80,6 +81,49 @@ daemon
       'opensquid daemon restart: not yet wired — launchd/systemd integration ships in the UI track\n',
     );
     process.exitCode = 1;
+  });
+
+// `schedule` verb tree — SCHED.3 lands `schedule add <NL>` which translates a
+// natural-language schedule into a 5-field POSIX cron expression via the
+// codex-declared `fast_classifier` alias. Persistence + lifecycle (enable /
+// disable / list) ship in later SCHED.* tasks; SCHED.3's scope is "NL in,
+// cron out" so a pack author can sanity-check the translation before wiring.
+const schedule = program.command('schedule').description('Schedule management (NL → cron)');
+
+schedule
+  .command('add')
+  .description('Translate a natural-language schedule into a 5-field POSIX cron expression.')
+  .argument('<nl>', 'Natural-language schedule (e.g. "every Monday at 9am")')
+  .option(
+    '--alias <alias>',
+    'Model alias to dispatch through (default: fast_classifier)',
+    'fast_classifier',
+  )
+  .option('--skill <skill>', 'Skill to attach the schedule to (recorded only — not persisted yet)')
+  .option('--pack <pack>', 'Pack to attach the schedule to (recorded only — not persisted yet)')
+  .action(async (nl: string, opts: { alias: string; skill?: string; pack?: string }) => {
+    try {
+      const result = await nlToCron(nl, { alias: opts.alias });
+      const payload: Record<string, string> = {
+        cron: result.cron,
+        nl_input: result.nl_input,
+        confidence: result.confidence,
+      };
+      if (result.timezone !== undefined) payload.timezone = result.timezone;
+      if (opts.skill !== undefined) payload.skill = opts.skill;
+      if (opts.pack !== undefined) payload.pack = opts.pack;
+      process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    } catch (e: unknown) {
+      if (e instanceof InvalidScheduleInputError || e instanceof InvalidCronError) {
+        process.stderr.write(`opensquid schedule add: ${e.message}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      process.stderr.write(
+        `opensquid schedule add: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+      process.exitCode = 1;
+    }
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
