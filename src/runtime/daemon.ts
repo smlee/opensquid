@@ -1,0 +1,339 @@
+/**
+ * `OpenSquidDaemon` — unified background process for every inbound trigger
+ * source that doesn't ride on a host tool-call hook. Source: SCHED.1.
+ *
+ * Scope: node-cron schedules + HMAC webhook intake + singleton via
+ * proper-lockfile. AUTO.5 file watchers and AUTO.6 inbound channels plug
+ * into the same lifecycle later without changing the public surface.
+ *
+ * `start()` atomic: validate cron, acquire lock, register tasks, bind
+ * webhook server, write pid file. Rollback on failure so the next start
+ * never trips over partial state. `stop()` strict-order: cron tasks →
+ * webhook server → pid file → lock release. Each step best-effort; only
+ * the lock release is irrecoverable. Signals (SIGTERM/SIGINT) fire stop()
+ * exactly once.
+ *
+ * Singleton via `proper-lockfile.lock(daemonLockPath(), { retries: 0,
+ * realpath: false })`. `realpath: false` so the target need not exist;
+ * `retries: 0` fails fast on contention. Engine-vocabulary: no consumer
+ * product names — consumers wire their own `dispatch` callback.
+ *
+ * Imported by: src/cli.ts (daemon CLI), runtime tests.
+ */
+
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+
+import cron from 'node-cron';
+import { lock as acquireLock } from 'proper-lockfile';
+
+import type { Event, ScheduleEvent, WebhookEvent } from './event.js';
+import { daemonLockPath, daemonPidPath, OPENSQUID_HOME } from './paths.js';
+import type { RateLimiter } from './rate_limit.js';
+import { buildScheduleRegistry, type ScheduleEntry } from './schedule_registry.js';
+import type { Pack } from './types.js';
+import { WebhookServer, type WebhookAuditSink } from './webhook_server.js';
+import type { Subscription } from './webhook_subscriptions.js';
+
+/** Caller routes `ScheduleEvent` + `WebhookEvent` into the runtime
+ * evaluator. The daemon doesn't import the evaluator directly — keeps
+ * this module dependency-light AND lets tests dispatch into a stub. */
+export type DaemonDispatcher = (event: Event) => Promise<void>;
+
+export type DaemonAuditEntry =
+  | { event: 'schedule_fired'; entryId: string; fireTime: string }
+  | { event: 'schedule_rate_limited'; entryId: string; fireTime: string }
+  | { event: 'schedule_error'; entryId: string; reason: string; fireTime: string }
+  | { event: 'webhook'; payload: Parameters<WebhookAuditSink>[0] }
+  | { event: 'lifecycle'; phase: 'start' | 'stop' | 'sigterm' | 'sigint'; at: string };
+
+export type DaemonAuditSink = (entry: DaemonAuditEntry) => void;
+
+export interface DaemonOpts {
+  /** Daemon walks `pack.skills[].triggers[]` for schedule entries. */
+  packs: readonly Pack[];
+  /** Resolved + secret-bearing subscription list (see webhook_subscriptions.ts). */
+  subscriptions: readonly Subscription[];
+  dispatch: DaemonDispatcher;
+  /** Webhook port. Default 8765. */
+  webhookPort?: number;
+  webhookHost?: string;
+  /** Rate-limiter (AUTO.2). Applied per-fire on cron + per-request on webhook. */
+  rateLimiter?: RateLimiter;
+  auditLog?: DaemonAuditSink;
+  /** Injected clock — tests pass a fake. */
+  now?: () => number;
+}
+
+const DEFAULT_WEBHOOK_PORT = 8765;
+
+const noopAudit: DaemonAuditSink = () => {
+  /* default audit sink (named to satisfy eslint no-empty-function) */
+};
+
+export class OpenSquidDaemon {
+  private readonly opts: DaemonOpts;
+  private readonly auditLog: DaemonAuditSink;
+  private readonly nowFn: () => number;
+  private readonly tasks = new Map<string, cron.ScheduledTask>();
+  private readonly entries = new Map<string, ScheduleEntry>();
+  private webhookServer: WebhookServer | null = null;
+  private release: (() => Promise<void>) | null = null;
+  private state: 'idle' | 'starting' | 'running' | 'stopping' | 'stopped' = 'idle';
+  private startedAtMs: number | null = null;
+  private signalHandlers: { signal: NodeJS.Signals; handler: () => void }[] = [];
+
+  constructor(opts: DaemonOpts) {
+    this.opts = opts;
+    this.auditLog = opts.auditLog ?? noopAudit;
+    this.nowFn = opts.now ?? Date.now;
+  }
+
+  /** Atomic start. Rolls back on any failure. */
+  async start(): Promise<void> {
+    if (this.state !== 'idle') {
+      throw new Error(`OpenSquidDaemon.start: invalid state "${this.state}"`);
+    }
+    this.state = 'starting';
+
+    // Validate cron before acquiring the lock so a bad pack never touches it.
+    const entries = buildScheduleRegistry(this.opts.packs);
+
+    // proper-lockfile needs the parent dir before mkdir-ing `.lock`.
+    await mkdir(OPENSQUID_HOME(), { recursive: true });
+
+    // Singleton: `realpath: false` lets the target not exist; `retries: 0`
+    // fails fast on contention.
+    try {
+      this.release = await acquireLock(daemonLockPath(), { retries: 0, realpath: false });
+    } catch (err) {
+      this.state = 'idle';
+      throw new Error(
+        `OpenSquidDaemon.start: another daemon is already running (lock at ${daemonLockPath()}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    try {
+      // Cron tasks wrap user code in fireScheduleEntry's try/catch so a
+      // rule-side throw never crashes the cron loop.
+      for (const entry of entries) {
+        this.entries.set(entry.id, entry);
+        const task = cron.schedule(
+          entry.cron,
+          () => {
+            void this.fireScheduleEntry(entry);
+          },
+          { scheduled: true, timezone: entry.timezone },
+        );
+        this.tasks.set(entry.id, task);
+      }
+
+      this.webhookServer = new WebhookServer({
+        port: this.opts.webhookPort ?? DEFAULT_WEBHOOK_PORT,
+        ...(this.opts.webhookHost !== undefined ? { host: this.opts.webhookHost } : {}),
+        subscriptions: this.opts.subscriptions,
+        dispatch: (event: WebhookEvent) => this.opts.dispatch(event),
+        ...(this.opts.rateLimiter !== undefined ? { rateLimiter: this.opts.rateLimiter } : {}),
+        auditLog: (payload) => this.auditLog({ event: 'webhook', payload }),
+        now: this.nowFn,
+      });
+      await this.webhookServer.start();
+
+      // Pid file is best-effort; not load-bearing for correctness.
+      await writeFile(daemonPidPath(), String(process.pid), 'utf8');
+      this.installSignalHandlers();
+
+      this.startedAtMs = this.nowFn();
+      this.state = 'running';
+      this.auditLog({
+        event: 'lifecycle',
+        phase: 'start',
+        at: new Date(this.startedAtMs).toISOString(),
+      });
+    } catch (err) {
+      // Rollback in reverse order.
+      await this.rollbackStart();
+      this.state = 'idle';
+      throw err;
+    }
+  }
+
+  /** Strict order: cron tasks → webhook server → pid file → lock release.
+   * Each step is best-effort; only the lock release matters for the next
+   * start. proper-lockfile also clears its own state on process exit via
+   * signal-exit, so a missed release here doesn't permanently brick. */
+  async stop(): Promise<void> {
+    if (this.state === 'stopped' || this.state === 'idle') return;
+    this.state = 'stopping';
+
+    for (const task of this.tasks.values()) safeSync(() => task.stop());
+    this.tasks.clear();
+    this.entries.clear();
+
+    if (this.webhookServer) {
+      await safeAsync(() => this.webhookServer?.close() ?? Promise.resolve());
+      this.webhookServer = null;
+    }
+
+    await safeAsync(() => rm(daemonPidPath(), { force: true }));
+
+    if (this.release) {
+      await safeAsync(this.release);
+      this.release = null;
+    }
+
+    this.uninstallSignalHandlers();
+
+    this.startedAtMs = null;
+    this.state = 'stopped';
+    this.auditLog({
+      event: 'lifecycle',
+      phase: 'stop',
+      at: new Date(this.nowFn()).toISOString(),
+    });
+  }
+
+  /** PID-aware status read used by the `daemon status` CLI verb. */
+  async status(): Promise<DaemonStatus> {
+    if (this.state === 'running' && this.startedAtMs !== null) {
+      return {
+        running: true,
+        pid: process.pid,
+        uptimeMs: this.nowFn() - this.startedAtMs,
+        scheduleCount: this.entries.size,
+        webhookPort: this.webhookServer?.address()?.port ?? null,
+      };
+    }
+    // External CLI call — read the pid file if present.
+    try {
+      const raw = await readFile(daemonPidPath(), 'utf8');
+      const pid = Number.parseInt(raw.trim(), 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        return { running: true, pid, uptimeMs: null, scheduleCount: null, webhookPort: null };
+      }
+    } catch {
+      /* not running */
+    }
+    return { running: false };
+  }
+
+  /** Caller-visible registry — read-only snapshot of entries. */
+  scheduleEntries(): readonly ScheduleEntry[] {
+    return [...this.entries.values()];
+  }
+
+  /** Webhook port — `null` until `start()` returns. */
+  webhookBoundPort(): number | null {
+    return this.webhookServer?.address()?.port ?? null;
+  }
+
+  /** Test seam: synchronously fire one entry's path without advancing the
+   * cron tick. Lives on the class (not the test file) because it touches
+   * the private `entries` map. Production callers never use this. */
+  async fireEntryForTest(entryId: string): Promise<void> {
+    const entry = this.entries.get(entryId);
+    if (!entry) throw new Error(`fireEntryForTest: unknown entry "${entryId}"`);
+    await this.fireScheduleEntry(entry);
+  }
+
+  // -------------------------------------------------------------------------
+  // Internals.
+
+  private async fireScheduleEntry(entry: ScheduleEntry): Promise<void> {
+    const fireTime = new Date(this.nowFn()).toISOString();
+    try {
+      if (this.opts.rateLimiter) {
+        const decision = await this.opts.rateLimiter.check(entry.pack, 'schedule', entry.id);
+        if (!decision.allowed) {
+          this.auditLog({ event: 'schedule_rate_limited', entryId: entry.id, fireTime });
+          return;
+        }
+      }
+      const event: ScheduleEvent = {
+        kind: 'schedule',
+        scheduleId: entry.id,
+        fireTime,
+        triggerPayload: { pack: entry.pack, skill: entry.skill, cron: entry.cron },
+      };
+      this.auditLog({ event: 'schedule_fired', entryId: entry.id, fireTime });
+      await this.opts.dispatch(event);
+    } catch (err) {
+      this.auditLog({
+        event: 'schedule_error',
+        entryId: entry.id,
+        reason: err instanceof Error ? err.message : String(err),
+        fireTime,
+      });
+    }
+  }
+
+  private async rollbackStart(): Promise<void> {
+    for (const task of this.tasks.values()) safeSync(() => task.stop());
+    this.tasks.clear();
+    this.entries.clear();
+    if (this.webhookServer) {
+      await safeAsync(() => this.webhookServer?.close() ?? Promise.resolve());
+      this.webhookServer = null;
+    }
+    if (this.release) {
+      await safeAsync(this.release);
+      this.release = null;
+    }
+    await safeAsync(() => rm(daemonPidPath(), { force: true }));
+  }
+
+  private installSignalHandlers(): void {
+    const make = (signal: 'sigterm' | 'sigint'): (() => void) => {
+      let fired = false;
+      return () => {
+        if (fired) return;
+        fired = true;
+        this.auditLog({
+          event: 'lifecycle',
+          phase: signal,
+          at: new Date(this.nowFn()).toISOString(),
+        });
+        void this.stop();
+      };
+    };
+    const sigterm = make('sigterm');
+    const sigint = make('sigint');
+    process.on('SIGTERM', sigterm);
+    process.on('SIGINT', sigint);
+    this.signalHandlers = [
+      { signal: 'SIGTERM', handler: sigterm },
+      { signal: 'SIGINT', handler: sigint },
+    ];
+  }
+
+  private uninstallSignalHandlers(): void {
+    for (const { signal, handler } of this.signalHandlers) process.off(signal, handler);
+    this.signalHandlers = [];
+  }
+}
+
+// Best-effort exception swallowers — cleanup paths must not throw and
+// must not block subsequent cleanup steps.
+function safeSync(fn: () => void): void {
+  try {
+    fn();
+  } catch {
+    /* best-effort */
+  }
+}
+async function safeAsync(fn: () => Promise<unknown>): Promise<void> {
+  try {
+    await fn();
+  } catch {
+    /* best-effort */
+  }
+}
+
+export interface DaemonStatus {
+  running: boolean;
+  pid?: number;
+  uptimeMs?: number | null;
+  scheduleCount?: number | null;
+  webhookPort?: number | null;
+}

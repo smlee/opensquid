@@ -36,3 +36,33 @@ export { readAllDriftCatalogs, type DriftEvent } from './drift_catalog.js';
 // only project + matching specialty/domain packs for Mode A subagent
 // orchestration. Excludes universal + workflow per design doc §"Team modes".
 export { inheritContext } from './context_inherit.js';
+
+// Background daemon (SCHED.1) — node-cron schedules + webhook intake +
+// singleton enforcement. The daemon is the unified host for every inbound
+// trigger source that doesn't ride on a host tool-call hook.
+export {
+  OpenSquidDaemon,
+  type DaemonOpts,
+  type DaemonStatus,
+  type DaemonAuditEntry,
+  type DaemonAuditSink,
+  type DaemonDispatcher,
+} from './daemon.js';
+export {
+  buildScheduleRegistry,
+  ScheduleRegistryError,
+  type ScheduleEntry,
+} from './schedule_registry.js';
+export {
+  WebhookServer,
+  type WebhookServerOpts,
+  type WebhookAuditEntry,
+  type WebhookAuditSink,
+  type WebhookDispatcher,
+} from './webhook_server.js';
+export {
+  loadWebhookSubscriptions,
+  WebhookSubscriptionError,
+  redact,
+  type Subscription,
+} from './webhook_subscriptions.js';

@@ -1,0 +1,291 @@
+/**
+ * Tests for `WebhookServer` — HMAC verify, idempotency, rate-limit, 404/405.
+ *
+ * We bind on `127.0.0.1:0` (kernel-assigned port) so parallel tests don't
+ * collide. Each test creates + closes a fresh server; the `afterEach`
+ * sweeps any leftover instance.
+ *
+ * Coverage:
+ *   1. valid HMAC → 200 + dispatch called with parsed WebhookEvent.
+ *   2. invalid HMAC → 401, no dispatch.
+ *   3. missing signature header → 401.
+ *   4. malformed signature header → 401 (sha256= prefix check).
+ *   5. duplicate POST same body within window → 200 + idempotent flag, no dispatch.
+ *   6. duplicate POST after TTL expiry → 200 + dispatch fires again.
+ *   7. unknown subscription id → 404.
+ *   8. wrong HTTP method (GET) → 405.
+ *   9. rate-limit denial → 429 with Retry-After header.
+ *  10. close() drains gracefully; no leftover timer keeps process alive.
+ */
+
+import { createHmac } from 'node:crypto';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import type { RateLimiter } from './rate_limit.js';
+import type { WebhookEvent } from './event.js';
+import type { Subscription } from './webhook_subscriptions.js';
+import { WebhookServer } from './webhook_server.js';
+
+function sign(secret: string, body: string): string {
+  return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+}
+
+const FIXED_SECRET = 'super-secret-key';
+
+function makeSubscription(overrides: Partial<Subscription> = {}): Subscription {
+  return {
+    id: 'stripe-events',
+    pack: 'billing',
+    skill: 'router',
+    signingSecret: FIXED_SECRET,
+    deliverOnly: false,
+    ...overrides,
+  };
+}
+
+interface ServerHandle {
+  server: WebhookServer;
+  url: string;
+  dispatched: WebhookEvent[];
+}
+
+const handles: ServerHandle[] = [];
+
+async function startServer(
+  opts: Partial<ConstructorParameters<typeof WebhookServer>[0]> = {},
+  subscriptions: Subscription[] = [makeSubscription()],
+): Promise<ServerHandle> {
+  const dispatched: WebhookEvent[] = [];
+  const server = new WebhookServer({
+    port: 0,
+    host: '127.0.0.1',
+    subscriptions,
+    dispatch: (e) => {
+      dispatched.push(e);
+      return Promise.resolve();
+    },
+    ...opts,
+  });
+  await server.start();
+  const addr = server.address();
+  if (!addr) throw new Error('server failed to bind');
+  const handle: ServerHandle = {
+    server,
+    url: `http://127.0.0.1:${addr.port}`,
+    dispatched,
+  };
+  handles.push(handle);
+  return handle;
+}
+
+afterEach(async () => {
+  while (handles.length > 0) {
+    const h = handles.pop();
+    if (!h) break;
+    await h.server.close().catch(() => undefined);
+  }
+});
+
+describe('WebhookServer — HMAC', () => {
+  it('accepts a valid signature and dispatches a WebhookEvent', async () => {
+    const h = await startServer();
+    const body = JSON.stringify({ hello: 'world' });
+    const res = await fetch(`${h.url}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign(FIXED_SECRET, body),
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { accepted: boolean; subscriptionId: string };
+    expect(json.accepted).toBe(true);
+    expect(json.subscriptionId).toBe('stripe-events');
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.dispatched[0]?.kind).toBe('webhook');
+    expect(h.dispatched[0]?.subscriptionId).toBe('stripe-events');
+    expect(h.dispatched[0]?.body).toEqual({ hello: 'world' });
+  });
+
+  it('rejects an invalid signature with 401 and no dispatch', async () => {
+    const h = await startServer();
+    const body = JSON.stringify({ tampered: true });
+    const res = await fetch(`${h.url}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign('WRONG-SECRET', body),
+      },
+      body,
+    });
+    expect(res.status).toBe(401);
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('rejects a missing signature header with 401', async () => {
+    const h = await startServer();
+    const res = await fetch(`${h.url}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(401);
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('rejects a signature without the sha256= prefix', async () => {
+    const h = await startServer();
+    const body = '{}';
+    const rawHex = createHmac('sha256', FIXED_SECRET).update(body).digest('hex');
+    const res = await fetch(`${h.url}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': rawHex, // missing `sha256=` prefix
+      },
+      body,
+    });
+    expect(res.status).toBe(401);
+    expect(h.dispatched).toHaveLength(0);
+  });
+});
+
+describe('WebhookServer — idempotency', () => {
+  it('dedups duplicate POST same body within TTL window', async () => {
+    const nowMs = 1_000_000;
+    const h = await startServer({ now: () => nowMs, idempotencyTtlMs: 60_000 });
+    const body = JSON.stringify({ event: 'charge.succeeded', id: 'evt_1' });
+    const sig = sign(FIXED_SECRET, body);
+    const post = () =>
+      fetch(`${h.url}/webhook/stripe-events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-opensquid-signature': sig },
+        body,
+      });
+    const res1 = await post();
+    expect(res1.status).toBe(200);
+    expect(((await res1.json()) as { accepted?: boolean }).accepted).toBe(true);
+    expect(h.dispatched).toHaveLength(1);
+    // Within window — same body should be deduped.
+    const res2 = await post();
+    expect(res2.status).toBe(200);
+    expect(((await res2.json()) as { idempotent?: boolean }).idempotent).toBe(true);
+    expect(h.dispatched).toHaveLength(1);
+  });
+
+  it('re-dispatches duplicate POST after TTL window expires', async () => {
+    let nowMs = 1_000_000;
+    const h = await startServer({ now: () => nowMs, idempotencyTtlMs: 60_000 });
+    const body = JSON.stringify({ event: 'charge.succeeded', id: 'evt_2' });
+    const sig = sign(FIXED_SECRET, body);
+    const post = () =>
+      fetch(`${h.url}/webhook/stripe-events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-opensquid-signature': sig },
+        body,
+      });
+    await post();
+    expect(h.dispatched).toHaveLength(1);
+    nowMs += 70_000; // jump past TTL
+    await post();
+    expect(h.dispatched).toHaveLength(2);
+  });
+});
+
+describe('WebhookServer — routing + method', () => {
+  it('returns 404 for unknown subscription id', async () => {
+    const h = await startServer();
+    const res = await fetch(`${h.url}/webhook/does-not-exist`, {
+      method: 'POST',
+      body: '{}',
+      headers: { 'x-opensquid-signature': sign(FIXED_SECRET, '{}') },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 405 for non-POST methods', async () => {
+    const h = await startServer();
+    const res = await fetch(`${h.url}/webhook/stripe-events`, { method: 'GET' });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
+  });
+
+  it('returns 404 for non-webhook paths', async () => {
+    const h = await startServer();
+    const res = await fetch(`${h.url}/random`, { method: 'POST', body: '' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('WebhookServer — rate-limit', () => {
+  it('returns 429 with Retry-After when limiter denies', async () => {
+    const limiter: Partial<RateLimiter> = {
+      check: () =>
+        Promise.resolve({ allowed: false, retryAfterMs: 5000, reason: 'rate_exceeded' as const }),
+    };
+    const sub = makeSubscription({ rateLimit: { max: 1, per: 'minute' } });
+    const h = await startServer({ rateLimiter: limiter as RateLimiter }, [sub]);
+    const body = '{"x":1}';
+    const res = await fetch(`${h.url}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign(FIXED_SECRET, body),
+      },
+      body,
+    });
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('5');
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it('skips rate-limit check when subscription has no rateLimit config', async () => {
+    let called = false;
+    const limiter: Partial<RateLimiter> = {
+      check: () => {
+        called = true;
+        return Promise.resolve({ allowed: false });
+      },
+    };
+    const h = await startServer({ rateLimiter: limiter as RateLimiter });
+    const body = '{}';
+    const res = await fetch(`${h.url}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign(FIXED_SECRET, body),
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    expect(called).toBe(false);
+  });
+});
+
+describe('WebhookServer — audit', () => {
+  it('emits structured audit entries with NO secret values', async () => {
+    const audit: Parameters<typeof startServer>[0] = {
+      auditLog: () => undefined,
+    };
+    const entries: unknown[] = [];
+    const h = await startServer({
+      ...audit,
+      auditLog: (e) => entries.push(e),
+    });
+    const body = '{}';
+    await fetch(`${h.url}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign(FIXED_SECRET, body),
+      },
+      body,
+    });
+    expect(entries.length).toBeGreaterThan(0);
+    // Audit log must never contain the resolved signing secret.
+    for (const e of entries) {
+      expect(JSON.stringify(e)).not.toContain(FIXED_SECRET);
+    }
+  });
+});

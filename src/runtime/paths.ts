@@ -66,3 +66,31 @@ export const packStateFile = (packId: string, key: string): string =>
 
 export const packLogFile = (packId: string, name: string): string =>
   join(packStateDir(packId), `${name}.jsonl`);
+
+// ---------------------------------------------------------------------------
+// Daemon paths (SCHED.1)
+//
+// The unified daemon process (`OpenSquidDaemon`) owns three side-files inside
+// `OPENSQUID_HOME()`:
+//
+//   - `daemon.lock`     proper-lockfile target. We hand `realpath: false`
+//                       to the lock call so the file itself doesn't need to
+//                       exist on disk — only the `${path}.lock` directory
+//                       that proper-lockfile creates atomically via mkdir.
+//
+//   - `daemon.pid`      ASCII process id written by `start()`, removed by
+//                       `stop()`. The CLI's `daemon status` verb reads this
+//                       to report PID + uptime without needing IPC.
+//
+//   - `daemon.log`      stdout/stderr rotation target (wired by SCHED.x UI
+//                       integration; the path helper is here for symmetry).
+//
+// All three sit under `OPENSQUID_HOME()` so the `OPENSQUID_HOME` env-var
+// override extends to daemon state — tests point `OPENSQUID_HOME` at an
+// `mkdtemp` and a fresh daemon can boot in isolation without polluting the
+// developer's home directory.
+// ---------------------------------------------------------------------------
+
+export const daemonLockPath = (): string => join(OPENSQUID_HOME(), 'daemon.lock');
+export const daemonPidPath = (): string => join(OPENSQUID_HOME(), 'daemon.pid');
+export const daemonLogPath = (): string => join(OPENSQUID_HOME(), 'daemon.log');
