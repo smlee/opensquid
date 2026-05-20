@@ -28,4 +28,11 @@ export {
   type DiscordAdapter,
   type DiscordAdapterOpts,
 } from './adapters/discord.js';
+export {
+  slackAdapter,
+  type SlackAdapter,
+  type SlackAdapterOpts,
+  type SlackInboundEvent,
+  type SlackInboundEnvelope,
+} from './adapters/slack.js';
 export { NotificationRouter, type MulticastResult } from './router.js';

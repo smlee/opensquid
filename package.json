@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.58",
+  "version": "0.5.59",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -89,6 +89,8 @@
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.0",
     "@anthropic-ai/sdk": "^0.30.0",
+    "@slack/socket-mode": "^2.0.0",
+    "@slack/web-api": "^7.0.0",
     "discord.js": "^14.16.0",
     "openai": "^4.0.0"
   },
@@ -97,6 +99,12 @@
       "optional": true
     },
     "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@slack/socket-mode": {
+      "optional": true
+    },
+    "@slack/web-api": {
       "optional": true
     },
     "discord.js": {
