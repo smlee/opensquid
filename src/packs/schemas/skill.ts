@@ -29,6 +29,7 @@
 import { z } from 'zod';
 
 import { Matcher } from '../../runtime/load_matchers.js';
+import { EventKind, Trigger, defaultTriggers } from '../../runtime/types.js';
 import { UnloadCondition } from '../../runtime/unload_conditions.js';
 
 // ---------------------------------------------------------------------------
@@ -153,6 +154,55 @@ export const Rule = z.preprocess(
 export type Rule = z.infer<typeof Rule>;
 
 // ---------------------------------------------------------------------------
+// Trigger — which Event kinds fire this skill (AUTO.1).
+//
+// Authoritative source: `docs/tasks/automation.md` AUTO.1 "Key code shapes"
+// section + memory `project_opensquid_modular_function_skill_separation`.
+//
+// A skill's `triggers:` list declares which `Event` kinds the dispatcher
+// should evaluate the skill against. Default (block omitted at the Skill
+// level) is `[{kind: 'tool_call'}]` — back-compat with every Phase 1–7 pack
+// that pre-dates the wider Event union.
+//
+// Discriminated union on `kind` matching `EventKind` (one variant per Event
+// kind) so the schema can carry kind-specific filter args without leaking
+// into the bare event payload. Per-trigger filter args are loose at AUTO.1
+// and refined by the downstream trigger sources:
+//
+//   - `schedule.cron`         — read by SCHED.1 scheduler
+//   - `webhook.path`          — read by SCHED.2 webhook intake
+//   - `file_changed.paths`    — read by AUTO.5 chokidar watcher
+//   - `inbound_channel.channel` — read by AUTO.6 inbound router (abstract
+//                                channel name; user maps via channels.yaml)
+//
+// `tool_call`, `prompt_submit`, `session_end`, `stop` carry no filter args
+// at this layer — the host hook delivers the event verbatim and the rule
+// process inside the skill does any per-tool / per-prompt filtering via the
+// existing `tool_name`, `tool_args`, `match_command` primitives.
+//
+// Risk callout (per task spec): the loader MUST refuse an empty
+// `triggers: []` rather than silently defaulting to "all kinds" or "no
+// kinds." Empty means the pack author wrote something they didn't intend;
+// the schema rejects with a Zod issue path pointing at the offending field.
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-export the eight event kinds as the canonical trigger-kind set.
+ *
+ * Trigger.kind ⊆ EventKind by construction (each `Trigger` variant's
+ * discriminator is one of the eight `EventKind` literals). Consumers that
+ * need the bare set of trigger kinds (audit logs, doctor output, AUTO.2
+ * `rate_limits:` keys) import this rather than re-typing the literals.
+ *
+ * The `Trigger` schema + `DEFAULT_TRIGGERS` constant itself lives in
+ * `runtime/types.ts` (single source of truth alongside `Event`). YAML
+ * callers should import them from there directly; skill.ts only references
+ * them via the local `import` for the Skill schema's `triggers:` field.
+ */
+export const TriggerKind = EventKind;
+export type TriggerKind = z.infer<typeof TriggerKind>;
+
+// ---------------------------------------------------------------------------
 // LoadModeEnum — preload vs lazy per design doc §"Skill properties".
 //
 // `preload` — loaded at session start, stays loaded (always-active discipline).
@@ -176,6 +226,20 @@ export const Skill = z.object({
   load: LoadModeEnum.default('lazy'),
   when_to_load: z.array(Matcher).default([]),
   unloads_when: z.array(UnloadCondition).default([]),
+  // AUTO.1: `triggers:` declares which `Event` kinds fire this skill.
+  // - omitted        → default to `[{kind: 'tool_call'}]` via the factory
+  //                    above (back-compat with every Phase 1–7 pack).
+  // - non-empty list → discriminated union per `EventKind`; the dispatcher
+  //                    filters by `event.kind ∈ triggers.map(t => t.kind)`.
+  // - empty list     → REJECTED (`.min(1)`). Refusing to load an explicitly
+  //                    empty trigger list is the no-silent-fail-open posture
+  //                    required by the spec risk callout: the loader never
+  //                    silently disables a skill, and never silently enables
+  //                    every event kind.
+  triggers: z
+    .array(Trigger)
+    .min(1, 'triggers must not be empty — omit the block to default to tool_call')
+    .default(defaultTriggers),
   rules: z.array(Rule).default([]),
   tools: z.array(z.string()).default([]),
   prose: z.string().optional(),

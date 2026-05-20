@@ -46,20 +46,22 @@
 
 import { z } from 'zod';
 import { minimatch } from 'minimatch';
-import type { Event } from './types.js';
+import { EventKind, type Event } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Matcher — canonical discriminated form. The shorthand pre-pass converts
 // single-key objects (`{tool_match: 'Bash'}`) to this shape before parsing.
+//
+// `event_type` accepts any of the eight `EventKind` literals (AUTO.1 widened
+// the union from 4 → 8). We re-export the runtime enum rather than redeclare
+// the four literals locally so a future variant lands in one place.
 // ---------------------------------------------------------------------------
-
-const EventTypeLiteral = z.enum(['tool_call', 'prompt_submit', 'stop', 'session_end']);
 
 export const MatcherCanonical = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool_match'), tool: z.string().min(1) }),
   z.object({ kind: z.literal('command_pattern'), pattern: z.string().min(1) }),
   z.object({ kind: z.literal('file_glob'), glob: z.string().min(1) }),
-  z.object({ kind: z.literal('event_type'), type: EventTypeLiteral }),
+  z.object({ kind: z.literal('event_type'), type: EventKind }),
 ]);
 export type Matcher = z.infer<typeof MatcherCanonical>;
 

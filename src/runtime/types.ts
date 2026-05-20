@@ -9,7 +9,11 @@
  * Type → source-of-truth in `docs/opensquid-real-design.md`:
  *
  *   Event       — §"The architecture in six concepts" (concept 1)
- *                 four kinds: tool_call | prompt_submit | session_end | stop
+ *                 eight kinds: tool_call | prompt_submit | session_end | stop
+ *                 | schedule | webhook | inbound_channel | file_changed
+ *                 (AUTO.1 widened the union from 4 → 8 to back the four
+ *                 non-tool-call triggers: scheduler ticks, webhook intakes,
+ *                 inbound channel messages, and file-change watchers.)
  *   Verdict     — §"Anti-drift split" (rule output)
  *                 level: pass | block | warn | surface
  *   ProcessStep — §"Skill format" (rules are processes, not typed checks)
@@ -43,45 +47,38 @@ export const Verdict = z.object({
 export type Verdict = z.infer<typeof Verdict>;
 
 // ---------------------------------------------------------------------------
-// Event — discriminated union on `kind`
+// Event + EventKind + Trigger — split into `./event.ts` per AUTO.1 file-size
+// constraint (types.ts must stay under 400 LOC). The barrel re-export below
+// preserves every existing `import { Event } from './types.js'` callsite so
+// the split is internal layout, not a public-API change.
 //
-// Use `z.discriminatedUnion` (not `z.union`) so TS narrows on `event.kind`
-// inside a `switch` and ZodError points at the right variant on rejection.
+// Naming note: spec says "split into `types/event.ts`" but we use
+// `./event.ts` (sibling, not subdir) to avoid the NodeNext name collision
+// between sibling file `types.ts` and sibling directory `types/`. Same
+// outcome, simpler resolver.
 // ---------------------------------------------------------------------------
 
-export const ToolCallEvent = z.object({
-  kind: z.literal('tool_call'),
-  tool: z.string(),
-  args: z.record(z.unknown()),
-  cwd: z.string().optional(),
-});
-export type ToolCallEvent = z.infer<typeof ToolCallEvent>;
-
-export const PromptSubmitEvent = z.object({
-  kind: z.literal('prompt_submit'),
-  prompt: z.string(),
-});
-export type PromptSubmitEvent = z.infer<typeof PromptSubmitEvent>;
-
-export const SessionEndEvent = z.object({
-  kind: z.literal('session_end'),
-  sessionId: z.string(),
-});
-export type SessionEndEvent = z.infer<typeof SessionEndEvent>;
-
-export const StopEvent = z.object({
-  kind: z.literal('stop'),
-  assistantText: z.string(),
-});
-export type StopEvent = z.infer<typeof StopEvent>;
-
-export const Event = z.discriminatedUnion('kind', [
-  ToolCallEvent,
+export {
+  DEFAULT_TRIGGERS,
+  Event,
+  EventKind,
+  FileChangedEvent,
+  InboundChannelEvent,
   PromptSubmitEvent,
+  ScheduleEvent,
   SessionEndEvent,
   StopEvent,
-]);
-export type Event = z.infer<typeof Event>;
+  ToolCallEvent,
+  Trigger,
+  WebhookEvent,
+  defaultTriggers,
+} from './event.js';
+
+// Internal re-import: the Skill schema below references `Trigger` +
+// `defaultTriggers`. We import them locally rather than relying on the
+// re-export above (NodeNext doesn't let a file consume its own re-exports
+// without a separate import statement).
+import { Trigger, defaultTriggers } from './event.js';
 
 // ---------------------------------------------------------------------------
 // Rule + ProcessStep — rules are processes (sequences of primitive calls)
@@ -169,6 +166,11 @@ export const Skill = z.object({
   load: LoadMode.default('lazy'),
   when_to_load: z.array(z.unknown()).default([]),
   unloads_when: z.array(z.unknown()).default([]),
+  // AUTO.1: same shape as the YAML-side `triggers:` block. The runtime view
+  // is the post-load contract; refusing empty arrays here keeps the
+  // env-var test seam (which feeds pre-parsed pack JSON) from sneaking an
+  // empty list past the YAML loader.
+  triggers: z.array(Trigger).min(1).default(defaultTriggers),
   rules: z.array(Rule).default([]),
   prose: z.string().optional(),
 });

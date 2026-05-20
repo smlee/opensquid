@@ -17,10 +17,14 @@
  *
  * State transitions per Event kind:
  *
- *   prompt_submit  → turnsSinceActivation += 1
- *   stop           → taskCompleted = true
- *   session_end    → sessionEnded = true
- *   tool_call      → no-op (tool calls are sub-events of a turn)
+ *   prompt_submit                            → turnsSinceActivation += 1
+ *   stop                                     → taskCompleted = true
+ *   session_end                              → sessionEnded = true
+ *   tool_call                                → no-op (sub-event of a turn)
+ *   schedule | webhook | inbound_channel |   → no-op (AUTO.1 trigger sources
+ *   file_changed                              fire outside the prompt-submit
+ *                                             turn cycle and don't mutate
+ *                                             user-facing tick state)
  *
  * `resetTick` puts a fresh state on the wire when a skill (re)activates —
  * the counters apply from that point forward, not from session start.
@@ -64,6 +68,21 @@ export function advanceTick(state: Readonly<TickState>, event: Event): TickState
       // Tool calls happen inside a turn — by design, NOT a turn boundary.
       // See module header.
       return state;
+    case 'schedule':
+    case 'webhook':
+    case 'inbound_channel':
+    case 'file_changed':
+      // AUTO.1 trigger sources: fire outside the prompt-submit turn cycle.
+      // They neither bump the idle counter nor signal task/session end —
+      // those signals are reserved for the host's lifecycle hooks.
+      return state;
+    default: {
+      // Exhaustiveness check: if a future Event variant lands without a
+      // case here, TS fails to compile this assignment. Loud at build
+      // time beats a silent fall-through that drops a real tick signal.
+      const _exhaustive: never = event;
+      return _exhaustive;
+    }
   }
 }
 

@@ -16,6 +16,15 @@
  * overridden by a later pack's warn. Pack ordering is the loader's
  * responsibility (Task 1.19); the dispatcher trusts the order it's given.
  *
+ * AUTO.1 event-kind filter: before walking a skill's rules, the dispatcher
+ * checks `event.kind ∈ skill.triggers.map(t => t.kind)`. Skills that don't
+ * subscribe to the incoming event kind are skipped entirely. This keeps
+ * tool-call hooks from re-running schedule/webhook/file-changed skills and
+ * vice versa. A skill that wants to fire on multiple kinds lists them all
+ * (e.g. `triggers: [{kind: tool_call}, {kind: schedule, cron: ...}]`). The
+ * default trigger list (when the YAML block is omitted) is a single
+ * `tool_call` entry — preserves Phase 1–7 dispatcher behavior verbatim.
+ *
  * Phase 1 policy: every verdict is funneled through `applyDriftResponse` with
  * the **`block_tool` default policy** (hard-coded here). Pack-declared
  * `drift_response` policies wire in Phase 2+ when the loader exposes a
@@ -58,6 +67,12 @@ export async function dispatchEvent(
 ): Promise<DispatchResult> {
   for (const pack of packs) {
     for (const skill of pack.skills) {
+      // AUTO.1: skip the skill entirely if no trigger subscribes to this
+      // event kind. `skill.triggers` is guaranteed non-empty by the schema
+      // (`.min(1)`) — an omitted YAML block defaults to `[{kind: 'tool_call'}]`.
+      // Using `.some` rather than `.includes` because each trigger is a
+      // discriminated-union object, not a bare string.
+      if (!skill.triggers.some((t) => t.kind === event.kind)) continue;
       for (const rule of skill.rules) {
         // Phase 4: destination_check rules fire on the scheduler tick
         // (`destination_scheduler.ts` → `check_destination` primitive), not

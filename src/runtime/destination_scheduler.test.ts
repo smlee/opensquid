@@ -79,7 +79,7 @@ function makeDestinationPack(opts: {
         load: 'lazy',
         when_to_load: [],
         unloads_when: [],
-
+        triggers: [{ kind: 'tool_call' }],
         rules: [
           {
             id: opts.ruleId ?? 'g1',
@@ -172,7 +172,7 @@ describe('maybeRunDestinationChecks', () => {
             load: 'lazy',
             when_to_load: [],
             unloads_when: [],
-
+            triggers: [{ kind: 'tool_call' }],
             rules: [
               {
                 id: 't',
@@ -223,7 +223,7 @@ describe('maybeRunDestinationChecks', () => {
             load: 'lazy',
             when_to_load: [],
             unloads_when: [],
-
+            triggers: [{ kind: 'tool_call' }],
             rules: [
               {
                 id: 'track-rule',

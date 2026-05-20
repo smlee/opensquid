@@ -38,6 +38,7 @@ function makeSkill(name: string, prose: string): Skill {
     load: 'lazy',
     when_to_load: [],
     unloads_when: [],
+    triggers: [{ kind: 'tool_call' }],
     rules: [],
   };
 }

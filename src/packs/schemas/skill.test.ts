@@ -5,11 +5,15 @@
  * rules + process steps, rule kind default, missing process rejection,
  * permissive `when_to_load` (no Phase-3 refinement yet), Phase-4
  * destination_check discriminated-union parsing.
+ *
+ * AUTO.1: adds `triggers:` block back-compat — omitted block defaults to
+ * `[{kind: 'tool_call'}]`; explicit empty list is rejected (no silent
+ * fail-open).
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { Rule, Skill } from './skill.js';
+import { Rule, Skill, TriggerKind } from './skill.js';
 
 describe('Skill schema', () => {
   it('parses a minimum-viable skill (just name) with all defaults', () => {
@@ -18,6 +22,10 @@ describe('Skill schema', () => {
     expect(result.load).toBe('lazy');
     expect(result.when_to_load).toEqual([]);
     expect(result.unloads_when).toEqual([]);
+    // AUTO.1: back-compat default — omitting `triggers:` MUST fill exactly
+    // `[{kind: 'tool_call'}]` so every Phase 1–7 pack keeps firing on the
+    // tool-call hook surface it was authored against.
+    expect(result.triggers).toEqual([{ kind: 'tool_call' }]);
     expect(result.rules).toEqual([]);
     expect(result.tools).toEqual([]);
     expect(result.prose).toBeUndefined();
@@ -178,5 +186,58 @@ describe('Rule schema — Phase 4 destination_check', () => {
       process: [{ call: 'verdict' }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AUTO.1 — Skill `triggers:` block back-compat + extension surface
+// ---------------------------------------------------------------------------
+
+describe('Skill schema — AUTO.1 triggers block', () => {
+  it('parses a skill with a multi-trigger list (schedule + file_changed + inbound_channel)', () => {
+    const result = Skill.parse({
+      name: 'drift-digest',
+      load: 'lazy',
+      triggers: [
+        { kind: 'schedule', cron: '0 9 * * 1' },
+        { kind: 'file_changed', paths: ['./src/**/*.ts'] },
+        { kind: 'inbound_channel', channel: 'alerts' },
+      ],
+    });
+    expect(result.triggers).toHaveLength(3);
+    expect(result.triggers.map((t) => t.kind)).toEqual([
+      'schedule',
+      'file_changed',
+      'inbound_channel',
+    ]);
+  });
+
+  it('rejects an explicit empty triggers list (no silent fail-open)', () => {
+    const result = Skill.safeParse({ name: 'broken', triggers: [] });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.join('.') === 'triggers')).toBe(true);
+    }
+  });
+
+  it('rejects a trigger with an unknown kind (engine-vocab discipline)', () => {
+    const result = Skill.safeParse({
+      name: 'broken',
+      triggers: [{ kind: 'mqtt', topic: 'sensors/#' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('TriggerKind enum is the same 8 literals as EventKind', () => {
+    expect(TriggerKind.options).toEqual([
+      'tool_call',
+      'prompt_submit',
+      'session_end',
+      'stop',
+      'schedule',
+      'webhook',
+      'inbound_channel',
+      'file_changed',
+    ]);
   });
 });
