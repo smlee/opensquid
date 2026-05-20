@@ -23,4 +23,9 @@ export {
   type TelegramAdapter,
   type TelegramAdapterOpts,
 } from './adapters/telegram.js';
+export {
+  discordAdapter,
+  type DiscordAdapter,
+  type DiscordAdapterOpts,
+} from './adapters/discord.js';
 export { NotificationRouter, type MulticastResult } from './router.js';
