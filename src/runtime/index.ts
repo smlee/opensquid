@@ -29,3 +29,8 @@ export { maybeRunDestinationChecks, destinationRuleKey } from './destination_sch
 // chronologically sorted view with `pack` provenance preserved. Backs the
 // `list_drift_events` MCP tool.
 export { readAllDriftCatalogs, type DriftEvent } from './drift_catalog.js';
+
+// Context inheritance filter (Task 6.3) — strips a parent's pack stack to
+// only project + matching specialty/domain packs for Mode A subagent
+// orchestration. Excludes universal + workflow per design doc §"Team modes".
+export { inheritContext } from './context_inherit.js';
