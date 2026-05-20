@@ -30,3 +30,6 @@ export {
 
 // Task 7.3
 export { shouldPromote, type OutcomeSignal, type PromotionThreshold } from './promote.js';
+
+// Task 7.4
+export { bumpSkillVersion } from './mutate_skill.js';
