@@ -22,11 +22,12 @@ import { daemonPidPath } from './runtime/paths.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
 import { registerTriggers } from './setup/cli/triggers.js';
+import { registerWebhooks } from './setup/cli/webhooks.js';
 
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.79');
+  .version('0.5.80');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -105,6 +106,14 @@ registerTraceCommand(program);
 // dispatcher wired here yet — `fire` errors cleanly until the daemon
 // surfaces an injectable dispatch handle (deferred to a later CLI task).
 registerTriggers(program);
+
+// CLI.3 — `opensquid webhooks list|subscribe|unsubscribe|test|rotate`.
+// CLI-managed webhook subscription store at `~/.opensquid/webhooks.yaml`
+// (same schema as the SCHED.1 runtime loader). Secrets stored inline as
+// `literal:<64-hex>` URIs so rotate stays atomic with a single yaml
+// rewrite. Daemon picks up changes on next reload; runtime resolver
+// needs `literalBackend()` registered (wired in setup phase).
+registerWebhooks(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
