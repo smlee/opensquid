@@ -19,12 +19,13 @@ import { Command } from 'commander';
 
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
+import { registerTraceCommand } from './setup/cli/trace.js';
 import { InvalidCronError, InvalidScheduleInputError, nlToCron } from './setup/schedule_nl.js';
 
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.67');
+  .version('0.5.77');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -125,6 +126,11 @@ schedule
       process.exitCode = 1;
     }
   });
+
+// OBSERVE.2 — `opensquid trace <runId> | tail | export <runId>`.
+// Registered via a sibling module to keep the verb tree's commander wiring
+// + libsql client lifecycle ownership out of `cli.ts`.
+registerTraceCommand(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
