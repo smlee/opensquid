@@ -61,3 +61,7 @@ export type {
   RuleKindEnum as RuleKindEnumType,
   Skill as SkillType,
 } from './skill.js';
+
+// team.yaml (Task 6.1 — Mode A team-pack manifest extension)
+export { SubagentRole, Team } from './team.js';
+export type { SubagentRole as SubagentRoleType, Team as TeamType } from './team.js';
