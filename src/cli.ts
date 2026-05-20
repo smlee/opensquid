@@ -20,12 +20,13 @@ import { Command } from 'commander';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
+import { registerTriggers } from './setup/cli/triggers.js';
 import { InvalidCronError, InvalidScheduleInputError, nlToCron } from './setup/schedule_nl.js';
 
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.77');
+  .version('0.5.78');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -131,6 +132,13 @@ schedule
 // Registered via a sibling module to keep the verb tree's commander wiring
 // + libsql client lifecycle ownership out of `cli.ts`.
 registerTraceCommand(program);
+
+// CLI.1 — `opensquid triggers list|show|fire|enable|disable`. Unified view
+// of skill `triggers:` blocks across all installed packs + user-side
+// enable/disable persistence (`~/.opensquid/trigger_state.yaml`). No
+// dispatcher wired here yet — `fire` errors cleanly until the daemon
+// surfaces an injectable dispatch handle (deferred to a later CLI task).
+registerTriggers(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
