@@ -18,3 +18,12 @@ export {
   validatePendingLesson,
 } from './capture.js';
 export type { LessonType, PendingLesson } from './types.js';
+
+// Task 7.2
+export {
+  appendBufferEntry,
+  walkBuffer,
+  bufferDir,
+  type BufferCategory,
+  type BufferEntry,
+} from './automation_buffer.js';
