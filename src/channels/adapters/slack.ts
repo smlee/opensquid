@@ -22,7 +22,8 @@
  * scrubbed from any error path that might surface them.
  */
 
-import type { ChannelAdapter, ChannelMessage, SendResult } from '../types.js';
+import type { InboundChannelEvent } from '../../runtime/event.js';
+import type { ChannelAdapter, ChannelMessage, InboundSubscription, SendResult } from '../types.js';
 
 export interface SlackAdapterOpts {
   /** Bot token (xoxb-...) for chat.postMessage and other web-api calls. */
@@ -31,6 +32,10 @@ export interface SlackAdapterOpts {
   appToken: string;
   /** Optional inbound event handler. Adapter acks BEFORE invoking. */
   onEvent?: (event: SlackInboundEvent) => void | Promise<void>;
+  /** Workspace segment to embed in `InboundChannelEvent.channelUri` — Slack
+   *  routes by token, not URI, but we keep the segment so audit logs +
+   *  channel mapping read identifiably. Defaults to `'workspace'`. */
+  workspace?: string;
 }
 
 export interface SlackInboundEvent {
@@ -44,6 +49,15 @@ export interface SlackAdapter extends ChannelAdapter {
   /** Test/inspection hook — process a single inbound envelope as if it
    * arrived from Slack. ACKs synchronously, runs the user handler async. */
   handleInbound(envelope: SlackInboundEnvelope): Promise<void>;
+  /**
+   * AUTO.6 — attach an inbound handler that maps Slack `message` events
+   * to a unified `InboundChannelEvent`. Auto-starts Socket Mode if not
+   * already running. ACK still fires synchronously before any handler
+   * runs (3s SLA).
+   */
+  subscribeInbound(
+    handler: (event: InboundChannelEvent) => Promise<void>,
+  ): Promise<InboundSubscription>;
 }
 
 export interface SlackInboundEnvelope {
@@ -99,10 +113,53 @@ function redact(message: string, ...secrets: string[]): string {
   return out;
 }
 
+/**
+ * Minimal Slack `event_callback`/`message` shape. Declared structurally
+ * so the adapter doesn't pull `@slack/types` into our public surface.
+ */
+interface SlackEventCallbackBody {
+  event?: {
+    type?: string;
+    channel?: string;
+    user?: string;
+    text?: string;
+    thread_ts?: string;
+    bot_id?: string;
+    subtype?: string;
+  };
+}
+
 export function slackAdapter(opts: SlackAdapterOpts): SlackAdapter {
   let web: SlackWebClient | null = null;
   let socket: SlackSocketModeClient | null = null;
   let started = false;
+  const inboundListeners = new Set<(event: InboundChannelEvent) => Promise<void>>();
+  const workspaceSegment = opts.workspace ?? 'workspace';
+
+  /** Map a Slack envelope (event_callback) → unified InboundChannelEvent.
+   *  Returns `null` for envelopes that don't carry a user-authored
+   *  message (subtypes like bot_message, message_changed, etc). */
+  function mapToInboundEvent(envelope: SlackInboundEnvelope): InboundChannelEvent | null {
+    if (envelope.type !== 'event_callback' && envelope.type !== 'events_api') return null;
+    const body = envelope.body as SlackEventCallbackBody | undefined;
+    const ev = body?.event;
+    if (ev?.type !== 'message') return null;
+    // Skip bot-authored + subtyped messages — loop-break first line of
+    // defense + ignore edit/delete envelopes which aren't fresh inputs.
+    if (ev.bot_id !== undefined && ev.bot_id !== '') return null;
+    if (ev.subtype !== undefined && ev.subtype !== '') return null;
+    if (ev.channel === undefined || ev.user === undefined) return null;
+    const channelUri = `slack://${workspaceSegment}/${ev.channel}`;
+    const event: InboundChannelEvent = {
+      kind: 'inbound_channel',
+      channelUri,
+      sender: ev.user,
+      text: ev.text ?? '',
+      receivedAt: new Date().toISOString(),
+      ...(ev.thread_ts !== undefined ? { threadKey: ev.thread_ts } : {}),
+    };
+    return event;
+  }
 
   /**
    * ACK-first dispatch. We invoke `envelope.ack()` synchronously (the
@@ -115,7 +172,7 @@ export function slackAdapter(opts: SlackAdapterOpts): SlackAdapter {
     // 1) ACK first — never await user code before this.
     const ackResult = envelope.ack();
     if (ackResult instanceof Promise) await ackResult;
-    // 2) Dispatch user handler async — never throws into the caller.
+    // 2a) Dispatch legacy onEvent — back-compat path.
     if (opts.onEvent !== undefined) {
       try {
         await opts.onEvent({ type: envelope.type, body: envelope.body });
@@ -123,6 +180,33 @@ export function slackAdapter(opts: SlackAdapterOpts): SlackAdapter {
         // user handler errors are swallowed — never affect ack.
       }
     }
+    // 2b) Dispatch AUTO.6 inbound listeners — only when the envelope
+    // carries a user-authored message event.
+    if (inboundListeners.size > 0) {
+      const event = mapToInboundEvent(envelope);
+      if (event !== null) {
+        for (const fn of inboundListeners) {
+          try {
+            await fn(event);
+          } catch {
+            // never bubble — same posture as onEvent.
+          }
+        }
+      }
+    }
+  }
+
+  /** Ensure Socket Mode is connected. Mirrors `start()` but for the
+   *  subscribeInbound auto-start path — only spins up if needed. */
+  async function ensureSocketStarted(): Promise<void> {
+    if (socket !== null) return;
+    const { SocketModeClient } = await loadSocketMode();
+    const s = new SocketModeClient({ appToken: opts.appToken });
+    s.on('slack_event', (envelope) => {
+      void ackThenDispatch(envelope);
+    });
+    await s.start();
+    socket = s;
   }
 
   return {
@@ -140,21 +224,16 @@ export function slackAdapter(opts: SlackAdapterOpts): SlackAdapter {
       // Only attach socket mode when the caller registered an inbound
       // handler — outbound-only deployments stay cheap.
       if (opts.onEvent !== undefined) {
-        const { SocketModeClient } = await loadSocketMode();
-        const s = new SocketModeClient({ appToken: opts.appToken });
-        // Catch-all: every event must ack first.
-        s.on('slack_event', (envelope) => {
-          // Fire-and-forget; ackThenDispatch handles errors internally.
-          void ackThenDispatch(envelope);
-        });
-        await s.start();
-        socket = s;
+        await ensureSocketStarted();
       }
     },
 
     async stop(): Promise<void> {
       if (!started) return;
       started = false;
+      // Clear AUTO.6 listeners FIRST so an in-flight envelope can't reach
+      // a stale handler after stop() resolves.
+      inboundListeners.clear();
       if (socket !== null) {
         try {
           await socket.disconnect();
@@ -189,6 +268,26 @@ export function slackAdapter(opts: SlackAdapterOpts): SlackAdapter {
 
     async handleInbound(envelope: SlackInboundEnvelope): Promise<void> {
       await ackThenDispatch(envelope);
+    },
+
+    async subscribeInbound(
+      handler: (event: InboundChannelEvent) => Promise<void>,
+    ): Promise<InboundSubscription> {
+      inboundListeners.add(handler);
+      // Auto-attach Socket Mode if start() hasn't been called yet, OR if
+      // start() ran without `onEvent` (outbound-only path). Idempotent.
+      started = true;
+      if (web === null) {
+        const { WebClient } = await loadWebApi();
+        web = new WebClient(opts.botToken);
+      }
+      await ensureSocketStarted();
+      return {
+        // eslint-disable-next-line @typescript-eslint/require-await -- async to satisfy InboundSubscription contract
+        unsubscribe: async (): Promise<void> => {
+          inboundListeners.delete(handler);
+        },
+      };
     },
   };
 }

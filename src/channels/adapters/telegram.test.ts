@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 /**
  * Telegram adapter tests — grammy `Bot` is mocked. Covers URI parsing,
  * allowlist enforcement, optional topic_id, error mapping, outbound-only
@@ -17,6 +18,9 @@ interface MockBotState {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   startCallCount: number;
+  /** AUTO.6 — grammy `bot.on('message', ...)` listeners. The mock fires them
+   *  in registration order when a test calls `fireMessage(ctx)`. */
+  messageListeners: ((ctx: unknown) => void | Promise<void>)[];
 }
 
 const mockState: MockBotState = {
@@ -25,6 +29,7 @@ const mockState: MockBotState = {
   start: vi.fn(),
   stop: vi.fn(),
   startCallCount: 0,
+  messageListeners: [],
 };
 
 class FakeGrammyError extends Error {
@@ -54,6 +59,11 @@ vi.mock('grammy', () => {
     stop(...args: unknown[]): Promise<void> {
       return mockState.stop(...args) as Promise<void>;
     }
+    on(filter: string, listener: (ctx: unknown) => void | Promise<void>): void {
+      if (filter === 'message') {
+        mockState.messageListeners.push(listener);
+      }
+    }
     constructor(token: string) {
       // token is captured by the constructor but unused in the mock;
       // kept named for parity with the real grammy.Bot signature.
@@ -72,6 +82,7 @@ beforeEach(() => {
   mockState.start.mockReset();
   mockState.stop.mockReset();
   mockState.startCallCount = 0;
+  mockState.messageListeners = [];
   mockState.sendMessage.mockResolvedValue({ message_id: 1, date: 0 });
   mockState.deleteWebhook.mockResolvedValue(true);
   // Default: start hangs (resolves only on shutdown).
@@ -82,6 +93,13 @@ beforeEach(() => {
   );
   mockState.stop.mockResolvedValue(undefined);
 });
+
+/** Test helper — invoke every registered message listener with `ctx`. */
+async function fireMessage(ctx: unknown): Promise<void> {
+  for (const l of mockState.messageListeners) {
+    await l(ctx);
+  }
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -233,5 +251,108 @@ describe('telegramAdapter — stop()', () => {
     const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
     await a.stop();
     expect(mockState.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe('telegramAdapter — subscribeInbound (AUTO.6)', () => {
+  it('emits InboundChannelEvent with channelUri from chat.id (no topic)', async () => {
+    const events: unknown[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    expect(mockState.messageListeners.length).toBe(1);
+
+    await fireMessage({
+      chat: { id: -100123 },
+      from: { id: 8075471258 },
+      message: { text: 'hello' },
+    });
+    expect(events).toHaveLength(1);
+    const e = events[0] as { kind: string; channelUri: string; sender: string; text: string };
+    expect(e.kind).toBe('inbound_channel');
+    expect(e.channelUri).toBe('telegram://-100123');
+    expect(e.sender).toBe('8075471258');
+    expect(e.text).toBe('hello');
+  });
+
+  it('includes thread_id in channelUri + threadKey when message is in a forum topic', async () => {
+    const events: unknown[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+
+    await fireMessage({
+      chat: { id: -100123 },
+      from: { id: 7 },
+      message: { text: 'topic msg', message_thread_id: 42 },
+    });
+    const e = events[0] as { channelUri: string; threadKey?: string };
+    expect(e.channelUri).toBe('telegram://-100123/42');
+    expect(e.threadKey).toBe('42');
+  });
+
+  it('starts the bot lazily on subscribeInbound (long-polling kicks off)', async () => {
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    expect(mockState.startCallCount).toBe(0);
+    await a.subscribeInbound(async () => Promise.resolve());
+    expect(mockState.startCallCount).toBe(1);
+  });
+
+  it('subscribeInbound returns a stub when outboundOnly is true', async () => {
+    const events: unknown[] = [];
+    const a = telegramAdapter({
+      token: 't',
+      allowlistChatIds: [12345],
+      outboundOnly: true,
+    });
+    const sub = await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    // No listener attached, no start fired.
+    expect(mockState.messageListeners).toHaveLength(0);
+    expect(mockState.startCallCount).toBe(0);
+    // Unsubscribe is a no-op.
+    await sub.unsubscribe();
+  });
+
+  it('unsubscribe stops further events from firing the handler', async () => {
+    const events: unknown[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    const sub = await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    await fireMessage({
+      chat: { id: -1 },
+      from: { id: 1 },
+      message: { text: 'first' },
+    });
+    expect(events).toHaveLength(1);
+
+    await sub.unsubscribe();
+    await fireMessage({
+      chat: { id: -1 },
+      from: { id: 1 },
+      message: { text: 'second' },
+    });
+    // Listener slot disabled — no new dispatch.
+    expect(events).toHaveLength(1);
+  });
+
+  it('handler errors are swallowed and never bubble to the bot loop', async () => {
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    await a.subscribeInbound(async () => {
+      throw new Error('handler boom');
+    });
+    // fireMessage runs `await l(ctx)` — if the adapter let the error
+    // escape, this test would reject. Asserting "did not throw" is enough.
+    await expect(
+      fireMessage({
+        chat: { id: -1 },
+        from: { id: 1 },
+        message: { text: 'x' },
+      }),
+    ).resolves.toBeUndefined();
   });
 });

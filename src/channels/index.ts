@@ -13,10 +13,19 @@
 export type {
   ChannelAdapter,
   ChannelMessage,
+  InboundSubscription,
   RoutingConfig,
   SendResult,
   Severity,
 } from './types.js';
+export {
+  InboundRouter,
+  type InboundBinding,
+  type InboundDispatcher,
+  type InboundRouterAuditEntry,
+  type InboundRouterAuditSink,
+  type InboundRouterOpts,
+} from './inbound_router.js';
 export { chatAdapter } from './chat.js';
 export {
   telegramAdapter,

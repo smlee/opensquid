@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 /**
  * Discord adapter tests — discord.js is mocked at module level. Covers
  * URI validation, the lazy login → ready handshake, send happy path,
@@ -22,7 +23,11 @@ interface MockClientState {
   fetch: ReturnType<typeof vi.fn>;
   channel: MockChannelState;
   readyListeners: (() => void)[];
+  /** AUTO.6 — discord.js `client.on('messageCreate', ...)` listeners. */
+  messageListeners: ((msg: unknown) => void)[];
   constructed: number;
+  /** Track the intents arg the adapter requested at construction. */
+  lastIntents: number[];
 }
 
 const mock: MockClientState = {
@@ -31,7 +36,9 @@ const mock: MockClientState = {
   fetch: vi.fn(),
   channel: { isTextBased: vi.fn(), send: vi.fn() },
   readyListeners: [],
+  messageListeners: [],
   constructed: 0,
+  lastIntents: [],
 };
 
 vi.mock('discord.js', () => {
@@ -39,8 +46,9 @@ vi.mock('discord.js', () => {
     channels = {
       fetch: (id: string): Promise<unknown> => mock.fetch(id) as Promise<unknown>,
     };
-    constructor(_opts: { intents: number[] }) {
+    constructor(opts: { intents: number[] }) {
       mock.constructed += 1;
+      mock.lastIntents = [...opts.intents];
     }
     login(token: string): Promise<string> {
       return mock.login(token) as Promise<string>;
@@ -51,8 +59,20 @@ vi.mock('discord.js', () => {
     once(event: 'ready', listener: () => void): void {
       if (event === 'ready') mock.readyListeners.push(listener);
     }
+    on(event: string, listener: (msg: unknown) => void): void {
+      if (event === 'messageCreate') mock.messageListeners.push(listener);
+    }
+    off(event: string, listener: (msg: unknown) => void): void {
+      if (event === 'messageCreate') {
+        const idx = mock.messageListeners.indexOf(listener);
+        if (idx >= 0) mock.messageListeners.splice(idx, 1);
+      }
+    }
   }
-  return { Client, GatewayIntentBits: { Guilds: 1 } };
+  return {
+    Client,
+    GatewayIntentBits: { Guilds: 1, GuildMessages: 2, MessageContent: 4 },
+  };
 });
 
 const { discordAdapter } = await import('./discord.js');
@@ -72,7 +92,9 @@ beforeEach(() => {
   mock.channel.isTextBased.mockReset();
   mock.channel.send.mockReset();
   mock.readyListeners = [];
+  mock.messageListeners = [];
   mock.constructed = 0;
+  mock.lastIntents = [];
   mock.login.mockImplementation(() => {
     fireReadySoon();
     return Promise.resolve('ok');
@@ -82,6 +104,11 @@ beforeEach(() => {
   mock.channel.send.mockResolvedValue({ id: 'msg-1' });
   mock.fetch.mockResolvedValue(mock.channel);
 });
+
+/** Test helper — invoke every registered messageCreate listener. */
+function fireMessageCreate(msg: unknown): void {
+  for (const l of mock.messageListeners) l(msg);
+}
 
 describe('discordAdapter — URI validation', () => {
   it('validate accepts discord://<guild>/<channel> with numeric ids only', () => {
@@ -171,5 +198,100 @@ describe('discordAdapter — start()/stop() lifecycle', () => {
     const a = discordAdapter({ token: 't' });
     await a.stop();
     expect(mock.destroy).not.toHaveBeenCalled();
+  });
+});
+
+describe('discordAdapter — subscribeInbound (AUTO.6)', () => {
+  it('upgrades intents to Guilds + GuildMessages + MessageContent', async () => {
+    const a = discordAdapter({ token: 't' });
+    await a.subscribeInbound(async () => Promise.resolve());
+    // 1 = Guilds, 2 = GuildMessages, 4 = MessageContent (from mock)
+    expect(mock.lastIntents).toEqual([1, 2, 4]);
+  });
+
+  it('emits InboundChannelEvent on guild messageCreate', async () => {
+    const events: unknown[] = [];
+    const a = discordAdapter({ token: 't' });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+
+    fireMessageCreate({
+      id: 'msg-1',
+      content: 'hello team',
+      author: { id: 'u-7', bot: false },
+      channelId: 'c-222',
+      guildId: 'g-111',
+    });
+    // queueMicrotask drain — fan-out uses void promise.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toHaveLength(1);
+    const e = events[0] as { channelUri: string; sender: string; text: string };
+    expect(e.channelUri).toBe('discord://g-111/c-222');
+    expect(e.sender).toBe('u-7');
+    expect(e.text).toBe('hello team');
+  });
+
+  it('skips messages from bots (loop-break first line)', async () => {
+    const events: unknown[] = [];
+    const a = discordAdapter({ token: 't' });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    fireMessageCreate({
+      id: 'msg-bot',
+      content: 'echo: hello',
+      author: { id: 'bot-self', bot: true },
+      channelId: 'c-222',
+      guildId: 'g-111',
+    });
+    await Promise.resolve();
+    expect(events).toHaveLength(0);
+  });
+
+  it('throws if called after outbound send() already started without inbound intents', async () => {
+    const a = discordAdapter({ token: 't' });
+    await a.send('discord://111/222', { text: 'hi' });
+    await expect(a.subscribeInbound(async () => Promise.resolve())).rejects.toThrow(
+      /already started without inbound intents/,
+    );
+  });
+
+  it('unsubscribe stops further events from firing the handler', async () => {
+    const events: unknown[] = [];
+    const a = discordAdapter({ token: 't' });
+    const sub = await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    fireMessageCreate({
+      id: 'm1',
+      content: 'first',
+      author: { id: 'u-1', bot: false },
+      channelId: 'c-1',
+      guildId: 'g-1',
+    });
+    await Promise.resolve();
+    expect(events).toHaveLength(1);
+
+    await sub.unsubscribe();
+    fireMessageCreate({
+      id: 'm2',
+      content: 'second',
+      author: { id: 'u-1', bot: false },
+      channelId: 'c-1',
+      guildId: 'g-1',
+    });
+    await Promise.resolve();
+    // Listener removed from the set — no new dispatch.
+    expect(events).toHaveLength(1);
+  });
+
+  it('stop() detaches the messageCreate listener (lifecycle)', async () => {
+    const a = discordAdapter({ token: 't' });
+    await a.subscribeInbound(async () => Promise.resolve());
+    expect(mock.messageListeners.length).toBe(1);
+    await a.stop();
+    expect(mock.messageListeners.length).toBe(0);
   });
 });

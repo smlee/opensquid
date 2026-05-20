@@ -7,6 +7,8 @@
  * markdown flavors, etc.) — those live in each adapter's own module.
  */
 
+import type { InboundChannelEvent } from '../runtime/event.js';
+
 export type Severity = 'critical' | 'error' | 'warning' | 'info';
 
 export interface ChannelMessage {
@@ -19,6 +21,34 @@ export interface SendResult {
   error?: string;
 }
 
+/**
+ * Returned by `subscribeInbound`. Calling `unsubscribe()` detaches the
+ * handler from the underlying SDK client; the client itself stays alive
+ * for outbound `send()` callers. After unsubscribe resolves, no further
+ * events for this subscription will fire.
+ */
+export interface InboundSubscription {
+  unsubscribe(): Promise<void>;
+}
+
+/**
+ * AUTO.6 — inbound surface. Each platform-specific adapter that can
+ * accept incoming messages (Telegram bot updates, Discord guild messages,
+ * Slack Socket Mode events) implements this method. Adapters that are
+ * fundamentally outbound-only (webhook://) omit it; the `InboundRouter`
+ * checks for presence before calling.
+ *
+ * Contract:
+ *   - `handler` is invoked once per inbound message after the adapter
+ *     maps platform-specific payload → unified `InboundChannelEvent`.
+ *   - The adapter is responsible for any platform-specific ack SLA
+ *     (Slack's 3s) — it MUST ack BEFORE invoking `handler` so handler
+ *     latency cannot violate the SLA.
+ *   - `handler` errors are caught and swallowed by the adapter — never
+ *     bubble out to the platform-side event loop.
+ *   - `unsubscribe()` is idempotent + safe to call before the adapter's
+ *     client has finished starting.
+ */
 export interface ChannelAdapter {
   /** URI scheme this adapter handles, e.g. 'chat', 'telegram'. */
   scheme: string;
@@ -26,6 +56,14 @@ export interface ChannelAdapter {
   validate(uri: string): boolean;
   /** Deliver the message; never throws — failure is surfaced via SendResult. */
   send(uri: string, message: ChannelMessage): Promise<SendResult>;
+  /**
+   * Optional inbound surface (AUTO.6). Adapters that emit
+   * `InboundChannelEvent` (telegram/discord/slack) implement this;
+   * outbound-only adapters (webhook) omit it.
+   */
+  subscribeInbound?(
+    handler: (event: InboundChannelEvent) => Promise<void>,
+  ): Promise<InboundSubscription>;
 }
 
 /**

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 /**
  * Slack adapter tests — @slack/web-api + @slack/socket-mode mocked.
  * Covers URI validation, send happy path, send rejection mapping,
@@ -215,5 +216,145 @@ describe('slackAdapter — start()/stop() lifecycle', () => {
     await a.start();
     await a.stop();
     expect(socket.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('slackAdapter — subscribeInbound (AUTO.6)', () => {
+  it('emits InboundChannelEvent from a user message envelope (event_callback)', async () => {
+    const events: unknown[] = [];
+    const a = slackAdapter({ botToken: 'xoxb', appToken: 'xapp', workspace: 'acme' });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    // Socket mode auto-started — assert that.
+    expect(socket.constructedCount).toBe(1);
+
+    const ack = vi.fn();
+    await a.handleInbound({
+      type: 'event_callback',
+      body: {
+        event: {
+          type: 'message',
+          channel: 'C123',
+          user: 'U456',
+          text: 'hi team',
+        },
+      },
+      ack,
+    });
+    // ACK still fires first (3s SLA preserved).
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(events).toHaveLength(1);
+    const e = events[0] as { channelUri: string; sender: string; text: string };
+    expect(e.channelUri).toBe('slack://acme/C123');
+    expect(e.sender).toBe('U456');
+    expect(e.text).toBe('hi team');
+  });
+
+  it('threads forward thread_ts as threadKey when present', async () => {
+    const events: unknown[] = [];
+    const a = slackAdapter({ botToken: 'xoxb', appToken: 'xapp' });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    await a.handleInbound({
+      type: 'event_callback',
+      body: {
+        event: {
+          type: 'message',
+          channel: 'C9',
+          user: 'U1',
+          text: 'thread reply',
+          thread_ts: '1234567890.000100',
+        },
+      },
+      ack: vi.fn(),
+    });
+    const e = events[0] as { threadKey?: string };
+    expect(e.threadKey).toBe('1234567890.000100');
+  });
+
+  it('skips bot_id messages (loop-break first line)', async () => {
+    const events: unknown[] = [];
+    const a = slackAdapter({ botToken: 'xoxb', appToken: 'xapp' });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    await a.handleInbound({
+      type: 'event_callback',
+      body: {
+        event: {
+          type: 'message',
+          channel: 'C1',
+          user: 'U-bot',
+          text: 'echo',
+          bot_id: 'B999',
+        },
+      },
+      ack: vi.fn(),
+    });
+    expect(events).toHaveLength(0);
+  });
+
+  it('skips subtyped messages (message_changed, etc.)', async () => {
+    const events: unknown[] = [];
+    const a = slackAdapter({ botToken: 'xoxb', appToken: 'xapp' });
+    await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    await a.handleInbound({
+      type: 'event_callback',
+      body: {
+        event: {
+          type: 'message',
+          channel: 'C1',
+          user: 'U1',
+          text: '(edited)',
+          subtype: 'message_changed',
+        },
+      },
+      ack: vi.fn(),
+    });
+    expect(events).toHaveLength(0);
+  });
+
+  it('ack fires BEFORE the inbound dispatch (3s SLA preserved)', async () => {
+    const order: string[] = [];
+    const a = slackAdapter({ botToken: 'xoxb', appToken: 'xapp' });
+    await a.subscribeInbound(async () => {
+      order.push('handler');
+    });
+    await a.handleInbound({
+      type: 'event_callback',
+      body: {
+        event: { type: 'message', channel: 'C1', user: 'U1', text: 'x' },
+      },
+      ack: () => {
+        order.push('ack');
+      },
+    });
+    expect(order).toEqual(['ack', 'handler']);
+  });
+
+  it('unsubscribe removes the listener but socket stays connected', async () => {
+    const events: unknown[] = [];
+    const a = slackAdapter({ botToken: 'xoxb', appToken: 'xapp' });
+    const sub = await a.subscribeInbound(async (e) => {
+      events.push(e);
+    });
+    await a.handleInbound({
+      type: 'event_callback',
+      body: { event: { type: 'message', channel: 'C1', user: 'U1', text: 'first' } },
+      ack: vi.fn(),
+    });
+    expect(events).toHaveLength(1);
+
+    await sub.unsubscribe();
+    await a.handleInbound({
+      type: 'event_callback',
+      body: { event: { type: 'message', channel: 'C1', user: 'U1', text: 'second' } },
+      ack: vi.fn(),
+    });
+    expect(events).toHaveLength(1);
   });
 });
