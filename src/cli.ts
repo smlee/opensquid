@@ -22,6 +22,8 @@ import { daemonPidPath } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
 import { registerCache } from './setup/cli/cache.js';
 import { registerCheckpoints } from './setup/cli/checkpoints.js';
+import { registerCost } from './setup/cli/cost.js';
+import { registerLimits } from './setup/cli/limits.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
@@ -31,7 +33,7 @@ import { registerWebhooks } from './setup/cli/webhooks.js';
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.84');
+  .version('0.5.85');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -151,6 +153,17 @@ registerCheckpoints(program);
 // supports selective invalidation by `--primitive` and/or `--older-than`;
 // a zero-filter (full) clear requires `--yes` or TTY confirmation.
 registerCache(program);
+
+// CLI.8 — `opensquid cost (default)|cost routing|cost subscriptions` and
+// `opensquid limits (default)|limits reset <pack>`. Surfaces the AUTO.7
+// CostRouter routing decisions + AUTO.2 RateLimiter bucket state. The
+// CostRouter doesn't persist by default — the daemon wires its `audit:`
+// sink to `cost_routing_log` so the CLI can render `cost` / `cost routing`
+// summaries; in a fresh install both verbs print a clean placeholder.
+// `limits reset` requires --yes or TTY confirmation; non-TTY without
+// --yes refuses with exit 1 (mirrors `cache clear` / `checkpoints clean`).
+registerCost(program);
+registerLimits(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
