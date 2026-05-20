@@ -76,6 +76,28 @@ export interface CheckpointRow {
   errorMessage: string | undefined;
 }
 
+/**
+ * Identity of a run captured at process entry. The Resumer (DURABLE.4)
+ * needs `(packId, skill, ruleId, eventKind, eventPayload, packVersion)` to
+ * reconstruct a `ProcessContext` on resume — the checkpoint table only
+ * stores the hashed `inputsHash`, never the raw event payload, so the
+ * manifest is the load-bearing record for restart.
+ *
+ * `packVersion` is compared at resume time to detect drift; if the pack
+ * version diverges between crash and resume the run is skipped + audited
+ * (see Resumer.resume).
+ */
+export interface RunManifest {
+  runId: string;
+  packId: string;
+  packVersion: string;
+  skill: string;
+  ruleId: string;
+  eventKind: string;
+  eventPayload: unknown;
+  startedAtMs: number;
+}
+
 const CREATE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS checkpoints (
     run_id TEXT NOT NULL,
@@ -100,6 +122,52 @@ const CREATE_INDEX_COMPLETED_AT_SQL = `
   CREATE INDEX IF NOT EXISTS idx_checkpoints_completed_at ON checkpoints(completed_at_ms);
 `;
 
+// ---------------------------------------------------------------------------
+// `run_manifests` — one row per run-start. Written by the rule dispatcher
+// before it calls evaluateProcess; consumed by the Resumer (DURABLE.4) to
+// reconstruct the ProcessContext for an interrupted run.
+//
+// `event_payload_json` is the canonical-JSON encoding of the inbound event
+// payload that triggered the run. Storing it here is what lets us replay
+// across daemon restart — the checkpoint rows themselves only carry the
+// hashed `inputsHash` of each primitive's args, not the original event.
+// ---------------------------------------------------------------------------
+
+const CREATE_TABLE_MANIFESTS_SQL = `
+  CREATE TABLE IF NOT EXISTS run_manifests (
+    run_id TEXT PRIMARY KEY,
+    pack_id TEXT NOT NULL,
+    pack_version TEXT NOT NULL,
+    skill TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    event_kind TEXT NOT NULL,
+    event_payload_json TEXT NOT NULL,
+    started_at_ms INTEGER NOT NULL
+  );
+`;
+
+const CREATE_INDEX_MANIFEST_STARTED_AT_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_run_manifests_started_at ON run_manifests(started_at_ms);
+`;
+
+// ---------------------------------------------------------------------------
+// `terminal_markers` — one row written when a run finishes (success OR
+// terminal error). Resumer treats the presence of a row as "do not resume".
+//
+// Option 2 from the DURABLE.4 spec: explicit marker. Cheaper than Option 1
+// (which would require the resumer to load every pack at scan time and
+// compare `lastCompletedStep === totalSteps - 1`). One small insert per
+// terminal outcome; sub-ms write cost.
+// ---------------------------------------------------------------------------
+
+const CREATE_TABLE_TERMINALS_SQL = `
+  CREATE TABLE IF NOT EXISTS terminal_markers (
+    run_id TEXT PRIMARY KEY,
+    outcome TEXT NOT NULL,
+    terminated_at_ms INTEGER NOT NULL
+  );
+`;
+
 export class CheckpointStore {
   private initialized = false;
 
@@ -115,6 +183,9 @@ export class CheckpointStore {
     await this.db.execute(CREATE_TABLE_SQL);
     await this.db.execute(CREATE_INDEX_RUN_ID_SQL);
     await this.db.execute(CREATE_INDEX_COMPLETED_AT_SQL);
+    await this.db.execute(CREATE_TABLE_MANIFESTS_SQL);
+    await this.db.execute(CREATE_INDEX_MANIFEST_STARTED_AT_SQL);
+    await this.db.execute(CREATE_TABLE_TERMINALS_SQL);
     this.initialized = true;
   }
 
@@ -249,12 +320,173 @@ export class CheckpointStore {
     });
     return Number(rs.rowsAffected);
   }
+
+  /**
+   * Record a run-start manifest. Called by the rule dispatcher BEFORE
+   * `evaluateProcess` so that a crash mid-process leaves the manifest
+   * behind for the Resumer (DURABLE.4) to find.
+   *
+   * `INSERT OR REPLACE` — idempotent on `runId`. A retried run with the
+   * same identity overwrites the prior manifest (timestamps refresh,
+   * event payload re-canonicalizes to the same JSON anyway). The Resumer
+   * uses the latest manifest in any case.
+   */
+  async recordRunStart(manifest: RunManifest): Promise<void> {
+    await this.init();
+    const eventJson = canonicalJsonStringify(manifest.eventPayload);
+    await this.db.execute({
+      sql: `INSERT OR REPLACE INTO run_manifests
+              (run_id, pack_id, pack_version, skill, rule_id,
+               event_kind, event_payload_json, started_at_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        manifest.runId,
+        manifest.packId,
+        manifest.packVersion,
+        manifest.skill,
+        manifest.ruleId,
+        manifest.eventKind,
+        eventJson,
+        manifest.startedAtMs,
+      ],
+    });
+  }
+
+  /**
+   * Look up the manifest for a runId. Returns `null` when the run was
+   * never registered via `recordRunStart` — the Resumer treats those
+   * runs as orphan checkpoints and skips them with audit reason
+   * `manifest_missing`.
+   */
+  async getRunManifest(runId: string): Promise<RunManifest | null> {
+    await this.init();
+    const rs = await this.db.execute({
+      sql: `SELECT run_id, pack_id, pack_version, skill, rule_id,
+                   event_kind, event_payload_json, started_at_ms
+            FROM run_manifests WHERE run_id = ?`,
+      args: [runId],
+    });
+    const row = rs.rows[0];
+    if (!row) return null;
+    return rowToManifest(row);
+  }
+
+  /**
+   * Record terminal outcome for a run. Called by the rule dispatcher
+   * AFTER `evaluateProcess` returns (regardless of `verdict` / `no_verdict`
+   * / `error`). The Resumer treats a row in `terminal_markers` as
+   * "this run finished — do not resume".
+   *
+   * `outcome` is stored as free-form text for audit visibility
+   * (verdict / no_verdict / error). The Resumer doesn't switch on it —
+   * presence of the row is what gates resume.
+   */
+  async recordRunTerminal(runId: string, outcome: string, nowMs: number): Promise<void> {
+    await this.init();
+    await this.db.execute({
+      sql: `INSERT OR REPLACE INTO terminal_markers
+              (run_id, outcome, terminated_at_ms)
+            VALUES (?, ?, ?)`,
+      args: [runId, outcome, nowMs],
+    });
+  }
+
+  /**
+   * Has the run terminated? `true` when a `terminal_markers` row exists
+   * for the runId. Used by tests + the Resumer's own scan to short-circuit
+   * cleanly without a second SELECT.
+   */
+  async hasTerminalMarker(runId: string): Promise<boolean> {
+    await this.init();
+    const rs = await this.db.execute({
+      sql: `SELECT 1 FROM terminal_markers WHERE run_id = ? LIMIT 1`,
+      args: [runId],
+    });
+    return rs.rows.length > 0;
+  }
+
+  /**
+   * Scan for runs the Resumer (DURABLE.4) should consider resuming.
+   *
+   * A run is "interrupted" when:
+   *   - It has at least one row in `checkpoints` (we ran something), AND
+   *   - It has NO row in `terminal_markers` (process didn't finish), AND
+   *   - The most-recent completed_at_ms is within `withinMs` of now
+   *     (the resume window — older runs are "stale" and skipped by the
+   *     Resumer with audit reason `stale`).
+   *
+   * Returns rows in ascending-age order (most recent first) so the
+   * Resumer drains the freshest interrupted runs before stale ones in
+   * pathological 100+-interrupted-runs cases.
+   *
+   * `withinMs <= 0` disables the window — useful for explicit
+   * `opensquid checkpoints resume <run_id>` which bypasses the default.
+   * The Resumer's own implementation passes `Number.POSITIVE_INFINITY`
+   * for that path; this method clamps to a "no window" semantic when
+   * the value is non-finite or non-positive.
+   */
+  async scanInterrupted(
+    withinMs: number,
+    nowMs: number = Date.now(),
+  ): Promise<InterruptedSummary[]> {
+    await this.init();
+    const useWindow = Number.isFinite(withinMs) && withinMs > 0;
+    const cutoff = useWindow ? nowMs - withinMs : 0;
+    const sql = `
+      SELECT c.run_id AS run_id,
+             MAX(c.step_idx) AS last_step_idx,
+             MAX(c.completed_at_ms) AS last_at_ms
+      FROM checkpoints c
+      LEFT JOIN terminal_markers t ON t.run_id = c.run_id
+      WHERE t.run_id IS NULL
+        ${useWindow ? 'AND c.completed_at_ms >= ?' : ''}
+        AND c.status = 'completed'
+      GROUP BY c.run_id
+      ORDER BY last_at_ms DESC
+    `;
+    const args = useWindow ? [cutoff] : [];
+    const rs = await this.db.execute({ sql, args });
+    return rs.rows.map((row) => {
+      const runIdRaw = row.run_id;
+      return {
+        runId: typeof runIdRaw === 'string' ? runIdRaw : '',
+        lastCompletedStep: Number(row.last_step_idx),
+        lastCompletedAtMs: Number(row.last_at_ms),
+      };
+    });
+  }
+}
+
+/**
+ * One row returned by `CheckpointStore.scanInterrupted` — the resumable
+ * runs in the store. The Resumer joins this with `getRunManifest` to
+ * build the full `InterruptedRun` shape (with packId / skill / ruleId /
+ * eventPayload).
+ */
+export interface InterruptedSummary {
+  runId: string;
+  lastCompletedStep: number;
+  lastCompletedAtMs: number;
 }
 
 /**
  * Map a libsql row to the typed `CheckpointRow`. `outputs_json` round-trips
  * through `canonicalJsonParse` so base64 envelopes restore as Buffers.
  */
+function rowToManifest(row: Record<string, unknown>): RunManifest {
+  const eventJson = row.event_payload_json;
+  return {
+    runId: String(row.run_id),
+    packId: String(row.pack_id),
+    packVersion: String(row.pack_version),
+    skill: String(row.skill),
+    ruleId: String(row.rule_id),
+    eventKind: String(row.event_kind),
+    eventPayload: typeof eventJson === 'string' ? canonicalJsonParse(eventJson) : null,
+    startedAtMs: Number(row.started_at_ms),
+  };
+}
+
 function rowToCheckpoint(row: Record<string, unknown>): CheckpointRow {
   const status = row.status === 'errored' ? 'errored' : 'completed';
   const asBindingRaw = row.as_binding;

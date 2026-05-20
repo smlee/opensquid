@@ -347,3 +347,93 @@ describe('OpenSquidDaemon — status reader', () => {
     await expect(stat(`${lockPath}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// DURABLE.4 — restart-safe resume hook
+// ---------------------------------------------------------------------------
+
+describe('OpenSquidDaemon — DURABLE.4 resumer hook', () => {
+  // Minimal Resumer-shaped stub. We cast to satisfy the `resumer?: Resumer`
+  // field without depending on the full Resumer class graph here — the
+  // daemon only invokes resumeOnStartup() on it.
+  interface ResumerStub {
+    resumeOnStartup: () => Promise<{ resumed: number; skipped: number }>;
+  }
+  const makeStubResumer = (
+    rs: ResumerStub,
+  ): NonNullable<Parameters<typeof newDaemon>[0]['resumer']> =>
+    rs as unknown as NonNullable<Parameters<typeof newDaemon>[0]['resumer']>;
+
+  it('invokes resumer.resumeOnStartup() after lock acquire + before cron registration', async () => {
+    const order: string[] = [];
+    const resumer = makeStubResumer({
+      resumeOnStartup: () => {
+        order.push('resume');
+        return Promise.resolve({ resumed: 0, skipped: 0 });
+      },
+    });
+    const d = newDaemon({
+      packs: [pack('p', [scheduleSkill('s', '*/5 * * * *')])],
+      subscriptions: [],
+      webhookPort: 0,
+      resumer,
+      dispatch: () => {
+        order.push('dispatch');
+        return Promise.resolve();
+      },
+    });
+    await d.start();
+    // Resume fires during start(); we never see 'dispatch' here because
+    // cron didn't tick. Order so far: ['resume'].
+    expect(order).toEqual(['resume']);
+    await d.stop();
+  });
+
+  it('still enforces singleton even when crashed-run data is present', async () => {
+    // Simulate a prior crash: pretend resumer would see interrupted work.
+    // Even so, the SECOND daemon must fail to acquire the lock.
+    const resumer = makeStubResumer({
+      resumeOnStartup: () => Promise.resolve({ resumed: 2, skipped: 0 }),
+    });
+    const first = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      resumer,
+      dispatch: () => Promise.resolve(),
+    });
+    await first.start();
+    const second = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      resumer,
+      dispatch: () => Promise.resolve(),
+    });
+    await expect(second.start()).rejects.toThrow(/already running/);
+    await first.stop();
+  });
+
+  it('start() rollback fires when resumer throws (lock + pid file released)', async () => {
+    const resumer = makeStubResumer({
+      resumeOnStartup: () => Promise.reject(new Error('resumer boom')),
+    });
+    const d = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      resumer,
+      dispatch: () => Promise.resolve(),
+    });
+    await expect(d.start()).rejects.toThrow(/resumer boom/);
+    // After rollback, a fresh daemon must be able to boot.
+    const refresh = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      dispatch: () => Promise.resolve(),
+    });
+    await expect(refresh.start()).resolves.toBeUndefined();
+    await refresh.stop();
+  });
+});

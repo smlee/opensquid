@@ -30,6 +30,7 @@ import type { NotificationRouter } from '../channels/router.js';
 import type { RoutingConfig } from '../channels/types.js';
 
 import { handleDeliverOnly } from './deliver_only.js';
+import type { Resumer, ResumeAuditEntry } from './durable/index.js';
 import type { Event, FileChangedEvent, ScheduleEvent, WebhookEvent } from './event.js';
 import { daemonLockPath, daemonPidPath, OPENSQUID_HOME } from './paths.js';
 import type { RateLimiter } from './rate_limit.js';
@@ -54,7 +55,8 @@ export type DaemonAuditEntry =
   | { event: 'schedule_error'; entryId: string; reason: string; fireTime: string }
   | { event: 'webhook'; payload: Parameters<WebhookAuditSink>[0] }
   | { event: 'file_changed'; payload: FileWatcherAuditEntry }
-  | { event: 'lifecycle'; phase: 'start' | 'stop' | 'sigterm' | 'sigint'; at: string };
+  | { event: 'lifecycle'; phase: 'start' | 'stop' | 'sigterm' | 'sigint'; at: string }
+  | { event: 'resume'; payload: ResumeAuditEntry };
 
 export type DaemonAuditSink = (entry: DaemonAuditEntry) => void;
 
@@ -76,6 +78,13 @@ export interface DaemonOpts {
   notificationRouter?: NotificationRouter;
   routingConfig?: RoutingConfig;
   auditLog?: DaemonAuditSink;
+  /** DURABLE.4 — restart-safe resume hook. When set, `start()` invokes
+   *  `resumer.resumeOnStartup()` AFTER lock acquire + BEFORE cron tasks
+   *  register so interrupted runs replay before fresh fires race. The
+   *  resumer's own audit entries are surfaced via the daemon audit sink
+   *  under the `resume` event variant. Optional — daemons without a
+   *  checkpoint store don't need it. */
+  resumer?: Resumer;
   /** Injected clock — tests pass a fake. */
   now?: () => number;
 }
@@ -132,6 +141,15 @@ export class OpenSquidDaemon {
     }
 
     try {
+      // DURABLE.4 — replay any interrupted runs BEFORE registering cron
+      // tasks. The order matters: a cron tick that races a resume could
+      // double-execute the same run. Singleton lock above already
+      // guarantees we're the only daemon doing this. Resumer failures
+      // bubble up via the same rollback path as cron / webhook failures.
+      if (this.opts.resumer !== undefined) {
+        await this.opts.resumer.resumeOnStartup();
+      }
+
       // Cron tasks wrap user code in fireScheduleEntry's try/catch so a
       // rule-side throw never crashes the cron loop.
       for (const entry of entries) {
