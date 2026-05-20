@@ -1,0 +1,20 @@
+/**
+ * Wedge-gate runtime barrel.
+ *
+ * Authoritative source: `docs/opensquid-real-design.md` §"Two-stage wedge gate".
+ *
+ * Re-exports the public surface of the wedge-gate runtime. Internal helpers
+ * (filename builders, validators) stay private to their owning module.
+ *
+ * Imports from: ./capture, ./types.
+ * Imported by: src/mcp/server.ts, src/runtime/hooks/*.
+ */
+
+// Task 7.1
+export {
+  capturePendingLesson,
+  pendingLessonsDir,
+  safeTimestamp,
+  validatePendingLesson,
+} from './capture.js';
+export type { LessonType, PendingLesson } from './types.js';
