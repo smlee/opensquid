@@ -11,12 +11,14 @@
  * vendor name is hardcoded — providers compare against the abstract
  * label users wrote in `models.yaml`.
  *
- * Mode coverage (post LLM.2):
+ * Mode coverage (post LLM.3):
  *   - (subscription, cli)            → subscriptionCliStrategy
  *   - (subscription, sdk)            → subscriptionSdkStrategy
  *   - (api, *), provider=anthropic   → apiAnthropicStrategy (needs secrets)
  *   - (api, *), provider=openai      → apiOpenAIStrategy    (needs secrets)
- *   - everything else                → stubStrategy (LLM.3–LLM.4 fill in)
+ *   - (local, *)                     → localOllamaStrategy (Ollama is the
+ *                                       only Phase-1 local impl)
+ *   - everything else                → stubStrategy (LLM.4 fills in mcp)
  *
  * Secrets dependency:
  *   API strategies need a `SecretResolver` to read the user's API key.
@@ -34,6 +36,7 @@ import type { SecretResolver } from '../secrets/types.js';
 
 import { apiAnthropicStrategy } from './strategies/api_anthropic.js';
 import { apiOpenAIStrategy } from './strategies/api_openai.js';
+import { localOllamaStrategy } from './strategies/local_ollama.js';
 import { stubStrategy } from './strategies/_stub.js';
 import { subscriptionCliStrategy } from './strategies/subscription_cli.js';
 import { subscriptionSdkStrategy } from './strategies/subscription_sdk.js';
@@ -67,6 +70,11 @@ export function resolveStrategy(
         `(got ${config.provider === undefined ? 'undefined' : `"${config.provider}"`})`,
     );
   }
-  // local / mcp / anything else falls through to the stub until LLM.3–LLM.4.
+  if (config.mode === 'local') {
+    // Phase 1: Ollama is the only `local` implementation. Future engines
+    // (llama.cpp, vLLM, MLX) would branch on cfg.provider here.
+    return localOllamaStrategy(config);
+  }
+  // mcp falls through to the stub until LLM.4.
   return stubStrategy(alias, config.mode);
 }
