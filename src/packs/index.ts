@@ -35,3 +35,8 @@ export type { UniquenessIssue } from './validate_uniqueness.js';
 // (universal → domain → specialty → workflow → project) then alphabetical
 // by name. Pure function consumed by the load-orchestrator.
 export { sortPacksByScope } from './load_order.js';
+
+// `extends:` mechanism (Task 5.2) — layer a child pack over a parent pack
+// with child-wins-on-collision semantics, plus a cycle detector for the
+// `extends:` chain. Validation-layer companion to the load orchestrator.
+export { applyExtends, detectExtendsCycle } from './apply_extends.js';
