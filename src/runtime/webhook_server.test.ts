@@ -289,3 +289,93 @@ describe('WebhookServer — audit', () => {
     }
   });
 });
+
+describe('WebhookServer — deliver-only wiring (SCHED.2)', () => {
+  it('routes deliver_only=true subs through the deliverOnly handler, never dispatch', async () => {
+    const sub = makeSubscription({
+      id: 'github-push',
+      deliverOnly: true,
+      template: 'msg: {{x}}',
+      deliverTo: 'alerts',
+      severity: 'info',
+    });
+    const dispatched: WebhookEvent[] = [];
+    const entries: unknown[] = [];
+    const handlerCalls: { subId: string; body: unknown }[] = [];
+    const server = new WebhookServer({
+      port: 0,
+      host: '127.0.0.1',
+      subscriptions: [sub],
+      dispatch: (e) => {
+        dispatched.push(e);
+        return Promise.resolve();
+      },
+      deliverOnly: (s, body) => {
+        handlerCalls.push({ subId: s.id, body });
+        return Promise.resolve({
+          rendered: true,
+          emptyFieldCount: 0,
+          redactedSecrets: 0,
+          multicast: { sent: 1, failed: 0 },
+        });
+      },
+      auditLog: (e) => entries.push(e),
+    });
+    await server.start();
+    handles.push({ server, url: `http://127.0.0.1:${server.address()!.port}`, dispatched });
+
+    const body = JSON.stringify({ x: 'hello' });
+    const res = await fetch(`http://127.0.0.1:${server.address()!.port}/webhook/github-push`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign(FIXED_SECRET, body),
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    expect(dispatched).toHaveLength(0);
+    expect(handlerCalls).toHaveLength(1);
+    expect(handlerCalls[0]?.subId).toBe('github-push');
+    expect(handlerCalls[0]?.body).toEqual({ x: 'hello' });
+    const deliverEntry = entries.find(
+      (e): e is { event: 'deliver_only'; rendered: boolean } =>
+        typeof e === 'object' && e !== null && (e as { event?: string }).event === 'deliver_only',
+    );
+    expect(deliverEntry).toBeDefined();
+    expect(deliverEntry?.rendered).toBe(true);
+  });
+
+  it('audits deliver-only as misconfigured when no handler wired, still returns 200', async () => {
+    const sub = makeSubscription({ deliverOnly: true });
+    const entries: unknown[] = [];
+    const server = new WebhookServer({
+      port: 0,
+      host: '127.0.0.1',
+      subscriptions: [sub],
+      dispatch: () => Promise.resolve(),
+      auditLog: (e) => entries.push(e),
+    });
+    await server.start();
+    handles.push({ server, url: `http://127.0.0.1:${server.address()!.port}`, dispatched: [] });
+
+    const body = '{}';
+    const res = await fetch(`http://127.0.0.1:${server.address()!.port}/webhook/stripe-events`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign(FIXED_SECRET, body),
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { delivered: boolean; reason?: string };
+    expect(json.delivered).toBe(false);
+    expect(json.reason).toBe('misconfigured');
+    const deliverEntry = entries.find(
+      (e): e is { event: 'deliver_only'; reason?: string } =>
+        typeof e === 'object' && e !== null && (e as { event?: string }).event === 'deliver_only',
+    );
+    expect(deliverEntry?.reason).toBe('misconfigured');
+  });
+});

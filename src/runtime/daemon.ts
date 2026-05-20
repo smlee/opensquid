@@ -26,12 +26,16 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import cron from 'node-cron';
 import { lock as acquireLock } from 'proper-lockfile';
 
+import type { NotificationRouter } from '../channels/router.js';
+import type { RoutingConfig } from '../channels/types.js';
+
+import { handleDeliverOnly } from './deliver_only.js';
 import type { Event, ScheduleEvent, WebhookEvent } from './event.js';
 import { daemonLockPath, daemonPidPath, OPENSQUID_HOME } from './paths.js';
 import type { RateLimiter } from './rate_limit.js';
 import { buildScheduleRegistry, type ScheduleEntry } from './schedule_registry.js';
 import type { Pack } from './types.js';
-import { WebhookServer, type WebhookAuditSink } from './webhook_server.js';
+import { WebhookServer, type DeliverOnlyHandler, type WebhookAuditSink } from './webhook_server.js';
 import type { Subscription } from './webhook_subscriptions.js';
 
 /** Caller routes `ScheduleEvent` + `WebhookEvent` into the runtime
@@ -59,6 +63,12 @@ export interface DaemonOpts {
   webhookHost?: string;
   /** Rate-limiter (AUTO.2). Applied per-fire on cron + per-request on webhook. */
   rateLimiter?: RateLimiter;
+  /** SCHED.2 — router + config used for `deliverOnly: true` subscriptions.
+   *  Optional: a daemon with no deliver-only subscriptions doesn't need
+   *  either field. If a deliver-only sub fires without these set, the
+   *  webhook server returns 200 + audits as `misconfigured`. */
+  notificationRouter?: NotificationRouter;
+  routingConfig?: RoutingConfig;
   auditLog?: DaemonAuditSink;
   /** Injected clock — tests pass a fake. */
   now?: () => number;
@@ -129,11 +139,13 @@ export class OpenSquidDaemon {
         this.tasks.set(entry.id, task);
       }
 
+      const deliverOnlyHandler = this.buildDeliverOnlyHandler();
       this.webhookServer = new WebhookServer({
         port: this.opts.webhookPort ?? DEFAULT_WEBHOOK_PORT,
         ...(this.opts.webhookHost !== undefined ? { host: this.opts.webhookHost } : {}),
         subscriptions: this.opts.subscriptions,
         dispatch: (event: WebhookEvent) => this.opts.dispatch(event),
+        ...(deliverOnlyHandler !== undefined ? { deliverOnly: deliverOnlyHandler } : {}),
         ...(this.opts.rateLimiter !== undefined ? { rateLimiter: this.opts.rateLimiter } : {}),
         auditLog: (payload) => this.auditLog({ event: 'webhook', payload }),
         now: this.nowFn,
@@ -239,6 +251,27 @@ export class OpenSquidDaemon {
 
   // -------------------------------------------------------------------------
   // Internals.
+
+  /** Build the deliver-only handler closure passed to the webhook server.
+   *  Returns `undefined` when no router/config is wired — that case is
+   *  handled by the server (audits as `misconfigured`, returns 200). */
+  private buildDeliverOnlyHandler(): DeliverOnlyHandler | undefined {
+    const router = this.opts.notificationRouter;
+    const routing = this.opts.routingConfig;
+    if (router === undefined || routing === undefined) return undefined;
+    return async (sub: Subscription, body: unknown) => {
+      const result = await handleDeliverOnly(sub, body, router, routing);
+      return {
+        rendered: result.rendered,
+        ...(result.reason !== undefined ? { reason: result.reason } : {}),
+        emptyFieldCount: result.emptyFieldCount,
+        redactedSecrets: result.redactedSecrets,
+        ...(result.multicast !== undefined
+          ? { multicast: { sent: result.multicast.sent, failed: result.multicast.failed } }
+          : {}),
+      };
+    };
+  }
 
   private async fireScheduleEntry(entry: ScheduleEntry): Promise<void> {
     const fireTime = new Date(this.nowFn()).toISOString();

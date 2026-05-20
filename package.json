@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.65",
+  "version": "0.5.66",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -64,6 +64,7 @@
     "commander": "^12.1.0",
     "grammy": "^1.43.0",
     "minimatch": "^10.0.0",
+    "mustache": "^4.2.0",
     "node-cron": "^3.0.3",
     "picocolors": "^1.0.0",
     "proper-lockfile": "^4.1.2",
@@ -72,6 +73,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/mustache": "^4.2.6",
     "@types/node": "^20.14.0",
     "@types/node-cron": "^3.0.11",
     "@types/proper-lockfile": "^4.1.4",

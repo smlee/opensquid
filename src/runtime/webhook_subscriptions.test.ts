@@ -149,6 +149,72 @@ describe('loadWebhookSubscriptions', () => {
     );
   });
 
+  it('parses a deliver_only subscription with template + deliver_to + severity (SCHED.2)', async () => {
+    const path = join(tmpRoot, 'deliver-only.yaml');
+    await writeFile(
+      path,
+      [
+        'subscriptions:',
+        '  - id: github-push',
+        '    pack: ci-monitor',
+        '    secret: env:GH_WH',
+        '    deliver_only: true',
+        '    template: "Push to {{repository.full_name}}"',
+        '    deliver_to: alerts',
+        '    severity: info',
+      ].join('\n'),
+      'utf8',
+    );
+    const subs = await loadWebhookSubscriptions(path, stubResolver({ 'env:GH_WH': 'sig' }));
+    expect(subs).toHaveLength(1);
+    expect(subs[0]).toMatchObject({
+      id: 'github-push',
+      pack: 'ci-monitor',
+      deliverOnly: true,
+      template: 'Push to {{repository.full_name}}',
+      deliverTo: 'alerts',
+      severity: 'info',
+    });
+    expect(subs[0]?.skill).toBeUndefined();
+  });
+
+  it('rejects deliver_only=true without required template/deliver_to/severity', async () => {
+    const path = join(tmpRoot, 'partial.yaml');
+    await writeFile(
+      path,
+      [
+        'subscriptions:',
+        '  - id: github-push',
+        '    pack: ci-monitor',
+        '    secret: env:GH_WH',
+        '    deliver_only: true',
+        '    template: "no destination"',
+      ].join('\n'),
+      'utf8',
+    );
+    await expect(
+      loadWebhookSubscriptions(path, stubResolver({ 'env:GH_WH': 'sig' })),
+    ).rejects.toThrow(WebhookSubscriptionError);
+  });
+
+  it('rejects deliver_only=false without skill', async () => {
+    const path = join(tmpRoot, 'no-skill.yaml');
+    await writeFile(
+      path,
+      [
+        'subscriptions:',
+        '  - id: x',
+        '    pack: p',
+        '    secret: env:K',
+        '    deliver_only: false',
+      ].join('\n'),
+      'utf8',
+    );
+    await expect(loadWebhookSubscriptions(path, stubResolver({ 'env:K': 'v' }))).rejects.toThrow(
+      WebhookSubscriptionError,
+    );
+  });
+
   it('redact() never contains the resolved secret', async () => {
     const SECRET = 'TOP-SECRET-NEVER-LEAK';
     const sub = await loadWebhookSubscriptions(

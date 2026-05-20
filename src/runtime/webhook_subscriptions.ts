@@ -52,18 +52,54 @@ const RateLimitSpec = z.object({
   per: z.enum(['minute', 'hour', 'day']),
 });
 
+const SeveritySpec = z.enum(['critical', 'error', 'warning', 'info']);
+
 const SubscriptionYaml = z
   .object({
     id: z.string().min(1),
     pack: z.string().min(1),
-    skill: z.string().min(1),
+    /** Optional once SCHED.2 introduced deliver-only routing — pure
+     * template-render subscriptions don't need a skill to invoke. */
+    skill: z.string().min(1).optional(),
     /** URI handed to the SecretResolver (e.g. `env:STRIPE_WEBHOOK_SECRET`). */
     secret: z.string().min(1),
-    /** SCHED.2 zero-LLM path. SCHED.1 ships the field but never consults it. */
+    /** SCHED.2 zero-LLM path. When true, `template` + `deliver_to` +
+     * `severity` are required and the webhook body renders through
+     * Mustache directly into the NotificationRouter — no LLM invoked. */
     deliver_only: z.boolean().default(false),
+    /** Mustache template rendered from the webhook body (SCHED.2). */
+    template: z.string().optional(),
+    /** Abstract channel name fed into `NotificationRouter.multicast()`. */
+    deliver_to: z.string().optional(),
+    /** Severity tier for routing — also stamped on `ChannelMessage`. */
+    severity: SeveritySpec.optional(),
     rate_limit: RateLimitSpec.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((sub, ctx) => {
+    if (!sub.deliver_only) {
+      // Non-deliver-only subscriptions must declare a skill (back-compat).
+      if (sub.skill === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['skill'],
+          message: 'skill is required when deliver_only is false',
+        });
+      }
+      return;
+    }
+    // SCHED.2 requires template + deliver_to + severity together so the
+    // router has everything it needs at fire time (no late surprises).
+    for (const field of ['template', 'deliver_to', 'severity'] as const) {
+      if (sub[field] === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} is required when deliver_only is true`,
+        });
+      }
+    }
+  });
 
 const WebhookSubscriptionsFile = z
   .object({
@@ -77,13 +113,20 @@ export type SubscriptionYaml = z.infer<typeof SubscriptionYaml>;
 // Runtime view — secret URI replaced by RESOLVED value. Stays in memory.
 // ---------------------------------------------------------------------------
 
+export type SubscriptionSeverity = 'critical' | 'error' | 'warning' | 'info';
+
 export interface Subscription {
   id: string;
   pack: string;
-  skill: string;
+  /** Required only for non-deliver-only subscriptions (evaluator path). */
+  skill?: string;
   /** Resolved HMAC-SHA256 signing key. NEVER log, NEVER persist. */
   signingSecret: string;
   deliverOnly: boolean;
+  /** SCHED.2 — required when deliverOnly is true; validated at load. */
+  template?: string;
+  deliverTo?: string;
+  severity?: SubscriptionSeverity;
   rateLimit?: { max: number; per: 'minute' | 'hour' | 'day' };
 }
 
@@ -162,9 +205,12 @@ export async function loadWebhookSubscriptions(
     out.push({
       id: sub.id,
       pack: sub.pack,
-      skill: sub.skill,
+      ...(sub.skill !== undefined ? { skill: sub.skill } : {}),
       signingSecret: resolved,
       deliverOnly: sub.deliver_only,
+      ...(sub.template !== undefined ? { template: sub.template } : {}),
+      ...(sub.deliver_to !== undefined ? { deliverTo: sub.deliver_to } : {}),
+      ...(sub.severity !== undefined ? { severity: sub.severity } : {}),
       ...(sub.rate_limit ? { rateLimit: sub.rate_limit } : {}),
     });
   }
@@ -182,9 +228,12 @@ export function redact(sub: Subscription): Omit<Subscription, 'signingSecret'> &
   return {
     id: sub.id,
     pack: sub.pack,
-    skill: sub.skill,
+    ...(sub.skill !== undefined ? { skill: sub.skill } : {}),
     signingSecret: '[REDACTED]',
     deliverOnly: sub.deliverOnly,
+    ...(sub.template !== undefined ? { template: sub.template } : {}),
+    ...(sub.deliverTo !== undefined ? { deliverTo: sub.deliverTo } : {}),
+    ...(sub.severity !== undefined ? { severity: sub.severity } : {}),
     ...(sub.rateLimit ? { rateLimit: sub.rateLimit } : {}),
   };
 }

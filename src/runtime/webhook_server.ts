@@ -47,6 +47,17 @@ export type WebhookAuditEntry =
   | { event: 'rejected_rate_limit'; subscriptionId: string; receivedAt: string }
   | { event: 'idempotent'; subscriptionId: string; receivedAt: string }
   | { event: 'dispatched'; subscriptionId: string; receivedAt: string }
+  | {
+      event: 'deliver_only';
+      subscriptionId: string;
+      receivedAt: string;
+      rendered: boolean;
+      reason?: 'empty_template' | 'multicast_error' | 'misconfigured';
+      emptyFieldCount?: number;
+      redactedSecrets?: number;
+      multicastSent?: number;
+      multicastFailed?: number;
+    }
   | { event: 'error'; reason: string; receivedAt: string };
 
 export type WebhookAuditSink = (entry: WebhookAuditEntry) => void;
@@ -54,12 +65,33 @@ export type WebhookAuditSink = (entry: WebhookAuditEntry) => void;
 /** What the daemon hands the server for an authenticated webhook. */
 export type WebhookDispatcher = (event: WebhookEvent) => Promise<void>;
 
+/**
+ * SCHED.2 zero-LLM handler. Caller supplies a closure that wires the
+ * NotificationRouter + RoutingConfig; the server invokes it for any
+ * subscription with `deliverOnly: true`. Returning a result lets the
+ * server audit the outcome without coupling to mustache or channels.
+ */
+export type DeliverOnlyHandler = (
+  sub: Subscription,
+  body: unknown,
+) => Promise<{
+  rendered: boolean;
+  reason?: 'empty_template' | 'multicast_error' | 'misconfigured';
+  emptyFieldCount?: number;
+  redactedSecrets?: number;
+  multicast?: { sent: number; failed: number };
+}>;
+
 export interface WebhookServerOpts {
   port: number;
   /** `'127.0.0.1'` (default) keeps the server unreachable from LAN. */
   host?: string;
   subscriptions: readonly Subscription[];
   dispatch: WebhookDispatcher;
+  /** SCHED.2 — invoked for subscriptions with `deliverOnly: true`. When
+   *  unset, deliver-only subscriptions audit as `misconfigured` and the
+   *  request still returns 200 (never break on missing handler). */
+  deliverOnly?: DeliverOnlyHandler;
   rateLimiter?: RateLimiter;
   auditLog?: WebhookAuditSink;
   /** Injected clock for tests. */
@@ -85,6 +117,7 @@ export class WebhookServer {
   private readonly server: Server;
   private readonly subscriptions: Map<string, Subscription>;
   private readonly dispatch: WebhookDispatcher;
+  private readonly deliverOnly: DeliverOnlyHandler | undefined;
   private readonly rateLimiter: RateLimiter | undefined;
   private readonly auditLog: WebhookAuditSink;
   private readonly nowFn: () => number;
@@ -96,6 +129,7 @@ export class WebhookServer {
   constructor(private readonly opts: WebhookServerOpts) {
     this.subscriptions = new Map(opts.subscriptions.map((s) => [s.id, s]));
     this.dispatch = opts.dispatch;
+    this.deliverOnly = opts.deliverOnly;
     this.rateLimiter = opts.rateLimiter;
     this.auditLog = opts.auditLog ?? noopAudit;
     this.nowFn = opts.now ?? Date.now;
@@ -207,10 +241,57 @@ export class WebhookServer {
     }
     this.idempotencyCache.set(dedupKey, now);
 
-    // SCHED.1 always dispatches a WebhookEvent. SCHED.2 will branch on
-    // `sub.deliverOnly` BEFORE this code path; for now everything routes
-    // through the runtime evaluator.
     this.auditLog({ event: 'received', subscriptionId, receivedAt });
+
+    // SCHED.2: deliver-only subscriptions skip the runtime evaluator
+    // entirely. Mustache-render the body straight into the
+    // NotificationRouter — zero LLM invocation, sub-second response.
+    if (sub.deliverOnly) {
+      const event = buildWebhookEvent(sub.id, req, body, receivedAt);
+      if (this.deliverOnly) {
+        const result = await this.deliverOnly(sub, event.body);
+        this.auditLog({
+          event: 'deliver_only',
+          subscriptionId,
+          receivedAt,
+          rendered: result.rendered,
+          ...(result.reason ? { reason: result.reason } : {}),
+          ...(result.emptyFieldCount !== undefined
+            ? { emptyFieldCount: result.emptyFieldCount }
+            : {}),
+          ...(result.redactedSecrets !== undefined
+            ? { redactedSecrets: result.redactedSecrets }
+            : {}),
+          ...(result.multicast
+            ? {
+                multicastSent: result.multicast.sent,
+                multicastFailed: result.multicast.failed,
+              }
+            : {}),
+        });
+        return sendJson(res, 200, {
+          accepted: true,
+          subscriptionId: sub.id,
+          delivered: result.rendered,
+          ...(result.reason ? { reason: result.reason } : {}),
+        });
+      }
+      // Handler unset — audit + return 200 (don't break the integration).
+      this.auditLog({
+        event: 'deliver_only',
+        subscriptionId,
+        receivedAt,
+        rendered: false,
+        reason: 'misconfigured',
+      });
+      return sendJson(res, 200, {
+        accepted: true,
+        subscriptionId: sub.id,
+        delivered: false,
+        reason: 'misconfigured',
+      });
+    }
+
     await this.dispatch(buildWebhookEvent(sub.id, req, body, receivedAt));
     this.auditLog({ event: 'dispatched', subscriptionId, receivedAt });
     return sendJson(res, 200, { accepted: true, subscriptionId: sub.id });
