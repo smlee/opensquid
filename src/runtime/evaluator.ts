@@ -26,13 +26,62 @@
  * which the caller owns. A second `evaluateProcess` call against the same
  * steps with a fresh ctx must produce the same result — tests rely on this.
  *
- * Imports from: runtime/types.ts, runtime/result.ts, functions/registry.ts.
+ * Durable execution (DURABLE.2):
+ *
+ *   When the caller passes a `checkpoint` option containing a CheckpointStore
+ *   + runId, every step whose primitive declares `durable: true` is wrapped:
+ *
+ *     1. Resolve `(call, interpolatedArgs)` → `inputsHash` via canonical JSON
+ *     2. Look up `checkpoints[runId][stepIdx]` (prefetched at entry)
+ *     3. If the row exists, has `status: 'completed'`, and `inputsHash`
+ *        matches → restore the row's `outputs` into `ctx.bindings[step.as]`,
+ *        skip the primitive call entirely
+ *     4. Else → execute the primitive, then `store.append(...)` the row
+ *
+ *   Non-durable primitives bypass the wrap entirely (no hash, no lookup, no
+ *   write) — the audit guarantee is that the only durable-execution overhead
+ *   on cheap primitives is one `if (def.durable)` branch per step.
+ *
+ *   Errored primitive results write a row with `status: 'errored'` so the
+ *   resumer can re-run that step on the next pass. The evaluator still
+ *   returns the error to the caller — the checkpoint write is best-effort
+ *   accounting, not a swallowed failure.
+ *
+ * Imports from: runtime/types.ts, runtime/result.ts, functions/registry.ts,
+ *   runtime/durable/checkpoint_store.ts, runtime/durable/canonical_json.ts,
+ *   runtime/durable/run_id.ts.
  * Imported by: runtime/ (rule dispatcher in later phases).
  */
 
 import type { FunctionRegistry, EvalCtx } from '../functions/registry.js';
 
+import { canonicalJsonStringify } from './durable/canonical_json.js';
+import type { CheckpointRow, CheckpointStore } from './durable/checkpoint_store.js';
+import { sha256Hex } from './durable/run_id.js';
 import type { ProcessStep, RuleResult, Verdict } from './types.js';
+
+// ---------------------------------------------------------------------------
+// CheckpointOptions — wire the durable-execution layer into evaluateProcess.
+//
+// `store` + `runId` are the only two values the evaluator needs from the
+// caller. The caller (rule dispatcher in a later phase) is responsible for:
+//   - Deriving `runId` via `runIdFor` from the inbound event
+//   - Hydrating `ctx.bindings` from `store.loadBindings(runId)` BEFORE
+//     calling evaluateProcess (so non-durable steps that reference durable
+//     outputs from a prior partial run still see the right values)
+//
+// The evaluator itself is stateless w.r.t. the store — it pulls the per-run
+// checkpoint set once at entry, then walks the steps. No incremental queries.
+// ---------------------------------------------------------------------------
+
+export interface CheckpointOptions {
+  store: CheckpointStore;
+  runId: string;
+}
+
+interface EvaluateOptions {
+  checkpoint?: CheckpointOptions;
+}
 
 // ---------------------------------------------------------------------------
 // evaluateProcess — drive a step array against a Context + Registry
@@ -58,7 +107,17 @@ export async function evaluateProcess(
   steps: ProcessStep[],
   ctx: EvalCtx,
   registry: FunctionRegistry,
+  options: EvaluateOptions = {},
 ): Promise<RuleResult> {
+  const { checkpoint } = options;
+
+  // Prefetch the run's checkpoint rows ONCE — keyed by stepIdx so each
+  // step does a Map lookup, not a libsql query. Empty map when checkpoint
+  // is disabled or the run has no prior history (fresh run / new run_id).
+  const prior: Map<number, CheckpointRow> = checkpoint
+    ? await loadCheckpointMap(checkpoint.store, checkpoint.runId)
+    : new Map<number, CheckpointRow>();
+
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     if (!step) continue; // noUncheckedIndexedAccess guard
@@ -71,8 +130,26 @@ export async function evaluateProcess(
     // 2. Interpolate `{{var}}` in string args
     const interpolatedArgs = interpolateArgs(step.args ?? {}, ctx.bindings);
 
-    // 3. Dispatch through the registry
-    const result = await registry.call(step.call, interpolatedArgs, ctx);
+    // 3. Dispatch — wrapped with the durable-checkpoint layer when the
+    //    primitive declares `durable: true` AND the caller passed a
+    //    checkpoint store. Non-durable primitives flow straight through.
+    const meta = registry.durability(step.call);
+    const isDurable = checkpoint !== undefined && meta?.durable === true;
+
+    let result;
+    if (isDurable) {
+      result = await invokeDurable(
+        i,
+        step,
+        interpolatedArgs,
+        ctx,
+        registry,
+        checkpoint,
+        prior.get(i),
+      );
+    } else {
+      result = await registry.call(step.call, interpolatedArgs, ctx);
+    }
 
     // 4. Primitive failed — surface step index for diagnostics
     if (!result.ok) {
@@ -104,6 +181,108 @@ export async function evaluateProcess(
     }
   }
   return { kind: 'no_verdict' };
+}
+
+// ---------------------------------------------------------------------------
+// invokeDurable — checkpoint-wrapped primitive call (DURABLE.2).
+//
+// Reads `prior` (the pre-fetched checkpoint row for this step idx, if any).
+// On hit + matching `inputsHash` + `status === 'completed'`, the primitive
+// is SKIPPED and the row's `outputs` is returned as the step's value (the
+// caller then re-applies the `step.as` binding via the main loop). On miss
+// or hash mismatch, the primitive runs and a new checkpoint row is appended.
+//
+// Hash mismatch policy: re-execute as if there were no prior row. This
+// covers the "pack was edited between runs" case — the prior row's outputs
+// are no longer trustworthy for current inputs. The new row overwrites via
+// `INSERT OR REPLACE`.
+//
+// Errored primitive: append a row with `status: 'errored'` so DURABLE.4's
+// resumer can retry. The evaluator still returns the err to the caller.
+//
+// `checkpoint.store.append` throws on libsql failure (DURABLE.1 fail-mode);
+// the evaluator does NOT swallow the throw — a checkpoint that didn't make
+// it to disk is worse than a loud error, because the run would silently
+// drop step bindings on the next resume.
+// ---------------------------------------------------------------------------
+
+async function invokeDurable(
+  stepIdx: number,
+  step: ProcessStep,
+  interpolatedArgs: Record<string, unknown>,
+  ctx: EvalCtx,
+  registry: FunctionRegistry,
+  checkpoint: CheckpointOptions,
+  prior: CheckpointRow | undefined,
+): Promise<Awaited<ReturnType<FunctionRegistry['call']>>> {
+  const inputsHash = sha256Hex(canonicalJsonStringify({ fn: step.call, args: interpolatedArgs }));
+
+  // Checkpoint HIT — completed row for same step + same inputs. Skip the
+  // primitive call, restore the bound value, and return it as an ok result.
+  if (prior?.status === 'completed' && prior.inputsHash === inputsHash) {
+    return { ok: true, value: prior.outputs };
+  }
+
+  // Checkpoint MISS (no row, hash mismatch, or errored row) — execute fresh.
+  const startedAtMs = Date.now();
+  const result = await registry.call(step.call, interpolatedArgs, ctx);
+  const completedAtMs = Date.now();
+
+  // Persist the outcome BEFORE returning. Throw propagates if the store
+  // fails — see header rationale (silent fail-open would lose bindings).
+  if (result.ok) {
+    const write = {
+      runId: checkpoint.runId,
+      stepIdx,
+      fn: step.call,
+      inputsHash,
+      outputs: result.value,
+      startedAtMs,
+      completedAtMs,
+      status: 'completed' as const,
+      ...(step.as !== undefined ? { asBinding: step.as } : {}),
+    };
+    await checkpoint.store.append(write);
+  } else {
+    const write = {
+      runId: checkpoint.runId,
+      stepIdx,
+      fn: step.call,
+      inputsHash,
+      outputs: null,
+      startedAtMs,
+      completedAtMs,
+      status: 'errored' as const,
+      errorMessage: result.error.message,
+      ...(step.as !== undefined ? { asBinding: step.as } : {}),
+    };
+    await checkpoint.store.append(write);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// loadCheckpointMap — single-query prefetch of every row for a runId.
+//
+// Calls `CheckpointStore.fetchRun(runId)` (one libsql SELECT) and keys the
+// result by `stepIdx`. The evaluator then dispatches each durable step
+// against the pre-fetched map without per-step queries — the only DB hit
+// during a process walk is one read at entry plus N writes for the N
+// durable steps. Non-durable steps add ZERO database I/O.
+//
+// Both completed and errored rows land in the map. The wrap (`invokeDurable`)
+// checks `status === 'completed'` + `inputsHash` match before honoring the
+// hit; errored rows fall through to re-execution.
+// ---------------------------------------------------------------------------
+
+async function loadCheckpointMap(
+  store: CheckpointStore,
+  runId: string,
+): Promise<Map<number, CheckpointRow>> {
+  const rows = await store.fetchRun(runId);
+  const out = new Map<number, CheckpointRow>();
+  for (const row of rows) out.set(row.stepIdx, row);
+  return out;
 }
 
 // ---------------------------------------------------------------------------

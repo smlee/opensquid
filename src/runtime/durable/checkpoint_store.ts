@@ -208,6 +208,31 @@ export class CheckpointStore {
   }
 
   /**
+   * Fetch every row for a run in ascending `step_idx` order. Used by the
+   * evaluator's checkpoint wrap (DURABLE.2) to build a per-step lookup map
+   * once at process entry, then dispatch each durable step against the
+   * pre-fetched row without per-step libsql queries.
+   *
+   * Returns BOTH completed and errored rows — the evaluator decides what to
+   * do with each: completed + matching inputsHash → skip; everything else
+   * → re-execute and overwrite via `INSERT OR REPLACE`.
+   *
+   * Returns `[]` when the run has no checkpoints (fresh run).
+   */
+  async fetchRun(runId: string): Promise<CheckpointRow[]> {
+    await this.init();
+    const rs = await this.db.execute({
+      sql: `SELECT run_id, step_idx, fn, inputs_hash, outputs_json, as_binding,
+                   started_at_ms, completed_at_ms, status, error_message
+            FROM checkpoints
+            WHERE run_id = ?
+            ORDER BY step_idx ASC`,
+      args: [runId],
+    });
+    return rs.rows.map(rowToCheckpoint);
+  }
+
+  /**
    * Delete every row whose `completed_at_ms` falls before `now - ms`.
    * Returns the affected-row count for audit-log surfacing. Used by the
    * future `opensquid checkpoints clean --older-than 7d` CLI verb.

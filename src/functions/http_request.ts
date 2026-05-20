@@ -32,9 +32,19 @@ export function registerHttpRequestFunction(
   registry: FunctionRegistry,
   opts: { gate: CapabilityGate },
 ): void {
+  // DURABLE.2 — once SCHED.1 / AUTO.6 wires the real fetch, http_request
+  // is expensive (network round-trip + token-bucket rate limit). Marked
+  // `durable: true` now so the contract is fixed before the fetch layer
+  // lands. `memoizable: true` for the GET case (idempotent reads against
+  // identical URLs); pack authors composing POST/PUT/PATCH/DELETE should
+  // mind that the memo cache (DURABLE.3) keys on `(fn, args)` and will
+  // happily cache a non-idempotent request — DURABLE.3 documents this risk.
   registry.register({
     name: 'http_request',
     argSchema: HttpRequestArgs,
+    durable: true,
+    memoizable: true,
+    costEstimateMs: 500,
     execute: async ({ url, method }, ctx) => {
       const verdict = await opts.gate.check({
         pack: ctx.packId,

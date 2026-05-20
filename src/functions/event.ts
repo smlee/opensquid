@@ -70,9 +70,17 @@ function resolveCommandField(args: Record<string, unknown>, target: string | und
 }
 
 export function registerEventFunctions(registry: FunctionRegistry): void {
+  // DURABLE.2 — every primitive in this file is a pure read off `EvalCtx.event`
+  // (no I/O, no LLM call). Cost is sub-microsecond; checkpoint overhead would
+  // exceed re-run cost by orders of magnitude. `match_command` runs one regex
+  // — still cheap; `costEstimateMs: 0.1` is the order-of-magnitude marker the
+  // benchmarks use to group "trivial" primitives.
   registry.register({
     name: 'tool_name',
     argSchema: EmptyArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async (_args, ctx) => {
       if (ctx.event.kind !== 'tool_call') return ok(null);
       return ok(ctx.event.tool);
@@ -82,6 +90,9 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'tool_args',
     argSchema: EmptyArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async (_args, ctx) => {
       if (ctx.event.kind !== 'tool_call') return ok(null);
       return ok(ctx.event.args);
@@ -91,6 +102,9 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'cwd',
     argSchema: EmptyArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async (_args, ctx) => {
       if (ctx.event.kind !== 'tool_call') return ok(null);
       return ok(ctx.event.cwd ?? null);
@@ -100,6 +114,9 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'last_assistant_message',
     argSchema: EmptyArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async (_args, ctx) => {
       if (ctx.event.kind !== 'stop') return ok(null);
       return ok(ctx.event.assistantText);
@@ -109,6 +126,9 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'match_command',
     argSchema: MatchCommandArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async ({ pattern, target }, ctx) => {
       if (ctx.event.kind !== 'tool_call') return ok(false);
       const command = resolveCommandField(ctx.event.args, target);

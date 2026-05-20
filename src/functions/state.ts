@@ -86,9 +86,17 @@ async function touchFile(path: string): Promise<void> {
 }
 
 export function registerStateFunctions(registry: FunctionRegistry): void {
+  // DURABLE.2 — local filesystem reads/writes against `~/.opensquid/`. Each
+  // call is a few-ms `readFile` / atomic `rename`; checkpoint overhead would
+  // exceed the cost of re-running the call on resume. None are memoizable
+  // because state changes between calls — a memoized `read_state` would
+  // return stale data if another step writes the same key.
   registry.register({
     name: 'read_state',
     argSchema: ReadStateArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 1,
     execute: async ({ key, pack }, ctx) => {
       // Optional `pack` arg routes to `~/.opensquid/packs/<id>/state/...`;
       // omitted = session-scoped fallback (unchanged Phase 1 semantics).
@@ -110,6 +118,9 @@ export function registerStateFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'write_state',
     argSchema: WriteStateArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 2,
     execute: async ({ key, value, pack }, ctx) => {
       const path = pack ? packStateFile(pack, key) : sessionStateFile(ctx.sessionId, key);
       try {
@@ -128,6 +139,9 @@ export function registerStateFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'append_log',
     argSchema: AppendLogArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 5,
     execute: async ({ name, entry }, ctx) => {
       const path = sessionLogFile(ctx.sessionId, name);
       try {

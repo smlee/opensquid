@@ -216,9 +216,19 @@ export function registerSubagentFunction(
   registry: FunctionRegistry,
   opts: RegisterSubagentOptions = {},
 ): void {
+  // DURABLE.2 — spawning a full subagent SDK run is the single most expensive
+  // primitive in the library (multi-second response + token cost + drift
+  // roll-up write). Always checkpoint so a resume restores `stdout` + `drifts`
+  // from the prior run instead of re-spawning. NOT memoizable: subagent runs
+  // are non-deterministic (temperature, context-dependent reasoning) and the
+  // drift roll-up has a side effect on the parent's catalog — caching would
+  // also skip the catalog write.
   registry.register({
     name: 'spawn_subagent',
     argSchema: SpawnSubagentArgs,
+    durable: true,
+    memoizable: false,
+    costEstimateMs: 30_000,
     execute: async ({ model, prompt, context }, ctx) => {
       let sdk: SubagentSdk;
       try {

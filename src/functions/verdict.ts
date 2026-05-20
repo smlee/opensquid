@@ -62,27 +62,44 @@ const RestartWorkflowArgs = z.object({ entry_skill: z.string() }).strict();
 const SetActiveTaskStateArgs = z.object({ state: z.string() }).strict();
 
 export function registerVerdictFunctions(registry: FunctionRegistry): void {
+  // DURABLE.2 — every primitive in this file is a pure object builder (no
+  // I/O, no LLM, no shell). Sub-microsecond cost; checkpointing them would
+  // be a net loss. None are memoizable because the input → output mapping
+  // is so trivial there's nothing to cache that wouldn't be re-computed
+  // faster than a cache lookup.
   registry.register({
     name: 'verdict',
     argSchema: VerdictArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async ({ level, message }) => ok({ level, message }),
   });
 
   registry.register({
     name: 'halt_task',
     argSchema: HaltTaskArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async ({ reason }) => ok({ kind: 'halt' as const, reason }),
   });
 
   registry.register({
     name: 'restart_workflow',
     argSchema: RestartWorkflowArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async ({ entry_skill }) => ok({ kind: 'restart' as const, entrySkill: entry_skill }),
   });
 
   registry.register({
     name: 'set_active_task_state',
     argSchema: SetActiveTaskStateArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
     execute: async ({ state }) => ok({ kind: 'state_set' as const, state }),
   });
 }

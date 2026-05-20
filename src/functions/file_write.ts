@@ -54,9 +54,19 @@ export function registerFileWriteFunction(
   opts: { gate: CapabilityGate; cwd?: string },
 ): void {
   const baseDir = opts.cwd ?? process.cwd();
+  // DURABLE.2 — atomic tmp+rename file write. Side-effecting (touches the
+  // filesystem) and gate-checked (one CapabilityGate roundtrip). Re-running
+  // on resume would re-write the file — harmless for content-identical
+  // writes, but a wasted gate check + write. Checkpoint so resume restores
+  // the `{ path, bytes }` result without re-writing. NOT memoizable: a
+  // memoized hit would silently skip the actual filesystem write, which is
+  // the entire point of the primitive.
   registry.register({
     name: 'file_write',
     argSchema: FileWriteArgs,
+    durable: true,
+    memoizable: false,
+    costEstimateMs: 5,
     execute: async ({ path, content }, ctx) => {
       const absolute = isAbsolute(path) ? path : resolve(baseDir, path);
       const verdict = await opts.gate.check({

@@ -76,9 +76,20 @@ const LlmClassifyArgs = z.object({
 });
 
 export function registerLlmFunctions(registry: FunctionRegistry): void {
+  // DURABLE.2 — both primitives in this file dispatch through a model
+  // strategy (subprocess CLI or HTTP-API client). Either path is slow + has
+  // a token cost, so we ALWAYS checkpoint: re-running on resume would
+  // double-charge the user's subscription / API quota. `subagent_call` is
+  // `memoizable: false` because its outputs are non-deterministic (model
+  // temperature, narrative generation); `llm_classify` IS memoizable because
+  // the pack-supplied `allowed_labels` clamps the output space and the
+  // classifier prompt is intentionally low-temp.
   registry.register({
     name: 'subagent_call',
     argSchema: SubagentCallArgs,
+    durable: true,
+    memoizable: false,
+    costEstimateMs: 30_000,
     execute: async ({ model, prompt, timeout_ms }) => {
       const cfg = await loadModelsConfig();
       const aliasCfg = cfg[model];
@@ -110,6 +121,9 @@ export function registerLlmFunctions(registry: FunctionRegistry): void {
   registry.register({
     name: 'llm_classify',
     argSchema: LlmClassifyArgs,
+    durable: true,
+    memoizable: true,
+    costEstimateMs: 3000,
     execute: async ({ model, prompt, allowed_labels, timeout_ms }) => {
       const cfg = await loadModelsConfig();
       const aliasCfg = cfg[model];

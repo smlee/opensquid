@@ -290,8 +290,12 @@ describe('evaluateProcess — unsupported if-expression', () => {
       const result = await evaluateProcess(steps, createTestCtx(), reg);
 
       expect(result).toEqual({ kind: 'no_verdict' });
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]?.[0]).toContain('Unsupported if-expression');
+      // Filter to the evaluator's own warning — the registry also warns
+      // when a test primitive omits the DURABLE.2 `durable` flag.
+      const ifWarnings = warn.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes('Unsupported if-expression'),
+      );
+      expect(ifWarnings).toHaveLength(1);
     } finally {
       warn.mockRestore();
     }

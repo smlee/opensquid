@@ -31,9 +31,18 @@ export function registerShellExecFunction(
   registry: FunctionRegistry,
   opts: { gate: CapabilityGate },
 ): void {
+  // DURABLE.2 — once AUTO.5 wires the real spawn, shell_exec is expensive
+  // + side-effecting (touches the host shell). Marked `durable: true` now
+  // so the contract is fixed before AUTO.5 lands. NOT memoizable: shell
+  // output depends on environment state outside the args (cwd, env vars,
+  // filesystem), and the command may have side effects we'd skip on a
+  // memo hit.
   registry.register({
     name: 'shell_exec',
     argSchema: ShellExecArgs,
+    durable: true,
+    memoizable: false,
+    costEstimateMs: 200,
     execute: async ({ command }, ctx) => {
       const verdict = await opts.gate.check({
         pack: ctx.packId,

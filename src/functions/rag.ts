@@ -72,9 +72,19 @@ const StoreLessonArgs = z.object({
 });
 
 export function registerRagFunctions(registry: FunctionRegistry, backend: RagBackend): void {
+  // DURABLE.2 — RAG primitives touch the libsql backend (and, for `embed`,
+  // possibly an Ollama subprocess). All three are durable: re-running on
+  // resume costs an extra round-trip per call; the checkpoint write is
+  // cheaper than rerunning the embedder or fts5 search. `recall` + `embed`
+  // are memoizable: same query/text → same hit list / vector (within a
+  // bounded TTL). `store_lesson` is a side-effecting write — never memoize a
+  // write, or two identical calls would silently no-op the second insert.
   registry.register({
     name: 'recall',
     argSchema: RecallArgs,
+    durable: true,
+    memoizable: true,
+    costEstimateMs: 50,
     execute: async ({ query, k }) => {
       try {
         const hits = await backend.recall(query, k ?? 5);
@@ -92,6 +102,9 @@ export function registerRagFunctions(registry: FunctionRegistry, backend: RagBac
   registry.register({
     name: 'embed',
     argSchema: EmbedArgs,
+    durable: true,
+    memoizable: true,
+    costEstimateMs: 50,
     execute: async ({ text }) => {
       try {
         const vec = await backend.embed(text);
@@ -109,6 +122,9 @@ export function registerRagFunctions(registry: FunctionRegistry, backend: RagBac
   registry.register({
     name: 'store_lesson',
     argSchema: StoreLessonArgs,
+    durable: true,
+    memoizable: false,
+    costEstimateMs: 50,
     execute: async ({ id, content, tags, source, author }) => {
       try {
         await backend.storeLesson({

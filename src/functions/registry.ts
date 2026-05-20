@@ -64,12 +64,44 @@ export interface FunctionError {
 // Generic over TArgs / TResult so the call site sees the right types, but
 // type-erased to `FunctionDef<unknown, unknown>` once inside the registry
 // Map (see `register` for the existential cast).
+//
+// DURABLE.2 fields (`durable`, `memoizable`, `costEstimateMs`):
+//
+//   `durable`         — when `true`, the evaluator (DURABLE.2 wrap) appends a
+//                       checkpoint row after every invocation so a crashed
+//                       process can resume mid-rule. When `false`, the
+//                       evaluator skips the checkpoint write entirely
+//                       (cheap primitives re-run faster than the cost of
+//                       persisting them).
+//
+//   `memoizable`      — when `true`, identical `(fn, args)` calls within a
+//                       run can be served from the memo cache (DURABLE.3,
+//                       not yet wired). `memoizable: true, durable: false`
+//                       is allowed but unusual — the cache persists only
+//                       for the lifetime of the in-memory tier (LRU); it
+//                       does not survive daemon restart on its own.
+//                       Document it in the primitive header when used.
+//
+//   `costEstimateMs?` — hint for benchmarking + future tier routing
+//                       (DURABLE.4 uses it to pick which interrupted runs to
+//                       resume first). Order-of-magnitude only; the value
+//                       does not gate any runtime decision in DURABLE.2.
+//
+// Default policy: if a primitive registers WITHOUT these fields, the
+// registry treats them as `false` and emits a single console.warn naming
+// the primitive (audit rule: every primitive must declare explicitly).
 // ---------------------------------------------------------------------------
 
 export interface FunctionDef<TArgs = unknown, TResult = unknown> {
   name: string;
   argSchema: z.ZodSchema<TArgs>;
   execute: (args: TArgs, ctx: EvalCtx) => Promise<Result<TResult, FunctionError>>;
+  /** Checkpoint after each call so crashes can resume mid-rule. */
+  durable?: boolean;
+  /** Cache identical `(fn, args)` outputs (DURABLE.3, wired separately). */
+  memoizable?: boolean;
+  /** Order-of-magnitude latency hint; informational only. */
+  costEstimateMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,12 +113,38 @@ export interface FunctionDef<TArgs = unknown, TResult = unknown> {
 // Every other failure mode is a Result.
 // ---------------------------------------------------------------------------
 
+/**
+ * Effective (post-default) durability metadata for a registered primitive.
+ * Returned by `FunctionRegistry.durability` so callers (evaluator, future
+ * memo cache, audit tooling) read a normalized record rather than poking at
+ * the raw `FunctionDef`.
+ */
+export interface PrimitiveDurability {
+  durable: boolean;
+  memoizable: boolean;
+  costEstimateMs: number | undefined;
+}
+
 export class FunctionRegistry {
   private map = new Map<string, FunctionDef<unknown, unknown>>();
 
   register<TArgs, TResult>(def: FunctionDef<TArgs, TResult>): void {
     if (this.map.has(def.name)) {
       throw new Error(`Function "${def.name}" already registered`);
+    }
+    // DURABLE.2 — warn loudly when a primitive omits the durability flag.
+    // Default is `false` (cheap fail-safe), but silent default-false on a
+    // primitive that SHOULD be durable would double-charge on every resume
+    // (e.g. an llm_classify variant whose author forgot the flag). The
+    // warning surfaces the omission at registration time so audit catches
+    // it before it ships. `memoizable` is bundled into the same warning —
+    // either both flags are explicit or neither is, by author convention.
+    if (def.durable === undefined) {
+      console.warn(
+        `[opensquid:registry] Primitive "${def.name}" registered without an ` +
+          `explicit \`durable\` flag — defaulting to \`false\`. Declare ` +
+          `\`durable: true | false\` on the FunctionDef to silence this warning.`,
+      );
     }
     // type-erasure cast: TArgs/TResult are existentially quantified in the
     // registry's Map. Each entry knows its own schema at the value level
@@ -104,6 +162,21 @@ export class FunctionRegistry {
 
   list(): string[] {
     return [...this.map.keys()].sort();
+  }
+
+  /**
+   * Normalized durability metadata for a registered primitive. Returns
+   * `undefined` if the name is not registered. Default-falses apply so
+   * downstream code never has to repeat the `?? false` plumbing.
+   */
+  durability(name: string): PrimitiveDurability | undefined {
+    const def = this.map.get(name);
+    if (!def) return undefined;
+    return {
+      durable: def.durable ?? false,
+      memoizable: def.memoizable ?? false,
+      costEstimateMs: def.costEstimateMs,
+    };
   }
 
   async call(

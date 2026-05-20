@@ -7,7 +7,7 @@
  * repeat boilerplate.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { ok } from '../runtime/result.js';
@@ -121,5 +121,107 @@ describe('FunctionRegistry introspection', () => {
 
     expect(result).toEqual({ ok: true, value: undefined });
     expect(ctx.bindings.get('touched')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DURABLE.2 — durability metadata on FunctionDef.
+//
+// Coverage:
+//   1. `durability()` returns normalized flags for explicit declarations.
+//   2. `durability()` returns `false`/`undefined` defaults for omissions.
+//   3. Registry emits a console.warn when `durable` is omitted at register().
+//   4. Registry does NOT warn when `durable` is explicitly set (true OR false).
+//   5. `durability()` returns `undefined` for unregistered names.
+// ---------------------------------------------------------------------------
+
+describe('FunctionRegistry durability metadata (DURABLE.2)', () => {
+  it('returns normalized durability flags for explicit declarations', () => {
+    const reg = new FunctionRegistry();
+    reg.register({
+      name: 'llm_classify',
+      argSchema: z.object({}),
+      execute: () => Promise.resolve(ok(null)),
+      durable: true,
+      memoizable: true,
+      costEstimateMs: 3000,
+    });
+
+    expect(reg.durability('llm_classify')).toEqual({
+      durable: true,
+      memoizable: true,
+      costEstimateMs: 3000,
+    });
+  });
+
+  it('defaults durable/memoizable to false when omitted', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const reg = new FunctionRegistry();
+      reg.register({
+        name: 'lazy',
+        argSchema: z.object({}),
+        execute: () => Promise.resolve(ok(null)),
+      });
+
+      expect(reg.durability('lazy')).toEqual({
+        durable: false,
+        memoizable: false,
+        costEstimateMs: undefined,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('emits a console.warn when a primitive registers without `durable`', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const reg = new FunctionRegistry();
+      reg.register({
+        name: 'forgot_flag',
+        argSchema: z.object({}),
+        execute: () => Promise.resolve(ok(null)),
+      });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      const msg: unknown = warn.mock.calls[0]?.[0];
+      expect(typeof msg === 'string' && msg.includes('forgot_flag')).toBe(true);
+      expect(typeof msg === 'string' && msg.includes('durable')).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does NOT warn when `durable` is set explicitly (true or false)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const reg = new FunctionRegistry();
+      reg.register({
+        name: 'cheap',
+        argSchema: z.object({}),
+        execute: () => Promise.resolve(ok(null)),
+        durable: false,
+        memoizable: false,
+        costEstimateMs: 0.1,
+      });
+      reg.register({
+        name: 'expensive',
+        argSchema: z.object({}),
+        execute: () => Promise.resolve(ok(null)),
+        durable: true,
+        memoizable: true,
+        costEstimateMs: 3000,
+      });
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('returns undefined for an unregistered primitive', () => {
+    const reg = new FunctionRegistry();
+    expect(reg.durability('missing')).toBeUndefined();
   });
 });

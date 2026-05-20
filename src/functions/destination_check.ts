@@ -110,9 +110,19 @@ const ALLOWED_LABELS = ['ON_GOAL', 'DRIFTING', 'UNCERTAIN'] as const;
 // ---------------------------------------------------------------------------
 
 export function registerDestinationCheckFunction(registry: FunctionRegistry): void {
+  // DURABLE.2 — composes `llm_classify` under the hood; same expense profile.
+  // `durable: true` so resume restores the verdict instead of re-paying the
+  // classifier call. `memoizable: true` because the prompt is constructed
+  // deterministically from `(goal, recent_actions, model)` and the
+  // `ALLOWED_LABELS` set is closed — identical inputs give identical labels
+  // within the classifier's temperature, matching `llm_classify`'s memo
+  // policy.
   registry.register({
     name: 'check_destination',
     argSchema: CheckDestinationArgs,
+    durable: true,
+    memoizable: true,
+    costEstimateMs: 5000,
     execute: async ({ goal, recent_actions, model }, ctx) => {
       // Prompt construction — kept simple + deterministic. Pack authors who
       // need a richer prompt should compose their own process via direct
