@@ -20,6 +20,7 @@ import { Command } from 'commander';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
+import { registerCache } from './setup/cli/cache.js';
 import { registerCheckpoints } from './setup/cli/checkpoints.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
@@ -30,7 +31,7 @@ import { registerWebhooks } from './setup/cli/webhooks.js';
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.83');
+  .version('0.5.84');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -143,6 +144,13 @@ registerAudit(program);
 // surfaces a clear "not yet wired" stderr message rather than silently
 // failing. `clean --older-than 30d --yes` prunes old rows.
 registerCheckpoints(program);
+
+// CLI.7 — `opensquid cache stats|clear`. Surfaces the DURABLE.3 MemoCache.
+// `stats` reads per-primitive hit/size rows from the libsql tier (the in-
+// memory LRU tier is restart-volatile and deliberately excluded). `clear`
+// supports selective invalidation by `--primitive` and/or `--older-than`;
+// a zero-filter (full) clear requires `--yes` or TTY confirmation.
+registerCache(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
