@@ -49,6 +49,11 @@ export interface ModelAliasConfig {
   model?: string;
   endpoint?: string;
   provider?: string;
+  // MCP-mode fields (LLM.4). `server` is the MCP server command/binary
+  // (stdio transport for Phase 1); `tool` is the tool name on that server
+  // that opensquid will invoke with the prompt as an argument.
+  server?: string;
+  tool?: string;
 }
 
 // Strategies expose a single async `call` method. `timeoutMs` is per-call

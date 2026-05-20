@@ -11,14 +11,15 @@
  * vendor name is hardcoded — providers compare against the abstract
  * label users wrote in `models.yaml`.
  *
- * Mode coverage (post LLM.3):
+ * Mode coverage (post LLM.4 — all five modes now concrete):
  *   - (subscription, cli)            → subscriptionCliStrategy
  *   - (subscription, sdk)            → subscriptionSdkStrategy
  *   - (api, *), provider=anthropic   → apiAnthropicStrategy (needs secrets)
  *   - (api, *), provider=openai      → apiOpenAIStrategy    (needs secrets)
  *   - (local, *)                     → localOllamaStrategy (Ollama is the
  *                                       only Phase-1 local impl)
- *   - everything else                → stubStrategy (LLM.4 fills in mcp)
+ *   - (mcp, *)                       → mcpStrategy (fail-fasts on missing
+ *                                       server/tool at factory time)
  *
  * Secrets dependency:
  *   API strategies need a `SecretResolver` to read the user's API key.
@@ -37,6 +38,7 @@ import type { SecretResolver } from '../secrets/types.js';
 import { apiAnthropicStrategy } from './strategies/api_anthropic.js';
 import { apiOpenAIStrategy } from './strategies/api_openai.js';
 import { localOllamaStrategy } from './strategies/local_ollama.js';
+import { mcpStrategy } from './strategies/mcp.js';
 import { stubStrategy } from './strategies/_stub.js';
 import { subscriptionCliStrategy } from './strategies/subscription_cli.js';
 import { subscriptionSdkStrategy } from './strategies/subscription_sdk.js';
@@ -75,6 +77,12 @@ export function resolveStrategy(
     // (llama.cpp, vLLM, MLX) would branch on cfg.provider here.
     return localOllamaStrategy(config);
   }
-  // mcp falls through to the stub until LLM.4.
+  if (config.mode === 'mcp') {
+    // mcp strategy fail-fasts on missing server/tool at factory time —
+    // resolve here surfaces config errors at pack-load.
+    return mcpStrategy(config);
+  }
+  // Unknown mode (shouldn't be reachable given ModelMode union, but the
+  // stub is a safe fallback).
   return stubStrategy(alias, config.mode);
 }
