@@ -1,0 +1,44 @@
+# sangmin-personal drift response policy.
+#
+# Default per project_opensquid_drift_response_is_codex_declared:
+# `full_stop_and_redo` — halt the entire task, restart from the user's
+# defined workflow. Per-rule overrides downshift to softer policies where
+# the legacy rule was a `severity: warn` (honesty-ledger) or where a
+# softer response is appropriate (substrate-purity).
+default: full_stop_and_redo
+per_rule:
+  # Git hygiene — block the one tool call, don't halt the whole task.
+  never-amend: block_tool
+  no-implicit-push: block_tool
+  no-force-push-main: block_tool
+
+  # Substrate-purity is a soft warn (engine-side smell, not a stop signal).
+  substrate-purity: warn
+
+  # Version slot assignment is loud — pause for user input.
+  version-slot-assignment: notify_and_pause
+
+  # Honesty-ledger claim rules — all warn, never block.
+  research-start: warn
+  research-spawning: warn
+  starting-now: warn
+  running-tests: warn
+  running-build: warn
+  committed: warn
+  telegram-sent: warn
+  pushed: warn
+  tagged: warn
+  fmt-clippy: warn
+  phase-logged: warn
+  audit-done: warn
+  pre-push-checklist: warn
+  ci-verify-after-push: warn
+
+  # Phase-logging claim gates — warn.
+  phase-claim-forward: warn
+  session-no-task: warn
+
+  # Workflow + versioning hard-stops — explicit for visibility.
+  workflow-phases-required: full_stop_and_redo
+  phase-logged-before-commit: full_stop_and_redo
+  versioning-pre1-patch-only: full_stop_and_redo

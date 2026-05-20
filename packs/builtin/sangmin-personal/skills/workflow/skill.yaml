@@ -1,0 +1,60 @@
+# workflow — the locked 7-phase workflow.
+#
+# Ports the legacy `standard-7-phase` workflow + `phase-logged-7-phase`
+# policy from bundled-default/codex.yaml lines 97–145, 308–313.
+#
+# Two rules:
+#   - workflow-phases-required (destination_check): periodic LLM judgement
+#     on whether the active task is skipping phases.
+#   - phase-logged-before-commit (track_check): refuse `git commit` until
+#     all 7 phases are logged via `mcp__opensquid__log_phase`.
+#
+# Load: preload — workflow discipline is always-on per
+# project_opensquid_codex_load_hybrid.
+name: workflow
+load: preload
+when_to_load: []
+rules:
+  - id: workflow-phases-required
+    kind: destination_check
+    interval:
+      every_n_tool_calls: 10
+    model_alias: reasoning
+    prompt_template: |
+      The locked 7-phase workflow is:
+        pre_research → learn → code → test → audit → post_research → fix
+
+      Inspect the active task's recent activity. Has the agent skipped or
+      short-circuited any phase before reaching a terminal action
+      (commit, push, tag)?
+
+      Reply with one of:
+        DRIFTING  <one-line reason>
+        ON_TRACK  <one-line reason>
+
+  - id: phase-logged-before-commit
+    process:
+      - call: match_command
+        args:
+          pattern: 'git\s+commit\b'
+          target: tool_args.command
+        as: committing
+      - call: read_state
+        if: committing
+        args:
+          key: workflow.phases_logged
+        as: phases
+      - call: verdict
+        if: 'committing && phases != "complete"'
+        args:
+          level: block
+          message: >-
+            BLOCKED: 7-phase workflow incomplete. Log each phase via
+            `mcp__opensquid__log_phase` (pre_research → learn → code →
+            test → audit → post_research → fix) before committing.
+prose: |
+  The locked 7-phase workflow per feedback_workflow_cycle (PRIMARY
+  drift-protection rule). Every substantive task runs all 7 phases
+  before a terminal action. The destination_check is the soft side
+  (periodic LLM judgement); the track_check gates `git commit` on a
+  state key that the runtime updates each time `log_phase` fires.

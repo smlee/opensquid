@@ -1,0 +1,63 @@
+# git — Sangmin's git hygiene rules.
+#
+# Three drift gates ported from bundled-default/codex.yaml drifts[0,1,3]
+# (never-amend / no-implicit-push / no-force-push-main). Each fires when
+# the host invokes Bash with a matching command. Drift response is
+# `block_tool` per drift_response.yaml — refuse the one tool call rather
+# than halting the whole task.
+name: git
+load: lazy
+when_to_load:
+  - tool_match: Bash
+rules:
+  - id: never-amend
+    process:
+      - call: match_command
+        args:
+          pattern: 'git\s+commit\b[^\n]*\s--amend\b'
+          target: tool_args.command
+        as: hit
+      - call: verdict
+        if: hit
+        args:
+          level: block
+          message: >-
+            BLOCKED: `git commit --amend` violates the never-amend rule.
+            Even on unpushed commits — make a follow-up commit instead.
+            Override only if the user explicitly requested an amend in
+            THIS turn.
+
+  - id: no-implicit-push
+    process:
+      - call: match_command
+        args:
+          pattern: 'git\s+push\b'
+          target: tool_args.command
+        as: hit
+      - call: verdict
+        if: hit
+        args:
+          level: block
+          message: >-
+            BLOCKED: `git push` requires explicit user authorization.
+            Commits stay local until the user says push.
+
+  - id: no-force-push-main
+    process:
+      - call: match_command
+        args:
+          pattern: 'git\s+push\b[^\n]*(--force|-f)\b[^\n]*\b(main|master)\b'
+          target: tool_args.command
+        as: hit
+      - call: verdict
+        if: hit
+        args:
+          level: block
+          message: >-
+            BLOCKED: force-push to main/master is destructive. Requires
+            explicit user request — and even then, prefer a regular push
+            or a new branch.
+prose: |
+  Git hygiene rules. The three blocks above are the locked floor; the
+  user can override on a per-command basis when they have a genuine
+  reason (e.g. a pre-authorized push).

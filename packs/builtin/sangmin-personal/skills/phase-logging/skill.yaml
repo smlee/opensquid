@@ -1,0 +1,71 @@
+# phase-logging — three claim rules that gate on opensquid-internal tools.
+#
+# Ports lines 253–287 of bundled-default/codex.yaml:
+#   - version-slot-assignment (announces minor/major bump → notify_and_pause)
+#   - phase-claim-forward (announces "Phase N — phase_name" → expect log_phase)
+#   - session-no-task (announces "I'll execute" → expect TaskCreate/Update)
+#
+# These three live in their own skill because they gate on
+# opensquid-internal tool calls (mcp__opensquid__log_phase,
+# TaskCreate/TaskUpdate, AskUserQuestion) rather than on shell commands.
+# Drift response policy per drift_response.yaml.
+name: phase-logging
+load: preload
+when_to_load: []
+rules:
+  - id: version-slot-assignment
+    process:
+      - call: last_assistant_message
+        as: msg
+      - call: match_command
+        args:
+          pattern: '\b(?:next\s+minor|next\s+major|bump(?:ing)?\s+(?:to\s+)?(?:minor|major)|ships?\s+as\s+v?[0-9]+\.[0-9]+\.[0-9]+)\b'
+          target: tool_args.msg
+        as: claimed
+      - call: verdict
+        if: claimed
+        args:
+          level: warn
+          message: >-
+            ASK the user before naming a non-patch version slot
+            (call AskUserQuestion); never pick v0.8/v0.9/v1.0
+            unilaterally.
+
+  - id: phase-claim-forward
+    process:
+      - call: last_assistant_message
+        as: msg
+      - call: match_command
+        args:
+          pattern: '\bPhase\s+[1-7](?:\s*\/\s*7)?\s*[—\-:]\s*(?:pre[_-]?research|learn|code|test|audit|post[_-]?research|fix)\b'
+          target: tool_args.msg
+        as: claimed
+      - call: verdict
+        if: claimed
+        args:
+          level: warn
+          message: >-
+            call mcp__opensquid__log_phase for the phase you announced
+
+  - id: session-no-task
+    process:
+      - call: last_assistant_message
+        as: msg
+      - call: match_command
+        args:
+          pattern: "\\b(?:let\\s+me\\s+(?:run|execute|implement|fix|build|wire)|now\\s+i'?ll\\s+(?:run|implement|fix|build|wire))\\b"
+          target: tool_args.msg
+        as: claimed
+      - call: verdict
+        if: claimed
+        args:
+          level: warn
+          message: >-
+            create or update a task (TaskCreate/TaskUpdate) before doing
+            substantive work — keeps the workflow-gate enforceable
+prose: |
+  Phase-logging discipline. Three claim gates that the agent should
+  back with a structured tool call rather than a free-text assertion:
+  version-slot allocation, phase announcement, and session-task
+  creation. All warn-level — the agent learns to swap free-text for
+  the right tool call.
