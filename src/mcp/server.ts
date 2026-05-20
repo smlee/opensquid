@@ -4,11 +4,12 @@
  *
  * Exposes the Phase-1 read-only tool set:
  *
- *   list_packs       — currently active packs
- *   list_skills      — skills (optionally scoped to a pack)
- *   inspect_skill    — rules + load conditions + drift policy for one skill
- *   read_state       — read a session state key (functions/state.ts companion)
- *   read_violations  — return session violations.jsonl contents
+ *   list_packs         — currently active packs
+ *   list_skills        — skills (optionally scoped to a pack)
+ *   inspect_skill      — rules + load conditions + drift policy for one skill
+ *   read_state         — read a session state key (functions/state.ts companion)
+ *   read_violations    — return session violations.jsonl contents
+ *   list_drift_events  — aggregated drift catalog across packs + session (Task 5.4)
  *
  * Mutations (write_state, append_log, promote_lesson, …) are intentionally
  * NOT exposed via MCP in Phase 1. Those live behind the hook bindings + rule
@@ -37,6 +38,7 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 import { handleInspectSkill } from './tools/inspect-skill.js';
+import { handleListDriftEvents } from './tools/list-drift-events.js';
 import { handleListPacks } from './tools/list-packs.js';
 import { handleListSkills } from './tools/list-skills.js';
 import { handleReadState } from './tools/read-state.js';
@@ -67,6 +69,10 @@ const ToolHandlers = {
     schema: z.object({}),
     handle: () => handleReadViolations(),
   },
+  list_drift_events: {
+    schema: z.object({ packs: z.array(z.string()).optional() }),
+    handle: (args: { packs?: string[] }) => handleListDriftEvents(args),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -79,6 +85,7 @@ const descriptions: Record<ToolName, string> = {
   inspect_skill: 'Show rules, load conditions, drift policy of a skill',
   read_state: 'Read a session state key',
   read_violations: 'Read the session violations.jsonl',
+  list_drift_events: 'List drift events aggregated across packs + session',
 };
 
 async function main(): Promise<void> {

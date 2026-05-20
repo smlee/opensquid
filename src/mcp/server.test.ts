@@ -16,14 +16,15 @@
  * protocol.
  *
  * Cases:
- *   1. tools/list returns exactly the 5 Phase-1 tools, each with an object
- *      JSON Schema.
+ *   1. tools/list returns exactly the 6 read-only tools, each with an object
+ *      JSON Schema (5 Phase-1 + `list_drift_events` from Task 5.4).
  *   2. list_packs returns "no packs loaded" (Phase 1 stub).
  *   3. list_skills (no args) returns "no skills loaded".
  *   4. inspect_skill missing required arg → JSON-RPC error.
  *   5. read_state on a pre-written key returns the JSON body.
  *   6. read_state on a missing key returns "null".
  *   7. read_violations with no log file returns "".
+ *   8. list_drift_events on a pre-populated pack catalog returns the merged JSON.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -182,13 +183,14 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns 5 Phase-1 tools with JSON Schema', async () => {
+  it('tools/list returns the 6 read-only tools with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
     const names = result.tools.map((t) => t.name).sort();
     expect(names).toEqual([
       'inspect_skill',
+      'list_drift_events',
       'list_packs',
       'list_skills',
       'read_state',
@@ -261,5 +263,35 @@ describe('opensquid-mcp subprocess', () => {
     expect(r.error).toBeUndefined();
     const out = r.result as ToolCallResult;
     expect(out.content[0]?.text).toBe('');
+  }, 15_000);
+
+  it('list_drift_events aggregates a pre-populated pack catalog with session catalog', async () => {
+    // Seed one pack catalog + one session catalog under the per-test HOME.
+    const packDir = join(home, 'packs', 'pack-a', 'state');
+    await mkdir(packDir, { recursive: true });
+    await writeFile(
+      join(packDir, 'drift-catalog.jsonl'),
+      `${JSON.stringify({ timestamp: '2026-05-19T10:00:00Z', ruleId: 'r1', level: 'block', message: 'from a' })}\n`,
+      'utf8',
+    );
+    await writeFile(
+      join(home, 'sessions', sessionId, 'state', 'drift-catalog.jsonl'),
+      `${JSON.stringify({ timestamp: '2026-05-19T09:00:00Z', ruleId: 'r2', level: 'warn', message: 'from session' })}\n`,
+      'utf8',
+    );
+
+    const r = await client.request('tools/call', {
+      name: 'list_drift_events',
+      arguments: { packs: ['pack-a'] },
+    });
+    expect(r.error).toBeUndefined();
+    const out = r.result as ToolCallResult;
+    const events = JSON.parse(out.content[0]?.text ?? '[]') as {
+      timestamp: string;
+      pack: string;
+      ruleId: string;
+    }[];
+    // Chronological order: session@09 → pack-a@10.
+    expect(events.map((e) => `${e.pack}|${e.ruleId}`)).toEqual(['<session>|r2', 'pack-a|r1']);
   }, 15_000);
 });

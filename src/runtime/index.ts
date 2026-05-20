@@ -23,3 +23,9 @@ export { prefilterSkills, type PrefilterOptions } from './skill_prefilter.js';
 export { routeSkills } from './skill_router.js';
 export { partitionSkills, type SkillSet } from './pinned_skills.js';
 export { maybeRunDestinationChecks, destinationRuleKey } from './destination_scheduler.js';
+
+// Roll-up drift catalogs across pack layers (Task 5.4) — aggregates each
+// pack's `drift-catalog.jsonl` plus the session-level catalog into one
+// chronologically sorted view with `pack` provenance preserved. Backs the
+// `list_drift_events` MCP tool.
+export { readAllDriftCatalogs, type DriftEvent } from './drift_catalog.js';
