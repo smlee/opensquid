@@ -45,6 +45,50 @@ export const ManifestScope = z.enum(['universal', 'domain', 'specialty', 'workfl
 export type ManifestScope = z.infer<typeof ManifestScope>;
 
 // ---------------------------------------------------------------------------
+// Rate limits — pack-declared per-trigger caps enforced by `RateLimiter`
+// (AUTO.2). Keyed by the same `TriggerKind` literals from `runtime/event.ts`
+// so a typo (`per: "5 minutes"`, `webhok: ...`) fails the `.strict()` /
+// enum validators at load instead of silently defaulting to unlimited.
+//
+// Per-trigger config: `max` and `per` are required; `concurrent` defaults
+// to "no cap". The `per` enum is sealed at `minute|hour|day` — anything
+// finer is out-of-scope for AUTO.2 (the dispatch sources fire at second
+// granularity at the fastest, and an explicit enum rejects authoring
+// mistakes loudly).
+//
+// Block-missing semantics: undefined → unlimited for every trigger (no
+// regression for any Phase 1–7 pack authored before AUTO.2). Per-trigger
+// keys are also individually optional inside the block — a pack can
+// declare only `schedule:` and leave `webhook:` unlimited.
+// ---------------------------------------------------------------------------
+
+export const RateLimitPeriod = z.enum(['minute', 'hour', 'day']);
+export type RateLimitPeriod = z.infer<typeof RateLimitPeriod>;
+
+const RateLimitTriggerConfig = z
+  .object({
+    max: z.number().int().positive(),
+    per: RateLimitPeriod,
+    concurrent: z.number().int().positive().optional(),
+  })
+  .strict();
+export type RateLimitTriggerConfig = z.infer<typeof RateLimitTriggerConfig>;
+
+export const RateLimits = z
+  .object({
+    tool_call: RateLimitTriggerConfig.optional(),
+    prompt_submit: RateLimitTriggerConfig.optional(),
+    session_end: RateLimitTriggerConfig.optional(),
+    stop: RateLimitTriggerConfig.optional(),
+    schedule: RateLimitTriggerConfig.optional(),
+    webhook: RateLimitTriggerConfig.optional(),
+    inbound_channel: RateLimitTriggerConfig.optional(),
+    file_changed: RateLimitTriggerConfig.optional(),
+  })
+  .strict();
+export type RateLimits = z.infer<typeof RateLimits>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -67,6 +111,10 @@ export const Manifest = z
     conflicts: z.array(z.string()).default([]),
     extends: z.string().optional(),
     evolves: z.boolean().default(true),
+    // AUTO.2: optional `rate_limits:` block. Block absent → unlimited for
+    // every trigger (back-compat with every Phase 1–7 pack). Block present
+    // → only the declared trigger keys are limited; others remain unlimited.
+    rate_limits: RateLimits.optional(),
   })
   .strict();
 export type Manifest = z.infer<typeof Manifest>;

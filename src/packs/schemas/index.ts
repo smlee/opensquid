@@ -22,8 +22,14 @@
  */
 
 // manifest.yaml
-export { Manifest, ManifestScope } from './manifest.js';
-export type { Manifest as ManifestType, ManifestScope as ManifestScopeType } from './manifest.js';
+export { Manifest, ManifestScope, RateLimitPeriod, RateLimits } from './manifest.js';
+export type {
+  Manifest as ManifestType,
+  ManifestScope as ManifestScopeType,
+  RateLimitPeriod as RateLimitPeriodType,
+  RateLimits as RateLimitsType,
+  RateLimitTriggerConfig as RateLimitTriggerConfigType,
+} from './manifest.js';
 
 // models.yaml
 export { ModelAlias, ModelImpl, ModelMode, ModelsConfig } from './models.js';

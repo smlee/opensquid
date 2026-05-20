@@ -94,4 +94,116 @@ describe('Manifest schema', () => {
       expect(result.success).toBe(true);
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // AUTO.2 — `rate_limits:` block.
+  //
+  // The block is fully optional (block-missing = unlimited for every trigger,
+  // back-compat). Inside the block, every trigger key is also individually
+  // optional. Required validation centres on: `per` is the sealed
+  // minute|hour|day enum; `max` and `concurrent` are positive integers; typos
+  // in trigger keys fail `.strict()`; the locked enum rejects `"5 minutes"`.
+  // ---------------------------------------------------------------------------
+
+  it('accepts a manifest with no rate_limits block (back-compat)', () => {
+    const result = Manifest.parse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+    });
+    expect(result.rate_limits).toBeUndefined();
+  });
+
+  it('parses a full rate_limits block matching the spec example', () => {
+    const result = Manifest.parse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      rate_limits: {
+        schedule: { max: 1, per: 'minute', concurrent: 1 },
+        webhook: { max: 60, per: 'minute', concurrent: 5 },
+        inbound_channel: { max: 30, per: 'minute' },
+        file_changed: { max: 100, per: 'minute' },
+      },
+    });
+    expect(result.rate_limits?.schedule).toEqual({ max: 1, per: 'minute', concurrent: 1 });
+    expect(result.rate_limits?.inbound_channel?.concurrent).toBeUndefined();
+  });
+
+  it('rejects rate_limits.schedule.per = "5 minutes" (sealed enum)', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      rate_limits: { schedule: { max: 1, per: '5 minutes' } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path.includes('per'));
+      expect(issue).toBeDefined();
+    }
+  });
+
+  it('rejects rate_limits with negative max', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      rate_limits: { schedule: { max: -1, per: 'minute' } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects rate_limits with zero concurrent', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      rate_limits: { schedule: { max: 10, per: 'minute', concurrent: 0 } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('strict mode rejects an unknown trigger key inside rate_limits', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      rate_limits: { webhok: { max: 1, per: 'minute' } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === 'unrecognized_keys')).toBe(true);
+    }
+  });
+
+  it('strict mode rejects an unknown key inside a per-trigger config', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      rate_limits: { schedule: { max: 1, per: 'minute', burst: 5 } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts hour and day periods (full enum coverage)', () => {
+    for (const per of ['minute', 'hour', 'day'] as const) {
+      const result = Manifest.safeParse({
+        name: 'p',
+        version: '0.1.0',
+        scope: 'workflow',
+        goal: 'x',
+        rate_limits: { schedule: { max: 1, per } },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
 });
