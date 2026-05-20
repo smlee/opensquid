@@ -27,3 +27,6 @@ export {
   type BufferCategory,
   type BufferEntry,
 } from './automation_buffer.js';
+
+// Task 7.3
+export { shouldPromote, type OutcomeSignal, type PromotionThreshold } from './promote.js';
