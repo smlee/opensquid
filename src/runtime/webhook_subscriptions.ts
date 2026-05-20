@@ -74,6 +74,13 @@ const SubscriptionYaml = z
     /** Severity tier for routing — also stamped on `ChannelMessage`. */
     severity: SeveritySpec.optional(),
     rate_limit: RateLimitSpec.optional(),
+    /** ISO-8601 audit timestamps stamped by the CLI (CLI.3). The daemon
+     *  parses but does not act on them — they exist so subscription
+     *  records have a single source of truth on disk. Forward-compatible
+     *  additions go through explicit `.optional()` fields, NOT
+     *  `.passthrough()`, so typos still surface at load. */
+    created_at: z.string().datetime().optional(),
+    rotated_at: z.string().datetime().optional(),
   })
   .strict()
   .superRefine((sub, ctx) => {

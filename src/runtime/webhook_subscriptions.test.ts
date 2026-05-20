@@ -215,6 +215,99 @@ describe('loadWebhookSubscriptions', () => {
     );
   });
 
+  it('accepts ISO-8601 created_at + rotated_at (CLI.3 audit timestamps)', async () => {
+    const path = join(tmpRoot, 'with-timestamps.yaml');
+    const createdAt = new Date('2026-05-20T12:34:56.789Z').toISOString();
+    const rotatedAt = new Date('2026-05-20T13:45:01.000Z').toISOString();
+    await writeFile(
+      path,
+      [
+        'subscriptions:',
+        '  - id: stripe-events',
+        '    pack: billing',
+        '    skill: stripe-router',
+        '    secret: env:STRIPE_WH',
+        '    deliver_only: false',
+        `    created_at: "${createdAt}"`,
+        `    rotated_at: "${rotatedAt}"`,
+      ].join('\n'),
+      'utf8',
+    );
+    const subs = await loadWebhookSubscriptions(
+      path,
+      stubResolver({ 'env:STRIPE_WH': 'sk_test_abc' }),
+    );
+    expect(subs).toHaveLength(1);
+    // Audit timestamps are parsed but not surfaced on the runtime Subscription
+    // (daemon-side single-responsibility — they're CLI's audit concern).
+    expect(subs[0]).toMatchObject({
+      id: 'stripe-events',
+      signingSecret: 'sk_test_abc',
+    });
+  });
+
+  it('accepts a subscription without timestamps (back-compat with pre-CLI.3 YAML)', async () => {
+    const path = join(tmpRoot, 'no-timestamps.yaml');
+    await writeFile(
+      path,
+      ['subscriptions:', '  - id: legacy', '    pack: p', '    skill: s', '    secret: env:K'].join(
+        '\n',
+      ),
+      'utf8',
+    );
+    const subs = await loadWebhookSubscriptions(path, stubResolver({ 'env:K': 'v' }));
+    expect(subs).toHaveLength(1);
+    expect(subs[0]?.id).toBe('legacy');
+  });
+
+  it('rejects a malformed created_at (not ISO-8601)', async () => {
+    const path = join(tmpRoot, 'bad-timestamp.yaml');
+    await writeFile(
+      path,
+      [
+        'subscriptions:',
+        '  - id: a',
+        '    pack: p',
+        '    skill: s',
+        '    secret: env:K',
+        '    created_at: "not-a-real-date"',
+      ].join('\n'),
+      'utf8',
+    );
+    await expect(loadWebhookSubscriptions(path, stubResolver({ 'env:K': 'v' }))).rejects.toThrow(
+      WebhookSubscriptionError,
+    );
+  });
+
+  it('round-trips a CLI.3-written subscription (Patch A regression)', async () => {
+    // Mimic exactly what CLI.3 writes via webhooks_state.ts:
+    // `secret: literal:<hex>` + `created_at: <toISOString()>`.
+    const path = join(tmpRoot, 'cli-written.yaml');
+    const hex = 'a'.repeat(64);
+    const createdAt = new Date().toISOString();
+    await writeFile(
+      path,
+      [
+        'subscriptions:',
+        '  - id: gh-events',
+        '    pack: ci-monitor',
+        '    skill: gh-router',
+        `    secret: literal:${hex}`,
+        `    created_at: "${createdAt}"`,
+      ].join('\n'),
+      'utf8',
+    );
+    const subs = await loadWebhookSubscriptions(path, stubResolver({ [`literal:${hex}`]: hex }));
+    expect(subs).toHaveLength(1);
+    expect(subs[0]).toMatchObject({
+      id: 'gh-events',
+      pack: 'ci-monitor',
+      skill: 'gh-router',
+      signingSecret: hex,
+      deliverOnly: false,
+    });
+  });
+
   it('redact() never contains the resolved secret', async () => {
     const SECRET = 'TOP-SECRET-NEVER-LEAK';
     const sub = await loadWebhookSubscriptions(
