@@ -55,7 +55,7 @@ export interface CapabilityRequest {
 
 export interface CapabilityVerdict {
   allowed: boolean;
-  source: 'declared' | 'user_approved' | 'denied' | 'denylist';
+  source: 'declared' | 'user_approved' | 'user_override' | 'denied' | 'denylist';
   message?: string;
 }
 export type PromptCallback = (req: CapabilityRequest) => Promise<boolean>;
@@ -65,6 +65,24 @@ export interface PackPermissions {
   name: string;
   permissions?: PermissionsType;
 }
+
+/**
+ * User-side capability override (CLI.4). Persisted in
+ * `~/.opensquid/permission_overrides.yaml` and merged into the gate by
+ * `applyOverrides()` (see `src/setup/cli/permissions_state.ts`).
+ *
+ * Each override grants `(pack, capability, target-glob)`. The CLI is
+ * forbidden from persisting overrides that match the built-in denylist —
+ * the gate still applies its built-in deny FIRST, so even a malicious
+ * write to the overrides file can never escape the sealed denylist
+ * unless `OPENSQUID_TRUST_BUILTIN_DENY=0` is set.
+ */
+export interface UserOverride {
+  pack: string;
+  capability: Capability;
+  target: string;
+}
+
 export interface CapabilityGateOpts {
   packs: Map<string, PackPermissions>;
   prompt?: PromptCallback;
@@ -73,6 +91,12 @@ export interface CapabilityGateOpts {
   trustBuiltinDeny?: boolean;
   /** Override `~/...` expansion target (defaults to os.homedir()). */
   homeDir?: string;
+  /**
+   * User-side overrides (CLI.4). Applied AFTER built-in deny + pack
+   * deny, BEFORE pack allowlist. Override-matched verdicts carry
+   * `source: 'user_override'` for audit-log triage.
+   */
+  overrides?: readonly UserOverride[];
 }
 
 function noopAudit(): void {
@@ -111,6 +135,7 @@ export class CapabilityGate {
   private readonly auditLogFn: AuditLog;
   private readonly trustBuiltinDeny: boolean;
   private readonly homeDir: string;
+  private readonly overrides: readonly UserOverride[];
 
   constructor(opts: CapabilityGateOpts) {
     this.packs = opts.packs;
@@ -118,6 +143,7 @@ export class CapabilityGate {
     this.auditLogFn = opts.auditLog ?? noopAudit;
     this.trustBuiltinDeny = opts.trustBuiltinDeny ?? trustBuiltinDeny();
     this.homeDir = opts.homeDir ?? homedir();
+    this.overrides = opts.overrides ?? [];
   }
 
   async check(req: CapabilityRequest): Promise<CapabilityVerdict> {
@@ -130,17 +156,74 @@ export class CapabilityGate {
       }
     }
 
-    if (!block) return this.handleUndeclared(req);
-
-    const packDeny = this.matchPackDeny(req, block);
-    if (packDeny) {
-      return this.audit({ allowed: false, source: 'denylist', message: packDeny }, req);
+    // Pack-local deny wins over user overrides (a pack author explicitly
+    // forbidding a pattern shouldn't be silently undermined by an old
+    // override file). User override wins over pack allowlist gaps.
+    if (block) {
+      const packDeny = this.matchPackDeny(req, block);
+      if (packDeny) {
+        return this.audit({ allowed: false, source: 'denylist', message: packDeny }, req);
+      }
     }
+
+    const override = this.matchOverride(req);
+    if (override) {
+      return this.audit({ allowed: true, source: 'user_override', message: override }, req);
+    }
+
+    if (!block) return this.handleUndeclared(req);
 
     const declared = this.matchAllowlist(req, block);
     if (declared) return this.audit({ allowed: true, source: 'declared', message: declared }, req);
 
     return this.handleUndeclared(req);
+  }
+
+  private matchOverride(req: CapabilityRequest): string | null {
+    for (const o of this.overrides) {
+      if (o.pack !== req.pack) continue;
+      if (o.capability !== req.capability) continue;
+      // http_request override: hostname-exact OR `*.<suffix>` (parity with
+      // pack allowlist; never raw-URL glob — foot-gun guard).
+      if (req.capability === 'http_request') {
+        const url = safeParseUrl(req.target);
+        if (url === null) continue;
+        if (matchHostname(url.hostname, o.target)) {
+          return `user override: ${url.hostname} matches "${o.target}"`;
+        }
+        continue;
+      }
+      // file_write override: ~-expand + minimatch with dot:true (parity
+      // with declared allowlist + pack-local deny matchPathList).
+      if (req.capability === 'file_write') {
+        const expanded = resolve(expandHome(req.target, this.homeDir));
+        const expandedPattern = resolve(expandHome(o.target, this.homeDir));
+        if (minimatch(expanded, expandedPattern, { dot: true })) {
+          return `user override: matches "${o.target}"`;
+        }
+        continue;
+      }
+      // shell_exec override: exact OR glob, but the SHELL_METACHARACTERS
+      // gate still applies (an override cannot un-block metachars unless
+      // it's an exact-match like the declared allowlist semantic).
+      if (req.capability === 'shell_exec') {
+        if (o.target === req.target) return `user override exact: "${o.target}"`;
+        let hasMeta = false;
+        for (const meta of SHELL_METACHARACTERS) {
+          if (req.target.includes(meta)) {
+            hasMeta = true;
+            break;
+          }
+        }
+        if (hasMeta) continue;
+        if (minimatch(req.target, o.target)) return `user override glob: "${o.target}"`;
+        continue;
+      }
+      // send_message / subprocess_call / subagent_call → minimatch glob
+      // on the raw target (parity with `matchGlobList`).
+      if (minimatch(req.target, o.target)) return `user override: matches "${o.target}"`;
+    }
+    return null;
   }
 
   private matchBuiltinDeny(req: CapabilityRequest): string | null {

@@ -19,6 +19,7 @@ import { Command } from 'commander';
 
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
+import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
 import { registerTriggers } from './setup/cli/triggers.js';
@@ -27,7 +28,7 @@ import { registerWebhooks } from './setup/cli/webhooks.js';
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.80');
+  .version('0.5.81');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -114,6 +115,15 @@ registerTriggers(program);
 // rewrite. Daemon picks up changes on next reload; runtime resolver
 // needs `literalBackend()` registered (wired in setup phase).
 registerWebhooks(program);
+
+// CLI.4 — `opensquid permissions list|audit|grant|revoke`. Surfaces the
+// AUTO.3 capability gate's pack-declared permissions block + user-side
+// override file at `~/.opensquid/permission_overrides.yaml`. The CLI
+// blocks grants that match the sealed built-in denylist unless
+// `OPENSQUID_TRUST_BUILTIN_DENY=0` (which the gate also honors).
+// `audit` reads `~/.opensquid/permission_audit.jsonl` (file-based);
+// CLI.5 ships the libsql `audit_log` table that supersedes this sink.
+registerPermissions(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
