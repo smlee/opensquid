@@ -111,7 +111,11 @@ export class Resumer {
   private readonly store: CheckpointStore;
   private readonly evaluator: RunEvaluator;
   private readonly resolver: RuleResolver;
+  /** Primary sink supplied at construction. Patch C adds `additionalSinks`
+   *  via `attachAuditSink` so the daemon can fan-out resumer events into
+   *  its unified `AuditLog` without rebuilding the Resumer. */
   private readonly auditLog: AuditSink;
+  private readonly additionalSinks: AuditSink[] = [];
   private readonly resumeWindowMs: number;
   private readonly nowMs: () => number;
 
@@ -123,6 +127,28 @@ export class Resumer {
     this.resumeWindowMs =
       opts.resumeWindowMs ?? readResumeWindowFromEnv() ?? DEFAULT_RESUME_WINDOW_MS;
     this.nowMs = opts.nowMs ?? Date.now;
+  }
+
+  /** Patch C — daemon-side wiring hook. Attaches an additional audit sink
+   *  that fires AFTER the primary sink for every emitted entry. Multiple
+   *  attaches accumulate; no detach (daemon lifetime owns the Resumer).
+   *  Errors thrown from attached sinks are swallowed so a downstream
+   *  AuditLog hiccup never blocks the primary audit path. */
+  attachAuditSink(sink: AuditSink): void {
+    this.additionalSinks.push(sink);
+  }
+
+  /** Internal — fan-out wrapper used by every audit emit site. */
+  private emit(entry: AuditEntry): void {
+    this.auditLog(entry);
+    for (const sink of this.additionalSinks) {
+      try {
+        sink(entry);
+      } catch {
+        /* swallow — attached sinks (e.g. unified AuditLog) must not
+           influence primary audit flow. C10 / patch B discipline. */
+      }
+    }
   }
 
   /** Discover interrupted runs in the configured resume window. */
@@ -150,11 +176,11 @@ export class Resumer {
       // Resolver returns null when the pack / skill / rule can't be
       // found. Default reason is `pack_missing` (most common cause);
       // the resolver can surface richer detail via its own audit hook.
-      this.auditLog({ event: 'resume_skipped', runId: run.runId, reason: 'pack_missing' });
+      this.emit({ event: 'resume_skipped', runId: run.runId, reason: 'pack_missing' });
       return { resumed: false, reason: 'pack_missing' };
     }
     if (resolved.packVersion !== run.packVersion) {
-      this.auditLog({
+      this.emit({
         event: 'resume_skipped',
         runId: run.runId,
         reason: 'pack_version_mismatch',
@@ -167,7 +193,7 @@ export class Resumer {
     try {
       await this.evaluator({ manifest, bindings, entryStepIdx });
     } catch (err) {
-      this.auditLog({
+      this.emit({
         event: 'resume_skipped',
         runId: run.runId,
         reason: 'evaluator_error',
@@ -175,7 +201,7 @@ export class Resumer {
       });
       return { resumed: false, reason: 'evaluator_error' };
     }
-    this.auditLog({
+    this.emit({
       event: 'resume_run',
       runId: run.runId,
       packId: run.packId,
@@ -197,7 +223,7 @@ export class Resumer {
       if (r.resumed) resumed += 1;
       else skippedOther += 1;
     }
-    this.auditLog({
+    this.emit({
       event: 'resume_summary',
       scanned: interrupted.length,
       resumed,
@@ -213,7 +239,7 @@ export class Resumer {
       if (!m) {
         // Orphan checkpoint: rule dispatcher forgot `recordRunStart`.
         // Programmer error, not a normal recovery path → always audit.
-        this.auditLog({ event: 'resume_skipped', runId: s.runId, reason: 'manifest_missing' });
+        this.emit({ event: 'resume_skipped', runId: s.runId, reason: 'manifest_missing' });
         continue;
       }
       out.push({

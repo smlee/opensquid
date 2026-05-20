@@ -29,13 +29,16 @@
  *  11. status() returns running with the pid file when read out-of-process.
  */
 
+import { createHmac } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createClient, type Client } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { OpenSquidDaemon, type DaemonAuditEntry } from './daemon.js';
+import type { AuditEntry as ResumerAuditEntry } from './durable/resumer.js';
 import type { Event } from './event.js';
 import { daemonLockPath, daemonPidPath } from './paths.js';
 import type { RateLimiter } from './rate_limit.js';
@@ -435,5 +438,210 @@ describe('OpenSquidDaemon — DURABLE.4 resumer hook', () => {
     });
     await expect(refresh.start()).resolves.toBeUndefined();
     await refresh.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Patch C — daemon owns the unified `AuditLog` lifecycle
+// ---------------------------------------------------------------------------
+
+/** Wait one microtask + setImmediate so any `void auditLog.append(...)`
+ *  promises queued by the adapter fan-out actually resolve before we
+ *  query the libsql client. Mirrors `audit_adapters.test.ts:flush`. */
+async function flushAudit(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function sign(secret: string, body: string): string {
+  return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+}
+
+describe('OpenSquidDaemon — Patch C unified AuditLog lifecycle', () => {
+  it('start() opens + init AuditLog; stop() releases the daemon-owned client', async () => {
+    const audit: Client = createClient({ url: ':memory:' });
+    // Inject the client; daemon must NOT close it on stop (ownership = caller).
+    const d = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      auditClient: audit,
+      dispatch: () => Promise.resolve(),
+    });
+    expect(d.getAuditLog()).toBeNull();
+    await d.start();
+    const log = d.getAuditLog();
+    expect(log).not.toBeNull();
+    // init() created the audit_log table — assert via sqlite_master.
+    const rs = await audit.execute(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_log'",
+    );
+    expect(rs.rows).toHaveLength(1);
+    await d.stop();
+    expect(d.getAuditLog()).toBeNull();
+    // Caller-injected client must still be usable — daemon didn't close it.
+    const rs2 = await audit.execute('SELECT COUNT(*) AS c FROM audit_log');
+    expect(rs2.rows).toHaveLength(1);
+    audit.close();
+  });
+
+  it('webhook accept lands in the unified audit_log table via the daemon', async () => {
+    const audit: Client = createClient({ url: ':memory:' });
+    const SECRET = 'hook-secret-1';
+    const d = newDaemon({
+      packs: [],
+      subscriptions: [
+        {
+          id: 'wh-accept',
+          pack: 'p',
+          skill: 's',
+          signingSecret: SECRET,
+          deliverOnly: false,
+        },
+      ],
+      webhookPort: 0,
+      auditClient: audit,
+      dispatch: () => Promise.resolve(),
+    });
+    await d.start();
+    const port = d.webhookBoundPort();
+    expect(port).toBeGreaterThan(0);
+    const body = JSON.stringify({ patch: 'C' });
+    const res = await fetch(`http://127.0.0.1:${String(port)}/webhook/wh-accept`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-opensquid-signature': sign(SECRET, body),
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    await flushAudit();
+    const log = d.getAuditLog();
+    expect(log).not.toBeNull();
+    if (!log) return;
+    const rows = await log.query({ category: 'webhook' });
+    // received + dispatched both land in the unified table.
+    const subtypes = rows.map((r) => r.detail.event_subtype);
+    expect(subtypes).toContain('received');
+    expect(subtypes).toContain('dispatched');
+    // Discipline: the signing secret never reaches the unified log.
+    expect(JSON.stringify(rows)).not.toContain(SECRET);
+    await d.stop();
+    audit.close();
+  });
+
+  it('resumer events fan out into the unified audit_log table', async () => {
+    const audit: Client = createClient({ url: ':memory:' });
+    // Resumer-shaped stub with `attachAuditSink` so the daemon can fan-out.
+    type AttachedSink = (entry: ResumerAuditEntry) => void;
+    const attached: AttachedSink[] = [];
+    const resumerStub = {
+      attachAuditSink: (sink: AttachedSink) => {
+        attached.push(sink);
+      },
+      resumeOnStartup: (): Promise<{ resumed: number; skipped: number }> => {
+        // Emit one resume_run + one resume_summary through every attached sink.
+        for (const s of attached) {
+          s({
+            event: 'resume_run',
+            runId: 'r-patch-c',
+            packId: 'pack-Z',
+            fromStepIdx: 2,
+          });
+          s({ event: 'resume_summary', scanned: 1, resumed: 1, skippedOther: 0 });
+        }
+        return Promise.resolve({ resumed: 1, skipped: 0 });
+      },
+    };
+    const d = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      auditClient: audit,
+      resumer: resumerStub as unknown as NonNullable<Parameters<typeof newDaemon>[0]['resumer']>,
+      dispatch: () => Promise.resolve(),
+    });
+    await d.start();
+    await flushAudit();
+    const log = d.getAuditLog();
+    expect(log).not.toBeNull();
+    if (!log) return;
+    const rows = await log.query({ category: 'resume' });
+    const subtypes = rows.map((r) => r.detail.event_subtype).sort();
+    expect(subtypes).toEqual(['resume_run', 'resume_summary']);
+    const runRow = rows.find((r) => r.detail.event_subtype === 'resume_run');
+    expect(runRow?.packId).toBe('pack-Z');
+    expect(runRow?.decision).toBe('success');
+    await d.stop();
+    audit.close();
+  });
+
+  it('getAuditLog(): null → instance → null across start/stop lifecycle', async () => {
+    const audit: Client = createClient({ url: ':memory:' });
+    const d = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      auditClient: audit,
+      dispatch: () => Promise.resolve(),
+    });
+    expect(d.getAuditLog()).toBeNull();
+    await d.start();
+    expect(d.getAuditLog()).not.toBeNull();
+    await d.stop();
+    expect(d.getAuditLog()).toBeNull();
+    audit.close();
+  });
+
+  it('caller-provided auditClient is NOT closed by daemon.stop() (ownership boundary)', async () => {
+    const audit: Client = createClient({ url: ':memory:' });
+    const d = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      auditClient: audit,
+      dispatch: () => Promise.resolve(),
+    });
+    await d.start();
+    await d.stop();
+    // If the daemon had closed it, this would throw — `@libsql/client`'s
+    // memory backend rejects execute() on a closed client.
+    const rs = await audit.execute('SELECT 1 AS x');
+    expect(rs.rows[0]?.x).toBe(1);
+    audit.close();
+  });
+
+  it('daemon-owned auditClient is opened from OPENSQUID_HOME and persists across stop()', async () => {
+    // No auditClient → daemon opens its own at OPENSQUID_HOME/opensquid.db.
+    // Verify the file appears + the daemon's getAuditLog populates rows.
+    const d = newDaemon({
+      packs: [],
+      subscriptions: [],
+      webhookPort: 0,
+      dispatch: () => Promise.resolve(),
+    });
+    await d.start();
+    const log = d.getAuditLog();
+    expect(log).not.toBeNull();
+    if (!log) return;
+    await log.append({
+      occurredAtMs: Date.now(),
+      category: 'webhook',
+      decision: 'success',
+      detail: { marker: 'patch-c-owned' },
+    });
+    await d.stop();
+    // After daemon.stop() the daemon-owned client is closed (and the
+    // AuditLog instance is null) — re-open from disk and confirm the
+    // row survived the close.
+    const dbPath = join(tmpRoot, 'opensquid.db');
+    await expect(stat(dbPath)).resolves.toBeDefined();
+    const reopen: Client = createClient({ url: `file:${dbPath}` });
+    const rs = await reopen.execute(
+      "SELECT detail_json FROM audit_log WHERE detail_json LIKE '%patch-c-owned%'",
+    );
+    expect(rs.rows).toHaveLength(1);
+    reopen.close();
   });
 });

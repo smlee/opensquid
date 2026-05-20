@@ -22,13 +22,17 @@
  */
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
+import { createClient, type Client } from '@libsql/client';
 import cron from 'node-cron';
 import { lock as acquireLock } from 'proper-lockfile';
 
 import type { NotificationRouter } from '../channels/router.js';
 import type { RoutingConfig } from '../channels/types.js';
 
+import { adaptResumer, adaptWebhookServer } from './audit_adapters.js';
+import { AuditLog } from './audit_log.js';
 import { handleDeliverOnly } from './deliver_only.js';
 import type { Resumer, ResumeAuditEntry } from './durable/index.js';
 import type { Event, FileChangedEvent, ScheduleEvent, WebhookEvent } from './event.js';
@@ -41,7 +45,12 @@ import {
   type FileWatcherConfig,
 } from './triggers/index.js';
 import type { Pack } from './types.js';
-import { WebhookServer, type DeliverOnlyHandler, type WebhookAuditSink } from './webhook_server.js';
+import {
+  WebhookServer,
+  type DeliverOnlyHandler,
+  type WebhookAuditEntry,
+  type WebhookAuditSink,
+} from './webhook_server.js';
 import type { Subscription } from './webhook_subscriptions.js';
 
 /** Caller routes `ScheduleEvent` + `WebhookEvent` into the runtime
@@ -85,6 +94,13 @@ export interface DaemonOpts {
    *  under the `resume` event variant. Optional — daemons without a
    *  checkpoint store don't need it. */
   resumer?: Resumer;
+  /** Patch C — optional injected libsql client backing the unified
+   *  `AuditLog`. When omitted, the daemon opens its own
+   *  `file:${OPENSQUID_HOME}/opensquid.db` client during `start()` and
+   *  closes it during `stop()`. Tests inject a `createClient({ url:
+   *  ':memory:' })` here. Caller-provided clients are NEVER closed by the
+   *  daemon — caller-owned lifecycle. */
+  auditClient?: Client;
   /** Injected clock — tests pass a fake. */
   now?: () => number;
 }
@@ -107,6 +123,15 @@ export class OpenSquidDaemon {
   private state: 'idle' | 'starting' | 'running' | 'stopping' | 'stopped' = 'idle';
   private startedAtMs: number | null = null;
   private signalHandlers: { signal: NodeJS.Signals; handler: () => void }[] = [];
+  /** Patch C — unified `audit_log` table sink. Opened in `start()` after
+   *  the proper-lockfile acquire; closed in `stop()` AFTER producers
+   *  drain so final shutdown writes still land. `null` outside the
+   *  running window — `getAuditLog()` enforces that contract. */
+  private auditLogInstance: AuditLog | null = null;
+  private auditClient: Client | null = null;
+  /** `true` when the daemon opened its own libsql client; `false` when
+   *  the caller injected one. Gates the close-on-stop path. */
+  private auditClientOwned = false;
 
   constructor(opts: DaemonOpts) {
     this.opts = opts;
@@ -141,6 +166,41 @@ export class OpenSquidDaemon {
     }
 
     try {
+      // Patch C — open the unified `AuditLog` immediately after the lock
+      // acquire so every producer constructed below (WebhookServer,
+      // Resumer fan-out) routes into it from the first event. Init is
+      // idempotent DDL; failures bubble through the existing rollback.
+      // Caller-injected client is NOT closed by the daemon — the caller
+      // owns lifecycle when they pass one in (the `auditClientOwned`
+      // flag below gates close-on-stop).
+      if (this.opts.auditClient !== undefined) {
+        this.auditClient = this.opts.auditClient;
+        this.auditClientOwned = false;
+      } else {
+        this.auditClient = createClient({ url: `file:${join(OPENSQUID_HOME(), 'opensquid.db')}` });
+        this.auditClientOwned = true;
+      }
+      this.auditLogInstance = new AuditLog(this.auditClient);
+      await this.auditLogInstance.init();
+
+      // Patch C — fan-out resumer events into the unified AuditLog.
+      // Resumer is constructed by the caller (the daemon receives it
+      // pre-built), so we attach an additional sink rather than rewiring
+      // construction. Caller's primary audit sink stays untouched; the
+      // attached `adaptResumer` sink fires after it. Guarded for legacy
+      // / stub resumers that pre-date the `attachAuditSink` API — those
+      // still work, just without unified-table fan-out.
+      if (this.opts.resumer !== undefined) {
+        const attach = (
+          this.opts.resumer as unknown as {
+            attachAuditSink?: (sink: ReturnType<typeof adaptResumer>) => void;
+          }
+        ).attachAuditSink;
+        if (typeof attach === 'function') {
+          attach.call(this.opts.resumer, adaptResumer(this.auditLogInstance, this.nowFn));
+        }
+      }
+
       // DURABLE.4 — replay any interrupted runs BEFORE registering cron
       // tasks. The order matters: a cron tick that races a resume could
       // double-execute the same run. Singleton lock above already
@@ -164,6 +224,20 @@ export class OpenSquidDaemon {
         this.tasks.set(entry.id, task);
       }
 
+      // Patch C — webhook events fan out to BOTH the caller-supplied
+      // `DaemonAuditSink` (existing `{ event: 'webhook', payload }`
+      // contract) AND the unified `AuditLog` via `adaptWebhookServer`.
+      // Tee'd sink so callers depending on the daemon's audit callback
+      // (existing tests) keep working while the libsql `audit_log` table
+      // gets populated.
+      const unifiedWebhookSink: WebhookAuditSink = adaptWebhookServer(
+        this.auditLogInstance,
+        this.nowFn,
+      );
+      const teeWebhookSink: WebhookAuditSink = (payload: WebhookAuditEntry): void => {
+        this.auditLog({ event: 'webhook', payload });
+        unifiedWebhookSink(payload);
+      };
       const deliverOnlyHandler = this.buildDeliverOnlyHandler();
       this.webhookServer = new WebhookServer({
         port: this.opts.webhookPort ?? DEFAULT_WEBHOOK_PORT,
@@ -172,7 +246,7 @@ export class OpenSquidDaemon {
         dispatch: (event: WebhookEvent) => this.opts.dispatch(event),
         ...(deliverOnlyHandler !== undefined ? { deliverOnly: deliverOnlyHandler } : {}),
         ...(this.opts.rateLimiter !== undefined ? { rateLimiter: this.opts.rateLimiter } : {}),
-        auditLog: (payload) => this.auditLog({ event: 'webhook', payload }),
+        auditLog: teeWebhookSink,
         now: this.nowFn,
       });
       await this.webhookServer.start();
@@ -225,6 +299,23 @@ export class OpenSquidDaemon {
       this.webhookServer = null;
     }
 
+    // Patch C — emit the `lifecycle: stop` audit BEFORE closing the
+    // libsql client so any unified-AuditLog subscriber to lifecycle
+    // events still records it. (Today the daemon's `auditLog` callback
+    // never re-routes lifecycle events into the unified table — it's a
+    // future hook; emitting here keeps both ordering options open.)
+    this.startedAtMs = null;
+    this.auditLog({
+      event: 'lifecycle',
+      phase: 'stop',
+      at: new Date(this.nowFn()).toISOString(),
+    });
+
+    // Patch C — close the AuditLog libsql client AFTER all producers
+    // stopped. `close()` is idempotent in @libsql/client; we still gate
+    // on `auditClientOwned` so caller-injected clients are untouched.
+    this.closeAuditClient();
+
     await safeAsync(() => rm(daemonPidPath(), { force: true }));
 
     if (this.release) {
@@ -234,13 +325,29 @@ export class OpenSquidDaemon {
 
     this.uninstallSignalHandlers();
 
-    this.startedAtMs = null;
     this.state = 'stopped';
-    this.auditLog({
-      event: 'lifecycle',
-      phase: 'stop',
-      at: new Date(this.nowFn()).toISOString(),
-    });
+  }
+
+  /** Patch C — public accessor for the daemon's unified `AuditLog`.
+   *  Returns `null` outside the running window (before `start()`
+   *  completes, after `stop()`, or while a `start()` rollback ran).
+   *  Callers who construct their OWN producers (e.g. `InboundRouter`)
+   *  fetch this AFTER `await daemon.start()` and wire `adaptInboundRouter
+   *  (daemon.getAuditLog()!)` themselves. */
+  getAuditLog(): AuditLog | null {
+    return this.auditLogInstance;
+  }
+
+  /** Internal — closes the libsql client iff the daemon opened it. Safe
+   *  to call multiple times. Always clears the field references so a
+   *  follow-up `start()` re-opens fresh. */
+  private closeAuditClient(): void {
+    if (this.auditClient !== null && this.auditClientOwned) {
+      safeSync(() => this.auditClient?.close());
+    }
+    this.auditClient = null;
+    this.auditClientOwned = false;
+    this.auditLogInstance = null;
   }
 
   /** PID-aware status read used by the `daemon status` CLI verb. */
@@ -350,6 +457,10 @@ export class OpenSquidDaemon {
       await safeAsync(() => this.webhookServer?.close() ?? Promise.resolve());
       this.webhookServer = null;
     }
+    // Patch C — release the libsql client opened earlier in start() so
+    // a subsequent start() doesn't double-open. Caller-injected clients
+    // are left alone (`closeAuditClient` gates on `auditClientOwned`).
+    this.closeAuditClient();
     if (this.release) {
       await safeAsync(this.release);
       this.release = null;
