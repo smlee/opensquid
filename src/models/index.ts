@@ -8,3 +8,14 @@
 export type { ModelAliasConfig, ModelImpl, ModelMode, ModelStrategy } from './types.js';
 export { resolveStrategy } from './dispatcher.js';
 export { loadModelsConfig } from './load_config.js';
+
+// AUTO.7 — cross-subscription cost routing
+export {
+  CostRouter,
+  EmptyTierError,
+  type CostOutcomeRecord,
+  type CostRoutingAuditEntry,
+  type CostRouterOpts,
+  type CostTier,
+  type SubscriptionPool,
+} from './cost_router.js';

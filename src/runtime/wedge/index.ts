@@ -50,3 +50,13 @@ export {
   type ApplyVerdictOpts,
   type ApplyVerdictResult,
 } from './schedule_outcome.js';
+
+// AUTO.7 — cost-tier Stage 2 wedge gate (pure decision function)
+export {
+  evaluateTierAdequacy,
+  DEFAULT_TIER_ADEQUACY_THRESHOLD,
+  type CostEvidence,
+  type CostOutcomeSignal,
+  type TierAdequacyThreshold,
+  type TierAdequacyVerdict,
+} from './cost_outcome.js';
