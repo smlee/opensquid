@@ -56,4 +56,18 @@ describe('DriftResponseConfig schema', () => {
       expect(result.error.issues.some((i) => i.code === 'unrecognized_keys')).toBe(true);
     }
   });
+
+  it('parses corrective_skills rule_id → skill name map (AUTO.4)', () => {
+    const result = DriftResponseConfig.parse({
+      default: 'block_tool',
+      per_rule: { 'format-violation': 'auto_correct' },
+      corrective_skills: { 'format-violation': 'auto-format-skill' },
+    });
+    expect(result.corrective_skills['format-violation']).toBe('auto-format-skill');
+  });
+
+  it('corrective_skills defaults to empty map when omitted', () => {
+    const result = DriftResponseConfig.parse({});
+    expect(result.corrective_skills).toEqual({});
+  });
 });

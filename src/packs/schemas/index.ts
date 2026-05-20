@@ -42,6 +42,7 @@ export type {
   RateLimitTriggerConfig as RateLimitTriggerConfigType,
   SendMessagePermission as SendMessagePermissionType,
   ShellExecPermission as ShellExecPermissionType,
+  SubagentCallPermission as SubagentCallPermissionType,
   SubprocessCallPermission as SubprocessCallPermissionType,
 } from './manifest.js';
 

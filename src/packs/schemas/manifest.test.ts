@@ -338,4 +338,18 @@ describe('Manifest schema', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('accepts subagent_call permission block with targets allowlist (AUTO.4)', () => {
+    const result = Manifest.parse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        subagent_call: { targets: ['auto-format-skill', 'lint-fix-*'] },
+      },
+    });
+    expect(result.permissions?.subagent_call?.targets).toEqual(['auto-format-skill', 'lint-fix-*']);
+    expect(result.permissions?.subagent_call?.deny).toEqual([]);
+  });
 });

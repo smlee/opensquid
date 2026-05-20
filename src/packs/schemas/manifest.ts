@@ -117,6 +117,10 @@ export const Capability = z.enum([
   'file_write',
   'send_message',
   'subprocess_call',
+  // AUTO.4: invoking another skill's process from inside the runtime (e.g.
+  // an `auto_correct` policy invoking the pack's declared corrective skill).
+  // `targets:` is an allowlist of skill names; `*` matches all.
+  'subagent_call',
 ]);
 export type Capability = z.infer<typeof Capability>;
 
@@ -158,6 +162,18 @@ const SubprocessCallPermission = z
   })
   .strict();
 
+// AUTO.4: subagent_call permits invoking another skill's process from inside
+// the runtime. `targets:` is a list of skill names (minimatch globs); `*`
+// matches every skill. Used by the `auto_correct` drift policy to gate
+// invocation of the pack's declared corrective skill before any process step
+// runs (fail-early per spec risk callout).
+const SubagentCallPermission = z
+  .object({
+    targets: z.array(z.string().min(1)).default([]),
+    deny: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
 export const Permissions = z
   .object({
     shell_exec: ShellExecPermission.optional(),
@@ -165,6 +181,7 @@ export const Permissions = z
     file_write: FileWritePermission.optional(),
     send_message: SendMessagePermission.optional(),
     subprocess_call: SubprocessCallPermission.optional(),
+    subagent_call: SubagentCallPermission.optional(),
   })
   .strict();
 export type Permissions = z.infer<typeof Permissions>;
@@ -173,6 +190,7 @@ export type HttpRequestPermission = z.infer<typeof HttpRequestPermission>;
 export type FileWritePermission = z.infer<typeof FileWritePermission>;
 export type SendMessagePermission = z.infer<typeof SendMessagePermission>;
 export type SubprocessCallPermission = z.infer<typeof SubprocessCallPermission>;
+export type SubagentCallPermission = z.infer<typeof SubagentCallPermission>;
 
 // ---------------------------------------------------------------------------
 // Manifest — the document shape.

@@ -92,10 +92,11 @@ export const BUILTIN_PATH_DENY: readonly string[] = Object.freeze([
 // user-writable scratch space. High-risk subpaths within /var (log,
 // run, spool) are rarely skill-write targets; packs can deny them.
 
-// Channel + binary built-in denies stay empty — packs declare via
+// Channel + binary + subagent built-in denies stay empty — packs declare via
 // `permissions.<cap>.deny:`. Frozen for sealed-module discipline.
 export const BUILTIN_CHANNEL_DENY: readonly string[] = Object.freeze([] as const);
 export const BUILTIN_BINARY_DENY: readonly string[] = Object.freeze([] as const);
+export const BUILTIN_SUBAGENT_DENY: readonly string[] = Object.freeze([] as const);
 
 // Env-var snapshot. Gate copies into its constructor so a mid-session env
 // mutation can't flip policy under a running pack.

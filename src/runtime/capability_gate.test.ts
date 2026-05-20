@@ -308,6 +308,46 @@ describe('CapabilityGate — send_message + subprocess_call', () => {
     const denied = await gate.check({ pack: 'p', capability: 'subprocess_call', target: 'curl' });
     expect(denied.allowed).toBe(false);
   });
+
+  it('subagent_call: skill-name allowlist match → allowed (AUTO.4)', async () => {
+    const gate = gateFor({
+      subagent_call: { targets: ['auto-format-skill', 'lint-fix-*'], deny: [] },
+    });
+    const exact = await gate.check({
+      pack: 'p',
+      capability: 'subagent_call',
+      target: 'auto-format-skill',
+    });
+    expect(exact.allowed).toBe(true);
+    expect(exact.source).toBe('declared');
+
+    const glob = await gate.check({
+      pack: 'p',
+      capability: 'subagent_call',
+      target: 'lint-fix-typescript',
+    });
+    expect(glob.allowed).toBe(true);
+
+    const denied = await gate.check({
+      pack: 'p',
+      capability: 'subagent_call',
+      target: 'unrelated-skill',
+    });
+    expect(denied.allowed).toBe(false);
+  });
+
+  it('subagent_call: pack-local deny wins over allowlist (AUTO.4)', async () => {
+    const gate = gateFor({
+      subagent_call: { targets: ['*'], deny: ['danger-skill'] },
+    });
+    const v = await gate.check({
+      pack: 'p',
+      capability: 'subagent_call',
+      target: 'danger-skill',
+    });
+    expect(v.allowed).toBe(false);
+    expect(v.source).toBe('denylist');
+  });
 });
 
 describe('CapabilityGate — unknown pack', () => {

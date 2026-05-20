@@ -29,6 +29,7 @@ import type {
   PermissionsType,
   SendMessagePermissionType,
   ShellExecPermissionType,
+  SubagentCallPermissionType,
   SubprocessCallPermissionType,
 } from '../packs/schemas/index.js';
 
@@ -37,6 +38,7 @@ import {
   BUILTIN_CHANNEL_DENY,
   BUILTIN_PATH_DENY,
   BUILTIN_SHELL_DENY,
+  BUILTIN_SUBAGENT_DENY,
   SHELL_METACHARACTERS,
   trustBuiltinDeny,
 } from './builtin_denylist.js';
@@ -154,6 +156,8 @@ export class CapabilityGate {
         return matchGlobList(req.target, BUILTIN_CHANNEL_DENY, 'built-in channel deny');
       case 'subprocess_call':
         return matchGlobList(req.target, BUILTIN_BINARY_DENY, 'built-in binary deny');
+      case 'subagent_call':
+        return matchGlobList(req.target, BUILTIN_SUBAGENT_DENY, 'built-in subagent deny');
       case 'http_request':
         // Parse-failure → deny (C10: no silent fail-open).
         if (safeParseUrl(req.target) === null) return `invalid URL "${req.target}"`;
@@ -232,6 +236,10 @@ export class CapabilityGate {
       const bins = (block as SubprocessCallPermissionType).binaries ?? [];
       return matchGlobList(req.target, bins, 'binary allowlist');
     }
+    if (req.capability === 'subagent_call') {
+      const targets = (block as SubagentCallPermissionType).targets ?? [];
+      return matchGlobList(req.target, targets, 'subagent allowlist');
+    }
     const _exhaustive: never = req.capability;
     return `unknown capability ${String(_exhaustive)}`;
   }
@@ -277,7 +285,8 @@ type PermBlock =
   | HttpRequestPermissionType
   | FileWritePermissionType
   | SendMessagePermissionType
-  | SubprocessCallPermissionType;
+  | SubprocessCallPermissionType
+  | SubagentCallPermissionType;
 
 function matchGlobList(target: string, patterns: readonly string[], label: string): string | null {
   for (const pattern of patterns) {

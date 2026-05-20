@@ -7,7 +7,9 @@
  */
 export * from './types.js';
 export { evaluateProcess } from './evaluator.js';
-export { applyDriftResponse } from './drift_response.js';
+export { applyDriftResponse, type DriftDispatchCtx } from './drift_response.js';
+export { runAutoCorrect, type AutoCorrectDeps, type AutoCorrectResult } from './auto_correct.js';
+export { escalateSeverity, type EscalateDeps, type EscalateResult } from './escalate.js';
 export { buildRegistry, loadActivePacks } from './bootstrap.js';
 export { dispatchEvent, type DispatchResult } from './hooks/dispatch.js';
 export { notifyAndPause, isPaused, readPauseState } from './failure_handling.js';

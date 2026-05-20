@@ -6,19 +6,19 @@
  *
  * When a rule emits a verdict, the runtime needs to decide WHAT TO DO about it
  * — and that "what to do" is pack-declared policy, not a hardcoded mechanism.
- * Six possible policies; Phase 1 ships the first four (`block_tool`, `warn`,
- * `full_stop_and_redo`, `notify_and_pause`); `auto_correct` + `escalate` are
- * accepted by this schema but deferred at the dispatcher layer (see
- * `runtime/types.ts` `DriftPolicy` notes — only the Phase-1 four are wired up).
- *
- * Schema accepts ALL SIX values intentionally — a pack author can declare
- * `auto_correct: true` in their YAML today; the runtime dispatcher returns
- * the fail-safe `notify_and_pause` until the auto-correct skill loop lands.
- * This keeps pack YAML forward-compatible.
+ * Six possible policies, all wired through the dispatcher:
+ *   `block_tool`, `warn`, `full_stop_and_redo`, `notify_and_pause`
+ *   `auto_correct` (AUTO.4 — invokes a corrective sub-skill)
+ *   `escalate`     (AUTO.4 — bumps severity to 'critical' + reroutes)
  *
  * `.strict()` is applied to the top-level object — typos like `defualt` would
  * silently fall through to the default policy; for a safety-critical file,
  * we fail loudly instead.
+ *
+ * `corrective_skills:` is a per-rule map (rule_id → corrective skill name)
+ * consulted by the `auto_correct` policy at dispatch time. Absent entries
+ * are detected at the AUTO.4 runtime layer and degraded to `notify_pause`
+ * with a clear reason (no silent fail-open).
  *
  * Default policy when the pack ships no `drift_response.yaml` at all is
  * `block_tool` per design doc §"Layered defaults" (the current opensquid
@@ -33,13 +33,10 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 // DriftPolicyEnum — six policies per design doc §"Policy options".
 //
-// Phase-1-wired (in `runtime/drift_response.ts` dispatch table):
-//   block_tool, warn, full_stop_and_redo, notify_and_pause
-// Schema-accepted but dispatcher-deferred (fail-safe to notify_and_pause):
-//   auto_correct, escalate
-//
-// Keeping all six in the schema means pack YAML stays forward-compatible
-// without a schema bump when the dispatcher widens.
+// All six are wired through the dispatcher in `runtime/drift_response.ts`
+// (AUTO.4 finished the two previously-deferred policies). The runtime layers
+// `auto_correct.ts` + `escalate.ts` interpret the action descriptors that
+// the dispatcher emits.
 // ---------------------------------------------------------------------------
 
 export const DriftPolicyEnum = z.enum([
@@ -58,12 +55,17 @@ export type DriftPolicyEnum = z.infer<typeof DriftPolicyEnum>;
 // `default` — applied to any rule that doesn't declare its own policy.
 // `per_rule` — rule_id → policy override. Lookup is direct: the dispatcher
 // reads `per_rule[ruleId] ?? default` on every verdict.
+// `corrective_skills` — rule_id → corrective skill name, consulted ONLY by
+// the `auto_correct` policy. Decoupled from `per_rule` so an author can
+// declare a corrective skill for a rule that currently uses `block_tool`
+// (and flip to `auto_correct` later without re-wiring the map).
 // ---------------------------------------------------------------------------
 
 export const DriftResponseConfig = z
   .object({
     default: DriftPolicyEnum.default('block_tool'),
     per_rule: z.record(z.string(), DriftPolicyEnum).default({}),
+    corrective_skills: z.record(z.string(), z.string().min(1)).default({}),
   })
   .strict();
 export type DriftResponseConfig = z.infer<typeof DriftResponseConfig>;
