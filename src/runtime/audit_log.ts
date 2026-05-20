@@ -26,13 +26,16 @@ import { createHash } from 'node:crypto';
 
 import type { Client } from '@libsql/client';
 
-/** Locked category enum. `pending_shell` is the only mutable category. */
+/** Locked category enum. `pending_shell` is the only mutable category.
+ *  `channel_inbound` (Patch B) is the inbound-routing counterpart of
+ *  `channel_send` — outbound stays `channel_send`. */
 export type AuditCategory =
   | 'capability_gate'
   | 'webhook'
   | 'schedule'
   | 'resume'
   | 'channel_send'
+  | 'channel_inbound'
   | 'pending_shell';
 
 /** Locked decision enum. `prompted` + `approved` + `rejected` are reserved

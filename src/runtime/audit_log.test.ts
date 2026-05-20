@@ -119,6 +119,20 @@ describe('AuditLog.append + query — every category round-trips', () => {
     expect(rows[0]?.detail.abstractChannel).toBe('alerts');
   });
 
+  it('channel_inbound (Patch B — AUTO.6 inbound router category)', async () => {
+    await log.append({
+      occurredAtMs: 1_700_000_000_000,
+      category: 'channel_inbound',
+      decision: 'success',
+      packId: 'support',
+      detail: { event_subtype: 'inbound_dispatched', channel: 'alerts', sender: 'user-7' },
+    });
+    const rows = await log.query({ category: 'channel_inbound' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.detail.event_subtype).toBe('inbound_dispatched');
+    expect(rows[0]?.packId).toBe('support');
+  });
+
   it('pending_shell starts in prompted state', async () => {
     await log.append({
       occurredAtMs: 1_700_000_000_000,
