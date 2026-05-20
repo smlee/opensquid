@@ -34,6 +34,10 @@ import { validatePackFunctions } from './validate_functions.js';
 function makeRegistry(): FunctionRegistry {
   const reg = new FunctionRegistry();
   const stubSchema = z.unknown();
+  // registry's execute contract returns Promise<Result> but this stub has
+  // no awaitable work; matches the same pattern used in
+  // src/functions/event.ts + verdict.ts + destination_check.ts.
+  // eslint-disable-next-line @typescript-eslint/require-await
   const stubExecute = async () => ok(null);
   reg.register({ name: 'match_command', argSchema: stubSchema, execute: stubExecute });
   reg.register({ name: 'verdict', argSchema: stubSchema, execute: stubExecute });
