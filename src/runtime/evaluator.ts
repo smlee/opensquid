@@ -47,9 +47,33 @@
  *   returns the error to the caller — the checkpoint write is best-effort
  *   accounting, not a swallowed failure.
  *
+ * Memoization (DURABLE.3):
+ *
+ *   When the caller passes a `memo` option containing a MemoCache, primitives
+ *   that declare `memoizable: true` (DURABLE.2 metadata) get an extra layer
+ *   AFTER the checkpoint-hit branch but BEFORE the primitive invoke:
+ *
+ *     1. Run the same `inputsHash` derivation.
+ *     2. If checkpoint hit → use it (covers same-run resume, exact-input).
+ *     3. Else look up `memoCache.get(fn, inputsHash)` — cross-run cache.
+ *     4. On memo hit → return value, write a checkpoint row (so a resume
+ *        of THIS run remembers the step) but DON'T re-invoke the primitive.
+ *     5. On memo miss → singleflight the invocation so 100 concurrent
+ *        misses on the same key → 1 primitive call. Set the cache + write
+ *        the checkpoint inside the singleflight body.
+ *
+ *   Memoization fires ONLY for `memoizable: true` primitives. Cheap
+ *   non-memoizable primitives (state_lookup, verdict, match_regex) flow
+ *   straight through — same as in DURABLE.2.
+ *
+ *   TTLs are caller-provided (per-primitive class defaults live in the
+ *   caller's `memo.ttlForFn(fn)` callback). The evaluator never invents a
+ *   TTL of its own — keeping the TTL policy with the caller lets pack
+ *   authors override per-fn defaults.
+ *
  * Imports from: runtime/types.ts, runtime/result.ts, functions/registry.ts,
  *   runtime/durable/checkpoint_store.ts, runtime/durable/canonical_json.ts,
- *   runtime/durable/run_id.ts.
+ *   runtime/durable/run_id.ts, runtime/durable/memo_cache.ts.
  * Imported by: runtime/ (rule dispatcher in later phases).
  */
 
@@ -57,6 +81,7 @@ import type { FunctionRegistry, EvalCtx } from '../functions/registry.js';
 
 import { canonicalJsonStringify } from './durable/canonical_json.js';
 import type { CheckpointRow, CheckpointStore } from './durable/checkpoint_store.js';
+import type { MemoCache } from './durable/memo_cache.js';
 import { sha256Hex } from './durable/run_id.js';
 import type { ProcessStep, RuleResult, Verdict } from './types.js';
 
@@ -79,8 +104,26 @@ export interface CheckpointOptions {
   runId: string;
 }
 
+/**
+ * Memoization wiring (DURABLE.3). `cache` is the shared two-tier MemoCache;
+ * `ttlForFn` is an optional per-primitive TTL resolver — when omitted, all
+ * memoizable primitives use the cache's no-TTL behavior (entry lives until
+ * evicted by LRU or explicit `clear()`).
+ *
+ * Default TTLs (when callers wire a resolver):
+ *   - llm_classify         → 1h
+ *   - recall, embed        → 5m
+ *   - http_request         → 30s
+ *   - check_destination    → 1h
+ */
+export interface MemoOptions {
+  cache: MemoCache;
+  ttlForFn?: (fn: string) => number | undefined;
+}
+
 interface EvaluateOptions {
   checkpoint?: CheckpointOptions;
+  memo?: MemoOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +152,7 @@ export async function evaluateProcess(
   registry: FunctionRegistry,
   options: EvaluateOptions = {},
 ): Promise<RuleResult> {
-  const { checkpoint } = options;
+  const { checkpoint, memo } = options;
 
   // Prefetch the run's checkpoint rows ONCE — keyed by stepIdx so each
   // step does a Map lookup, not a libsql query. Empty map when checkpoint
@@ -133,8 +176,11 @@ export async function evaluateProcess(
     // 3. Dispatch — wrapped with the durable-checkpoint layer when the
     //    primitive declares `durable: true` AND the caller passed a
     //    checkpoint store. Non-durable primitives flow straight through.
+    //    Memoization rides INSIDE the durable wrap and only fires when the
+    //    primitive ALSO declares `memoizable: true` (DURABLE.3).
     const meta = registry.durability(step.call);
     const isDurable = checkpoint !== undefined && meta?.durable === true;
+    const isMemoizable = memo !== undefined && meta?.memoizable === true;
 
     let result;
     if (isDurable) {
@@ -146,7 +192,13 @@ export async function evaluateProcess(
         registry,
         checkpoint,
         prior.get(i),
+        isMemoizable ? memo : undefined,
       );
+    } else if (isMemoizable) {
+      // Memoizable but not durable: rare combo (e.g. a cheap pure helper).
+      // Allowed by the registry but flagged in docs — the cache works,
+      // there's just no checkpoint side-effect.
+      result = await invokeMemoized(step, interpolatedArgs, ctx, registry, memo);
     } else {
       result = await registry.call(step.call, interpolatedArgs, ctx);
     }
@@ -214,6 +266,7 @@ async function invokeDurable(
   registry: FunctionRegistry,
   checkpoint: CheckpointOptions,
   prior: CheckpointRow | undefined,
+  memo: MemoOptions | undefined,
 ): Promise<Awaited<ReturnType<FunctionRegistry['call']>>> {
   const inputsHash = sha256Hex(canonicalJsonStringify({ fn: step.call, args: interpolatedArgs }));
 
@@ -223,9 +276,45 @@ async function invokeDurable(
     return { ok: true, value: prior.outputs };
   }
 
+  // Memo HIT (DURABLE.3) — when the primitive is memoizable AND we have a
+  // cache, look up by (fn, inputsHash). On hit we still write a checkpoint
+  // row so that a RESUME of this exact run+step short-circuits at the
+  // checkpoint level (skipping even the memo lookup) and so DURABLE.4's
+  // resumer sees this step as completed.
+  if (memo !== undefined) {
+    const hit = await memo.cache.get(step.call, inputsHash, memo.ttlForFn?.(step.call));
+    if (hit !== null) {
+      const cachedAtMs = Date.now();
+      const write = {
+        runId: checkpoint.runId,
+        stepIdx,
+        fn: step.call,
+        inputsHash,
+        outputs: hit.value,
+        startedAtMs: cachedAtMs,
+        completedAtMs: cachedAtMs,
+        status: 'completed' as const,
+        ...(step.as !== undefined ? { asBinding: step.as } : {}),
+      };
+      await checkpoint.store.append(write);
+      return { ok: true, value: hit.value };
+    }
+  }
+
   // Checkpoint MISS (no row, hash mismatch, or errored row) — execute fresh.
+  // Memoizable primitives funnel the PRIMITIVE INVOCATION through
+  // singleflight so 100 concurrent missers on the same (fn, hash) key produce
+  // exactly ONE primitive call. The checkpoint write happens AFTER
+  // singleflight resolves — it must run once per caller because each caller
+  // has a different runId; coupling the write to the singleflight body would
+  // leave 99 out of 100 racers without a checkpoint row.
   const startedAtMs = Date.now();
-  const result = await registry.call(step.call, interpolatedArgs, ctx);
+  const result = await invokePrimitive(
+    step.call,
+    inputsHash,
+    () => registry.call(step.call, interpolatedArgs, ctx),
+    memo,
+  );
   const completedAtMs = Date.now();
 
   // Persist the outcome BEFORE returning. Throw propagates if the store
@@ -259,6 +348,67 @@ async function invokeDurable(
     await checkpoint.store.append(write);
   }
   return result;
+}
+
+/**
+ * Invoke the primitive once, deduplicated by `(fn, inputsHash)` when a memo
+ * cache is wired. The singleflight body ALSO populates the memo cache on
+ * success — that way the leader caller and any followers see the same
+ * cached value the next time the key is queried. Errored results bypass
+ * the memo `set` so the next call retries (spec's retry-not-skip rule).
+ *
+ * Returns the primitive's Result<T, FunctionError> unchanged. The caller
+ * (`invokeDurable` / `invokeMemoized`) handles the checkpoint + binding
+ * side effects.
+ */
+async function invokePrimitive(
+  fn: string,
+  inputsHash: string,
+  call: () => Promise<Awaited<ReturnType<FunctionRegistry['call']>>>,
+  memo: MemoOptions | undefined,
+): Promise<Awaited<ReturnType<FunctionRegistry['call']>>> {
+  if (memo === undefined) {
+    return call();
+  }
+  return memo.cache.singleflight(fn, inputsHash, async () => {
+    const result = await call();
+    if (result.ok) {
+      await memo.cache.set(fn, inputsHash, result.value, memo.ttlForFn?.(fn));
+    }
+    return result;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// invokeMemoized — memoization without checkpoint side-effects.
+//
+// Used when a primitive is `memoizable: true` but `durable: false` (or the
+// caller didn't pass a checkpoint store). The cache still serves identical
+// (fn, args) calls; nothing gets persisted in the checkpoint table.
+// Singleflight still protects against stampede.
+// ---------------------------------------------------------------------------
+
+async function invokeMemoized(
+  step: ProcessStep,
+  interpolatedArgs: Record<string, unknown>,
+  ctx: EvalCtx,
+  registry: FunctionRegistry,
+  memo: MemoOptions,
+): Promise<Awaited<ReturnType<FunctionRegistry['call']>>> {
+  const inputsHash = sha256Hex(canonicalJsonStringify({ fn: step.call, args: interpolatedArgs }));
+  const ttlMs = memo.ttlForFn?.(step.call);
+
+  const hit = await memo.cache.get(step.call, inputsHash, ttlMs);
+  if (hit !== null) {
+    return { ok: true, value: hit.value };
+  }
+
+  return invokePrimitive(
+    step.call,
+    inputsHash,
+    () => registry.call(step.call, interpolatedArgs, ctx),
+    memo,
+  );
 }
 
 // ---------------------------------------------------------------------------

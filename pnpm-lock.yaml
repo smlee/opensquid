@@ -41,6 +41,9 @@ importers:
       grammy:
         specifier: ^1.43.0
         version: 1.43.0
+      lru-cache:
+        specifier: ^11.5.0
+        version: 11.5.0
       minimatch:
         specifier: ^10.0.0
         version: 10.2.5
@@ -1795,6 +1798,10 @@ packages:
 
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
+
+  lru-cache@11.5.0:
+    resolution: {integrity: sha512-5YgH9UJd7wVb9hIouI2adWpgqrrICkt070Dnj8EUY1+B4B2P9eRLPAkAAo6NICA7CEhOIeBHl46u9zSNpNu7zA==}
+    engines: {node: 20 || >=22}
 
   magic-bytes.js@1.13.0:
     resolution: {integrity: sha512-afO2mnxW7GDTXMm5/AoN1WuOcdoKhtgXjIvHmobqTD1grNplhGdv3PFOyjCVmrnOZBIT/gD/koDKpYG+0mvHcg==}
@@ -4233,6 +4240,8 @@ snapshots:
   lodash@4.18.1: {}
 
   loupe@3.2.1: {}
+
+  lru-cache@11.5.0: {}
 
   magic-bytes.js@1.13.0: {}
 

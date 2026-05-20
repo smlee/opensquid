@@ -1,5 +1,5 @@
 /**
- * Durable execution module barrel (DURABLE.1).
+ * Durable execution module barrel (DURABLE.1 + DURABLE.2 + DURABLE.3).
  *
  * Public surface:
  *
@@ -10,12 +10,17 @@
  *   RunIdInput             — runIdFor input shape
  *   canonicalJsonStringify — sorted-key JSON with Date/Buffer envelopes
  *   canonicalJsonParse     — inverse, rehydrates base64 envelopes to Buffers
+ *   MemoCache              — two-tier (LRU + libsql) memoization with singleflight
+ *   MemoHit                — wrapper that disambiguates cached `null` from miss
+ *   MemoStats              — per-primitive hit / size rows
+ *   MemoCacheOpts          — construction options (memoryMax, nowMs)
  *
- * DURABLE.1 ships storage only. The evaluator wrap that calls
- * `CheckpointStore.append` around every primitive invocation is DURABLE.2;
- * the resumer that scans interrupted runs at daemon start is DURABLE.4.
+ * DURABLE.1 ships storage; DURABLE.2 wires the evaluator wrap; DURABLE.3
+ * adds memoization on identical primitive inputs (memoizable: true).
+ * DURABLE.4 (resumer that scans interrupted runs) is not yet wired.
  */
 
 export { CheckpointStore, type CheckpointRow, type CheckpointWrite } from './checkpoint_store.js';
 export { runIdFor, sha256Hex, type RunIdInput } from './run_id.js';
 export { canonicalJsonStringify, canonicalJsonParse } from './canonical_json.js';
+export { MemoCache, type MemoHit, type MemoStats, type MemoCacheOpts } from './memo_cache.js';

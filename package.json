@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.73",
+  "version": "0.5.74",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -64,6 +64,7 @@
     "chokidar": "^3.6.0",
     "commander": "^12.1.0",
     "grammy": "^1.43.0",
+    "lru-cache": "^11.5.0",
     "minimatch": "^10.0.0",
     "mustache": "^4.2.0",
     "node-cron": "^3.0.3",
