@@ -30,10 +30,15 @@ import type { NotificationRouter } from '../channels/router.js';
 import type { RoutingConfig } from '../channels/types.js';
 
 import { handleDeliverOnly } from './deliver_only.js';
-import type { Event, ScheduleEvent, WebhookEvent } from './event.js';
+import type { Event, FileChangedEvent, ScheduleEvent, WebhookEvent } from './event.js';
 import { daemonLockPath, daemonPidPath, OPENSQUID_HOME } from './paths.js';
 import type { RateLimiter } from './rate_limit.js';
 import { buildScheduleRegistry, type ScheduleEntry } from './schedule_registry.js';
+import {
+  FileWatcher,
+  type FileWatcherAuditEntry,
+  type FileWatcherConfig,
+} from './triggers/index.js';
 import type { Pack } from './types.js';
 import { WebhookServer, type DeliverOnlyHandler, type WebhookAuditSink } from './webhook_server.js';
 import type { Subscription } from './webhook_subscriptions.js';
@@ -48,6 +53,7 @@ export type DaemonAuditEntry =
   | { event: 'schedule_rate_limited'; entryId: string; fireTime: string }
   | { event: 'schedule_error'; entryId: string; reason: string; fireTime: string }
   | { event: 'webhook'; payload: Parameters<WebhookAuditSink>[0] }
+  | { event: 'file_changed'; payload: FileWatcherAuditEntry }
   | { event: 'lifecycle'; phase: 'start' | 'stop' | 'sigterm' | 'sigint'; at: string };
 
 export type DaemonAuditSink = (entry: DaemonAuditEntry) => void;
@@ -86,6 +92,7 @@ export class OpenSquidDaemon {
   private readonly nowFn: () => number;
   private readonly tasks = new Map<string, cron.ScheduledTask>();
   private readonly entries = new Map<string, ScheduleEntry>();
+  private readonly fileWatchers = new Map<string, FileWatcher>();
   private webhookServer: WebhookServer | null = null;
   private release: (() => Promise<void>) | null = null;
   private state: 'idle' | 'starting' | 'running' | 'stopping' | 'stopped' = 'idle';
@@ -152,6 +159,11 @@ export class OpenSquidDaemon {
       });
       await this.webhookServer.start();
 
+      // AUTO.5 — file-change trigger sources. One watcher per skill that
+      // declares a `file_changed` trigger; constructed lazy so packs with
+      // no file_changed triggers never instantiate chokidar.
+      this.startFileWatchers();
+
       // Pid file is best-effort; not load-bearing for correctness.
       await writeFile(daemonPidPath(), String(process.pid), 'utf8');
       this.installSignalHandlers();
@@ -182,6 +194,13 @@ export class OpenSquidDaemon {
     for (const task of this.tasks.values()) safeSync(() => task.stop());
     this.tasks.clear();
     this.entries.clear();
+
+    // AUTO.5 — close file watchers first so an in-flight chokidar event
+    // can't sneak past the dispatcher after `stop()` returns.
+    for (const watcher of this.fileWatchers.values()) {
+      await safeAsync(() => watcher.stop());
+    }
+    this.fileWatchers.clear();
 
     if (this.webhookServer) {
       await safeAsync(() => this.webhookServer?.close() ?? Promise.resolve());
@@ -305,6 +324,10 @@ export class OpenSquidDaemon {
     for (const task of this.tasks.values()) safeSync(() => task.stop());
     this.tasks.clear();
     this.entries.clear();
+    for (const watcher of this.fileWatchers.values()) {
+      await safeAsync(() => watcher.stop());
+    }
+    this.fileWatchers.clear();
     if (this.webhookServer) {
       await safeAsync(() => this.webhookServer?.close() ?? Promise.resolve());
       this.webhookServer = null;
@@ -314,6 +337,71 @@ export class OpenSquidDaemon {
       this.release = null;
     }
     await safeAsync(() => rm(daemonPidPath(), { force: true }));
+  }
+
+  /**
+   * Walk `packs[].skills[].triggers[]` for `file_changed` triggers and
+   * spin up one `FileWatcher` per (pack, skill). Bare config — pack
+   * authors declare `paths:` (and optional `ignored:`) on the trigger;
+   * everything else (debounce window, awaitWriteFinish thresholds) is
+   * driven by the FileWatcher defaults.
+   *
+   * Skipped silently when a skill has no file_changed triggers (the
+   * common case for Phase 1–7 packs). A skill that declares the trigger
+   * but omits `paths:` is treated as a YAML mistake by chokidar (it
+   * throws at watch-time); we deliberately let that surface inside the
+   * `try { ... } catch { rollback }` in `start()` rather than reject at
+   * registry-build time, because the YAML-side schema in
+   * `runtime/types.ts` allows `paths` to be optional for forward-compat.
+   */
+  private startFileWatchers(): void {
+    if (this.opts.rateLimiter === undefined) {
+      // file_changed dispatch depends on the rate limiter (`check()` is
+      // unconfigured-pack-aware → unlimited default). We require it
+      // wired so the integration is uniform with SCHED.1.
+      const hasFileTrigger = this.opts.packs.some((p) =>
+        p.skills.some((s) => s.triggers.some((t) => t.kind === 'file_changed')),
+      );
+      if (hasFileTrigger) {
+        throw new Error(
+          'OpenSquidDaemon.start: file_changed triggers declared but no rateLimiter wired',
+        );
+      }
+      return;
+    }
+    const rateLimiter = this.opts.rateLimiter;
+
+    for (const pack of this.opts.packs) {
+      for (const skill of pack.skills) {
+        let triggerIndex = -1;
+        for (const trigger of skill.triggers) {
+          triggerIndex += 1;
+          if (trigger.kind !== 'file_changed') continue;
+          const paths = trigger.paths ?? [];
+          if (paths.length === 0) continue; // empty paths = nothing to watch; skip silently
+
+          const id = `${pack.name}::${skill.name}::${triggerIndex}`;
+          const cfg: FileWatcherConfig = {
+            pack: pack.name,
+            skill: skill.name,
+            paths: [...paths],
+          };
+          if (trigger.ignored !== undefined) cfg.ignored = [...trigger.ignored];
+
+          const watcher = new FileWatcher(
+            cfg,
+            (event: FileChangedEvent) => this.opts.dispatch(event),
+            rateLimiter,
+            {
+              auditLog: (payload) => this.auditLog({ event: 'file_changed', payload }),
+              now: this.nowFn,
+            },
+          );
+          watcher.start();
+          this.fileWatchers.set(id, watcher);
+        }
+      }
+    }
   }
 
   private installSignalHandlers(): void {
