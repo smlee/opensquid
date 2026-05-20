@@ -20,6 +20,7 @@ import { Command } from 'commander';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
+import { registerCheckpoints } from './setup/cli/checkpoints.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
@@ -29,7 +30,7 @@ import { registerWebhooks } from './setup/cli/webhooks.js';
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
-  .version('0.5.82');
+  .version('0.5.83');
 
 const daemon = program.command('daemon').description('Background daemon lifecycle');
 
@@ -132,6 +133,16 @@ registerPermissions(program);
 // `approve` / `reject` close the SEC.6 queued-shell-exec approval loop
 // via an atomic `prompted → approved|rejected` UPDATE.
 registerAudit(program);
+
+// CLI.6 — `opensquid checkpoints list|show|resume|clean`. Queries the
+// DURABLE.1 checkpoint store (run_manifests + checkpoints + terminal_markers)
+// and exposes the DURABLE.4 manual-resume path. `show` is the RAW JSONL
+// counterpart to `opensquid trace`'s rendered timeline — same data, no
+// formatting, suitable for jq pipelines. `resume` requires a daemon-wired
+// Resumer (factory deferred to the daemon track) — without it, the verb
+// surfaces a clear "not yet wired" stderr message rather than silently
+// failing. `clean --older-than 30d --yes` prunes old rows.
+registerCheckpoints(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
