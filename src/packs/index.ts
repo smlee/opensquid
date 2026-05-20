@@ -30,3 +30,8 @@ export type { ValidationIssue } from './validate_functions.js';
 // design doc §"Conflict resolution policy".
 export { validateUniqueSkillNames } from './validate_uniqueness.js';
 export type { UniquenessIssue } from './validate_uniqueness.js';
+
+// Scope-precedence pack ordering (Task 5.1) — stable sort by scope index
+// (universal → domain → specialty → workflow → project) then alphabetical
+// by name. Pure function consumed by the load-orchestrator.
+export { sortPacksByScope } from './load_order.js';
