@@ -36,3 +36,17 @@ export { bumpSkillVersion } from './mutate_skill.js';
 
 // Task 7.5
 export { decideEviction, type EvictionDecision } from './eviction.js';
+
+// SCHED.4 — schedule outcome two-stage gate
+export {
+  captureScheduleOutcome,
+  evaluateSchedulePromotion,
+  applyScheduleVerdict,
+  scheduleOutcomeDir,
+  DEFAULT_SCHEDULE_THRESHOLD,
+  type ScheduleOutcome,
+  type ScheduleVerdict,
+  type SchedulePromotionThreshold,
+  type ApplyVerdictOpts,
+  type ApplyVerdictResult,
+} from './schedule_outcome.js';

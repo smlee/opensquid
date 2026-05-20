@@ -20,6 +20,12 @@
  * fails and the moat is broken. (See the matching test + the
  * phase-7-wedge-gate.md spec for the exact regex pattern.)
  *
+ * For `schedule_outcome` lessons (SCHED.4), promotion is delegated to
+ * `schedule_outcome.ts` — schedules are time-series across N fires (not a
+ * single lesson + pass-rate-delta), so `shouldPromote` does not handle them.
+ * Both modules share the anti-self-grading invariant: external user signal
+ * (`approve` / `redo` / `manual_override`) is the ONLY promotion input.
+ *
  * `shouldPromote` is intentionally pure (no I/O, no clock, no random) so the
  * caller can drive it from any signal source (verdict catalog, hook
  * counters, end-of-automation cycle). The caller is responsible for:

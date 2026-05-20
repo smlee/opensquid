@@ -68,6 +68,7 @@ const LESSON_TYPES: ReadonlySet<LessonType> = new Set<LessonType>([
   'workflow',
   'preference',
   'skill_upgrade',
+  'schedule_outcome',
 ]);
 
 export function validatePendingLesson(lesson: PendingLesson): string | null {
