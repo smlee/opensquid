@@ -89,6 +89,92 @@ export const RateLimits = z
 export type RateLimits = z.infer<typeof RateLimits>;
 
 // ---------------------------------------------------------------------------
+// Permissions (AUTO.3) — pack-declared capability allowlists. Per-capability
+// blocks declare allowlist scopes (commands / domains / paths / channels /
+// binaries) plus an optional pack-local `deny:` adding to the built-in
+// denylist (which ALWAYS wins unless `OPENSQUID_TRUST_BUILTIN_DENY=0`).
+//
+// Block-missing semantics: undefined `permissions:` → deny-all for every
+// capability (locked decision — packs MUST declare what they need; silent
+// fail-open is constraint C10). Inside the block, every per-capability key
+// is individually optional — a pack that only does `file_write` declares
+// only `file_write:` and leaves the rest at deny.
+//
+// Glob semantics: allowlist + pack-local `deny:` patterns are minimatch
+// globs for shell commands (matched against PARSED argv joined with " "),
+// file paths, channels, and binary names. `http_request.domains:` is the
+// ONE exception — entries are hostname-exact OR leading-`*.` subdomain
+// match, NEVER raw-URL glob (per spec risk callout: `api.github.com.evil.com`
+// must NOT match `api.github.com`).
+//
+// `.strict()` on every block — typos like `commadns:` / `domian:` fail
+// loudly at load (same posture as the rest of the manifest schema).
+// ---------------------------------------------------------------------------
+
+export const Capability = z.enum([
+  'shell_exec',
+  'http_request',
+  'file_write',
+  'send_message',
+  'subprocess_call',
+]);
+export type Capability = z.infer<typeof Capability>;
+
+const ShellExecPermission = z
+  .object({
+    commands: z.array(z.string().min(1)).default([]),
+    deny: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
+const HttpMethod = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+
+const HttpRequestPermission = z
+  .object({
+    domains: z.array(z.string().min(1)).default([]),
+    methods: z.array(HttpMethod).default(['GET']),
+    deny: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
+const FileWritePermission = z
+  .object({
+    paths: z.array(z.string().min(1)).default([]),
+    deny: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
+const SendMessagePermission = z
+  .object({
+    channels: z.array(z.string().min(1)).default([]),
+    deny: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
+const SubprocessCallPermission = z
+  .object({
+    binaries: z.array(z.string().min(1)).default([]),
+    deny: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
+export const Permissions = z
+  .object({
+    shell_exec: ShellExecPermission.optional(),
+    http_request: HttpRequestPermission.optional(),
+    file_write: FileWritePermission.optional(),
+    send_message: SendMessagePermission.optional(),
+    subprocess_call: SubprocessCallPermission.optional(),
+  })
+  .strict();
+export type Permissions = z.infer<typeof Permissions>;
+export type ShellExecPermission = z.infer<typeof ShellExecPermission>;
+export type HttpRequestPermission = z.infer<typeof HttpRequestPermission>;
+export type FileWritePermission = z.infer<typeof FileWritePermission>;
+export type SendMessagePermission = z.infer<typeof SendMessagePermission>;
+export type SubprocessCallPermission = z.infer<typeof SubprocessCallPermission>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -115,6 +201,13 @@ export const Manifest = z
     // every trigger (back-compat with every Phase 1–7 pack). Block present
     // → only the declared trigger keys are limited; others remain unlimited.
     rate_limits: RateLimits.optional(),
+    // AUTO.3: optional `permissions:` block declaring per-capability
+    // allowlists. Block absent → deny-all for every capability (NOT back-
+    // compat — packs that exercise capabilities MUST declare them). The
+    // gate (`src/runtime/capability_gate.ts`) reads this block at check
+    // time; the built-in denylist (`src/runtime/builtin_denylist.ts`) is
+    // applied first and ALWAYS wins unless `OPENSQUID_TRUST_BUILTIN_DENY=0`.
+    permissions: Permissions.optional(),
   })
   .strict();
 export type Manifest = z.infer<typeof Manifest>;

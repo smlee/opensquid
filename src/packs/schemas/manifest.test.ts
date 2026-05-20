@@ -206,4 +206,136 @@ describe('Manifest schema', () => {
       expect(result.success).toBe(true);
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // AUTO.3 — `permissions:` block.
+  //
+  // Block-missing = deny-all (NOT back-compat; packs that exercise
+  // capabilities must declare them). Each per-capability sub-block is
+  // independently optional. Tests focus on schema-layer concerns (parse,
+  // strict, defaults); the gate-layer semantics are covered in
+  // capability_gate.test.ts.
+  // ---------------------------------------------------------------------------
+
+  it('accepts a manifest with no permissions block', () => {
+    const result = Manifest.parse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+    });
+    expect(result.permissions).toBeUndefined();
+  });
+
+  it('parses the full permissions block from the spec example', () => {
+    const result = Manifest.parse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        shell_exec: {
+          commands: ['git status', 'git log *', 'pnpm test', 'pnpm run *'],
+          deny: ['rm -rf /*'],
+        },
+        http_request: {
+          domains: ['api.github.com', '*.opensquid.tools'],
+          methods: ['GET', 'POST'],
+        },
+        file_write: {
+          paths: ['./.opensquid/**', './reports/**'],
+        },
+        send_message: {
+          channels: ['audit_log', 'alerts'],
+        },
+        subprocess_call: {
+          binaries: ['claude', 'codex', 'gemini'],
+        },
+      },
+    });
+    expect(result.permissions?.shell_exec?.commands).toContain('git status');
+    expect(result.permissions?.http_request?.methods).toEqual(['GET', 'POST']);
+    expect(result.permissions?.file_write?.paths).toContain('./reports/**');
+  });
+
+  it('defaults http_request.methods to ["GET"] when omitted', () => {
+    const result = Manifest.parse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        http_request: { domains: ['api.github.com'] },
+      },
+    });
+    expect(result.permissions?.http_request?.methods).toEqual(['GET']);
+  });
+
+  it('defaults per-capability deny: to []', () => {
+    const result = Manifest.parse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        shell_exec: { commands: ['git status'] },
+      },
+    });
+    expect(result.permissions?.shell_exec?.deny).toEqual([]);
+  });
+
+  it('strict mode rejects unknown capability key', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        shell_exce: { commands: [] }, // typo
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.code === 'unrecognized_keys')).toBe(true);
+    }
+  });
+
+  it('strict mode rejects unknown key inside a capability block', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        http_request: { domains: ['x'], hosts: ['y'] },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid HTTP method in http_request.methods', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        http_request: { domains: ['x'], methods: ['CONNECT'] },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects empty-string command in shell_exec.commands', () => {
+    const result = Manifest.safeParse({
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'x',
+      permissions: {
+        shell_exec: { commands: [''] },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });

@@ -22,13 +22,27 @@
  */
 
 // manifest.yaml
-export { Manifest, ManifestScope, RateLimitPeriod, RateLimits } from './manifest.js';
+export {
+  Capability,
+  Manifest,
+  ManifestScope,
+  Permissions,
+  RateLimitPeriod,
+  RateLimits,
+} from './manifest.js';
 export type {
+  Capability as CapabilityType,
+  FileWritePermission as FileWritePermissionType,
+  HttpRequestPermission as HttpRequestPermissionType,
   Manifest as ManifestType,
   ManifestScope as ManifestScopeType,
+  Permissions as PermissionsType,
   RateLimitPeriod as RateLimitPeriodType,
   RateLimits as RateLimitsType,
   RateLimitTriggerConfig as RateLimitTriggerConfigType,
+  SendMessagePermission as SendMessagePermissionType,
+  ShellExecPermission as ShellExecPermissionType,
+  SubprocessCallPermission as SubprocessCallPermissionType,
 } from './manifest.js';
 
 // models.yaml

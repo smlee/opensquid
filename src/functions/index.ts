@@ -26,3 +26,10 @@ export {
   type SubagentSdk,
   type SubagentSdkRunResult,
 } from './subagent.js';
+// AUTO.3 gated primitives — all three flow through `CapabilityGate.check()`
+// before any side effect. file_write is the only one with a real impl
+// (atomic tmp+rename); shell_exec + http_request are gated stubs that
+// AUTO.5 / SCHED.1 wire to spawn + fetch respectively.
+export { registerFileWriteFunction } from './file_write.js';
+export { registerShellExecFunction } from './shell_exec.js';
+export { registerHttpRequestFunction } from './http_request.js';
