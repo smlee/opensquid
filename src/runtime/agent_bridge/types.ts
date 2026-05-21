@@ -195,3 +195,60 @@ export interface SessionState {
   /** Set true while an agent turn is mid-flight; batches buffer until cleared. */
   turnInFlight: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Tool surface — WAB.4 (0.5.97).
+//
+// `ToolSpec` is the agent-side contract: the JSON Schema (`input_schema`)
+// is what gets serialized into `Anthropic.messages.create({ tools })`,
+// and `validate?` is the runtime guard the dispatcher runs BEFORE the
+// handler sees the input.
+//
+// Why split JSON Schema from runtime validator:
+//   - Anthropic's API requires `input_schema` as JSON Schema; the model
+//     uses it to constrain tool_use blocks.
+//   - We don't trust the model to honor the schema — tool inputs cross a
+//     trust boundary into opensquid runtime. Runtime validation is
+//     independent.
+//   - Keeping `validate` optional + caller-provided lets tools use zod
+//     (`schema.parse`), ajv (`ajv.compile(...)` adapted), or a hand-rolled
+//     guard — no new runtime dependency forced.
+//
+// `ToolHandler` is invoked with the VALIDATED input. Context carries
+// per-session identifiers the handler needs for project-scoped resource
+// access (RAG scope, channel routing) — see WAB.6 tool implementations.
+// ---------------------------------------------------------------------------
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  /** JSON Schema for tool input. Serialized to Anthropic as-is. */
+  input_schema: Record<string, unknown>;
+  /**
+   * Optional runtime input guard. Called by the dispatcher BEFORE the
+   * handler. Implementations: `(input) => schema.parse(input)` for zod,
+   * or any function that throws on invalid input. Return value is
+   * forwarded to the handler (so tools can both validate AND narrow types
+   * in one step).
+   */
+  validate?: (input: unknown) => unknown;
+}
+
+export interface ToolContext {
+  sessionKey: SessionKey;
+  projectUuid: string;
+}
+
+export type ToolHandler = (input: unknown, ctx: ToolContext) => Promise<string>;
+
+export interface ToolDispatcher {
+  /** Snapshot of registered tool specs — passed to Anthropic.messages.create. */
+  list(): ToolSpec[];
+  /**
+   * Dispatch a single tool_use block from the model. Throws on unknown
+   * name (caller should treat as a hard error — the model invoked
+   * something not in `list()`) or on validation failure. The returned
+   * string is fed back to the model as `tool_result.content`.
+   */
+  call(name: string, input: unknown, ctx: ToolContext): Promise<string>;
+}
