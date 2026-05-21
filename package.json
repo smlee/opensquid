@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.91",
+  "version": "0.5.92",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -15,7 +15,8 @@
     "opensquid-hook-sessionend": "./dist/runtime/hooks/session-end.js",
     "opensquid-hook-stop": "./dist/runtime/hooks/stop.js",
     "opensquid-hook-userpromptsubmit": "./dist/runtime/hooks/user-prompt-submit.js",
-    "opensquid-mcp": "./dist/mcp/server.js"
+    "opensquid-mcp": "./dist/mcp/server.js",
+    "opensquid-chat-bridge-mcp": "./dist/mcp/chat-bridge-server.js"
   },
   "files": [
     "dist",
