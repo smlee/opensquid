@@ -113,6 +113,39 @@ export async function runDaemonWorker(dataRoot?: string): Promise<never> {
     });
     await gateway.start();
     log(`[chat-daemon] gateway start complete`);
+
+    // v0.5.89 (TG.2) — startup reachability check against each
+    // unique inbound chat_id. Catches kicked-from-supergroup (403),
+    // stale chat_id (400), and network errors immediately at startup.
+    // Best-effort: failures don't block daemon startup, just log
+    // warnings so operators can see what's wrong without inspecting
+    // hours of empty log noise. The check is Telegram-only for now;
+    // Discord/Slack equivalents land in a follow-up if needed.
+    try {
+      const { verifyTelegramChats, formatReachabilityLine } = await import(
+        "./health-check.js"
+      );
+      const { loadChatConfig } = await import("../config.js");
+      const chatConfig = await loadChatConfig(dataRoot);
+      const tgToken = chatConfig.telegram?.bot_token;
+      // Collect unique chat_ids referenced across all projects' Telegram
+      // routing (skip dm: and topic-suffixed keys — getChat takes only
+      // the chat_id, no topic).
+      const chatIds = new Set<string>();
+      const configs = await loadAllProjectChatRouting(dataRoot);
+      for (const cfg of configs.values()) {
+        for (const id of cfg.telegram?.inbound_chat_ids ?? []) chatIds.add(id);
+      }
+      if (chatIds.size > 0 && tgToken) {
+        const results = await verifyTelegramChats(tgToken, [...chatIds]);
+        for (const r of results) log(formatReachabilityLine(r));
+      }
+    } catch (err) {
+      log(
+        `[chat-daemon] chat-reachability check skipped (non-fatal): ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
     // RPC server listens for outbound send() calls from per-project
     // MCP servers. Starting it AFTER gateway.start() means clients
     // that connect successfully are guaranteed a fully-warmed gateway.

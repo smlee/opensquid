@@ -91,6 +91,15 @@ export class TelegramAdapter implements ChatAdapter {
   private retryTimer: NodeJS.Timeout | null = null;
   /** Retry cadence — long enough that flapping doesn't burn API quota. */
   private static readonly RETRY_INTERVAL_MS = 60_000;
+  /**
+   * 0.5.90 (TG.3): chat_ids for which we've already logged an allowlist
+   * drop this process. The adapter silently drops messages from non-
+   * allowlisted chats (correct policy — never echo policy decisions back
+   * to the sender), but operators need a one-time-per-chat log line so
+   * they can diagnose "why isn't my message routing?" without reading
+   * source. Tracked as a Set keyed by chatIdStr; resets on restart.
+   */
+  private allowlistDropLogged = new Set<string>();
 
   constructor(private readonly config: TelegramConfig) {
     if (!config.bot_token?.trim()) {
@@ -143,7 +152,22 @@ export class TelegramAdapter implements ChatAdapter {
         this.config.allowlist_chat_ids.length > 0 &&
         !this.config.allowlist_chat_ids.includes(chatIdStr)
       ) {
-        return; // silently drop — bot must not echo policy decisions
+        // Silently drop on the chat side (correct — never echo policy back
+        // to the sender). But log once per chat_id per process lifetime
+        // (0.5.90 / TG.3) so operators can diagnose "why isn't my message
+        // routing?" without reading source. The first message from a
+        // newly-talking chat surfaces the drop with a hint to fix.
+        if (!this.allowlistDropLogged.has(chatIdStr)) {
+          this.allowlistDropLogged.add(chatIdStr);
+          const chatType = m.chat.type;
+          const hint =
+            "add this chat_id to chat_connections.telegram.allowlist_chat_ids in ~/.opensquid/config.json to enable inbound routing";
+          // eslint-disable-next-line no-console
+          console.error(
+            `[telegram adapter] dropped inbound from non-allowlisted chat ${chatIdStr} (type=${chatType}); ${hint}`,
+          );
+        }
+        return;
       }
       const normalized: ChatMessage = {
         id: String(m.message_id),
