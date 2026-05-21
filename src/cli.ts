@@ -17,6 +17,7 @@
 
 import { Command } from 'commander';
 
+import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
@@ -171,6 +172,13 @@ registerLimits(program);
 // prints help — the wizard never auto-runs. Flags: --dry-run, --replace,
 // --skip-test. See `src/setup/cli/chat.ts` for the registration shape.
 registerSetup(program);
+
+// WAB.7 — `opensquid agent-bridge {start|stop|status|restart|run-foreground}`.
+// Long-running warm-pool chat-agent daemon that wires every WAB.2-WAB.6
+// component together. Co-exists with the `daemon` verb group above (which
+// owns scheduler / webhook / file-watcher lifecycle). Separate PID lock at
+// `~/.opensquid/agent-bridge.lock` so both daemons can run in parallel.
+registerAgentBridge(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
