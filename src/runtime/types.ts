@@ -32,6 +32,8 @@
 
 import { z } from 'zod';
 
+import { ChatAgentSchema } from '../packs/schemas/chat_agent.js';
+
 // ---------------------------------------------------------------------------
 // Verdict — rule output
 // ---------------------------------------------------------------------------
@@ -186,6 +188,16 @@ export type Skill = z.infer<typeof Skill>;
 export const Scope = z.enum(['universal', 'domain', 'specialty', 'workflow', 'project']);
 export type Scope = z.infer<typeof Scope>;
 
+// `chatAgent` is the WAB.6 chat-agent binding side-file (`chat_agent.yaml`),
+// folded into the runtime Pack only when the pack ships one. Absent =
+// `undefined` (not an empty object) so consumers can distinguish "pack
+// shipped no chat-agent binding" from "shipped one with defaults" — the
+// runtime's `buildChatToolDispatcher` reads `undefined` as "fall back to
+// built-in defaults" without ever surfacing a phantom file.
+//
+// The side-file is intentionally additive: every existing pack stays valid
+// without authoring a `chat_agent.yaml`. Only consumers that opt into the
+// warm-agent chat bridge (WAB.6+) read the field.
 export const Pack = z.object({
   name: z.string(),
   version: z.string(),
@@ -197,6 +209,7 @@ export const Pack = z.object({
   extends: z.string().optional(),
   evolves: z.boolean().default(true),
   skills: z.array(Skill).default([]),
+  chatAgent: ChatAgentSchema.optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

@@ -133,6 +133,75 @@ describe('loadPack — error + edge cases', () => {
     expect(pack.skills.map((s) => s.name)).toEqual(['real-skill']);
   });
 
+  it('loads chat_agent.yaml when present, folding it into Pack.chatAgent', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: with-chat-agent', 'version: 0.1.0', 'scope: workflow', 'goal: WAB.6 binding'].join(
+        '\n',
+      ) + '\n',
+      'utf8',
+    );
+    await writeFile(
+      join(dir, 'chat_agent.yaml'),
+      [
+        'default_model: fast_chat',
+        'system_prompt: prompts/chat.md',
+        'max_tokens: 2048',
+        'disable_builtins:',
+        '  - recall',
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    const pack = await loadPack(dir);
+    expect(pack.chatAgent).toBeDefined();
+    expect(pack.chatAgent?.default_model).toBe('fast_chat');
+    expect(pack.chatAgent?.system_prompt).toBe('prompts/chat.md');
+    expect(pack.chatAgent?.max_tokens).toBe(2048);
+    expect(pack.chatAgent?.disable_builtins).toEqual(['recall']);
+    // Defaults still applied for unspecified fields.
+    expect(pack.chatAgent?.max_tool_iterations).toBe(8);
+    expect(pack.chatAgent?.skills).toEqual([]);
+  });
+
+  it('leaves Pack.chatAgent undefined when chat_agent.yaml is absent', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: no-chat-agent', 'version: 0.1.0', 'scope: workflow', 'goal: no side-file'].join(
+        '\n',
+      ) + '\n',
+      'utf8',
+    );
+    const pack = await loadPack(dir);
+    expect(pack.chatAgent).toBeUndefined();
+  });
+
+  it('surfaces a chat_agent.yaml schema error verbatim (typo top-level key)', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: bad-chat-agent', 'version: 0.1.0', 'scope: workflow', 'goal: bad side-file'].join(
+        '\n',
+      ) + '\n',
+      'utf8',
+    );
+    // `defualt_model` typo — strict-mode rejection.
+    await writeFile(
+      join(dir, 'chat_agent.yaml'),
+      ['defualt_model: fast_chat'].join('\n') + '\n',
+      'utf8',
+    );
+
+    let caught: unknown;
+    try {
+      await loadPack(dir);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const msg = (caught as Error).message;
+    expect(msg).toContain('chat_agent.yaml');
+  });
+
   it('follows symlinks inside skills/ to their target directory (documented behavior)', async () => {
     await writeFile(
       join(dir, 'manifest.yaml'),

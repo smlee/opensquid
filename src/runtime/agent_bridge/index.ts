@@ -9,7 +9,9 @@
  *     0.5.96 — burned in a parallel WIZ.2 slice that WAB.3 reset over).
  *   - WAB.5 (0.5.99): BatchCoordinator + ChatDispatcher (adaptive
  *     batching window + per-session mutex/queue glue).
- * WAB.6+ will add pack_binding, daemon, CLI.
+ *   - WAB.6 (0.5.100): pack_binding + 3 built-in tools (chat_send,
+ *     recall, store_lesson) + chat_agent.yaml pack side-file load.
+ * WAB.7+ will add daemon + CLI.
  *
  * Re-exports are flat (no nested namespaces) so consumers can write
  * `import { InboxTransportBridge, AgentEventBus, ... } from '<root>/runtime'`.
@@ -91,3 +93,22 @@ export {
   type ChatDispatcherOptions,
   type DispatcherAgentLoopOptions,
 } from './dispatcher.js';
+export {
+  buildChatToolDispatcher,
+  type BuildChatToolDispatcherOptions,
+  type BuildChatToolDispatcherResult,
+} from './pack_binding.js';
+export {
+  BUILT_INS,
+  chatSendSpec,
+  defaultDaemonSend,
+  makeChatSendHandler,
+  makeRecallHandler,
+  makeStoreLessonHandler,
+  recallSpec,
+  storeLessonBufferPath,
+  storeLessonSpec,
+  type DaemonSendFn,
+  type DaemonSendParams,
+  type MakeStoreLessonHandlerOptions,
+} from './tools/index.js';

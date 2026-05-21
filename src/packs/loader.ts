@@ -45,6 +45,7 @@ import type { z } from 'zod';
 
 import type { Pack } from '../runtime/types.js';
 
+import { ChatAgentSchema, type ChatAgentConfig } from './schemas/chat_agent.js';
 import { Manifest } from './schemas/manifest.js';
 import { Skill } from './schemas/skill.js';
 import { parseYamlFile } from './yaml.js';
@@ -77,6 +78,12 @@ export async function loadPack(dir: string): Promise<Pack> {
   const skillsDir = join(dir, 'skills');
   const skills = await loadSkillsDir(skillsDir);
 
+  // chat_agent.yaml — WAB.6 chat-agent binding side-file. OPTIONAL: absence
+  // (ENOENT) is the bind-time signal for "fall back to built-in defaults in
+  // pack_binding.ts". Any other read/parse error surfaces verbatim — a
+  // malformed `chat_agent.yaml` is a configuration bug, not a missing file.
+  const chatAgent = await loadOptionalChatAgent(join(dir, 'chat_agent.yaml'));
+
   return {
     name: manifest.name,
     version: manifest.version,
@@ -88,7 +95,31 @@ export async function loadPack(dir: string): Promise<Pack> {
     evolves: manifest.evolves,
     skills,
     ...(manifest.extends !== undefined ? { extends: manifest.extends } : {}),
+    ...(chatAgent !== undefined ? { chatAgent } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// loadOptionalChatAgent — read + validate `chat_agent.yaml` if present.
+//
+// ENOENT → returns `undefined` (the side-file is OPTIONAL per the WAB.6 spec
+// — packs that don't ship one fall back to built-in defaults in
+// `pack_binding.ts`). Any other error (YAML parse, schema validation, EACCES)
+// propagates verbatim via `parseYamlFile`'s path-bearing error messages so
+// the caller can blame the right file + field.
+// ---------------------------------------------------------------------------
+
+async function loadOptionalChatAgent(path: string): Promise<ChatAgentConfig | undefined> {
+  try {
+    const { data } = await parseYamlFile(path, ChatAgentSchema);
+    return data as ChatAgentConfig;
+  } catch (e) {
+    // Node's readFile throws ENOENT as `NodeJS.ErrnoException`. parseYamlFile
+    // forwards the underlying error (it wraps YAML + Zod errors but does NOT
+    // wrap fs errors), so we test the code on the raw exception.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------
