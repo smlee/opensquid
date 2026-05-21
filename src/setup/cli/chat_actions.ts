@@ -1,15 +1,20 @@
 /**
- * WIZ.3 — interactive chat-setup wizard. Implements `docs/tasks/WIZ.1-flow.md`
- * verbatim: detection → model alias → masked Anthropic key → chat_agent.yaml
- * authoring → dry-run preview → confirm → atomic write with backup → outro.
+ * WIZ.3 + WAB-SUB.3 — interactive chat-setup wizard. Implements
+ * `docs/tasks/WIZ.1-flow.md` storyboard with the WAB-SUB.3 mode-choice
+ * extension: detection → mode choice (api | subscription) → mode-specific
+ * alias setup → chat_agent.yaml authoring → dry-run preview → confirm →
+ * atomic write with backup → outro.
  *
  * Audit invariants:
  *   - No write without explicit `confirm()` → true after dry-run preview.
  *   - `isCancel()` checked after EVERY prompt; cancel path emits a "nothing
  *     written" message and exits clean.
- *   - Secrets prompted via `password()` (masked); never printed, logged, or
- *     written to YAML. Dry-run preview shows `=…<last4>` only.
- *   - Sub-mode hard-block in v1 (Replace into api-mode; Keep allowed + warned).
+ *   - Secrets prompted via `password()` (masked) IN api mode only; subscription
+ *     mode never prompts for a key. Dry-run preview shows `=…<last4>` only.
+ *   - Both `mode=api` and `mode=subscription` are first-class choices —
+ *     NEITHER pre-selected as `initialValue` (WAB-SUB.3 spec criterion A).
+ *   - Existing config (idempotency branch) treats BOTH modes as valid;
+ *     Replace walks the mode-choice prompt again.
  *   - `OPENSQUID_NO_BILLED_CALLS=1` skips step (f) entirely.
  *   - `~/.opensquid/setup-chat.lock` via proper-lockfile prevents concurrent runs.
  *
@@ -28,6 +33,7 @@ import { OPENSQUID_HOME } from '../../runtime/paths.js';
 
 import {
   runIdempotencyBranch,
+  runModeChoice,
   runModelAliasPrompts,
   runPackPrompts,
 } from './chat_actions_prompts.js';
@@ -170,8 +176,19 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
     );
   }
 
-  // (c) Model alias setup
-  const aliasResult = await runModelAliasPrompts(detection.secrets);
+  // (c.0) Mode choice — api vs subscription. WAB-SUB.3: this is the FIRST
+  // shape-determining prompt. NEITHER mode is pre-selected; the user
+  // explicitly picks. Reached on clean-state runs AND on the Replace branch
+  // of an existing-config run (so "Replace" can swap api↔subscription
+  // both ways, not just sub→api as the WIZ.3 hard-block forced).
+  const mode = await runModeChoice();
+  if (mode === 'cancel') return abortNoChanges();
+
+  // (c) Model alias setup — branches on the mode choice. api prompts
+  //     model + masked key + key dest. subscription prompts cli + impl
+  //     + args (no Anthropic API key prompt; subscription auth flows
+  //     through the host's own login state).
+  const aliasResult = await runModelAliasPrompts(detection.secrets, mode);
   if (aliasResult === null) return abortNoChanges();
 
   // (d) Pack + chat_agent.yaml authoring
@@ -252,14 +269,15 @@ function abortNoChanges(): WizardResult {
 
 const introBody = (d: InnerDeps): string =>
   `This wizard walks you through:
-  1. Declaring a model alias (fast_chat) so the chat agent can call Anthropic
-  2. Writing a chat_agent.yaml side-file inside one of your packs
-  3. (Optional) Sending a test message to verify end-to-end delivery
+  1. Picking how the agent reaches its LLM (Anthropic API key OR Claude Code subscription)
+  2. Declaring a model alias (fast_chat) for the agent
+  3. Writing a chat_agent.yaml side-file inside one of your packs
+  4. (Optional) Sending a test message to verify end-to-end delivery
 
 Nothing is written until you confirm. Ctrl-C aborts safely at any prompt.
 Files affected (preview shown before write):
   - ${d.homeDir}/models.yaml       (created or merged)
-  - ${d.envPath}                   (appended — ANTHROPIC_API_KEY)
+  - ${d.envPath}                   (appended — ANTHROPIC_API_KEY, api mode only)
   - <pack-root>/chat_agent.yaml    (created or replaced)
   - ${d.homeDir}/backup/<ts>/      (backups of overwritten files)`;
 

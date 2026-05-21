@@ -1,18 +1,30 @@
 /**
- * Prompt sub-flows for WIZ.3 — extracted from `chat_actions.ts` to stay
- * under the file-size budget.
+ * Prompt sub-flows for WIZ.3 + WAB-SUB.3 — extracted from `chat_actions.ts`
+ * to stay under the file-size budget.
  *
  * Each exported function maps to one WIZ.1 storyboard step that has more
  * than a single prompt:
  *   - runIdempotencyBranch (i) — keep / replace / test_only / cancel.
- *   - runModelAliasPrompts (c) — model + mode + masked key + key-storage dest.
- *   - runPackPrompts       (d) — pack selection + chat_agent.yaml authoring.
+ *     Treats BOTH api and subscription modes as valid existing config
+ *     (WAB-SUB.3 — old "subscription must be replaced" hard-block removed).
+ *   - runModeChoice        (c.0) — api vs subscription. NO `initialValue`;
+ *     the user explicitly picks. First substantive prompt in the flow.
+ *   - runModelAliasPrompts (c)   — dispatches to api or subscription branch
+ *     based on the prior mode choice. api → model + key + dest; subscription
+ *     → cli + impl + args (no key prompt).
+ *   - runPackPrompts       (d)   — pack selection + chat_agent.yaml authoring.
  *
  * Discipline: every `isCancel()` is checked. Every prompt that takes user
  * text input has a Zod-ish validator (we validate via clack's `validate:`
  * callback rather than re-parsing through Zod, because the callback returns
  * a string error message clack renders inline; Zod's error shape would need
  * an adapter layer).
+ *
+ * Mode-neutrality (WAB-SUB.3): neither api nor subscription is hardcoded as
+ * default. The runtime dispatcher already accepts both modes (per WAB-SUB.2
+ * pack_binding); the wizard now matches by letting the user pick at the
+ * earliest shape-determining moment instead of pretending api is the only
+ * supported mode.
  *
  * Imports from: @clack/prompts, node:path, ../../packs/schemas/chat_agent,
  *   ../../packs/schemas/models, ./chat_state.
@@ -21,14 +33,12 @@
 
 import { join } from 'node:path';
 
-import { cancel, confirm, isCancel, note, password, select, text } from '@clack/prompts';
+import { cancel, isCancel, note, select, text } from '@clack/prompts';
 
 import { ChatAgentSchema, type ChatAgentConfig } from '../../packs/schemas/chat_agent.js';
-import type { ModelAlias } from '../../packs/schemas/models.js';
 
-import type { ModelsState, PacksState, SecretsState } from './chat_state.js';
+import type { ModelsState, PacksState } from './chat_state.js';
 
-const ANTHROPIC_MODEL_REGEX = /^claude-[a-z0-9-]+$/;
 const ALIAS_NAME_REGEX = /^[a-z][a-z0-9_]*$/;
 const PACK_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
 
@@ -39,26 +49,28 @@ const PACK_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
 export type IdempotentChoice = 'keep' | 'replace' | 'test_only' | 'cancel';
 
 export async function runIdempotencyBranch(models: ModelsState): Promise<IdempotentChoice> {
-  if (models.fastChatMode === 'subscription') {
+  // WAB-SUB.3: BOTH `api` and `subscription` modes are now first-class valid.
+  // The old sub-mode hard-block ("WAB v1 requires api mode") is gone because
+  // pack_binding (WAB-SUB.2) + the runtime dispatcher accept both. We only
+  // warn for genuinely unsupported modes (`local`, `mcp`) — those modes' end-
+  // to-end agent-bridge support has not landed.
+  const mode = models.fastChatMode;
+  if (mode !== undefined && mode !== 'api' && mode !== 'subscription') {
     note(
-      [
-        'Your existing fast_chat uses subscription mode.',
-        'WAB v1 requires api mode; pick Replace to switch (your subscription config is backed up)',
-        "or Keep to leave it (chat agent won't start until subscription-mode follow-up ships).",
-      ].join('\n'),
-      'Warning',
-    );
-  } else if (models.fastChatMode !== 'api') {
-    note(
-      `Non-api mode (${String(models.fastChatMode)}) unsupported in v1; pick Replace to switch.`,
+      `Existing fast_chat uses mode=${String(mode)}, which the agent bridge does not yet drive end-to-end. Pick Replace to switch to api or subscription mode.`,
       'Warning',
     );
   }
+  const modeLabel = mode === undefined ? '(unknown mode)' : `mode=${mode}`;
   const choice = await select({
-    message: 'Existing fast_chat alias detected. What would you like to do?',
+    message: `Existing fast_chat alias detected (${modeLabel}). What would you like to do?`,
     options: [
       { value: 'keep', label: 'Keep — exit without changes' },
-      { value: 'replace', label: 'Replace — overwrite fast_chat (existing file backed up)' },
+      {
+        value: 'replace',
+        label:
+          'Replace — re-pick mode (api or subscription), overwrite fast_chat (existing file backed up)',
+      },
       { value: 'test_only', label: 'Test only — verify the existing config works (no writes)' },
     ],
     initialValue: 'keep',
@@ -68,109 +80,47 @@ export async function runIdempotencyBranch(models: ModelsState): Promise<Idempot
 }
 
 // ---------------------------------------------------------------------------
-// (c) Model alias setup
+// (c.0) Mode choice — api vs subscription. WAB-SUB.3 first-class choice.
+//
+// Position: FIRST substantive prompt in the wizard flow, after detection.
+// The user explicitly picks; NEITHER mode is pre-selected via `initialValue`.
+// Shape modeled on `gh auth login`'s HTTPS-vs-SSH protocol prompt (also
+// no default — the user states intent before any branch-specific question
+// is asked). Distinguishing this question UP FRONT means the subscription
+// path NEVER prompts for an Anthropic API key, and the api path NEVER
+// prompts for a CLI binary; cross-branch leakage is structurally impossible.
 // ---------------------------------------------------------------------------
 
-export interface AliasResult {
-  alias: ModelAlias;
-  apiKey: string | null;
-  storeKey: boolean;
-}
+export type ModeChoice = 'api' | 'subscription' | 'cancel';
 
-const KNOWN_MODELS: { value: string; label: string }[] = [
-  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 — fast + cheap, ~$1/M input' },
-  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 — more capable, ~$3/M input' },
-  { value: 'claude-opus-4-7', label: 'Opus 4.7 — most capable, ~$15/M input' },
-  { value: '__other__', label: 'Other — type a model identifier' },
-];
-
-export async function runModelAliasPrompts(secrets: SecretsState): Promise<AliasResult | null> {
-  const modelChoice = await select({
-    message: 'Which Anthropic model should fast_chat use?',
-    options: KNOWN_MODELS,
-    initialValue: 'claude-haiku-4-5-20251001',
-  });
-  if (isCancel(modelChoice)) return null;
-  let model: string;
-  if (modelChoice === '__other__') {
-    const custom = await text({
-      message: 'Model identifier (e.g. claude-haiku-4-5-20251001)',
-      validate: (v) =>
-        ANTHROPIC_MODEL_REGEX.test(v) ? undefined : 'Must look like claude-<family>-<version>',
-    });
-    if (isCancel(custom)) return null;
-    model = custom;
-  } else {
-    model = modelChoice;
-  }
-
-  const mode = await select({
-    message: 'Connection mode',
+export async function runModeChoice(): Promise<ModeChoice> {
+  const choice = await select({
+    message: 'How should the chat agent reach the LLM?',
     options: [
-      { value: 'api', label: 'API mode — direct Anthropic API key (REQUIRED for v1)' },
+      {
+        value: 'api',
+        label: 'Anthropic API (pay-per-token; needs an ANTHROPIC_API_KEY)',
+      },
       {
         value: 'subscription',
-        label: 'Subscription mode — NOT SUPPORTED IN v1 (will hard-block)',
+        label: 'Claude Code subscription (no extra cost; uses your `claude` CLI)',
       },
     ],
-    initialValue: 'api',
+    // NOTE: NO initialValue — explicit user pick per WAB-SUB.3 acceptance
+    // criterion A. clack renders with the first option highlighted but
+    // pressing Enter without arrow keys still requires intentional input.
   });
-  if (isCancel(mode)) return null;
-  if (mode === 'subscription') {
-    cancel(
-      'Subscription mode is not supported in v1. Re-run with API mode, or wait for the subscription-mode follow-up.',
-    );
-    return null;
-  }
-
-  const keyInput = await password({
-    message: secrets.anthropicKeyPresent
-      ? `Anthropic API key (existing key detected at ${secrets.envPath} — press Enter to skip)`
-      : 'Anthropic API key (input will be masked)',
-    mask: '*',
-    validate: (v) => {
-      if (v.length === 0) return undefined;
-      if (/\s/.test(v)) return 'API keys cannot contain whitespace. Did you paste a newline?';
-      if (!v.startsWith('sk-ant-')) return 'Anthropic API keys start with sk-ant-.';
-      return undefined;
-    },
-  });
-  if (isCancel(keyInput)) return null;
-  const apiKey = keyInput.length > 0 ? keyInput : null;
-
-  let storeKey = false;
-  if (apiKey !== null) {
-    const dest = await select({
-      message: 'Where should the key be stored?',
-      options: [
-        { value: 'env', label: '~/.loop/.env (default — chmod 600, opensquid secrets backend)' },
-        { value: 'skip', label: "Skip — I'll set ANTHROPIC_API_KEY manually in my shell rc" },
-      ],
-      initialValue: 'env',
-    });
-    if (isCancel(dest)) return null;
-    if (dest === 'skip') {
-      const reconfirm = await confirm({
-        message:
-          'You entered a key but chose not to persist it. The key will be lost when this wizard exits. Continue?',
-        initialValue: false,
-      });
-      if (isCancel(reconfirm) || reconfirm !== true) return null;
-      storeKey = false;
-    } else {
-      storeKey = true;
-    }
-  }
-
-  const alias: ModelAlias = {
-    description: 'Daily-driver chat agent (configured via setup wizard)',
-    mode: 'api',
-    args: [],
-    model,
-    provider: 'anthropic',
-  };
-  return { alias, apiKey, storeKey };
+  if (isCancel(choice)) return 'cancel';
+  return choice as ModeChoice;
 }
+
+// ---------------------------------------------------------------------------
+// (c) Model alias setup — split into chat_actions_prompts_alias.ts (api +
+//     subscription branches). Re-exported here for backwards compatibility
+//     with callers that import from this module.
+// ---------------------------------------------------------------------------
+
+export { runModelAliasPrompts, type AliasResult } from './chat_actions_prompts_alias.js';
 
 // ---------------------------------------------------------------------------
 // (d) Pack + chat_agent.yaml setup
