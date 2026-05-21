@@ -92,12 +92,33 @@ export async function runDaemonWorker(dataRoot?: string): Promise<never> {
     routingIndex = await rebuildRoutingIndex(dataRoot);
     log(`[chat-daemon] routing index built: ${routingIndex.size} inbound channels mapped`);
     gateway.onMessage(async (msg) => {
-      // v0.7.2: prefer the topic-specific routing key when the message
-      // carries a threadId (Telegram forum topic). Fall back to the
-      // channel-only key for legacy (no-topic) routing.
-      const specificKey = msg.threadId ? `${msg.channel}:${msg.threadId}` : null;
+      // v0.5.94 (WAB.2 Part A / TG.1 (a)): DM-first routing.
+      //
+      // Key precedence:
+      //   1. DM key (`telegram:dm:<user_id>`) when the message is a DM —
+      //      defined as `msg.channel === "telegram:" + msg.senderId`.
+      //      The Telegram adapter formats DM chats as `telegram:<chat_id>`
+      //      where chat_id === from.id, so the equality check is the
+      //      canonical Telegram private-chat indicator. This also rejects
+      //      group-message-from-self spoofs (group chat.id is negative
+      //      for supergroups; senderId is positive; they cannot collide).
+      //   2. Topic-specific key (`<channel>:<threadId>`) when the message
+      //      is in a forum topic.
+      //   3. Channel-only key (`<channel>`).
+      //
+      // Strict topic whitelist preserved per TG.1 (d) — a message in a
+      // topic NOT listed by any project's `inbound_topic_ids` will not
+      // fall back to the chat-only key (because `collectInboundChannels`
+      // does not emit the chat-only key when `inbound_topic_ids` is set
+      // on that project). Such messages orphan, which is the documented
+      // security-correct default.
+      const isDm =
+        msg.platform === 'telegram' && msg.channel === `telegram:${msg.senderId}`;
+      const dmKey = isDm ? `telegram:dm:${msg.senderId}` : null;
+      const topicKey = msg.threadId ? `${msg.channel}:${msg.threadId}` : null;
       const projectUuid =
-        (specificKey ? routingIndex.get(specificKey) : undefined) ??
+        (dmKey ? routingIndex.get(dmKey) : undefined) ??
+        (topicKey ? routingIndex.get(topicKey) : undefined) ??
         routingIndex.get(msg.channel) ??
         null;
       try {

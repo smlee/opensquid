@@ -66,3 +66,8 @@ export {
   redact,
   type Subscription,
 } from './webhook_subscriptions.js';
+
+// Warm-agent chat bridge (WAB.2, 0.5.94) — typed event bus + per-project
+// inbox JSONL → InboundChatEvent transport bridge. Foundation for the
+// WAB.3-WAB.7 warm-pool chat agent. See docs/tasks/T-warm-agent-chat-bridge.md.
+export * from './agent_bridge/index.js';

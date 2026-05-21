@@ -1,13 +1,22 @@
 /**
  * Per-project chat routing (v0.7.1 Phase C).
  *
+ * Note on src.legacy/ placement (TG.1 (f) / WAB.2): the "legacy" label is a
+ * pre-0.5.x architecture marker, NOT a "dead code" marker. The chat-daemon
+ * compiled from `src.legacy/chat/` is the production runtime for inbound
+ * Telegram + outbound chat_send. This file is actively maintained — see
+ * `inbound_dm_user_ids` (v0.5.94 / WAB.2 Part A) below.
+ *
  * Schema on disk: `~/.opensquid/projects/<uuid>/chat-routing.json`
  *
  * ```jsonc
  * {
  *   "telegram": {
  *     "report_channel": "telegram:-1001234567890",  // outbound default
- *     "inbound_chat_ids": ["-1001234567890"]        // accepts inbound from these chats
+ *     "report_topic_id": 15,                          // forum-topic id for outbound
+ *     "inbound_chat_ids": ["-1001234567890"],        // accepts inbound from these chats
+ *     "inbound_topic_ids": [15],                      // strict whitelist when set
+ *     "inbound_dm_user_ids": ["8075471258"]          // v0.5.94 — DM allowlist
  *   },
  *   "discord": {
  *     "report_channel": "discord:1234567890",
@@ -25,8 +34,9 @@
  *     from the active project's routing config. (Phase E wires the MCP
  *     tools; this module just exposes the lookup.)
  *   - **Inbound** (chat → agent): the daemon's gateway.onMessage handler
- *     looks up the source chat_id in the chat_id → project_uuid index
- *     this module builds. Match → JSONL append to that project's inbox.
+ *     constructs a routing key (DM key, topic key, or chat-only key per
+ *     TG.1 policy decision (a)+(d)) and looks it up in the index this
+ *     module builds. Match → JSONL append to that project's inbox.
  *     No match → JSONL append to the orphan inbox.
  *
  * UUID is the stable primary key because the project's human-friendly
@@ -60,6 +70,19 @@ export interface TelegramRouting {
    * from the listed `inbound_chat_ids`).
    */
   inbound_topic_ids?: number[];
+  /**
+   * v0.5.94 (WAB.2 Part A / TG.1 decision (a)) — allowlist of user IDs
+   * whose Telegram DMs route to this project. A "DM" is detected when the
+   * inbound `chat.id === from.id` (Telegram's canonical private-chat
+   * shape). On match, the routing key is `telegram:dm:<user_id>`. Group
+   * messages from the same user use `inbound_chat_ids` + topic semantics
+   * — this field does NOT shadow group routing.
+   *
+   * Schema is additive: existing chat-routing.json files without this
+   * field continue to load and route correctly (DM routing simply
+   * disabled for that project).
+   */
+  inbound_dm_user_ids?: string[];
 }
 
 export interface DiscordRouting {
@@ -211,6 +234,15 @@ export function collectInboundChannels(cfg: ProjectChatRouting): string[] {
         out.push(`telegram:${chatId}`);
       }
     }
+  }
+  // v0.5.94 (WAB.2 Part A / TG.1 (a)): emit DM allowlist keys as
+  // `telegram:dm:<user_id>`. Worker's onMessage detects DMs (chat.id ===
+  // from.id) and looks up against this key. Separate key namespace from
+  // `telegram:<chat_id>` so a user whose user_id collides with a
+  // supergroup chat_id (unlikely but possible — both are integers) does
+  // not silently cross-route.
+  if (cfg.telegram?.inbound_dm_user_ids) {
+    for (const uid of cfg.telegram.inbound_dm_user_ids) out.push(`telegram:dm:${uid}`);
   }
   if (cfg.discord?.inbound_channel_ids) {
     for (const id of cfg.discord.inbound_channel_ids) out.push(`discord:${id}`);

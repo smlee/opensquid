@@ -132,6 +132,102 @@ describe("collectInboundChannels", () => {
   });
 });
 
+// v0.5.94 (WAB.2 Part A / TG.1 (a)) — DM allowlist key emission.
+describe("collectInboundChannels — v0.5.94 DM allowlist", () => {
+  it("emits DM keys as telegram:dm:<user_id> when inbound_dm_user_ids is set", () => {
+    const ch = collectInboundChannels({
+      telegram: { inbound_dm_user_ids: ["123"] },
+    });
+    expect(ch).toEqual(["telegram:dm:123"]);
+  });
+
+  it("supports multiple DM user_ids", () => {
+    const ch = collectInboundChannels({
+      telegram: { inbound_dm_user_ids: ["123", "456"] },
+    });
+    expect(ch).toEqual(["telegram:dm:123", "telegram:dm:456"]);
+  });
+
+  it("emits both group + topic + DM keys when all are configured", () => {
+    const ch = collectInboundChannels({
+      telegram: {
+        inbound_chat_ids: ["-100super"],
+        inbound_topic_ids: [15],
+        inbound_dm_user_ids: ["8075471258"],
+      },
+    });
+    expect(ch).toEqual(["telegram:-100super:15", "telegram:dm:8075471258"]);
+  });
+
+  it("schema backwards-compat: config without inbound_dm_user_ids still works", () => {
+    const ch = collectInboundChannels({
+      telegram: { inbound_chat_ids: ["-100"] },
+    });
+    expect(ch).toEqual(["telegram:-100"]);
+  });
+
+  it("empty inbound_dm_user_ids list emits no DM keys", () => {
+    const ch = collectInboundChannels({
+      telegram: { inbound_dm_user_ids: [] },
+    });
+    expect(ch).toEqual([]);
+  });
+});
+
+describe("buildRoutingIndex — v0.5.94 DM key indexing", () => {
+  it("indexes DM keys so worker can look up by telegram:dm:<user_id>", () => {
+    const cfgs = new Map([
+      ["uuid-dm", { telegram: { inbound_dm_user_ids: ["8075471258"] } }],
+    ]);
+    const idx = buildRoutingIndex(cfgs);
+    expect(idx.get("telegram:dm:8075471258")).toBe("uuid-dm");
+    expect(idx.size).toBe(1);
+  });
+
+  it("two projects can each have their own DM allowlist (no collision)", () => {
+    const cfgs = new Map([
+      ["uuid-a", { telegram: { inbound_dm_user_ids: ["111"] } }],
+      ["uuid-b", { telegram: { inbound_dm_user_ids: ["222"] } }],
+    ]);
+    const idx = buildRoutingIndex(cfgs);
+    expect(idx.get("telegram:dm:111")).toBe("uuid-a");
+    expect(idx.get("telegram:dm:222")).toBe("uuid-b");
+    expect(idx.size).toBe(2);
+  });
+
+  it("same DM user across two projects: collision warned, last wins (consistent with existing behavior)", () => {
+    const cfgs = new Map([
+      ["uuid-a", { telegram: { inbound_dm_user_ids: ["999"] } }],
+      ["uuid-b", { telegram: { inbound_dm_user_ids: ["999"] } }],
+    ]);
+    const warnings: string[] = [];
+    const idx = buildRoutingIndex(cfgs, (m) => warnings.push(m));
+    expect(idx.get("telegram:dm:999")).toBe("uuid-b");
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/collision.*telegram:dm:999/);
+  });
+
+  it("group + DM in same project: both keys index to same uuid", () => {
+    const cfgs = new Map([
+      [
+        "uuid-x",
+        {
+          telegram: {
+            inbound_chat_ids: ["-100"],
+            inbound_topic_ids: [15],
+            inbound_dm_user_ids: ["8075471258"],
+          },
+        },
+      ],
+    ]);
+    const idx = buildRoutingIndex(cfgs);
+    expect(idx.get("telegram:-100:15")).toBe("uuid-x");
+    expect(idx.get("telegram:dm:8075471258")).toBe("uuid-x");
+    expect(idx.get("telegram:-100")).toBeUndefined(); // strict topic whitelist preserved
+    expect(idx.size).toBe(2);
+  });
+});
+
 describe("buildRoutingIndex — v0.7.2 topic-aware keys", () => {
   it("emits topic-specific keys when inbound_topic_ids is set", () => {
     const cfgs = new Map([
