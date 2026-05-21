@@ -86,3 +86,10 @@ export type {
 // team.yaml (Task 6.1 — Mode A team-pack manifest extension)
 export { SubagentRole, Team } from './team.js';
 export type { SubagentRole as SubagentRoleType, Team as TeamType } from './team.js';
+
+// chat_agent.yaml (WAB.6 prep — chat-agent binding side-file schema)
+export { BuiltinToolName, ChatAgentSchema } from './chat_agent.js';
+export type {
+  BuiltinToolName as BuiltinToolNameType,
+  ChatAgentConfig as ChatAgentConfigType,
+} from './chat_agent.js';
