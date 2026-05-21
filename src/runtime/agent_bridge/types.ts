@@ -107,3 +107,91 @@ export const outboundChatReplySchema = z.object({
   projectUuid: z.string().uuid(),
 });
 export type OutboundChatReply = z.infer<typeof outboundChatReplySchema>;
+
+// ---------------------------------------------------------------------------
+// ChatHistoryEntry — Anthropic-message-compatible turn fragment.
+//
+// Added WAB.3, 0.5.95. The agent loop (WAB.4) maps these directly into the
+// `messages` array of `Anthropic.messages.create`; the persistence layer
+// (WAB.3) round-trips them via JSONL. Keeping the shape Anthropic-native
+// avoids per-turn translation in the hot path.
+//
+// Content is an array of discriminated content blocks: text (plain prose),
+// tool_use (assistant invokes a tool — id + name + input), tool_result
+// (synthesized user message carrying tool output back to the model). This
+// mirrors Anthropic's documented message-content shape; see
+// https://docs.claude.com/en/api/messages content-block reference.
+//
+// `cacheMark` is an OPTIONAL transient hint set by the agent loop at
+// request-construction time; it is NOT persisted (cache breakpoints are
+// recomputed every turn from history positions per WAB.1 (c) — "marker
+// policy is system + last 2 user messages"). The field lives on the type
+// so the schema accepts persisted rows that might carry it from older
+// builds, but `appendEntries` strips it before writing.
+//
+// Validation: discriminated-union zod schema (`role` is the discriminator).
+// Strict on the content-block kinds so a typo in a producer surfaces at
+// the boundary, not deep inside `messages.create`.
+// ---------------------------------------------------------------------------
+
+const textBlockSchema = z.object({
+  type: z.literal('text'),
+  text: z.string(),
+});
+
+const toolUseBlockSchema = z.object({
+  type: z.literal('tool_use'),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  input: z.unknown(),
+});
+
+const toolResultBlockSchema = z.object({
+  type: z.literal('tool_result'),
+  tool_use_id: z.string().min(1),
+  content: z.string(),
+});
+
+export const chatHistoryContentBlockSchema = z.discriminatedUnion('type', [
+  textBlockSchema,
+  toolUseBlockSchema,
+  toolResultBlockSchema,
+]);
+export type ChatHistoryContentBlock = z.infer<typeof chatHistoryContentBlockSchema>;
+
+export const chatHistoryEntrySchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.array(chatHistoryContentBlockSchema),
+  timestamp: z.string().datetime({ offset: true }),
+  cacheMark: z.boolean().optional(),
+});
+export type ChatHistoryEntry = z.infer<typeof chatHistoryEntrySchema>;
+
+// ---------------------------------------------------------------------------
+// SessionState — warm-pool per-session container (WAB.3).
+//
+// WAB.1 decision (c) LOCKS the following:
+//   - NO Anthropic SDK client field — one daemon-wide client is shared.
+//   - `modelAlias` is the RESOLVED model id string (alias→id resolution
+//     happens at session creation in WAB.6; the state carries the final
+//     string the SDK consumes).
+//   - `packId` (NOT `codexId`) per pack-rename lock.
+//   - `turnInFlight` guards reentrant batches; the batch coordinator
+//     (WAB.5) reads + writes it under a per-session mutex.
+//
+// `lastActivityMs` is the wall-clock at last `getOrCreate` / `appendTurn`.
+// The LRU's own `updateAgeOnGet: true` setting handles TTL extension on
+// touch; this field is kept additionally so consumers (telemetry, future
+// admin CLI) can introspect activity without poking lru-cache internals.
+// ---------------------------------------------------------------------------
+
+export interface SessionState {
+  key: SessionKey;
+  history: ChatHistoryEntry[];
+  lastActivityMs: number;
+  projectUuid: string;
+  packId: string;
+  modelAlias: string;
+  /** Set true while an agent turn is mid-flight; batches buffer until cleared. */
+  turnInFlight: boolean;
+}
