@@ -31,6 +31,7 @@ import {
   runModelAliasPrompts,
   runPackPrompts,
 } from './chat_actions_prompts.js';
+import { runChannelTestStep } from './chat_actions_test_step.js';
 import {
   buildPlan,
   executePlan,
@@ -44,6 +45,7 @@ import {
   detectModelsConfig,
   detectPacksDir,
   detectSecretsBackend,
+  type ChatDaemonState,
   type ModelsState,
   type PacksState,
   type SecretsState,
@@ -150,11 +152,10 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
   const packResult = await runPackPrompts(detection.packs, d.homeDir);
   if (packResult === null) return abortNoChanges();
 
-  // (e) Channel offer (WIZ.4 deep-implements live verification)
+  // (e) Channel offer — pre-write channel-token detection only. Live
+  //     delivery happens post-write in step (f) below; this prompt stays
+  //     here so the user sees the channel status before committing writes.
   if ((await runChannelOffer(detection.secrets)) === 'cancel') return abortNoChanges();
-
-  // (f) Live test (gated by OPENSQUID_NO_BILLED_CALLS)
-  if ((await runLiveTest()) === 'cancel') return abortNoChanges();
 
   // (g) Dry-run preview + confirm + write
   const plan = buildPlan({
@@ -185,6 +186,11 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
 
   try {
     const result = await executePlan(plan);
+    // (f) WIZ.4 — opt-in live test, post-write. The user's models.yaml +
+    //     chat_agent.yaml are on disk by now; offering the test here lets
+    //     them verify end-to-end delivery against the freshly written
+    //     config. Skipped when OPENSQUID_NO_BILLED_CALLS=1.
+    await runChannelTestStep({ daemonState: detection.daemon });
     outro(successOutro(plan));
     return { outcome: 'completed', written: result.written };
   } catch (err) {
@@ -246,7 +252,7 @@ interface Detection {
   models: ModelsState;
   packs: PacksState;
   secrets: SecretsState;
-  daemon: { running: boolean; pid?: number };
+  daemon: ChatDaemonState;
   bridge: { running: boolean; pid?: number };
 }
 
@@ -306,17 +312,20 @@ async function runChannelOffer(secrets: SecretsState): Promise<'ok' | 'cancel'> 
     message: 'Set up Telegram channel now?',
     options: [
       { value: 'skip', label: "Skip for now (default) — I'll configure channels later" },
-      { value: 'detect', label: 'Detect + verify the existing bot token (no writes)' },
+      { value: 'detect', label: 'Detect the existing bot token (no writes, no calls)' },
     ],
     initialValue: 'skip',
   });
   if (isCancel(channelChoice)) return 'cancel';
   if (channelChoice === 'detect') {
     if (secrets.telegramTokenPresent) {
-      note(`Token found at ${secrets.envPath}. Live verification ships in WIZ.4.`, 'Channel');
+      note(
+        `Token found at ${secrets.envPath}. Live delivery is offered after save (step f).`,
+        'Channel',
+      );
     } else {
       note(
-        'OPENSQUID_TELEGRAM_BOT_TOKEN not found. Add it to ~/.loop/.env (see reference_user_telegram_config in memory).',
+        'OPENSQUID_TELEGRAM_BOT_TOKEN not found. Add it to ~/.loop/.env before accepting the post-save test.',
         'Channel',
       );
     }
@@ -324,27 +333,9 @@ async function runChannelOffer(secrets: SecretsState): Promise<'ok' | 'cancel'> 
   return 'ok';
 }
 
-async function runLiveTest(): Promise<'ok' | 'cancel'> {
-  if (process.env.OPENSQUID_NO_BILLED_CALLS === '1') {
-    note('Test skipped (OPENSQUID_NO_BILLED_CALLS set).', 'Test');
-    return 'ok';
-  }
-  const testChoice = await select({
-    message: 'Send a test message via chat-daemon now?',
-    options: [
-      { value: 'skip', label: 'Skip (default)' },
-      { value: 'send', label: 'Yes — send "[opensquid wizard test]" to project:telegram' },
-    ],
-    initialValue: 'skip',
-  });
-  if (isCancel(testChoice)) return 'cancel';
-  if (testChoice === 'send') {
-    note(
-      'Live test wiring ships in WIZ.4. Proceeding to save (test result does not gate the write).',
-      'Test',
-    );
-  }
-  return 'ok';
-}
+// `ChatDaemonState` is imported so the orchestrator's compile-time surface
+// matches what `runChannelTestStep` consumes. Re-exported for callers that
+// want to construct a wizard-equivalent test invocation in their own code.
+export type { ChatDaemonState };
 
 export { runChatSetupWizard as runWizard };
