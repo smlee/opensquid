@@ -108,7 +108,18 @@ export {
   buildChatToolDispatcher,
   type BuildChatToolDispatcherOptions,
   type BuildChatToolDispatcherResult,
+  type ResolvedAgentTurn,
 } from './pack_binding.js';
+export {
+  defaultMcpConfigPath,
+  defaultMcpServers,
+  materializeDefaultMcpConfig,
+  resolveMcpConfigPath,
+  type McpConfigDocument,
+  type McpServerEntry,
+  type MaterializeMcpConfigOptions,
+  type ResolveMcpConfigOptions,
+} from './mcp_config.js';
 export {
   BUILT_INS,
   chatSendSpec,

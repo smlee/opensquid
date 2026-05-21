@@ -156,6 +156,7 @@ describe('ChatDispatcher — basic flow', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client,
         model: 'claude-haiku-test',
         systemPrompt: 'you are a test agent',
@@ -198,6 +199,7 @@ describe('ChatDispatcher — basic flow', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client,
         model: 'claude-haiku-test',
         systemPrompt: 'sys',
@@ -239,6 +241,7 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client: gated.client,
         model: 'claude-haiku-test',
         systemPrompt: 'sys',
@@ -299,6 +302,7 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client: gated.client,
         model: 'claude-haiku-test',
         systemPrompt: 'sys',
@@ -354,6 +358,7 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client: gated.client,
         model: 'claude-haiku-test',
         systemPrompt: 'sys',
@@ -404,6 +409,7 @@ describe('ChatDispatcher — failure surface', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client,
         model: 'claude-haiku-test',
         systemPrompt: 'sys',
@@ -441,6 +447,7 @@ describe('ChatDispatcher — lifecycle', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client: gated.client,
         model: 'claude-haiku-test',
         systemPrompt: 'sys',
@@ -481,6 +488,7 @@ describe('ChatDispatcher — lifecycle', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client,
         model: 'm',
         systemPrompt: 's',
@@ -506,6 +514,7 @@ describe('ChatDispatcher — lifecycle', () => {
       bus,
       sessionManager: sm,
       agentLoopOptions: {
+        mode: 'api',
         client,
         model: 'm',
         systemPrompt: 's',
@@ -516,6 +525,54 @@ describe('ChatDispatcher — lifecycle', () => {
     dp.start();
     await dp.shutdown();
     expect(() => dp.start()).toThrow(/cannot restart/);
+    sm.shutdown();
+  });
+});
+
+describe('ChatDispatcher — subscription mode (WAB-SUB.2)', () => {
+  it('dispatches to runAgentTurnSubscription when agentLoopOptions.mode = subscription', async () => {
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    // Stub ClaudeCliClient — records the run() call + returns canned stdout.
+    const cliCalls: { cli: string; args: string[]; stdin: string }[] = [];
+    const stubCli = {
+      run: (req: { cli: string; args: string[]; stdin: string }) => {
+        cliCalls.push({ cli: req.cli, args: req.args, stdin: req.stdin });
+        return Promise.resolve('cli reply from claude');
+      },
+    };
+    const bus = new AgentEventBus();
+    const replies: { key: SessionKey; text: string }[] = [];
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'subscription',
+        cli: 'claude',
+        args: ['--print'],
+        mcpConfigPath: '/tmp/fake-mcp.json',
+        systemPrompt: 'you are tested',
+        client: stubCli,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      onReply: (key, text) => replies.push({ key, text }),
+    });
+    dp.start();
+
+    bus.emit('inbound', fixtureEvent(KEY, 'hello sub', '1'));
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(cliCalls).toHaveLength(1);
+    expect(cliCalls[0]?.cli).toBe('claude');
+    // Base args + our runtime layers.
+    expect(cliCalls[0]?.args).toContain('--print');
+    expect(cliCalls[0]?.args).toContain('--append-system-prompt');
+    expect(cliCalls[0]?.args).toContain('--mcp-config');
+    expect(cliCalls[0]?.args).toContain('/tmp/fake-mcp.json');
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.text).toBe('cli reply from claude');
+
+    await dp.shutdown();
     sm.shutdown();
   });
 });

@@ -1,17 +1,19 @@
 /**
- * agent_bridge — pack_binding unit tests (WAB.6, 0.5.100).
+ * agent_bridge — pack_binding unit tests (WAB.6 + WAB-SUB.2 mode dispatch).
  *
  * Coverage matches spec §"Test fixtures":
- *   - pack with chat_agent.yaml + api alias → dispatcher returned, resolved
- *     model + tunables propagated, three built-ins by default
+ *   - pack with chat_agent.yaml + api alias → api runner + resolved model
+ *     + tunables propagated, three built-ins by default
+ *   - pack with chat_agent.yaml + subscription alias → subscription runner
+ *     carrying cli + args; both modes are first-class (WAB-SUB.2)
  *   - pack with disable_builtins: ['recall'] → recall absent
  *   - pack with custom system_prompt path → prompt loaded from file
  *   - pack WITHOUT chat_agent.yaml → fallback defaults apply, alias
  *     resolved from `fast_chat` (when present) or throws on missing alias
  *   - alias missing from models.yaml → throws with "setup chat" hint
- *   - alias declared as non-api mode → throws with "currently only supports
- *     `mode: api`" message
  *   - alias declared as api mode but model field missing → throws
+ *   - alias declared as subscription mode but cli field missing → throws
+ *   - alias declared as local/mcp mode → throws "mode not yet implemented"
  *   - opt-in skill name unknown → warn invoked, dispatcher still built
  */
 
@@ -84,7 +86,7 @@ describe('buildChatToolDispatcher', () => {
     await rm(packRoot, { recursive: true, force: true });
   });
 
-  it('returns dispatcher + resolved model + tunables for a pack with chat_agent.yaml', async () => {
+  it('returns dispatcher + api runner + tunables for a pack with chat_agent.yaml (api mode)', async () => {
     const pack = basePack({
       chatAgent: {
         default_model: 'fast_chat',
@@ -103,6 +105,7 @@ describe('buildChatToolDispatcher', () => {
     });
 
     expect(result.resolvedModel).toBe(HAIKU);
+    expect(result.runner).toEqual({ mode: 'api', model: HAIKU });
     expect(result.tunables).toEqual({ maxToolIterations: 12, maxTokens: 2048 });
     expect(result.dispatcher.list().map((s) => s.name)).toEqual([
       'chat_send',
@@ -110,6 +113,64 @@ describe('buildChatToolDispatcher', () => {
       'store_lesson',
     ]);
     expect(result.systemPrompt).toMatch(/chat-agent embedded/);
+  });
+
+  it('returns subscription runner when alias is mode=subscription + impl=cli', async () => {
+    const pack = basePack({
+      chatAgent: {
+        default_model: 'subby',
+        skills: [],
+        disable_builtins: [],
+        max_tool_iterations: 8,
+        max_tokens: 1024,
+      },
+    });
+    const result = await buildChatToolDispatcher({
+      pack,
+      packRoot,
+      modelsConfig: {
+        subby: {
+          mode: 'subscription',
+          impl: 'cli',
+          cli: 'claude',
+          args: ['--print', '--model', 'sonnet'],
+        },
+      },
+      ragBackend: emptyBackend(),
+    });
+
+    expect(result.runner).toEqual({
+      mode: 'subscription',
+      cli: 'claude',
+      args: ['--print', '--model', 'sonnet'],
+    });
+    // resolvedModel is the human-readable label (cli name in subscription mode).
+    expect(result.resolvedModel).toBe('claude');
+    // Built-in tools still attached — subscription mode wires the same
+    // dispatcher; claude reaches them via the MCP config injected at
+    // daemon-start time (see daemon.test).
+    expect(result.dispatcher.list().length).toBe(3);
+  });
+
+  it('defaults subscription args to [] when models.yaml omits it', async () => {
+    const pack = basePack({
+      chatAgent: {
+        default_model: 'subby',
+        skills: [],
+        disable_builtins: [],
+        max_tool_iterations: 8,
+        max_tokens: 1024,
+      },
+    });
+    const result = await buildChatToolDispatcher({
+      pack,
+      packRoot,
+      modelsConfig: {
+        subby: { mode: 'subscription', impl: 'cli', cli: 'claude' },
+      },
+      ragBackend: emptyBackend(),
+    });
+    expect(result.runner).toMatchObject({ mode: 'subscription', cli: 'claude', args: [] });
   });
 
   it('filters built-ins via disable_builtins', async () => {
@@ -181,7 +242,7 @@ describe('buildChatToolDispatcher', () => {
     ).rejects.toThrow(/alias 'fast_chat' which is not declared.*opensquid setup chat/s);
   });
 
-  it('throws when alias is configured for a non-api mode', async () => {
+  it('throws when alias is subscription mode but cli field missing', async () => {
     const pack = basePack({
       chatAgent: {
         default_model: 'subby',
@@ -195,10 +256,10 @@ describe('buildChatToolDispatcher', () => {
       buildChatToolDispatcher({
         pack,
         packRoot,
-        modelsConfig: { subby: { mode: 'subscription', impl: 'cli', cli: 'claude', args: [] } },
+        modelsConfig: { subby: { mode: 'subscription', impl: 'cli', args: [] } },
         ragBackend: emptyBackend(),
       }),
-    ).rejects.toThrow(/mode 'subscription'.*only supports `mode: api`.*opensquid setup chat/s);
+    ).rejects.toThrow(/mode=subscription.*`cli` field is missing/s);
   });
 
   it('throws when alias is api mode but model field missing', async () => {
@@ -211,6 +272,26 @@ describe('buildChatToolDispatcher', () => {
         ragBackend: emptyBackend(),
       }),
     ).rejects.toThrow(/`model` field is missing/);
+  });
+
+  it('throws when alias mode is not yet implemented (local)', async () => {
+    const pack = basePack({
+      chatAgent: {
+        default_model: 'localy',
+        skills: [],
+        disable_builtins: [],
+        max_tool_iterations: 8,
+        max_tokens: 1024,
+      },
+    });
+    await expect(
+      buildChatToolDispatcher({
+        pack,
+        packRoot,
+        modelsConfig: { localy: { mode: 'local', endpoint: 'http://x' } },
+        ragBackend: emptyBackend(),
+      }),
+    ).rejects.toThrow(/mode='local'.*not yet implemented.*opensquid setup chat/s);
   });
 
   it('warns and skips unknown opt-in skill names but still returns the dispatcher', async () => {

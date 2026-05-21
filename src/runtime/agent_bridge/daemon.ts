@@ -1,22 +1,32 @@
 /**
- * agent_bridge — long-running daemon (WAB.7).
+ * agent_bridge — long-running daemon (WAB.7 + WAB-SUB.2 lazy api client, 0.5.106).
  *
- * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.7.
- * Architecture: `docs/tasks/WAB.1-architecture.md` decisions (a)-(g).
+ * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.7 +
+ * WAB-SUB.2 §"daemon mode-aware lazy client". Architecture:
+ * `docs/tasks/WAB.1-architecture.md` decisions (a)-(g).
  *
  * Wires every WAB.2-WAB.6 component (event bus, transport bridge, session
  * manager, batch coordinator + dispatcher, pack-bound tool dispatcher)
  * into a single long-running process driven by `start()` + `shutdown()`.
  * Owns the daemon-wide singletons:
- *   - one Anthropic SDK client (WAB.1 decision (c))
+ *   - one Anthropic SDK client — LAZILY constructed only when the
+ *     resolved pack binding is api-mode (WAB-SUB.2 cap on subscription
+ *     daemons paying for an unused SDK client + unused ANTHROPIC_API_KEY)
  *   - one PID lock at `~/.opensquid/agent-bridge.lock`
  *   - one PID file at `~/.opensquid/agent-bridge.pid`
  *   - one inbox watcher per project (the bridge is project-scoped)
+ *   - one materialized MCP config at
+ *     `~/.opensquid/agent-bridge/mcp-config.json` (subscription mode only)
  *
- * Hard-fail-at-start: missing ANTHROPIC_API_KEY, missing pack root,
- * missing project UUID, PID lock already held, bad pack config. Each
- * surface produces a CLEAR message naming the missing field + the
- * `opensquid setup chat` hint per `feedback_opensquid_runtime_failure_handling`.
+ * Mode-aware hard-fails (WAB-SUB.2):
+ *   - api mode    → missing ANTHROPIC_API_KEY throws "Mode 'api' requires
+ *                   ANTHROPIC_API_KEY ..." with setup-chat hint.
+ *   - subscription mode → key is NOT required; missing key is silently
+ *                         skipped (subscription auth flows through Claude
+ *                         Code's own state).
+ *   - all modes   → missing pack root / project UUID / PID lock held →
+ *                   hard-fail with structured message
+ *                   (`feedback_opensquid_runtime_failure_handling`).
  *
  * Shutdown order (spec WAB.7): dispatcher → transport → sessionManager →
  * release lock → delete PID file. The dispatcher's shutdown internally
@@ -24,15 +34,16 @@
  * first stops new turns AND waits for the current one to finish before
  * we tear down the transport. Idempotent — a second call is a no-op.
  *
- * `@anthropic-ai/sdk` is an OPTIONAL peer dep — dynamic-imported at start
- * so non-daemon CLI verbs never pay the cost AND so a missing peer dep
- * throws with an actionable "install @anthropic-ai/sdk" message.
+ * `@anthropic-ai/sdk` is an OPTIONAL peer dep — dynamic-imported only in
+ * the api-mode branch so subscription-mode daemons don't even attempt the
+ * import. A subscription pack with NO @anthropic-ai/sdk installed boots
+ * cleanly — that's the whole point of mode dispatch.
  *
  * Imports from: node:fs/promises, node:os, node:path, proper-lockfile,
  *   ../paths.js, ../../models/load_config.js, ../../packs/loader.js,
  *   ../../rag/backend_factory.js, ./dispatcher.js, ./event_bus.js,
- *   ./pack_binding.js, ./session_manager.js, ./session_persistence.js,
- *   ./transport_bridge.js, ./types.js.
+ *   ./mcp_config.js, ./pack_binding.js, ./session_manager.js,
+ *   ./session_persistence.js, ./transport_bridge.js, ./types.js.
  * Imported by: ./cli.ts (the agent-bridge CLI), test sibling.
  */
 
@@ -52,8 +63,9 @@ import type { SecretResolver } from '../../secrets/types.js';
 import { OPENSQUID_HOME } from '../paths.js';
 
 import type { AnthropicMessageClient } from './agent_loop.js';
-import { ChatDispatcher } from './dispatcher.js';
+import { ChatDispatcher, type DispatcherAgentLoopOptions } from './dispatcher.js';
 import { AgentEventBus } from './event_bus.js';
+import { resolveMcpConfigPath } from './mcp_config.js';
 import { buildChatToolDispatcher, type BuildChatToolDispatcherResult } from './pack_binding.js';
 import { SessionManager } from './session_manager.js';
 import { SessionPersistence } from './session_persistence.js';
@@ -72,7 +84,11 @@ export interface AgentBridgeDaemonOptions {
   projectUuid: string;
   /** Required — absolute path to the pack folder (contains manifest.yaml + chat_agent.yaml). */
   packRoot: string;
-  /** Anthropic API key — defaults to process.env.ANTHROPIC_API_KEY. Hard-fails if absent. */
+  /**
+   * Anthropic API key — defaults to process.env.ANTHROPIC_API_KEY. Only
+   * REQUIRED when the resolved pack binding is api-mode; subscription
+   * mode skips the check entirely.
+   */
   anthropicApiKey?: string;
   /** Override the daemon-home base (tests). Defaults to OPENSQUID_HOME(). */
   daemonHome?: string;
@@ -84,8 +100,16 @@ export interface AgentBridgeDaemonOptions {
    *  rooted at `~/.loop/.env`. The pack_binding's api-mode strategy uses
    *  this to read ANTHROPIC_API_KEY (and analogous keys). */
   secrets?: SecretResolver;
-  /** Inject an Anthropic client (tests). Defaults to dynamic-import + construct. */
+  /** Inject an Anthropic client (tests). Defaults to dynamic-import + construct.
+   *  In api-mode only — subscription mode never touches this. */
   anthropicClient?: AnthropicMessageClient;
+  /**
+   * Optional MCP config path override for subscription mode. Defaults to
+   * `OPENSQUID_AGENT_BRIDGE_MCP_CONFIG` env → materialize the daemon's
+   * default config at `<daemonHome>/agent-bridge/mcp-config.json`. Tests
+   * that want to skip the I/O can pass a stub path here.
+   */
+  mcpConfigPath?: string;
   /** Structured warn sink. Defaults to stderr write. */
   onWarn?: (message: string) => void;
   /** Reply hook — fired when the chat agent emits a final reply. Defaults to
@@ -135,16 +159,6 @@ export class AgentBridgeDaemon {
           'run `opensquid setup chat` to install a pack.',
       );
     }
-    const apiKey = this.opts.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
-    // The injected anthropicClient path skips the key check (tests use it).
-    if (apiKey.length === 0 && this.opts.anthropicClient === undefined) {
-      this.state = 'idle';
-      throw new Error(
-        'AgentBridgeDaemon: ANTHROPIC_API_KEY is not set. Run `opensquid setup chat` ' +
-          'or export ANTHROPIC_API_KEY before starting the daemon.',
-      );
-    }
-
     // proper-lockfile: `realpath: false` lets the target not exist (it mkdirs
     // `.lock/` atomically); `retries: 0` fails fast on contention.
     const home = this.opts.daemonHome ?? OPENSQUID_HOME();
@@ -162,7 +176,6 @@ export class AgentBridgeDaemon {
     }
 
     try {
-      const client = this.opts.anthropicClient ?? (await constructAnthropicClient(apiKey));
       const pack = await loadPack(this.opts.packRoot);
       const modelsConfig = this.opts.modelsConfig ?? (await loadModelsConfig());
       const ragBackend = this.opts.ragBackend ?? defaultRagBackend(home);
@@ -178,6 +191,11 @@ export class AgentBridgeDaemon {
         secrets,
         onWarn: (m) => this.warn(m),
       });
+      // Mode-aware agentLoopOptions: api branch builds the Anthropic
+      // client lazily AFTER we know the binding actually needs it;
+      // subscription branch materializes the MCP config so the spawned
+      // claude can discover opensquid's tools.
+      const agentLoopOptions = await this.buildAgentLoopOptions(home);
       const persistence = new SessionPersistence({
         root: join(home, 'agent-bridge', 'sessions'),
         onWarn: (m) => this.warn(m),
@@ -196,15 +214,7 @@ export class AgentBridgeDaemon {
       this.dispatcher = new ChatDispatcher({
         bus: this.bus,
         sessionManager: this.sessionManager,
-        agentLoopOptions: {
-          client,
-          model: this.bindingResult.resolvedModel,
-          systemPrompt: this.bindingResult.systemPrompt,
-          tools: this.bindingResult.dispatcher.list(),
-          dispatcher: this.bindingResult.dispatcher,
-          maxTokens: this.bindingResult.tunables.maxTokens,
-          maxToolIterations: this.bindingResult.tunables.maxToolIterations,
-        },
+        agentLoopOptions,
         onWarn: (m) => this.warn(m),
         ...(this.opts.onReply !== undefined ? { onReply: this.opts.onReply } : {}),
       });
@@ -219,6 +229,65 @@ export class AgentBridgeDaemon {
       this.state = 'idle';
       throw err;
     }
+  }
+
+  /**
+   * Build the dispatcher's mode-aware agentLoopOptions. Lazy api-client
+   * construction lives here so subscription-mode daemons never touch
+   * `@anthropic-ai/sdk` (nor require ANTHROPIC_API_KEY). Subscription mode
+   * resolves the MCP config path so the spawned claude can reach
+   * opensquid's MCP servers.
+   *
+   * Throws on api-mode start if no API key + no injected client. Throws on
+   * subscription-mode start if MCP config materialization fails. Both
+   * happen during the daemon's start() try/catch which rolls back the
+   * lock + binding.
+   */
+  private async buildAgentLoopOptions(home: string): Promise<DispatcherAgentLoopOptions> {
+    if (this.bindingResult === null) {
+      throw new Error('AgentBridgeDaemon.buildAgentLoopOptions: binding result is null');
+    }
+    const binding = this.bindingResult;
+    const runner = binding.runner;
+    if (runner.mode === 'api') {
+      const apiKey = this.opts.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
+      // The injected anthropicClient path skips the key check (tests use it).
+      if (apiKey.length === 0 && this.opts.anthropicClient === undefined) {
+        throw new Error(
+          "AgentBridgeDaemon: Mode 'api' requires ANTHROPIC_API_KEY in env / secrets " +
+            'backend. Run `opensquid setup chat` or export ANTHROPIC_API_KEY before ' +
+            'starting the daemon (or switch the pack to mode=subscription).',
+        );
+      }
+      const client = this.opts.anthropicClient ?? (await constructAnthropicClient(apiKey));
+      return {
+        mode: 'api',
+        client,
+        model: runner.model,
+        systemPrompt: binding.systemPrompt,
+        tools: binding.dispatcher.list(),
+        dispatcher: binding.dispatcher,
+        maxTokens: binding.tunables.maxTokens,
+        maxToolIterations: binding.tunables.maxToolIterations,
+      };
+    }
+    if (runner.mode === 'subscription') {
+      const mcpConfigPath = await resolveMcpConfigPath({
+        ...(this.opts.mcpConfigPath !== undefined ? { explicitPath: this.opts.mcpConfigPath } : {}),
+        daemonHome: home,
+      });
+      return {
+        mode: 'subscription',
+        cli: runner.cli,
+        args: runner.args,
+        mcpConfigPath,
+        systemPrompt: binding.systemPrompt,
+      };
+    }
+    // Exhaustiveness — pack_binding's resolveRunnerOrThrow rejects
+    // unimplemented modes before we get here, but a future addition to
+    // the union would trip this at compile time.
+    return assertNever(runner);
   }
 
   /** Tear down in spec order. Idempotent — second call is a no-op so signal
@@ -359,4 +428,12 @@ export function resolveProjectUuidFromEnv(env: NodeJS.ProcessEnv = process.env):
   const fromEnv = env.OPENSQUID_PROJECT_UUID;
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
   return null;
+}
+
+/** Compile-time exhaustiveness helper for the mode discriminator switch. */
+function assertNever(x: never): never {
+  throw new Error(
+    `AgentBridgeDaemon: unhandled runner mode '${(x as { mode: string }).mode}' — ` +
+      `run \`opensquid setup chat\` to choose api or subscription.`,
+  );
 }

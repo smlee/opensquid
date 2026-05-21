@@ -1,48 +1,34 @@
 /**
- * agent_bridge — pack binding (WAB.6).
+ * agent_bridge — pack binding (WAB.6 + WAB-SUB.2 mode dispatcher, 0.5.106).
  *
- * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.6
- * §"pack_binding.ts". Architecture: `docs/tasks/WAB.1-architecture.md`
+ * Specs: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.6 §"pack_binding.ts"
+ * + WAB-SUB.2 §"mode dispatcher". Architecture: `WAB.1-architecture.md`
  * decisions (e) + (g).
  *
  * Responsibility:
- *   `buildChatToolDispatcher({ pack, packRoot, modelsConfig, ragBackend, ... })`
- *   reads the pack's `chat_agent.yaml` (or its built-in fallback when the
- *   pack didn't ship one), resolves the model alias to a concrete model id,
- *   loads the system prompt (file path → file contents, or built-in
- *   default), filters built-in tools per `disable_builtins`, opts in any
- *   declared skills (warn-and-skip on unknown), and returns a
- *   `SimpleToolDispatcher` plus the runtime tunables the agent loop needs.
+ *   `buildChatToolDispatcher` reads the pack's `chat_agent.yaml` (or a
+ *   built-in fallback), resolves the model alias to a discriminated
+ *   `runner` descriptor (api vs subscription), loads the system prompt,
+ *   filters built-in tools per `disable_builtins`, opts in skills
+ *   (warn-and-skip on unknown), and returns a `SimpleToolDispatcher` +
+ *   the runtime tunables.
  *
- * Hard-fail surface:
- *   - The pack's `default_model` alias is not declared in `modelsConfig` →
- *     throw with a clear message naming the alias.
- *   - The alias resolves to a mode other than `api` → throw with the spec's
- *     exact error message format pointing at `opensquid setup chat`. The
- *     WAB.4 agent loop only supports `api` mode (the tool-use round-trip
- *     uses Anthropic's stable Messages contract); subscription / local /
- *     MCP modes do not expose the round-trip and would silently fail.
+ * Mode dispatch (WAB-SUB.2): both `api` and `subscription` are first-class.
+ * The dispatcher switches on `runner.mode` once per turn — `api` calls
+ * `runAgentTurn`, `subscription` calls `runAgentTurnSubscription`. Future
+ * modes (local, mcp) throw "mode not yet implemented" with a setup-chat hint.
  *
- * Non-responsibility:
- *   - Does NOT construct the Anthropic SDK client (one daemon-wide client,
- *     per WAB.1 decision (c)).
- *   - Does NOT instantiate the `RagBackend` — that's a per-daemon resource
- *     wired by WAB.7.
- *   - Does NOT call `setup`. Misconfiguration surfaces as a thrown error
- *     at bind-time; the operator runs setup themselves.
+ * Hard-fails: alias missing from modelsConfig; api mode missing `model`;
+ * subscription mode missing `cli`; mode = local | mcp (unimplemented).
  *
- * Unknown-skill semantics (WAB.1 (e) lock + WIZ.1 open-question resolution):
- *   `chat_agent.skills: [name]` entries that don't appear in the pack's
- *   `skills/` directory are skipped with a structured warn via the optional
- *   `onWarn` callback. The chat agent still loads; the user's setup UI is
- *   the right place to surface "you wrote `subagent_call` but no such skill
- *   exists" — failing the bind here would block the entire warm-agent path
- *   on a single typo.
+ * Non-responsibility: does NOT construct the Anthropic SDK client (lazy in
+ * daemon.ts), does NOT instantiate RagBackend (daemon-owned), does NOT call
+ * setup (misconfiguration surfaces as a thrown error).
  *
  * Imports from: ../../models/dispatcher.js, ../../packs/schemas/chat_agent.js,
  *   ./tool_dispatcher.js, ./tools/index.js, ./types.js, node:fs/promises,
  *   node:path.
- * Imported by: future daemon.ts (WAB.7), test sibling.
+ * Imported by: daemon.ts, test sibling.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -119,15 +105,24 @@ export interface BuildChatToolDispatcherOptions {
   onWarn?: (message: string) => void;
 }
 
+/**
+ * Resolved agent-turn runner — discriminated union the dispatcher branches
+ * on. `api` carries the concrete model id; `subscription` carries the CLI
+ * binary + base args from `models.yaml`. Both modes are first-class.
+ */
+export type ResolvedAgentTurn =
+  | { mode: 'api'; model: string }
+  | { mode: 'subscription'; cli: string; args: string[] };
+
 export interface BuildChatToolDispatcherResult {
   dispatcher: ToolDispatcher;
   systemPrompt: string;
-  /** Resolved concrete model id (e.g. `claude-haiku-4-5-20251001`). */
+  /** Daemon + dispatcher switch on `.mode` to pick runAgentTurn vs runAgentTurnSubscription. */
+  runner: ResolvedAgentTurn;
+  /** Human-readable model label: concrete model id (api) or cli name (subscription).
+   *  Convenience for telemetry/session-manager so they don't switch on the union. */
   resolvedModel: string;
-  tunables: {
-    maxToolIterations: number;
-    maxTokens: number;
-  };
+  tunables: { maxToolIterations: number; maxTokens: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -140,13 +135,11 @@ export async function buildChatToolDispatcher(
   const chatAgent = opts.pack.chatAgent ?? FALLBACK_CHAT_AGENT;
   const warn = opts.onWarn ?? noopWarn;
 
-  // 1. Resolve model alias. The agent loop's contract requires a concrete
-  //    model id string and only supports api-mode round-trips today.
-  const resolvedModel = resolveModelOrThrow(
-    chatAgent.default_model,
-    opts.modelsConfig,
-    opts.secrets,
-  );
+  // 1. Resolve model alias to a discriminated runner descriptor. Both api
+  //    and subscription modes are first-class; local/mcp throw with the
+  //    setup-chat hint per WAB-SUB.2.
+  const runner = resolveRunnerOrThrow(chatAgent.default_model, opts.modelsConfig, opts.secrets);
+  const resolvedModel = runner.mode === 'api' ? runner.model : runner.cli;
 
   // 2. Load system prompt — pack-relative file, or built-in default.
   const systemPrompt = await loadSystemPrompt(chatAgent.system_prompt, opts.packRoot);
@@ -168,6 +161,7 @@ export async function buildChatToolDispatcher(
   return {
     dispatcher,
     systemPrompt,
+    runner,
     resolvedModel,
     tunables: {
       maxToolIterations: chatAgent.max_tool_iterations,
@@ -177,52 +171,59 @@ export async function buildChatToolDispatcher(
 }
 
 // ---------------------------------------------------------------------------
-// resolveModelOrThrow — alias → concrete model id.
+// resolveRunnerOrThrow — alias → discriminated runner descriptor.
 //
-// Hard-fails on:
-//   - alias missing from `modelsConfig`.
-//   - alias declared but `mode !== 'api'` (the WAB.4 agent loop only
-//     supports api-mode round-trips today).
-//   - alias declared as api mode but `model` field missing (api strategies
-//     need a concrete model id; surfacing here is friendlier than letting
-//     the api strategy throw mid-turn).
+// api → validate `model` non-empty + resolveStrategy() for provider check.
+// subscription → validate `cli` non-empty + resolveStrategy() for impl check.
+// local | mcp → throws "mode not yet implemented" + setup-chat hint.
 //
-// `resolveStrategy` is called BUT its return value is intentionally
-// discarded — we use it for its side-effect of validating the strategy's
-// constructor preconditions (e.g. api mode missing `provider` throws
-// upfront). The actual SDK client used by the agent loop is daemon-wide.
+// resolveStrategy's return value is discarded — we call it for its side-
+// effect of validating strategy preconditions (provider for api, impl for
+// subscription). The actual SDK client (api) / spawn (subscription) is
+// constructed downstream in daemon.ts / agent_loop_subscription.ts.
 // ---------------------------------------------------------------------------
 
-function resolveModelOrThrow(
+function resolveRunnerOrThrow(
   alias: string,
   modelsConfig: Record<string, ModelAliasConfig>,
   secrets?: SecretResolver,
-): string {
+): ResolvedAgentTurn {
   const cfg = modelsConfig[alias];
   if (cfg === undefined) {
     throw new Error(
       `Chat agent uses model alias '${alias}' which is not declared in models.yaml. ` +
-        `Run \`opensquid setup chat\` to configure an API model alias.`,
+        `Run \`opensquid setup chat\` to configure an api or subscription model alias.`,
     );
   }
-  if (cfg.mode !== 'api') {
-    throw new Error(
-      `Chat agent uses model alias '${alias}' which is configured for mode '${cfg.mode}'. ` +
-        `The chat bridge currently only supports \`mode: api\`. ` +
-        `Run \`opensquid setup chat\` to configure an API model alias.`,
-    );
+  if (cfg.mode === 'api') {
+    if (cfg.model === undefined || cfg.model.length === 0) {
+      throw new Error(
+        `Chat agent uses model alias '${alias}' (mode=api) but \`model\` field is missing — ` +
+          `api strategies require a concrete model id. ` +
+          `Run \`opensquid setup chat\` to fix the alias.`,
+      );
+    }
+    // Validate strategy-constructor preconditions (e.g. provider field).
+    resolveStrategy(alias, cfg, secrets);
+    return { mode: 'api', model: cfg.model };
   }
-  if (cfg.model === undefined || cfg.model.length === 0) {
-    throw new Error(
-      `Chat agent uses model alias '${alias}' (mode=api) but \`model\` field is missing — ` +
-        `api strategies require a concrete model id. ` +
-        `Run \`opensquid setup chat\` to fix the alias.`,
-    );
+  if (cfg.mode === 'subscription') {
+    if (cfg.cli === undefined || cfg.cli.length === 0) {
+      throw new Error(
+        `Chat agent uses model alias '${alias}' (mode=subscription) but \`cli\` field is missing — ` +
+          `subscription strategies require a binary name or path. ` +
+          `Run \`opensquid setup chat\` to fix the alias.`,
+      );
+    }
+    // Validate strategy-constructor preconditions (impl branch).
+    resolveStrategy(alias, cfg, secrets);
+    return { mode: 'subscription', cli: cfg.cli, args: cfg.args ?? [] };
   }
-  // Validate strategy-constructor preconditions (e.g. provider field) by
-  // resolving the strategy and discarding the handle.
-  resolveStrategy(alias, cfg, secrets);
-  return cfg.model;
+  // Future modes (local, mcp) reserved — emit the setup-chat hint.
+  throw new Error(
+    `Chat agent uses model alias '${alias}' (mode='${cfg.mode}'): mode not yet implemented ` +
+      `in v1. Run \`opensquid setup chat\` to choose api or subscription.`,
+  );
 }
 
 // ---------------------------------------------------------------------------

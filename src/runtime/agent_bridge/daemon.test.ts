@@ -1,12 +1,14 @@
 /**
- * agent_bridge — AgentBridgeDaemon tests (WAB.7).
+ * agent_bridge — AgentBridgeDaemon tests (WAB.7 + WAB-SUB.2 mode-aware lazy client).
  *
  * Coverage (per spec test plan):
  *   - start: writes pid file, holds lock, shutdown releases
  *   - start while another is running → throws "another daemon is already running"
  *   - stale-pid recovery: a pidfile pointing at dead pid does NOT block start
  *   - shutdown order: dispatcher → transport → sessionManager → release → pid rm
- *   - missing ANTHROPIC_API_KEY → throws with setup-chat hint
+ *   - api-mode: missing ANTHROPIC_API_KEY → throws with mode-named setup hint
+ *   - subscription-mode: missing ANTHROPIC_API_KEY does NOT throw (WAB-SUB.2)
+ *   - subscription-mode: MCP config materialized at known path
  *   - missing projectUuid → throws with setup-chat hint
  *   - shutdown is idempotent
  *   - SIGTERM/SIGINT handlers installed + removed across lifecycle
@@ -207,7 +209,7 @@ describe('AgentBridgeDaemon.start — hard-fail surface', () => {
     await expect(d.start()).rejects.toThrow(/packRoot is required/);
   });
 
-  it('throws when ANTHROPIC_API_KEY is missing AND no client injected', async () => {
+  it('throws when api-mode and ANTHROPIC_API_KEY missing AND no client injected', async () => {
     const priorKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     try {
@@ -221,7 +223,9 @@ describe('AgentBridgeDaemon.start — hard-fail surface', () => {
         secrets: fakeSecrets(),
         onWarn: () => undefined,
       });
-      await expect(d.start()).rejects.toThrow(/ANTHROPIC_API_KEY is not set/);
+      await expect(d.start()).rejects.toThrow(
+        /Mode 'api' requires ANTHROPIC_API_KEY.*opensquid setup chat/s,
+      );
     } finally {
       if (priorKey !== undefined) process.env.ANTHROPIC_API_KEY = priorKey;
     }
@@ -252,6 +256,100 @@ describe('AgentBridgeDaemon.start — hard-fail surface', () => {
     });
     // pack ships `default_model: fast_chat`; modelsConfig only has wrong_alias.
     await expect(d.start()).rejects.toThrow(/not declared in models\.yaml/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Subscription-mode start (WAB-SUB.2)
+// ---------------------------------------------------------------------------
+
+function subscriptionModelsConfig(): Record<string, ModelAliasConfig> {
+  return {
+    fast_chat: {
+      mode: 'subscription',
+      impl: 'cli',
+      cli: 'claude',
+      args: ['--print'],
+    },
+  };
+}
+
+describe('AgentBridgeDaemon.start — subscription mode (WAB-SUB.2)', () => {
+  it('starts without ANTHROPIC_API_KEY when the resolved binding is subscription mode', async () => {
+    const priorKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const d = new AgentBridgeDaemon({
+        projectUuid: PROJECT_UUID,
+        packRoot,
+        daemonHome,
+        // anthropicClient deliberately omitted — subscription mode should
+        // skip the key check entirely.
+        modelsConfig: subscriptionModelsConfig(),
+        ragBackend: fakeRag(),
+        secrets: fakeSecrets(),
+        onWarn: () => undefined,
+      });
+      await d.start();
+      // Binding resolved to subscription runner.
+      const binding = d.bindingFor();
+      expect(binding).not.toBeNull();
+      expect(binding?.runner).toMatchObject({ mode: 'subscription', cli: 'claude' });
+      await d.shutdown();
+    } finally {
+      if (priorKey !== undefined) process.env.ANTHROPIC_API_KEY = priorKey;
+    }
+  });
+
+  it('materializes the default MCP config at <daemonHome>/agent-bridge/mcp-config.json', async () => {
+    const priorKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const d = new AgentBridgeDaemon({
+        projectUuid: PROJECT_UUID,
+        packRoot,
+        daemonHome,
+        modelsConfig: subscriptionModelsConfig(),
+        ragBackend: fakeRag(),
+        secrets: fakeSecrets(),
+        onWarn: () => undefined,
+      });
+      await d.start();
+      const cfgPath = join(daemonHome, 'agent-bridge', 'mcp-config.json');
+      const raw = await readFile(cfgPath, 'utf8');
+      const parsed = JSON.parse(raw) as { mcpServers: Record<string, { command: string }> };
+      expect(parsed.mcpServers.opensquid?.command).toBe('opensquid-mcp');
+      expect(parsed.mcpServers['opensquid-chat']?.command).toBe('opensquid-chat-bridge-mcp');
+      await d.shutdown();
+    } finally {
+      if (priorKey !== undefined) process.env.ANTHROPIC_API_KEY = priorKey;
+    }
+  });
+
+  it('honors mcpConfigPath override and does NOT materialize the default file', async () => {
+    const priorKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const customPath = join(daemonHome, 'custom-mcp.json');
+      const d = new AgentBridgeDaemon({
+        projectUuid: PROJECT_UUID,
+        packRoot,
+        daemonHome,
+        modelsConfig: subscriptionModelsConfig(),
+        ragBackend: fakeRag(),
+        secrets: fakeSecrets(),
+        mcpConfigPath: customPath,
+        onWarn: () => undefined,
+      });
+      await d.start();
+      // Default path NOT touched.
+      await expect(
+        readFile(join(daemonHome, 'agent-bridge', 'mcp-config.json'), 'utf8'),
+      ).rejects.toBeDefined();
+      await d.shutdown();
+    } finally {
+      if (priorKey !== undefined) process.env.ANTHROPIC_API_KEY = priorKey;
+    }
   });
 });
 

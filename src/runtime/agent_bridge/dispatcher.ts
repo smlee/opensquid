@@ -1,15 +1,18 @@
 /**
  * agent_bridge — event-bus → batch → session → agent-loop glue
- * (WAB.5, 0.5.99).
+ * (WAB.5 + WAB-SUB.2 mode dispatch, 0.5.106).
  *
- * Spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.5.
- * Architecture: `docs/tasks/WAB.1-architecture.md` decision (d).
+ * Spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.5 + WAB-SUB.2
+ * §"dispatcher integration". Architecture:
+ * `docs/tasks/WAB.1-architecture.md` decision (d).
  *
  * Responsibility:
  *   1. Subscribe to `bus.on('inbound')` and forward each event's text
  *      into the per-dispatcher `BatchCoordinator`.
  *   2. Provide the coordinator's `onFlush` handler — get/create the
- *      warm session, call `runAgentTurn` with the coalesced text,
+ *      warm session, call EITHER `runAgentTurn` (api mode) OR
+ *      `runAgentTurnSubscription` (subscription mode) with the coalesced
+ *      text per the resolved `agentLoopOptions.mode` discriminator,
  *      persist via `SessionManager.appendTurn`, forward reply.
  *   3. Enforce the per-session mutex+queue policy closing the
  *      `FIXME(WAB.5)` in session_manager.ts: at most ONE in-flight
@@ -18,31 +21,58 @@
  *      MAX_QUEUE_COALESCE_ATTEMPTS; the next attempt DROPS with
  *      `onWarn` so operators can spot flooding.
  *
+ * Mode dispatch (WAB-SUB.2):
+ *   `agentLoopOptions` is a discriminated union — `.mode` is the
+ *   discriminator. Switch happens ONCE per turn at the call site;
+ *   exhaustiveness via `assertNever`. Both modes are first-class —
+ *   neither is hardcoded as a default. Adding a future mode (local,
+ *   mcp) requires extending the union AND the switch, which surfaces
+ *   the gap at compile time.
+ *
  * Reply surface: v1 invokes `onReply` (default no-op). WAB.6 wires it
  * to the legacy chat-daemon RPC.
  *
  * Shutdown: idempotent — unsubscribes, shuts down coordinator (drops
  * pending timers), awaits in-flight turns, drops queued batches.
  *
- * Imports from: ./agent_loop.js, ./batch.js, ./event_bus.js,
- *   ./session_manager.js, ./types.js.
- * Imported by: ./index.ts (barrel); future daemon.ts (WAB.7).
+ * Imports from: ./agent_loop.js, ./agent_loop_subscription.js, ./batch.js,
+ *   ./event_bus.js, ./session_manager.js, ./types.js.
+ * Imported by: ./index.ts (barrel); daemon.ts.
  */
 
 import { runAgentTurn, type RunAgentTurnOptions } from './agent_loop.js';
+import {
+  runAgentTurnSubscription,
+  type RunAgentTurnSubscriptionOptions,
+  type RunAgentTurnSubscriptionResult,
+} from './agent_loop_subscription.js';
 import { BatchCoordinator, type BatchCoordinatorOptions } from './batch.js';
 import type { AgentEventBus } from './event_bus.js';
 import type { SessionManager } from './session_manager.js';
-import type { InboundChatEvent, SessionKey } from './types.js';
+import type { ChatHistoryEntry, InboundChatEvent, SessionKey } from './types.js';
 import { sessionKeyString } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
 
-/** Mirror of {@link RunAgentTurnOptions} (no narrowing — keeps
- *  `exactOptionalPropertyTypes` happy when passed through). */
-export type DispatcherAgentLoopOptions = RunAgentTurnOptions;
+/**
+ * Discriminated union of agent-loop invocation options. `.mode` is the
+ * discriminator the dispatcher switches on per turn.
+ *
+ * - `'api'` carries the {@link RunAgentTurnOptions} payload (Anthropic
+ *   client, model id, tools, system prompt, etc.). The dispatcher calls
+ *   `runAgentTurn(state, text, payload)`.
+ * - `'subscription'` carries {@link RunAgentTurnSubscriptionOptions}
+ *   (CLI binary, args, mcp config path, system prompt). The dispatcher
+ *   calls `runAgentTurnSubscription(state, text, payload)`.
+ *
+ * Both branches are first-class — the daemon picks one based on the
+ * pack's `models.yaml` declaration and passes it through verbatim.
+ */
+export type DispatcherAgentLoopOptions =
+  | ({ mode: 'api' } & RunAgentTurnOptions)
+  | ({ mode: 'subscription' } & RunAgentTurnSubscriptionOptions);
 
 export interface ChatDispatcherOptions {
   bus: AgentEventBus;
@@ -209,7 +239,7 @@ export class ChatDispatcher {
     }
     this.opts.sessionManager.beginTurn(key);
     try {
-      const result = await runAgentTurn(state, text, this.opts.agentLoopOptions);
+      const result = await runResolvedTurn(state, text, this.opts.agentLoopOptions);
       await this.opts.sessionManager.appendTurn(key, result.assistantEntries);
       this.onReply(key, result.replyText, state.projectUuid);
     } catch (err) {
@@ -220,6 +250,53 @@ export class ChatDispatcher {
       this.onTurnError(key, err);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// runResolvedTurn — switch on the discriminated mode, call the right runner.
+//
+// Exhaustiveness via `assertNever` at the default branch — if a future
+// `DispatcherAgentLoopOptions` variant is added (e.g. local, mcp) and the
+// maintainer forgets to update this switch, TypeScript rejects the
+// `assertNever` call at compile time. The runtime throw never fires in
+// practice; it's the fallback only the type system can't prove
+// unreachable on its own.
+// ---------------------------------------------------------------------------
+
+interface ResolvedTurnResult {
+  assistantEntries: ChatHistoryEntry[];
+  replyText: string;
+}
+
+async function runResolvedTurn(
+  state: Parameters<typeof runAgentTurn>[0],
+  text: string,
+  loop: DispatcherAgentLoopOptions,
+): Promise<ResolvedTurnResult> {
+  switch (loop.mode) {
+    case 'api':
+      // The structural type of `loop` (post-narrowing) is compatible with
+      // RunAgentTurnOptions — the extra `mode` field is harmless excess
+      // property at the call site (TS allows it; runAgentTurn ignores it).
+      return runAgentTurn(state, text, loop);
+    case 'subscription': {
+      const result: RunAgentTurnSubscriptionResult = await runAgentTurnSubscription(
+        state,
+        text,
+        loop,
+      );
+      return { assistantEntries: result.assistantEntries, replyText: result.replyText };
+    }
+    default:
+      return assertNever(loop);
+  }
+}
+
+function assertNever(x: never): never {
+  throw new Error(
+    `dispatcher: unhandled agent-loop mode '${(x as { mode: string }).mode}' — ` +
+      `run \`opensquid setup chat\` to choose api or subscription.`,
+  );
 }
 
 function describeErr(err: unknown): string {
