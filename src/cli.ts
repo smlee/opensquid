@@ -21,6 +21,7 @@ import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
 import { registerCache } from './setup/cli/cache.js';
+import { registerSetup } from './setup/cli/chat.js';
 import { registerCheckpoints } from './setup/cli/checkpoints.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
@@ -164,6 +165,12 @@ registerCache(program);
 // --yes refuses with exit 1 (mirrors `cache clear` / `checkpoints clean`).
 registerCost(program);
 registerLimits(program);
+
+// WIZ.5 — `opensquid setup chat`. Registers the `setup` parent verb group
+// + the `chat` subcommand (interactive chat-agent wizard). Bare `setup`
+// prints help — the wizard never auto-runs. Flags: --dry-run, --replace,
+// --skip-test. See `src/setup/cli/chat.ts` for the registration shape.
+registerSetup(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);

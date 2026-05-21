@@ -62,10 +62,23 @@ export interface WizardDeps {
   envPath?: string;
   /** Exit code sink — tests assert against this without process.exit. */
   setExitCode?: (code: number) => void;
+  /**
+   * WIZ.5 `--dry-run`. Wizard walks prompts + renders the plan, then exits
+   * WITHOUT calling `executePlan`. The dry-run preview is the deliverable;
+   * no files are written, no backups created. Final confirm prompt is
+   * skipped (we wouldn't honor a `true` answer anyway).
+   */
+  dryRun?: boolean;
+  /**
+   * WIZ.5 `--replace`. Skips the existing-config (idempotency) branch and
+   * always proceeds to author fresh config — overwriting any existing
+   * fast_chat alias. Backup of the prior models.yaml is still made.
+   */
+  replace?: boolean;
 }
 
 export interface WizardResult {
-  outcome: 'completed' | 'aborted' | 'no_changes' | 'concurrent_lock';
+  outcome: 'completed' | 'aborted' | 'no_changes' | 'concurrent_lock' | 'dry_run';
   written?: string[];
 }
 
@@ -77,6 +90,8 @@ export async function runChatSetupWizard(deps: WizardDeps = {}): Promise<WizardR
   const setExitCode = deps.setExitCode ?? ((c) => (process.exitCode = c));
   const homeDir = deps.opensquidHome ?? OPENSQUID_HOME();
   const envPath = deps.envPath ?? defaultEnvPath();
+  const dryRun = deps.dryRun === true;
+  const replace = deps.replace === true;
 
   await mkdir(homeDir, { recursive: true });
   const lockPath = join(homeDir, 'setup-chat.lock');
@@ -92,7 +107,7 @@ export async function runChatSetupWizard(deps: WizardDeps = {}): Promise<WizardR
     return { outcome: 'concurrent_lock' };
   }
   try {
-    return await runInner({ homeDir, envPath, setExitCode });
+    return await runInner({ homeDir, envPath, setExitCode, dryRun, replace });
   } finally {
     if (release) {
       try {
@@ -108,6 +123,8 @@ interface InnerDeps {
   homeDir: string;
   envPath: string;
   setExitCode: (code: number) => void;
+  dryRun: boolean;
+  replace: boolean;
 }
 
 async function runInner(d: InnerDeps): Promise<WizardResult> {
@@ -126,7 +143,11 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
   }
 
   // (i) Idempotency
-  if (detection.models.hasFastChat) {
+  // WIZ.5: `--replace` skips the idempotency branch entirely — proceed
+  // straight to authoring fresh config, overwriting any existing fast_chat
+  // alias. Caller still sees the dry-run preview + confirm before any
+  // write happens, so this is not a "silent overwrite" foot-gun.
+  if (detection.models.hasFastChat && !d.replace) {
     const choice = await runIdempotencyBranch(detection.models);
     if (choice === 'cancel') return abortNoChanges();
     if (choice === 'keep') {
@@ -142,6 +163,11 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
       return { outcome: 'no_changes' };
     }
     // 'replace' falls through.
+  } else if (detection.models.hasFastChat && d.replace) {
+    note(
+      'fast_chat alias exists. --replace: skipping confirm, will overwrite after dry-run preview.',
+      'Replace',
+    );
   }
 
   // (c) Model alias setup
@@ -177,6 +203,18 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
     }),
   });
   note(renderPlanPreview(plan), 'Plan');
+
+  // WIZ.5: `--dry-run` short-circuits before the confirm + executePlan.
+  // The plan preview IS the deliverable; nothing is written. We still emit
+  // a clear outro so the user knows the wizard finished cleanly.
+  if (d.dryRun) {
+    outro(
+      pc.yellow(
+        `Dry-run complete. ${String(plan.actions.length)} file(s) WOULD be written.\nRe-run without --dry-run to apply.`,
+      ),
+    );
+    return { outcome: 'dry_run' };
+  }
 
   const proceed = await confirm({
     message: `Write these ${String(plan.actions.length)} files?`,
