@@ -57,6 +57,17 @@ export {
 } from './session_manager.js';
 export { SimpleToolDispatcher, type ToolRegistration } from './tool_dispatcher.js';
 export {
+  DEFAULT_SUBSCRIPTION_TIMEOUT_MS,
+  SUBSCRIPTION_HISTORY_SNIPPET_LEN,
+  buildPromptBody,
+  defaultClaudeCliClient,
+  runAgentTurnSubscription,
+  type ClaudeCliClient,
+  type ClaudeCliRunRequest,
+  type RunAgentTurnSubscriptionOptions,
+  type RunAgentTurnSubscriptionResult,
+} from './agent_loop_subscription.js';
+export {
   MAX_TOOL_ITERATIONS,
   DEFAULT_MAX_TOKENS,
   CACHE_BREAKPOINT_USER_MSGS,
