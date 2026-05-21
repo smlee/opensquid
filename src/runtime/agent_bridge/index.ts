@@ -7,14 +7,16 @@
  *   - WAB.3 (0.5.95): SessionManager + SessionPersistence + history types.
  *   - WAB.4 (0.5.97): runAgentTurn + SimpleToolDispatcher (skipped
  *     0.5.96 — burned in a parallel WIZ.2 slice that WAB.3 reset over).
- * WAB.5+ will add BatchCoordinator, pack_binding, daemon, CLI.
+ *   - WAB.5 (0.5.99): BatchCoordinator + ChatDispatcher (adaptive
+ *     batching window + per-session mutex/queue glue).
+ * WAB.6+ will add pack_binding, daemon, CLI.
  *
  * Re-exports are flat (no nested namespaces) so consumers can write
  * `import { InboxTransportBridge, AgentEventBus, ... } from '<root>/runtime'`.
  *
  * Imports from: ./types.js, ./event_bus.js, ./transport_bridge.js,
  *   ./session_manager.js, ./session_persistence.js, ./agent_loop.js,
- *   ./tool_dispatcher.js.
+ *   ./tool_dispatcher.js, ./batch.js, ./dispatcher.js.
  * Imported by: src/runtime/index.ts (barrel).
  */
 
@@ -73,3 +75,19 @@ export {
   type AnthropicMessageCreateParams,
   type AnthropicMessageClient,
 } from './agent_loop.js';
+export {
+  BatchCoordinator,
+  type BatchCoordinatorOptions,
+  TG_SPLIT_THRESHOLD,
+  TEXT_BATCH_FAST_LEN,
+  TEXT_BATCH_SHORT_LEN,
+  TEXT_BATCH_FAST_DELAY_MS,
+  TEXT_BATCH_SHORT_DELAY_MS,
+  TEXT_BATCH_DELAY_MS_DEFAULT,
+  TEXT_BATCH_SPLIT_DELAY_MS,
+} from './batch.js';
+export {
+  ChatDispatcher,
+  type ChatDispatcherOptions,
+  type DispatcherAgentLoopOptions,
+} from './dispatcher.js';
