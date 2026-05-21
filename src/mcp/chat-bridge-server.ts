@@ -94,7 +94,7 @@ async function resolveActiveProjectUuid(): Promise<string | null> {
     try {
       const raw = await fs.readFile(candidate, 'utf8');
       const parsed = JSON.parse(raw) as ProjectCard;
-      if (parsed && parsed.version === 1 && parsed.uuid && parsed.id) {
+      if (parsed?.version === 1 && parsed.uuid && parsed.id) {
         return parsed.uuid;
       }
     } catch {
@@ -154,7 +154,7 @@ async function pollInbox(opts: {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
   }
-  const filtered = opts.since ? all.filter((m) => m.enqueued_at > (opts.since as string)) : all;
+  const filtered = opts.since ? all.filter((m) => m.enqueued_at > opts.since!) : all;
   filtered.sort((a, b) => a.enqueued_at.localeCompare(b.enqueued_at));
   return { messages: filtered.slice(-opts.limit), scanned_platforms: scanned };
 }
@@ -263,7 +263,7 @@ async function daemonSend(params: {
       } catch (e) {
         rejectCall(
           new Error(
-            `chat-daemon RPC: invalid JSON response: ${e instanceof Error ? e.message : e}`,
+            `chat-daemon RPC: invalid JSON response: ${e instanceof Error ? e.message : String(e)}`,
           ),
         );
       }
@@ -383,10 +383,11 @@ const ToolHandlers = {
       let channel = args.channel.trim();
       let threadId: string | undefined;
       if (channel.startsWith('project:')) {
-        const platformName = channel.slice('project:'.length) as 'telegram' | 'discord' | 'slack';
-        if (platformName !== 'telegram' && platformName !== 'discord' && platformName !== 'slack') {
-          throw new Error(`unknown project shorthand: project:${platformName}`);
+        const platformRaw = channel.slice('project:'.length);
+        if (platformRaw !== 'telegram' && platformRaw !== 'discord' && platformRaw !== 'slack') {
+          throw new Error(`unknown project shorthand: project:${platformRaw}`);
         }
+        const platformName: 'telegram' | 'discord' | 'slack' = platformRaw;
         const uuid = await resolveActiveProjectUuid();
         if (!uuid) {
           throw new Error(
