@@ -66,6 +66,36 @@ Open Squid surfaces these tools to your AI agent via MCP.
 | **`list_lessons`**       | Paginated list across the four non-discarded status dirs. Deterministic sort by (status, id). Default limit 50, capped at 500. Optional `statuses` filter.                     |
 | **`pending_candidates`** | Companion to `list_lessons` — shorthand for `list_lessons({statuses:["pending"]})`.                                                                                            |
 
+#### `promote_lesson` returns two `status` cases — branch deterministically
+
+For skills calling the `promote_lesson` runtime function (e.g. from a
+YAML `process:` step), the success result has **two** `status` shapes:
+
+- `{status: 'promoted', detail: ...}` — engine accepted the promotion;
+  the wedge gate ran and passed.
+- `{status: 'blocked', reasons: [...]}` — engine ran the gate and
+  refused. `reasons` is an array of kebab-case `BlockReason::Display`
+  strings (e.g. `missing-external-signal-sources`,
+  `missing-causal-narrative`, `insufficient-applied-count`,
+  `time-floor`). **This is the moat firing — NOT an error.**
+
+Skills should branch on `result.status` to decide whether to surface
+the block to the user or capture more evidence and retry. Example:
+
+```yaml
+process:
+  - function: promote_lesson
+    args: { id: '{lesson_id}' }
+    bind: result
+verdict: |
+  if (result.status === 'blocked') return { kind: 'block', reasons: result.reasons };
+  return { kind: 'promote' };
+```
+
+A genuine runtime/infra failure (engine unreachable, malformed args,
+etc.) still surfaces as `kind: 'runtime'` on the Result envelope —
+that path is distinct from the gate firing.
+
 ### Aggregate + classification
 
 | Tool                     | What it does                                                                                                                                                                                                                                                                           |

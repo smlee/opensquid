@@ -177,8 +177,12 @@ describe.skipIf(!hasEngineBinary())('wedge gate fires (block-only E2E)', () => {
       ).toBe(true);
 
       // Surface the actual reasons in test output so post-mortem doesn't
-      // require re-running with verbose flags.
-      console.log(`[wedge-gate-e2e] block reasons for ${createdId}: ${JSON.stringify(reasons)}`);
+      // require re-running with verbose flags. Stderr (not stdout) so it
+      // doesn't interleave with vitest's JSON reporter on CI — matches the
+      // rest of the codebase's test-diagnostic convention.
+      process.stderr.write(
+        `[wedge-gate-e2e] block reasons for ${createdId}: ${JSON.stringify(reasons)}\n`,
+      );
     } finally {
       await client.close();
     }

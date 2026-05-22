@@ -140,6 +140,25 @@ export function registerLessonFunctions(registry: FunctionRegistry, client: Engi
     },
   });
 
+  /**
+   * `promote_lesson` returns two `status` cases — branch deterministically.
+   *
+   * Usage from a YAML skill:
+   *
+   * ```yaml
+   * process:
+   *   - function: promote_lesson
+   *     args: { id: "{lesson_id}" }
+   *     bind: result
+   * verdict: |
+   *   if (result.status === "blocked") return { kind: "block", reasons: result.reasons };
+   *   return { kind: "promote" };
+   * ```
+   *
+   * `status: 'blocked'` means the wedge gate fired (moat working as
+   * designed — NOT an error). `kind: 'runtime'` on the Result envelope
+   * means a genuine infra failure (engine unreachable, etc.).
+   */
   registry.register<{ id: string }, PromoteLessonResult>({
     name: 'promote_lesson',
     argSchema: PromoteLessonArgs,
