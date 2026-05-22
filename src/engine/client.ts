@@ -1,43 +1,51 @@
 /**
- * JSON-RPC 2.0 client for the loop-engine subprocess.
+ * JSON-RPC 2.0 client for the loop-engine daemon.
  *
- * Spawns `loop-engine serve` over stdio + line-framed JSON. One persistent
- * subprocess per `EngineClient` instance, lazily started on first call,
- * respawned after external exit (#170 regression guard).
+ * Connects to a long-running engine process at
+ * `~/.opensquid/loop-engine.sock` via Unix domain socket. The daemon
+ * is acquired-or-spawned by `acquireOrSpawnEngine()` (singleton.ts),
+ * so multiple `EngineClient` instances across hooks + sessions share
+ * the same underlying engine process — the keystone for cross-session
+ * memory recall.
  *
- * Critical invariants (T.1.D, T.1.CC, T.1.E, T.1.G):
+ * Critical invariants (T.1 audit + T.4 spec):
  *
- *  1. LOOP_HOME pin — engine defaults `~/.loop`; opensquid pins to
- *     `~/.opensquid` via spawn env so engine reads/writes the right
- *     storage root. Stripping this would make the 38 existing memories
- *     + 10+ existing lessons silently invisible.
+ *  1. **Singleton transport** — `EngineClient` no longer owns a
+ *     subprocess. It holds a `net.Socket` connection to a shared
+ *     daemon. Engine lifecycle lives in `singleton.ts`; closing a
+ *     client only closes the connection, not the engine.
  *
- *  2. Stderr drain — engine emits 2 stderr lines (rehydrate stats +
- *     ready message) BEFORE the first JSON-RPC response, and continues
- *     emitting `tracing` lines throughout its lifetime when `RUST_LOG`
- *     is set. The `data`-event listener consumes them; if we omitted
- *     it, the OS pipe buffer (64KB) would fill under RUST_LOG=trace,
- *     engine writes would block, and the JSON-RPC stream would hang.
+ *  2. **LOOP_HOME pin** (T.1.D) — handled by `singleton.ts` at spawn
+ *     time. Engine defaults `~/.loop`; opensquid pins to
+ *     `~/.opensquid`. Stripping the pin would make existing memories
+ *     + lessons silently invisible.
  *
- *  3. SIGTERM → SIGKILL escalation on `close()` — 2-second grace then
- *     hard kill so opensquid teardown can't be held hostage by an
- *     engine stuck in shutdown.
+ *  3. **Auto-reconnect on socket close** — if the daemon restarts
+ *     (kill -9, OOM, manual `engine kill`), the next `call()` will
+ *     re-acquire via the singleton. Pending calls reject so callers
+ *     can retry.
  *
- *  4. Error wire shape — five engine-custom codes in `-32000..=-32004`
- *     range. RpcError carries `.code` + `.data` so callers can branch
- *     on `PROMOTION_BLOCKED` etc. without string-matching messages.
+ *  4. **Error wire shape** — five engine-custom codes in
+ *     `-32000..=-32004` range. `RpcError` carries `.code` + `.data`
+ *     so callers branch on the structured field, not the message.
  *
- *  5. Authored_by wire encoding — INPUT accepts `'user' | 'pack'` (else
- *     maps to engine's `Llm` default); OUTPUT is `'user' | 'pack' |
- *     'agent'` (`Llm` is rendered as `"agent"`). NOT `"llm"`.
+ *  5. **Authored_by wire encoding** — INPUT accepts `'user' | 'pack'`
+ *     (else maps to engine's `Llm` default); OUTPUT is
+ *     `'user' | 'pack' | 'agent'` (`Llm` renders as `"agent"`).
+ *
+ *  6. **Windows fallback** — UDS is Unix-only. On Windows,
+ *     `acquireOrSpawnEngine()` throws; callers wrap with a feature
+ *     flag (`OPENSQUID_ENGINE_SOCKET=disable`) to fall back to the
+ *     legacy per-process stdio spawn (NOT implemented here yet —
+ *     tracked as T.8 follow-up).
  *
  * Types live in `./types.js` — this file owns the transport + class.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
+import type { Socket } from 'node:net';
 
-import { resolveEngineBin } from './config.js';
+import { acquireOrSpawnEngine } from './singleton.js';
 import type {
   CreateMemoryResult,
   GetMemoryResult,
@@ -117,15 +125,18 @@ interface PendingCall {
 }
 
 /**
- * Subprocess + JSON-RPC plumbing. One instance ≡ one engine subprocess.
- * Spawns lazily on first `call`; survives crashes (next call respawns).
+ * Socket + JSON-RPC plumbing. One instance ≡ one connection to the
+ * shared engine daemon. Connection is established lazily on first
+ * `call`. Survives daemon restarts: when the socket closes, the next
+ * call re-acquires via `acquireOrSpawnEngine()`.
  */
 export class EngineClient {
-  private proc: ChildProcessWithoutNullStreams | null = null;
+  private socket: Socket | null = null;
   private reader: Interface | null = null;
   private pending = new Map<number, PendingCall>();
   private nextId = 1;
   private startupAck: Promise<void> | null = null;
+  private spawnedByUs = false;
 
   // --- typed wrappers per JSON-RPC method (engine serve.rs:290-310) ---
 
@@ -236,14 +247,14 @@ export class EngineClient {
 
   /**
    * Send a JSON-RPC request, await the response. Throws `RpcError` on
-   * engine-side errors; throws `Error` on subprocess crashes.
+   * engine-side errors; throws `Error` on socket close mid-call.
    *
    * The startup `ping` call passes through without re-entering
-   * `ensureStarted` to break the chicken-and-egg.
+   * `ensureConnected` to break the chicken-and-egg.
    */
   async call<T = unknown>(method: string, params: unknown): Promise<T> {
-    if (method !== 'ping' || this.proc === null) {
-      await this.ensureStarted();
+    if (method !== 'ping' || this.socket === null) {
+      await this.ensureConnected();
     }
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
@@ -251,78 +262,74 @@ export class EngineClient {
         resolve: (v) => resolve(v as T),
         reject,
       });
-      if (!this.proc) {
+      const sock = this.socket;
+      if (!sock) {
         this.pending.delete(id);
-        reject(new Error('engine subprocess not running'));
+        reject(new Error('engine connection not established'));
         return;
       }
       const line = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
-      this.proc.stdin.write(line);
+      sock.write(line);
     });
   }
 
-  /** SIGTERM → 2s → SIGKILL escalation. Resolves once the proc exits. */
+  /**
+   * Close the connection to the engine daemon. Does NOT kill the
+   * daemon — engine lifecycle is owned by `singleton.ts` (and by
+   * T.7's `engine kill` for explicit teardown). After close(), the
+   * next `call()` will re-acquire.
+   */
   async close(): Promise<void> {
-    if (!this.proc) return;
-    const proc = this.proc;
-    proc.kill('SIGTERM');
+    const sock = this.socket;
+    if (!sock) return;
     return new Promise<void>((resolve) => {
-      const escalate = setTimeout(() => proc.kill('SIGKILL'), 2000);
-      proc.once('exit', () => {
-        clearTimeout(escalate);
-        resolve();
-      });
+      // If the socket is already closed, end() is a noop and `close`
+      // fires synchronously on the next tick.
+      sock.once('close', () => resolve());
+      sock.end();
     });
+  }
+
+  /**
+   * Returns true if this client's last connection was the one that
+   * spawned the engine daemon. Useful for telemetry — production
+   * callers should not rely on this for correctness.
+   */
+  get didSpawnEngine(): boolean {
+    return this.spawnedByUs;
   }
 
   // --- internals ------------------------------------------------------
 
-  private async ensureStarted(): Promise<void> {
-    if (this.proc) return;
+  private async ensureConnected(): Promise<void> {
+    if (this.socket) return;
     if (this.startupAck) return this.startupAck;
 
-    const bin = await resolveEngineBin();
-    if (!bin) {
-      throw new Error(
-        'loop-engine binary not found. Set OPENSQUID_ENGINE_BIN, run ' +
-          '`opensquid engine set-path <path>`, or build at ' +
-          '~/projects/loop/engine/target/release/loop-engine',
-      );
-    }
+    // Acquire or spawn. Singleton handles the lock, recheck, spawn,
+    // pidfile, and socket-wait — this module just consumes the result.
+    const { socket, spawnedByUs } = await acquireOrSpawnEngine();
+    this.socket = socket;
+    this.spawnedByUs = spawnedByUs;
 
-    // CRITICAL: LOOP_HOME pin (T.1.D). Engine defaults to `~/.loop`; we
-    // override so its storage root is `~/.opensquid`. Stripping this
-    // makes the existing memory + lesson stores silently invisible.
-    const proc = spawn(bin, ['serve'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        LOOP_HOME: process.env.LOOP_HOME ?? `${process.env.HOME ?? ''}/.opensquid`,
-      },
-    });
-    this.proc = proc;
-    this.reader = createInterface({ input: proc.stdout });
-    this.reader.on('line', (line: string) => this.onLine(line));
-
-    // CRITICAL: drain stderr (T.1.CC). Engine emits 2 stderr lines
-    // before first stdout JSON, and continuous tracing lines if
-    // RUST_LOG is set. Without this drain, pipe buffer fills and
-    // engine blocks.
-    proc.stderr.on('data', (chunk: Buffer) => {
-      const text = chunk.toString().trimEnd();
-      if (text) process.stderr.write(`[engine] ${text}\n`);
+    // Line-framed JSON-RPC over the socket. `createInterface` strips
+    // '\n' and emits per-line events. Same plumbing as the legacy
+    // stdio path — only the underlying stream changed.
+    this.reader = createInterface({ input: socket });
+    this.reader.on('line', (line: string) => {
+      this.onLine(line);
     });
 
-    proc.on('exit', (code: number | null) => this.onExit(code));
-    proc.on('error', (err: Error) => {
-      process.stderr.write(`[opensquid] engine spawn error: ${err.message}\n`);
+    socket.on('close', () => this.onClose('socket closed'));
+    socket.on('error', (err: Error) => {
+      process.stderr.write(`[opensquid] engine socket error: ${err.message}\n`);
     });
 
-    // Single ping to confirm the engine is live before returning.
+    // Confirm liveness before returning. A successful ping proves the
+    // daemon is past rehydrate + ready to dispatch.
     this.startupAck = this.call('ping', {})
       .then(() => undefined)
       .catch((e: Error) => {
-        throw new Error(`engine failed to start: ${e.message}`);
+        throw new Error(`engine handshake failed: ${e.message}`);
       });
     return this.startupAck;
   }
@@ -351,19 +358,19 @@ export class EngineClient {
   }
 
   /**
-   * #170: clear `startupAck` on exit so the next call's
-   * `ensureStarted()` actually respawns instead of returning the stale
-   * resolved promise from the previous lifetime. Reject all pending so
-   * callers can retry.
+   * Clear connection state on close so the next call re-acquires.
+   * Mirrors the pre-T.4 behavior for subprocess exits — the daemon
+   * may restart out-of-band (kill -9, OOM, T.7 `engine kill`) and
+   * the next call should transparently respawn / reconnect.
    */
-  private onExit(code: number | null): void {
-    const reason = `loop-engine subprocess exited (code=${code === null ? 'null' : String(code)})`;
-    process.stderr.write(`[opensquid] ${reason}\n`);
-    this.proc = null;
+  private onClose(reason: string): void {
+    process.stderr.write(`[opensquid] engine connection closed: ${reason}\n`);
+    this.socket = null;
     this.reader = null;
     this.startupAck = null;
+    this.spawnedByUs = false;
     for (const [, pending] of this.pending) {
-      pending.reject(new Error(reason));
+      pending.reject(new Error(`loop-engine connection lost: ${reason}`));
     }
     this.pending.clear();
   }
