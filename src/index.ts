@@ -1,5 +1,9 @@
 /**
  * opensquid public entry — re-exports the runtime API as the package surface.
- * Empty during Phase 0 scaffold; Phase 1 fills in the surface.
+ *
+ * T.2 (loop-engine re-integration): expose `./engine/*` so external
+ * consumers can spawn the engine, build typed JSON-RPC calls, and
+ * branch on the five custom `ENGINE_ERROR` codes without reaching into
+ * subpath imports.
  */
-export {};
+export * from './engine/index.js';

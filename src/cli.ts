@@ -17,6 +17,7 @@
 
 import { Command } from 'commander';
 
+import { registerEngineCli } from './engine/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
@@ -172,6 +173,11 @@ registerLimits(program);
 // prints help — the wizard never auto-runs. Flags: --dry-run, --replace,
 // --skip-test. See `src/setup/cli/chat.ts` for the registration shape.
 registerSetup(program);
+
+// T.2 — `opensquid engine doctor|set-path|forget|kill`. Engine binary
+// discovery + persisted-path management. Revived from the pre-reset
+// surface; stdio-only in 0.5.108 (UDS singleton lands in T.4).
+registerEngineCli(program);
 
 // WAB.7 — `opensquid agent-bridge {start|stop|status|restart|run-foreground}`.
 // Long-running warm-pool chat-agent daemon that wires every WAB.2-WAB.6

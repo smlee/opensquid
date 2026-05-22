@@ -31,6 +31,8 @@
  * package.json.
  */
 
+import { readFileSync } from 'node:fs';
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -88,9 +90,29 @@ const descriptions: Record<ToolName, string> = {
   list_drift_events: 'List drift events aggregated across packs + session',
 };
 
+/**
+ * Read the published package version at runtime. T.1.H fix: the prior
+ * hardcoded `'0.5.9'` drifted ~100 patch bumps behind reality. Resolve
+ * `package.json` relative to this module's URL so the lookup works in
+ * both `dist/mcp/server.js` (built) and `src/mcp/server.ts` (vitest)
+ * layouts — package.json sits at the package root, two levels up.
+ */
+function readPackageVersion(): string {
+  try {
+    // This file lives at <root>/{dist,src}/mcp/server.{js,ts}; package.json
+    // sits at <root>/package.json — two levels up regardless of layout.
+    const pkgJsonPath = new URL('../../package.json', import.meta.url);
+    const raw = readFileSync(pkgJsonPath, 'utf8');
+    const parsed = JSON.parse(raw) as { version?: string };
+    return parsed.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 async function main(): Promise<void> {
   const server = new Server(
-    { name: 'opensquid', version: '0.5.9' },
+    { name: 'opensquid', version: readPackageVersion() },
     { capabilities: { tools: {} } },
   );
 
