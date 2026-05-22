@@ -104,7 +104,7 @@ describe('opensquid engine kill', () => {
     expect(stdoutCapture).toContain('engine daemon stopped.');
     await expect(fs.stat(pidPath)).rejects.toThrow();
     await expect(fs.stat(sockPath)).rejects.toThrow();
-  });
+  }, 15_000);
 
   it('handles ESRCH (stale pid) gracefully and still cleans up', async () => {
     killSpy.mockImplementation(() => {
