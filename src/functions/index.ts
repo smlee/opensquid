@@ -10,6 +10,7 @@
  */
 export * from './registry.js';
 export { registerEventFunctions } from './event.js';
+export { registerLessonFunctions } from './lessons.js';
 export { registerLlmFunctions } from './llm.js';
 export { registerRagFunctions } from './rag.js';
 export { registerStateFunctions } from './state.js';

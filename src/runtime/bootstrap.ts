@@ -54,8 +54,10 @@
  * Imported by: runtime/hooks/*.ts (per-hook binaries), runtime/index.ts (re-export).
  */
 
+import { EngineClient } from '../engine/client.js';
 import { registerDestinationCheckFunction } from '../functions/destination_check.js';
 import { registerEventFunctions } from '../functions/event.js';
+import { registerLessonFunctions } from '../functions/lessons.js';
 import { registerLlmFunctions } from '../functions/llm.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { FunctionRegistry } from '../functions/registry.js';
@@ -72,6 +74,18 @@ import type { Pack } from './types.js';
 export interface BuildRegistryOpts {
   /** Inject a pre-built backend (tests). Skips config resolution + init. */
   backend?: RagBackend;
+  /**
+   * Inject a pre-built EngineClient for the lesson primitives (T.6 tests).
+   * Production builds construct a fresh `EngineClient` that lazily connects
+   * to the shared UDS daemon via the T.4 singleton — multiple clients across
+   * RAG + lessons safely share the same daemon process.
+   *
+   * Pass an explicit stub (or `null`) in tests that exercise pure runtime
+   * paths and don't want to spawn / connect to a real engine. `null`
+   * disables lesson registration entirely; `undefined` constructs a fresh
+   * client (production default).
+   */
+  engineClient?: EngineClient | null;
 }
 
 export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<FunctionRegistry> {
@@ -101,6 +115,19 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   const backend = opts.backend ?? createBackend(await resolveBackendConfig());
   await backend.init();
   registerRagFunctions(r, backend);
+
+  // T-loop-engine-reintegration T.6 — wire the wedge gate lesson surface
+  // (`propose_lesson`, `promote_lesson`, `recall_lesson`). Lessons need a
+  // direct EngineClient handle (the RAG backend wraps memory.* calls, not
+  // lesson.* calls — see src/rag/backends/loop_engine.ts header §1).
+  // Lazy connect: the client doesn't touch the socket until the first
+  // primitive call, so registering here adds zero startup cost when no
+  // pack actually invokes a lesson primitive. Tests pass `engineClient: null`
+  // to skip registration; `engineClient: <stub>` to inject a stub.
+  if (opts.engineClient !== null) {
+    const client = opts.engineClient ?? new EngineClient();
+    registerLessonFunctions(r, client);
+  }
   return r;
 }
 
