@@ -101,11 +101,32 @@ export async function resolveBackendConfig(): Promise<BackendConfig> {
 }
 
 async function loadPersisted(): Promise<PersistedConfig> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(ragConfigPath(), 'utf8');
-    const parsed = JSON.parse(raw) as PersistedConfig;
-    return parsed;
-  } catch {
+    raw = await fs.readFile(ragConfigPath(), 'utf8');
+  } catch (e) {
+    // Missing file is the common-case (no user override) — silent. Any
+    // other read error (EACCES, EIO, etc.) is unusual — warn so users
+    // know why their persisted backend choice isn't being picked up.
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      process.stderr.write(
+        `[opensquid] rag-config read failed at ${ragConfigPath()} (${String(e)}); ` +
+          `using defaults.\n`,
+      );
+    }
+    return {};
+  }
+  try {
+    return JSON.parse(raw) as PersistedConfig;
+  } catch (e) {
+    // Parse-error path is loud — a typo silently downgrading the user's
+    // chosen backend was the bug A.04 addresses. Return {} to keep boot
+    // resilient but surface the cause so users can fix the file.
+    process.stderr.write(
+      `[opensquid] rag-config parse failed at ${ragConfigPath()} (${String(e)}); ` +
+        `using defaults — fix or delete the file to silence this warning.\n`,
+    );
     return {};
   }
 }
@@ -114,8 +135,15 @@ async function pickDefaultKind(): Promise<'loop-engine' | 'libsql-qwen3'> {
   try {
     const bin = await resolveEngineBin();
     if (bin) return 'loop-engine';
-  } catch {
-    // Engine resolver failed unexpectedly — fall through to libsql.
+  } catch (e) {
+    // Engine resolver failed unexpectedly — surface to stderr so users
+    // can correlate "why is libsql active instead of the engine?" with
+    // the underlying cause (corrupted engine-config.json, broken
+    // executable, etc.) rather than guessing at the silent downgrade.
+    process.stderr.write(
+      `[opensquid] engine binary lookup failed (${String(e)}); ` +
+        `falling back to libsql-qwen3.\n`,
+    );
   }
   return 'libsql-qwen3';
 }

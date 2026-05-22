@@ -49,12 +49,39 @@ function engineConfigPath(): string {
 }
 
 export async function loadEngineConfig(): Promise<EngineConfig> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(engineConfigPath(), 'utf8');
+    raw = await fs.readFile(engineConfigPath(), 'utf8');
+  } catch (e) {
+    // Missing file is the common-case (no persisted choice yet) —
+    // silent. Other read errors (EACCES, EIO) are unusual — warn so
+    // users know why their persisted engine_bin isn't being picked up.
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      process.stderr.write(
+        `[opensquid] engine-config read failed at ${engineConfigPath()} (${String(e)}); ` +
+          `using defaults.\n`,
+      );
+    }
+    return { ...DEFAULT_CONFIG };
+  }
+  try {
     const parsed = JSON.parse(raw) as EngineConfig;
     if (parsed.version === 1) return parsed;
-  } catch {
-    // missing or malformed — return default
+    // Wrong version — treat as malformed for the warning path below.
+    process.stderr.write(
+      `[opensquid] engine-config at ${engineConfigPath()} has unexpected version=${String(
+        parsed.version,
+      )} (want 1); using defaults.\n`,
+    );
+  } catch (e) {
+    // Parse-error path is loud — a typo silently dropping the persisted
+    // engine_bin was the bug A.05 addresses. Return default to keep boot
+    // resilient but surface the cause so users can fix the file.
+    process.stderr.write(
+      `[opensquid] engine-config parse failed at ${engineConfigPath()} (${String(e)}); ` +
+        `using defaults — fix or delete the file to silence this warning.\n`,
+    );
   }
   return { ...DEFAULT_CONFIG };
 }
