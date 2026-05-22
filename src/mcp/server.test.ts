@@ -215,7 +215,7 @@ describe('opensquid-mcp subprocess', () => {
     // assert no engine-internal vocabulary leaked.
     const recallTool = result.tools.find((t) => t.name === 'recall');
     expect(recallTool).toBeDefined();
-    expect(recallTool!.description).toMatch(/memory/i);
+    expect(recallTool!.description).toMatch(/memor/i);
     expect(recallTool!.description).not.toMatch(/wedge|manifest|cartridge/i);
   }, 15_000);
 

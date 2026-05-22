@@ -99,8 +99,7 @@ const descriptions: Record<ToolName, string> = {
   read_state: 'Read a session state key',
   read_violations: 'Read the session violations.jsonl',
   list_drift_events: 'List drift events aggregated across packs + session',
-  recall:
-    'Search the opensquid memory pool for hits relevant to the query. Returns up to k results ranked by hybrid semantic+text score.',
+  recall: 'Find memories relevant to a query. Returns up to k ranked results.',
 };
 
 /**

@@ -1,7 +1,7 @@
 /**
  * Wire-shape types for loop-engine JSON-RPC.
  *
- * Mirrors the shapes defined in engine/src/serve.rs at HEAD (engine v0.5.3).
+ * Mirrors the shapes defined in engine/src/serve.rs at HEAD (engine v0.5.4).
  * Drift-corrected per T.1 audit findings (B, D, E, G):
  *   - LessonCreateParams gets v1.1 (`pack_id`, `seed_as_promoted`) +
  *     v1.2 (`external_id`) fields.
