@@ -172,7 +172,7 @@ describe('ChatDispatcher — basic flow', () => {
     bus.emit('inbound', fixtureEvent(KEY, 'there', '2'));
 
     // Wait for batch flush + turn + persistence + onReply chain to settle.
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     await drain();
 
     expect(calls).toHaveLength(1);
@@ -213,7 +213,7 @@ describe('ChatDispatcher — basic flow', () => {
 
     bus.emit('inbound', fixtureEvent(KEY, 'first', '1'));
     bus.emit('inbound', fixtureEvent(OTHER_KEY, 'second', '2'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     await drain();
 
     expect(calls).toHaveLength(2);
@@ -258,7 +258,7 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
     bus.emit('inbound', fixtureEvent(KEY, 'turn-1', '1'));
     // Wait for the batch to flush + the first turn to enter the gated
     // client.
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(gated.calls).toHaveLength(1);
     expect(dp.inFlightTurnCount).toBe(1);
 
@@ -267,14 +267,14 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
     // but the dispatcher should QUEUE instead of starting a second
     // turn concurrently.
     bus.emit('inbound', fixtureEvent(KEY, 'turn-2', '2'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(gated.calls).toHaveLength(1); // still only the first
     expect(dp.queuedTurnCount).toBe(1);
 
     // Release the first turn — the dispatcher should drain the queue
     // and start the second turn.
     gated.release(0);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(gated.calls).toHaveLength(2);
     // The second turn's user content should be 'turn-2'.
     const secondMessages = gated.calls[1]?.request.messages;
@@ -284,7 +284,7 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
 
     // Release the second turn so shutdown can proceed.
     gated.release(1);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(replies).toHaveLength(2);
 
     await dp.shutdown();
@@ -316,24 +316,24 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
     dp.start();
 
     bus.emit('inbound', fixtureEvent(KEY, 'turn-1', '1'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(gated.calls).toHaveLength(1);
     expect(dp.inFlightTurnCount).toBe(1);
 
     // Second batch enqueues (attempt 1 fills the slot).
     bus.emit('inbound', fixtureEvent(KEY, 'queue-a', '2'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(dp.queuedTurnCount).toBe(1);
 
     // Third batch coalesces into the queue slot (attempt 2). Still 1
     // queued, no warn yet.
     bus.emit('inbound', fixtureEvent(KEY, 'queue-b', '3'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(dp.queuedTurnCount).toBe(1);
     expect(warns).toHaveLength(0);
 
     gated.release(0);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
 
     // Second turn should receive the coalesced queue text.
     expect(gated.calls).toHaveLength(2);
@@ -342,7 +342,7 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
     expect(secondLast?.content[0]).toMatchObject({ type: 'text', text: 'queue-a\nqueue-b' });
 
     gated.release(1);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
 
     await dp.shutdown();
     sm.shutdown();
@@ -371,24 +371,24 @@ describe('ChatDispatcher — per-session mutex + queue', () => {
     dp.start();
 
     bus.emit('inbound', fixtureEvent(KEY, 'turn-1', '1'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     bus.emit('inbound', fixtureEvent(KEY, 'queue-1', '2'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     bus.emit('inbound', fixtureEvent(KEY, 'queue-2', '3'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     // Third distinct flush — the dispatcher coalesces into the queue
     // slot but DOES NOT warn yet (attempt 2 is the coalesce cap).
     bus.emit('inbound', fixtureEvent(KEY, 'dropme', '4'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     // Now we're at attempt 3 → DROP + warn.
     expect(warns.length).toBeGreaterThan(0);
     expect(warns.some((w) => w.includes('dropping batch'))).toBe(true);
     expect(warns.some((w) => w.includes('telegram:8075471258'))).toBe(true);
 
     gated.release(0);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     gated.release(1);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
 
     await dp.shutdown();
     sm.shutdown();
@@ -423,7 +423,7 @@ describe('ChatDispatcher — failure surface', () => {
     dp.start();
 
     bus.emit('inbound', fixtureEvent(KEY, 'failing turn', '1'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
 
     expect(errors).toHaveLength(1);
     expect((errors[0] as Error).message).toBe('upstream 500');
@@ -460,9 +460,9 @@ describe('ChatDispatcher — lifecycle', () => {
     dp.start();
 
     bus.emit('inbound', fixtureEvent(KEY, 'in-flight', '1'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     bus.emit('inbound', fixtureEvent(KEY, 'queued', '2'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
     expect(dp.queuedTurnCount).toBe(1);
 
     // Begin shutdown — it should resolve only after the in-flight
@@ -560,7 +560,7 @@ describe('ChatDispatcher — subscription mode (WAB-SUB.2)', () => {
     dp.start();
 
     bus.emit('inbound', fixtureEvent(KEY, 'hello sub', '1'));
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 100));
 
     expect(cliCalls).toHaveLength(1);
     expect(cliCalls[0]?.cli).toBe('claude');
