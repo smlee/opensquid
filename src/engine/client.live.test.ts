@@ -13,11 +13,13 @@
  */
 
 import { statSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { killEngineByPidfile } from '../../test/__util/kill-engine.js';
 
 import { EngineClient } from './client.js';
 
@@ -52,21 +54,38 @@ const describeIfBinary = binary ? describe : describe.skip;
 describeIfBinary('EngineClient — live binary round-trip', () => {
   let tmpHome: string;
   let priorBin: string | undefined;
-  let priorHome: string | undefined;
+  let priorLoopHome: string | undefined;
+  let priorOpensquidHome: string | undefined;
 
   beforeAll(() => {
     tmpHome = mkdtempSync(join(tmpdir(), 'opensquid-engine-live-'));
     priorBin = process.env.OPENSQUID_ENGINE_BIN;
-    priorHome = process.env.LOOP_HOME;
+    priorLoopHome = process.env.LOOP_HOME;
+    priorOpensquidHome = process.env.OPENSQUID_HOME;
     if (binary) process.env.OPENSQUID_ENGINE_BIN = binary;
+    // T.8.K.01: override BOTH homes so the singleton's pidfile +
+    // socket land in tmpHome — not the user's real ~/.opensquid (which
+    // would either collide with a real daemon or leak our spawn into
+    // the user's workspace).
     process.env.LOOP_HOME = tmpHome;
+    process.env.OPENSQUID_HOME = tmpHome;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // T.8.K.01: kill any engine daemon spawned under this test's
+    // tmpHome (the singleton's pidfile lives at $OPENSQUID_HOME/
+    // loop-engine.pid, which we pinned to tmpHome above). Best-effort —
+    // never throws. The globalSetup teardown in vitest.config.ts is the
+    // belt-and-suspenders backstop for anything missed here.
+    await killEngineByPidfile(tmpHome);
     if (priorBin === undefined) delete process.env.OPENSQUID_ENGINE_BIN;
     else process.env.OPENSQUID_ENGINE_BIN = priorBin;
-    if (priorHome === undefined) delete process.env.LOOP_HOME;
-    else process.env.LOOP_HOME = priorHome;
+    if (priorLoopHome === undefined) delete process.env.LOOP_HOME;
+    else process.env.LOOP_HOME = priorLoopHome;
+    if (priorOpensquidHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorOpensquidHome;
+    // Clean the tmpdir (best-effort).
+    rmSync(tmpHome, { recursive: true, force: true });
   });
 
   it('ping() resolves with ok: true + a version string', async () => {

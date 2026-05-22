@@ -23,8 +23,8 @@
  *   pnpm vitest run test/live/loop-engine-rag-live.test.ts
  */
 
-import { existsSync, mkdtempSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { resolveEngineBin } from '../../src/engine/config.js';
 import { loopEngineBackend } from '../../src/rag/backends/loop_engine.js';
+import { killEngineByPidfile } from '../__util/kill-engine.js';
 
 import type { Lesson } from '../../src/rag/types.js';
 
@@ -53,25 +54,10 @@ beforeAll(() => {
 
 afterAll(async () => {
   if (!bin || testHome === '') return;
-  // Best-effort: kill the engine we spawned via this test's home,
-  // then clean the temp dir. PID file written by singleton; if absent
-  // (e.g. test never ran), skip.
-  const pidPath = join(testHome, 'loop-engine.pid');
-  if (existsSync(pidPath)) {
-    try {
-      const pidStr = (await readFile(pidPath, 'utf8')).trim();
-      const pid = Number.parseInt(pidStr, 10);
-      if (Number.isFinite(pid) && pid > 0) {
-        try {
-          process.kill(pid, 'SIGTERM');
-        } catch {
-          // already gone
-        }
-      }
-    } catch {
-      // pidfile unreadable — let the OS reap when the test process exits
-    }
-  }
+  // T.8.K.01: shared helper handles SIGTERM + grace + socket/pidfile
+  // cleanup. Best-effort — never throws. The vitest globalSetup
+  // teardown is the backstop if this misses anything.
+  await killEngineByPidfile(testHome);
   await rm(testHome, { recursive: true, force: true }).catch(() => undefined);
 });
 

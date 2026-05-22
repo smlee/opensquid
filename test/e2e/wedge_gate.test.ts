@@ -33,20 +33,23 @@
  *     don't collide with the user's existing engine daemon (if any).
  *   - Each test uses a Date.now()-suffixed description so concurrent runs
  *     can't collide on lesson IDs.
- *   - We do NOT delete created lessons — they accumulate inside the
- *     per-test tmpdir, which `afterAll` could remove but doesn't (so a
- *     failing test leaves evidence on disk for post-mortem). T.8 will
- *     audit whether this needs explicit cleanup; for T.6 the tmpdir
- *     isolation is enough.
+ *   - Created lessons live inside the per-test tmpdirs. T.8.K.01 +
+ *     K.02 added `afterAll` cleanup that kills the spawned engine
+ *     (via killEngineByPidfile) and removes both tmpdirs. The
+ *     vitest globalSetup teardown (test/__util/global-teardown.ts) is
+ *     a belt-and-suspenders backstop matching `loop-engine serve
+ *     --socket .*opensquid-` patterns — only test-spawned daemons,
+ *     never the user's real engine.
  */
 
-import { existsSync, mkdtempSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { EngineClient, RpcError } from '../../src/engine/client.js';
+import { killEngineByPidfile } from '../__util/kill-engine.js';
 
 // ---------------------------------------------------------------------------
 // Binary discovery — mirror the live-test pattern (engine/client.live.test.ts).
@@ -108,13 +111,22 @@ describe.skipIf(!hasEngineBinary())('wedge gate fires (block-only E2E)', () => {
     process.env.OPENSQUID_HOME = tmpOpensquid;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // T.8.K.01 + K.02: kill any engine daemon spawned under this test's
+    // tmpdir (the singleton's pidfile lives at $OPENSQUID_HOME/
+    // loop-engine.pid, which we pinned to tmpOpensquid above). Best-effort
+    // — never throws. globalSetup teardown is the backstop.
+    await killEngineByPidfile(tmpOpensquid);
     if (priorBin === undefined) delete process.env.OPENSQUID_ENGINE_BIN;
     else process.env.OPENSQUID_ENGINE_BIN = priorBin;
     if (priorLoopHome === undefined) delete process.env.LOOP_HOME;
     else process.env.LOOP_HOME = priorLoopHome;
     if (priorOpensquidHome === undefined) delete process.env.OPENSQUID_HOME;
     else process.env.OPENSQUID_HOME = priorOpensquidHome;
+    // Clean the tmpdirs (best-effort) — header originally noted "afterAll
+    // could remove but doesn't"; T.8.K.02 closes that gap.
+    rmSync(tmpHome, { recursive: true, force: true });
+    rmSync(tmpOpensquid, { recursive: true, force: true });
   });
 
   it('blocks promotion when freshly created with no evidence and no applied_count', async () => {
