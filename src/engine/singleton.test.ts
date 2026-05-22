@@ -177,6 +177,43 @@ describe('acquireOrSpawnEngine — cold start (no socket)', () => {
     mockResolveEngineBin.mockResolvedValueOnce(null);
     await expect(acquireOrSpawnEngine()).rejects.toThrow(/binary not found/);
   });
+
+  it('surfaces spawn ENOENT as the actual cause instead of a socket-wait timeout', async () => {
+    // T.8.A.03: spawn-time errors (binary missing / not executable)
+    // previously only wrote to stderr, then `waitForSocket` rejected
+    // ~10s later with a misleading "Timeout waiting for engine UDS at ..."
+    // message. The fix captures the spawn error and re-throws it from
+    // the waitForSocket catch path so callers see the real cause.
+    //
+    // We assert by catching the rejection ONCE and inspecting the
+    // message — avoids the cost of two ~10s socket-wait timeouts.
+    const proc = makeMockProc(33333);
+    mockSpawn.mockImplementationOnce(() => {
+      // Fire 'error' after a short delay so it lands AFTER the
+      // production code has attached its `proc.once('error', ...)`
+      // listener (which happens post-spawn, post-pidfile-write).
+      // setImmediate fires too early — listener isn't attached yet
+      // and Node treats the 'error' as unhandled.
+      // Crucially: do NOT write the socket file — waitForSocket will
+      // poll until its timeout and then throw, at which point our
+      // catch should prefer the captured spawnErr.
+      setTimeout(() => {
+        const err = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
+        proc.emit('error', err);
+      }, 50);
+      return proc;
+    });
+
+    let caught: Error | undefined;
+    try {
+      await acquireOrSpawnEngine();
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toMatch(/spawn failed before socket appeared/);
+    expect(caught!.message).toMatch(/ENOENT/);
+  }, 15_000);
 });
 
 describe('acquireOrSpawnEngine — warm path (existing daemon)', () => {

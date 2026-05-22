@@ -263,14 +263,30 @@ export async function acquireOrSpawnEngine(): Promise<EngineConnection> {
     // child even though we never read its (closed) stdio.
     proc.unref();
 
-    // Track spawn-time errors before the socket appears. Without
-    // this listener a spawn failure surfaces as a `waitForSocket`
-    // timeout instead of the actual cause.
+    // Track spawn-time errors before the socket appears. Capture the
+    // first error so we can re-throw it AS the cause instead of letting
+    // it dead-end at stderr while waitForSocket times out 10s later
+    // with a misleading "Timeout waiting for engine UDS at ..." message.
+    // Spawn ENOENT (missing binary), EACCES (not executable), etc. now
+    // surface their actual cause to the caller.
+    let spawnErr: Error | undefined;
     proc.once('error', (err: Error) => {
+      spawnErr = err;
       process.stderr.write(`[opensquid] engine spawn error: ${err.message}\n`);
     });
 
-    await waitForSocket(sockPath, SOCKET_WAIT_TIMEOUT_MS);
+    try {
+      await waitForSocket(sockPath, SOCKET_WAIT_TIMEOUT_MS);
+    } catch (waitErr) {
+      // Prefer the spawn error if one fired — it's the real cause.
+      // The waitForSocket timeout is the symptom, not the diagnosis.
+      if (spawnErr) {
+        throw new Error(`engine spawn failed before socket appeared: ${spawnErr.message}`, {
+          cause: spawnErr,
+        });
+      }
+      throw waitErr;
+    }
     const sock = await tryConnect(sockPath);
     return { socket: sock, spawnedByUs: true };
   } finally {
