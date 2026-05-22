@@ -207,12 +207,40 @@ Once published, `npm install opensquid` will bring the `loop-engine` Rust binary
 Until then (and for git-clone / monorepo dev), Open Squid falls through a 5-step discovery chain that locates the engine binary at:
 
 1. `OPENSQUID_ENGINE_BIN` env var
-2. The path persisted in `~/.opensquid/config.json` `engine_bin`
+2. The path persisted in `~/.opensquid/engine-config.json` `engine_bin`
 3. A bundled npm optional dep (the v0.6c path, no-op pre-publish)
 4. `~/projects/*/{engine,}/target/release/loop-engine` auto-search
 5. `loop-engine` on `$PATH`
 
-The first auto-discovery hit persists itself back to `config.json` so subsequent sessions start instantly. Move your loop-engine checkout and the next launch silently re-discovers.
+The first auto-discovery hit persists itself back to `engine-config.json` so subsequent sessions start instantly. Move your loop-engine checkout and the next launch silently re-discovers — a stale persisted path is detected on the next start and cleared so re-discovery picks up the new location.
+
+### Engine CLI
+
+```bash
+opensquid engine doctor          # show resolved binary + discovery chain
+opensquid engine set-path <path> # pin an explicit binary path
+opensquid engine forget          # clear the persisted path; force re-discovery
+opensquid engine kill            # stop the shared engine daemon (SIGTERM + cleanup)
+```
+
+`engine kill` reads `~/.opensquid/loop-engine.pid` (written by the daemon-spawn singleton), sends `SIGTERM`, waits 2s for graceful shutdown, then best-effort unlinks the socket + pidfile. Idempotent — running it with nothing started prints `no engine daemon running.` and exits 0.
+
+---
+
+## Memory backends
+
+Open Squid talks to a pluggable backend for memory storage + recall. The backend kind is configured per-project via `~/.opensquid/rag-config.json` (or the `OPENSQUID_RAG_BACKEND` env var). Today's defaults pick the right one automatically — you only need to read this section if you want to override.
+
+| Backend `kind`           | Storage                                                  | Best for                                                                                                                                            |
+| ------------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`loop-engine`**        | Rust daemon over UDS, vectors via HNSW                   | Default when the engine binary is discoverable. Cross-session shared memory, fastest recall, exposes the full wedge gate + lesson layer.            |
+| **`libsql-qwen3`**       | Local libsql (sqlite fork) + Qwen3-Embedding-4B (Ollama) | Default when no engine is present. Pure-JS fallback that still does semantic recall; needs Ollama running locally with `qwen3-embedding:4b` pulled. |
+| **`libsql-lexical`**     | Local libsql, full-text search only                      | Zero-dependency fallback. No embeddings, no Ollama. Good enough for proper-noun + keyword recall when semantic isn't available.                     |
+| **`claude-auto-memory`** | Anthropic's Auto Memory (host-managed)                   | Adapter for users already on Claude Auto Memory who want the opensquid wedge gate + workflow layer over their existing memory store. Read-through.  |
+
+**Default selection logic** — if the `loop-engine` binary is discoverable via the chain above, `loop-engine` is the default backend. Otherwise the resolver falls back to `libsql-qwen3` when Ollama + the embedding model are reachable, else `libsql-lexical`. No silent failure — `opensquid engine doctor` shows which path applied.
+
+The `loop-engine` backend is the one with the central RAG-style `manifest` assembly (`list_lessons` + `recall` + wedge gate stats in one call), shared cross-session vector memory, and the four-layer wedge ratchet. The libsql backends ship the same memory tools (`memorize` / `recall` / `get_memory` / `update_memory` / `forget`) but the lesson + wedge layer reduces to a thin file-backed equivalent.
 
 ---
 

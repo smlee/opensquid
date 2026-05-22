@@ -70,18 +70,39 @@ export async function saveEngineConfig(config: EngineConfig): Promise<void> {
  * the resolved path back to config when discovered via search so the
  * next session is instant. Returns `null` if no working binary could be
  * located.
+ *
+ * **Re-resolution on every start** (T.7 / T.1.P): a persisted
+ * `engine_bin` that no longer points at an executable file is cleared
+ * from the config and the resolver falls through to bundled → dev →
+ * `$PATH`. This adds ~10-100ms (one extra `fs.stat`) but means a
+ * deleted / moved / freshly-rebuilt binary silently self-heals on the
+ * next start instead of failing loudly with `ENOENT`. Bundled hits
+ * are NOT persisted (deterministic from npm layout); dev-path + `$PATH`
+ * hits ARE persisted so subsequent sessions skip the search.
  */
 export async function resolveEngineBin(): Promise<string | null> {
   const fromEnv = process.env.OPENSQUID_ENGINE_BIN?.trim();
   if (fromEnv) return fromEnv;
 
-  const config = await loadEngineConfig();
-  if (config.engine_bin && (await isExecutable(config.engine_bin))) {
-    return config.engine_bin;
+  let config = await loadEngineConfig();
+  if (config.engine_bin) {
+    if (await isExecutable(config.engine_bin)) {
+      return config.engine_bin;
+    }
+    // Stale persisted path (binary deleted / moved / chmod -x).
+    // Clear + persist so subsequent calls don't repeat the stat.
+    delete config.engine_bin;
+    delete config.engine_bin_resolved_at;
+    await saveEngineConfig(config);
+    // Reload so the in-memory `config` matches what's on disk before
+    // the success-branch writes below mutate + save again.
+    config = await loadEngineConfig();
   }
 
   const bundled = resolveBundledEngineBin();
   if (bundled && (await isExecutable(bundled))) {
+    // Do NOT persist — the npm layout determines this deterministically
+    // and persisting a `node_modules/` path makes upgrades hostile.
     return bundled;
   }
 
