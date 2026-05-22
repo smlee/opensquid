@@ -27,6 +27,7 @@
 import { claudeAutoMemoryBackend } from './backends/claude_auto_memory.js';
 import { libsqlLexicalBackend } from './backends/libsql_lexical.js';
 import { libsqlQwen3Backend } from './backends/libsql_qwen3.js';
+import { loopEngineBackend } from './backends/loop_engine.js';
 
 import type { RagBackend } from './types.js';
 
@@ -47,6 +48,18 @@ export type BackendConfig =
       // means future per-pack overrides (e.g. custom memory subdir) drop
       // in without changing the dispatch signature.
       kind: 'claude-auto-memory';
+    }
+  | {
+      // loop-engine routes RagBackend through the engine daemon's
+      // JSON-RPC API (memory.search + memory.create) via the T.4 UDS
+      // singleton. `mode: 'hybrid'` is the engine's server-side RRF
+      // path — drop-in quality equivalent of libsql-qwen3 per T.1.JJ.
+      // `ollamaUrl` is only used when a pack rule calls the `embed`
+      // primitive directly for a raw vector; recall + storeLesson go
+      // through the engine (which handles embedding internally).
+      kind: 'loop-engine';
+      mode?: 'semantic' | 'text' | 'hybrid';
+      ollamaUrl?: string;
     };
 
 export function createBackend(config: BackendConfig): RagBackend {
@@ -61,6 +74,11 @@ export function createBackend(config: BackendConfig): RagBackend {
       return libsqlLexicalBackend({ dbUrl: config.dbUrl });
     case 'claude-auto-memory':
       return claudeAutoMemoryBackend();
+    case 'loop-engine':
+      return loopEngineBackend({
+        ...(config.mode === undefined ? {} : { mode: config.mode }),
+        ...(config.ollamaUrl === undefined ? {} : { ollamaUrl: config.ollamaUrl }),
+      });
     default: {
       // Exhaustive check: if `BackendConfig` gains a variant and this arm
       // isn't updated, TS flags `_exhaustive` as not-`never`.

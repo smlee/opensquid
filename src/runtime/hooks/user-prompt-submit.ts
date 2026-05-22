@@ -63,7 +63,7 @@ async function main(): Promise<void> {
 
   const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
   const packs = await loadActivePacks(sessionId);
-  const registry = buildRegistry();
+  const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
   if (stderr) process.stderr.write(stderr + '\n');
   process.exit(exitCode);

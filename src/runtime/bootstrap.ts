@@ -15,18 +15,17 @@
  *     modes. The `Promise<Pack[]>` signature is pinned now so the Phase 2
  *     swap is body-only — call sites do not refactor.
  *
- * RAG omission rationale (Phase 1):
- *   `registerRagFunctions(registry, backend)` requires a `RagBackend`
- *   instance (Task 1.10). Phase 1's smoke test pack (`neverAmendPack`) uses
- *   only `match_command` + `verdict` — no `recall` / `embed` / `store_lesson`
- *   calls — so no backend is needed. Wiring a default backend here would
- *   force Phase 1 to either (a) instantiate a real libsql backend at every
- *   hook invocation (boot cost, file I/O) or (b) ship a no-op stub that
- *   silently returns empty hits (hides misconfigured packs). Both are worse
- *   than just not registering rag until the loader (Phase 2) knows whether
- *   any active pack actually needs it. If a Phase 1 pack DOES try to call a
- *   rag primitive, the evaluator surfaces `unknown_function` cleanly via the
- *   normal error path — not a silent miss.
+ * RAG wiring (T-loop-engine-reintegration / T.3 — first-ever production
+ * registration of recall/embed/store_lesson):
+ *   `registerRagFunctions(registry, backend)` is now called per-bootstrap
+ *   with a backend chosen by `resolveBackendConfig()` (env > config.json >
+ *   default = loop-engine if engine binary discoverable, else libsql-qwen3).
+ *   The cost concerns that justified Phase 1 omission are resolved: the
+ *   default `loop-engine` path connects to a shared UDS daemon (T.4), so
+ *   per-hook boot cost is one socket-connect + one ping, not a full libsql
+ *   open. `buildRegistry()` becomes async to accommodate `backend.init()`
+ *   (engine handshake / libsql CREATE TABLE depending on backend). All
+ *   four hook bins already await it.
  *
  * Two env-var test seams (subprocess hook bridge):
  *
@@ -58,15 +57,24 @@
 import { registerDestinationCheckFunction } from '../functions/destination_check.js';
 import { registerEventFunctions } from '../functions/event.js';
 import { registerLlmFunctions } from '../functions/llm.js';
+import { registerRagFunctions } from '../functions/rag.js';
 import { FunctionRegistry } from '../functions/registry.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { loadPack } from '../packs/loader.js';
+import { createBackend } from '../rag/backend_factory.js';
+import { resolveBackendConfig } from '../rag/config.js';
 
+import type { RagBackend } from '../rag/types.js';
 import type { Pack } from './types.js';
 
-export function buildRegistry(): FunctionRegistry {
+export interface BuildRegistryOpts {
+  /** Inject a pre-built backend (tests). Skips config resolution + init. */
+  backend?: RagBackend;
+}
+
+export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<FunctionRegistry> {
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerStateFunctions(r);
@@ -85,7 +93,14 @@ export function buildRegistry(): FunctionRegistry {
   // a separate registry; the production bootstrap always uses the lazy
   // dynamic-import path.
   registerSubagentFunction(r);
-  // RAG primitives intentionally not registered in Phase 1 — see header.
+  // T-loop-engine-reintegration T.3 — FIRST-EVER production wiring of the
+  // RAG primitives. Resolves backend choice (env > ~/.opensquid/rag-config
+  // .json > default), constructs, inits, registers. Tests override via
+  // `opts.backend` to skip the resolver + a real init (which may need a
+  // live engine binary).
+  const backend = opts.backend ?? createBackend(await resolveBackendConfig());
+  await backend.init();
+  registerRagFunctions(r, backend);
   return r;
 }
 

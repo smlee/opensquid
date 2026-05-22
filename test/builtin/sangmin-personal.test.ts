@@ -55,7 +55,19 @@ describe('builtin sangmin-personal pack', () => {
 
   it('every process step references a registered primitive', async () => {
     const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
-    const registry = buildRegistry();
+    // Inject a no-op RAG backend so the test doesn't try to spawn a live
+    // loop-engine daemon (T.3 wired RAG; resolveBackendConfig() defaults
+    // to loop-engine when the binary is discoverable). Registry shape is
+    // independent of which backend services the calls — validatePackFunctions
+    // only checks primitive names are registered.
+    const registry = await buildRegistry({
+      backend: {
+        init: () => Promise.resolve(),
+        embed: () => Promise.resolve(null),
+        recall: () => Promise.resolve([]),
+        storeLesson: () => Promise.resolve(),
+      },
+    });
     const issues = validatePackFunctions(pack, registry);
     expect(issues).toEqual([]);
   });
