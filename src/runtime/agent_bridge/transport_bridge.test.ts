@@ -39,8 +39,11 @@ afterEach(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
-/** Wait until either `pred()` returns truthy OR timeout. */
-async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
+/** Wait until either `pred()` returns truthy OR timeout. 5s default
+ *  (was 2s) — Node 20 GitHub Actions runners + chokidar polling backend
+ *  occasionally exceed 2s under shared-runner contention. Locally the
+ *  predicate fires well under 500ms; the extra budget only matters in CI. */
+async function waitFor(pred: () => boolean, timeoutMs = 5000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (pred()) return;
