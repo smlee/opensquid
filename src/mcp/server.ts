@@ -10,11 +10,14 @@
  *   read_state         — read a session state key (functions/state.ts companion)
  *   read_violations    — return session violations.jsonl contents
  *   list_drift_events  — aggregated drift catalog across packs + session (Task 5.4)
+ *   recall             — search the configured RAG backend for memory hits (Task T.5)
  *
  * Mutations (write_state, append_log, promote_lesson, …) are intentionally
  * NOT exposed via MCP in Phase 1. Those live behind the hook bindings + rule
  * processes; the MCP surface is read-only inspection so an external client
- * can never bypass the dispatcher.
+ * can never bypass the dispatcher. `recall` is still read-only — it only
+ * reads from the memory pool, never writes — so it slots cleanly into the
+ * existing pattern.
  *
  * Transport: stdio (StdioServerTransport). stdout is reserved for the
  * JSON-RPC stream — NO `console.log` anywhere in this binary or any module
@@ -45,6 +48,7 @@ import { handleListPacks } from './tools/list-packs.js';
 import { handleListSkills } from './tools/list-skills.js';
 import { handleReadState } from './tools/read-state.js';
 import { handleReadViolations } from './tools/read-violations.js';
+import { handleRecall } from './tools/recall.js';
 
 // Each entry binds an args Zod schema to a handler that already accepts the
 // inferred shape. `safeParse` runs against `req.params.arguments` before the
@@ -75,6 +79,13 @@ const ToolHandlers = {
     schema: z.object({ packs: z.array(z.string()).optional() }),
     handle: (args: { packs?: string[] }) => handleListDriftEvents(args),
   },
+  recall: {
+    schema: z.object({
+      query: z.string().min(1),
+      k: z.number().int().min(1).max(50).optional(),
+    }),
+    handle: (args: { query: string; k?: number }) => handleRecall(args),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -88,6 +99,8 @@ const descriptions: Record<ToolName, string> = {
   read_state: 'Read a session state key',
   read_violations: 'Read the session violations.jsonl',
   list_drift_events: 'List drift events aggregated across packs + session',
+  recall:
+    'Search the opensquid memory pool for hits relevant to the query. Returns up to k results ranked by hybrid semantic+text score.',
 };
 
 /**

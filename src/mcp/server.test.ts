@@ -16,8 +16,9 @@
  * protocol.
  *
  * Cases:
- *   1. tools/list returns exactly the 6 read-only tools, each with an object
- *      JSON Schema (5 Phase-1 + `list_drift_events` from Task 5.4).
+ *   1. tools/list returns exactly the 7 read-only tools, each with an object
+ *      JSON Schema (5 Phase-1 + `list_drift_events` from Task 5.4 + `recall`
+ *      from Task T.5).
  *   2. list_packs returns "no packs loaded" (Phase 1 stub).
  *   3. list_skills (no args) returns "no skills loaded".
  *   4. inspect_skill missing required arg → JSON-RPC error.
@@ -25,6 +26,10 @@
  *   6. read_state on a missing key returns "null".
  *   7. read_violations with no log file returns "".
  *   8. list_drift_events on a pre-populated pack catalog returns the merged JSON.
+ *   9. recall validates query (empty string rejected).
+ *  10. recall validates k bounds (>50 rejected; <1 rejected).
+ *  11. recall returns "No memories found..." when backend yields zero hits.
+ *  12. recall formats multi-hit output as "[N] (source, score=X.XXX) <content>".
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -174,6 +179,11 @@ describe('opensquid-mcp subprocess', () => {
       ...process.env,
       OPENSQUID_HOME: home,
       CLAUDE_SESSION_ID: sessionId,
+      // Pin recall's backend to the lexical (Ollama-free) variant so the
+      // tool's RAG path is testable without an Ollama or engine binary on
+      // the runner. Each test gets its own OPENSQUID_HOME, so the libsql
+      // file is fresh per test.
+      OPENSQUID_RAG_BACKEND: 'libsql-lexical',
     });
     await client.initialize();
   }, 15_000);
@@ -183,7 +193,7 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 6 read-only tools with JSON Schema', async () => {
+  it('tools/list returns the 7 read-only tools with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
@@ -195,11 +205,18 @@ describe('opensquid-mcp subprocess', () => {
       'list_skills',
       'read_state',
       'read_violations',
+      'recall',
     ]);
     for (const t of result.tools) {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema.type).toBe('object');
     }
+    // recall description is user-visible in Claude Code's MCP listing —
+    // assert no engine-internal vocabulary leaked.
+    const recallTool = result.tools.find((t) => t.name === 'recall');
+    expect(recallTool).toBeDefined();
+    expect(recallTool!.description).toMatch(/memory/i);
+    expect(recallTool!.description).not.toMatch(/wedge|manifest|cartridge/i);
   }, 15_000);
 
   it('list_packs returns "no packs loaded" (Phase 1 stub)', async () => {
@@ -293,5 +310,53 @@ describe('opensquid-mcp subprocess', () => {
     }[];
     // Chronological order: session@09 → pack-a@10.
     expect(events.map((e) => `${e.pack}|${e.ruleId}`)).toEqual(['<session>|r2', 'pack-a|r1']);
+  }, 15_000);
+
+  it('recall rejects an empty query (Zod min(1))', async () => {
+    const r = await client.request('tools/call', {
+      name: 'recall',
+      arguments: { query: '' },
+    });
+    if (r.error) {
+      expect(r.error.message.toLowerCase()).toMatch(/invalid|query/);
+    } else {
+      const out = r.result as ToolCallResult & { isError?: boolean };
+      expect(out.isError === true || /invalid|query/i.test(out.content[0]?.text ?? '')).toBe(true);
+    }
+  }, 15_000);
+
+  it('recall rejects k > 50 and k < 1 (Zod bounds)', async () => {
+    const tooHigh = await client.request('tools/call', {
+      name: 'recall',
+      arguments: { query: 'anything', k: 100 },
+    });
+    if (tooHigh.error) {
+      expect(tooHigh.error.message.toLowerCase()).toMatch(/invalid|k/);
+    } else {
+      const out = tooHigh.result as ToolCallResult & { isError?: boolean };
+      expect(out.isError === true || /invalid/i.test(out.content[0]?.text ?? '')).toBe(true);
+    }
+    const tooLow = await client.request('tools/call', {
+      name: 'recall',
+      arguments: { query: 'anything', k: 0 },
+    });
+    if (tooLow.error) {
+      expect(tooLow.error.message.toLowerCase()).toMatch(/invalid|k/);
+    } else {
+      const out = tooLow.result as ToolCallResult & { isError?: boolean };
+      expect(out.isError === true || /invalid/i.test(out.content[0]?.text ?? '')).toBe(true);
+    }
+  }, 15_000);
+
+  it('recall returns "No memories found..." for a fresh empty backend', async () => {
+    const r = await client.request('tools/call', {
+      name: 'recall',
+      arguments: { query: 'nothing-will-match-this-xyz123' },
+    });
+    expect(r.error).toBeUndefined();
+    const out = r.result as ToolCallResult;
+    expect(out.content[0]?.text).toBe(
+      'No memories found matching "nothing-will-match-this-xyz123".',
+    );
   }, 15_000);
 });
