@@ -86,18 +86,22 @@ describe('opensquid engine kill', () => {
     await fs.writeFile(pidPath, '12345\n', 'utf8');
     await fs.writeFile(sockPath, '', 'utf8'); // stand-in for an actual socket
 
-    // Kick off cmdKill, then advance timers in the background so the
-    // 2s grace setTimeout resolves. Polling lets us advance once
-    // cmdKill has actually scheduled the timer (post readFile +
-    // process.kill).
+    // Kick off cmdKill. cmdKill awaits readFile (microtasks) then
+    // process.kill (sync, mocked) then `new Promise(setTimeout(..., 2000))`.
+    // We need to keep pumping until `done` resolves — a fixed-count loop
+    // can race ahead of the timer scheduling on slow CI (Node 20 timing
+    // variance). Pump-while-pending guarantees liveness regardless of
+    // when cmdKill actually schedules the grace-period timer.
     const done = runKill();
-    const pump = (async (): Promise<void> => {
-      for (let i = 0; i < 200; i++) {
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(50);
-      }
-    })();
-    await Promise.all([done, pump]);
+    let resolved = false;
+    void done.then(() => {
+      resolved = true;
+    });
+    while (!resolved) {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    await done;
 
     expect(killSpy).toHaveBeenCalledWith(12345, 'SIGTERM');
     expect(stdoutCapture).toContain('sent SIGTERM to pid=12345');
