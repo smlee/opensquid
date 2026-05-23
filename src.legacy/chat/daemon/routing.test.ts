@@ -17,6 +17,7 @@ import {
   projectInboxDir,
   projectsRootPath,
   saveProjectChatRouting,
+  type CollisionInfo,
 } from "./routing.js";
 
 let tmpRoot: string;
@@ -248,11 +249,13 @@ describe("buildRoutingIndex — v0.5.94 DM key indexing", () => {
       ["uuid-a", { telegram: { inbound_dm_user_ids: ["999"] } }],
       ["uuid-b", { telegram: { inbound_dm_user_ids: ["999"] } }],
     ]);
-    const warnings: string[] = [];
-    const idx = buildRoutingIndex(cfgs, (m) => warnings.push(m));
+    const collisions: CollisionInfo[] = [];
+    const idx = buildRoutingIndex(cfgs, (info) => collisions.push(info));
     expect(idx.get("telegram:dm:999")).toBe("uuid-b");
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toMatch(/collision.*telegram:dm:999/);
+    expect(collisions.length).toBe(1);
+    expect(collisions[0]?.channel_key).toBe("telegram:dm:999");
+    expect(collisions[0]?.existing_uuid).toBe("uuid-a");
+    expect(collisions[0]?.newcomer_uuid).toBe("uuid-b");
   });
 
   it("group + DM in same project: both keys index to same uuid", () => {
@@ -329,17 +332,19 @@ describe("buildRoutingIndex", () => {
     expect(idx.size).toBe(3);
   });
 
-  it("calls onWarn on collision and lets the later project win", () => {
+  it("calls onCollision with structured info and lets the later project win", () => {
     const cfgs = new Map([
       ["uuid-a", { telegram: { inbound_chat_ids: ["100"] } }],
       ["uuid-b", { telegram: { inbound_chat_ids: ["100"] } }],
     ]);
-    const warnings: string[] = [];
-    const idx = buildRoutingIndex(cfgs, (m) => warnings.push(m));
+    const collisions: CollisionInfo[] = [];
+    const idx = buildRoutingIndex(cfgs, (info) => collisions.push(info));
     // Map iteration order on insertion → uuid-b wins.
     expect(idx.get("telegram:100")).toBe("uuid-b");
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toMatch(/collision.*telegram:100/);
+    expect(collisions.length).toBe(1);
+    expect(collisions[0]?.channel_key).toBe("telegram:100");
+    expect(collisions[0]?.existing_uuid).toBe("uuid-a");
+    expect(collisions[0]?.newcomer_uuid).toBe("uuid-b");
   });
 });
 

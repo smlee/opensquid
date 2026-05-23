@@ -241,26 +241,45 @@ export async function loadAllProjectChatRouting(
 }
 
 /**
+ * Structured collision payload — TPS.5 (v0.5.124). Replaces the
+ * v0.7.x string-callback API so the worker doesn't have to regex-parse
+ * its own warning template back into fields. Old shape is gone (no users
+ * outside this repo). Single caller (worker.ts) migrated in lockstep.
+ */
+export interface CollisionInfo {
+  /** "<platform>:<native_id>[:<thread_id>]" */
+  channel_key: string;
+  /** Project_uuid that currently holds the slot in the lookup map. */
+  existing_uuid: string;
+  /** Project_uuid that just tried to claim the same key (will win after this call). */
+  newcomer_uuid: string;
+}
+
+export type CollisionCallback = (info: CollisionInfo) => void;
+
+/**
  * Build the inbound chat_id → project_uuid lookup map from a collection
  * of per-project routing configs. Used at daemon startup AND whenever
  * the file watcher fires on a routing change.
  *
  * Collision handling: if two projects claim the same inbound chat_id,
- * the LATER one wins (Map.set overwrite). Surface a warning via the
- * optional `onWarn` callback so the operator can fix it.
+ * the LATER one wins (Map.set overwrite). Surface a structured warning
+ * via the optional `onCollision` callback so the operator can fix it.
  */
 export function buildRoutingIndex(
   configs: Map<string, ProjectChatRouting>,
-  onWarn?: (message: string) => void,
+  onCollision?: CollisionCallback,
 ): RoutingIndex {
   const idx: RoutingIndex = new Map();
   for (const [projectUuid, cfg] of configs) {
     for (const channelKey of collectInboundChannels(cfg)) {
       const existing = idx.get(channelKey);
-      if (existing && existing !== projectUuid && onWarn) {
-        onWarn(
-          `chat_id collision: ${channelKey} claimed by both project ${existing} and ${projectUuid} (latter wins)`,
-        );
+      if (existing && existing !== projectUuid && onCollision) {
+        onCollision({
+          channel_key: channelKey,
+          existing_uuid: existing,
+          newcomer_uuid: projectUuid,
+        });
       }
       idx.set(channelKey, projectUuid);
     }

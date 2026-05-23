@@ -75,6 +75,74 @@ function projectChatRoutingPath(projectUuid: string): string {
   return join(resolveDataRoot(), 'projects', projectUuid, 'chat-routing.json');
 }
 
+function collisionsPath(): string {
+  return join(resolveDataRoot(), 'collisions.jsonl');
+}
+
+// ---------------------------------------------------------------------------
+// TPS.5 — collision surface read path. Inlined here (not imported from
+// src.legacy/chat/daemon/collisions.ts) for the same type-poison reason
+// the routing reader is inlined in this file: src.legacy is excluded
+// from tsconfig and the codex/parse.ts transitive dep would break the
+// strict-flag whole-tree typecheck.
+// ---------------------------------------------------------------------------
+
+interface CollisionEntry {
+  v: 1;
+  occurred_at: string;
+  channel_key: string;
+  claimants: string[];
+  winner_uuid: string;
+  notified_via_telegram: boolean;
+}
+
+async function loadActiveCollisions(
+  activeUuid: string,
+  maxAgeMinutes = 24 * 60,
+): Promise<CollisionEntry[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(collisionsPath(), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    return [];
+  }
+  const cutoff = Date.now() - maxAgeMinutes * 60 * 1000;
+  const out: CollisionEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.length === 0) continue;
+    let parsed: CollisionEntry;
+    try {
+      parsed = JSON.parse(line) as CollisionEntry;
+    } catch {
+      continue;
+    }
+    if (parsed.v !== 1) continue;
+    if (!Array.isArray(parsed.claimants)) continue;
+    if (!parsed.claimants.includes(activeUuid)) continue;
+    const t = Date.parse(parsed.occurred_at);
+    if (!Number.isFinite(t) || t < cutoff) continue;
+    out.push(parsed);
+  }
+  return out;
+}
+
+function formatCollisionWarnings(entries: CollisionEntry[]): string {
+  if (entries.length === 0) return '';
+  const lines = [
+    `⚠️  ${entries.length} unresolved routing collision${entries.length === 1 ? '' : 's'} affecting this workspace:`,
+  ];
+  for (const e of entries) {
+    lines.push(
+      `   - ${e.channel_key} claimed by ${e.claimants.join(' + ')}; winner=${e.winner_uuid}`,
+    );
+  }
+  lines.push(
+    '   Fix: edit one of the chat-routing.json files under ~/.opensquid/projects/ so the claim is unambiguous.',
+  );
+  return lines.join('\n') + '\n\n';
+}
+
 // ---------------------------------------------------------------------------
 // Active-project detection: walk up from cwd looking for
 // .opensquid/project.json. Same convention as legacy findProjectCard.
@@ -371,16 +439,20 @@ const ToolHandlers = {
       };
       if (args.platform) arg.platform = args.platform;
       if (args.since) arg.since = args.since;
-      const { messages, scanned_platforms } = await pollInbox(arg);
+      const [{ messages, scanned_platforms }, collisions] = await Promise.all([
+        pollInbox(arg),
+        loadActiveCollisions(uuid),
+      ]);
+      const warningPrefix = formatCollisionWarnings(collisions);
       if (messages.length === 0) {
-        return `No new messages in project ${uuid} (scanned: ${scanned_platforms.join(', ') || '<none>'}).`;
+        return `${warningPrefix}No new messages in project ${uuid} (scanned: ${scanned_platforms.join(', ') || '<none>'}).`;
       }
       const cursor = messages[messages.length - 1]?.enqueued_at ?? '';
       const lines = messages.map(
         (m) =>
           `[${m.enqueued_at}] ${m.platform}/${m.channel}${m.thread_id ? ':' + m.thread_id : ''} <${m.sender}> ${m.text}`,
       );
-      return `${lines.join('\n')}\n\n--\nProject: ${uuid}\nScanned: ${scanned_platforms.join(', ')}\nReturned: ${messages.length}\nNext cursor (pass as 'since'): ${cursor}`;
+      return `${warningPrefix}${lines.join('\n')}\n\n--\nProject: ${uuid}\nScanned: ${scanned_platforms.join(', ')}\nReturned: ${messages.length}\nNext cursor (pass as 'since'): ${cursor}`;
     },
   },
   chat_send: {

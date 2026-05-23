@@ -260,7 +260,20 @@ function log(line: string): void {
 
 async function rebuildRoutingIndex(dataRoot?: string): Promise<RoutingIndex> {
   const cfgs = await loadAllProjectChatRouting(dataRoot);
-  return buildRoutingIndex(cfgs, (msg) => log(`[chat-daemon] routing warn: ${msg}`));
+  const { recordCollision } = await import("./collisions.js");
+  return buildRoutingIndex(cfgs, (info) => {
+    log(
+      `[chat-daemon] routing collision: ${info.channel_key} existing=${info.existing_uuid} newcomer=${info.newcomer_uuid} (latter wins)`,
+    );
+    // Fire-and-forget: persist + notify happen async; the routing
+    // rebuild must not wait. recordCollision swallows its own errors
+    // (stderr-logged) so this `void` is intentional.
+    void recordCollision({
+      info,
+      dataRoot,
+      ...(gateway !== null ? { gateway } : {}),
+    });
+  });
 }
 
 function sameIndex(a: RoutingIndex, b: RoutingIndex): boolean {
