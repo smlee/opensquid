@@ -30,6 +30,7 @@ import { buildChatGateway } from "../factory.js";
 import type { ChatGateway } from "../gateway.js";
 import { appendToInbox } from "./inbox.js";
 import { daemonPaths } from "./lifecycle.js";
+import type { InboundMessageNotification } from "./protocol.js";
 import { type RoutingIndex, buildRoutingIndex, loadAllProjectChatRouting } from "./routing.js";
 import { RpcServer } from "./rpc-server.js";
 
@@ -131,6 +132,40 @@ export async function runDaemonWorker(dataRoot?: string): Promise<never> {
           `[chat-daemon] inbox append failed for ${msg.channel}: ${err instanceof Error ? err.message : err}`,
         );
       }
+      // TPS.6 patch 2 (v0.5.126) — broadcast to long-lived UDS
+      // subscribers. The JSONL file write above is the durable record;
+      // this push is the low-latency delivery. We broadcast on a
+      // single key — the most-specific one available: topic-suffixed
+      // `<channel>:<threadId>` if present, else bare `<channel>`.
+      // This mirrors the routing-index key semantics from
+      // `collectInboundChannels`: a project that registers only
+      // `chat_id:thread_id` doesn't want to receive messages from
+      // other topics in the same supergroup. Wildcard subscribers
+      // (chat_ids=[]) see every message regardless of key shape.
+      // Fire-and-forget — subscriber write failures are handled by
+      // the registry's own socket lifecycle hooks.
+      if (rpcServer !== null) {
+        const broadcastKey = msg.threadId
+          ? `${msg.channel}:${msg.threadId}`
+          : msg.channel;
+        const notif: InboundMessageNotification = {
+          jsonrpc: "2.0",
+          method: "inbound_message",
+          params: {
+            delivery_id: `del-${Date.now().toString()}-${Math.random().toString(36).slice(2, 10)}`,
+            message_id: msg.id,
+            platform: msg.platform,
+            channel: msg.channel,
+            ...(msg.threadId !== undefined ? { thread_id: msg.threadId } : {}),
+            sender: msg.sender,
+            sender_id: msg.senderId,
+            text: msg.text,
+            received_at: msg.receivedAt.toISOString(),
+            mentions_bot: msg.mentionsBot,
+          },
+        };
+        rpcServer.subscribers.broadcast(broadcastKey, notif);
+      }
     });
     await gateway.start();
     log(`[chat-daemon] gateway start complete`);
@@ -225,6 +260,18 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   log(`[chat-daemon] ${signal} received, shutting down...`);
   if (routingPollTimer) clearInterval(routingPollTimer);
+  // TPS.6 patch 2 (v0.5.126) — tell subscribers we're going away
+  // BEFORE closing the RPC server. The shutdown notification gives
+  // MCP bridges a clean signal to back off their reconnect loop
+  // instead of treating the disconnect as transient and immediately
+  // retrying.
+  try {
+    if (rpcServer) rpcServer.subscribers.shutdown(signal);
+  } catch (err) {
+    log(
+      `[chat-daemon] subscriber shutdown notify error (non-fatal): ${err instanceof Error ? err.message : err}`,
+    );
+  }
   try {
     if (rpcServer) await rpcServer.close();
   } catch (err) {
