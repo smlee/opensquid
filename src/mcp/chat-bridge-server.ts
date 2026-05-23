@@ -50,6 +50,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
+import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscriber.js';
+
 // ---------------------------------------------------------------------------
 // Data-root + daemon-socket resolution. Mirrors legacy paths exactly so
 // this bridge connects to the same daemon the rest of opensquid spawned.
@@ -193,6 +195,53 @@ interface InboxMessage {
   mentions_bot: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// TPS.6 patch 3 — buffer/fs merge helpers.
+// ---------------------------------------------------------------------------
+
+function mergeSubscriberBuffer(
+  sub: ChatBridgeSubscriber,
+  platform?: 'telegram' | 'discord' | 'slack',
+): InboxMessage[] {
+  const raw = sub.drainBuffer();
+  const out: InboxMessage[] = [];
+  for (const m of raw) {
+    if (platform && m.platform !== platform) continue;
+    const converted: InboxMessage = {
+      v: 1,
+      id: m.message_id,
+      ...(m.thread_id !== undefined ? { thread_id: m.thread_id } : {}),
+      platform: m.platform,
+      channel: m.channel,
+      sender: m.sender,
+      sender_id: m.sender_id,
+      text: m.text,
+      // Subscriber gives received_at (platform-stamped); use it as
+      // enqueued_at for the merge. The slight clock skew vs the fs
+      // file's appendToInbox stamp is acceptable — both fields are
+      // monotonic-per-source and the merge sort is stable.
+      received_at: m.received_at,
+      enqueued_at: m.received_at,
+      mentions_bot: m.mentions_bot,
+    };
+    out.push(converted);
+  }
+  return out;
+}
+
+function mergeAndSortInboxMessages(
+  fsMessages: InboxMessage[],
+  bufferMessages: InboxMessage[],
+): InboxMessage[] {
+  // De-dupe by message_id; buffer wins on collision (newer source).
+  const byId = new Map<string, InboxMessage>();
+  for (const m of fsMessages) byId.set(m.id, m);
+  for (const m of bufferMessages) byId.set(m.id, m);
+  const merged = [...byId.values()];
+  merged.sort((a, b) => a.enqueued_at.localeCompare(b.enqueued_at));
+  return merged;
+}
+
 async function pollInbox(opts: {
   projectUuid: string;
   platform?: 'telegram' | 'discord' | 'slack';
@@ -247,6 +296,15 @@ class DaemonUnreachableError extends Error {
 }
 
 let rpcCounter = 0;
+
+// ---------------------------------------------------------------------------
+// TPS.6 patch 3 (v0.5.127) — long-lived subscriber. Created in main();
+// chat_poll_inbox handler drains its LRU buffer first, then falls back
+// to the fs JSONL inbox for cold-start catch-up. Module-level mutable
+// so the closure in ToolHandlers can read it without restructuring.
+// ---------------------------------------------------------------------------
+
+let activeSubscriber: ChatBridgeSubscriber | null = null;
 
 async function daemonSend(params: {
   channel: string;
@@ -439,20 +497,33 @@ const ToolHandlers = {
       };
       if (args.platform) arg.platform = args.platform;
       if (args.since) arg.since = args.since;
-      const [{ messages, scanned_platforms }, collisions] = await Promise.all([
+      // TPS.6 patch 3 (v0.5.127): merge subscriber's push-fed LRU
+      // buffer with the fs JSONL inbox. Buffer carries low-latency
+      // hot messages (~ms from arrival); fs carries cold-start
+      // catch-up + messages older than the buffer TTL/LRU eviction.
+      // De-dupe by message_id (the platform-native id is stable
+      // across both sources). Filter by `since` AFTER merge; apply
+      // limit as the last step.
+      const [{ messages: fsMessages, scanned_platforms }, collisions] = await Promise.all([
         pollInbox(arg),
         loadActiveCollisions(uuid),
       ]);
+      const bufferMessages = activeSubscriber
+        ? mergeSubscriberBuffer(activeSubscriber, args.platform)
+        : [];
+      const merged = mergeAndSortInboxMessages(fsMessages, bufferMessages);
+      const filtered = args.since ? merged.filter((m) => m.enqueued_at > args.since!) : merged;
+      const limited = filtered.slice(-args.limit);
       const warningPrefix = formatCollisionWarnings(collisions);
-      if (messages.length === 0) {
+      if (limited.length === 0) {
         return `${warningPrefix}No new messages in project ${uuid} (scanned: ${scanned_platforms.join(', ') || '<none>'}).`;
       }
-      const cursor = messages[messages.length - 1]?.enqueued_at ?? '';
-      const lines = messages.map(
+      const cursor = limited[limited.length - 1]?.enqueued_at ?? '';
+      const lines = limited.map(
         (m) =>
           `[${m.enqueued_at}] ${m.platform}/${m.channel}${m.thread_id ? ':' + m.thread_id : ''} <${m.sender}> ${m.text}`,
       );
-      return `${warningPrefix}${lines.join('\n')}\n\n--\nProject: ${uuid}\nScanned: ${scanned_platforms.join(', ')}\nReturned: ${messages.length}\nNext cursor (pass as 'since'): ${cursor}`;
+      return `${warningPrefix}${lines.join('\n')}\n\n--\nProject: ${uuid}\nScanned: ${scanned_platforms.join(', ')}\nReturned: ${limited.length}\nNext cursor (pass as 'since'): ${cursor}`;
     },
   },
   chat_send: {
@@ -560,6 +631,26 @@ async function main(): Promise<void> {
     const text = await (handler.handle as (a: unknown) => Promise<string>)(parsed.data);
     return { content: [{ type: 'text' as const, text }] };
   });
+
+  // TPS.6 patch 3 (v0.5.127): boot the long-lived UDS subscriber.
+  // Wildcard subscription (chat_ids=[]) — the MCP bridge handles
+  // per-workspace filtering itself via the active-project UUID
+  // resolved on each chat_poll_inbox call. workspace_uuid /
+  // workspace_path are reported to the daemon for diagnostics and
+  // for the auto-boot path (TPS.6 patch 4). If resolveActiveProjectUuid
+  // returns null at startup, the bridge is running outside any
+  // project — subscribe anyway with a sentinel uuid so the daemon
+  // still pushes broadcasts (the buffer remains useful even without
+  // a workspace identity).
+  const startupUuid = (await resolveActiveProjectUuid()) ?? 'no-project';
+  activeSubscriber = new ChatBridgeSubscriber({
+    socketPath: daemonSocketPath(),
+    sessionId: generateSessionId(),
+    workspaceUuid: startupUuid,
+    workspacePath: process.cwd(),
+    chatIds: [],
+  });
+  activeSubscriber.start();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
