@@ -78,6 +78,54 @@ describe("loadProjectChatRouting", () => {
     const r = await loadProjectChatRouting(uuid, tmpRoot);
     expect(r).toBeNull();
   });
+
+  // v0.5.120+ (TPS.2) — auto_bound block round-trip
+  it("loads a routing file with the v0.5.120+ auto_bound block", async () => {
+    const uuid = "tps2-uuid";
+    await fs.mkdir(path.join(tmpRoot, "projects", uuid), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "projects", uuid, "chat-routing.json"),
+      JSON.stringify({
+        telegram: {
+          report_channel: "telegram:-100",
+          inbound_chat_ids: ["-100"],
+          inbound_topic_ids: [15],
+          auto_bound: {
+            workspace_path: "/Users/test/projects/loop",
+            workspace_uuid: "tps2-uuid",
+            topic_id: 15,
+            topic_name: "loop · tps2-uui",
+            created_at: "2026-05-23T04:00:00Z",
+            created_by: "wizard",
+          },
+        },
+      }),
+    );
+    const r = await loadProjectChatRouting(uuid, tmpRoot);
+    expect(r).not.toBeNull();
+    expect(r?.telegram?.auto_bound?.workspace_uuid).toBe("tps2-uuid");
+    expect(r?.telegram?.auto_bound?.topic_id).toBe(15);
+    expect(r?.telegram?.auto_bound?.created_by).toBe("wizard");
+    expect(r?.telegram?.auto_bound?.topic_name).toBe("loop · tps2-uui");
+  });
+
+  it("schema backwards-compat: routing file without auto_bound block still loads", async () => {
+    const uuid = "legacy-uuid";
+    await fs.mkdir(path.join(tmpRoot, "projects", uuid), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpRoot, "projects", uuid, "chat-routing.json"),
+      JSON.stringify({
+        telegram: {
+          report_channel: "telegram:-100",
+          inbound_chat_ids: ["-100"],
+          inbound_topic_ids: [15],
+        },
+      }),
+    );
+    const r = await loadProjectChatRouting(uuid, tmpRoot);
+    expect(r?.telegram?.auto_bound).toBeUndefined();
+    expect(r?.telegram?.inbound_topic_ids).toEqual([15]);
+  });
 });
 
 describe("loadAllProjectChatRouting", () => {

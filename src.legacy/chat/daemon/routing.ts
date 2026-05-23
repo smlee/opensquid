@@ -83,6 +83,59 @@ export interface TelegramRouting {
    * disabled for that project).
    */
   inbound_dm_user_ids?: string[];
+  /**
+   * v0.5.120+ (TPS.2) — metadata tracking automatic creation of a
+   * forum topic for this workspace. Set by the setup wizard (TPS.4) or
+   * daemon auto-boot (TPS.6) when a topic is created on behalf of
+   * this project. Optional — workspaces with manually-edited routing
+   * configs (e.g. legacy v0.7.x setups) don't have this block.
+   *
+   * When `auto_bound.topic_id` is set, `inbound_topic_ids` SHOULD
+   * contain that same id (the wizard / auto-boot writes both). The
+   * `auto_bound` block is purely metadata for lifecycle decisions
+   * (TPS.5 collision surface, TPS.7 stale-topic rebind, TPS.8 cleanup
+   * audit) — the routing index itself only reads `inbound_topic_ids`.
+   *
+   * Schema is additive: existing chat-routing.json files without this
+   * block continue to load and route correctly.
+   */
+  auto_bound?: TelegramAutoBound;
+}
+
+/**
+ * v0.5.120+ (TPS.2) — auto-binding metadata for a forum topic
+ * automatically claimed for a workspace. See `TelegramRouting.auto_bound`
+ * for semantics.
+ */
+export interface TelegramAutoBound {
+  /** Absolute cwd of the workspace at the time the topic was bound. */
+  workspace_path: string;
+  /**
+   * Mirror of the outer project_uuid (this routing config's directory
+   * name) for sanity-checking. If they ever disagree, the worker logs
+   * a warning + the routing index still uses the outer uuid.
+   */
+  workspace_uuid: string;
+  /**
+   * Mirror of `inbound_topic_ids[0]` (or `report_topic_id`) for
+   * sanity-checking + lifecycle ops. If they disagree, the worker
+   * logs a warning.
+   */
+  topic_id: number;
+  /** Human-readable name set on the topic at creation time. */
+  topic_name: string;
+  /** ISO-8601 timestamp of when the topic was first bound. */
+  created_at: string;
+  /**
+   * Who created the binding:
+   *   - `wizard`     — user accepted the topic-create prompt in
+   *                    `opensquid setup chat` (TPS.4).
+   *   - `auto-boot`  — daemon detected an unbound workspace at MCP
+   *                    subscribe time and claimed a topic (TPS.6).
+   *   - `manual`     — user wrote the auto_bound block by hand; treat
+   *                    as informational only, never overwrite.
+   */
+  created_by: "wizard" | "auto-boot" | "manual";
 }
 
 export interface DiscordRouting {
