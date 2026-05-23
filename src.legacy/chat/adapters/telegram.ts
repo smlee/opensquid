@@ -1,6 +1,19 @@
 /**
  * Telegram adapter — long-polling via the official Bot API (v0.7a).
  *
+ * Rebuild path when you edit this file: `pnpm build` does NOT recompile
+ * src.legacy/ (rootDir=src per tsconfig.build.json), but the chat-daemon
+ * worker loads `dist/chat/adapters/telegram.js` at runtime. After
+ * editing, regenerate the dist file with:
+ *
+ *     pnpm exec tsc src.legacy/chat/adapters/telegram.ts \
+ *         --outDir dist --rootDir src.legacy \
+ *         --module NodeNext --moduleResolution NodeNext --target ES2022 \
+ *         --esModuleInterop --skipLibCheck --noEmitOnError false
+ *
+ * Then `node ./dist/index.js chat-daemon restart` to load the new code.
+ * Without the restart, sends keep using the old in-memory adapter.
+ *
  * SDK: `grammy` (modern, TS-first, actively maintained — recommended
  * over `telegraf` which is frozen at v4.16 from Feb 2024 and over
  * `node-telegram-bot-api` which is untyped).
