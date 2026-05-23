@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import type { connect as netConnect } from 'node:net';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -49,7 +50,12 @@ function makeFakeSocket(): FakeSocket {
   return sock;
 }
 
-let timers: Array<{ cb: () => void; ms: number }> = [];
+interface ScheduledTimer {
+  cb: () => void;
+  ms: number;
+}
+
+let timers: ScheduledTimer[] = [];
 let createdSockets: FakeSocket[] = [];
 let stderrCalls: string[];
 let originalStderrWrite: typeof process.stderr.write;
@@ -59,10 +65,10 @@ beforeEach(() => {
   createdSockets = [];
   stderrCalls = [];
   originalStderrWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+  process.stderr.write = (chunk: string | Uint8Array): boolean => {
     stderrCalls.push(typeof chunk === 'string' ? chunk : chunk.toString());
     return true;
-  }) as typeof process.stderr.write;
+  };
 });
 
 afterEach(() => {
@@ -83,7 +89,7 @@ function makeSubscriber(extra?: Partial<SubscriberOptions>): ChatBridgeSubscribe
     connectFn: () => {
       const sock = makeFakeSocket();
       createdSockets.push(sock);
-      return sock as unknown as ReturnType<typeof import('node:net').connect>;
+      return sock as unknown as ReturnType<typeof netConnect>;
     },
     ...(extra ?? {}),
   });
