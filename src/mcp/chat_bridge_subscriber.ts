@@ -241,8 +241,21 @@ export class ChatBridgeSubscriber {
       this.reconnectMs = Math.max(this.reconnectMs, SHUTDOWN_BACKOFF_MS);
       return;
     }
-    // Subscribe ack — frame.result.ok === true. Nothing to do; the
-    // successful write already reset backoff.
+    if (frame.result && typeof frame.result === 'object') {
+      // Subscribe ack — surface auto-boot bind for operator visibility
+      // when the daemon (TPS.6 patch 4) resolved-or-created a topic
+      // for this workspace. Successful write already reset backoff.
+      const result = frame.result as {
+        ok?: boolean;
+        bound_topic_id?: number;
+        bound_topic_name?: string;
+      };
+      if (result.ok && result.bound_topic_id !== undefined && result.bound_topic_name) {
+        process.stderr.write(
+          `[chat-bridge subscriber] auto-bound to "${result.bound_topic_name}" (thread_id=${String(result.bound_topic_id)})\n`,
+        );
+      }
+    }
   }
 
   private scheduleReconnect(reason: string): void {

@@ -36,7 +36,9 @@ import {
   type UnsubscribeResult,
   daemonSockAddress,
 } from "./protocol.js";
+import { loadProjectChatRouting } from "./routing.js";
 import { SubscriberRegistry } from "./subscribers.js";
+import { resolveOrCreateTopic } from "./workspace-topic.js";
 
 export interface RpcServerOptions {
   gateway: ChatGateway;
@@ -195,8 +197,34 @@ export class RpcServer {
             chat_ids: p.chat_ids,
             socket,
           });
-          // Auto-boot (bound_topic_id/_name) lands in TPS.6 patch 4
-          // (v0.5.128). For patch 1 we just acknowledge registration.
+          // TPS.6 patch 4 (v0.5.128) — daemon-side auto-boot. When the
+          // workspace has a configured supergroup but no auto_bound
+          // binding yet, resolve-or-create the forum topic now so the
+          // MCP bridge starts seeing per-workspace-routed inbound
+          // messages without requiring a separate `opensquid setup
+          // chat` wizard run. resolveOrCreateTopic is idempotent —
+          // existing bindings come back as {created:false} with the
+          // existing topic_id/topic_name.
+          //
+          // Skipped conditions (all degrade silently to a wildcard-
+          // routed subscription; subscribers see general topic only):
+          //   - workspace_uuid is the "no-project" sentinel
+          //   - chat-routing.json missing or has no
+          //     telegram.report_channel (no destination)
+          //   - resolveOrCreateTopic throws (logged to stderr, never
+          //     blocks subscribe ack)
+          const autoBoot = await tryAutoBootTopic(
+            p.workspace_uuid,
+            p.workspace_path,
+            this.opts.dataRoot,
+          );
+          if (autoBoot) {
+            return success<SubscribeResult>(req.id, {
+              ok: true,
+              bound_topic_id: autoBoot.topicId,
+              bound_topic_name: autoBoot.topicName,
+            });
+          }
           return success<SubscribeResult>(req.id, { ok: true });
         }
         case "unsubscribe": {
@@ -321,4 +349,52 @@ function parseError(): JsonRpcFailure {
 
 function invalidRequest(id: number | string | null): JsonRpcFailure {
   return failure(id, JSON_RPC_INVALID_REQUEST, "invalid jsonrpc request");
+}
+
+// ---------------------------------------------------------------------
+// TPS.6 patch 4 (v0.5.128) — auto-boot helper
+// ---------------------------------------------------------------------
+
+/**
+ * Try to resolve-or-create a Telegram forum topic for a workspace at
+ * subscribe time. Returns null when the workspace can't be auto-bound
+ * (no project, no routing file, no report_channel, or resolve threw).
+ * Never throws — failures only log to stderr.
+ */
+async function tryAutoBootTopic(
+  workspaceUuid: string,
+  workspacePath: string,
+  dataRoot?: string,
+): Promise<{ topicId: number; topicName: string } | null> {
+  if (!workspaceUuid || workspaceUuid === "no-project") return null;
+  let chatId: string | undefined;
+  try {
+    const routing = await loadProjectChatRouting(workspaceUuid, dataRoot);
+    chatId = routing?.telegram?.report_channel;
+  } catch (err) {
+    process.stderr.write(
+      `[rpc-server] auto-boot: loadProjectChatRouting failed for ${workspaceUuid}: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    return null;
+  }
+  if (!chatId || chatId.length === 0) return null;
+  try {
+    const result = await resolveOrCreateTopic({
+      workspaceUuid,
+      workspacePath,
+      chatId,
+      mode: "auto-boot",
+      ...(dataRoot !== undefined ? { dataRoot } : {}),
+    });
+    return { topicId: result.topicId, topicName: result.topicName };
+  } catch (err) {
+    process.stderr.write(
+      `[rpc-server] auto-boot: resolveOrCreateTopic failed for ${workspaceUuid} (chatId=${chatId}): ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+    return null;
+  }
 }
