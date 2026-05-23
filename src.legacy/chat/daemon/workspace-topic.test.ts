@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { loadProjectChatRouting } from "./routing.js";
 import {
-  _resetDefaultRpcClientCache,
   clearBinding,
   deriveTopicName,
   mergeChatIds,
@@ -26,7 +25,6 @@ beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "opensquid-workspace-topic-test-"));
   prevHome = process.env.OPENSQUID_HOME;
   process.env.OPENSQUID_HOME = tmpRoot;
-  _resetDefaultRpcClientCache();
 });
 
 afterEach(async () => {
@@ -63,12 +61,24 @@ describe("deriveTopicName", () => {
     expect(deriveTopicName("/", "abc12345-xyz")).toBe("root · abc12345");
   });
 
-  it("caps long basenames at 40 chars with ellipsis", () => {
+  it("caps long basenames at 48 chars with ellipsis (pre-research verdict #4)", () => {
     const longName = "x".repeat(60);
     const result = deriveTopicName(`/projects/${longName}`, "abcd1234-xyz");
-    expect(result.length).toBeLessThanOrEqual(40 + 3 + 8 + 1); // basename + ' · ' + uuid prefix slack
+    // basename ≤ 48 + " · " (3) + uuid prefix (8) = 59 max
+    expect(result.length).toBeLessThanOrEqual(48 + 3 + 8);
     expect(result).toContain("...");
     expect(result).toContain(" · abcd1234");
+    // 48 cap = 45 chars of name + "..." (3 chars) = 48
+    const basenamePart = result.split(" · ")[0] ?? "";
+    expect(basenamePart.length).toBe(48);
+  });
+
+  it("does NOT truncate basenames that fit under the 48-char limit", () => {
+    const exactly48 = "x".repeat(48);
+    const result = deriveTopicName(`/projects/${exactly48}`, "abcd1234-xyz");
+    const basenamePart = result.split(" · ")[0] ?? "";
+    expect(basenamePart).toBe(exactly48);
+    expect(basenamePart).not.toContain("...");
   });
 });
 
@@ -237,6 +247,109 @@ describe("resolveOrCreateTopic — merges into existing routing", () => {
     expect(loaded?.telegram?.inbound_topic_ids).toEqual([3, 7777]);
     // inbound_chat_ids unchanged (no duplicates added)
     expect(loaded?.telegram?.inbound_chat_ids).toEqual(["-1001234"]);
+  });
+});
+
+describe("resolveOrCreateTopic — pre-research verdict #6 (partial-failure orphan recovery)", () => {
+  it("logs an orphan-topic record when createTopic succeeds but persist fails", async () => {
+    const { client } = makeRecordingClient();
+    // Make persistRoutingAtomic fail by writing a directory where the
+    // routing file should be — the tmp + rename will fail.
+    const uuid = "uuid-orphan";
+    const projectDir = path.join(tmpRoot, "projects", uuid);
+    await fs.mkdir(projectDir, { recursive: true });
+    // Create chat-routing.json AS A DIRECTORY so fs.writeFile(tmp) →
+    // fs.rename(tmp, target) fails on rename (cannot replace a dir
+    // with a file via rename on most fs).
+    await fs.mkdir(path.join(projectDir, "chat-routing.json.dir-clash"));
+    // ... actually a simpler trigger: make the target a directory
+    await fs.rm(path.join(projectDir, "chat-routing.json.dir-clash"), { recursive: true });
+    await fs.mkdir(path.join(projectDir, "chat-routing.json"), { recursive: true });
+
+    await expect(
+      resolveOrCreateTopic({
+        workspaceUuid: uuid,
+        workspacePath: "/tmp/orphan",
+        chatId: "-1001234",
+        mode: "wizard",
+        rpcClient: client,
+        dataRoot: tmpRoot,
+      }),
+    ).rejects.toThrow();
+
+    // Verify orphan record was written
+    const orphanPath = path.join(tmpRoot, "orphan-topics.jsonl");
+    const orphanContent = await fs.readFile(orphanPath, "utf8").catch(() => "");
+    expect(orphanContent.length).toBeGreaterThan(0);
+    const lines = orphanContent.trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]!);
+    expect(record.topic_id).toBe(7777);
+    expect(record.workspace_uuid).toBe(uuid);
+    expect(record.mode).toBe("wizard");
+    expect(record.persist_error).toMatch(/.+/);
+  });
+});
+
+describe("resolveOrCreateTopic — pre-research verdict #9 (invariant warning)", () => {
+  it("logs a warning when auto_bound.topic_id is not in inbound_topic_ids (but does not auto-repair)", async () => {
+    const uuid = "uuid-invariant";
+    const dir = path.join(tmpRoot, "projects", uuid);
+    await fs.mkdir(dir, { recursive: true });
+    // Construct an intentionally-inconsistent config: auto_bound says
+    // topic 42 but inbound_topic_ids says [3].
+    await fs.writeFile(
+      path.join(dir, "chat-routing.json"),
+      JSON.stringify({
+        telegram: {
+          inbound_chat_ids: ["-1001234"],
+          inbound_topic_ids: [3],
+          auto_bound: {
+            workspace_path: "/tmp/invariant",
+            workspace_uuid: uuid,
+            topic_id: 42,
+            topic_name: "stale-name",
+            created_at: "2026-05-22T00:00:00Z",
+            created_by: "manual",
+          },
+        },
+      }),
+    );
+
+    // Capture stderr — using spyOn keeps the test self-contained.
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const captured: string[] = [];
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      const text = typeof chunk === "string" ? chunk : chunk.toString();
+      captured.push(text);
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { client } = makeRecordingClient();
+      const result = await resolveOrCreateTopic({
+        workspaceUuid: uuid,
+        workspacePath: "/tmp/invariant",
+        chatId: "-1001234",
+        mode: "wizard",
+        rpcClient: client,
+        dataRoot: tmpRoot,
+      });
+      // Existing binding returned (idempotent path), not re-created
+      expect(result.created).toBe(false);
+      expect(result.topicId).toBe(42);
+      // Invariant warning fired
+      const warned = captured.some((c) =>
+        c.includes("invariant warning") && c.includes("topic_id=42"),
+      );
+      expect(warned).toBe(true);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+
+    // Config NOT auto-repaired
+    const loaded = await loadProjectChatRouting(uuid, tmpRoot);
+    expect(loaded?.telegram?.inbound_topic_ids).toEqual([3]); // not [3, 42]
+    expect(loaded?.telegram?.auto_bound?.topic_id).toBe(42);
   });
 });
 
