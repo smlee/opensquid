@@ -347,14 +347,20 @@ export class TelegramAdapter implements ChatAdapter {
         "call gateway.start() before send()",
       );
     }
-    const chatId = nativeChatIdFromChannel(message.channel);
+    const { chatId, threadId: channelThreadId } = parseTelegramChannel(message.channel);
     const opts: { reply_to_message_id?: number; message_thread_id?: number } = {};
     if (message.replyTo) {
       const n = Number(message.replyTo);
       if (Number.isFinite(n)) opts.reply_to_message_id = n;
     }
-    if (message.threadId) {
-      const n = Number(message.threadId);
+    // Explicit `message.threadId` from the caller wins over a thread id
+    // embedded in the channel string. The embedded form exists so that
+    // composite channel literals echoed from `chat_poll_inbox`
+    // (e.g. `telegram:-1001234567890:15`) can be passed back to
+    // `chat_send` verbatim without the caller having to split them.
+    const effectiveThreadId = message.threadId ?? channelThreadId;
+    if (effectiveThreadId !== undefined) {
+      const n = Number(effectiveThreadId);
       if (Number.isFinite(n)) opts.message_thread_id = n;
     }
     const sent = await this.bot.api.sendMessage(chatId, message.text, opts);
@@ -402,16 +408,70 @@ export class TelegramAdapter implements ChatAdapter {
 // Helpers
 // ---------------------------------------------------------------------
 
-function nativeChatIdFromChannel(channel: string): string {
-  // formatChannelId is "telegram:<id>" — strip the prefix.
-  const idx = channel.indexOf(":");
-  if (idx === -1) {
-    throw new ChatGatewayError(`malformed channel id '${channel}'`);
+/**
+ * Parse a Telegram channel id (with optional embedded forum-topic
+ * thread id) into its native chat_id + message_thread_id parts.
+ *
+ * Wire format (canonical, mirrors `chat_poll_inbox` output):
+ * - `telegram:<chat_id>`              → general topic, no thread
+ * - `telegram:<chat_id>:<thread_id>`  → forum topic (supergroup with
+ *                                       Topics enabled)
+ *
+ * Examples:
+ * - `telegram:-1001234567890`      → `{ chatId: "-1001234567890" }`
+ * - `telegram:-1001234567890:15`   → `{ chatId: "-1001234567890",
+ *                                       threadId: "15" }`
+ * - `telegram:8075471258`          → `{ chatId: "8075471258" }` (DM)
+ *
+ * Why the parser lives in the adapter (not in `gateway.ts`): Slack uses
+ * a different colon-in-native-id convention (`slack:C012345:1234.5678`
+ * where the trailing segment is `thread_ts`, an opaque part of the
+ * native id). Telegram's `<chat_id>:<thread_id>` semantic is
+ * platform-specific and shouldn't leak into the cross-platform
+ * `nativeIdFromChannel` helper.
+ *
+ * Exported for unit testing.
+ */
+export function parseTelegramChannel(channel: string): {
+  chatId: string;
+  threadId?: string;
+} {
+  const colon = channel.indexOf(":");
+  if (colon === -1) {
+    throw new ChatGatewayError(
+      `malformed channel id '${channel}'`,
+      "telegram channel ids must be 'telegram:<chat_id>' or 'telegram:<chat_id>:<thread_id>'",
+    );
   }
-  if (channel.slice(0, idx) !== "telegram") {
+  if (channel.slice(0, colon) !== "telegram") {
     throw new ChatGatewayError(`telegram adapter received non-telegram channel: '${channel}'`);
   }
-  return channel.slice(idx + 1);
+  const rest = channel.slice(colon + 1);
+  if (rest.length === 0) {
+    throw new ChatGatewayError(`malformed channel id '${channel}': empty chat_id`);
+  }
+  // chat_id is always the first segment after `telegram:`. If a second
+  // colon-segment is present, it's the forum-topic message_thread_id.
+  const sep = rest.indexOf(":");
+  if (sep === -1) {
+    return { chatId: rest };
+  }
+  const chatId = rest.slice(0, sep);
+  const threadId = rest.slice(sep + 1);
+  if (chatId.length === 0) {
+    throw new ChatGatewayError(`malformed channel id '${channel}': empty chat_id`);
+  }
+  if (threadId.length === 0) {
+    throw new ChatGatewayError(
+      `malformed channel id '${channel}': empty thread_id after second colon`,
+    );
+  }
+  if (!/^\d+$/.test(threadId)) {
+    throw new ChatGatewayError(
+      `malformed channel id '${channel}': thread_id must be all-digits, got '${threadId}'`,
+    );
+  }
+  return { chatId, threadId };
 }
 
 /**

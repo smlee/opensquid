@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ChatGatewayError } from "../gateway.js";
-import { TelegramAdapter, detectBotMention } from "./telegram.js";
+import { TelegramAdapter, detectBotMention, parseTelegramChannel } from "./telegram.js";
 
 describe("TelegramAdapter constructor", () => {
   it("rejects empty bot_token", () => {
@@ -40,6 +40,126 @@ describe("detectBotMention", () => {
     const text = "see https://mybot.example.com";
     const entities = [{ type: "url", offset: 4, length: 25 }];
     expect(detectBotMention(text, entities, "mybot")).toBe(false);
+  });
+});
+
+describe("parseTelegramChannel", () => {
+  it("parses a DM channel (single user chat_id, no thread)", () => {
+    expect(parseTelegramChannel("telegram:8075471258")).toEqual({ chatId: "8075471258" });
+  });
+
+  it("parses a supergroup channel (negative chat_id, no thread)", () => {
+    expect(parseTelegramChannel("telegram:-1001234567890")).toEqual({
+      chatId: "-1001234567890",
+    });
+  });
+
+  it("parses a forum-topic composite channel (chat_id + thread_id)", () => {
+    expect(parseTelegramChannel("telegram:-1001234567890:15")).toEqual({
+      chatId: "-1001234567890",
+      threadId: "15",
+    });
+  });
+
+  it("accepts arbitrary numeric thread_id", () => {
+    expect(parseTelegramChannel("telegram:-1001234567890:1")).toEqual({
+      chatId: "-1001234567890",
+      threadId: "1",
+    });
+    expect(parseTelegramChannel("telegram:-1001234567890:999999")).toEqual({
+      chatId: "-1001234567890",
+      threadId: "999999",
+    });
+  });
+
+  it("rejects missing colon", () => {
+    expect(() => parseTelegramChannel("telegramonly")).toThrow(ChatGatewayError);
+  });
+
+  it("rejects non-telegram platform prefix", () => {
+    expect(() => parseTelegramChannel("discord:1234567890")).toThrow(ChatGatewayError);
+    expect(() => parseTelegramChannel("slack:C012345")).toThrow(ChatGatewayError);
+  });
+
+  it("rejects empty chat_id", () => {
+    expect(() => parseTelegramChannel("telegram:")).toThrow(ChatGatewayError);
+    expect(() => parseTelegramChannel("telegram::15")).toThrow(ChatGatewayError);
+  });
+
+  it("rejects empty thread_id after second colon", () => {
+    expect(() => parseTelegramChannel("telegram:-1001234567890:")).toThrow(ChatGatewayError);
+  });
+
+  it("rejects non-numeric thread_id", () => {
+    expect(() => parseTelegramChannel("telegram:-1001234567890:abc")).toThrow(ChatGatewayError);
+    expect(() => parseTelegramChannel("telegram:-1001234567890:15.5")).toThrow(ChatGatewayError);
+  });
+});
+
+describe("TelegramAdapter.send — thread routing (forum topics)", () => {
+  function makeAdapterWithCapturingBot(): {
+    adapter: TelegramAdapter;
+    calls: Array<{
+      chat_id: string | number;
+      text: string;
+      other?: { reply_to_message_id?: number; message_thread_id?: number };
+    }>;
+  } {
+    const adapter = new TelegramAdapter({ bot_token: "123:ABCDEF" });
+    const calls: Array<{
+      chat_id: string | number;
+      text: string;
+      other?: { reply_to_message_id?: number; message_thread_id?: number };
+    }> = [];
+    adapter._testSeed({
+      api: {
+        sendMessage: (chat_id, text, other) => {
+          calls.push({ chat_id, text, other });
+          return Promise.resolve({ message_id: 100, date: 1700000000 });
+        },
+      },
+    });
+    return { adapter, calls };
+  }
+
+  it("routes a general-topic send (no thread suffix, no explicit threadId) without message_thread_id", async () => {
+    const { adapter, calls } = makeAdapterWithCapturingBot();
+    await adapter.send({ channel: "telegram:-1001234567890", text: "hi general" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.chat_id).toBe("-1001234567890");
+    expect(calls[0]?.other?.message_thread_id).toBeUndefined();
+  });
+
+  it("extracts thread_id from a composite channel string", async () => {
+    const { adapter, calls } = makeAdapterWithCapturingBot();
+    await adapter.send({ channel: "telegram:-1001234567890:15", text: "hi topic 15" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.chat_id).toBe("-1001234567890");
+    expect(calls[0]?.other?.message_thread_id).toBe(15);
+  });
+
+  it("honours an explicit threadId param on OutboundMessage", async () => {
+    const { adapter, calls } = makeAdapterWithCapturingBot();
+    await adapter.send({
+      channel: "telegram:-1001234567890",
+      text: "hi topic 42",
+      threadId: "42",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.chat_id).toBe("-1001234567890");
+    expect(calls[0]?.other?.message_thread_id).toBe(42);
+  });
+
+  it("explicit threadId overrides a thread suffix embedded in the channel", async () => {
+    const { adapter, calls } = makeAdapterWithCapturingBot();
+    await adapter.send({
+      channel: "telegram:-1001234567890:15",
+      text: "explicit wins",
+      threadId: "99",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.chat_id).toBe("-1001234567890");
+    expect(calls[0]?.other?.message_thread_id).toBe(99);
   });
 });
 

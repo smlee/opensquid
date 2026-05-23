@@ -39,7 +39,7 @@
  * bin in package.json.
  */
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { connect, type Socket } from 'node:net';
@@ -337,13 +337,19 @@ const SendSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Outbound channel. Either `<platform>:<native_id>` literal (e.g. `telegram:-1001234567890`) or the magic `project:<platform>` shorthand that resolves to the active project's report_channel + report_topic_id.",
+      "Outbound channel. One of: (a) `<platform>:<native_id>` literal (e.g. `telegram:-1001234567890`); (b) Telegram forum-topic composite `telegram:<chat_id>:<thread_id>` (e.g. `telegram:-1001234567890:15`) — same shape echoed by `chat_poll_inbox`, can be passed back verbatim; (c) `project:<platform>` magic shorthand that resolves to the active project's report_channel + report_topic_id.",
     ),
   text: z.string().min(1),
   reply_to: z
     .string()
     .optional()
     .describe('Source message id to thread under (best-effort per platform).'),
+  thread_id: z
+    .string()
+    .optional()
+    .describe(
+      'Explicit thread / topic id. Overrides any thread suffix embedded in `channel`. Telegram only (forum-topic message_thread_id). Ignored on platforms without sub-thread routing.',
+    ),
 });
 
 const ToolHandlers = {
@@ -381,7 +387,12 @@ const ToolHandlers = {
     schema: SendSchema,
     handle: async (args: z.infer<typeof SendSchema>): Promise<string> => {
       let channel = args.channel.trim();
-      let threadId: string | undefined;
+      // Precedence: explicit args.thread_id > project:<platform> resolved
+      // thread > thread suffix embedded in channel. The daemon adapter
+      // honours the same precedence when it parses the channel itself,
+      // but we resolve the project: shorthand HERE so we can pass a
+      // clean (channel, threadId) tuple downstream.
+      let threadId: string | undefined = args.thread_id;
       if (channel.startsWith('project:')) {
         const platformRaw = channel.slice('project:'.length);
         if (platformRaw !== 'telegram' && platformRaw !== 'discord' && platformRaw !== 'slack') {
@@ -401,7 +412,7 @@ const ToolHandlers = {
           );
         }
         channel = resolved.channel;
-        if (resolved.threadId) threadId = resolved.threadId;
+        if (threadId === undefined && resolved.threadId) threadId = resolved.threadId;
       }
       const sendArgs: { channel: string; text: string; replyTo?: string; threadId?: string } = {
         channel,
@@ -410,7 +421,7 @@ const ToolHandlers = {
       if (args.reply_to) sendArgs.replyTo = args.reply_to;
       if (threadId) sendArgs.threadId = threadId;
       const result = await daemonSend(sendArgs);
-      return `sent to ${result.platform}:${channel}${threadId ? ' (thread ' + threadId + ')' : ''} — message_id=${result.message_id} at ${result.delivered_at}`;
+      return `sent to ${channel}${threadId ? ' (thread ' + threadId + ')' : ''} — message_id=${result.message_id} at ${result.delivered_at}`;
     },
   },
 } as const;
@@ -428,9 +439,28 @@ const descriptions: Record<ToolName, string> = {
 // MCP server bootstrap.
 // ---------------------------------------------------------------------------
 
+/**
+ * Read the published package version at runtime. Same pattern as
+ * `src/mcp/server.ts` (T.1.H fix) — the prior hardcoded `'0.5.92'`
+ * here had drifted ~25 patch bumps behind reality. Resolve
+ * `package.json` relative to this module's URL so the lookup works in
+ * both `dist/mcp/chat-bridge-server.js` (built) and
+ * `src/mcp/chat-bridge-server.ts` (vitest) layouts.
+ */
+function readPackageVersion(): string {
+  try {
+    const pkgJsonPath = new URL('../../package.json', import.meta.url);
+    const raw = readFileSync(pkgJsonPath, 'utf8');
+    const parsed = JSON.parse(raw) as { version?: string };
+    return parsed.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 async function main(): Promise<void> {
   const server = new Server(
-    { name: 'opensquid-chat-bridge', version: '0.5.92' },
+    { name: 'opensquid-chat-bridge', version: readPackageVersion() },
     { capabilities: { tools: {} } },
   );
 
