@@ -30,8 +30,13 @@ import {
   type PingResult,
   type SendParams,
   type SendResult,
+  type SubscribeParams,
+  type SubscribeResult,
+  type UnsubscribeParams,
+  type UnsubscribeResult,
   daemonSockAddress,
 } from "./protocol.js";
+import { SubscriberRegistry } from "./subscribers.js";
 
 export interface RpcServerOptions {
   gateway: ChatGateway;
@@ -50,6 +55,13 @@ export class RpcServer {
   private listening = false;
   private readonly address: string;
   private readonly startedAt: number;
+  /**
+   * TPS.6 patch 1 (v0.5.125) — long-lived subscriber registry. The
+   * gateway.onMessage wire-up that broadcasts to this registry lands
+   * in patch 2 (v0.5.126). For patch 1, the daemon accepts
+   * subscribe/unsubscribe RPCs but does not yet push notifications.
+   */
+  readonly subscribers = new SubscriberRegistry();
 
   constructor(private readonly opts: RpcServerOptions) {
     this.address = daemonSockAddress(opts.dataRoot);
@@ -116,7 +128,10 @@ export class RpcServer {
     });
     socket.on("error", () => {
       // Half-open connections are common; closing here keeps the daemon
-      // tidy without surfacing an error to other clients.
+      // tidy without surfacing an error to other clients. Subscriber
+      // eviction is handled by the registry's own socket 'error'/'close'
+      // listeners installed at register() time, so we don't need to
+      // touch the registry here.
       try {
         socket.destroy();
       } catch {
@@ -138,7 +153,7 @@ export class RpcServer {
       return;
     }
     if (this.opts.onRequest) this.opts.onRequest(req.method);
-    void this.handle(req).then((res) => this.respond(socket, res));
+    void this.handle(req, socket).then((res) => this.respond(socket, res));
   }
 
   private respond(socket: Socket, response: JsonRpcSuccess | JsonRpcFailure): void {
@@ -149,9 +164,49 @@ export class RpcServer {
     }
   }
 
-  private async handle(req: JsonRpcRequest): Promise<JsonRpcSuccess | JsonRpcFailure> {
+  private async handle(req: JsonRpcRequest, socket: Socket): Promise<JsonRpcSuccess | JsonRpcFailure> {
     try {
       switch (req.method) {
+        case "subscribe": {
+          const p = req.params as SubscribeParams | undefined;
+          if (
+            !p ||
+            typeof p.session_id !== "string" ||
+            p.session_id.length === 0 ||
+            typeof p.workspace_uuid !== "string" ||
+            typeof p.workspace_path !== "string" ||
+            !Array.isArray(p.chat_ids)
+          ) {
+            return failure(
+              req.id,
+              JSON_RPC_INVALID_PARAMS,
+              "subscribe: session_id, workspace_uuid, workspace_path, chat_ids[] required",
+            );
+          }
+          for (const id of p.chat_ids) {
+            if (typeof id !== "string") {
+              return failure(req.id, JSON_RPC_INVALID_PARAMS, "subscribe: chat_ids[] must be strings");
+            }
+          }
+          this.subscribers.register({
+            session_id: p.session_id,
+            workspace_uuid: p.workspace_uuid,
+            workspace_path: p.workspace_path,
+            chat_ids: p.chat_ids,
+            socket,
+          });
+          // Auto-boot (bound_topic_id/_name) lands in TPS.6 patch 4
+          // (v0.5.128). For patch 1 we just acknowledge registration.
+          return success<SubscribeResult>(req.id, { ok: true });
+        }
+        case "unsubscribe": {
+          const p = req.params as UnsubscribeParams | undefined;
+          if (!p || typeof p.session_id !== "string" || p.session_id.length === 0) {
+            return failure(req.id, JSON_RPC_INVALID_PARAMS, "unsubscribe: session_id required");
+          }
+          this.subscribers.unregister(p.session_id);
+          return success<UnsubscribeResult>(req.id, { ok: true });
+        }
         case "ping":
           return success<PingResult>(req.id, {
             pong: true,

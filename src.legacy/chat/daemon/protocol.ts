@@ -87,7 +87,93 @@ export interface PingResult {
   version: string;
 }
 
-export type DaemonMethod = "send" | "list_channels" | "ping" | "create_topic";
+// ---------------------------------------------------------------------
+// TPS.6 (v0.5.125) — subscriber broker primitives
+// ---------------------------------------------------------------------
+
+/**
+ * Register the calling socket as a long-lived subscriber. Daemon keeps
+ * the connection open and pushes `inbound_message` notifications
+ * (no `id` field) over the same socket whenever a Telegram message
+ * arrives for the listed chat_ids (or any chat_id, when chat_ids is
+ * empty — wildcard subscriber).
+ *
+ * Idempotent on session_id: re-registering with the same session_id
+ * evicts the previous slot (and closes its socket) before installing
+ * the new one. This lets a reconnecting MCP bridge regain its slot
+ * without leaking the old subscriber entry.
+ *
+ * Returns `bound_topic_id`/`bound_topic_name` when the daemon's
+ * auto-boot path (TPS.6 patch 4) resolved-or-created a workspace
+ * topic during the handshake. Empty when the workspace already had
+ * an explicit binding (idempotent reuse).
+ */
+export interface SubscribeParams {
+  session_id: string;
+  workspace_uuid: string;
+  workspace_path: string;
+  /** Empty array = wildcard (every inbound message). */
+  chat_ids: string[];
+}
+
+export interface SubscribeResult {
+  ok: true;
+  bound_topic_id?: number;
+  bound_topic_name?: string;
+}
+
+export interface UnsubscribeParams {
+  session_id: string;
+}
+
+export interface UnsubscribeResult {
+  ok: true;
+}
+
+/**
+ * Server-initiated push payload — JSON-RPC 2.0 notification (no `id`
+ * field per spec §4.1, so the client MUST NOT reply). One message =
+ * one notification frame. `delivery_id` is the idempotency key the
+ * client uses to dedupe across reconnects (the daemon may resend a
+ * notification if a write-during-disconnect raced with reconnect).
+ */
+export interface InboundMessageNotification {
+  jsonrpc: "2.0";
+  method: "inbound_message";
+  params: {
+    delivery_id: string;
+    message_id: string;
+    platform: "telegram" | "discord" | "slack";
+    channel: string;
+    thread_id?: string;
+    sender: string;
+    sender_id: string;
+    text: string;
+    received_at: string;
+    mentions_bot: boolean;
+  };
+}
+
+export interface DaemonShutdownNotification {
+  jsonrpc: "2.0";
+  method: "daemon_shutdown";
+  params: {
+    reason: string;
+    restart_expected_at?: string;
+  };
+}
+
+export type RpcNotification =
+  | InboundMessageNotification
+  | DaemonShutdownNotification;
+
+export type DaemonMethod =
+  | "send"
+  | "list_channels"
+  | "ping"
+  | "create_topic"
+  | "subscribe"
+  | "unsubscribe";
 
 // ---------------------------------------------------------------------
 // JSON-RPC 2.0 envelopes
