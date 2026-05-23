@@ -38,6 +38,7 @@ import {
   runPackPrompts,
 } from './chat_actions_prompts.js';
 import { runChannelTestStep } from './chat_actions_test_step.js';
+import { runTopicCreateStep } from './topic_create_step.js';
 import {
   buildPlan,
   executePlan,
@@ -241,6 +242,12 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
 
   try {
     const result = await executePlan(plan);
+    // (e2) TPS.4 — offer to auto-create + bind a Telegram forum topic
+    //      for this workspace. Slots between the WIZ.3 plan-write and
+    //      the WIZ.4 channel-test so the test below lands in the
+    //      freshly-bound topic. Opt-out (default = yes). Same skip
+    //      semantics as WIZ.4 for OPENSQUID_NO_BILLED_CALLS=1.
+    await runTopicCreateStep({ daemonState: detection.daemon });
     // (f) WIZ.4 — opt-in live test, post-write. The user's models.yaml +
     //     chat_agent.yaml are on disk by now; offering the test here lets
     //     them verify end-to-end delivery against the freshly written
