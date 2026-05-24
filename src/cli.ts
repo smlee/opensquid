@@ -25,6 +25,7 @@ import { registerAudit } from './setup/cli/audit.js';
 import { registerCache } from './setup/cli/cache.js';
 import { registerSetup } from './setup/cli/chat.js';
 import { registerCheckpoints } from './setup/cli/checkpoints.js';
+import { registerSetupWizard } from './setup/cli/hooks.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
 import { registerPermissions } from './setup/cli/permissions.js';
@@ -172,7 +173,15 @@ registerLimits(program);
 // + the `chat` subcommand (interactive chat-agent wizard). Bare `setup`
 // prints help — the wizard never auto-runs. Flags: --dry-run, --replace,
 // --skip-test. See `src/setup/cli/chat.ts` for the registration shape.
-registerSetup(program);
+const setupGroup = registerSetup(program);
+
+// G.1 — `opensquid setup wizard hooks`. Writes opensquid's 4 anti-drift
+// hook entries into `~/.claude/settings.json` (+ project-scope when a
+// `.opensquid/` ancestor is found from cwd). Preserves all third-party
+// hooks via the `@opensquid: true` marker contract. Replaces the broken
+// `node .../dist/index.js anti-drift <event>` legacy entries that
+// currently exist in the user's settings.json.
+registerSetupWizard(setupGroup);
 
 // T.2 — `opensquid engine doctor|set-path|forget|kill`. Engine binary
 // discovery + persisted-path management. Revived from the pre-reset

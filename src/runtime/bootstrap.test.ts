@@ -19,7 +19,14 @@
  * a daemon socket).
  */
 
-import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { discoverActivePacks } from '../packs/discovery.js';
+import { sortPacksByScope } from '../packs/load_order.js';
 
 import { buildRegistry } from './bootstrap.js';
 
@@ -90,5 +97,90 @@ describe('buildRegistry — T.6 lesson wiring (wedge gate surface)', () => {
     expect(registry.has('propose_lesson')).toBe(false);
     expect(registry.has('promote_lesson')).toBe(false);
     expect(registry.has('recall_lesson')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G.1 — active-pack discovery + scope composition.
+//
+// The "real" path in `bootstrap.ts:realPacksPromise` is captured at
+// module-load time, which makes it hard to exercise every branch from a
+// single test process. We test the COMPOSITION LOGIC (the building blocks
+// `discoverActivePacks` + `sortPacksByScope`) directly here — that's where
+// the actual ordering invariants live. Subprocess integration tests
+// (`hooks.integration.test.ts` + `test/e2e/runtime-smoke.test.ts`) cover
+// the live module-load path.
+// ---------------------------------------------------------------------------
+
+describe('G.1 bootstrap composition — discoverActivePacks + sortPacksByScope', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'opensquid-bootstrap-compose-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function makePackAt(scopeRoot: string, name: string, scope: string): Promise<void> {
+    const packDir = join(scopeRoot, 'codexes', name);
+    await mkdir(packDir, { recursive: true });
+    await writeFile(
+      join(packDir, 'manifest.yaml'),
+      [`name: ${name}`, 'version: 0.1.0', `scope: ${scope}`, 'goal: t'].join('\n') + '\n',
+      'utf8',
+    );
+  }
+
+  async function makeScope(scopeName: string, packs: { name: string; scope: string }[]) {
+    const scopeRoot = join(root, scopeName);
+    await mkdir(scopeRoot, { recursive: true });
+    for (const p of packs) await makePackAt(scopeRoot, p.name, p.scope);
+    await writeFile(
+      join(scopeRoot, 'active.json'),
+      JSON.stringify({ packs: packs.map((p) => p.name) }),
+      'utf8',
+    );
+    return scopeRoot;
+  }
+
+  it('composes user-scope packs [A, B] + project-scope packs [C] sorted by scope tier then name', async () => {
+    // User scope ships two packs at different scope tiers; project scope
+    // ships one. The composed list (post-sort) should land in:
+    //   universal (a) → workflow (b) → project (c).
+    const userRoot = await makeScope('user', [
+      { name: 'b-workflow', scope: 'workflow' },
+      { name: 'a-universal', scope: 'universal' },
+    ]);
+    const projRoot = await makeScope('project', [{ name: 'c-project', scope: 'project' }]);
+
+    const user = await discoverActivePacks(userRoot);
+    const proj = await discoverActivePacks(projRoot);
+    const composed = sortPacksByScope([...user, ...proj]);
+
+    expect(composed.map((p) => p.name)).toEqual(['a-universal', 'b-workflow', 'c-project']);
+  });
+
+  it('alphabetical tie-break within scope tier', async () => {
+    const userRoot = await makeScope('user', [
+      { name: 'charlie', scope: 'workflow' },
+      { name: 'alpha', scope: 'workflow' },
+      { name: 'bravo', scope: 'workflow' },
+    ]);
+
+    const user = await discoverActivePacks(userRoot);
+    const composed = sortPacksByScope(user);
+
+    expect(composed.map((p) => p.name)).toEqual(['alpha', 'bravo', 'charlie']);
+  });
+
+  it('null project-scope root contributes nothing', async () => {
+    const userRoot = await makeScope('user', [{ name: 'only-one', scope: 'workflow' }]);
+    const user = await discoverActivePacks(userRoot);
+    const proj = await discoverActivePacks(null);
+    const composed = sortPacksByScope([...user, ...proj]);
+
+    expect(composed.map((p) => p.name)).toEqual(['only-one']);
   });
 });

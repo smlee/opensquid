@@ -24,11 +24,71 @@
  * Imported by: src/functions/state.ts, src/runtime/drift_catalog.ts.
  */
 
+import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 export const OPENSQUID_HOME = (): string =>
   process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
+
+// ---------------------------------------------------------------------------
+// Scope-root resolvers (G.1)
+//
+// opensquid pack discovery has two installation scopes (per G.1 spec
+// §"Pre-verified facts" pack-architecture-is-2D bullet):
+//
+//   - user scope    = `OPENSQUID_HOME()`           (`~/.opensquid/` by default)
+//   - project scope = `<project>/.opensquid/`      (walked from cwd upward)
+//
+// Each scope root may contain an `active.json` declaring which folders under
+// `codexes/` are active. `discoverActivePacks(scopeRoot)` consumes the result
+// of these resolvers; null means "this scope is not in effect (no project
+// root found walking up from cwd)".
+//
+// `resolveUserScopeRoot()` is a thin alias around `OPENSQUID_HOME()` for
+// naming symmetry with the project-scope helper. The `OPENSQUID_HOME` env
+// override remains the single way tests redirect user-scope I/O — do NOT
+// duplicate the env-override logic here.
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the user-scope opensquid root (`~/.opensquid/` by default; honors
+ * `OPENSQUID_HOME` env override). Always returns a path; the directory may
+ * not exist yet (`discoverActivePacks` treats absent active.json as empty).
+ */
+export const resolveUserScopeRoot = (): string => OPENSQUID_HOME();
+
+/**
+ * Walks up from `cwd` looking for a `.opensquid/` directory. Returns its
+ * absolute path on first hit, or `null` if the walk reaches the filesystem
+ * root without finding one (no project scope in effect).
+ *
+ * 64-level cap mirrors the cwd walk in
+ * `src/runtime/agent_bridge/cli.ts:walkForProjectUuid` — protects against
+ * pathological symlink cycles. In practice, real project trees bottom out
+ * well before 64 levels.
+ *
+ * Important: this probes for the `.opensquid/` DIRECTORY's existence, NOT
+ * the agent_bridge's `.opensquid/project.json` file. The two walks have
+ * different purposes (G.1 walks for "is there pack config here?";
+ * agent_bridge walks for "is there a UUID-bound project here?").
+ */
+export const resolveProjectScopeRoot = async (cwd: string): Promise<string | null> => {
+  let dir = resolve(cwd);
+  for (let i = 0; i < 64; i++) {
+    const candidate = join(dir, '.opensquid');
+    try {
+      const st = await stat(candidate);
+      if (st.isDirectory()) return candidate;
+    } catch {
+      /* keep walking */
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+};
 
 export const sessionStateDir = (sessionId: string): string =>
   join(OPENSQUID_HOME(), 'sessions', sessionId, 'state');

@@ -1,0 +1,162 @@
+/**
+ * `opensquid setup wizard hooks` — write Claude Code hook entries.
+ *
+ * Two-stage wizard:
+ *   1. Discover-and-preview — read existing `~/.claude/settings.json` and
+ *      (when present) `<project>/.claude/settings.json`, project the
+ *      proposed change, render a counts summary to stdout. If `--dry-run`
+ *      was passed, exit here.
+ *   2. Commit — call `writeOpensquidHooks(...)` on each target; print
+ *      the resolved counters per file.
+ *
+ * Target selection:
+ *   - user scope: ALWAYS targeted (`~/.claude/settings.json`).
+ *   - project scope: targeted when `resolveProjectScopeRoot(cwd)` finds a
+ *     `.opensquid/` ancestor — then `<projectRoot>/../.claude/settings.json`
+ *     gets written too. Wait — `.opensquid/` lives at the project root, not
+ *     `.claude/`. So we write to `dirname(projectScopeRoot)/.claude/settings.json`.
+ *
+ * Idempotent: re-running the command after the first pass produces a
+ * byte-identical `~/.claude/settings.json` (verified by a test fixture).
+ *
+ * Flags:
+ *   --dry-run    Render counts + projected output without writing.
+ *   --user-only  Only write `~/.claude/settings.json`; skip project scope.
+ *
+ * Imports from: commander, node:path, ../wizard/settings-writer, ../../runtime/paths.
+ * Imported by: src/cli.ts (via `registerSetupWizard`).
+ */
+
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { resolveProjectScopeRoot } from '../../runtime/paths.js';
+
+import {
+  projectOpensquidHooks,
+  readSettingsJson,
+  writeOpensquidHooks,
+  type WriteResult,
+} from '../wizard/settings-writer.js';
+
+import type { Command } from 'commander';
+
+export interface HooksCliDeps {
+  /** Test injection — override the writer. Defaults to the real impl. */
+  writer?: (path: string) => Promise<WriteResult>;
+  /** Test injection — override the preview reader. Defaults to the real impl. */
+  reader?: (path: string) => Promise<unknown>;
+  /** Test injection — override `process.cwd()`. */
+  cwd?: () => string;
+  /** Test injection — override `homedir()` for ~/.claude resolution. */
+  home?: () => string;
+  stdout?: (s: string) => void;
+  stderr?: (s: string) => void;
+}
+
+export interface HooksCliFlags {
+  dryRun?: boolean;
+  userOnly?: boolean;
+}
+
+interface ResolvedDeps {
+  writer: (path: string) => Promise<WriteResult>;
+  reader: (path: string) => Promise<unknown>;
+  cwd: () => string;
+  home: () => string;
+  out: (s: string) => void;
+  err: (s: string) => void;
+}
+
+function buildDeps(deps: HooksCliDeps): ResolvedDeps {
+  return {
+    writer: deps.writer ?? writeOpensquidHooks,
+    reader: deps.reader ?? readSettingsJson,
+    cwd: deps.cwd ?? ((): string => process.cwd()),
+    home: deps.home ?? homedir,
+    out:
+      deps.stdout ??
+      ((s: string): void => {
+        process.stdout.write(s);
+      }),
+    err:
+      deps.stderr ??
+      ((s: string): void => {
+        process.stderr.write(s);
+      }),
+  };
+}
+
+/**
+ * Resolve the two candidate settings.json paths. User-scope is always
+ * present (file may not exist yet — `readSettingsJson` returns `{}`).
+ * Project-scope is null when there's no `.opensquid/` ancestor.
+ */
+export async function resolveTargets(deps: {
+  cwd: () => string;
+  home: () => string;
+}): Promise<{ user: string; project: string | null }> {
+  const user = join(deps.home(), '.claude', 'settings.json');
+  const projectScopeRoot = await resolveProjectScopeRoot(deps.cwd());
+  // `.opensquid/` and `.claude/` are siblings under the project root.
+  // `projectScopeRoot` is the path TO `<project>/.opensquid`; its parent
+  // is the project root itself.
+  const project =
+    projectScopeRoot === null ? null : join(dirname(projectScopeRoot), '.claude', 'settings.json');
+  return { user, project };
+}
+
+/**
+ * Run the hooks wizard. Pulled out of the commander action so tests can
+ * call it directly without spinning a Command tree.
+ */
+export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = {}): Promise<void> {
+  const r = buildDeps(deps);
+  const targets = await resolveTargets({ cwd: r.cwd, home: r.home });
+
+  const paths: string[] = [targets.user];
+  if (targets.project !== null && flags.userOnly !== true) paths.push(targets.project);
+
+  if (flags.dryRun === true) {
+    r.out('opensquid setup wizard hooks — DRY RUN (no files written)\n');
+    for (const p of paths) {
+      const input = (await r.reader(p)) as Parameters<typeof projectOpensquidHooks>[0];
+      const { added, replaced, preserved } = projectOpensquidHooks(input);
+      r.out(
+        `  ${p}: would add ${String(added)}, replace ${String(replaced)}, preserve ${String(
+          preserved,
+        )} hook group(s)\n`,
+      );
+    }
+    return;
+  }
+
+  r.out('opensquid setup wizard hooks — writing entries\n');
+  for (const p of paths) {
+    const result = await r.writer(p);
+    r.out(
+      `  ${p}: added ${String(result.added)}, replaced ${String(result.replaced)}, preserved ${String(
+        result.preserved,
+      )} hook group(s) (backup: ${result.backupPath})\n`,
+    );
+  }
+}
+
+/**
+ * Register the `wizard hooks` subcommand under the supplied `setup` parent.
+ * Returns the wizard subgroup so callers can chain additional wizards.
+ */
+export function registerSetupWizard(setup: Command, deps: HooksCliDeps = {}): Command {
+  const wizard = setup.command('wizard').description('Setup wizards (multi-step config writers)');
+
+  wizard
+    .command('hooks')
+    .description("Write opensquid's 4 anti-drift hook entries into Claude Code settings.json")
+    .option('--dry-run', 'preview the projected changes without writing any file', false)
+    .option('--user-only', 'skip the project-scope settings.json even when one is detected', false)
+    .action(async (flags: HooksCliFlags) => {
+      await runHooksWizard(flags, deps);
+    });
+
+  return wizard;
+}

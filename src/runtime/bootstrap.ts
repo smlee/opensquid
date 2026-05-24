@@ -64,9 +64,13 @@ import { FunctionRegistry } from '../functions/registry.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
+import { discoverActivePacks } from '../packs/discovery.js';
+import { sortPacksByScope } from '../packs/load_order.js';
 import { loadPack } from '../packs/loader.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
+
+import { resolveProjectScopeRoot, resolveUserScopeRoot } from './paths.js';
 
 import type { RagBackend } from '../rag/types.js';
 import type { Pack } from './types.js';
@@ -132,7 +136,26 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
 }
 
 // ---------------------------------------------------------------------------
-// Active packs — Phase 1 test seam (replaced by YAML loader in Phase 2).
+// Active packs — three composing sources (G.1 lands the third one).
+//
+//   1. Test seam: `OPENSQUID_TEST_PACK`     (inline JSON pack object)
+//   2. Test seam: `OPENSQUID_TEST_PACK_DIR` (path to a pack folder)
+//   3. Real loader: user-scope + project-scope `active.json` (G.1)
+//
+// The two test seams keep their fail-OPEN contract verbatim — fixtures are
+// opensquid-authored, so a malformed fixture stays a test bug and shouldn't
+// crash the hook binary mid-tool-call. The real loader path (3) fails LOUD
+// per `project_opensquid_runtime_failure_handling` — user-authored config
+// bugs must surface, not silent-fail to the "allow everything" path.
+//
+// Composition order in `loadActivePacks`:
+//   in-process override (`setActivePacks`) → env seam → disk seam → real on-disk
+//
+// `setActivePacks` is the test override that completely replaces the
+// in-process list; env+disk+real compose by concatenation. The real-loader
+// output is run through `sortPacksByScope` to land 5-tier scope ordering
+// across user-scope + project-scope packs; the test seams are NOT sorted
+// because tests want to assert exact insertion order.
 // ---------------------------------------------------------------------------
 
 function loadFromEnv(): Pack[] {
@@ -143,7 +166,7 @@ function loadFromEnv(): Pack[] {
     // Trust shape at this seam — the test pack is opensquid-authored, and
     // mis-shaped input surfaces immediately as the evaluator rejects rules
     // it can't parse. A full Zod parse here would force a circular import
-    // (types.ts -> bootstrap.ts -> types.ts) for zero Phase-1 benefit.
+    // (types.ts -> bootstrap.ts -> types.ts) for zero benefit.
     return [parsed as Pack];
   } catch {
     return [];
@@ -153,7 +176,7 @@ function loadFromEnv(): Pack[] {
 // Sync constant — the JSON env-var path is read at module load (no I/O).
 const envPacks: Pack[] = loadFromEnv();
 
-// Async future-state — the on-disk YAML path requires fs reads. Resolved at
+// Async test seam — the on-disk YAML path requires fs reads. Resolved at
 // module load too; `loadActivePacks` awaits the same promise on every call
 // so the load happens exactly once per hook subprocess. Errors are swallowed
 // per the seam contract (see header) — a broken fixture yields the empty
@@ -168,16 +191,51 @@ const diskPacksPromise: Promise<Pack[]> = (async () => {
   }
 })();
 
+// G.1 — real on-disk loader. Composes both installation scopes:
+//   - user scope: `~/.opensquid/` (via `resolveUserScopeRoot()`)
+//   - project scope: walked up from `process.cwd()` (via
+//     `resolveProjectScopeRoot(...)`); `null` when no `.opensquid/` exists
+//     in or above cwd, in which case `discoverActivePacks` returns `[]`.
+//
+// Fail-LOUD: any thrown error from `discoverActivePacks` (malformed
+// active.json, missing pack folder, broken manifest.yaml) is rethrown
+// after a stderr blame line so the user can see WHICH file is wrong. This
+// is the diametric opposite of the two test seams above, which fail-OPEN.
+//
+// One-shot resolution at module load: hooks run as short-lived subprocesses,
+// so we pay the disk-read cost once per hook invocation, not once per call.
+const realPacksPromise: Promise<Pack[]> = (async () => {
+  try {
+    const user = await discoverActivePacks(resolveUserScopeRoot());
+    const projectRoot = await resolveProjectScopeRoot(process.cwd());
+    const project = await discoverActivePacks(projectRoot);
+    return sortPacksByScope([...user, ...project]);
+  } catch (e) {
+    // Surface the path-bearing error to stderr so the user can act on it,
+    // then rethrow. The hook binary's top-level `main().catch(...)` is
+    // fail-OPEN (exit 0 with stderr) so this never blocks the parent
+    // agent — but the user sees the message and can fix the config.
+    process.stderr.write(`[opensquid] active pack load failed: ${(e as Error).message}\n`);
+    throw e;
+  }
+})();
+
 let activePacks: Pack[] = envPacks;
 
 export function setActivePacks(packs: Pack[]): void {
   activePacks = packs;
 }
 
-// Async signature pinned for Phase 2 — see header. `setActivePacks` always
-// wins (in-process tests override env-var seams); on top of that the env-var
-// JSON path and the on-disk YAML path compose (concatenated).
+/**
+ * Returns the composed active-pack list for this hook subprocess.
+ *
+ * Order: in-process override (`setActivePacks`) wins outright; on top of
+ * that the env-var JSON seam, the disk-YAML seam, and the real on-disk
+ * loader compose by concatenation. Real-loader output is scope-sorted
+ * before concat; test-seam packs preserve insertion order so tests can
+ * assert specific positioning.
+ */
 export async function loadActivePacks(_sessionId: string): Promise<Pack[]> {
-  const disk = await diskPacksPromise;
-  return [...activePacks, ...disk];
+  const [disk, real] = await Promise.all([diskPacksPromise, realPacksPromise]);
+  return [...activePacks, ...disk, ...real];
 }
