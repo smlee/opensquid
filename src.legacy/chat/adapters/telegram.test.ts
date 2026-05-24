@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ChatGatewayError } from "../gateway.js";
-import { TelegramAdapter, detectBotMention, parseTelegramChannel } from "./telegram.js";
+import {
+  TelegramAdapter,
+  TopicGoneError,
+  detectBotMention,
+  extractGrammyDescription,
+  isTopicGoneError,
+  parseTelegramChannel,
+} from "./telegram.js";
 
 describe("TelegramAdapter constructor", () => {
   it("rejects empty bot_token", () => {
@@ -225,5 +232,160 @@ describe("TelegramAdapter — 409 outbound-only fallback (#147)", () => {
     // Retry timer is private; we can't directly assert it exists, but
     // _testClearRetryTimer() should successfully clear it (verified by
     // the afterEach not throwing on subsequent runs).
+  });
+});
+
+// =====================================================================
+// TPS.7 (v0.5.130) — stale-topic detection
+// =====================================================================
+
+/**
+ * Construct a GrammyError-shaped value: an Error subclass with extra
+ * `error_code` + `description` fields. grammy itself populates these on
+ * Bot API failures; we mimic the shape without pulling the SDK in.
+ */
+function makeGrammyError(opts: {
+  description: string;
+  errorCode?: number;
+}): Error & { error_code: number; description: string } {
+  const e = new Error(opts.description) as Error & { error_code: number; description: string };
+  e.name = "GrammyError";
+  e.error_code = opts.errorCode ?? 400;
+  e.description = opts.description;
+  return e;
+}
+
+describe("isTopicGoneError (TPS.7)", () => {
+  it("matches a canonical 'Bad Request: message thread not found' response", () => {
+    const err = makeGrammyError({ description: "Bad Request: message thread not found" });
+    expect(isTopicGoneError(err)).toBe(true);
+  });
+
+  it("matches the legacy CAPS form 'MESSAGE_THREAD_NOT_FOUND'", () => {
+    const err = makeGrammyError({ description: "MESSAGE_THREAD_NOT_FOUND" });
+    expect(isTopicGoneError(err)).toBe(true);
+  });
+
+  it("matches case-insensitively across variants", () => {
+    expect(isTopicGoneError(makeGrammyError({ description: "Message Thread Not Found" }))).toBe(
+      true,
+    );
+    expect(isTopicGoneError(makeGrammyError({ description: "message thread not found" }))).toBe(
+      true,
+    );
+  });
+
+  it("does NOT match a 403 (bot kicked from supergroup) error", () => {
+    const err = makeGrammyError({
+      description: "Forbidden: bot was kicked from the supergroup chat",
+      errorCode: 403,
+    });
+    expect(isTopicGoneError(err)).toBe(false);
+  });
+
+  it("does NOT match a 429 (rate limit) error", () => {
+    const err = makeGrammyError({
+      description: "Too Many Requests: retry after 30",
+      errorCode: 429,
+    });
+    expect(isTopicGoneError(err)).toBe(false);
+  });
+
+  it("does NOT match a 400 with an unrelated description", () => {
+    const err = makeGrammyError({ description: "Bad Request: chat not found" });
+    expect(isTopicGoneError(err)).toBe(false);
+  });
+
+  it("does NOT match a non-Error value", () => {
+    expect(isTopicGoneError("not an error")).toBe(false);
+    expect(isTopicGoneError(null)).toBe(false);
+    expect(isTopicGoneError(undefined)).toBe(false);
+    expect(isTopicGoneError({ description: "message thread not found" })).toBe(false);
+  });
+});
+
+describe("extractGrammyDescription (TPS.7)", () => {
+  it("returns the GrammyError description when present", () => {
+    const err = makeGrammyError({ description: "Bad Request: foo" });
+    expect(extractGrammyDescription(err)).toBe("Bad Request: foo");
+  });
+
+  it("falls back to Error.message when description is missing", () => {
+    const err = new Error("just a plain error");
+    expect(extractGrammyDescription(err)).toBe("just a plain error");
+  });
+
+  it("returns undefined for non-objects", () => {
+    expect(extractGrammyDescription("string")).toBeUndefined();
+    expect(extractGrammyDescription(null)).toBeUndefined();
+    expect(extractGrammyDescription(undefined)).toBeUndefined();
+  });
+});
+
+describe("TelegramAdapter.send — TopicGoneError re-throw (TPS.7)", () => {
+  function makeAdapterWithThrowingBot(err: Error): TelegramAdapter {
+    const adapter = new TelegramAdapter({ bot_token: "123:ABCDEF" });
+    adapter._testSeed({
+      api: {
+        sendMessage: () => Promise.reject(err),
+      },
+    });
+    return adapter;
+  }
+
+  it("re-throws a 400 'message thread not found' as TopicGoneError with chatId + threadId", async () => {
+    const adapter = makeAdapterWithThrowingBot(
+      makeGrammyError({ description: "Bad Request: message thread not found" }),
+    );
+    await expect(
+      adapter.send({ channel: "telegram:-1001234567890:42", text: "hi stale" }),
+    ).rejects.toMatchObject({
+      name: "TopicGoneError",
+      chatId: "-1001234567890",
+      threadId: 42,
+    });
+  });
+
+  it("attaches the underlying GrammyError on the TopicGoneError", async () => {
+    const underlying = makeGrammyError({ description: "Bad Request: message thread not found" });
+    const adapter = makeAdapterWithThrowingBot(underlying);
+    try {
+      await adapter.send({ channel: "telegram:-1001234567890:7", text: "doomed" });
+      expect.fail("expected TopicGoneError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TopicGoneError);
+      expect((err as TopicGoneError).underlying).toBe(underlying);
+    }
+  });
+
+  it("does NOT re-throw as TopicGoneError when the send had no message_thread_id (general topic)", async () => {
+    // Even if the error description happens to match, a general-topic
+    // send can't have its topic 'go away' — there's no topic to clear.
+    // We propagate the original error unchanged.
+    const adapter = makeAdapterWithThrowingBot(
+      makeGrammyError({ description: "Bad Request: message thread not found" }),
+    );
+    await expect(
+      adapter.send({ channel: "telegram:-1001234567890", text: "no topic here" }),
+    ).rejects.not.toBeInstanceOf(TopicGoneError);
+  });
+
+  it("propagates 403 bot-kicked errors unchanged (NOT TopicGoneError)", async () => {
+    const adapter = makeAdapterWithThrowingBot(
+      makeGrammyError({
+        description: "Forbidden: bot was kicked from the supergroup chat",
+        errorCode: 403,
+      }),
+    );
+    await expect(
+      adapter.send({ channel: "telegram:-1001234567890:15", text: "denied" }),
+    ).rejects.not.toBeInstanceOf(TopicGoneError);
+  });
+
+  it("propagates generic Errors unchanged (NOT TopicGoneError)", async () => {
+    const adapter = makeAdapterWithThrowingBot(new Error("ECONNRESET"));
+    await expect(
+      adapter.send({ channel: "telegram:-1001234567890:15", text: "boom" }),
+    ).rejects.toThrow("ECONNRESET");
   });
 });

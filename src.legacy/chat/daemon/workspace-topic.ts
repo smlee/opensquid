@@ -41,6 +41,7 @@ import * as lockfile from "proper-lockfile";
 const requireCJS = createRequire(import.meta.url);
 
 import {
+  loadAllProjectChatRouting,
   loadProjectChatRouting,
   projectChatRoutingPath,
   type ProjectChatRouting,
@@ -277,6 +278,47 @@ export async function clearBinding(args: {
   } finally {
     await release();
   }
+}
+
+/**
+ * Find the workspace whose `auto_bound` block claims the given
+ * (chat_id, topic_id) pair. Used by TPS.7 stale-topic recovery to
+ * locate which workspace owned a now-stale binding so we can
+ * `clearBinding` for the right uuid.
+ *
+ * Returns the workspace uuid on match, or null when:
+ *   - no project has an auto_bound block at all
+ *   - no auto_bound block matches BOTH chat_id and topic_id
+ *   - the matching project's routing config was already cleared by a
+ *     concurrent recovery (race-safe)
+ *
+ * Match rule: `auto_bound.topic_id === topicId` AND
+ *             `inbound_chat_ids.includes(chatId)`.
+ * The chat_id check guards against the (rare) case of identical topic_id
+ * numbers across two different supergroups; without it we could clear
+ * the wrong workspace's binding.
+ *
+ * Lock-free read: this just scans on-disk routing configs. The actual
+ * mutation (`clearBinding`) is lockfile-protected on the per-project
+ * routing file, so two concurrent recoveries racing to clear the same
+ * binding serialize cleanly — first wins, second sees no binding to
+ * clear and returns false.
+ */
+export async function findOwnerOfBinding(args: {
+  chatId: string;
+  topicId: number;
+  dataRoot?: string;
+}): Promise<string | null> {
+  const all = await loadAllProjectChatRouting(args.dataRoot);
+  for (const [uuid, cfg] of all) {
+    const bound = cfg.telegram?.auto_bound;
+    if (!bound) continue;
+    if (bound.topic_id !== args.topicId) continue;
+    const inboundChats = cfg.telegram?.inbound_chat_ids ?? [];
+    if (!inboundChats.includes(args.chatId)) continue;
+    return uuid;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------

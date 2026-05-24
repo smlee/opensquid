@@ -15,6 +15,8 @@ import { createServer, type Server, type Socket } from "node:net";
 import { existsSync, unlinkSync } from "node:fs";
 
 import type { ChatGateway } from "../gateway.js";
+import { TopicGoneError } from "../adapters/telegram.js";
+import { recordTopicGoneEvent } from "./collisions.js";
 import {
   type CreateTopicParams,
   type CreateTopicResult,
@@ -38,7 +40,7 @@ import {
 } from "./protocol.js";
 import { loadProjectChatRouting } from "./routing.js";
 import { SubscriberRegistry } from "./subscribers.js";
-import { resolveOrCreateTopic } from "./workspace-topic.js";
+import { clearBinding, findOwnerOfBinding, resolveOrCreateTopic } from "./workspace-topic.js";
 
 export interface RpcServerOptions {
   gateway: ChatGateway;
@@ -166,6 +168,56 @@ export class RpcServer {
     }
   }
 
+  /**
+   * TPS.7 (v0.5.130) — async stale-topic recovery. Locates the
+   * workspace that owned the now-stale binding, clears it via
+   * `clearBinding`, and records a `TopicGoneEvent` in collisions.jsonl
+   * (which fires a debounced Telegram notification through the same
+   * surface TPS.5 collisions use).
+   *
+   * Fire-and-forget from the send-RPC catch block. NEVER throws — all
+   * failures log to stderr. The original send already failed; the
+   * caller doesn't care about recovery errors.
+   *
+   * Re-binding does NOT happen here — by design it defers to the next
+   * MCP-bridge subscribe (TPS.6 auto-boot path), which is lockfile-
+   * protected so two concurrent recoveries can't double-create topics.
+   */
+  private async handleTopicGone(err: TopicGoneError): Promise<void> {
+    try {
+      const workspaceUuid = await findOwnerOfBinding({
+        chatId: err.chatId,
+        topicId: err.threadId,
+        ...(this.opts.dataRoot !== undefined ? { dataRoot: this.opts.dataRoot } : {}),
+      });
+      if (workspaceUuid === null) {
+        // No project claims this binding — either the user manually
+        // cleared it, a concurrent recovery beat us to it, or the
+        // binding was never tracked. Nothing to clean; nothing to
+        // notify.
+        return;
+      }
+      await clearBinding({
+        workspaceUuid,
+        ...(this.opts.dataRoot !== undefined ? { dataRoot: this.opts.dataRoot } : {}),
+      });
+      await recordTopicGoneEvent({
+        workspaceUuid,
+        chatId: err.chatId,
+        topicId: err.threadId,
+        underlyingDescription: err.message,
+        gateway: this.opts.gateway,
+        ...(this.opts.dataRoot !== undefined ? { dataRoot: this.opts.dataRoot } : {}),
+      });
+    } catch (recoveryErr) {
+      process.stderr.write(
+        `[rpc-server] topic-gone recovery failed for chatId=${err.chatId} topicId=${err.threadId}: ${
+          recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
+        }\n`,
+      );
+    }
+  }
+
   private async handle(req: JsonRpcRequest, socket: Socket): Promise<JsonRpcSuccess | JsonRpcFailure> {
     try {
       switch (req.method) {
@@ -267,18 +319,32 @@ export class RpcServer {
           if (!p || typeof p.channel !== "string" || typeof p.text !== "string") {
             return failure(req.id, JSON_RPC_INVALID_PARAMS, "send: channel + text required");
           }
-          const result = await this.opts.gateway.send({
-            channel: p.channel,
-            text: p.text,
-            replyTo: p.replyTo,
-            threadId: p.threadId,
-          });
-          return success<SendResult>(req.id, {
-            ok: true,
-            platform: result.platform,
-            message_id: result.messageId,
-            delivered_at: result.deliveredAt.toISOString(),
-          });
+          try {
+            const result = await this.opts.gateway.send({
+              channel: p.channel,
+              text: p.text,
+              replyTo: p.replyTo,
+              threadId: p.threadId,
+            });
+            return success<SendResult>(req.id, {
+              ok: true,
+              platform: result.platform,
+              message_id: result.messageId,
+              delivered_at: result.deliveredAt.toISOString(),
+            });
+          } catch (err) {
+            // TPS.7 (v0.5.130) — typed stale-topic detection. Fire the
+            // recovery asynchronously so the caller gets the original
+            // failure (the send still failed; the daemon cleans up the
+            // stale binding in the background, and the next MCP-bridge
+            // subscribe rebinds via TPS.6 auto-boot).
+            if (err instanceof TopicGoneError) {
+              void this.handleTopicGone(err);
+            }
+            // Re-throw to the outer catch which formats the JSON-RPC
+            // failure (preserves the existing error contract).
+            throw err;
+          }
         }
         case "create_topic": {
           const p = req.params as CreateTopicParams | undefined;

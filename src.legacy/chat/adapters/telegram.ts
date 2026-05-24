@@ -376,7 +376,24 @@ export class TelegramAdapter implements ChatAdapter {
       const n = Number(effectiveThreadId);
       if (Number.isFinite(n)) opts.message_thread_id = n;
     }
-    const sent = await this.bot.api.sendMessage(chatId, message.text, opts);
+    // TPS.7 (v0.5.130) — detect topic-gone failure and re-throw as a
+    // typed error so the daemon's send-RPC handler can clear the stale
+    // binding + notify the operator. Other Bot API failures propagate
+    // unchanged (the caller's existing error path stays in charge).
+    let sent: { message_id: number; date: number };
+    try {
+      sent = await this.bot.api.sendMessage(chatId, message.text, opts);
+    } catch (err) {
+      if (isTopicGoneError(err) && opts.message_thread_id !== undefined) {
+        throw new TopicGoneError(
+          extractGrammyDescription(err) ?? "topic gone",
+          chatId,
+          opts.message_thread_id,
+          err,
+        );
+      }
+      throw err;
+    }
     return {
       platform: "telegram",
       messageId: String(sent.message_id),
@@ -485,6 +502,70 @@ export function parseTelegramChannel(channel: string): {
     );
   }
   return { chatId, threadId };
+}
+
+// ---------------------------------------------------------------------
+// TPS.7 (v0.5.130) — typed stale-topic error
+// ---------------------------------------------------------------------
+
+/**
+ * Thrown by `TelegramAdapter.send` when the Telegram Bot API rejects an
+ * outbound `sendMessage` because the target `message_thread_id` no
+ * longer exists in the supergroup. The daemon's RPC `send` handler
+ * catches this, clears the workspace's stale binding via
+ * `clearBinding` (TPS.3), and surfaces the staleness through TPS.5's
+ * collision channel.
+ *
+ * Carries the underlying `GrammyError` (as `underlying: unknown`) for
+ * diagnostics — callers shouldn't peek into it but the daemon logs it.
+ *
+ * Why a typed error vs. introspecting the original GrammyError at the
+ * RPC layer: keeps grammy out of `rpc-server.ts` (which doesn't import
+ * the SDK) and makes the contract obvious at every call site.
+ */
+export class TopicGoneError extends Error {
+  readonly platform = "telegram" as const;
+  constructor(
+    message: string,
+    public readonly chatId: string,
+    public readonly threadId: number,
+    public readonly underlying: unknown,
+  ) {
+    super(message);
+    this.name = "TopicGoneError";
+  }
+}
+
+/**
+ * Match Bot API 400 responses whose description matches one of the
+ * known "thread not found" shapes. Defensive against Telegram changing
+ * the description string: matches "message thread not found" with
+ * either casing, both underscores or spaces, and the legacy CAPS form.
+ *
+ * Exported for unit testing.
+ */
+export function isTopicGoneError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { error_code?: number }).error_code;
+  if (code !== 400) return false;
+  const desc = extractGrammyDescription(err);
+  if (desc === undefined) return false;
+  return /message[_ ]thread[_ ]not[_ ]found/i.test(desc);
+}
+
+/**
+ * Pull the human-readable description out of a GrammyError-shaped value,
+ * falling back to the Error.message. Returns undefined if neither yields
+ * a usable string.
+ *
+ * Exported for unit testing.
+ */
+export function extractGrammyDescription(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const desc = (err as { description?: unknown }).description;
+  if (typeof desc === "string" && desc.length > 0) return desc;
+  if (err instanceof Error && err.message.length > 0) return err.message;
+  return undefined;
 }
 
 /**

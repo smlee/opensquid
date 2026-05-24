@@ -12,6 +12,7 @@ import { loadProjectChatRouting } from "./routing.js";
 import {
   clearBinding,
   deriveTopicName,
+  findOwnerOfBinding,
   mergeChatIds,
   mergeTopicIds,
   resolveOrCreateTopic,
@@ -396,5 +397,126 @@ describe("clearBinding (TPS.7 prep)", () => {
     );
     const cleared = await clearBinding({ workspaceUuid: uuid, dataRoot: tmpRoot });
     expect(cleared).toBe(false);
+  });
+});
+
+describe("findOwnerOfBinding (TPS.7)", () => {
+  async function seedProject(uuid: string, routing: object): Promise<void> {
+    const dir = path.join(tmpRoot, "projects", uuid);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "chat-routing.json"), JSON.stringify(routing, null, 2));
+  }
+
+  const exampleAutoBound = {
+    workspace_path: "/x",
+    workspace_uuid: "uuid-match",
+    topic_id: 42,
+    topic_name: "match · uuid-mat",
+    created_at: "2026-05-22T00:00:00Z",
+    created_by: "auto-boot",
+  } as const;
+
+  it("returns the uuid of the project whose auto_bound matches (chat_id, topic_id)", async () => {
+    await seedProject("uuid-match", {
+      telegram: {
+        inbound_chat_ids: ["-1001234567890"],
+        inbound_topic_ids: [42],
+        auto_bound: exampleAutoBound,
+      },
+    });
+    const uuid = await findOwnerOfBinding({
+      chatId: "-1001234567890",
+      topicId: 42,
+      dataRoot: tmpRoot,
+    });
+    expect(uuid).toBe("uuid-match");
+  });
+
+  it("returns null when no project has any auto_bound block", async () => {
+    await seedProject("uuid-no-bind", {
+      telegram: { inbound_chat_ids: ["-1001234567890"], inbound_topic_ids: [42] },
+    });
+    const uuid = await findOwnerOfBinding({
+      chatId: "-1001234567890",
+      topicId: 42,
+      dataRoot: tmpRoot,
+    });
+    expect(uuid).toBeNull();
+  });
+
+  it("returns null when topic_id matches but chat_id does NOT (cross-supergroup safety)", async () => {
+    await seedProject("uuid-other-chat", {
+      telegram: {
+        inbound_chat_ids: ["-9999999999999"],
+        inbound_topic_ids: [42],
+        auto_bound: { ...exampleAutoBound, workspace_uuid: "uuid-other-chat" },
+      },
+    });
+    const uuid = await findOwnerOfBinding({
+      chatId: "-1001234567890",
+      topicId: 42,
+      dataRoot: tmpRoot,
+    });
+    expect(uuid).toBeNull();
+  });
+
+  it("returns null when chat_id matches but topic_id does NOT", async () => {
+    await seedProject("uuid-other-topic", {
+      telegram: {
+        inbound_chat_ids: ["-1001234567890"],
+        inbound_topic_ids: [99],
+        auto_bound: {
+          ...exampleAutoBound,
+          workspace_uuid: "uuid-other-topic",
+          topic_id: 99,
+        },
+      },
+    });
+    const uuid = await findOwnerOfBinding({
+      chatId: "-1001234567890",
+      topicId: 42,
+      dataRoot: tmpRoot,
+    });
+    expect(uuid).toBeNull();
+  });
+
+  it("picks the right project when multiple coexist (different topic_ids)", async () => {
+    await seedProject("uuid-a", {
+      telegram: {
+        inbound_chat_ids: ["-1001234567890"],
+        inbound_topic_ids: [10],
+        auto_bound: { ...exampleAutoBound, workspace_uuid: "uuid-a", topic_id: 10 },
+      },
+    });
+    await seedProject("uuid-b", {
+      telegram: {
+        inbound_chat_ids: ["-1001234567890"],
+        inbound_topic_ids: [20],
+        auto_bound: { ...exampleAutoBound, workspace_uuid: "uuid-b", topic_id: 20 },
+      },
+    });
+    expect(
+      await findOwnerOfBinding({
+        chatId: "-1001234567890",
+        topicId: 10,
+        dataRoot: tmpRoot,
+      }),
+    ).toBe("uuid-a");
+    expect(
+      await findOwnerOfBinding({
+        chatId: "-1001234567890",
+        topicId: 20,
+        dataRoot: tmpRoot,
+      }),
+    ).toBe("uuid-b");
+  });
+
+  it("returns null when projects directory is missing entirely", async () => {
+    const uuid = await findOwnerOfBinding({
+      chatId: "-1001234567890",
+      topicId: 42,
+      dataRoot: tmpRoot,
+    });
+    expect(uuid).toBeNull();
   });
 });

@@ -22,6 +22,9 @@ import type {
   SendResult as GatewaySendResult,
 } from "../gateway.js";
 import { ChatGateway } from "../gateway.js";
+import { TopicGoneError } from "../adapters/telegram.js";
+import { loadAllTopicGoneEvents } from "./collisions.js";
+import { saveProjectChatRouting, loadProjectChatRouting } from "./routing.js";
 import { DaemonClient, DaemonRpcError, DaemonUnreachableError } from "./rpc-client.js";
 import { daemonSockAddress } from "./protocol.js";
 import { RpcServer } from "./rpc-server.js";
@@ -200,5 +203,125 @@ describe("RpcServer + DaemonClient round-trip", () => {
       expect((err as DaemonRpcError).code).toBe(-32601);
       expect((err as DaemonRpcError).message).toContain("unknown method");
     }
+  });
+});
+
+// =====================================================================
+// TPS.7 (v0.5.130) — send → TopicGoneError → handleTopicGone recovery
+// =====================================================================
+
+/**
+ * Stub adapter that throws a TopicGoneError on every send. Used to
+ * exercise the daemon's stale-topic recovery path end-to-end (real UDS
+ * round-trip, real recovery, real JSONL append).
+ */
+class TopicGoneAdapter implements ChatAdapter {
+  readonly platform: ChatPlatform = "telegram";
+  constructor(
+    private readonly chatId: string,
+    private readonly topicId: number,
+  ) {}
+  start(): Promise<void> {
+    return Promise.resolve();
+  }
+  shutdown(): Promise<void> {
+    return Promise.resolve();
+  }
+  onMessage(_: MessageHandler): void {
+    /* noop */
+  }
+  send(_: OutboundMessage): Promise<GatewaySendResult> {
+    return Promise.reject(
+      new TopicGoneError(
+        "Bad Request: message thread not found",
+        this.chatId,
+        this.topicId,
+        new Error("synthetic"),
+      ),
+    );
+  }
+  identity(): Promise<{ username: string; nativeId: string }> {
+    return Promise.resolve({ username: "stub-tg", nativeId: "0" });
+  }
+}
+
+async function waitFor<T>(check: () => Promise<T | null>, timeoutMs = 2000): Promise<T> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const r = await check();
+    if (r !== null) return r;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+}
+
+describe("RpcServer.handleTopicGone (TPS.7)", () => {
+  it("clears the bound workspace's binding + writes a topic_gone event when send throws TopicGoneError", async () => {
+    // Seed a project whose auto_bound matches what the adapter will
+    // report as gone.
+    const uuid = "uuid-stale";
+    await saveProjectChatRouting(
+      uuid,
+      {
+        telegram: {
+          report_channel: "-1001234567890",
+          inbound_chat_ids: ["-1001234567890"],
+          inbound_topic_ids: [42],
+          auto_bound: {
+            workspace_path: "/x",
+            workspace_uuid: uuid,
+            topic_id: 42,
+            topic_name: "stale · uuid-sta",
+            created_at: "2026-05-22T00:00:00Z",
+            created_by: "auto-boot",
+          },
+        },
+      },
+      tmpRoot,
+    );
+
+    const gw = new ChatGateway([new TopicGoneAdapter("-1001234567890", 42)]);
+    await gw.start();
+    server = new RpcServer({ gateway: gw, dataRoot: tmpRoot });
+    await server.listen();
+
+    const client = new DaemonClient({ dataRoot: tmpRoot });
+    // The send itself fails (caller gets the original failure).
+    await expect(
+      client.send({ channel: "telegram:-1001234567890:42", text: "doomed" }),
+    ).rejects.toBeInstanceOf(DaemonRpcError);
+
+    // Recovery is fire-and-forget — wait for the binding to be cleared.
+    const cleared = await waitFor(async () => {
+      const r = await loadProjectChatRouting(uuid, tmpRoot);
+      return r?.telegram?.auto_bound === undefined ? true : null;
+    });
+    expect(cleared).toBe(true);
+
+    // A topic_gone event landed in collisions.jsonl.
+    const events = await loadAllTopicGoneEvents(tmpRoot);
+    expect(events.length).toBe(1);
+    expect(events[0]?.workspace_uuid).toBe(uuid);
+    expect(events[0]?.chat_id).toBe("-1001234567890");
+    expect(events[0]?.topic_id).toBe(42);
+  });
+
+  it("does NOTHING when no project owns the (chat_id, topic_id) — no orphan binding to clean", async () => {
+    // No projects seeded.
+    const gw = new ChatGateway([new TopicGoneAdapter("-1001234567890", 999)]);
+    await gw.start();
+    server = new RpcServer({ gateway: gw, dataRoot: tmpRoot });
+    await server.listen();
+
+    const client = new DaemonClient({ dataRoot: tmpRoot });
+    await expect(
+      client.send({ channel: "telegram:-1001234567890:999", text: "orphan" }),
+    ).rejects.toBeInstanceOf(DaemonRpcError);
+
+    // Recovery runs but finds no owner → no JSONL write, no error
+    // propagated. Give it ~200ms to settle then assert empty.
+    await new Promise((r) => setTimeout(r, 200));
+    const events = await loadAllTopicGoneEvents(tmpRoot);
+    expect(events.length).toBe(0);
   });
 });

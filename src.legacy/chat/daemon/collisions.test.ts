@@ -23,9 +23,14 @@ import {
   DEBOUNCE_WINDOW_MS,
   collisionsPath,
   getRecentCollisions,
+  getRecentTopicGoneEvents,
   loadAllCollisions,
+  loadAllCollisionsLines,
+  loadAllTopicGoneEvents,
   recordCollision,
+  recordTopicGoneEvent,
   type CollisionEntry,
+  type TopicGoneEvent,
 } from "./collisions.js";
 import { saveProjectChatRouting } from "./routing.js";
 import type { CollisionInfo } from "./routing.js";
@@ -270,3 +275,244 @@ async function seedProjectWithReportChannel(uuid: string): Promise<void> {
     tmpRoot,
   );
 }
+
+// =====================================================================
+// TPS.7 (v0.5.130) — topic-gone events
+// =====================================================================
+
+describe("recordTopicGoneEvent — record + format", () => {
+  it("writes a well-formed JSONL line with kind='topic_gone'", async () => {
+    const entry = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+    });
+    expect(entry.v).toBe(1);
+    expect(entry.kind).toBe("topic_gone");
+    expect(entry.channel_key).toBe("telegram:-1001234567890:42");
+    expect(entry.workspace_uuid).toBe("uuid-x");
+    expect(entry.chat_id).toBe("-1001234567890");
+    expect(entry.topic_id).toBe(42);
+    expect(entry.underlying_description).toBe("Bad Request: message thread not found");
+    expect(entry.notified_via_telegram).toBe(false); // no gateway
+
+    const raw = await fs.readFile(collisionsPath(), "utf8");
+    expect(raw.trim().split("\n").length).toBe(1);
+    const parsed = JSON.parse(raw.trim()) as TopicGoneEvent;
+    expect(parsed.kind).toBe("topic_gone");
+  });
+
+  it("notifies via Telegram when a report_channel exists and outside debounce", async () => {
+    const fake = makeFakeGateway();
+    await seedProjectWithReportChannel("uuid-x");
+    const e = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+    });
+    expect(e.notified_via_telegram).toBe(true);
+    expect(fake.sent.length).toBe(1);
+    expect(fake.sent[0]?.text).toContain("topic binding cleared");
+    expect(fake.sent[0]?.text).toContain("uuid-x");
+    expect(fake.sent[0]?.text).toContain("42");
+  });
+
+  it("debounces within 60min for the same channel_key", async () => {
+    const fake = makeFakeGateway();
+    await seedProjectWithReportChannel("uuid-x");
+    const t0 = 1_000_000_000;
+    const e1 = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+      nowMs: () => t0,
+    });
+    expect(e1.notified_via_telegram).toBe(true);
+    const e2 = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+      nowMs: () => t0 + 60_000,
+    });
+    expect(e2.notified_via_telegram).toBe(false);
+    expect(fake.sent.length).toBe(1);
+    // Both still persisted.
+    const all = await loadAllTopicGoneEvents();
+    expect(all.length).toBe(2);
+  });
+
+  it("escapes debounce after 60min + 1ms", async () => {
+    const fake = makeFakeGateway();
+    await seedProjectWithReportChannel("uuid-x");
+    const t0 = 1_000_000_000;
+    await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+      nowMs: () => t0,
+    });
+    const e2 = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+      nowMs: () => t0 + DEBOUNCE_WINDOW_MS + 1,
+    });
+    expect(e2.notified_via_telegram).toBe(true);
+    expect(fake.sent.length).toBe(2);
+  });
+
+  it("topic-gone debounce is independent of collision debounce (different debounce keys)", async () => {
+    // A recent collision for the same channel_key should NOT suppress
+    // a topic-gone notification — different surfaces, different debounces.
+    const fake = makeFakeGateway();
+    await seedProjectWithReportChannel("uuid-x");
+    await recordCollision({
+      info: {
+        channel_key: "telegram:-1001234567890:42",
+        existing_uuid: "uuid-a",
+        newcomer_uuid: "uuid-x",
+      },
+      gateway: fake.asChatGateway(),
+      nowMs: () => 1_000_000,
+    });
+    expect(fake.sent.length).toBe(1); // collision notify
+    const e = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+      nowMs: () => 1_000_100,
+    });
+    expect(e.notified_via_telegram).toBe(true); // fresh notify
+    expect(fake.sent.length).toBe(2);
+  });
+
+  it("gateway send failure → persisted with notified_via_telegram=false", async () => {
+    const fake = makeFakeGateway();
+    fake.shouldThrow = true;
+    await seedProjectWithReportChannel("uuid-x");
+    const e = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+    });
+    expect(e.notified_via_telegram).toBe(false);
+    const all = await loadAllTopicGoneEvents();
+    expect(all.length).toBe(1);
+  });
+
+  it("no report_channel configured → no notification but JSONL still written", async () => {
+    const fake = makeFakeGateway();
+    // No seed — no project has a report_channel.
+    const e = await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+      gateway: fake.asChatGateway(),
+    });
+    expect(e.notified_via_telegram).toBe(false);
+    expect(fake.sent.length).toBe(0);
+    const all = await loadAllTopicGoneEvents();
+    expect(all.length).toBe(1);
+  });
+});
+
+describe("loadAllCollisionsLines (TPS.7 tagged union)", () => {
+  it("loads a mixed file with collision + topic_gone records", async () => {
+    await seedProjectWithReportChannel("uuid-x");
+    await recordCollision({
+      info: {
+        channel_key: "telegram:-1001234567890:15",
+        existing_uuid: "uuid-a",
+        newcomer_uuid: "uuid-x",
+      },
+    });
+    await recordTopicGoneEvent({
+      workspaceUuid: "uuid-x",
+      chatId: "-1001234567890",
+      topicId: 42,
+      underlyingDescription: "Bad Request: message thread not found",
+    });
+    const all = await loadAllCollisionsLines();
+    expect(all.length).toBe(2);
+    // loadAllCollisions filters to just the collision record.
+    expect((await loadAllCollisions()).length).toBe(1);
+    // loadAllTopicGoneEvents filters to just the topic-gone record.
+    expect((await loadAllTopicGoneEvents()).length).toBe(1);
+  });
+
+  it("treats records without 'kind' as collisions (TPS.5 back-compat)", async () => {
+    // Hand-craft an old-shape collision record (no `kind` field).
+    const dataDir = path.join(tmpRoot);
+    await fs.mkdir(dataDir, { recursive: true });
+    const legacyRecord: CollisionEntry = {
+      v: 1,
+      occurred_at: new Date().toISOString(),
+      channel_key: "telegram:-1001234567890:15",
+      claimants: ["uuid-a", "uuid-b"],
+      winner_uuid: "uuid-b",
+      notified_via_telegram: false,
+    };
+    await fs.writeFile(collisionsPath(), JSON.stringify(legacyRecord) + "\n", "utf8");
+    const collisions = await loadAllCollisions();
+    expect(collisions.length).toBe(1);
+    expect(collisions[0]?.channel_key).toBe("telegram:-1001234567890:15");
+    const topicGone = await loadAllTopicGoneEvents();
+    expect(topicGone.length).toBe(0);
+  });
+});
+
+describe("getRecentTopicGoneEvents (TPS.7)", () => {
+  it("filters to events within the maxAgeMinutes window", async () => {
+    // Hand-craft three events at known timestamps.
+    const now = Date.now();
+    const recent: TopicGoneEvent = {
+      v: 1,
+      kind: "topic_gone",
+      occurred_at: new Date(now - 5 * 60 * 1000).toISOString(),
+      channel_key: "telegram:-1001234567890:1",
+      workspace_uuid: "uuid-1",
+      chat_id: "-1001234567890",
+      topic_id: 1,
+      underlying_description: "recent",
+      notified_via_telegram: true,
+    };
+    const old: TopicGoneEvent = {
+      ...recent,
+      occurred_at: new Date(now - 48 * 60 * 60 * 1000).toISOString(),
+      channel_key: "telegram:-1001234567890:2",
+      topic_id: 2,
+      underlying_description: "ancient",
+    };
+    await fs.mkdir(path.dirname(collisionsPath()), { recursive: true });
+    await fs.writeFile(
+      collisionsPath(),
+      JSON.stringify(recent) + "\n" + JSON.stringify(old) + "\n",
+      "utf8",
+    );
+    const within24h = await getRecentTopicGoneEvents(24 * 60);
+    expect(within24h.length).toBe(1);
+    expect(within24h[0]?.underlying_description).toBe("recent");
+    // 1-min window catches nothing.
+    expect((await getRecentTopicGoneEvents(1)).length).toBe(0);
+  });
+
+  it("returns [] when the file does not exist", async () => {
+    expect(await getRecentTopicGoneEvents()).toEqual([]);
+  });
+});

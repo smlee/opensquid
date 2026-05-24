@@ -42,11 +42,20 @@ import type { CollisionInfo } from "./routing.js";
 // ---------------------------------------------------------------------
 
 /**
- * One line in `collisions.jsonl`. `v: 1` is a schema version pinned so
- * future readers can detect + skip incompatible shapes.
+ * One routing-collision line in `collisions.jsonl`. `v: 1` is a schema
+ * version pinned so future readers can detect + skip incompatible
+ * shapes.
+ *
+ * TPS.7 added a tagged union to the file (see `TopicGoneEvent` below).
+ * Existing on-disk `CollisionEntry` records pre-date the `kind` field;
+ * the loader defaults missing `kind` to `"collision"` for back-compat.
+ * New writes from TPS.5's `recordCollision` continue to omit `kind` to
+ * keep wire-format diffs minimal (the absence of `kind` IS the signal).
  */
 export interface CollisionEntry {
   v: 1;
+  /** Implicit "collision" — older writes lack this field; readers default. */
+  kind?: "collision";
   occurred_at: string;
   channel_key: string;
   /** All project_uuids known to have claimed this key (existing + newcomer). */
@@ -61,6 +70,44 @@ export interface CollisionEntry {
    */
   notified_via_telegram: boolean;
 }
+
+/**
+ * TPS.7 (v0.5.130) — topic-gone event line in `collisions.jsonl`.
+ *
+ * Written when the daemon's RPC `send` handler catches a `TopicGoneError`
+ * from the Telegram adapter (Bot API 400: "message thread not found").
+ * Co-located with `CollisionEntry` in the same file because both surface
+ * the same way: append-only audit trail + debounced Telegram notify +
+ * MCP `chat_poll_inbox` warning prepend.
+ *
+ * Discriminator: `kind: "topic_gone"`. The auto-rebind itself happens
+ * later on the next MCP-bridge subscribe via TPS.6's auto-boot path —
+ * this record is the *signal* that a binding was cleared, not the act
+ * of rebinding.
+ */
+export interface TopicGoneEvent {
+  v: 1;
+  kind: "topic_gone";
+  occurred_at: string;
+  /** "telegram:<chat_id>:<topic_id>" — same channel_key shape as CollisionEntry. */
+  channel_key: string;
+  /** Workspace whose `auto_bound` was just cleared. */
+  workspace_uuid: string;
+  /** The supergroup chat_id (without "telegram:" prefix). */
+  chat_id: string;
+  /** The thread/topic id that disappeared. */
+  topic_id: number;
+  /** Bot API description string for forensics (e.g. "Bad Request: message thread not found"). */
+  underlying_description: string;
+  /**
+   * Whether a Telegram notification fired for THIS record. Same
+   * debounce semantics as `CollisionEntry.notified_via_telegram`.
+   */
+  notified_via_telegram: boolean;
+}
+
+/** Discriminated union of everything that lives in collisions.jsonl. */
+export type CollisionsLine = CollisionEntry | TopicGoneEvent;
 
 export const DEBOUNCE_WINDOW_MS = 60 * 60 * 1000;
 
@@ -81,12 +128,14 @@ export function collisionsPath(dataRoot?: string): string {
 // ---------------------------------------------------------------------
 
 /**
- * Read the JSONL file end-to-end, dropping malformed lines. Returns []
- * on missing file. Cheap because the file is small in practice (one
- * line per collision event; the user fixes the config and the file
- * stops growing).
+ * Read the full discriminated union from `collisions.jsonl`, dropping
+ * malformed lines and unknown-shape records. Returns [] on missing
+ * file. TPS.7 (v0.5.130) — supersedes pre-TPS.7 single-type readers.
+ *
+ * Records without an explicit `kind` are treated as `CollisionEntry`
+ * (back-compat with TPS.5 writes).
  */
-export async function loadAllCollisions(dataRoot?: string): Promise<CollisionEntry[]> {
+export async function loadAllCollisionsLines(dataRoot?: string): Promise<CollisionsLine[]> {
   const p = collisionsPath(dataRoot);
   let raw: string;
   try {
@@ -95,19 +144,60 @@ export async function loadAllCollisions(dataRoot?: string): Promise<CollisionEnt
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
   }
-  const out: CollisionEntry[] = [];
+  const out: CollisionsLine[] = [];
   for (const line of raw.split("\n")) {
     if (line.length === 0) continue;
     try {
-      const parsed = JSON.parse(line) as CollisionEntry;
-      if (parsed.v === 1 && typeof parsed.channel_key === "string") {
-        out.push(parsed);
+      const parsed = JSON.parse(line) as CollisionsLine;
+      if (parsed.v !== 1 || typeof parsed.channel_key !== "string") continue;
+      const kind = (parsed as { kind?: string }).kind;
+      if (kind === "topic_gone") {
+        const ev = parsed as TopicGoneEvent;
+        if (
+          typeof ev.workspace_uuid === "string" &&
+          typeof ev.chat_id === "string" &&
+          typeof ev.topic_id === "number"
+        ) {
+          out.push(ev);
+        }
+      } else {
+        // kind missing OR explicitly "collision" — treat as CollisionEntry.
+        const ent = parsed as CollisionEntry;
+        if (Array.isArray(ent.claimants) && typeof ent.winner_uuid === "string") {
+          out.push(ent);
+        }
       }
     } catch {
       /* skip malformed line */
     }
   }
   return out;
+}
+
+/**
+ * TPS.5 back-compat reader — filters `loadAllCollisionsLines` to just
+ * `CollisionEntry` records (drops TPS.7 `TopicGoneEvent` lines). Used
+ * by the debounce scan in `recordCollision` so a recent topic-gone
+ * event doesn't suppress a fresh collision notification.
+ */
+export async function loadAllCollisions(dataRoot?: string): Promise<CollisionEntry[]> {
+  const all = await loadAllCollisionsLines(dataRoot);
+  return all.filter((line): line is CollisionEntry => {
+    const kind = (line as { kind?: string }).kind;
+    return kind === undefined || kind === "collision";
+  });
+}
+
+/**
+ * TPS.7 (v0.5.130) — read `TopicGoneEvent` records only. Used by the
+ * debounce scan in `recordTopicGoneEvent` and by MCP `chat_poll_inbox`
+ * for stale-topic warnings.
+ */
+export async function loadAllTopicGoneEvents(dataRoot?: string): Promise<TopicGoneEvent[]> {
+  const all = await loadAllCollisionsLines(dataRoot);
+  return all.filter((line): line is TopicGoneEvent => {
+    return (line as { kind?: string }).kind === "topic_gone";
+  });
 }
 
 /**
@@ -125,6 +215,25 @@ export async function getRecentCollisions(
 ): Promise<CollisionEntry[]> {
   const cutoff = Date.now() - maxAgeMinutes * 60 * 1000;
   const all = await loadAllCollisions(dataRoot);
+  return all.filter((e) => {
+    const t = Date.parse(e.occurred_at);
+    return Number.isFinite(t) && t >= cutoff;
+  });
+}
+
+/**
+ * TPS.7 (v0.5.130) — same default window as `getRecentCollisions` but
+ * for `TopicGoneEvent` records. Surfaced through MCP `chat_poll_inbox`
+ * so the agent learns "your topic was deleted; daemon cleared the
+ * binding; next session will rebind automatically" within the same
+ * 24h window.
+ */
+export async function getRecentTopicGoneEvents(
+  maxAgeMinutes = 24 * 60,
+  dataRoot?: string,
+): Promise<TopicGoneEvent[]> {
+  const cutoff = Date.now() - maxAgeMinutes * 60 * 1000;
+  const all = await loadAllTopicGoneEvents(dataRoot);
   return all.filter((e) => {
     const t = Date.parse(e.occurred_at);
     return Number.isFinite(t) && t >= cutoff;
@@ -221,7 +330,7 @@ export async function recordCollision(args: RecordCollisionArgs): Promise<Collis
   };
 
   try {
-    await appendEntry(entry, args.dataRoot);
+    await appendCollisionsLine(entry, args.dataRoot);
   } catch (err) {
     process.stderr.write(
       `[collisions] persist failed for ${args.info.channel_key}: ${
@@ -230,12 +339,6 @@ export async function recordCollision(args: RecordCollisionArgs): Promise<Collis
     );
   }
   return entry;
-}
-
-async function appendEntry(entry: CollisionEntry, dataRoot?: string): Promise<void> {
-  const p = collisionsPath(dataRoot);
-  await fs.mkdir(path.dirname(p), { recursive: true });
-  await fs.appendFile(p, JSON.stringify(entry) + "\n", "utf8");
 }
 
 // ---------------------------------------------------------------------
@@ -306,5 +409,143 @@ function formatCollisionMessage(info: CollisionInfo, sourceLabel: string): strin
     `chat-routing.json files under ~/.opensquid/projects/ to resolve.`,
     "",
     `(notified by ${sourceLabel})`,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------
+// TPS.7 (v0.5.130) — topic-gone append + notify
+// ---------------------------------------------------------------------
+
+export interface RecordTopicGoneArgs {
+  workspaceUuid: string;
+  chatId: string;
+  topicId: number;
+  underlyingDescription: string;
+  dataRoot?: string;
+  /** Optional gateway for the Telegram notification. */
+  gateway?: ChatGateway;
+  /** Injected clock for tests. */
+  nowMs?: () => number;
+}
+
+/**
+ * Record a topic-gone event: append a structured JSONL entry to
+ * collisions.jsonl, and (if outside the debounce window + a Telegram
+ * report_channel exists) fire a one-shot notification to the
+ * supergroup's general topic. Returns the entry that was appended.
+ *
+ * Mirrors `recordCollision` semantics — NEVER throws past the caller.
+ * Persist failures log to stderr; send failures flip the
+ * `notified_via_telegram` flag to false. The async caller in
+ * `rpc-server.ts:handleTopicGone` doesn't await any user-visible work.
+ *
+ * Debounce key: the same `channel_key` shape used by collisions
+ * (`telegram:<chat_id>:<topic_id>`). Within `DEBOUNCE_WINDOW_MS`,
+ * additional topic-gone events for the same channel record to JSONL
+ * but skip the Telegram ping — the user already got the alert.
+ */
+export async function recordTopicGoneEvent(args: RecordTopicGoneArgs): Promise<TopicGoneEvent> {
+  const now = (args.nowMs ?? Date.now)();
+  const channelKey = `telegram:${args.chatId}:${args.topicId}`;
+  const existing = await loadAllTopicGoneEvents(args.dataRoot).catch(() => [] as TopicGoneEvent[]);
+  const lastNotified = lastTopicGoneNotifiedAt(existing, channelKey);
+  const withinDebounce = lastNotified !== null && now - lastNotified < DEBOUNCE_WINDOW_MS;
+
+  const shouldNotify = !withinDebounce && args.gateway !== undefined;
+  let didNotify = false;
+  if (shouldNotify && args.gateway) {
+    try {
+      didNotify = await notifyTopicGoneViaTelegram({
+        gateway: args.gateway,
+        workspaceUuid: args.workspaceUuid,
+        chatId: args.chatId,
+        topicId: args.topicId,
+        dataRoot: args.dataRoot,
+      });
+    } catch (err) {
+      process.stderr.write(
+        `[collisions] topic-gone telegram notify failed for ${channelKey}: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+      didNotify = false;
+    }
+  }
+
+  const entry: TopicGoneEvent = {
+    v: 1,
+    kind: "topic_gone",
+    occurred_at: new Date(now).toISOString(),
+    channel_key: channelKey,
+    workspace_uuid: args.workspaceUuid,
+    chat_id: args.chatId,
+    topic_id: args.topicId,
+    underlying_description: args.underlyingDescription,
+    notified_via_telegram: didNotify,
+  };
+
+  try {
+    await appendCollisionsLine(entry, args.dataRoot);
+  } catch (err) {
+    process.stderr.write(
+      `[collisions] topic-gone persist failed for ${channelKey}: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+  }
+  return entry;
+}
+
+function lastTopicGoneNotifiedAt(events: TopicGoneEvent[], channelKey: string): number | null {
+  let best: number | null = null;
+  for (const e of events) {
+    if (e.channel_key !== channelKey) continue;
+    if (!e.notified_via_telegram) continue;
+    const t = Date.parse(e.occurred_at);
+    if (!Number.isFinite(t)) continue;
+    if (best === null || t > best) best = t;
+  }
+  return best;
+}
+
+async function appendCollisionsLine(line: CollisionsLine, dataRoot?: string): Promise<void> {
+  const p = collisionsPath(dataRoot);
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  await fs.appendFile(p, JSON.stringify(line) + "\n", "utf8");
+}
+
+interface NotifyTopicGoneArgs {
+  gateway: ChatGateway;
+  workspaceUuid: string;
+  chatId: string;
+  topicId: number;
+  dataRoot?: string;
+}
+
+async function notifyTopicGoneViaTelegram(args: NotifyTopicGoneArgs): Promise<boolean> {
+  const configs = await loadAllProjectChatRouting(args.dataRoot);
+  const target = pickNotificationTarget(configs);
+  if (target === null) return false;
+
+  const text = formatTopicGoneMessage(args);
+  try {
+    await args.gateway.send({ channel: target.channel, text });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function formatTopicGoneMessage(args: NotifyTopicGoneArgs): string {
+  return [
+    "🧹 opensquid topic binding cleared (topic was deleted)",
+    "",
+    `  workspace: ${args.workspaceUuid}`,
+    `  chat_id: ${args.chatId}`,
+    `  topic_id: ${args.topicId} (no longer exists)`,
+    "",
+    `The bound forum topic was deleted from the supergroup. The daemon`,
+    `cleared the stale binding; the next MCP-bridge subscribe for this`,
+    `workspace will auto-rebind to a fresh topic (TPS.6 auto-boot).`,
   ].join("\n");
 }
