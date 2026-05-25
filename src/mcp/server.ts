@@ -2,7 +2,7 @@
 /**
  * `opensquid-mcp` — MCP server entrypoint over stdio.
  *
- * Exposes the Phase-1 read-only tool set:
+ * Exposes the Phase-1 read-only tool set plus G.3's write surface:
  *
  *   list_packs         — currently active packs
  *   list_skills        — skills (optionally scoped to a pack)
@@ -11,13 +11,15 @@
  *   read_violations    — return session violations.jsonl contents
  *   list_drift_events  — aggregated drift catalog across packs + session (Task 5.4)
  *   recall             — search the configured RAG backend for memory hits (Task T.5)
+ *   memorize           — persist a memory (G.3) — direct engine.memory.create
+ *   store_lesson       — capture a Stage-1 wedge-gate candidate (G.3)
+ *   forget             — delete a memory; user-immune by default (G.3)
  *
- * Mutations (write_state, append_log, promote_lesson, …) are intentionally
- * NOT exposed via MCP in Phase 1. Those live behind the hook bindings + rule
- * processes; the MCP surface is read-only inspection so an external client
- * can never bypass the dispatcher. `recall` is still read-only — it only
- * reads from the memory pool, never writes — so it slots cleanly into the
- * existing pattern.
+ * G.3 introduces the first three WRITE tools as an explicit architectural
+ * exception to the T.1.H read-only invariant — see each handler's header for
+ * per-tool justification. `lesson.promote` (Stage 2) is intentionally NOT
+ * exposed, so the wedge-gate outcome-validation moat cannot be bypassed by
+ * an external MCP client.
  *
  * Transport: stdio (StdioServerTransport). stdout is reserved for the
  * JSON-RPC stream — NO `console.log` anywhere in this binary or any module
@@ -42,13 +44,34 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
+import { EngineClient } from '../engine/client.js';
+
+import { handleForget, ForgetSchema, type ForgetArgs } from './tools/forget.js';
 import { handleInspectSkill } from './tools/inspect-skill.js';
 import { handleListDriftEvents } from './tools/list-drift-events.js';
 import { handleListPacks } from './tools/list-packs.js';
 import { handleListSkills } from './tools/list-skills.js';
+import { handleMemorize, MemorizeSchema, type MemorizeArgs } from './tools/memorize.js';
 import { handleReadState } from './tools/read-state.js';
 import { handleReadViolations } from './tools/read-violations.js';
 import { handleRecall } from './tools/recall.js';
+import {
+  handleStoreLesson,
+  StoreLessonSchema,
+  type StoreLessonArgs,
+} from './tools/store-lesson.js';
+
+/**
+ * Lazy engine-client singleton. Construction is cheap (no socket I/O until
+ * the first `call`); `EngineClient.ensureConnected` re-uses the daemon via
+ * `acquireOrSpawnEngine()`, so multiple MCP write tools share one connection.
+ * Held at module scope so a single MCP-server process amortizes the handshake.
+ */
+let engineClient: EngineClient | null = null;
+function getEngine(): EngineClient {
+  engineClient ??= new EngineClient();
+  return engineClient;
+}
 
 // Each entry binds an args Zod schema to a handler that already accepts the
 // inferred shape. `safeParse` runs against `req.params.arguments` before the
@@ -86,6 +109,20 @@ const ToolHandlers = {
     }),
     handle: (args: { query: string; k?: number }) => handleRecall(args),
   },
+  memorize: {
+    schema: MemorizeSchema,
+    handle: (args: MemorizeArgs) =>
+      handleMemorize(args, getEngine()).then((r) => JSON.stringify(r)),
+  },
+  store_lesson: {
+    schema: StoreLessonSchema,
+    handle: (args: StoreLessonArgs) =>
+      handleStoreLesson(args, getEngine()).then((r) => JSON.stringify(r)),
+  },
+  forget: {
+    schema: ForgetSchema,
+    handle: (args: ForgetArgs) => handleForget(args, getEngine()).then((r) => JSON.stringify(r)),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -100,6 +137,12 @@ const descriptions: Record<ToolName, string> = {
   read_violations: 'Read the session violations.jsonl',
   list_drift_events: 'List drift events aggregated across packs + session',
   recall: 'Find memories relevant to a query. Returns up to k ranked results.',
+  memorize:
+    'Persist a memory. authored_by="user" (default) makes it eviction-immune. Scope defaults to user.',
+  store_lesson:
+    'Capture a candidate lesson for Stage 1 (user validates classification). ' +
+    'Use this for in-session corrections; do NOT call promote_lesson — automation handles Stage 2.',
+  forget: 'Delete a memory by id. User-authored memories require force: true (eviction immunity).',
 };
 
 /**

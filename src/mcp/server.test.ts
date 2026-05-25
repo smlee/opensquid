@@ -16,9 +16,8 @@
  * protocol.
  *
  * Cases:
- *   1. tools/list returns exactly the 7 read-only tools, each with an object
- *      JSON Schema (5 Phase-1 + `list_drift_events` from Task 5.4 + `recall`
- *      from Task T.5).
+ *   1. tools/list returns the 10 tools (7 read-only + G.3's `memorize`,
+ *      `store_lesson`, `forget`), each with an object JSON Schema.
  *   2. list_packs returns "no packs loaded" (Phase 1 stub).
  *   3. list_skills (no args) returns "no skills loaded".
  *   4. inspect_skill missing required arg → JSON-RPC error.
@@ -193,19 +192,22 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 7 read-only tools with JSON Schema', async () => {
+  it('tools/list returns the 10 tools (7 read-only + 3 write) with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
     const names = result.tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      'forget',
       'inspect_skill',
       'list_drift_events',
       'list_packs',
       'list_skills',
+      'memorize',
       'read_state',
       'read_violations',
       'recall',
+      'store_lesson',
     ]);
     for (const t of result.tools) {
       expect(t.description.length).toBeGreaterThan(0);
@@ -217,6 +219,72 @@ describe('opensquid-mcp subprocess', () => {
     expect(recallTool).toBeDefined();
     expect(recallTool!.description).toMatch(/memor/i);
     expect(recallTool!.description).not.toMatch(/wedge|manifest|cartridge/i);
+    // G.3 write-tool descriptions — assert the load-bearing copy that
+    // distinguishes memorize (immediate persist) from store_lesson
+    // (Stage-1 candidate) and warns against direct promote_lesson calls.
+    const memorize = result.tools.find((t) => t.name === 'memorize');
+    expect(memorize?.description).toMatch(/eviction-immune/i);
+    const storeLesson = result.tools.find((t) => t.name === 'store_lesson');
+    expect(storeLesson?.description).toMatch(/stage 1/i);
+    expect(storeLesson?.description).toMatch(/do not call promote_lesson/i);
+    const forgetTool = result.tools.find((t) => t.name === 'forget');
+    expect(forgetTool?.description).toMatch(/force: true/i);
+  }, 15_000);
+
+  it('memorize with missing required args yields an error (Zod runs before engine)', async () => {
+    const r = await client.request('tools/call', {
+      name: 'memorize',
+      arguments: { description: 'd' }, // missing content
+    });
+    if (r.error) {
+      expect(r.error.message.toLowerCase()).toMatch(/invalid|content|required/);
+    } else {
+      const out = r.result as ToolCallResult & { isError?: boolean };
+      expect(out.isError === true || /invalid|content/i.test(out.content[0]?.text ?? '')).toBe(
+        true,
+      );
+    }
+  }, 15_000);
+
+  it('store_lesson with invalid classification yields an error (Zod runs before engine)', async () => {
+    const r = await client.request('tools/call', {
+      name: 'store_lesson',
+      arguments: { description: 'd', content: 'c', classification: 'nonsense' },
+    });
+    if (r.error) {
+      expect(r.error.message.toLowerCase()).toMatch(/invalid|classification/);
+    } else {
+      const out = r.result as ToolCallResult & { isError?: boolean };
+      expect(
+        out.isError === true || /invalid|classification/i.test(out.content[0]?.text ?? ''),
+      ).toBe(true);
+    }
+  }, 15_000);
+
+  it('forget with empty id yields an error (Zod runs before engine)', async () => {
+    const r = await client.request('tools/call', {
+      name: 'forget',
+      arguments: { id: '' },
+    });
+    if (r.error) {
+      expect(r.error.message.toLowerCase()).toMatch(/invalid|id|required/);
+    } else {
+      const out = r.result as ToolCallResult & { isError?: boolean };
+      expect(out.isError === true || /invalid|id/i.test(out.content[0]?.text ?? '')).toBe(true);
+    }
+  }, 15_000);
+
+  it('CallTool with unknown name yields an error (regression)', async () => {
+    const r = await client.request('tools/call', {
+      name: 'this_tool_does_not_exist',
+      arguments: {},
+    });
+    if (r.error) {
+      expect(r.error.message.toLowerCase()).toMatch(/unknown|not.*found/);
+    } else {
+      const out = r.result as ToolCallResult & { isError?: boolean };
+      expect(out.isError === true || /unknown|not/i.test(out.content[0]?.text ?? '')).toBe(true);
+    }
   }, 15_000);
 
   it('list_packs returns "no packs loaded" (Phase 1 stub)', async () => {
