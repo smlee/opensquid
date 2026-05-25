@@ -73,7 +73,7 @@ interface SnapshotAutoOpts {
 /**
  * Encode a project path the way Claude Code does for the auto-memory
  * directory: every `/` becomes `-` (including the leading slash, so
- * `/Users/slee/x` → `-Users-slee-x`). Non-path inputs are passed verbatim.
+ * `/Users/alice/x` → `-Users-alice-x`). Non-path inputs are passed verbatim.
  */
 export function encodeProjectPath(projectPath: string): string {
   return projectPath.replace(/\//g, '-');
