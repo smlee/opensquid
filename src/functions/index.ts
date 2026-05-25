@@ -13,6 +13,7 @@ export { registerEventFunctions } from './event.js';
 export { registerLessonFunctions } from './lessons.js';
 export { registerLlmFunctions } from './llm.js';
 export { registerRagFunctions } from './rag.js';
+export { registerRecallPreInjectFunction } from './recall_pre_inject.js';
 export { registerStateFunctions } from './state.js';
 export { registerVerdictFunctions } from './verdict.js';
 export {

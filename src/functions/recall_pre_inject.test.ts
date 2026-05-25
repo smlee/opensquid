@@ -1,0 +1,251 @@
+/**
+ * Tests for the `recall_pre_inject` primitive (G.4).
+ *
+ * Covers every fixture listed in the task spec's "Test fixtures" block:
+ *
+ *   - empty prompt → no_verdict (no recall call made)
+ *   - short prompt below `min_prompt_chars` → no_verdict (no recall call)
+ *   - non-prompt_submit event → no_verdict (defensive guard)
+ *   - 3 hits above min_score → inject_context with all 3 formatted
+ *   - 0 hits above min_score → no_verdict
+ *   - 8 hits with token budget exceeded at hit 4 → keeps 3 + truncated=true
+ *   - k:20 + backend returns 5 → returns 5 (no padding)
+ *   - invalid k (50 > max 20) → Zod rejects at registry boundary
+ *   - backend.recall throws → runtime error result
+ *
+ * The backend is a hand-rolled stub implementing `RagBackend`. We don't
+ * exercise the real libsql/Ollama backend — that path is covered by
+ * `rag.test.ts`. Here we focus on the filter / token-budget / formatter
+ * logic that's specific to `recall_pre_inject`.
+ */
+
+import { describe, expect, it, vi } from 'vitest';
+
+import type { RagBackend, RecallHit } from '../rag/types.js';
+import type { Event } from '../runtime/types.js';
+
+import { type EvalCtx, FunctionRegistry } from './registry.js';
+import { registerRecallPreInjectFunction } from './recall_pre_inject.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeHit(score: number, content: string, source: RecallHit['source'] = 'fused'): RecallHit {
+  return {
+    lesson: {
+      id: `lesson-${score.toFixed(3)}`,
+      content,
+      tags: [],
+      source: 'test',
+      author: 'agent',
+      createdAt: '2026-05-24T00:00:00.000Z',
+    },
+    score,
+    source,
+  };
+}
+
+function makeBackend(recallFn: RagBackend['recall']): RagBackend {
+  return {
+    init: () => Promise.resolve(),
+    embed: () => Promise.resolve(null),
+    recall: recallFn,
+    storeLesson: () => Promise.resolve(),
+  };
+}
+
+function makeCtx(event: Event): EvalCtx {
+  return {
+    event,
+    bindings: new Map<string, unknown>(),
+    sessionId: 'test-session',
+    packId: 'test-pack',
+  };
+}
+
+const promptEvent = (prompt: string): Event => ({ kind: 'prompt_submit', prompt });
+
+function buildRegistry(backend: RagBackend): FunctionRegistry {
+  const r = new FunctionRegistry();
+  registerRecallPreInjectFunction(r, backend);
+  return r;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('recall_pre_inject', () => {
+  it('returns null (no_verdict equivalent) on an empty prompt without calling recall', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call('recall_pre_inject', {}, makeCtx(promptEvent('')));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value).toBeNull();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it('returns null on a prompt shorter than min_prompt_chars without calling recall', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
+    const registry = buildRegistry(makeBackend(recall));
+    // Default min_prompt_chars = 20; "yes" is 3 chars.
+    const result = await registry.call('recall_pre_inject', {}, makeCtx(promptEvent('yes')));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value).toBeNull();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it('returns null on a non-prompt_submit event (defensive guard)', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      {},
+      makeCtx({ kind: 'tool_call', tool: 'Bash', args: {} }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value).toBeNull();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it('returns inject_context with all 3 hits when 3 hits are above min_score', async () => {
+    const hits = [
+      makeHit(0.9, 'hit one body'),
+      makeHit(0.7, 'hit two body'),
+      makeHit(0.5, 'hit three body'),
+    ];
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue(hits);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      {},
+      makeCtx(promptEvent('please fix the bug in the parser')),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    const value = result.value as { kind: string; content: string };
+    expect(value.kind).toBe('inject_context');
+    expect(value.content).toContain('top 3 memories');
+    expect(value.content).toContain('hit one body');
+    expect(value.content).toContain('hit two body');
+    expect(value.content).toContain('hit three body');
+    expect(value.content).toContain('please fix the bug in the parser');
+    expect(value.content).toContain('[end opensquid recall]');
+    // No truncation marker because all hits fit.
+    expect(value.content).not.toContain('truncated by token budget');
+  });
+
+  it('returns null when 0 hits clear min_score (all below threshold)', async () => {
+    const hits = [makeHit(0.2, 'noise'), makeHit(0.3, 'more noise')];
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue(hits);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      {},
+      makeCtx(promptEvent('please fix the bug in the parser')),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value).toBeNull();
+  });
+
+  it('truncates at whole-hit granularity when token budget exceeded (keeps 3, marks truncated)', async () => {
+    // Each hit body ≈ 4000 chars → ~1000 tokens per hit at 4 chars/token.
+    // max_tokens: 3500 → budget allows 3 hits (3000 tokens), drops the 4th.
+    const big = 'x'.repeat(4000);
+    const hits = Array.from({ length: 8 }, (_, i) => makeHit(0.9 - i * 0.05, big));
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue(hits);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      { max_tokens: 3500 },
+      makeCtx(promptEvent('please fix the bug in the parser')),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    const value = result.value as { kind: string; content: string };
+    expect(value.kind).toBe('inject_context');
+    expect(value.content).toContain('top 3 memories');
+    expect(value.content).toContain('truncated by token budget');
+    // Body should appear exactly 3 times (one per kept hit).
+    const matches = value.content.split(big).length - 1;
+    expect(matches).toBe(3);
+  });
+
+  it('returns all hits without padding when k:20 but backend returns 5', async () => {
+    const hits = Array.from({ length: 5 }, (_, i) => makeHit(0.9 - i * 0.05, `body ${String(i)}`));
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue(hits);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      { k: 20 },
+      makeCtx(promptEvent('please fix the bug in the parser')),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    const value = result.value as { kind: string; content: string };
+    expect(value.kind).toBe('inject_context');
+    expect(value.content).toContain('top 5 memories');
+    // Backend received the full k=20 ask; padding is the backend's job (it doesn't pad).
+    expect(recall).toHaveBeenCalledWith(expect.any(String), 20);
+  });
+
+  it('Zod rejects k:50 (above max 20) at registry boundary with arg_invalid', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      { k: 50 },
+      makeCtx(promptEvent('please fix the bug in the parser')),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.error.kind).toBe('arg_invalid');
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it('Zod rejects unknown args (strict()) so YAML typos surface', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      { kk: 5 }, // typo: `kk` not `k`
+      makeCtx(promptEvent('please fix the bug in the parser')),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.error.kind).toBe('arg_invalid');
+  });
+
+  it('surfaces backend.recall throws as a runtime error result', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockRejectedValue(new Error('libsql down'));
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      {},
+      makeCtx(promptEvent('please fix the bug in the parser')),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.error.kind).toBe('runtime');
+    expect(result.error.message).toContain('libsql down');
+  });
+
+  it('truncates header query to 80 chars and adds ellipsis when prompt is long', async () => {
+    const longPrompt = `a`.repeat(150);
+    const hits = [makeHit(0.9, 'body')];
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue(hits);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call('recall_pre_inject', {}, makeCtx(promptEvent(longPrompt)));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    const value = result.value as { kind: string; content: string };
+    expect(value.content).toContain('a'.repeat(80) + '…');
+    // The full 150-char prompt should NOT appear verbatim in the header.
+    expect(value.content).not.toContain('a'.repeat(150));
+  });
+});

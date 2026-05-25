@@ -457,13 +457,21 @@ describe('Pack', () => {
 });
 
 describe('RuleResult (TS-only union)', () => {
-  it('narrows on `kind`', () => {
+  it('narrows on `kind` across all 4 variants (compile-time assertNever)', () => {
+    // G.4 widened RuleResult from 3 → 4 variants by adding `inject_context`.
+    // The exhaustive switch + `_exhaustive: never` assignment is the
+    // compile-time guarantee that every variant is handled; CI fails if a
+    // new variant lands without updating this switch.
     const verdictResult: RuleResult = {
       kind: 'verdict',
       verdict: { level: 'pass', message: 'ok' },
     };
     const noVerdict: RuleResult = { kind: 'no_verdict' };
     const errResult: RuleResult = { kind: 'error', error: 'boom', step: 2 };
+    const injectResult: RuleResult = {
+      kind: 'inject_context',
+      content: '[opensquid recall] hi',
+    };
 
     const summarize = (r: RuleResult): string => {
       switch (r.kind) {
@@ -473,6 +481,8 @@ describe('RuleResult (TS-only union)', () => {
           return 'none';
         case 'error':
           return `err@${String(r.step)}:${r.error}`;
+        case 'inject_context':
+          return `inj:${r.content}`;
         default: {
           const _exhaustive: never = r;
           return _exhaustive;
@@ -483,5 +493,20 @@ describe('RuleResult (TS-only union)', () => {
     expect(summarize(verdictResult)).toBe('pass:ok');
     expect(summarize(noVerdict)).toBe('none');
     expect(summarize(errResult)).toBe('err@2:boom');
+    expect(summarize(injectResult)).toBe('inj:[opensquid recall] hi');
+  });
+
+  it('inject_context variant carries a `content: string` field (round-trip)', () => {
+    // Round-trip: TS-only union has no Zod schema, so the "round-trip" is
+    // a structural check — we construct, narrow, and re-extract the
+    // content. This guards against accidental shape drift (e.g. someone
+    // renaming `content` to `text`) in a future refactor.
+    const payload =
+      '[opensquid recall — top 2 memories for "fix the bug"]\n\n1. (score=0.812, source=fused)\nremember the off-by-one in foo()\n\n2. (score=0.701, source=semantic)\nbar() returns null on empty input\n\n[end opensquid recall]';
+    const r: RuleResult = { kind: 'inject_context', content: payload };
+    if (r.kind !== 'inject_context') throw new Error('unreachable');
+    expect(r.content).toBe(payload);
+    expect(r.content.startsWith('[opensquid recall')).toBe(true);
+    expect(r.content.endsWith('[end opensquid recall]')).toBe(true);
   });
 });

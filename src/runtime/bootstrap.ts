@@ -60,6 +60,7 @@ import { registerEventFunctions } from '../functions/event.js';
 import { registerLessonFunctions } from '../functions/lessons.js';
 import { registerLlmFunctions } from '../functions/llm.js';
 import { registerRagFunctions } from '../functions/rag.js';
+import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
 import { FunctionRegistry } from '../functions/registry.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
@@ -119,6 +120,12 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   const backend = opts.backend ?? createBackend(await resolveBackendConfig());
   await backend.init();
   registerRagFunctions(r, backend);
+  // G.4 — `recall_pre_inject` shares the same backend handle as `recall`
+  // (no second connection). Registered immediately after RAG so the backend
+  // is guaranteed initialized; the primitive itself ignores non-prompt_submit
+  // events at the per-call boundary as a defensive guard on top of the
+  // dispatcher's skill-trigger filter.
+  registerRecallPreInjectFunction(r, backend);
 
   // T-loop-engine-reintegration T.6 — wire the wedge gate lesson surface
   // (`propose_lesson`, `promote_lesson`, `recall_lesson`). Lessons need a

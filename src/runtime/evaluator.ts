@@ -213,6 +213,19 @@ export async function evaluateProcess(
       return { kind: 'verdict', verdict: result.value };
     }
 
+    // 5b. `inject_context` shape → terminal RuleResult variant (G.4).
+    //
+    // Any primitive that returns `{ kind: 'inject_context', content: string }`
+    // short-circuits the rule with that payload (mirroring the `verdict`
+    // pattern). `recall_pre_inject` is the production producer; the shape-
+    // based check rather than a name-based check keeps the door open for
+    // additional context-providing primitives without re-touching the
+    // evaluator. Primitives that DON'T want to terminate the rule return a
+    // bound value via `as:` instead.
+    if (isInjectContext(result.value)) {
+      return { kind: 'inject_context', content: result.value.content };
+    }
+
     // 6-8. on_empty policy when the call produced nothing useful
     if (isEmpty(result.value) && step.on_empty !== undefined) {
       if (step.on_empty === 'pass') {
@@ -568,4 +581,20 @@ function isVerdict(v: unknown): v is Verdict {
   if (typeof v !== 'object' || v === null) return false;
   if (!('level' in v) || !('message' in v)) return false;
   return typeof v.level === 'string' && typeof v.message === 'string';
+}
+
+// ---------------------------------------------------------------------------
+// isInjectContext — TS type predicate for the G.4 inject_context shape.
+//
+// The `recall_pre_inject` primitive (and any future context-providing
+// primitive) returns `{ kind: 'inject_context', content: string }` to
+// short-circuit the rule with a payload the hook layer will inject into
+// the host's prompt context. Shape-based check (not name-based) so the
+// evaluator stays open to multiple producers without re-touching this file.
+// ---------------------------------------------------------------------------
+
+function isInjectContext(v: unknown): v is { kind: 'inject_context'; content: string } {
+  if (typeof v !== 'object' || v === null) return false;
+  if (!('kind' in v) || !('content' in v)) return false;
+  return v.kind === 'inject_context' && typeof v.content === 'string';
 }

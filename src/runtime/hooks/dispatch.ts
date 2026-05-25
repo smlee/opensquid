@@ -57,6 +57,21 @@ import type { Event, Pack } from '../types.js';
 export interface DispatchResult {
   exitCode: 0 | 2;
   stderr: string;
+  /**
+   * G.4 — aggregated `inject_context` payloads from every skill that fired
+   * during this dispatch. Empty array on the common (no-injection) path.
+   *
+   * Only the `UserPromptSubmit` hook bin actually emits these as host
+   * context (Claude Code's `hookSpecificOutput.additionalContext` JSON
+   * envelope). Other hook bins ignore the array (the dispatcher writes a
+   * stderr warning when an `inject_context` fires on a non-`prompt_submit`
+   * event so misconfiguration is visible).
+   *
+   * Block-verdict + inject_context COEXIST: the block wins on `exitCode`,
+   * but the injections are still aggregated and returned so the user sees
+   * the recall context alongside the block message. Per Phase-2 lock #7.
+   */
+  contextInjections: string[];
 }
 
 /**
@@ -93,6 +108,13 @@ export async function dispatchEvent(
   // signal (rules=0 means dispatch ran but no skill subscribed to this kind;
   // rules=N means N rules were evaluated up to the short-circuit point).
   let rulesWalked = 0;
+  // G.4 — aggregate inject_context payloads across every rule in every
+  // skill. Kept across the full walk (verdict short-circuit still returns
+  // any injections that fired BEFORE the verdict — by-design coexistence).
+  const contextInjections: string[] = [];
+  // Stderr warnings buffer when an `inject_context` fires on an event kind
+  // OTHER than `prompt_submit`. Misconfiguration signal per Phase-2 lock #4.
+  let warnBuf = '';
   for (const pack of packs) {
     for (const skill of pack.skills) {
       // AUTO.1: skip the skill entirely if no trigger subscribes to this
@@ -115,6 +137,22 @@ export async function dispatchEvent(
           packId: pack.name,
         };
         const result = await evaluateProcess(rule.process, ctx, registry);
+
+        // G.4 — `inject_context` is a non-blocking terminal RuleResult.
+        // Aggregate and continue walking; only `UserPromptSubmit` hook bin
+        // actually emits the array. Other hook bins discard with a warning.
+        if (result.kind === 'inject_context') {
+          if (event.kind === 'prompt_submit') {
+            contextInjections.push(result.content);
+          } else {
+            warnBuf +=
+              `[opensquid] WARN: rule "${rule.id}" in skill "${skill.name}" (pack "${pack.name}") ` +
+              `emitted inject_context on event kind "${event.kind}"; only "prompt_submit" surfaces ` +
+              `injections (drop). Update the skill's triggers: block.\n`;
+          }
+          continue;
+        }
+
         if (result.kind !== 'verdict') continue;
 
         // Phase 1: every verdict routes through the `block_tool` default
@@ -123,21 +161,45 @@ export async function dispatchEvent(
         switch (action.kind) {
           case 'block_tool':
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
-            return { exitCode: 2, stderr: action.message };
+            return {
+              exitCode: 2,
+              stderr: appendWarn(action.message, warnBuf),
+              contextInjections,
+            };
           case 'warn':
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
-            return { exitCode: 0, stderr: action.message };
+            return {
+              exitCode: 0,
+              stderr: appendWarn(action.message, warnBuf),
+              contextInjections,
+            };
           case 'halt':
           case 'notify_pause':
             // Phase 1 stub: real halt = Task 1.14; real notify = Task 1.18.
             // Until then, return allow + empty stderr so a future-policy
             // verdict during Phase 1 doesn't accidentally block.
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
-            return { exitCode: 0, stderr: '' };
+            return {
+              exitCode: 0,
+              stderr: appendWarn('', warnBuf),
+              contextInjections,
+            };
         }
       }
     }
   }
   emitDispatchMarker(event.kind, rulesWalked, packs.length);
-  return { exitCode: 0, stderr: '' };
+  return { exitCode: 0, stderr: appendWarn('', warnBuf), contextInjections };
+}
+
+/**
+ * Append the buffered inject-context misuse warnings to whatever stderr the
+ * dispatcher otherwise produced. Keeps the warning visible alongside a
+ * block / warn message rather than getting swallowed by the verdict
+ * short-circuit. Empty inputs short-circuit to '' (no spurious newline).
+ */
+function appendWarn(stderr: string, warnBuf: string): string {
+  if (warnBuf === '') return stderr;
+  if (stderr === '') return warnBuf.trimEnd();
+  return `${stderr}\n${warnBuf.trimEnd()}`;
 }

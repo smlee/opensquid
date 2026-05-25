@@ -216,14 +216,22 @@ export type Pack = z.infer<typeof Pack>;
 // ---------------------------------------------------------------------------
 // RuleResult — in-process evaluation outcome (TS-only, no schema)
 //
-// A rule evaluates to one of three states. `error` carries the failing step
-// index so the runtime can surface which `call` blew up.
+// A rule evaluates to one of four states. `error` carries the failing step
+// index so the runtime can surface which `call` blew up. `inject_context`
+// (G.4) is the non-verdict, non-error terminal state used by the
+// `recall_pre_inject` primitive: it carries a formatted string the hook
+// layer prepends to the host's context (for `UserPromptSubmit`, Claude
+// Code's `hookSpecificOutput.additionalContext` JSON envelope). Other
+// terminal RuleResult variants are PER-RULE; `inject_context` is aggregated
+// at dispatch level into `DispatchResult.contextInjections: string[]` so
+// multiple skills can stack their injections in one prompt.
 // ---------------------------------------------------------------------------
 
 export type RuleResult =
   | { kind: 'verdict'; verdict: Verdict }
   | { kind: 'no_verdict' }
-  | { kind: 'error'; error: string; step: number };
+  | { kind: 'error'; error: string; step: number }
+  | { kind: 'inject_context'; content: string };
 
 // ---------------------------------------------------------------------------
 // DriftPolicy + RuntimeAction — what the runtime does once a rule fires.

@@ -85,14 +85,14 @@ describe('dispatchEvent', () => {
   it('returns exit 0 + empty stderr when no packs are active', async () => {
     const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
     const result = await dispatchEvent(event, [], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 0, stderr: '' });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
   });
 
   it('returns exit 2 + stderr when a rule produces a block verdict', async () => {
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'no amend' });
     const pack = makePack('p1', [verdictRule]);
     const result = await dispatchEvent(event, [pack], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 2, stderr: 'no amend' });
+    expect(result).toEqual({ exitCode: 2, stderr: 'no amend', contextInjections: [] });
   });
 
   it('returns exit 0 + empty stderr when no rules produce a verdict', async () => {
@@ -101,7 +101,7 @@ describe('dispatchEvent', () => {
     const pack = makePack('p1', [noVerdictRule]);
     const registry = new FunctionRegistry();
     const result = await dispatchEvent(event, [pack], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 0, stderr: '' });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
   });
 
   it('first-match short-circuit: blocking pack #1 wins over later packs', async () => {
@@ -109,7 +109,7 @@ describe('dispatchEvent', () => {
     const pack1 = makePack('pack1', [verdictRule]);
     const pack2 = makePack('pack2', [verdictRule]);
     const result = await dispatchEvent(event, [pack1, pack2], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 2, stderr: 'pack1 blocks' });
+    expect(result).toEqual({ exitCode: 2, stderr: 'pack1 blocks', contextInjections: [] });
   });
 
   // -------------------------------------------------------------------------
@@ -135,14 +135,14 @@ describe('dispatchEvent', () => {
     const pack = makePack('p1', [verdictRule], [{ kind: 'schedule', cron: '0 9 * * 1' }]);
     const result = await dispatchEvent(event, [pack], registry, 'sess-1');
     // Skill subscribes only to `schedule`; tool_call must pass through.
-    expect(result).toEqual({ exitCode: 0, stderr: '' });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
   });
 
   it('AUTO.1: fires a schedule-only skill when the event is a schedule', async () => {
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'sched fired' });
     const pack = makePack('p1', [verdictRule], [{ kind: 'schedule', cron: '0 9 * * 1' }]);
     const result = await dispatchEvent(scheduleEvent, [pack], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 2, stderr: 'sched fired' });
+    expect(result).toEqual({ exitCode: 2, stderr: 'sched fired', contextInjections: [] });
   });
 
   it('AUTO.1: fires a multi-kind skill on both tool_call and schedule', async () => {
@@ -154,8 +154,8 @@ describe('dispatchEvent', () => {
     );
     const onTool = await dispatchEvent(event, [pack], registry, 'sess-1');
     const onSched = await dispatchEvent(scheduleEvent, [pack], registry, 'sess-1');
-    expect(onTool).toEqual({ exitCode: 2, stderr: 'multi fired' });
-    expect(onSched).toEqual({ exitCode: 2, stderr: 'multi fired' });
+    expect(onTool).toEqual({ exitCode: 2, stderr: 'multi fired', contextInjections: [] });
+    expect(onSched).toEqual({ exitCode: 2, stderr: 'multi fired', contextInjections: [] });
   });
 
   // -------------------------------------------------------------------------
@@ -223,6 +223,112 @@ describe('dispatchEvent', () => {
       const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
       await dispatchEvent(event, [], registry, 'sess-1');
       expect(stderrBuf).toContain('[opensquid-dispatch]');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // G.4 — inject_context aggregation
+  //
+  // Per Phase-2 lock #6/7: `inject_context` is a non-blocking terminal
+  // RuleResult variant. The dispatcher aggregates every fired inject into
+  // `contextInjections: string[]` regardless of whether a later verdict
+  // short-circuits with block/warn. Block wins on exitCode; injections
+  // still ride through.
+  //
+  // On non-prompt_submit events, an inject_context fire is misconfiguration
+  // — the dispatcher writes a stderr warning and discards the payload.
+  // -------------------------------------------------------------------------
+  describe('G.4: inject_context aggregation', () => {
+    const promptEvent = { kind: 'prompt_submit' as const, prompt: 'fix the bug' };
+
+    function buildRegistryWithInject(content: string): FunctionRegistry {
+      const r = new FunctionRegistry();
+      r.register({
+        name: 'inject_emitter',
+        argSchema: z.record(z.unknown()),
+        // eslint-disable-next-line @typescript-eslint/require-await
+        execute: async () => ok({ kind: 'inject_context' as const, content }),
+      });
+      return r;
+    }
+
+    const injectRule: Rule = {
+      id: 'fake-inject-rule',
+      kind: 'track_check',
+      process: [{ call: 'inject_emitter' }],
+    };
+
+    it('aggregates a single inject_context payload into contextInjections', async () => {
+      const registry = buildRegistryWithInject('recall: foo');
+      const pack = makePack('p1', [injectRule], [{ kind: 'prompt_submit' }]);
+      const result = await dispatchEvent(promptEvent, [pack], registry, 'sess-1');
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.contextInjections).toEqual(['recall: foo']);
+    });
+
+    it('aggregates injections from TWO skills (order = pack walk order)', async () => {
+      // Two packs each with one inject rule; both should aggregate.
+      // We use the same primitive name across registries by constructing one
+      // registry that emits a fixed payload, then making two packs that both
+      // reference the same primitive. Order is pack1 → pack2.
+      const r = new FunctionRegistry();
+      let callIdx = 0;
+      r.register({
+        name: 'inject_emitter',
+        argSchema: z.record(z.unknown()),
+        execute: async () => {
+          await Promise.resolve();
+          const content = callIdx === 0 ? 'first inject' : 'second inject';
+          callIdx += 1;
+          return ok({ kind: 'inject_context' as const, content });
+        },
+      });
+      const pack1 = makePack('p1', [injectRule], [{ kind: 'prompt_submit' }]);
+      const pack2 = makePack('p2', [injectRule], [{ kind: 'prompt_submit' }]);
+      const result = await dispatchEvent(promptEvent, [pack1, pack2], r, 'sess-1');
+      expect(result.exitCode).toBe(0);
+      expect(result.contextInjections).toEqual(['first inject', 'second inject']);
+    });
+
+    it('coexists with a block verdict — block wins on exitCode, inject still aggregated', async () => {
+      // Pack 1 injects, pack 2 blocks. The inject fires first (pack walk
+      // order); pack 2's block produces the exitCode 2. The injection rides
+      // through so the user sees the recall context alongside the block.
+      const r = new FunctionRegistry();
+      r.register({
+        name: 'inject_emitter',
+        argSchema: z.record(z.unknown()),
+        // eslint-disable-next-line @typescript-eslint/require-await
+        execute: async () =>
+          ok({ kind: 'inject_context' as const, content: 'inject before block' }),
+      });
+      r.register({
+        name: 'verdict',
+        argSchema: z.record(z.unknown()),
+        // eslint-disable-next-line @typescript-eslint/require-await
+        execute: async () => ok({ level: 'block', message: 'blocked after inject' }),
+      });
+      const pack1 = makePack('p1', [injectRule], [{ kind: 'prompt_submit' }]);
+      const pack2 = makePack('p2', [verdictRule], [{ kind: 'prompt_submit' }]);
+      const result = await dispatchEvent(promptEvent, [pack1, pack2], r, 'sess-1');
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toBe('blocked after inject');
+      expect(result.contextInjections).toEqual(['inject before block']);
+    });
+
+    it('emits stderr warning + discards inject when fired on a non-prompt_submit event', async () => {
+      // Skill subscribes to tool_call but emits inject_context anyway —
+      // misconfiguration. The dispatcher drops the payload (empty array)
+      // and writes a stderr warning so the pack author can fix the trigger.
+      const registry = buildRegistryWithInject('should be dropped');
+      const pack = makePack('p1', [injectRule], [{ kind: 'tool_call' }]);
+      const toolEvent: ToolCallEvent = { kind: 'tool_call', tool: 'Bash', args: {} };
+      const result = await dispatchEvent(toolEvent, [pack], registry, 'sess-1');
+      expect(result.exitCode).toBe(0);
+      expect(result.contextInjections).toEqual([]);
+      expect(result.stderr).toContain('inject_context on event kind "tool_call"');
+      expect(result.stderr).toContain('fake-inject-rule');
     });
   });
 });
