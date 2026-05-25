@@ -274,6 +274,31 @@ The `loop-engine` backend is the one with the central RAG-style `manifest` assem
 
 ---
 
+## Migration from Claude Code auto-memory
+
+Open Squid ships a two-step path for users coming from Claude Code's host-local auto-memory (`~/.claude/projects/<encoded-path>/memory/*.md`):
+
+1. **Bulk import** (G.6) — `opensquid memory import-auto` walks the auto-memory directory, parses each `*.md` (skipping `MEMORY.md`, the index), and writes every entry into the configured memory backend via `engine.memoryCreate`. Dedup is by the auto-memory `name` frontmatter slug, round-tripped through `origin.host` — re-runs are idempotent.
+
+   ```bash
+   # preview without writing
+   opensquid memory import-auto --dry-run
+   # full import (default: cwd's auto-memory dir)
+   opensquid memory import-auto
+   ```
+
+2. **Periodic catch-up** (G.7) — `opensquid memory snapshot-auto` re-imports any auto-memory files modified since the last snapshot. The timestamp is stored at `~/.opensquid/.last-auto-memory-snapshot`. First run (no snapshot file) imports everything; subsequent runs are an mtime delta. Run it on a cron, a git hook, or manually.
+
+   ```bash
+   opensquid memory snapshot-auto
+   ```
+
+After the initial import, **prefer `mcp__opensquid__memorize`** for new memory writes — entries created through the MCP tool stay portable across harnesses (Claude Code, Cursor, ChatGPT desktop, Gemini CLI) and across devices. Direct auto-memory writes still work as a host-local fallback, but they don't sync.
+
+The bundled `prefer-opensquid-memory` skill (sangmin-personal-rules codex) emits a `warn` verdict on every `Write` / `Edit` / `NotebookEdit` that targets an auto-memory path, reminding the agent to route through `mcp__opensquid__memorize` instead. It's a nudge — not a block — so the fallback path remains usable when you genuinely want a host-local note.
+
+---
+
 ## Codex packs (v0.4)
 
 Open Squid speaks a YAML pack format called **codex** — portable bundles of foundation (tools/domains/methodologies), lessons, and detection rules.

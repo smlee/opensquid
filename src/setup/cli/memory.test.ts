@@ -1,12 +1,12 @@
 /**
- * Unit tests for `registerMemory` — commander wiring + import-auto handler.
+ * Unit tests for `registerMemory` — commander wiring + import-auto + snapshot-auto.
  *
  * Uses commander's `parseAsync` against in-test program instances rather
- * than spawning subprocesses. Engine + filesystem-resolver are injected
- * via `MemoryCliDeps` so tests stay hermetic.
+ * than spawning subprocesses. Engine + filesystem-resolver + opensquidHome
+ * are injected via `MemoryCliDeps` so tests stay hermetic.
  */
 
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,15 +18,18 @@ import type { EngineClient } from '../../engine/client.js';
 import { encodeProjectPath, registerMemory } from './memory.js';
 
 let root: string;
+let home: string;
 let exitCodeBefore: typeof process.exitCode;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'opensquid-memcli-'));
+  home = await mkdtemp(join(tmpdir(), 'opensquid-memcli-home-'));
   exitCodeBefore = process.exitCode;
 });
 
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
+  await rm(home, { recursive: true, force: true });
   process.exitCode = exitCodeBefore;
 });
 
@@ -94,6 +97,7 @@ function makeProgram(stubs: Stubs): Command {
   const program = new Command().exitOverride(); // don't kill the test process
   registerMemory(program, {
     engineFactory: stubs.engineFactory,
+    opensquidHome: () => home,
     stdout: (s) => stubs.stdout.push(s),
     stderr: (s) => stubs.stderr.push(s),
     cwd: () => '/Users/test/proj',
@@ -228,5 +232,80 @@ describe('opensquid memory import-auto', () => {
     expect(stubs.stdout.join('')).toMatch(/Imported 1, skipped 0, errors 1/);
     expect(stubs.stderr.join('')).toMatch(/bad\.md/);
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('opensquid memory snapshot-auto', () => {
+  it('first run (no snapshot file) imports ALL files and writes timestamp', async () => {
+    const memDir = await makeFixtureDir('-Users-test-proj');
+    await writeFixture(memDir, 'a', 'feedback');
+    await writeFixture(memDir, 'b', 'user');
+    const stubs = makeStubs();
+    const program = makeProgram(stubs);
+    await program.parseAsync(
+      ['node', 'opensquid', 'memory', 'snapshot-auto', '--auto-memory-root', root],
+      { from: 'node' },
+    );
+    expect(stubs.memoryCreate).toHaveBeenCalledTimes(2);
+    expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 2, skipped 0, errors 0/);
+    const stamp = await readFile(join(home, '.last-auto-memory-snapshot'), 'utf-8');
+    expect(Number(stamp.trim())).toBeGreaterThan(0);
+    expect(stubs.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('exits non-zero with clear stderr when auto-memory-root is missing', async () => {
+    const stubs = makeStubs();
+    const program = makeProgram(stubs);
+    await program.parseAsync(
+      [
+        'node',
+        'opensquid',
+        'memory',
+        'snapshot-auto',
+        '--auto-memory-root',
+        join(root, 'does-not-exist'),
+      ],
+      { from: 'node' },
+    );
+    expect(process.exitCode).toBe(1);
+    expect(stubs.stderr.join('')).toMatch(/snapshot-auto:.*does not exist/);
+    expect(stubs.engineFactory).not.toHaveBeenCalled();
+  });
+
+  it('dedup via existingNames carries through to snapshot', async () => {
+    const memDir = await makeFixtureDir('-Users-test-proj');
+    await writeFixture(memDir, 'a', 'feedback');
+    const stubs = makeStubs({ existing: ['a'] });
+    const program = makeProgram(stubs);
+    await program.parseAsync(
+      ['node', 'opensquid', 'memory', 'snapshot-auto', '--auto-memory-root', root],
+      { from: 'node' },
+    );
+    expect(stubs.memoryCreate).not.toHaveBeenCalled();
+    expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 0, skipped 1, errors 0/);
+  });
+
+  it('--help documents the flags', async () => {
+    const stubs = makeStubs();
+    const program = new Command().exitOverride();
+    let helpText = '';
+    registerMemory(program, {
+      engineFactory: stubs.engineFactory,
+      opensquidHome: () => home,
+      stdout: (s) => (helpText += s),
+      stderr: (s) => (helpText += s),
+      cwd: () => '/x',
+    });
+    program.configureOutput({ writeOut: (s) => (helpText += s), writeErr: (s) => (helpText += s) });
+    try {
+      await program.parseAsync(['node', 'opensquid', 'memory', 'snapshot-auto', '--help'], {
+        from: 'node',
+      });
+    } catch {
+      /* commander exitOverride throws on --help; expected */
+    }
+    expect(helpText).toMatch(/--project/);
+    expect(helpText).toMatch(/--auto-memory-root/);
+    expect(helpText).not.toMatch(/--dry-run/); // snapshot has no dry-run
   });
 });
