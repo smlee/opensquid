@@ -29,6 +29,7 @@ import { registerDoctor } from './setup/cli/doctor.js';
 import { registerSetupWizard } from './setup/cli/hooks.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
+import { registerMemory } from './setup/cli/memory.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
@@ -203,6 +204,13 @@ registerEngineCli(program);
 // owns scheduler / webhook / file-watcher lifecycle). Separate PID lock at
 // `~/.opensquid/agent-bridge.lock` so both daemons can run in parallel.
 registerAgentBridge(program);
+
+// G.6 — `opensquid memory import-auto`. Bulk-imports Claude Code auto-memory
+// files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the loop-engine
+// via direct `engine.memoryCreate` RPC, bypassing the MCP write overhead for
+// bulk ingest. Dedupe by frontmatter `name` round-tripped through `origin.host`.
+// All imports tagged `authored_by: 'user'` (eviction-immune).
+registerMemory(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
