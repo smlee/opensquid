@@ -29,6 +29,7 @@ import { registerDoctor } from './setup/cli/doctor.js';
 import { registerSetupWizard } from './setup/cli/hooks.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
+import { registerSetupWizardMcp } from './setup/cli/mcp.js';
 import { registerMemory } from './setup/cli/memory.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
@@ -183,7 +184,16 @@ const setupGroup = registerSetup(program);
 // hooks via the `@opensquid: true` marker contract. Replaces the broken
 // `node .../dist/index.js anti-drift <event>` legacy entries that
 // currently exist in the user's settings.json.
-registerSetupWizard(setupGroup);
+const wizardGroup = registerSetupWizard(setupGroup);
+
+// G.8 — `opensquid setup wizard mcp`. Writes opensquid's two MCP server
+// entries (opensquid + opensquid-chat) into `~/.claude.json` at the USER
+// level, so the central brain is reachable from EVERY project without
+// per-project `.mcp.json` setup. Same `@opensquid` marker contract as G.1.
+// Replaces the broken legacy `node .../dist/index.js` user-level entry
+// with the correct `dist/mcp/server.js` path. Surfaces a non-destructive
+// advisory if a project-level `.mcp.json` still has opensquid entries.
+registerSetupWizardMcp(wizardGroup);
 
 // G.2 — `opensquid doctor hooks`. Health check for Claude Code hook wiring.
 // Reads `~/.claude/settings.json` + `<cwd>/.claude/settings.json`, spawns
