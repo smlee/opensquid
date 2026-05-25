@@ -451,25 +451,63 @@ async function loadCheckpointMap(
 // ---------------------------------------------------------------------------
 // evalCondition — safe `if:` expression evaluator (NO eval())
 //
-// Phase 1 deliberately accepts only two forms:
+// Supported forms (deterministic, allow-listed — no JS `eval`, no
+// `new Function`):
 //
-//   - Bare-name truthiness: `hit` → Boolean(bindings.get('hit'))
-//   - Simple equality:      `x == "FOO"` → String(bindings.get('x')) === 'FOO'
+//   - Bare-name truthiness:  `hit` → Boolean(bindings.get('hit'))
+//   - Simple equality:       `x == "FOO"` → String(bindings.get('x')) === 'FOO'
+//   - Numeric comparison on a dotted property (G.5):
+//       `name.field <op> <int>` where:
+//         * `name` is a bare binding,
+//         * `field` is a single property (`length` / `count` are the typical
+//            uses but any plain identifier works for forward extension),
+//         * `<op>` ∈ { `===`, `==`, `!==`, `!=`, `>`, `<`, `>=`, `<=` },
+//         * `<int>` is a non-negative integer literal.
+//   - Logical AND of any two of the above:
+//       `EXPR && EXPR` — both sides evaluated independently via this same
+//       function, short-circuit semantics.
 //
-// Anything else (operators &&, ||, function calls, parens, numbers as RHS)
-// returns false and emits a console warning. The warning is intentionally
-// loud during pack-author development; Task 1.10+ wires a real logger and
-// surfaces these via the channel-routing pipeline. Until then `console.warn`
-// is the agreed placeholder.
+// Anything else (||, function calls, parens, numbers as RHS for `==`,
+// negation, nested property paths beyond one level) returns false and emits
+// a console warning. The warning is intentionally loud during pack-author
+// development; Task 1.10+ wires a real logger and surfaces these via the
+// channel-routing pipeline. Until then `console.warn` is the agreed
+// placeholder.
+//
+// G.5 introduced the numeric-comparison + AND forms so the
+// `verify-before-citing-memory` skill can express
+// `drift_phrases.matched.length > 0 && verification_tools.count === 0`
+// without an unbounded expression evaluator.
 //
 // Audit grep: this file contains zero matches for `eval(` or `new Function`.
 // ---------------------------------------------------------------------------
 
 const EQ_PATTERN = /^(\w+)\s*==\s*"([^"]+)"$/;
 const BARE_PATTERN = /^\w+$/;
+// Supports `name.field` AND `name.field.subfield` — used by G.5's skill YAML
+// (`drift_phrases.matched.length > 0`). Deeper nesting falls through to the
+// unsupported-warning path so we don't grow into an arbitrary path expression
+// engine.
+const NUM_CMP_PATTERN = /^(\w+)((?:\.\w+){1,3})\s*(===|!==|==|!=|>=|<=|>|<)\s*(\d+)$/;
 
 function evalCondition(expr: string, bindings: Map<string, unknown>): boolean {
   const trimmed = expr.trim();
+
+  // Logical AND — split on the FIRST `&&` (any further ones recurse into the
+  // right-hand parse via the same path). Short-circuit semantics: if the LHS
+  // is false, the RHS is never evaluated. Both halves must themselves be one
+  // of the supported forms or the standard "unsupported" warning fires for
+  // the failing half via the recursive call.
+  const andIdx = trimmed.indexOf('&&');
+  if (andIdx !== -1) {
+    const lhs = trimmed.slice(0, andIdx).trim();
+    const rhs = trimmed.slice(andIdx + 2).trim();
+    if (lhs.length === 0 || rhs.length === 0) {
+      console.warn(`[opensquid:evaluator] Unsupported if-expression: ${JSON.stringify(expr)}.`);
+      return false;
+    }
+    return evalCondition(lhs, bindings) && evalCondition(rhs, bindings);
+  }
 
   const eqMatch = EQ_PATTERN.exec(trimmed);
   if (eqMatch) {
@@ -477,6 +515,40 @@ function evalCondition(expr: string, bindings: Map<string, unknown>): boolean {
     const value = eqMatch[2];
     if (name === undefined || value === undefined) return false;
     return String(bindings.get(name)) === value;
+  }
+
+  const cmpMatch = NUM_CMP_PATTERN.exec(trimmed);
+  if (cmpMatch) {
+    const name = cmpMatch[1];
+    const pathTail = cmpMatch[2]; // leading dot included, e.g. `.matched.length`
+    const op = cmpMatch[3];
+    const rhsRaw = cmpMatch[4];
+    if (name === undefined || pathTail === undefined || op === undefined || rhsRaw === undefined) {
+      return false;
+    }
+    const bound = bindings.get(name);
+    const fields = pathTail.split('.').filter((s) => s.length > 0);
+    const lhsNum = resolveNumericPath(bound, fields);
+    if (lhsNum === undefined) return false;
+    const rhsNum = Number.parseInt(rhsRaw, 10);
+    switch (op) {
+      case '===':
+      case '==':
+        return lhsNum === rhsNum;
+      case '!==':
+      case '!=':
+        return lhsNum !== rhsNum;
+      case '>':
+        return lhsNum > rhsNum;
+      case '<':
+        return lhsNum < rhsNum;
+      case '>=':
+        return lhsNum >= rhsNum;
+      case '<=':
+        return lhsNum <= rhsNum;
+      default:
+        return false;
+    }
   }
 
   if (BARE_PATTERN.test(trimmed)) {
@@ -487,9 +559,42 @@ function evalCondition(expr: string, bindings: Map<string, unknown>): boolean {
   // notice during dev; the runtime never silently mis-evaluates a condition.
   console.warn(
     `[opensquid:evaluator] Unsupported if-expression: ${JSON.stringify(expr)}. ` +
-      `Phase 1 supports bare-name truthiness ("hit") or simple equality ("x == \\"FOO\\").`,
+      `Supported: bare name, x == "FOO", name.field <op> N, EXPR && EXPR.`,
   );
   return false;
+}
+
+/**
+ * Walk a sequence of property segments against the bound value and return
+ * the final value as a finite number. `length` on an array short-circuits
+ * to `array.length` even though Array.length isn't an own property in the
+ * usual `in` sense. Returns `undefined` if any segment fails to resolve to
+ * an object (until the final segment) or if the final segment isn't a
+ * finite number.
+ *
+ * Used by the `name.field <op> N` and `name.field.subfield <op> N` forms
+ * in `evalCondition`. The regex caps depth at 3 segments — deeper paths
+ * fall back to the unsupported-warning path.
+ */
+function resolveNumericPath(bound: unknown, fields: string[]): number | undefined {
+  let cur: unknown = bound;
+  for (let i = 0; i < fields.length; i++) {
+    if (cur === null || cur === undefined) return undefined;
+    const field = fields[i];
+    if (field === undefined) return undefined;
+    if (i === fields.length - 1) {
+      // Final segment — must resolve to a finite number.
+      if (field === 'length' && Array.isArray(cur)) return cur.length;
+      if (typeof cur !== 'object') return undefined;
+      const v = (cur as Record<string, unknown>)[field];
+      if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+      return v;
+    }
+    // Intermediate segment — descend into an object property.
+    if (typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[field];
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

@@ -62,8 +62,10 @@ import { registerLlmFunctions } from '../functions/llm.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
 import { FunctionRegistry } from '../functions/registry.js';
+import { SessionToolHistory } from '../functions/session_tool_history.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
+import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { discoverActivePacks } from '../packs/discovery.js';
 import { sortPacksByScope } from '../packs/load_order.js';
@@ -112,6 +114,13 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // a separate registry; the production bootstrap always uses the lazy
   // dynamic-import path.
   registerSubagentFunction(r);
+  // G.5 — text-pattern matcher + per-turn tool-call ledger reader. Both are
+  // pure (no I/O for text_pattern_match; one read for session_tool_history)
+  // so they ship pre-registered as FunctionDef objects rather than via a
+  // dedicated registrar helper. The drift skill `verify-before-citing-memory`
+  // composes them in a process: text scan → tool-history lookup → verdict.
+  r.register(TextPatternMatch);
+  r.register(SessionToolHistory);
   // T-loop-engine-reintegration T.3 — FIRST-EVER production wiring of the
   // RAG primitives. Resolves backend choice (env > ~/.opensquid/rag-config
   // .json > default), constructs, inits, registers. Tests override via

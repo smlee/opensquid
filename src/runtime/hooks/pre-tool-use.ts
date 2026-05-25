@@ -20,6 +20,7 @@
  * bottom is the last line of defense.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { appendTool } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -72,6 +73,17 @@ async function main(): Promise<void> {
   }
 
   const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // G.5 — append this tool name to the session's per-turn ledger BEFORE
+  // dispatching. Best-effort: a ledger-write failure must never block the
+  // pending tool call (fail-open guarantee of the hook bin). The Stop-event
+  // freshness rule reads this ledger via `session_tool_history`.
+  if (parsed.data.kind === 'tool_call') {
+    try {
+      await appendTool(sessionId, parsed.data.tool);
+    } catch (e) {
+      process.stderr.write(`opensquid: tool-ledger append failed — ${String(e)}\n`);
+    }
+  }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);

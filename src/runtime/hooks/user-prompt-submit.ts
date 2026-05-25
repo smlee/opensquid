@@ -17,6 +17,7 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -62,6 +63,15 @@ async function main(): Promise<void> {
   }
 
   const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // G.5 — a new turn starts on every UserPromptSubmit. Reset the per-turn
+  // slice of the tool-call ledger so the freshness rule (read on the next
+  // Stop event) sees only tools called during THIS turn. Session-wide list
+  // is untouched. Best-effort: never crash the hook over ledger plumbing.
+  try {
+    await resetTurnLedger(sessionId);
+  } catch (e) {
+    process.stderr.write(`opensquid: tool-ledger turn-reset failed — ${String(e)}\n`);
+  }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections } = await dispatchEvent(

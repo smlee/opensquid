@@ -282,7 +282,10 @@ describe('evaluateProcess — unsupported if-expression', () => {
       const steps: ProcessStep[] = [
         {
           call: 'verdict',
-          if: 'a && b',
+          // `||` is still unsupported (only `&&` is allow-listed); use it to
+          // exercise the warning path. `a && b` is now a supported compound
+          // expression as of G.5's evalCondition extension.
+          if: 'a || b',
           args: { level: 'block', message: 'should-skip' },
         },
       ];
@@ -299,5 +302,152 @@ describe('evaluateProcess — unsupported if-expression', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G.5 — extended if-expression forms: numeric-property comparison + AND.
+// These tests pin the `verify-before-citing-memory` skill's exact YAML
+// expression shape (`drift_phrases.matched.length > 0 && verification_tools
+// .count === 0`) to the deterministic, no-eval evaluator.
+// ---------------------------------------------------------------------------
+
+describe('evaluateProcess — G.5 extended if-expressions', () => {
+  function makeBindingEmitter(bindings: Record<string, unknown>): FunctionRegistry {
+    const reg = new FunctionRegistry();
+    reg.register(verdictDef);
+    for (const [name, value] of Object.entries(bindings)) {
+      reg.register({
+        name: `emit_${name}`,
+        argSchema: z.record(z.unknown()),
+        durable: false,
+        memoizable: false,
+        // eslint-disable-next-line @typescript-eslint/require-await -- async to match contract
+        execute: async () => ok(value),
+      });
+    }
+    return reg;
+  }
+
+  it('name.length > 0 evaluates against a bound array', async () => {
+    const reg = makeBindingEmitter({ matches: ['per memory', 'deferred'] });
+    const steps: ProcessStep[] = [
+      { call: 'emit_matches', as: 'matches' },
+      {
+        call: 'verdict',
+        if: 'matches.length > 0',
+        args: { level: 'warn', message: 'matched' },
+      },
+    ];
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+    expect(result).toEqual({ kind: 'verdict', verdict: { level: 'warn', message: 'matched' } });
+  });
+
+  it('name.length > 0 is false on an empty array (verdict skipped)', async () => {
+    const reg = makeBindingEmitter({ matches: [] });
+    const steps: ProcessStep[] = [
+      { call: 'emit_matches', as: 'matches' },
+      {
+        call: 'verdict',
+        if: 'matches.length > 0',
+        args: { level: 'warn', message: 'should-skip' },
+      },
+    ];
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+    expect(result).toEqual({ kind: 'no_verdict' });
+  });
+
+  it('name.count === 0 evaluates against an object field', async () => {
+    const reg = makeBindingEmitter({ tools: { tools: [], count: 0 } });
+    const steps: ProcessStep[] = [
+      { call: 'emit_tools', as: 'tools' },
+      {
+        call: 'verdict',
+        if: 'tools.count === 0',
+        args: { level: 'warn', message: 'no-tools' },
+      },
+    ];
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+    expect(result).toEqual({ kind: 'verdict', verdict: { level: 'warn', message: 'no-tools' } });
+  });
+
+  it('nested name.field.subfield resolves through one intermediate segment', async () => {
+    const reg = makeBindingEmitter({
+      drift: { matched: ['per memory', 'deferred'] },
+    });
+    const steps: ProcessStep[] = [
+      { call: 'emit_drift', as: 'drift' },
+      {
+        call: 'verdict',
+        if: 'drift.matched.length > 0',
+        args: { level: 'warn', message: 'nested-fired' },
+      },
+    ];
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+    expect(result).toEqual({
+      kind: 'verdict',
+      verdict: { level: 'warn', message: 'nested-fired' },
+    });
+  });
+
+  it('compound A && B with nested + flat paths fires when both are true', async () => {
+    // Exact shape used by G.5's verify-before-citing-memory skill.
+    const reg = makeBindingEmitter({
+      drift_phrases: {
+        matched: ['per memory'],
+        phrases: [{ phrase: 'per memory', offset: 0 }],
+      },
+      verification_tools: { tools: [], count: 0 },
+    });
+    const steps: ProcessStep[] = [
+      { call: 'emit_drift_phrases', as: 'drift_phrases' },
+      { call: 'emit_verification_tools', as: 'verification_tools' },
+      {
+        call: 'verdict',
+        if: 'drift_phrases.matched.length > 0 && verification_tools.count === 0',
+        args: { level: 'warn', message: 'compound-fired' },
+      },
+    ];
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+    expect(result).toEqual({
+      kind: 'verdict',
+      verdict: { level: 'warn', message: 'compound-fired' },
+    });
+  });
+
+  it('compound A && B short-circuits to no-verdict when LHS is false', async () => {
+    const reg = makeBindingEmitter({
+      drift_phrases: { matched: [], phrases: [] },
+      verification_tools: { tools: [], count: 0 },
+    });
+    const steps: ProcessStep[] = [
+      { call: 'emit_drift_phrases', as: 'drift_phrases' },
+      { call: 'emit_verification_tools', as: 'verification_tools' },
+      {
+        call: 'verdict',
+        if: 'drift_phrases.matched.length > 0 && verification_tools.count === 0',
+        args: { level: 'warn', message: 'should-skip' },
+      },
+    ];
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+    expect(result).toEqual({ kind: 'no_verdict' });
+  });
+
+  it('compound A && B short-circuits to no-verdict when RHS is false', async () => {
+    const reg = makeBindingEmitter({
+      drift_phrases: { matched: ['per memory'], phrases: [] },
+      verification_tools: { tools: ['Read'], count: 1 },
+    });
+    const steps: ProcessStep[] = [
+      { call: 'emit_drift_phrases', as: 'drift_phrases' },
+      { call: 'emit_verification_tools', as: 'verification_tools' },
+      {
+        call: 'verdict',
+        if: 'drift_phrases.matched.length > 0 && verification_tools.count === 0',
+        args: { level: 'warn', message: 'should-skip' },
+      },
+    ];
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+    expect(result).toEqual({ kind: 'no_verdict' });
   });
 });
