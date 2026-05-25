@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # G.13 — manual trigger for the heavy E2E job below. The regular `test`
+  # job stays on every push/PR; `e2e` is opt-in to avoid burning ~5 min of
+  # CI wall-clock on every commit (real engine spawn, real fs round-trip,
+  # 9 composite scenarios).
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: 'Run the G.13 e2e drift-prevention pass'
+        required: false
+        default: 'true'
 
 permissions:
   contents: read
@@ -28,3 +38,32 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test
       - run: pnpm build
+
+  # G.13 — End-to-end drift-prevention pass. Spawns a real loop-engine
+  # daemon, compiled hook bins, real fs mutations. ~5min wall-clock; do
+  # NOT run on every push (CI cost). Triggered manually via
+  # `gh workflow run ci.yml`. Skipped automatically when the loop-engine
+  # binary isn't available (CI environment doesn't cross-build Rust by
+  # default — scenarios that depend on the engine record as failure with
+  # a clear "binary not available" note in the generated report).
+  e2e:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_e2e == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:e2e
+        continue-on-error: true
+      - name: Upload e2e report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-drift-prevention-report
+          path: test/e2e/e2e-drift-prevention-report.md
+          if-no-files-found: warn

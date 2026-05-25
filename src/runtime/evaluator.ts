@@ -489,6 +489,16 @@ const BARE_PATTERN = /^\w+$/;
 // unsupported-warning path so we don't grow into an arbitrary path expression
 // engine.
 const NUM_CMP_PATTERN = /^(\w+)((?:\.\w+){1,3})\s*(===|!==|==|!=|>=|<=|>|<)\s*(\d+)$/;
+// G.13 fix: `name.field == true|false` literal-bool comparison. The d9-guard
+// skill's `if: 'automation.value == true'` was previously falling through to
+// the unsupported-warning path because NUM_CMP_PATTERN only accepts integer
+// RHS. Booleans must round-trip without coercion (Number(false)===0 would
+// silently make `count == false` evaluate true for empty arrays).
+const BOOL_CMP_PATTERN = /^(\w+)((?:\.\w+){1,3})\s*(===|==|!==|!=)\s*(true|false)$/;
+// G.13 fix: `name.field == "STR"` dotted equality. EQ_PATTERN only covers
+// bare-name LHS; without this branch, skills writing `result.label == "BLOCK"`
+// silently fail-closed. Same op set as BOOL_CMP for consistency.
+const STR_PATH_EQ_PATTERN = /^(\w+)((?:\.\w+){1,3})\s*(===|==|!==|!=)\s*"([^"]+)"$/;
 
 function evalCondition(expr: string, bindings: Map<string, unknown>): boolean {
   const trimmed = expr.trim();
@@ -546,6 +556,85 @@ function evalCondition(expr: string, bindings: Map<string, unknown>): boolean {
         return lhsNum >= rhsNum;
       case '<=':
         return lhsNum <= rhsNum;
+      default:
+        return false;
+    }
+  }
+
+  // G.13 fix: `name.field == true|false` — dotted bool comparison. Must run
+  // BEFORE the bare-name fallback so `automation.value == true` is recognised
+  // as a structured form rather than falling through to "unsupported".
+  const boolMatch = BOOL_CMP_PATTERN.exec(trimmed);
+  if (boolMatch) {
+    const name = boolMatch[1];
+    const pathTail = boolMatch[2];
+    const op = boolMatch[3];
+    const rhsRaw = boolMatch[4];
+    if (name === undefined || pathTail === undefined || op === undefined || rhsRaw === undefined) {
+      return false;
+    }
+    const bound = bindings.get(name);
+    const fields = pathTail.split('.').filter((s) => s.length > 0);
+    // Walk the path; tolerate non-bool intermediate-then-bool-leaf as well
+    // as the leaf simply being missing (undefined → comparison false unless
+    // explicitly `!=`/`!==`).
+    let cur: unknown = bound;
+    for (const f of fields) {
+      if (cur === null || cur === undefined || typeof cur !== 'object') {
+        cur = undefined;
+        break;
+      }
+      cur = (cur as Record<string, unknown>)[f];
+    }
+    const lhs = typeof cur === 'boolean' ? cur : undefined;
+    const rhs = rhsRaw === 'true';
+    if (lhs === undefined) {
+      // Undefined LHS never EQUALS a literal; always NOT EQUAL.
+      return op === '!==' || op === '!=';
+    }
+    switch (op) {
+      case '===':
+      case '==':
+        return lhs === rhs;
+      case '!==':
+      case '!=':
+        return lhs !== rhs;
+      default:
+        return false;
+    }
+  }
+
+  // G.13 fix: `name.field == "STR"` dotted string equality.
+  const strPathMatch = STR_PATH_EQ_PATTERN.exec(trimmed);
+  if (strPathMatch) {
+    const name = strPathMatch[1];
+    const pathTail = strPathMatch[2];
+    const op = strPathMatch[3];
+    const rhs = strPathMatch[4];
+    if (name === undefined || pathTail === undefined || op === undefined || rhs === undefined) {
+      return false;
+    }
+    const bound = bindings.get(name);
+    const fields = pathTail.split('.').filter((s) => s.length > 0);
+    let cur: unknown = bound;
+    for (const f of fields) {
+      if (cur === null || cur === undefined || typeof cur !== 'object') {
+        cur = undefined;
+        break;
+      }
+      cur = (cur as Record<string, unknown>)[f];
+    }
+    const lhs =
+      typeof cur === 'string' || typeof cur === 'number' || typeof cur === 'boolean'
+        ? String(cur)
+        : '';
+    switch (op) {
+      case '===':
+      case '==':
+        return lhs === rhs;
+      case '!==':
+      case '!=':
+        return lhs !== rhs;
       default:
         return false;
     }
