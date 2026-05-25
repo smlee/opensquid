@@ -15,7 +15,7 @@
  * full verdict-primitive process.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { FunctionRegistry } from '../../functions/registry.js';
@@ -156,5 +156,73 @@ describe('dispatchEvent', () => {
     const onSched = await dispatchEvent(scheduleEvent, [pack], registry, 'sess-1');
     expect(onTool).toEqual({ exitCode: 2, stderr: 'multi fired' });
     expect(onSched).toEqual({ exitCode: 2, stderr: 'multi fired' });
+  });
+
+  // -------------------------------------------------------------------------
+  // G.2 — dispatch-trace marker
+  //
+  // The marker line on STDERR is the load-bearing signal that proves
+  // dispatchEvent actually ran (catches the G.1 silent-no-op failure mode in
+  // CI). Default-on; OPENSQUID_DISPATCH_TRACE=0 silences. We capture
+  // process.stderr.write via vi.spyOn — the dispatcher writes the marker
+  // directly to stderr (NOT to a return field) because it must be observable
+  // even in the success exit-code-0 path where stderr is otherwise empty.
+  // -------------------------------------------------------------------------
+  describe('G.2: dispatch-trace marker', () => {
+    let originalWrite: typeof process.stderr.write;
+    let stderrBuf: string;
+
+    beforeEach(() => {
+      stderrBuf = '';
+      originalWrite = process.stderr.write.bind(process.stderr);
+      // Monkey-patch directly — vi.spyOn doesn't type-narrow process.stderr.write
+      // cleanly (overloaded signature). Direct replacement is simpler and is
+      // restored in afterEach. The patched function only buffers; it does not
+      // forward to the original, so vitest's stderr stays clean during tests.
+      process.stderr.write = (chunk: string | Uint8Array): boolean => {
+        stderrBuf += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+        return true;
+      };
+      // Default-on behavior: ensure no leftover env from prior test.
+      delete process.env.OPENSQUID_DISPATCH_TRACE;
+    });
+
+    afterEach(() => {
+      process.stderr.write = originalWrite;
+      delete process.env.OPENSQUID_DISPATCH_TRACE;
+    });
+
+    it('emits [opensquid-dispatch] marker with event/rules/packs counts on empty-packs path', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
+      await dispatchEvent(event, [], registry, 'sess-1');
+      expect(stderrBuf).toContain('[opensquid-dispatch] event=tool_call rules=0 packs=0');
+    });
+
+    it('emits marker with rules=N when N rules were walked before short-circuit', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'block', message: 'no amend' });
+      const pack = makePack('p1', [verdictRule]);
+      await dispatchEvent(event, [pack], registry, 'sess-1');
+      expect(stderrBuf).toContain('[opensquid-dispatch] event=tool_call rules=1 packs=1');
+    });
+
+    it('emits marker on schedule-event dispatch (not just tool_call)', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
+      await dispatchEvent(scheduleEvent, [], registry, 'sess-1');
+      expect(stderrBuf).toContain('[opensquid-dispatch] event=schedule rules=0 packs=0');
+    });
+
+    it('OPENSQUID_DISPATCH_TRACE=0 silences the marker', async () => {
+      process.env.OPENSQUID_DISPATCH_TRACE = '0';
+      const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
+      await dispatchEvent(event, [], registry, 'sess-1');
+      expect(stderrBuf).not.toContain('[opensquid-dispatch]');
+    });
+
+    it('OPENSQUID_DISPATCH_TRACE=1 (or unset) still emits — only literal "0" silences', async () => {
+      process.env.OPENSQUID_DISPATCH_TRACE = '1';
+      const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
+      await dispatchEvent(event, [], registry, 'sess-1');
+      expect(stderrBuf).toContain('[opensquid-dispatch]');
+    });
   });
 });

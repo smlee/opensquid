@@ -1,0 +1,220 @@
+/**
+ * `opensquid doctor hooks` — health check for Claude Code hook wiring (G.2).
+ *
+ * Reads `~/.claude/settings.json` + `<cwd>/.claude/settings.json`, finds
+ * opensquid-managed hook entries (regex `/opensquid-hook|opensquid.*anti-drift/`),
+ * spawns each with a canonical Claude Code event payload, checks STDERR for
+ * the `[opensquid-dispatch]` marker. Marker absence = silent-no-op (the G.1
+ * root-cause failure mode). Exit 0 if all green, 1 if any red (CI-friendly).
+ *
+ * Security gate: NEVER spawns a command that doesn't match the opensquid
+ * regex — non-matching entries SKIPPED with note ("not opensquid-managed").
+ * D9-guard prompt-type hooks SKIPPED ("non-spawnable hook type").
+ *
+ * Engine-vocabulary discipline: consumer-side file — knows about Claude
+ * Code's settings.json + hook events. Runtime stays harness-agnostic.
+ *
+ * Imported by: src/cli.ts.
+ */
+
+import { spawn } from 'node:child_process';
+import { join, resolve } from 'node:path';
+
+import type { Command } from 'commander';
+
+import { readSettingsHooks, type ParsedHookEntry } from '../wizard/settings-reader.js';
+
+/** Regex that gates which hook commands doctor will spawn. */
+export const OPENSQUID_HOOK_REGEX = /opensquid-hook|opensquid.*anti-drift/;
+
+/** Maps Claude Code event names → canonical event-kind label + minimal
+ * snake_case stdin payload satisfying each hook bin's parser. */
+const PROBE_PAYLOADS: Record<string, { kind: string; stdin: string }> = {
+  PreToolUse: {
+    kind: 'tool_call',
+    stdin: JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'echo probe' },
+      session_id: 'doctor-probe',
+    }),
+  },
+  UserPromptSubmit: {
+    kind: 'prompt_submit',
+    stdin: JSON.stringify({ prompt: 'doctor-probe', session_id: 'doctor-probe' }),
+  },
+  Stop: {
+    kind: 'stop',
+    stdin: JSON.stringify({ assistant_text: 'doctor-probe', session_id: 'doctor-probe' }),
+  },
+  SessionEnd: { kind: 'session_end', stdin: JSON.stringify({ session_id: 'doctor-probe' }) },
+};
+
+type Status = 'green' | 'red' | 'skipped';
+
+export interface DoctorResult {
+  scope: 'user' | 'project';
+  event: string;
+  command: string;
+  status: Status;
+  reason: string;
+}
+
+export interface DoctorOptions {
+  userSettingsPath: string;
+  projectSettingsPath: string;
+  /** Override for unit tests — defaults to spawning real subprocesses. */
+  spawnProbe?: (command: string, stdin: string) => Promise<{ exitCode: number; stderr: string }>;
+}
+
+/** Pure runner — disk + spawn injectable for tests. */
+export async function runDoctorHooks(opts: DoctorOptions): Promise<DoctorResult[]> {
+  const probe = opts.spawnProbe ?? defaultSpawnProbe;
+  const results: DoctorResult[] = [];
+  const scopes: ['user' | 'project', string][] = [
+    ['user', opts.userSettingsPath],
+    ['project', opts.projectSettingsPath],
+  ];
+
+  for (const [scope, path] of scopes) {
+    let entries: ParsedHookEntry[];
+    try {
+      entries = await readSettingsHooks(path);
+    } catch (e) {
+      results.push(mk(scope, '-', path, 'red', `could not parse ${path}: ${String(e)}`));
+      continue;
+    }
+    if (entries.length === 0) {
+      results.push(mk(scope, '-', path, 'skipped', `no hooks at ${path}`));
+      continue;
+    }
+    for (const entry of entries) results.push(await probeEntry(scope, entry, probe));
+  }
+  return results;
+}
+
+function mk(
+  scope: 'user' | 'project',
+  event: string,
+  command: string,
+  status: Status,
+  reason: string,
+): DoctorResult {
+  return { scope, event, command, status, reason };
+}
+
+async function probeEntry(
+  scope: 'user' | 'project',
+  entry: ParsedHookEntry,
+  probe: NonNullable<DoctorOptions['spawnProbe']>,
+): Promise<DoctorResult> {
+  // D9-guard prompt-type → not a subprocess; cannot probe.
+  if (entry.type === 'prompt') {
+    return mk(
+      scope,
+      entry.event,
+      entry.prompt,
+      'skipped',
+      'non-spawnable hook type (inline prompt)',
+    );
+  }
+  // Security gate: only spawn commands that look opensquid-managed.
+  if (!OPENSQUID_HOOK_REGEX.test(entry.command)) {
+    return mk(scope, entry.event, entry.command, 'skipped', 'not opensquid-managed');
+  }
+  const probePayload = PROBE_PAYLOADS[entry.event];
+  if (!probePayload) {
+    return mk(
+      scope,
+      entry.event,
+      entry.command,
+      'red',
+      `unknown event "${entry.event}" — no probe payload registered`,
+    );
+  }
+  let result: { exitCode: number; stderr: string };
+  try {
+    result = await probe(entry.command, probePayload.stdin);
+  } catch (e) {
+    return mk(scope, entry.event, entry.command, 'red', `spawn failed: ${String(e)}`);
+  }
+  const expectedMarker = `[opensquid-dispatch] event=${probePayload.kind}`;
+  if (!result.stderr.includes(expectedMarker)) {
+    return mk(
+      scope,
+      entry.event,
+      entry.command,
+      'red',
+      `marker absent (expected "${expectedMarker}"), likely silent no-op (G.1 broken-path bug); exit=${String(result.exitCode)}`,
+    );
+  }
+  return mk(scope, entry.event, entry.command, 'green', 'marker present');
+}
+
+/** Default subprocess probe — spawn `sh -c <command>` so PATH-resolved bin
+ * names work the same way Claude Code itself spawns them. Times out after
+ * 10s so a misbehaving hook can't hang the doctor CLI. */
+function defaultSpawnProbe(
+  command: string,
+  stdin: string,
+): Promise<{ exitCode: number; stderr: string }> {
+  return new Promise((res, rej) => {
+    // OPENSQUID_DISPATCH_TRACE forced on for the probe — the user may have it
+    // off in their normal env, but doctor MUST see the marker to assess.
+    const env = { ...process.env, OPENSQUID_DISPATCH_TRACE: '1' };
+    const p = spawn(command, {
+      shell: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    });
+    let stderr = '';
+    const timer = setTimeout(() => {
+      p.kill('SIGKILL');
+      rej(new Error('probe timeout (10s)'));
+    }, 10_000);
+    p.stderr.on('data', (b: Buffer) => (stderr += b.toString('utf8')));
+    p.on('error', (err) => {
+      clearTimeout(timer);
+      rej(err);
+    });
+    p.on('close', (code) => {
+      clearTimeout(timer);
+      res({ exitCode: code ?? -1, stderr });
+    });
+    p.stdin.write(stdin);
+    p.stdin.end();
+  });
+}
+
+/** Pretty-print to stdout. Returns the number of RED results (caller maps to
+ * process exit code). */
+export function printReport(results: DoctorResult[]): number {
+  let red = 0;
+  for (const r of results) {
+    const tag = r.status === 'green' ? '[GREEN]  ' : r.status === 'red' ? '[RED]    ' : '[SKIPPED]';
+    if (r.status === 'red') red += 1;
+    const cmdTrunc = r.command.length > 60 ? r.command.slice(0, 57) + '...' : r.command;
+    process.stdout.write(`${tag} ${r.scope}/${r.event}: ${cmdTrunc}\n`);
+    if (r.reason) process.stdout.write(`           reason: ${r.reason}\n`);
+  }
+  process.stdout.write(
+    `\nsummary: ${String(results.filter((r) => r.status === 'green').length)} green, ${String(red)} red, ${String(results.filter((r) => r.status === 'skipped').length)} skipped\n`,
+  );
+  return red;
+}
+
+export function registerDoctor(program: Command): void {
+  const doc = program.command('doctor').description('Health checks for opensquid configuration');
+  doc
+    .command('hooks')
+    .description('Check that configured Claude Code hooks actually dispatch (G.2)')
+    .action(async () => {
+      const userPath = resolve(process.env.HOME ?? '', '.claude/settings.json');
+      const projectPath = join(process.cwd(), '.claude/settings.json');
+      const results = await runDoctorHooks({
+        userSettingsPath: userPath,
+        projectSettingsPath: projectPath,
+      });
+      const red = printReport(results);
+      process.exit(red === 0 ? 0 : 1);
+    });
+}

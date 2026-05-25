@@ -59,12 +59,40 @@ export interface DispatchResult {
   stderr: string;
 }
 
+/**
+ * G.2 dispatch-trace marker.
+ *
+ * Emits `[opensquid-dispatch] event=<kind> rules=<N> packs=<N>` to STDERR at
+ * the END of every `dispatchEvent` call. Three reasons stderr (not stdout):
+ *   1. Claude Code parses stdout as JSON for some hook events; polluting it
+ *      with diagnostic text would break the host contract.
+ *   2. Claude Code only surfaces stderr to the user when exit code is non-zero
+ *      (per the hook contract); on exit 0 the marker stays invisible to the
+ *      user but visible to CI / `opensquid doctor hooks` subprocess probes.
+ *   3. Matches the convention opensquid uses elsewhere in stderr.
+ *
+ * Default-on; users can silence with `OPENSQUID_DISPATCH_TRACE=0`. The
+ * absence of this marker line in a subprocess probe is the load-bearing
+ * signal that the hook bin silently no-op'd (the G.1 root-cause failure
+ * mode). See `hooks.bin.integration.test.ts` + `src/setup/cli/doctor.ts`.
+ */
+function emitDispatchMarker(eventKind: string, ruleCount: number, packCount: number): void {
+  if (process.env.OPENSQUID_DISPATCH_TRACE === '0') return;
+  process.stderr.write(
+    `[opensquid-dispatch] event=${eventKind} rules=${String(ruleCount)} packs=${String(packCount)}\n`,
+  );
+}
+
 export async function dispatchEvent(
   event: Event,
   packs: Pack[],
   registry: FunctionRegistry,
   sessionId: string,
 ): Promise<DispatchResult> {
+  // Count rules walked across all skills so the marker carries a meaningful
+  // signal (rules=0 means dispatch ran but no skill subscribed to this kind;
+  // rules=N means N rules were evaluated up to the short-circuit point).
+  let rulesWalked = 0;
   for (const pack of packs) {
     for (const skill of pack.skills) {
       // AUTO.1: skip the skill entirely if no trigger subscribes to this
@@ -79,6 +107,7 @@ export async function dispatchEvent(
         // through the per-event process walker. Skip them here so the
         // dispatcher only walks track_check processes.
         if (rule.kind === 'destination_check') continue;
+        rulesWalked += 1;
         const ctx: EvalCtx = {
           event,
           bindings: new Map(),
@@ -93,18 +122,22 @@ export async function dispatchEvent(
         const action = applyDriftResponse(result.verdict, 'block_tool');
         switch (action.kind) {
           case 'block_tool':
+            emitDispatchMarker(event.kind, rulesWalked, packs.length);
             return { exitCode: 2, stderr: action.message };
           case 'warn':
+            emitDispatchMarker(event.kind, rulesWalked, packs.length);
             return { exitCode: 0, stderr: action.message };
           case 'halt':
           case 'notify_pause':
             // Phase 1 stub: real halt = Task 1.14; real notify = Task 1.18.
             // Until then, return allow + empty stderr so a future-policy
             // verdict during Phase 1 doesn't accidentally block.
+            emitDispatchMarker(event.kind, rulesWalked, packs.length);
             return { exitCode: 0, stderr: '' };
         }
       }
     }
   }
+  emitDispatchMarker(event.kind, rulesWalked, packs.length);
   return { exitCode: 0, stderr: '' };
 }

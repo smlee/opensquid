@@ -25,6 +25,7 @@ import { registerAudit } from './setup/cli/audit.js';
 import { registerCache } from './setup/cli/cache.js';
 import { registerSetup } from './setup/cli/chat.js';
 import { registerCheckpoints } from './setup/cli/checkpoints.js';
+import { registerDoctor } from './setup/cli/doctor.js';
 import { registerSetupWizard } from './setup/cli/hooks.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
@@ -182,6 +183,14 @@ const setupGroup = registerSetup(program);
 // `node .../dist/index.js anti-drift <event>` legacy entries that
 // currently exist in the user's settings.json.
 registerSetupWizard(setupGroup);
+
+// G.2 — `opensquid doctor hooks`. Health check for Claude Code hook wiring.
+// Reads `~/.claude/settings.json` + `<cwd>/.claude/settings.json`, spawns
+// each opensquid-managed hook command with a canonical event payload, and
+// asserts the `[opensquid-dispatch]` marker on stderr. Exit 0 = all green,
+// 1 = any red. NEVER spawns commands that don't match the opensquid regex
+// (security gate against running arbitrary user-configured commands).
+registerDoctor(program);
 
 // T.2 — `opensquid engine doctor|set-path|forget|kill`. Engine binary
 // discovery + persisted-path management. Revived from the pre-reset

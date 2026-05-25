@@ -47,7 +47,15 @@ async function runHook(hookFile: string, stdin: string): Promise<RunResult> {
   return new Promise<RunResult>((resolvePromise, reject) => {
     const proc = spawn(TSX_BIN, [hookPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, CLAUDE_SESSION_ID: 'test-session' },
+      // G.2: silence the dispatch-trace marker so the legacy "empty stderr
+      // on allow" assertions here keep their contract. The marker is
+      // diagnostic; its presence is asserted in `hooks.bin.integration.test.ts`
+      // (the dedicated regression net against silent-no-op).
+      env: {
+        ...process.env,
+        CLAUDE_SESSION_ID: 'test-session',
+        OPENSQUID_DISPATCH_TRACE: '0',
+      },
     });
     let stdout = '';
     let stderr = '';

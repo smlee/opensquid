@@ -117,6 +117,12 @@ function envWithSmokePack(): NodeJS.ProcessEnv {
   delete env.CLAUDE_SESSION_ID;
   delete env.OPENSQUID_TEST_PACK;
   env.OPENSQUID_TEST_PACK_DIR = SMOKE_PACK_DIR;
+  // G.2: silence the dispatch-trace marker so the "empty stderr on allow"
+  // assertions stay valid. The marker is diagnostic, not drift output —
+  // its presence/absence is asserted in hooks.bin.integration.test.ts
+  // (the regression net for the silent-no-op failure mode). Existing
+  // contracts here are about "no drift message", which is orthogonal.
+  env.OPENSQUID_DISPATCH_TRACE = '0';
   return env;
 }
 
@@ -147,6 +153,7 @@ describe('runtime smoke (subprocess hook + on-disk YAML pack)', () => {
     delete env.CLAUDE_SESSION_ID;
     delete env.OPENSQUID_TEST_PACK;
     delete env.OPENSQUID_TEST_PACK_DIR;
+    env.OPENSQUID_DISPATCH_TRACE = '0'; // G.2: see envWithSmokePack note.
     const result = await runHook(
       { tool: 'Bash', args: { command: 'git commit --amend -m "oops"' } },
       env,
