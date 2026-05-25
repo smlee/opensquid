@@ -22,6 +22,7 @@ import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
+import { registerAutomation } from './setup/cli/automation.js';
 import { registerCache } from './setup/cli/cache.js';
 import { registerSetup } from './setup/cli/chat.js';
 import { registerCheckpoints } from './setup/cli/checkpoints.js';
@@ -171,6 +172,13 @@ registerCache(program);
 // --yes refuses with exit 1 (mirrors `cache clear` / `checkpoints clean`).
 registerCost(program);
 registerLimits(program);
+
+// G.12 — `opensquid automation on|off|status`. Toggles the per-session
+// flag file at `~/.opensquid/sessions/<id>/automation.flag` that the
+// `is_automation_mode` primitive reads (OR'd with `OPENSQUID_AUTOMATION=1`)
+// to gate Stop-event skills like `d9-guard`. Session id resolves from
+// `--session-id` → `$OPENSQUID_SESSION_ID` → fresh uuid (stderr-advised).
+registerAutomation(program);
 
 // WIZ.5 — `opensquid setup chat`. Registers the `setup` parent verb group
 // + the `chat` subcommand (interactive chat-agent wizard). Bare `setup`

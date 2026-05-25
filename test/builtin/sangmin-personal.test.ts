@@ -7,8 +7,9 @@
  *  - validateUniqueSkillNames passes (no skill name collisions).
  *  - validatePackFunctions passes against the runtime registry (every
  *    `call:` resolves to a registered primitive).
- *  - Six skill folders (git, engine-vocab, workflow, versioning,
- *    honesty-ledger, phase-logging).
+ *  - Seven skill folders (d9-guard, git, engine-vocab, workflow, versioning,
+ *    honesty-ledger, phase-logging). G.12 added d9-guard (automation-gated
+ *    Stop-event politeness-reflex detector).
  *
  * The pack ships from packs/builtin/sangmin-personal/ (in package.json's
  * `files`). We resolve the path relative to process.cwd() so the test
@@ -34,10 +35,11 @@ describe('builtin sangmin-personal pack', () => {
     expect(pack.evolves).toBe(true);
   });
 
-  it('ships six skill folders', async () => {
+  it('ships seven skill folders', async () => {
     const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
     const skillNames = pack.skills.map((s) => s.name).sort();
     expect(skillNames).toEqual([
+      'd9-guard',
       'engine-vocab',
       'git',
       'honesty-ledger',

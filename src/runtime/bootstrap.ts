@@ -57,6 +57,7 @@
 import { EngineClient } from '../engine/client.js';
 import { registerDestinationCheckFunction } from '../functions/destination_check.js';
 import { registerEventFunctions } from '../functions/event.js';
+import { IsAutomationMode } from '../functions/is_automation_mode.js';
 import { registerLessonFunctions } from '../functions/lessons.js';
 import { registerLlmFunctions } from '../functions/llm.js';
 import { registerRagFunctions } from '../functions/rag.js';
@@ -121,6 +122,13 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // composes them in a process: text scan → tool-history lookup → verdict.
   r.register(TextPatternMatch);
   r.register(SessionToolHistory);
+  // G.12 — `is_automation_mode` returns whether the current session is in
+  // an automation loop (env var OR `~/.opensquid/sessions/<id>/automation.flag`).
+  // Skills like `d9-guard` gate `if: 'automation.value === true'` so their
+  // Stop-event llm_classify only fires inside `/loop`-style automation,
+  // preventing the politeness-reflex prompt from interrupting normal
+  // interactive use.
+  r.register(IsAutomationMode);
   // T-loop-engine-reintegration T.3 — FIRST-EVER production wiring of the
   // RAG primitives. Resolves backend choice (env > ~/.opensquid/rag-config
   // .json > default), constructs, inits, registers. Tests override via

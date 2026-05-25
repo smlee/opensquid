@@ -1,0 +1,67 @@
+# d9-guard — Stop-event "politeness reflex" detector, AUTOMATION-GATED (G.12).
+#
+# The original D9 rule (the inline `~/.claude/settings.json` prompt hook) was
+# firing on every Stop event, including normal interactive turns where a
+# blocking question to the user is the CORRECT behavior. The G.12 pack-managed
+# version short-circuits the llm_classify call unless the session is in
+# automation mode (the user is running `/loop` or similar full-automation
+# track that explicitly forbids ping-pong AskUserQuestion). Outside
+# automation, the rule is a no-op.
+#
+# Two automation signals are OR'd by the `is_automation_mode` primitive:
+#   1. `OPENSQUID_AUTOMATION=1` env var (manual / wrapper override)
+#   2. `~/.opensquid/sessions/<id>/automation.flag` (the `opensquid automation
+#      on|off` CLI writes/removes this)
+#
+# The cleanup of the legacy inline D9-guard prompt hook in ~/.claude/settings
+# .json is a SEPARATE concern: this pack-version supersedes it but does not
+# auto-remove it. Users should `opensquid setup wizard hooks` or hand-edit
+# settings.json to delete the inline entry once they've verified the pack-
+# managed version is firing correctly.
+name: d9-guard
+load: preload
+when_to_load:
+  - kind: event_type
+    type: stop
+triggers:
+  - kind: stop
+rules:
+  - id: d9-blocking-question-check
+    kind: track_check
+    process:
+      - call: is_automation_mode
+        as: automation
+      - call: llm_classify
+        if: automation.value == true
+        as: classification
+        args:
+          model: fast_classifier
+          prompt: |
+            The assistant message below ended a turn. Determine whether it
+            terminated with a genuine BLOCKING question (one the agent
+            cannot proceed without a user answer to) or a POLITENESS
+            REFLEX (a soft "let me know if you want me to ..." / "should I
+            do X?" that the agent should have just decided + executed in
+            automation mode).
+
+            Emit one label: BLOCK if it's a politeness reflex that should
+            have been auto-decided; ALLOW if it's a genuine blocking
+            question or not a question at all.
+          allowed_labels:
+            - ALLOW
+            - BLOCK
+      - call: verdict
+        if: automation.value == true && classification == "BLOCK"
+        args:
+          level: warn
+          message: 'D9-guard: politeness reflex detected in automation mode — decide with sensible defaults and proceed instead of pinging back.'
+prose: |
+  Codifies the "automation mode = NO questions" feedback (the user-flagged
+  2026-05-21 rule against ping-pong AskUserQuestion inside `/loop` and
+  similar automation tracks). The rule fires ONLY when
+  `is_automation_mode()` returns true, so interactive turns where a
+  question to the user IS appropriate are left untouched.
+
+  Gating model: `if: automation.value == true` short-circuits BOTH the
+  llm_classify call AND the verdict. Outside automation, the rule executes
+  zero LLM calls and emits no verdict — a true no-op.
