@@ -21,6 +21,7 @@ import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { extractSessionId, recordCurrentSession } from './session_id.js';
 
 interface PromptSubmitPayload {
   prompt?: string;
@@ -62,7 +63,11 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  const sessionId = extractSessionId(raw);
+  // Record the live session id so out-of-band processes (the `opensquid
+  // automation on|off` CLI, run from a terminal that never sees this stdin)
+  // can target the session the hooks actually key on. Best-effort.
+  await recordCurrentSession(sessionId);
   // G.5 — a new turn starts on every UserPromptSubmit. Reset the per-turn
   // slice of the tool-call ledger so the freshness rule (read on the next
   // Stop event) sees only tools called during THIS turn. Session-wide list

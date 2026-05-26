@@ -109,11 +109,30 @@ describe('opensquid automation on', () => {
     expect(st.isFile()).toBe(true);
   });
 
-  it('falls back to a random uuid + stderr advisory when neither flag nor env id present', async () => {
-    const { program, io } = build();
+  it('resolves from the .current-session pointer when --session-id + env absent', async () => {
+    // The UserPromptSubmit hook records the live session id here; the CLI must
+    // target it (not a fresh random) so on/off line up with what the hooks key on.
+    const { program, io } = build({ readCurrentSession: () => Promise.resolve('live-sid') });
+    await program.parseAsync(argv('on'));
+    expect(io.stderr).toBe('');
+    expect(io.stdout).toContain('live-sid');
+    const st = await stat(automationFlagPath('live-sid'));
+    expect(st.isFile()).toBe(true);
+  });
+
+  it('falls back to a random uuid + stderr advisory when no id source present', async () => {
+    // No --session-id, no env, no live pointer → random fallback.
+    const { program, io } = build({ readCurrentSession: () => Promise.resolve(null) });
     await program.parseAsync(argv('on'));
     expect(io.stderr).toContain('rand-fallback-uuid');
     expect(io.stdout).toContain('rand-fallback-uuid');
+  });
+
+  it('prefers --session-id over the .current-session pointer', async () => {
+    const { program, io } = build({ readCurrentSession: () => Promise.resolve('live-sid') });
+    await program.parseAsync(argv('on', '--session-id', 'explicit-sid'));
+    expect(io.stdout).toContain('explicit-sid');
+    expect(io.stdout).not.toContain('live-sid');
   });
 });
 

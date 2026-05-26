@@ -21,6 +21,7 @@ import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { extractSessionId } from './session_id.js';
 
 interface StopPayload {
   assistantText?: string;
@@ -65,7 +66,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  const sessionId = extractSessionId(raw);
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);

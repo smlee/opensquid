@@ -31,6 +31,7 @@ import {
   isAutomationFlagSet,
   setAutomationFlag,
 } from '../../runtime/automation_state.js';
+import { readCurrentSession } from '../../runtime/hooks/session_id.js';
 
 import type { Command } from 'commander';
 
@@ -38,12 +39,15 @@ export interface AutomationCliDeps {
   stdout?: (s: string) => void;
   stderr?: (s: string) => void;
   randomSessionId?: () => string;
+  /** Reads the live-session pointer written by the UserPromptSubmit hook. */
+  readCurrentSession?: () => Promise<string | null>;
 }
 
 interface Resolved {
   out: (s: string) => void;
   err: (s: string) => void;
   randomSessionId: () => string;
+  readCurrentSession: () => Promise<string | null>;
 }
 
 interface VerbOpts {
@@ -55,32 +59,42 @@ function buildDeps(d: AutomationCliDeps): Resolved {
     out: d.stdout ?? ((s: string): void => void process.stdout.write(s)),
     err: d.stderr ?? ((s: string): void => void process.stderr.write(s)),
     randomSessionId: d.randomSessionId ?? ((): string => randomUUID()),
+    readCurrentSession: d.readCurrentSession ?? readCurrentSession,
   };
 }
 
-function resolveSessionId(opts: VerbOpts, r: Resolved): string {
+/**
+ * Resolution precedence: `--session-id` → `OPENSQUID_SESSION_ID` →
+ * `.current-session` (recorded each turn by the UserPromptSubmit hook, so the
+ * CLI targets the session the hooks actually key on) → a fresh random id.
+ */
+async function resolveSessionId(opts: VerbOpts, r: Resolved): Promise<string> {
   if (opts.sessionId !== undefined && opts.sessionId !== '') return opts.sessionId;
   const envId = process.env.OPENSQUID_SESSION_ID;
   if (envId !== undefined && envId !== '') return envId;
+  const current = await r.readCurrentSession();
+  if (current !== null && current !== '') return current;
   const fresh = r.randomSessionId();
-  r.err(`opensquid automation: no --session-id or OPENSQUID_SESSION_ID; using ${fresh}\n`);
+  r.err(
+    `opensquid automation: no --session-id, OPENSQUID_SESSION_ID, or live session pointer; using ${fresh}\n`,
+  );
   return fresh;
 }
 
 async function actOn(r: Resolved, opts: VerbOpts): Promise<void> {
-  const sid = resolveSessionId(opts, r);
+  const sid = await resolveSessionId(opts, r);
   await setAutomationFlag(sid);
   r.out(`automation: on (${automationFlagPath(sid)})\n`);
 }
 
 async function actOff(r: Resolved, opts: VerbOpts): Promise<void> {
-  const sid = resolveSessionId(opts, r);
+  const sid = await resolveSessionId(opts, r);
   await clearAutomationFlag(sid);
   r.out(`automation: off (${automationFlagPath(sid)})\n`);
 }
 
 async function actStatus(r: Resolved, opts: VerbOpts): Promise<void> {
-  const sid = resolveSessionId(opts, r);
+  const sid = await resolveSessionId(opts, r);
   if (process.env.OPENSQUID_AUTOMATION === '1') {
     r.out(`automation: on (source=env OPENSQUID_AUTOMATION=1)\n`);
     return;

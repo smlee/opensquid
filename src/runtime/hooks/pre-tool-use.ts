@@ -24,6 +24,7 @@ import { appendTool } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { extractSessionId } from './session_id.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -72,7 +73,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  const sessionId = extractSessionId(raw);
   // G.5 — append this tool name to the session's per-turn ledger BEFORE
   // dispatching. Best-effort: a ledger-write failure must never block the
   // pending tool call (fail-open guarantee of the hook bin). The Stop-event
