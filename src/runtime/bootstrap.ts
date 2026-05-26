@@ -60,6 +60,7 @@ import { registerEventFunctions } from '../functions/event.js';
 import { IsAutomationMode } from '../functions/is_automation_mode.js';
 import { registerLessonFunctions } from '../functions/lessons.js';
 import { registerLlmFunctions } from '../functions/llm.js';
+import { PathExists } from '../functions/path_exists.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
 import { FunctionRegistry } from '../functions/registry.js';
@@ -122,6 +123,12 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // composes them in a process: text scan → tool-history lookup → verdict.
   r.register(TextPatternMatch);
   r.register(SessionToolHistory);
+  // Track SD.1 — `path_exists` is a pure read-only directory scan (one
+  // readdir, no content reads, cwd-subtree-confined). It backs the
+  // `scope-decomposer` hard gate's "no pre-research artifact on disk" check.
+  // memoizable:false so the gate sees an artifact the moment the agent
+  // creates it mid-session.
+  r.register(PathExists);
   // G.12 — `is_automation_mode` returns whether the current session is in
   // an automation loop (env var OR `~/.opensquid/sessions/<id>/automation.flag`).
   // Skills like `d9-guard` gate `if: 'automation.value === true'` so their
