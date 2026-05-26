@@ -1,15 +1,26 @@
 /**
- * Orchestrates the auto-memory → opensquid import (G.6).
+ * Orchestrates the auto-memory → opensquid sync (G.6 + MAU.1).
  *
  * Reads every `*.md` (minus `MEMORY.md`, the index) in a source directory,
- * parses each via the reader, dedupes against an existing-name set, and
- * (unless `dryRun`) calls `engine.memoryCreate` per file.
+ * parses each via the reader, and reconciles it against the engine store:
+ *   - name not present              → `engine.memoryCreate`  (imported)
+ *   - name present, content changed → `engine.memoryUpdate`  (refreshed)
+ *   - name present, content same    → no-op                  (skipped)
  *
- * Dedup identity: the auto-memory file's frontmatter `name` field. Engine
- * `MemoryListRow` has no `name` column, so we round-trip the slug through
- * `origin.host` using the `IMPORT_HOST_PREFIX` marker. `fetchExistingImportNames`
- * pages `memory.list` once and re-extracts the slug set — caller passes that
- * set in via `opts.existingNames` so iteration is purely local.
+ * Identity: the auto-memory file's frontmatter `name` field. Engine
+ * `MemoryListRow` has no `name` column, so the slug round-trips through
+ * `origin.host` via the `IMPORT_HOST_PREFIX` marker. `fetchExistingImportIndex`
+ * pages `memory.list` once and returns a `name → { id }` map; the caller passes
+ * it in via `opts.existingIndex` so iteration is purely local.
+ *
+ * Refresh detection (MAU.1): `MemoryListRow` carries no `content`, and
+ * `memoryUpdate` cannot write `origin` — so a content hash stashed in
+ * `origin.host` would go stale after an update and re-trigger forever. Instead,
+ * for an existing entry we `memoryGet({ id })` (returns the FULL body) and
+ * compare against the file body; equal → skip, differ → update. After an update
+ * the stored content matches the file, so the next run no-ops (self-terminating).
+ * `dryRun` performs NO engine reads or writes — it reports existing entries as
+ * `skipped` (a coarse preview; refresh detection needs a live read).
  *
  * Scope mapping (Phase-2 lock): feedback / user / reference → user-scope;
  * project → project-scope. All imports tagged `authored_by: 'user'`
@@ -19,7 +30,7 @@
  * list are candidates. Undefined → all `.md` files except `MEMORY.md`.
  *
  * Imports from: node:fs, node:path, ../../engine/client.js, ./auto_memory_reader.js.
- * Imported by: setup/cli/memory.ts, auto_memory_importer.test.ts.
+ * Imported by: setup/cli/memory.ts, auto_memory_snapshot.ts, auto_memory_importer.test.ts.
  */
 
 import { promises as fs } from 'node:fs';
@@ -39,16 +50,22 @@ const TYPE_TO_SCOPE: Record<string, 'user' | { project: string }> = {
 /** Marker that lets us re-derive the auto-memory `name` slug from the engine row. */
 export const IMPORT_HOST_PREFIX = 'opensquid-import:auto-memory:';
 
+/** An engine memory previously imported from auto-memory, keyed by name slug. */
+export interface ImportIndexEntry {
+  id: string;
+}
+
 export interface ImportResult {
   imported: number;
+  refreshed: number;
   skipped: number;
   errors: { path: string; reason: string }[];
 }
 
 export interface ImportOpts {
   dryRun: boolean;
-  /** Pre-fetched set of auto-memory names already present in the engine. */
-  existingNames: Set<string>;
+  /** Pre-fetched `name → { id }` map of auto-memory entries already in the engine. */
+  existingIndex: Map<string, ImportIndexEntry>;
   /** G.7 snapshot hook hand-off; undefined → all .md files except MEMORY.md. */
   fileWhitelist?: string[];
 }
@@ -62,27 +79,48 @@ export async function importAutoMemoryDir(
   const files = opts.fileWhitelist
     ? allFiles.filter((f) => opts.fileWhitelist!.includes(f))
     : allFiles;
-  const result: ImportResult = { imported: 0, skipped: 0, errors: [] };
+  const result: ImportResult = { imported: 0, refreshed: 0, skipped: 0, errors: [] };
   for (const file of files) {
     const path = join(dir, file);
     try {
       const parsed = await readAutoMemory(path);
-      if (opts.existingNames.has(parsed.frontmatter.name)) {
+      const name = parsed.frontmatter.name;
+      const scope = TYPE_TO_SCOPE[parsed.frontmatter.metadata.type] ?? 'user';
+      const existing = opts.existingIndex.get(name);
+
+      if (existing === undefined) {
+        if (!opts.dryRun) {
+          const created = await engine.memoryCreate({
+            description: parsed.frontmatter.description,
+            content: parsed.body,
+            authored_by: 'user',
+            scope,
+            origin: { host: `${IMPORT_HOST_PREFIX}${name}` },
+          });
+          // Track in-map so the same name twice in one run reconciles, not re-creates.
+          opts.existingIndex.set(name, { id: created.id });
+        }
+        result.imported += 1;
+        continue;
+      }
+
+      // Existing entry. dryRun is read-free → report as skipped (coarse preview).
+      if (opts.dryRun) {
         result.skipped += 1;
         continue;
       }
-      if (!opts.dryRun) {
-        await engine.memoryCreate({
+      const current = await engine.memoryGet({ id: existing.id });
+      if (current.content !== parsed.body) {
+        await engine.memoryUpdate({
+          id: existing.id,
           description: parsed.frontmatter.description,
           content: parsed.body,
-          authored_by: 'user',
-          scope: TYPE_TO_SCOPE[parsed.frontmatter.metadata.type] ?? 'user',
-          origin: { host: `${IMPORT_HOST_PREFIX}${parsed.frontmatter.name}` },
+          scope,
         });
-        // Track in-set so the same name twice in one run still dedupes.
-        opts.existingNames.add(parsed.frontmatter.name);
+        result.refreshed += 1;
+      } else {
+        result.skipped += 1;
       }
-      result.imported += 1;
     } catch (e) {
       result.errors.push({ path, reason: (e as Error).message });
     }
@@ -91,18 +129,19 @@ export async function importAutoMemoryDir(
 }
 
 /**
- * Pages `engine.memoryList` and returns the set of auto-memory `name`
- * slugs already present (extracted from `origin.host` via `IMPORT_HOST_PREFIX`).
+ * Pages `engine.memoryList` and returns a `name → { id }` map of auto-memory
+ * entries already in the engine (extracted from `origin.host` via
+ * `IMPORT_HOST_PREFIX`). Non-import rows (no marker) are ignored.
  *
- * Caller is responsible for passing this to `importAutoMemoryDir` so the
- * importer stays a pure iteration loop. `dryRun` callers still want this
- * set so the preview is accurate.
+ * The caller passes the map to `importAutoMemoryDir` (so iteration is local)
+ * and to `pruneOrphanedImports` (MAU.2). The `{ id }` lets the importer
+ * `memoryGet` / `memoryUpdate` the right row on refresh.
  */
-export async function fetchExistingImportNames(
+export async function fetchExistingImportIndex(
   engine: EngineClient,
   pageSize = 200,
-): Promise<Set<string>> {
-  const names = new Set<string>();
+): Promise<Map<string, ImportIndexEntry>> {
+  const index = new Map<string, ImportIndexEntry>();
   let offset = 0;
   // Cap iterations so a bug in the engine list doesn't infinite-loop here.
   for (let i = 0; i < 1000; i++) {
@@ -110,11 +149,11 @@ export async function fetchExistingImportNames(
     for (const row of page.results) {
       const host = row.origin?.host;
       if (host?.startsWith(IMPORT_HOST_PREFIX)) {
-        names.add(host.slice(IMPORT_HOST_PREFIX.length));
+        index.set(host.slice(IMPORT_HOST_PREFIX.length), { id: row.id });
       }
     }
     if (page.returned < pageSize) break;
     offset += page.returned;
   }
-  return names;
+  return index;
 }

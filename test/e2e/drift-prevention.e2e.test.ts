@@ -38,7 +38,7 @@ import { handleForget } from '../../src/mcp/tools/forget.js';
 import { handleMemorize } from '../../src/mcp/tools/memorize.js';
 import { handleStoreLesson } from '../../src/mcp/tools/store-lesson.js';
 import {
-  fetchExistingImportNames,
+  fetchExistingImportIndex,
   importAutoMemoryDir,
 } from '../../src/setup/migrate/auto_memory_importer.js';
 import {
@@ -326,18 +326,18 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
       }
       const autoDir = join(tmpClaudeHome, 'projects', 'g13-fixture', 'memory');
       await buildAutoMemoryDir(autoDir, 3);
-      const existing = await fetchExistingImportNames(engineClient);
+      const existing = await fetchExistingImportIndex(engineClient);
       const first = await importAutoMemoryDir(autoDir, engineClient, {
         dryRun: false,
-        existingNames: existing,
+        existingIndex: existing,
       });
       expect(first.imported).toBe(3);
       expect(first.skipped).toBe(0);
-      // Re-run: same files, same names → all 3 should dedupe.
-      const existing2 = await fetchExistingImportNames(engineClient);
+      // Re-run: same files, same names + unchanged content → all 3 should dedupe (skip).
+      const existing2 = await fetchExistingImportIndex(engineClient);
       const second = await importAutoMemoryDir(autoDir, engineClient, {
         dryRun: false,
-        existingNames: existing2,
+        existingIndex: existing2,
       });
       expect(second.imported).toBe(0);
       expect(second.skipped).toBe(3);

@@ -39,7 +39,7 @@ import { join } from 'node:path';
 import { EngineClient } from '../../engine/client.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 import {
-  fetchExistingImportNames,
+  fetchExistingImportIndex,
   importAutoMemoryDir,
   type ImportResult,
 } from '../migrate/auto_memory_importer.js';
@@ -114,7 +114,7 @@ function reportResult(
   dir: string,
 ): void {
   deps.stdout(
-    `${prefix}Imported ${String(result.imported)}, skipped ${String(result.skipped)}, errors ${String(result.errors.length)} (from ${dir})\n`,
+    `${prefix}Imported ${String(result.imported)}, refreshed ${String(result.refreshed)}, skipped ${String(result.skipped)}, errors ${String(result.errors.length)} (from ${dir})\n`,
   );
   for (const err of result.errors) {
     deps.stderr(`  error: ${err.path}: ${err.reason}\n`);
@@ -127,10 +127,10 @@ async function actImportAuto(deps: Required<MemoryCliDeps>, opts: ImportAutoOpts
   if (dir === null) return;
   const engine = deps.engineFactory();
   try {
-    const existingNames = await fetchExistingImportNames(engine);
+    const existingIndex = await fetchExistingImportIndex(engine);
     const result = await importAutoMemoryDir(dir, engine, {
       dryRun: opts.dryRun,
-      existingNames,
+      existingIndex,
     });
     reportResult(deps, result, opts.dryRun ? '[dry-run] ' : '', dir);
   } finally {

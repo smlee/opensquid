@@ -33,7 +33,7 @@ import { join } from 'node:path';
 import type { EngineClient } from '../../engine/client.js';
 
 import {
-  fetchExistingImportNames,
+  fetchExistingImportIndex,
   importAutoMemoryDir,
   type ImportResult,
 } from './auto_memory_importer.js';
@@ -65,10 +65,10 @@ export async function snapshotAuto(
     const stat = await fs.stat(join(autoMemoryDir, f));
     if (stat.mtimeMs > lastSnapshot) recent.push(f);
   }
-  const existingNames = await fetchExistingImportNames(engine);
+  const existingIndex = await fetchExistingImportIndex(engine);
   const result = await importAutoMemoryDir(autoMemoryDir, engine, {
     dryRun: false,
-    existingNames,
+    existingIndex,
     fileWhitelist: recent,
   });
   // Ensure opensquidHome exists before writing the timestamp file.

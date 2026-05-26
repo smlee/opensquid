@@ -49,6 +49,7 @@ function mkEngine(existingNames: string[] = []): {
   client: EngineClient;
   memoryCreate: ReturnType<typeof vi.fn>;
   memoryList: ReturnType<typeof vi.fn>;
+  memoryUpdate: ReturnType<typeof vi.fn>;
 } {
   const memoryCreate = vi.fn().mockResolvedValue({
     id: 'mem-x',
@@ -72,8 +73,29 @@ function mkEngine(existingNames: string[] = []): {
     returned: results.length,
     results,
   });
-  const client = { memoryCreate, memoryList } as unknown as EngineClient;
-  return { client, memoryCreate, memoryList };
+  // MAU.1 refresh path: existing rows are content-checked via memoryGet. The
+  // row id == name, and the reader-trimmed fixture body is `body of <name>`
+  // (no trailing newline), so returning that makes an unchanged existing entry
+  // compare equal → skipped.
+  const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
+    Promise.resolve({
+      id,
+      description: id,
+      content: `body of ${id}`,
+      created_at: 't',
+      scope: 'user',
+    }),
+  );
+  const memoryUpdate = vi
+    .fn()
+    .mockResolvedValue({ id: 'x', description: 'd', content: 'c', scope: 'user' });
+  const client = {
+    memoryCreate,
+    memoryList,
+    memoryGet,
+    memoryUpdate,
+  } as unknown as EngineClient;
+  return { client, memoryCreate, memoryList, memoryUpdate };
 }
 
 describe('snapshotAuto', () => {

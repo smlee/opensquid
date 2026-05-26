@@ -72,9 +72,25 @@ function makeStubs(
     returned: results.length,
     results,
   });
+  // MAU.1 refresh path: existing rows are content-checked via memoryGet. The
+  // row id == name and the reader-trimmed fixture body is `body of <name>` (no
+  // trailing newline), so returning that makes an unchanged existing entry
+  // compare equal → skipped (not refreshed).
+  const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
+    Promise.resolve({
+      id,
+      description: id,
+      content: `body of ${id}`,
+      created_at: 't',
+      scope: 'user',
+    }),
+  );
+  const memoryUpdate = vi
+    .fn()
+    .mockResolvedValue({ id: 'x', description: 'd', content: 'c', scope: 'user' });
   const close = vi.fn().mockResolvedValue(undefined);
   const engineFactory = vi.fn(
-    () => ({ memoryCreate, memoryList, close }) as unknown as EngineClient,
+    () => ({ memoryCreate, memoryList, memoryGet, memoryUpdate, close }) as unknown as EngineClient,
   );
   return { engineFactory, memoryCreate, memoryList, close, stdout: [], stderr: [] };
 }
@@ -123,7 +139,9 @@ describe('opensquid memory import-auto', () => {
       { from: 'node' },
     );
     expect(stubs.memoryCreate).not.toHaveBeenCalled();
-    expect(stubs.stdout.join('')).toMatch(/\[dry-run\] Imported 2, skipped 0, errors 0/);
+    expect(stubs.stdout.join('')).toMatch(
+      /\[dry-run\] Imported 2, refreshed 0, skipped 0, errors 0/,
+    );
     expect(stubs.close).toHaveBeenCalledTimes(1);
   });
 
@@ -138,7 +156,7 @@ describe('opensquid memory import-auto', () => {
       { from: 'node' },
     );
     expect(stubs.memoryCreate).toHaveBeenCalledTimes(2);
-    expect(stubs.stdout.join('')).toMatch(/Imported 2, skipped 0, errors 0/);
+    expect(stubs.stdout.join('')).toMatch(/Imported 2, refreshed 0, skipped 0, errors 0/);
   });
 
   it('idempotent: re-run with existing names returns 0 imported', async () => {
@@ -152,7 +170,7 @@ describe('opensquid memory import-auto', () => {
       { from: 'node' },
     );
     expect(stubs.memoryCreate).not.toHaveBeenCalled();
-    expect(stubs.stdout.join('')).toMatch(/Imported 0, skipped 2, errors 0/);
+    expect(stubs.stdout.join('')).toMatch(/Imported 0, refreshed 0, skipped 2, errors 0/);
   });
 
   it('--auto-memory-root with nonexistent path exits non-zero with clear stderr', async () => {
@@ -193,7 +211,7 @@ describe('opensquid memory import-auto', () => {
       { from: 'node' },
     );
     expect(stubs.memoryCreate).toHaveBeenCalledTimes(1);
-    expect(stubs.stdout.join('')).toMatch(/Imported 1, skipped 0, errors 0/);
+    expect(stubs.stdout.join('')).toMatch(/Imported 1, refreshed 0, skipped 0, errors 0/);
   });
 
   it('--help documents the flags', async () => {
@@ -229,7 +247,7 @@ describe('opensquid memory import-auto', () => {
       ['node', 'opensquid', 'memory', 'import-auto', '--auto-memory-root', root],
       { from: 'node' },
     );
-    expect(stubs.stdout.join('')).toMatch(/Imported 1, skipped 0, errors 1/);
+    expect(stubs.stdout.join('')).toMatch(/Imported 1, refreshed 0, skipped 0, errors 1/);
     expect(stubs.stderr.join('')).toMatch(/bad\.md/);
     expect(process.exitCode).toBe(1);
   });
@@ -247,7 +265,7 @@ describe('opensquid memory snapshot-auto', () => {
       { from: 'node' },
     );
     expect(stubs.memoryCreate).toHaveBeenCalledTimes(2);
-    expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 2, skipped 0, errors 0/);
+    expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 2, refreshed 0, skipped 0, errors 0/);
     const stamp = await readFile(join(home, '.last-auto-memory-snapshot'), 'utf-8');
     expect(Number(stamp.trim())).toBeGreaterThan(0);
     expect(stubs.close).toHaveBeenCalledTimes(1);
@@ -282,7 +300,7 @@ describe('opensquid memory snapshot-auto', () => {
       { from: 'node' },
     );
     expect(stubs.memoryCreate).not.toHaveBeenCalled();
-    expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 0, skipped 1, errors 0/);
+    expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 0, refreshed 0, skipped 1, errors 0/);
   });
 
   it('--help documents the flags', async () => {
