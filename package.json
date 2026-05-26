@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.149",
+  "version": "0.5.150",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -73,6 +73,7 @@
     "node-cron": "^3.0.3",
     "picocolors": "^1.0.0",
     "proper-lockfile": "^4.1.2",
+    "re2js": "^2.8.3",
     "semver": "^7.6.0",
     "yaml": "^2.5.0",
     "zod": "^3.23.0"

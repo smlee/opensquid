@@ -1,15 +1,19 @@
 /**
- * Function allow-list tests — Task H.1.5.
+ * Function allow-list tests — Task H.1.5 + H.4 (RE2-WASM swap).
  *
  * Acceptance contract (spec H.1.5):
  *   - ≥15 cases total (3 per function × 5 functions).
  *   - Each function: happy path + type-mismatch + edge (empty/null).
  *   - FUNCTIONS is frozen — direct mutation throws in strict mode.
  *   - `match()` does NOT throw on a bad-regex input (returns false).
- *   - DO NOT include an actual ReDoS payload in CI — the v1 plain-RegExp
- *     path would hang the test suite. Only test that `match` exists and
- *     handles bad-regex via the try/catch. H.4 is the redos-hardening
- *     follow-up that makes ReDoS testing safe.
+ *
+ * H.4 additions:
+ *   - Active ReDoS regression: `match("aaa…b", "(a+)+$")` must return
+ *     `false` AND complete in <100ms. Pre-H.4 this hung the event loop;
+ *     post-H.4 the RE2 DFA matches in linear time.
+ *   - PCRE-feature rejection: backreferences, lookahead, lookbehind,
+ *     possessive quantifiers all return `false` (RE2 syntax errors
+ *     swallowed by the function's try/catch).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -148,9 +152,9 @@ describe('match(s, pattern)', () => {
     expect(fn.match!('', 'x')).toBe(false);
   });
   it('returns false on invalid regex (try/catch swallows compile error)', () => {
-    // Unbalanced paren — `new RegExp("(")` throws SyntaxError; the function
-    // catches it and returns false. NO TODO comment per H.1.5 spec — the
-    // H.4 task slot tracks the redos-hardening upgrade.
+    // Unbalanced paren — RE2.compile throws RE2JSSyntaxException; the
+    // function catches it and returns false. Same contract as the
+    // legacy V8-RegExp path, now backed by RE2 syntax checking.
     expect(fn.match!('x', '(')).toBe(false);
     expect(fn.match!('x', '[')).toBe(false);
     expect(fn.match!('x', '\\')).toBe(false);
@@ -161,10 +165,53 @@ describe('match(s, pattern)', () => {
     expect(fn.match!(42, '\\d+')).toBe(false);
     expect(fn.match!('x', /x/)).toBe(false); // RegExp objects rejected — must be string
   });
-  it('exists on the registry (do NOT exercise adversarial ReDoS patterns — H.4)', () => {
-    // Acknowledging §12.1 lock: plain RegExp is ReDoS-vulnerable. A real
-    // adversarial pattern (`(a+)+$` vs `aaaa...b`) would hang this test.
-    // Just confirm the function is wired up.
-    expect(typeof fn.match).toBe('function');
+
+  // H.4: ReDoS hardening regression --------------------------------------
+
+  it('H.4: catastrophic-backtracking pattern returns false in <100ms (ReDoS-immune)', () => {
+    // Pre-H.4 (V8 RegExp): `(a+)+$` against a 30-char `aaaa…b` input
+    // hangs the event loop for seconds-to-minutes via exponential
+    // backtracking. Post-H.4 (re2js DFA): linear-time match, ~3ms on
+    // the validation rig. The 100ms ceiling is generous to absorb
+    // first-call compile + CI noise; a real backtracking regression
+    // would blow past it by 3+ orders of magnitude.
+    const adversarial = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaab'; // 29 'a's then 'b'
+    const start = Date.now();
+    const result = fn.match!(adversarial, '(a+)+$');
+    const elapsed = Date.now() - start;
+    expect(result).toBe(false);
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it('H.4: backreferences reject (RE2 rejects PCRE-only feature)', () => {
+    // `\1` is a PCRE backreference. RE2 throws RE2JSSyntaxException at
+    // compile-time; function returns false.
+    expect(fn.match!('abc', '\\1')).toBe(false);
+  });
+
+  it('H.4: lookaheads reject (RE2 rejects PCRE-only feature)', () => {
+    // `(?=...)` is a PCRE positive lookahead. RE2 rejects at compile.
+    expect(fn.match!('abc', '(?=foo)')).toBe(false);
+  });
+
+  it('H.4: lookbehinds reject (RE2 rejects PCRE-only feature)', () => {
+    // `(?<=...)` is a PCRE positive lookbehind. RE2 rejects at compile.
+    expect(fn.match!('abc', '(?<=foo)')).toBe(false);
+  });
+
+  it('H.4: possessive quantifiers reject (RE2 rejects PCRE-only feature)', () => {
+    // `a++` is a possessive quantifier (non-backtracking greedy). RE2
+    // calls this a "nested repetition operator" and rejects at compile.
+    expect(fn.match!('abc', 'a++')).toBe(false);
+  });
+
+  it('H.4: H.3 example pattern (flat alternation) works under RE2', () => {
+    // file-pattern-guard skill uses this exact pattern. Verifies the
+    // shipped builtin pack is RE2-safe.
+    const pattern = 'node_modules|/dist/|/build/|/.git/|.lock$';
+    expect(fn.match!('foo/node_modules/bar', pattern)).toBe(true);
+    expect(fn.match!('foo/dist/bar', pattern)).toBe(true);
+    expect(fn.match!('package.lock', pattern)).toBe(true);
+    expect(fn.match!('src/lib/util.ts', pattern)).toBe(false);
   });
 });

@@ -229,24 +229,44 @@ fired for the wrong reason."
 | `boolean`            | `0`           | `false`        | `false`        | `false`        | `false`        |
 | `null` / `undefined` | `0`           | `false`        | `false`        | `false`        | `false`        |
 
-### 3.2 `match()` and ReDoS
+### 3.2 `match()` and the RE2 grammar subset
 
-`match()` currently wraps `new RegExp(p).test(s)`. V8's RegExp engine
-is vulnerable to catastrophic backtracking on certain pathological
-patterns (e.g. `(a+)+$`). The H.4 follow-up task swaps the
-implementation to RE2, which is linear-time by construction. Until
-H.4 ships, follow these author guidelines:
+`match()` is backed by [`re2js`](https://github.com/le0pard/re2js), a
+pure-JS port of Google's RE2 engine. RE2 matches in **linear time**
+relative to input length — patterns like `(a+)+$` that crash V8's
+RegExp engine via catastrophic backtracking complete in single-digit
+milliseconds under RE2 regardless of input length. **opensquid's
+`match()` is ReDoS-immune by construction** (shipped in 0.5.150, task
+H.4).
 
-- **Prefer flat alternation** — `"a|b|c"` is fine.
-- **Avoid nested quantifiers** — `"(a+)+"` is the canonical ReDoS shape.
-- **Avoid backreferences** — `"(\\w+)\\s+\\1"` will reject under H.4
-  anyway (RE2 doesn't support backreferences).
-- **Avoid lookaheads / lookbehinds** — `"(?=...)"` / `"(?<=...)"` will
-  also reject under H.4.
+The trade for linear-time matching is that RE2 rejects a handful of
+PCRE features that fundamentally require backtracking. Patterns using
+any of the following return `false` (the compile-time syntax error is
+swallowed by `match()`'s try/catch):
 
-If you must use a feature RE2 rejects, document it explicitly in the
-skill's prose so the H.4 migration knows to leave the pattern alone or
-swap it for a primitive-side check.
+- **Backreferences** — `\1`, `\2`, … (e.g. `(\w+)\s+\1`)
+- **Lookaheads** — `(?=...)`, `(?!...)`
+- **Lookbehinds** — `(?<=...)`, `(?<!...)`
+- **Possessive quantifiers** — `a++`, `a*+`, `a?+`
+- **Atomic groups** — `(?>...)`
+- **Embedded conditionals** — `(?(cond)yes|no)`
+
+Everything else works identically to V8 RegExp: character classes,
+alternation, basic quantifiers (`*` `+` `?` `{n,m}`), capturing
+groups, named captures, anchors (`^` `$` `\b`), and Unicode classes.
+The [RE2 syntax reference](https://github.com/google/re2/wiki/Syntax)
+is the authoritative grammar — opensquid follows it directly.
+
+Author guidelines:
+
+- **Prefer flat alternation** — `"a|b|c"` is the canonical safe shape.
+- **Reach for primitives** instead of regex when expressing
+  authorization, set membership, or structured field shape. `match()`
+  is a string-pattern primitive, not a logic primitive.
+- **If you genuinely need a PCRE-only feature**, the right move is
+  almost always to move the check into a primitive (skill-side TS) and
+  expose its result as a binding. Don't try to work around the RE2
+  subset in the regex itself.
 
 ### 3.3 Bindings
 
@@ -431,13 +451,22 @@ steps. The H pre-research §12.2 documents the lock.
 If you genuinely want to skip a step, omit the step entirely or use
 `if: false`.
 
-### 6.3 `match()` and ReDoS (until H.4 ships)
+### 6.3 `match()` uses RE2 — PCRE-only features reject
 
-See §3.2 above. The summary: `match()` currently uses V8's RegExp
-engine, which is vulnerable to catastrophic backtracking. Keep
-patterns simple — flat alternation, no nested quantifiers, no
-backreferences, no lookarounds. The H.4 follow-up will swap the
-implementation to RE2.
+See §3.2 above for the full reference. Summary: `match()` is backed
+by `re2js` (Google's RE2 engine, ported to pure JS) and is
+**ReDoS-immune by construction** — linear-time matching, no
+catastrophic backtracking. The trade is that RE2 rejects these PCRE
+features at compile time, which `match()` surfaces as `false`:
+
+- Backreferences (`\1`)
+- Lookaheads / lookbehinds (`(?=...)`, `(?<=...)`)
+- Possessive quantifiers (`a++`, `a*+`)
+- Atomic groups (`(?>...)`)
+
+If your existing pattern uses one of these, move the check into a
+primitive (skill-side TS) and bind its result with `as:` — don't
+fight the RE2 grammar inside the `if:` clause.
 
 ### 6.4 No chained comparison
 
@@ -484,7 +513,6 @@ These are out of scope for the H track but candidates for follow-ups:
 | Ternary (`a ? b : c`)          | H.5+                                   | Currently use `(cond && a) \|\| b`. Ternary is sugar.                       |
 | `in` operator                  | H.5+                                   | `"x" in obj` — currently use `obj.x != null`.                               |
 | Template literals (`{{name}}`) | Separate Phase-2 templating task       | NOT a grammar extension — would live in a `template:` field, not `if:`.     |
-| RE2 in `match()`               | **H.4** (next task)                    | ReDoS hardening, see §6.3 above.                                            |
 
 The H track is the home of expression-grammar evolution. Additional
 operators ship as `H.5`, `H.6`, etc. in this same track, not as new

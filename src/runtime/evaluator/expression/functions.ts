@@ -1,5 +1,5 @@
 /**
- * Function allow-list registry — Task H.1.5.
+ * Function allow-list registry — Task H.1.5 + H.4 (ReDoS-hardened `match()`).
  *
  * ALLOW-LIST ONLY. The interpreter dispatches `call` nodes through this
  * frozen registry; missing names throw `InterpreterRuntimeError('unknown
@@ -10,7 +10,8 @@
  *   2. **Confirm pure** — deterministic + side-effect-free (no I/O, no time,
  *      no random). Tests must include a determinism case.
  *   3. **Document new attack surface** —
- *        - Regex-accepting → ReDoS pattern (follow `match()` precedent).
+ *        - Regex-accepting → use RE2 (ReDoS-immune by construction; follow
+ *          `match()` precedent).
  *        - String-returning → bounded length (cap ~10k chars to prevent
  *          step-cap evasion via huge strings).
  *        - Object-returning → must `Object.create(null)` the result.
@@ -37,7 +38,7 @@
  *   | contains     | string × string → bool                 | returns false |
  *   | startsWith   | string × string → bool                 | returns false |
  *   | endsWith     | string × string → bool                 | returns false |
- *   | match        | string × string → bool                 | returns false |
+ *   | match        | string × string → bool (RE2 grammar)   | returns false |
  *
  * Handlers do NOT throw on type-mismatch — they return `false`/`0` (matches
  * the relational-op convention from `interpreter.ts:applyCompare`). Only
@@ -45,6 +46,8 @@
  * Wrong arity is acceptable failure mode: missing args arrive as
  * `undefined` and the type guards coerce to the default.
  */
+
+import { RE2JS } from 're2js';
 
 /** Handler signature: positional args are passed evaluated and unmodified. */
 export type FnHandler = (...args: unknown[]) => unknown;
@@ -70,29 +73,61 @@ const endsWith: FnHandler = (s, p) =>
   typeof s === 'string' && typeof p === 'string' && s.endsWith(p);
 
 /**
- * `match(s, pattern)` — RegExp test; false on type-mismatch or invalid
- * pattern (the `new RegExp(p)` throw is swallowed by the try/catch).
+ * `match(s, pattern)` — RE2 test; false on type-mismatch or invalid pattern.
  *
- * ReDoS risk (pre-research §12.1 LOCKED): v1 uses plain V8 `RegExp`, which
- * is vulnerable to catastrophic backtracking on adversarial patterns like
- * `(a+)+$` against long `aaaa...b` inputs. Acceptable for v1 because the
- * production threat model is first-party packs only — zero production
- * `if:` clauses use `match()` today, and there is no third-party pack
- * ecosystem to attack through yet. The fix is tracked as task **H.4
- * (redos-hardening)**: swap to `re2-wasm`'s `RE2` constructor (identical
- * API surface, ~250KB blob, ReDoS-immune by construction). Do NOT add a
- * `// TODO` here — comments rot; the H.4 task slot tracks the work.
+ * ReDoS-immune by construction (H.4, pre-research §12.1 rollback). Backed
+ * by `re2js` — a pure-JS port of Google's RE2 engine — which matches in
+ * linear time relative to input length. A pattern like `(a+)+$` against
+ * `"aaa…b"` no longer hangs the event loop; it returns `false` in <10ms
+ * regardless of input length.
  *
- * Comparable projects: Cerbos uses Go's stdlib `regexp` (RE2-derived, safe
- * for free from the language). Cloudflare Workers ships `re2-wasm` because
- * they run third-party untrusted code; opensquid v1 is structurally closer
- * to Cerbos's threat model.
+ * **PCRE features RE2 rejects** (`RE2JS.compile()` throws
+ * `RE2JSSyntaxException`, which the catch below converts to `false`):
+ *
+ *   - **Backreferences** — `\1`, `\2`, …  (e.g. `(\w+)\s+\1`)
+ *   - **Lookaheads** — `(?=...)`, `(?!...)`
+ *   - **Lookbehinds** — `(?<=...)`, `(?<!...)`
+ *   - **Possessive quantifiers** — `a++`, `a*+`, `a?+`
+ *   - **Atomic groups** — `(?>...)`
+ *   - **Embedded conditionals** — `(?(cond)yes|no)`
+ *
+ * These features all rely on backtracking, which is precisely the
+ * mechanism RE2 trades away to guarantee linear-time matching. Pack
+ * authors using `match()` must stay inside the RE2 subset; everything
+ * else (character classes, alternation, basic quantifiers `*` `+` `?`
+ * `{n,m}`, capturing groups `(...)`, named captures `(?P<name>...)`,
+ * anchors `^` `$` `\b`, Unicode classes) works identically to V8 RegExp.
+ *
+ * **Cost.** `re2js` adds ~868KB to `node_modules` (no native build,
+ * no WASM cold-start — pure JS); first-call compile of any new pattern
+ * is the warm-up. Skill packs typically reuse a small set of patterns,
+ * so amortized per-call cost is dominated by the linear-time DFA match
+ * after the first compile.
+ *
+ * **Breaking-change classification.** Semantically breaking: any pack
+ * authoring an `if:` clause that uses a PCRE-only feature now returns
+ * `false` instead of evaluating the regex. opensquid still bumps PATCH
+ * (0.5.149 → 0.5.150) per the pre-1.0 + agent-only-PATCH SemVer rules
+ * locked in pre-research. None of the shipped `packs/builtin/` clauses
+ * use rejected features (verified by H.3 implementer + post-research
+ * §6 sweep against the RE2 syntax reference).
+ *
+ * **Comparable projects.** Cerbos uses Go's stdlib `regexp` (RE2-derived,
+ * safe for free from the language). Cloudflare Workers ships `re2-wasm`
+ * (also RE2 in a different transport) on their third-party-code surface.
+ * Both made the same trade for the same threat-model reason.
  */
 const match: FnHandler = (s, pattern) => {
   if (typeof s !== 'string' || typeof pattern !== 'string') return false;
   try {
-    return new RegExp(pattern).test(s);
-  } catch {
+    return RE2JS.compile(pattern).test(s);
+  } catch (err) {
+    // RE2JSSyntaxException covers PCRE-rejected features + malformed
+    // patterns (e.g. `(`, `[`, trailing `\`). Catching the base class
+    // keeps behavior consistent with the legacy V8-RegExp try/catch:
+    // any compile-time failure → false. We DO swallow other exceptions
+    // defensively, but the only documented thrown type is the syntax one.
+    void err;
     return false;
   }
 };

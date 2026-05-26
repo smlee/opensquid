@@ -7,6 +7,52 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.150] - 2026-05-26
+
+### Changed (BREAKING semantic)
+
+- `match()` (the `if:` grammar's regex primitive) now uses
+  [`re2js`](https://github.com/le0pard/re2js) — a pure-JS port of
+  Google's RE2 engine — instead of V8's native `RegExp`. Patterns
+  using PCRE-only features that fundamentally require backtracking
+  (backreferences `\1`, lookaheads `(?=...)`, lookbehinds `(?<=...)`,
+  possessive quantifiers `a++`, atomic groups `(?>...)`) now return
+  `false` instead of evaluating, because RE2 rejects them at
+  compile-time. Pre-1.0 SemVer + opensquid's locked agent-only-PATCH
+  rule means this is a **PATCH bump even though the semantic change
+  is breaking** for any pack using rejected features. Verified: zero
+  shipped `packs/builtin/` clauses use any rejected feature. Pack
+  authors hitting a rejection should move the check into a primitive
+  and bind its result with `as:` rather than fight the RE2 subset
+  inside `if:`. See `docs/skill-grammar-guide.md` §3.2 for the full
+  feature reference and the `RE2` syntax link.
+- Bundle: `re2js` adds ~868KB to `node_modules`. No native build
+  (pure JS, no node-gyp), no WASM cold-start. First-call compile of
+  any new pattern is the warm-up; subsequent calls hit RE2's DFA
+  fast-path directly.
+
+### Security
+
+- `match()` is now **ReDoS-immune by construction**. Pre-H.4 (V8
+  RegExp), the canonical catastrophic-backtracking pattern `(a+)+$`
+  against a 30-character `aaaa…b` input hung the Node event loop for
+  seconds-to-minutes. Post-H.4 (RE2 DFA), the same pattern returns
+  `false` in <10ms regardless of input length. A regression test in
+  `src/runtime/evaluator/expression/functions.test.ts` asserts the
+  result is `false` AND `Date.now()` delta is <100ms. This closes
+  the pre-research §12.1 rollback path: with `re2js` shipping, third-
+  party pack ecosystems can no longer use an adversarial regex in
+  an `if:` clause to DoS the runtime.
+- Selected `re2js` over `re2-wasm` and `re2` (node-re2): `re2-wasm`
+  is unmaintained (last release Sept 2021, only 3 versions ever);
+  `re2` (node-re2) requires native compilation (node-gyp + nan) and
+  ships a 12.3MB tarball with brittle cross-Node-version behavior;
+  `re2js` is actively maintained (44 versions, last release 3 days
+  before this commit), pure-JS, MIT-licensed, native ESM with proper
+  `exports` map, zero runtime deps, and supports Node ≥18.
+
+---
+
 ## [0.5.149] - 2026-05-26
 
 ### Added
