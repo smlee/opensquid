@@ -18,10 +18,10 @@
  * sandbox behavior from parse-error noise.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { ASTNode, BinaryOp, PathSegment } from './ast.js';
-import { FUNCTIONS } from './functions.js';
+import type { FnHandler } from './functions.js';
 import {
   type EvalCtx,
   evaluate,
@@ -62,10 +62,16 @@ const bin = (op: BinaryOp, lhs: ASTNode, rhs: ASTNode): ASTNode => ({
   offset: 0,
 });
 
-// Fresh context per call so the step counter starts at zero.
-const ctx = (bindings: Record<string, unknown> = {}): EvalCtx => ({
+// Fresh context per call so the step counter starts at zero. Pass a
+// `functions` object to inject test-only handlers (frozen production
+// `FUNCTIONS` is unreachable from tests by design — see functions.ts).
+const ctx = (
+  bindings: Record<string, unknown> = {},
+  functions?: Record<string, FnHandler>,
+): EvalCtx => ({
   bindings: new Map(Object.entries(bindings)),
   steps: 0,
+  ...(functions ? { functions } : {}),
 });
 
 // ---- Literals ------------------------------------------------------------
@@ -138,18 +144,16 @@ describe('interpreter — binary relational (number-typed only)', () => {
 // ---- Binary: short-circuit && / || ---------------------------------------
 
 describe('interpreter — short-circuit', () => {
-  // Inject a throw-on-call function for the duration of these tests. The
-  // RHS-throws fixture is the definitive proof of short-circuit: if RHS
-  // were evaluated, the function would throw, and the test would fail.
-  afterEach(() => {
-    delete FUNCTIONS.boom;
-  });
+  // The RHS-throws fixture is the definitive proof of short-circuit: if
+  // RHS were evaluated, the function would throw and the test would fail.
+  // Inject via `EvalCtx.functions` (frozen production registry stays
+  // untouched — see functions.ts header).
+  const boom: FnHandler = () => {
+    throw new Error('RHS evaluated despite LHS short-circuit');
+  };
 
   it('&& short-circuits when LHS is falsy (RHS never evaluated)', () => {
-    FUNCTIONS.boom = () => {
-      throw new Error('RHS evaluated despite LHS falsy');
-    };
-    expect(evaluate(bin('&&', lit(false), call('boom', [])), ctx())).toBe(false);
+    expect(evaluate(bin('&&', lit(false), call('boom', [])), ctx({}, { boom }))).toBe(false);
   });
 
   it('&& evaluates RHS when LHS is truthy', () => {
@@ -157,10 +161,7 @@ describe('interpreter — short-circuit', () => {
   });
 
   it('|| short-circuits when LHS is truthy (RHS never evaluated)', () => {
-    FUNCTIONS.boom = () => {
-      throw new Error('RHS evaluated despite LHS truthy');
-    };
-    expect(evaluate(bin('||', lit('lhs'), call('boom', [])), ctx())).toBe('lhs');
+    expect(evaluate(bin('||', lit('lhs'), call('boom', [])), ctx({}, { boom }))).toBe('lhs');
   });
 
   it('|| evaluates RHS when LHS is falsy', () => {
@@ -307,17 +308,20 @@ describe('interpreter — step cap (off-by-one)', () => {
 // ---- Call dispatch (FUNCTIONS stub) -------------------------------------
 
 describe('interpreter — call dispatch', () => {
-  afterEach(() => {
-    delete FUNCTIONS.len;
+  it('dispatches via the injected functions registry', () => {
+    // The call-dispatch test is about the registry lookup + arg passing,
+    // not about how the array got into the AST. Inject a `len` stub via
+    // EvalCtx.functions so the frozen production registry is unaffected.
+    const lenStub: FnHandler = (x) => (Array.isArray(x) ? x.length : 0);
+    const arrBinding = call('len', [name('arr')]);
+    expect(evaluate(arrBinding, ctx({ arr: [1, 2] }, { len: lenStub }))).toBe(2);
   });
 
-  it('len([1,2]) → 2 (via locally injected stub; real registry lands in H.1.5)', () => {
-    FUNCTIONS.len = (x: unknown) => (Array.isArray(x) ? x.length : 0);
-    // Construct a literal array — paths/names would need a binding. The
-    // call-dispatch test is about the registry lookup + arg passing,
-    // not about how the array got into the AST.
-    const arrBinding = call('len', [name('arr')]);
-    expect(evaluate(arrBinding, ctx({ arr: [1, 2] }))).toBe(2);
+  it('falls back to production FUNCTIONS when EvalCtx.functions is omitted', () => {
+    // `len("hello")` resolves via the imported FUNCTIONS default. This is
+    // also a smoke test that the H.1.5 registry shipped — failure here
+    // would indicate the default arg wiring regressed.
+    expect(evaluate(call('len', [lit('hello')]), ctx())).toBe(5);
   });
 
   it('unknown function name throws InterpreterRuntimeError', () => {
@@ -325,16 +329,24 @@ describe('interpreter — call dispatch', () => {
     expect(() => evaluate(call('unknownFn', []), ctx())).toThrow(/unknown function: unknownFn/);
   });
 
+  it('treats __proto__ / constructor lookups as unknown functions', () => {
+    // Null-prototype + frozen registry: bracket access on reserved JS
+    // slot names does NOT resolve to inherited Object.prototype methods.
+    expect(() => evaluate(call('__proto__', []), ctx())).toThrow(InterpreterRuntimeError);
+    expect(() => evaluate(call('constructor', []), ctx())).toThrow(InterpreterRuntimeError);
+    expect(() => evaluate(call('toString', []), ctx())).toThrow(InterpreterRuntimeError);
+  });
+
   it('passes undefined / null args through to the dispatched function', () => {
-    // Documents arg-passthrough convention for H.1.5: missing-name bindings
-    // resolve to undefined and are forwarded unchanged. Functions handle
-    // their own null/undefined semantics.
+    // Documents arg-passthrough convention: missing-name bindings resolve
+    // to undefined and are forwarded unchanged. Functions handle their
+    // own null/undefined semantics (H.1.5 functions.ts coercion table).
     let captured: unknown[] = [];
-    FUNCTIONS.len = (...args: unknown[]) => {
+    const capture: FnHandler = (...args: unknown[]) => {
       captured = args;
       return 0;
     };
-    evaluate(call('len', [name('missing'), lit(null)]), ctx());
+    evaluate(call('capture', [name('missing'), lit(null)]), ctx({}, { capture }));
     expect(captured).toEqual([undefined, null]);
   });
 });

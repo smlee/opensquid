@@ -12,9 +12,12 @@
  *      Counted at each recursive `evaluate()` entry (depth + 1 per descent).
  *   4. Step cap 10_000 — guards against compute-bound DoS from compound
  *      expressions. Counted at every `evaluate()` call (before any branch).
- *   5. Allow-listed function dispatch only — `FUNCTIONS` registry lookup;
- *      missing names throw `InterpreterRuntimeError`. (H.1.5 populates the
- *      5 pure functions; H.1.4 ships the registry as an empty stub.)
+ *   5. Allow-listed function dispatch only — `FUNCTIONS` registry lookup
+ *      (frozen, null-prototype base — see functions.ts); missing names
+ *      throw `InterpreterRuntimeError`. Tests inject a per-call writable
+ *      registry via `EvalCtx.functions`; production callers omit it and
+ *      get the audited 5-function default (`len`, `contains`, `match`,
+ *      `startsWith`, `endsWith`).
  *   6. No filesystem / network / process / time / random access in any path.
  *   7. Comparison operators use STRICT equality per pre-research §12.3 lock
  *      — no `String()` coercion. `==` and `===` both lower to the same
@@ -34,7 +37,7 @@
  */
 
 import { assertNever, type ASTNode, type BinaryOp, type PathSegment } from './ast.js';
-import { FUNCTIONS } from './functions.js';
+import { FUNCTIONS, type FnHandler } from './functions.js';
 
 /** AST-nesting depth cap. See pre-research §3.2. */
 export const MAX_DEPTH = 64;
@@ -68,6 +71,15 @@ export interface EvalCtx {
   bindings: Map<string, unknown>;
   /** Mutated per visit; `evaluate` throws `InterpreterLimitError` on overrun. */
   steps: number;
+  /**
+   * Optional function-registry override. Defaults to the frozen `FUNCTIONS`
+   * import. Tests pass a per-call writable registry to inject throwing
+   * stubs (short-circuit proofs) and arg-passthrough captures without
+   * mutating the frozen production registry. Production callers (the H.1.6
+   * `evalCondition` driver) omit this field — the default is the correct,
+   * audited allow-list.
+   */
+  functions?: Record<string, FnHandler>;
 }
 
 /**
@@ -96,8 +108,14 @@ export function evaluate(node: ASTNode, ctx: EvalCtx, depth = 0): unknown {
     case 'path':
       return resolvePath(evaluate(node.target, ctx, depth + 1), node.segments);
     case 'call': {
-      const fn = FUNCTIONS[node.name];
-      if (!fn) throw new InterpreterRuntimeError(`unknown function: ${node.name}`);
+      const registry = ctx.functions ?? FUNCTIONS;
+      // Bracket access on a null-prototype + frozen registry: reserved
+      // JS slot names like `__proto__` / `constructor` resolve to undefined
+      // because the prototype chain has nothing to inherit from.
+      const fn = registry[node.name];
+      if (typeof fn !== 'function') {
+        throw new InterpreterRuntimeError(`unknown function: ${node.name}`);
+      }
       const args = node.args.map((a) => evaluate(a, ctx, depth + 1));
       return fn(...args);
     }
