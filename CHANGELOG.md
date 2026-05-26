@@ -1572,6 +1572,39 @@ Dogfood-verified end-to-end against the family memory.
 
 ---
 
+## [0.5.148] — 2026-05-26
+
+Load-time validation of `if:` expressions in skill YAML, layered on top of
+H.1.6's chevrotain grammar. Invalid `if:` clauses now fail fast at
+`loadPack()` with full path + Zod field-path context instead of silently
+evaluating to `false` (with a `console.warn`) at first event fire.
+
+### Added
+
+- **Load-time `if:` validation** in `src/packs/schemas/skill.ts` via a
+  `conditionString` wrapper (`z.string().refine(parseExpression …)`)
+  attached to `ProcessStep.if`. Every skill's `if:` clauses are now
+  parsed at skill-load time using the chevrotain grammar from H.1.x.
+  Errors surface through the existing `parseYamlFile` formatter
+  (`src/packs/yaml.ts:86–93`) with the shape:
+
+      Schema validation failed for skills/foo/skill.yaml:
+      process[2].if: invalid if: expression — see docs/skill-grammar-guide.md
+
+  Empty / whitespace-only `if:` clauses are accepted at load time (match
+  the runtime's §12.2 "empty = true" semantics); only lex / parse / AST
+  errors fail validation. All 8 unique production clauses in
+  `packs/builtin/**` verified load-clean (per pre-research §1.3 + §8.1).
+
+  No changes to `src/packs/loader.ts` or `src/packs/yaml.ts` — the
+  existing error formatter already threads source path + Zod field path
+  into messages (§8.1 verification).
+
+  Note: a second `ProcessStep` schema lives at `src/runtime/types.ts:93–99`;
+  de-duplication is a separate cleanup task and is out of scope for H.2.
+
+---
+
 ## [0.5.147] — 2026-05-26
 
 The H.1.6 integration cutover. The 5-regex `if:` evaluator that powered

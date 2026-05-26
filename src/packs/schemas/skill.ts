@@ -28,9 +28,56 @@
 
 import { z } from 'zod';
 
+import { parseExpression } from '../../runtime/evaluator/expression/index.js';
 import { Matcher } from '../../runtime/load_matchers.js';
 import { EventKind, Trigger, defaultTriggers } from '../../runtime/types.js';
 import { UnloadCondition } from '../../runtime/unload_conditions.js';
+
+// ---------------------------------------------------------------------------
+// conditionString — load-time-validated `if:` expression (Task H.2).
+//
+// Wraps `z.string()` with a `.refine()` that parses the expression through
+// `parseExpression` (chevrotain lexer + parser + AST visitor from H.1). A
+// pack with an unparseable `if:` clause now fails fast at `loadPack()` with
+// full source-path + Zod field-path context — was previously a silent
+// `false` + `console.warn` at first event fire.
+//
+// Empty / whitespace-only strings are accepted at load time (return true)
+// to match the runtime's §12.2 semantics in
+// `src/runtime/evaluator/expression/index.ts:82` — a present-but-empty
+// `if:` is equivalent to "no `if:` field" so trailing-whitespace YAML
+// doesn't accidentally skip steps. The `parseExpression` entry itself
+// throws on empties (it's the parse-only sibling — see its JSDoc); we
+// short-circuit before calling it.
+//
+// Error threading: `parseYamlFile` (src/packs/yaml.ts:86–93) wraps Zod's
+// `.message` with the source path, producing the final shape:
+//
+//   "Schema validation failed for skills/foo/skill.yaml:
+//    process[2].if: invalid if: expression — see docs/skill-grammar-guide.md"
+//
+// No changes needed to `loader.ts` or `yaml.ts` — pre-research §8.1
+// verified the existing formatter threads paths + field positions cleanly.
+//
+// Perf: each refinement runs lex+parse+ast (no cache hit here — the cache
+// in `evaluator/expression/cache.ts` is for `evalCondition` reads). Pre-
+// research §8.1 estimated ~30ms for a 100-skill pack with avg 3 `if:`
+// clauses each (300 invocations × ~0.1ms grammar). Runs once per process
+// start; acceptable.
+// ---------------------------------------------------------------------------
+
+const conditionString = z.string().refine(
+  (s) => {
+    if (s.trim() === '') return true;
+    try {
+      parseExpression(s);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  { message: 'invalid if: expression — see docs/skill-grammar-guide.md' },
+);
 
 // ---------------------------------------------------------------------------
 // ProcessStep — one step inside a rule's process.
@@ -40,15 +87,21 @@ import { UnloadCondition } from '../../runtime/unload_conditions.js';
 // `args` — opaque key-value bag; per-primitive Zod refinement lands in the
 //          function-library registry (separate from this YAML schema).
 // `as`   — variable binding for downstream steps (`as: hit` then `if: hit`).
-// `if`   — conditional execution expression (evaluator-interpreted).
+// `if`   — conditional execution expression (evaluator-interpreted). Wrapped
+//          in `conditionString` for load-time grammar validation (H.2).
 // `on_empty` — what verdict to emit when the call produces no output.
+//
+// Note: a second `ProcessStep` schema lives at `src/runtime/types.ts:93–99`
+// with a loose `if: z.string().optional()`. The YAML load path goes through
+// THIS schema (the load-time validation entry point); de-duplication is a
+// separate cleanup task (out of scope for H.2).
 // ---------------------------------------------------------------------------
 
 export const ProcessStep = z.object({
   call: z.string().min(1),
   args: z.record(z.unknown()).optional(),
   as: z.string().optional(),
-  if: z.string().optional(),
+  if: conditionString.optional(),
   on_empty: z.enum(['pass', 'block', 'continue']).optional(),
 });
 export type ProcessStep = z.infer<typeof ProcessStep>;

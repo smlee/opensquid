@@ -227,3 +227,141 @@ describe('loadPack — error + edge cases', () => {
     expect(pack.skills.map((s) => s.name)).toEqual(['linked-skill']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task H.2 — load-time `if:` validation via Zod refinement.
+//
+// Confirms that invalid `if:` expressions fail at `loadPack()` time with a
+// path-bearing + field-bearing error message (was previously a silent
+// `false` + `console.warn` at first event fire), while every shipped
+// production `if:` clause + the empty / absent cases still load cleanly.
+//
+// Test design:
+//   - Each test builds a one-skill pack under a per-test tmpdir.
+//   - Skills declare a single rule with one ProcessStep so the Zod issue
+//     path is predictable: `rules[0].process[0].if`.
+//   - Triggers default to `[{kind: 'tool_call'}]` (per Skill schema default)
+//     so we never have to spell them out in the fixture.
+// ---------------------------------------------------------------------------
+
+describe('loadPack — Task H.2 load-time if: validation', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'opensquid-loader-h2-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // Helper: build a one-skill pack with the given `if:` clause inside a
+  // single rule. The skill name is fixed; the `if:` value is the only
+  // pack-author variable. Returns the path to the skill.yaml so tests can
+  // assert against it in error messages.
+  async function writeSkillWithIf(ifClause: string | null): Promise<{ skillYaml: string }> {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: h2-fixture', 'version: 0.1.0', 'scope: workflow', 'goal: H.2 test'].join('\n') + '\n',
+      'utf8',
+    );
+
+    const skillDir = join(dir, 'skills', 'h2-skill');
+    await mkdir(skillDir, { recursive: true });
+
+    // `if:` is OMITTED when ifClause is null; otherwise quoted-string form
+    // so YAML parses arbitrary characters (including bare `(`).
+    const stepLines = ['      - call: verdict', `        args: { level: "warn", message: "h2" }`];
+    if (ifClause !== null) {
+      stepLines.push(`        if: ${JSON.stringify(ifClause)}`);
+    }
+
+    const skillYaml = join(skillDir, 'skill.yaml');
+    await writeFile(
+      skillYaml,
+      [
+        'name: h2-skill',
+        'load: lazy',
+        'rules:',
+        '  - id: h2-rule',
+        '    process:',
+        ...stepLines,
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    return { skillYaml };
+  }
+
+  it('rejects an unparseable if: clause with a path-bearing + field-bearing error', async () => {
+    const { skillYaml } = await writeSkillWithIf('this is not valid');
+
+    let caught: unknown;
+    try {
+      await loadPack(dir);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const msg = (caught as Error).message;
+    // Source path threaded through by parseYamlFile.
+    expect(msg).toContain(skillYaml);
+    // Field path threaded through by Zod (process[0].if). Plus our
+    // refinement message. We assert these as separate substrings rather
+    // than a single regex because Zod's JSON-line formatting moves them
+    // onto separate lines.
+    expect(msg).toMatch(/Schema validation failed/);
+    expect(msg).toMatch(/process/);
+    expect(msg).toMatch(/if/);
+    expect(msg).toContain('invalid if: expression');
+  });
+
+  it('rejects unbalanced paren in if: at load time', async () => {
+    await writeSkillWithIf('(');
+    await expect(loadPack(dir)).rejects.toThrow(/invalid if: expression/);
+  });
+
+  it('rejects garbage syntax in if: at load time', async () => {
+    await writeSkillWithIf('== =');
+    await expect(loadPack(dir)).rejects.toThrow(/invalid if: expression/);
+  });
+
+  it('accepts an empty if: string (matches §12.2 runtime "empty = true" semantics)', async () => {
+    await writeSkillWithIf('');
+    const pack = await loadPack(dir);
+    expect(pack.skills).toHaveLength(1);
+    expect(pack.skills[0]?.name).toBe('h2-skill');
+  });
+
+  it('accepts an absent if: field (existing behavior)', async () => {
+    await writeSkillWithIf(null);
+    const pack = await loadPack(dir);
+    expect(pack.skills).toHaveLength(1);
+    expect(pack.skills[0]?.rules[0]?.id).toBe('h2-rule');
+  });
+
+  // The 8 unique production clauses currently shipping in
+  // `packs/builtin/**` (per pre-research §1.3 enumeration). All must load
+  // cleanly so the H.2 ship is non-breaking for every existing pack.
+  it.each([
+    ['BARE — claimed', 'claimed'],
+    ['BARE — committing', 'committing'],
+    ['BARE — hit', 'hit'],
+    ['BARE — cmd_hit', 'cmd_hit'],
+    ['EQ_PATTERN — candidates == "NONE"', 'candidates == "NONE"'],
+    ['BOOL_CMP — automation.value == true', 'automation.value == true'],
+    [
+      'BOOL_CMP + EQ_PATTERN — automation.value == true && classification == "BLOCK"',
+      'automation.value == true && classification == "BLOCK"',
+    ],
+    [
+      '§12.4 latent-rule — committing && phases != "complete"',
+      'committing && phases != "complete"',
+    ],
+  ])('accepts the production clause: %s', async (_label, clause) => {
+    await writeSkillWithIf(clause);
+    const pack = await loadPack(dir);
+    expect(pack.skills).toHaveLength(1);
+  });
+});
