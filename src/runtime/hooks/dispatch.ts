@@ -25,11 +25,22 @@
  * default trigger list (when the YAML block is omitted) is a single
  * `tool_call` entry — preserves Phase 1–7 dispatcher behavior verbatim.
  *
- * Phase 1 policy: every verdict is funneled through `applyDriftResponse` with
- * the **`block_tool` default policy** (hard-coded here). Pack-declared
- * `drift_response` policies wire in Phase 2+ when the loader exposes a
- * per-rule / per-pack policy map. Locking the default to `block_tool` (rather
- * than `warn`) keeps Phase 1 conservative — a fired rule blocks the tool.
+ * PR-followup policy resolution (replaces hard-coded `block_tool`):
+ *   1. Pack-shipped `drift_response.yaml` → `Pack.driftResponse` (loaded by
+ *      `loadPack`). For each fired rule, the dispatcher consults
+ *      `pack.driftResponse?.per_rule[rule.id] ?? pack.driftResponse?.default`.
+ *   2. Pack without `drift_response.yaml` → falls back to the historical
+ *      Phase 1 default of `block_tool` (NOT the schema's `block_tool`
+ *      default — that only fires when the file IS present but omits the
+ *      field; here we want the "no policy declared at all" branch).
+ *   3. `corrective_skills` map (`auto_correct` policy support) is threaded
+ *      into `applyDriftResponse` via the `DriftDispatchCtx` argument so
+ *      `auto_correct` policies can look up their corrective skill name.
+ *
+ * Pack-agnostic discipline: the dispatcher does NOT special-case
+ * sangmin-personal-rules or any other named pack. It reads whatever each
+ * pack's `driftResponse` field contains; missing/empty/absent all flow
+ * through the same `??` chain.
  *
  * Exit-code mapping (Claude Code hook protocol):
  *   block_tool   → { exitCode: 2, stderr: message }
@@ -52,7 +63,7 @@
 import type { EvalCtx, FunctionRegistry } from '../../functions/registry.js';
 import { applyDriftResponse } from '../drift_response.js';
 import { evaluateProcess } from '../evaluator.js';
-import type { Event, Pack } from '../types.js';
+import type { DriftPolicy, Event, Pack } from '../types.js';
 
 export interface DispatchResult {
   exitCode: 0 | 2;
@@ -135,6 +146,12 @@ export async function dispatchEvent(
           bindings: new Map(),
           sessionId,
           packId: pack.name,
+          // PR-followup: thread pack-shipped `models.yaml` into eval context
+          // so LLM primitives can resolve aliases from the pack's declared
+          // baseline. Spread-conditional to keep `EvalCtx` clean for packs
+          // that ship no `models.yaml` (`exactOptionalPropertyTypes` rejects
+          // explicit `undefined` on an optional slot).
+          ...(pack.models !== undefined ? { packModels: pack.models } : {}),
         };
         const result = await evaluateProcess(rule.process, ctx, registry);
 
@@ -155,9 +172,25 @@ export async function dispatchEvent(
 
         if (result.kind !== 'verdict') continue;
 
-        // Phase 1: every verdict routes through the `block_tool` default
-        // policy. Pack-declared policies wire in Phase 2+ via the loader.
-        const action = applyDriftResponse(result.verdict, 'block_tool');
+        // PR-followup: resolve drift-response policy from the pack's
+        // `drift_response.yaml` (folded into `Pack.driftResponse` by
+        // `loadPack`). Precedence: per-rule override → pack default →
+        // historical Phase 1 hard-coded `block_tool` (preserves the previous
+        // behavior for packs that don't ship the file at all).
+        //
+        // `rule.id` is required on every rule by the Skill schema, so the
+        // `per_rule` lookup is always well-defined.
+        const driftResponse = pack.driftResponse;
+        const resolvedPolicy: DriftPolicy =
+          driftResponse?.per_rule[rule.id] ?? driftResponse?.default ?? 'block_tool';
+        // `corrective_skills` is only consulted by the `auto_correct` policy
+        // inside `applyDriftResponse`; passing it unconditionally is safe
+        // because the dispatcher ignores it for every other policy.
+        const action = applyDriftResponse(result.verdict, resolvedPolicy, {
+          ...(driftResponse !== undefined
+            ? { correctiveSkills: driftResponse.corrective_skills }
+            : {}),
+        });
         switch (action.kind) {
           case 'block_tool':
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
@@ -175,9 +208,15 @@ export async function dispatchEvent(
             };
           case 'halt':
           case 'notify_pause':
-            // Phase 1 stub: real halt = Task 1.14; real notify = Task 1.18.
-            // Until then, return allow + empty stderr so a future-policy
-            // verdict during Phase 1 doesn't accidentally block.
+          case 'auto_correct':
+          case 'escalate':
+            // Phase 1 stub: real halt = Task 1.14; real notify = Task 1.18;
+            // `auto_correct` + `escalate` action descriptors are interpreted
+            // by `runtime/auto_correct.ts` + `runtime/escalate.ts` at the
+            // hook-binary layer (out of scope for this dispatcher's per-event
+            // walk). Until those layers wire from this site, return allow +
+            // empty stderr so a pack-declared future-policy verdict doesn't
+            // accidentally block the tool call.
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
             return {
               exitCode: 0,

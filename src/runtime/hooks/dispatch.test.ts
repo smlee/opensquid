@@ -331,4 +331,137 @@ describe('dispatchEvent', () => {
       expect(result.stderr).toContain('fake-inject-rule');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // PR-followup — pack-declared drift_response policy resolution
+  //
+  // The dispatcher used to hard-code `block_tool` for every verdict. After
+  // PR-followup, it consults `pack.driftResponse?.per_rule[rule.id] ??
+  // pack.driftResponse?.default` first, falling back to `block_tool` only
+  // when the pack ships no drift_response.yaml at all. These tests prove:
+  //   - per-rule override (e.g. v1-publish-detector: block_tool) routes through
+  //   - default policy fires for rules with no per-rule entry
+  //   - `warn` policy maps to exit 0 + stderr message (not exit 2)
+  //   - `notify_and_pause` policy maps to exit 0 + empty stderr (stub path)
+  //   - pack without drift_response.yaml falls back to historical block_tool
+  // -------------------------------------------------------------------------
+  describe('PR-followup: pack-declared drift_response resolution', () => {
+    // Helper that overlays a `driftResponse` field onto a base Pack.
+    function withDrift(pack: Pack, drift: Pack['driftResponse']): Pack {
+      return { ...pack, driftResponse: drift };
+    }
+
+    it('per-rule block_tool override fires for the named rule', async () => {
+      const registry = buildRegistryWithVerdict({
+        level: 'block',
+        message: 'v1 framing detected',
+        ruleId: 'v1-publish-detector',
+      });
+      const blockRule: Rule = {
+        id: 'v1-publish-detector',
+        kind: 'track_check',
+        process: [{ call: 'verdict' }],
+      };
+      const pack = withDrift(makePack('p1', [blockRule]), {
+        default: 'notify_and_pause',
+        per_rule: { 'v1-publish-detector': 'block_tool' },
+        corrective_skills: {},
+      });
+      const result = await dispatchEvent(event, [pack], registry, 'sess-1');
+      // block_tool maps to exit 2 + message in stderr.
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toBe('v1 framing detected');
+    });
+
+    it('default policy applies when rule has no per-rule entry', async () => {
+      // Verdict fires from a rule that is NOT in per_rule; default `warn`
+      // takes effect → exit 0 + message in stderr (allow-with-warning).
+      const registry = buildRegistryWithVerdict({
+        level: 'block',
+        message: 'no per-rule override',
+        ruleId: 'unlisted-rule',
+      });
+      const rule: Rule = {
+        id: 'unlisted-rule',
+        kind: 'track_check',
+        process: [{ call: 'verdict' }],
+      };
+      const pack = withDrift(makePack('p1', [rule]), {
+        default: 'warn',
+        per_rule: { 'some-other-rule': 'block_tool' },
+        corrective_skills: {},
+      });
+      const result = await dispatchEvent(event, [pack], registry, 'sess-1');
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('no per-rule override');
+    });
+
+    it('notify_and_pause policy maps to exit 0 + empty stderr (Phase 1 stub path)', async () => {
+      const registry = buildRegistryWithVerdict({
+        level: 'block',
+        message: 'pause via channel',
+        ruleId: 'paused-rule',
+      });
+      const rule: Rule = {
+        id: 'paused-rule',
+        kind: 'track_check',
+        process: [{ call: 'verdict' }],
+      };
+      const pack = withDrift(makePack('p1', [rule]), {
+        default: 'notify_and_pause',
+        per_rule: {},
+        corrective_skills: {},
+      });
+      const result = await dispatchEvent(event, [pack], registry, 'sess-1');
+      // Real channel routing lands in Task 1.18; dispatcher stub returns
+      // exit 0 + empty stderr so a pack-declared notify_and_pause doesn't
+      // accidentally block the tool call during Phase 1.
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+    });
+
+    it('pack without driftResponse falls back to historical block_tool default', async () => {
+      const registry = buildRegistryWithVerdict({
+        level: 'block',
+        message: 'no policy → block_tool',
+        ruleId: 'rule-without-policy',
+      });
+      const rule: Rule = {
+        id: 'rule-without-policy',
+        kind: 'track_check',
+        process: [{ call: 'verdict' }],
+      };
+      const pack = makePack('p1', [rule]);
+      // No driftResponse on pack — preserves pre-PR-followup behavior.
+      expect(pack.driftResponse).toBeUndefined();
+      const result = await dispatchEvent(event, [pack], registry, 'sess-1');
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toBe('no policy → block_tool');
+    });
+
+    it('per-rule warn override on a rule that would otherwise block routes through warn', async () => {
+      // Confirms the dispatcher's resolution path is per-rule first, then
+      // default, then fallback — and that switching policy actually changes
+      // the exit code (the load-bearing evidence the wiring works).
+      const registry = buildRegistryWithVerdict({
+        level: 'block',
+        message: 'informational signal',
+        ruleId: 'informational-rule',
+      });
+      const rule: Rule = {
+        id: 'informational-rule',
+        kind: 'track_check',
+        process: [{ call: 'verdict' }],
+      };
+      const pack = withDrift(makePack('p1', [rule]), {
+        default: 'block_tool',
+        per_rule: { 'informational-rule': 'warn' },
+        corrective_skills: {},
+      });
+      const result = await dispatchEvent(event, [pack], registry, 'sess-1');
+      // warn → exit 0 + message visible.
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('informational signal');
+    });
+  });
 });

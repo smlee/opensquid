@@ -8,25 +8,31 @@
  *
  *     my-pack/
  *       manifest.yaml          ← required
- *       models.yaml            ← optional, Phase 2.4+ consumer
+ *       models.yaml            ← optional, FOLDED IN (PR-followup)
  *       channels.yaml          ← optional, Phase 2.4+ consumer
  *       notifications.yaml     ← optional, Phase 2.4+ consumer
- *       drift_response.yaml    ← optional, Phase 2.4+ consumer
+ *       drift_response.yaml    ← optional, FOLDED IN (PR-followup)
+ *       chat_agent.yaml        ← optional, FOLDED IN (WAB.6)
  *       skills/
  *         <skill-name>/skill.yaml
  *
- * This loader is the *only* read path for a pack folder. It does two things:
+ * This loader is the *only* read path for a pack folder. It does these things:
  *
  *   1. Parse `manifest.yaml` through `parseYamlFile` + the `Manifest` schema —
  *      the four required fields (name/version/scope/goal) plus defaulted rest.
  *   2. Scan `skills/` (if present) for sub-directories containing a
  *      `skill.yaml` and parse each through the `Skill` schema.
+ *   3. PR-followup: parse `models.yaml` (if present) → `Pack.models` so the
+ *      LLM-primitive resolver can consult pack-declared aliases.
+ *   4. PR-followup: parse `drift_response.yaml` (if present) → `Pack.driftResponse`
+ *      so the hook dispatcher can resolve per-rule + default policies instead
+ *      of hard-coding `block_tool`.
  *
- * Side files (models / channels / notifications / drift_response) are
- * intentionally NOT folded into the returned `Pack` — they belong to
- * orthogonal config consumers (per spec risk callout 2). Phase 2.4+ wires
- * them in via separate loaders so the runtime can compose models + channels
- * + drift response independently from the pack identity.
+ * Side files `channels.yaml` / `notifications.yaml` remain orthogonal config
+ * consumers (per the original spec risk callout 2) — they wire in via the
+ * notification router when that subsystem lands. The two folded-in side
+ * files above ARE pack-identity-relevant (model aliases shape rule eval;
+ * drift policies shape dispatcher output), so they belong on the Pack.
  *
  * Error surface: every failure flows through `parseYamlFile`, which already
  * threads the source path into both YAML-parse and Zod-validation error
@@ -46,7 +52,9 @@ import type { z } from 'zod';
 import type { Pack } from '../runtime/types.js';
 
 import { ChatAgentSchema, type ChatAgentConfig } from './schemas/chat_agent.js';
+import { DriftResponseConfig } from './schemas/drift_response.js';
 import { Manifest } from './schemas/manifest.js';
+import { ModelsConfig } from './schemas/models.js';
 import { Skill } from './schemas/skill.js';
 import { parseYamlFile } from './yaml.js';
 
@@ -59,6 +67,8 @@ import { parseYamlFile } from './yaml.js';
 // `Skill[]` line up with the runtime types declared in `runtime/types.ts`.
 type ManifestOutput = z.infer<typeof Manifest>;
 type SkillOutput = z.infer<typeof Skill>;
+type ModelsConfigOutput = z.infer<typeof ModelsConfig>;
+type DriftResponseConfigOutput = z.infer<typeof DriftResponseConfig>;
 
 // ---------------------------------------------------------------------------
 // loadPack — public entry point
@@ -84,6 +94,19 @@ export async function loadPack(dir: string): Promise<Pack> {
   // malformed `chat_agent.yaml` is a configuration bug, not a missing file.
   const chatAgent = await loadOptionalChatAgent(join(dir, 'chat_agent.yaml'));
 
+  // models.yaml — PR-followup model-alias side-file. OPTIONAL: absence
+  // (ENOENT) means the pack ships no abstract aliases and the model
+  // resolver should fall back to env-var + user-level config only. Any
+  // other read/parse error surfaces verbatim — a malformed `models.yaml`
+  // is a configuration bug, not a missing file.
+  const models = await loadOptionalModels(join(dir, 'models.yaml'));
+
+  // drift_response.yaml — PR-followup drift-policy side-file. OPTIONAL:
+  // absence (ENOENT) means the runtime dispatcher should fall back to its
+  // Phase 1 conservative default (`block_tool`) — preserves pre-PR-followup
+  // behavior for packs that don't ship the file. Same parse-error contract.
+  const driftResponse = await loadOptionalDriftResponse(join(dir, 'drift_response.yaml'));
+
   return {
     name: manifest.name,
     version: manifest.version,
@@ -96,6 +119,8 @@ export async function loadPack(dir: string): Promise<Pack> {
     skills,
     ...(manifest.extends !== undefined ? { extends: manifest.extends } : {}),
     ...(chatAgent !== undefined ? { chatAgent } : {}),
+    ...(models !== undefined ? { models } : {}),
+    ...(driftResponse !== undefined ? { driftResponse } : {}),
   };
 }
 
@@ -117,6 +142,51 @@ async function loadOptionalChatAgent(path: string): Promise<ChatAgentConfig | un
     // Node's readFile throws ENOENT as `NodeJS.ErrnoException`. parseYamlFile
     // forwards the underlying error (it wraps YAML + Zod errors but does NOT
     // wrap fs errors), so we test the code on the raw exception.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// loadOptionalModels — read + validate `models.yaml` if present.
+//
+// PR-followup: same ENOENT-as-absent contract as `loadOptionalChatAgent`.
+// Absent file → `undefined`. Parse/schema errors propagate verbatim via
+// `parseYamlFile`'s path-bearing error messages so the user can blame the
+// right file + alias. Re-cast to the schema's output type so defaults (e.g.
+// `args: []`, `description: ''`) are visible to the runtime.
+// ---------------------------------------------------------------------------
+
+async function loadOptionalModels(path: string): Promise<ModelsConfigOutput | undefined> {
+  try {
+    const { data } = await parseYamlFile(path, ModelsConfig);
+    return data as ModelsConfigOutput;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// loadOptionalDriftResponse — read + validate `drift_response.yaml` if present.
+//
+// PR-followup: same ENOENT-as-absent contract. The schema is `.strict()` so a
+// typo at the top level (e.g. `defualt:`) fails loudly — important for a
+// safety-critical file. Absent file → `undefined`; the dispatcher then falls
+// back to the Phase 1 conservative `block_tool` default in code (NOT the
+// schema's `block_tool` default — that only fires when the file IS present
+// but omits the field). Keeping the two paths separate means "no file at all"
+// is a distinct signal from "file present with explicit defaults" — useful
+// for the setup-UI diagnostic ("pack X declares no drift_response policy").
+// ---------------------------------------------------------------------------
+
+async function loadOptionalDriftResponse(
+  path: string,
+): Promise<DriftResponseConfigOutput | undefined> {
+  try {
+    const { data } = await parseYamlFile(path, DriftResponseConfig);
+    return data as DriftResponseConfigOutput;
+  } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw e;
   }

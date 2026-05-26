@@ -1,7 +1,10 @@
-# Side-file fixture — exists to prove `loadPack` does NOT consume models.yaml
-# (it belongs to a separate config consumer landing in Phase 2.4+).
-aliases:
-  fast_classifier:
-    mode: subscription
-    command: claude
-    args: ['--print', '--model', 'claude-haiku-4-5']
+# Side-file fixture — PR-followup made `models.yaml` a real consumer of
+# `loadPack` (folded into `Pack.models`). The file MUST schema-validate now.
+# Shape matches `src/packs/schemas/models.ts` (ModelsConfig — top-level keys
+# are alias names; values are ModelAlias objects).
+fast_classifier:
+  description: fixture classifier alias
+  mode: subscription
+  impl: cli
+  cli: example-cli
+  args: ['--print']

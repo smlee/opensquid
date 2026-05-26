@@ -33,6 +33,8 @@
 import { z } from 'zod';
 
 import { ChatAgentSchema } from '../packs/schemas/chat_agent.js';
+import { DriftResponseConfig } from '../packs/schemas/drift_response.js';
+import { ModelsConfig } from '../packs/schemas/models.js';
 
 // ---------------------------------------------------------------------------
 // Verdict — rule output
@@ -198,6 +200,23 @@ export type Scope = z.infer<typeof Scope>;
 // The side-file is intentionally additive: every existing pack stays valid
 // without authoring a `chat_agent.yaml`. Only consumers that opt into the
 // warm-agent chat bridge (WAB.6+) read the field.
+//
+// `models` is the optional `models.yaml` side-file folded into the Pack —
+// pack-declared model aliases (`fast_classifier`, `reasoning`, etc.). The
+// runtime's model-config resolver (PR-followup) reads this AFTER env vars
+// and user-level `~/.opensquid/models.yaml` overrides, so a pack-shipped
+// alias acts as the "out-of-the-box default" that the user can override.
+// Absent = `undefined`; downstream resolvers treat that as "no pack
+// contributions" and only consult env + user-yaml. See `models/load_config.ts`.
+//
+// `driftResponse` is the optional `drift_response.yaml` side-file. When
+// present, the hook dispatcher (`runtime/hooks/dispatch.ts`) resolves each
+// rule's policy via `driftResponse.per_rule[rule.id] ?? driftResponse.default`
+// instead of the historical hard-coded `block_tool` default. Absent =
+// `undefined`; the dispatcher falls back to `block_tool` as the Phase 1
+// conservative default so existing packs that don't ship the file behave
+// identically to pre-PR-followup. See `runtime/hooks/dispatch.ts` for the
+// resolve-precedence chain.
 export const Pack = z.object({
   name: z.string(),
   version: z.string(),
@@ -210,6 +229,8 @@ export const Pack = z.object({
   evolves: z.boolean().default(true),
   skills: z.array(Skill).default([]),
   chatAgent: ChatAgentSchema.optional(),
+  models: ModelsConfig.optional(),
+  driftResponse: DriftResponseConfig.optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

@@ -23,6 +23,7 @@
 
 import type { z } from 'zod';
 
+import type { ModelsConfig } from '../packs/schemas/models.js';
 import { type Result, err } from '../runtime/result.js';
 import type { Event } from '../runtime/types.js';
 
@@ -40,6 +41,14 @@ export interface EvalCtx {
   bindings: Map<string, unknown>;
   sessionId: string;
   packId: string;
+  /**
+   * PR-followup: pack-shipped `models.yaml` content (`Pack.models`), threaded
+   * through so `llm_classify` / `subagent_call` primitives can consult the
+   * pack's declared aliases without the global `loadModelsConfig()` call
+   * having to re-discover the active pack. `undefined` for packs that ship
+   * no `models.yaml` and for non-pack call sites (legacy daemon).
+   */
+  packModels?: ModelsConfig;
 }
 
 // ---------------------------------------------------------------------------

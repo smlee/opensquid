@@ -90,8 +90,12 @@ export function registerLlmFunctions(registry: FunctionRegistry): void {
     durable: true,
     memoizable: false,
     costEstimateMs: 30_000,
-    execute: async ({ model, prompt, timeout_ms }) => {
-      const cfg = await loadModelsConfig();
+    execute: async ({ model, prompt, timeout_ms }, ctx) => {
+      // PR-followup: thread pack-shipped `models.yaml` through the resolver
+      // so a pack's declared alias works out of the box without a user-level
+      // `~/.opensquid/models.yaml`. `ctx.packModels` is `undefined` for
+      // packs that ship no `models.yaml` and for legacy non-pack call sites.
+      const cfg = await loadModelsConfig(ctx.packModels);
       const aliasCfg = cfg[model];
       if (!aliasCfg) {
         return err({
@@ -124,8 +128,9 @@ export function registerLlmFunctions(registry: FunctionRegistry): void {
     durable: true,
     memoizable: true,
     costEstimateMs: 3000,
-    execute: async ({ model, prompt, allowed_labels, timeout_ms }) => {
-      const cfg = await loadModelsConfig();
+    execute: async ({ model, prompt, allowed_labels, timeout_ms }, ctx) => {
+      // PR-followup: same `ctx.packModels` thread-through as `subagent_call`.
+      const cfg = await loadModelsConfig(ctx.packModels);
       const aliasCfg = cfg[model];
       if (!aliasCfg) {
         return err({

@@ -202,6 +202,155 @@ describe('loadPack — error + edge cases', () => {
     expect(msg).toContain('chat_agent.yaml');
   });
 
+  // PR-followup: models.yaml + drift_response.yaml are now folded into the
+  // Pack by `loadPack`. Tests verify presence + absence + schema-error paths
+  // for both side files. Schema-error path covers the most common author bug
+  // (typo at top level under `.strict()` for drift_response; missing required
+  // `mode:` for models).
+
+  it('loads models.yaml when present, folding it into Pack.models', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: with-models', 'version: 0.1.0', 'scope: workflow', 'goal: PR-followup'].join('\n') +
+        '\n',
+      'utf8',
+    );
+    await writeFile(
+      join(dir, 'models.yaml'),
+      [
+        'fast_classifier:',
+        '  description: test classifier',
+        '  mode: subscription',
+        '  impl: cli',
+        '  cli: example-cli',
+        "  args: ['--print']",
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    const pack = await loadPack(dir);
+    expect(pack.models).toBeDefined();
+    expect(pack.models?.fast_classifier?.mode).toBe('subscription');
+    expect(pack.models?.fast_classifier?.cli).toBe('example-cli');
+    // Schema default applies — args was authored, but description default
+    // stays as the authored value rather than the empty-string fallback.
+    expect(pack.models?.fast_classifier?.description).toBe('test classifier');
+  });
+
+  it('leaves Pack.models undefined when models.yaml is absent', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: no-models', 'version: 0.1.0', 'scope: workflow', 'goal: no side-file'].join('\n') +
+        '\n',
+      'utf8',
+    );
+    const pack = await loadPack(dir);
+    expect(pack.models).toBeUndefined();
+  });
+
+  it('surfaces a models.yaml schema error verbatim (missing required mode)', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: bad-models', 'version: 0.1.0', 'scope: workflow', 'goal: bad models'].join('\n') +
+        '\n',
+      'utf8',
+    );
+    // `mode:` is the one schema-required field; omitting it must throw.
+    await writeFile(
+      join(dir, 'models.yaml'),
+      ['fast_classifier:', "  cli: 'example-cli'"].join('\n') + '\n',
+      'utf8',
+    );
+
+    let caught: unknown;
+    try {
+      await loadPack(dir);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const msg = (caught as Error).message;
+    expect(msg).toContain('models.yaml');
+    expect(msg.toLowerCase()).toContain('mode');
+  });
+
+  it('loads drift_response.yaml when present, folding it into Pack.driftResponse', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: with-drift', 'version: 0.1.0', 'scope: workflow', 'goal: PR-followup'].join('\n') +
+        '\n',
+      'utf8',
+    );
+    await writeFile(
+      join(dir, 'drift_response.yaml'),
+      [
+        'default: notify_and_pause',
+        'per_rule:',
+        '  example-rule: block_tool',
+        '  other-rule: warn',
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    const pack = await loadPack(dir);
+    expect(pack.driftResponse).toBeDefined();
+    expect(pack.driftResponse?.default).toBe('notify_and_pause');
+    expect(pack.driftResponse?.per_rule['example-rule']).toBe('block_tool');
+    expect(pack.driftResponse?.per_rule['other-rule']).toBe('warn');
+    // Default-empty `corrective_skills` applied.
+    expect(pack.driftResponse?.corrective_skills).toEqual({});
+  });
+
+  it('leaves Pack.driftResponse undefined when drift_response.yaml is absent', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: no-drift', 'version: 0.1.0', 'scope: workflow', 'goal: no side-file'].join('\n') +
+        '\n',
+      'utf8',
+    );
+    const pack = await loadPack(dir);
+    expect(pack.driftResponse).toBeUndefined();
+  });
+
+  it('surfaces a drift_response.yaml schema error verbatim (typo top-level key under .strict())', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: bad-drift', 'version: 0.1.0', 'scope: workflow', 'goal: bad drift'].join('\n') + '\n',
+      'utf8',
+    );
+    // `defualt:` typo — `.strict()` rejects unknown top-level keys.
+    await writeFile(join(dir, 'drift_response.yaml'), 'defualt: warn\n', 'utf8');
+
+    let caught: unknown;
+    try {
+      await loadPack(dir);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const msg = (caught as Error).message;
+    expect(msg).toContain('drift_response.yaml');
+  });
+
+  it('surfaces a drift_response.yaml schema error verbatim (unknown policy enum value)', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: bad-policy', 'version: 0.1.0', 'scope: workflow', 'goal: bad policy'].join('\n') +
+        '\n',
+      'utf8',
+    );
+    await writeFile(join(dir, 'drift_response.yaml'), 'default: panic\n', 'utf8');
+
+    let caught: unknown;
+    try {
+      await loadPack(dir);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain('drift_response.yaml');
+  });
+
   it('follows symlinks inside skills/ to their target directory (documented behavior)', async () => {
     await writeFile(
       join(dir, 'manifest.yaml'),
