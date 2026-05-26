@@ -157,3 +157,50 @@ export async function fetchExistingImportIndex(
   }
   return index;
 }
+
+/**
+ * Deletion propagation (MAU.2): remove engine memories whose auto-memory source
+ * file no longer exists, so the derived recall index reflects the source.
+ *
+ * Marker-guarded: only entries in `existingIndex` (i.e. carrying the
+ * `IMPORT_HOST_PREFIX` marker) are deletion candidates — engine-native and
+ * user-`memorize`d entries are never in that map, so they are structurally
+ * unreachable here. `force: true` because import entries are tagged
+ * `authored_by: 'user'` (eviction-immune); the marker + an absent source is the
+ * authority, and pruning a derived copy does not evict a hand-authored lesson.
+ *
+ * Safety net for the on-disk set: an entry is kept if its name matches EITHER a
+ * file's frontmatter `name` (authoritative; handles name != basename) OR a
+ * file's basename. The basename fallback means a transiently-malformed file
+ * (which `readAutoMemory` would throw on) still protects its engine copy from
+ * being orphaned by a parse error.
+ *
+ * `dryRun` counts candidates without deleting.
+ */
+export async function pruneOrphanedImports(
+  dir: string,
+  engine: EngineClient,
+  existingIndex: Map<string, ImportIndexEntry>,
+  opts: { dryRun: boolean },
+): Promise<{ pruned: number }> {
+  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.md') && f !== 'MEMORY.md');
+  const onDisk = new Set<string>();
+  for (const f of files) {
+    onDisk.add(f.replace(/\.md$/, '')); // basename fallback (name usually == basename)
+    try {
+      const parsed = await readAutoMemory(join(dir, f));
+      onDisk.add(parsed.frontmatter.name); // authoritative name (handles name != basename)
+    } catch {
+      // Malformed file → keep only the basename guard; never let a parse error
+      // orphan (delete) its engine copy.
+    }
+  }
+  let pruned = 0;
+  for (const [name, entry] of existingIndex) {
+    if (!onDisk.has(name)) {
+      if (!opts.dryRun) await engine.memoryDelete({ id: entry.id, force: true });
+      pruned += 1;
+    }
+  }
+  return { pruned };
+}

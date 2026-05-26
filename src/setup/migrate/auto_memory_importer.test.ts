@@ -20,6 +20,7 @@ import {
   fetchExistingImportIndex,
   importAutoMemoryDir,
   IMPORT_HOST_PREFIX,
+  pruneOrphanedImports,
   type ImportIndexEntry,
 } from './auto_memory_importer.js';
 
@@ -62,6 +63,7 @@ interface Engine {
   create: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
+  del: ReturnType<typeof vi.fn>;
 }
 
 /**
@@ -91,12 +93,14 @@ function mkEngine(storedContent: Record<string, string> = {}): Engine {
   const update = vi
     .fn()
     .mockResolvedValue({ id: 'x', description: 'd', content: 'c', scope: 'user' });
+  const del = vi.fn().mockResolvedValue({ id: 'x', deleted: true });
   const client = {
     memoryCreate: create,
     memoryGet: get,
     memoryUpdate: update,
+    memoryDelete: del,
   } as unknown as EngineClient;
-  return { client, create, get, update };
+  return { client, create, get, update, del };
 }
 
 function idx(entries: Record<string, string>): Map<string, ImportIndexEntry> {
@@ -349,5 +353,56 @@ describe('fetchExistingImportIndex', () => {
     const index = await fetchExistingImportIndex(client);
     expect(index.size).toBe(250);
     expect(memoryList).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('pruneOrphanedImports', () => {
+  it('prunes an import entry whose source file is gone (force-delete)', async () => {
+    await write('a.md', fixture('a', 'feedback')); // a present
+    const { client, del } = mkEngine();
+    const result = await pruneOrphanedImports(dir, client, idx({ a: 'id-a', gone: 'id-gone' }), {
+      dryRun: false,
+    });
+    expect(result).toEqual({ pruned: 1 });
+    expect(del).toHaveBeenCalledTimes(1);
+    expect(del.mock.calls[0]?.[0]).toEqual({ id: 'id-gone', force: true });
+  });
+
+  it('keeps an entry whose source exists (by frontmatter name)', async () => {
+    await write('a.md', fixture('a', 'feedback'));
+    const { client, del } = mkEngine();
+    const result = await pruneOrphanedImports(dir, client, idx({ a: 'id-a' }), { dryRun: false });
+    expect(result).toEqual({ pruned: 0 });
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('basename guard: a malformed file still protects its engine copy from prune', async () => {
+    await write('foo.md', '# no frontmatter — readAutoMemory throws\n');
+    const { client, del } = mkEngine();
+    const result = await pruneOrphanedImports(dir, client, idx({ foo: 'id-foo' }), {
+      dryRun: false,
+    });
+    expect(result).toEqual({ pruned: 0 }); // kept via basename fallback
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('handles name != basename: keeps the named entry, prunes the truly-orphaned one', async () => {
+    await write('y.md', fixture('x', 'feedback')); // file y.md, frontmatter name: x
+    const { client, del } = mkEngine();
+    const result = await pruneOrphanedImports(dir, client, idx({ x: 'id-x', z: 'id-z' }), {
+      dryRun: false,
+    });
+    expect(result).toEqual({ pruned: 1 });
+    expect(del).toHaveBeenCalledTimes(1);
+    expect(del.mock.calls[0]?.[0]).toEqual({ id: 'id-z', force: true });
+  });
+
+  it('dryRun: counts orphans without deleting', async () => {
+    const { client, del } = mkEngine();
+    const result = await pruneOrphanedImports(dir, client, idx({ gone: 'id-gone' }), {
+      dryRun: true,
+    });
+    expect(result).toEqual({ pruned: 1 });
+    expect(del).not.toHaveBeenCalled();
   });
 });
