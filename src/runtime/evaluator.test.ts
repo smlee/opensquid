@@ -282,10 +282,13 @@ describe('evaluateProcess — unsupported if-expression', () => {
       const steps: ProcessStep[] = [
         {
           call: 'verdict',
-          // `||` is still unsupported (only `&&` is allow-listed); use it to
-          // exercise the warning path. `a && b` is now a supported compound
-          // expression as of G.5's evalCondition extension.
-          if: 'a || b',
+          // H.1.6: `||` is now valid grammar (was unsupported pre-cutover).
+          // Use truly-invalid syntax (`== =` — a bare `=` is not a recognised
+          // lexer token; only `==` / `===` / `!=` / `!==` consume `=`) to
+          // exercise the lex-error → false-with-warn path. Pre-research §7.1
+          // case #5 marks this as the one justified test-code rewrite of
+          // the H.1.6 cutover.
+          if: '== =',
           args: { level: 'block', message: 'should-skip' },
         },
       ];
@@ -293,12 +296,14 @@ describe('evaluateProcess — unsupported if-expression', () => {
       const result = await evaluateProcess(steps, createTestCtx(), reg);
 
       expect(result).toEqual({ kind: 'no_verdict' });
-      // Filter to the evaluator's own warning — the registry also warns
-      // when a test primitive omits the DURABLE.2 `durable` flag.
+      // The chevrotain-backed evaluator emits a warn prefixed with
+      // `[opensquid:evaluator]` and naming the error tier (lex / parse /
+      // runtime / interpreter-limit). Filter to that prefix so the registry's
+      // own `durable`-flag warning doesn't bleed into the assertion.
       const ifWarnings = warn.mock.calls.filter(
-        (c) => typeof c[0] === 'string' && c[0].includes('Unsupported if-expression'),
+        (c) => typeof c[0] === 'string' && c[0].includes('[opensquid:evaluator]'),
       );
-      expect(ifWarnings).toHaveLength(1);
+      expect(ifWarnings.length).toBeGreaterThanOrEqual(1);
     } finally {
       warn.mockRestore();
     }

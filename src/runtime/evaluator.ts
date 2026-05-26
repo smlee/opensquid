@@ -9,11 +9,14 @@
  *
  * What the evaluator deliberately is NOT:
  *
- *   - A general-purpose expression language. `if:` accepts ONLY bare-name
- *     truthiness (`hit`) and simple equality (`x == "FOO"`). Anything else
- *     resolves to `false` with a console warning. No `eval()` or
- *     `new Function()` — audit-grepped. Future expression features ship as
- *     a Phase 2 task, not a string-eval here.
+ *   - A string-eval engine. `if:` parsing is delegated to the chevrotain
+ *     grammar in `runtime/evaluator/expression/index.ts` (H.1.6 cutover);
+ *     this module never sees raw expression strings beyond the one-line
+ *     delegate at the bottom of the file. No `eval()` / `new Function()`
+ *     anywhere — audit-grepped on both this file and the expression dir.
+ *     The grammar supports logical ops (`||`, `&&`, `!`), parens, dotted
+ *     and bracket paths, function calls (5 allow-listed: `len`, `contains`,
+ *     `match`, `startsWith`, `endsWith`), and strict equality.
  *
  *   - A template engine. `{{name}}` interpolation runs against string
  *     `args` values only; nested objects with template strings are NOT
@@ -83,6 +86,7 @@ import { canonicalJsonStringify } from './durable/canonical_json.js';
 import type { CheckpointRow, CheckpointStore } from './durable/checkpoint_store.js';
 import type { MemoCache } from './durable/memo_cache.js';
 import { sha256Hex } from './durable/run_id.js';
+import { evalCondition } from './evaluator/expression/index.js';
 import type { ProcessStep, RuleResult, Verdict } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -449,242 +453,23 @@ async function loadCheckpointMap(
 }
 
 // ---------------------------------------------------------------------------
-// evalCondition — safe `if:` expression evaluator (NO eval())
+// `if:` expression dispatch — H.1.6 cutover.
 //
-// Supported forms (deterministic, allow-listed — no JS `eval`, no
-// `new Function`):
+// The old 5-regex evaluator + the numeric-path helper were deleted in H.1.6
+// in favor of the chevrotain grammar in `runtime/evaluator/expression/`.
+// That module's `evalCondition(expr, bindings)` is imported at the top of
+// this file and called directly from the step-loop guard above (search for
+// the `step.if` check). The behavior contract per pre-research §12:
 //
-//   - Bare-name truthiness:  `hit` → Boolean(bindings.get('hit'))
-//   - Simple equality:       `x == "FOO"` → String(bindings.get('x')) === 'FOO'
-//   - Numeric comparison on a dotted property (G.5):
-//       `name.field <op> <int>` where:
-//         * `name` is a bare binding,
-//         * `field` is a single property (`length` / `count` are the typical
-//            uses but any plain identifier works for forward extension),
-//         * `<op>` ∈ { `===`, `==`, `!==`, `!=`, `>`, `<`, `>=`, `<=` },
-//         * `<int>` is a non-negative integer literal.
-//   - Logical AND of any two of the above:
-//       `EXPR && EXPR` — both sides evaluated independently via this same
-//       function, short-circuit semantics.
+//   - §12.2: empty/whitespace-only `if:` returns `true` (was silent false +
+//     warn). Symmetric with the absent-field case at the loop guard.
+//   - §12.3: comparisons are strict — `1 == "1"` is `false`.
+//   - §12.4: `phases != "complete"` is valid grammar; the previously-dead
+//     `phase-logged-before-commit` rule starts firing for real.
 //
-// Anything else (||, function calls, parens, numbers as RHS for `==`,
-// negation, nested property paths beyond one level) returns false and emits
-// a console warning. The warning is intentionally loud during pack-author
-// development; Task 1.10+ wires a real logger and surfaces these via the
-// channel-routing pipeline. Until then `console.warn` is the agreed
-// placeholder.
-//
-// G.5 introduced the numeric-comparison + AND forms so the
-// `verify-before-citing-memory` skill can express
-// `drift_phrases.matched.length > 0 && verification_tools.count === 0`
-// without an unbounded expression evaluator.
-//
-// Audit grep: this file contains zero matches for `eval(` or `new Function`.
+// Audit grep: this file contains zero matches for `eval(` or `new Function`,
+// and zero matches for the deleted regex-constant names.
 // ---------------------------------------------------------------------------
-
-const EQ_PATTERN = /^(\w+)\s*==\s*"([^"]+)"$/;
-const BARE_PATTERN = /^\w+$/;
-// Supports `name.field` AND `name.field.subfield` — used by G.5's skill YAML
-// (`drift_phrases.matched.length > 0`). Deeper nesting falls through to the
-// unsupported-warning path so we don't grow into an arbitrary path expression
-// engine.
-const NUM_CMP_PATTERN = /^(\w+)((?:\.\w+){1,3})\s*(===|!==|==|!=|>=|<=|>|<)\s*(\d+)$/;
-// G.13 fix: `name.field == true|false` literal-bool comparison. The d9-guard
-// skill's `if: 'automation.value == true'` was previously falling through to
-// the unsupported-warning path because NUM_CMP_PATTERN only accepts integer
-// RHS. Booleans must round-trip without coercion (Number(false)===0 would
-// silently make `count == false` evaluate true for empty arrays).
-const BOOL_CMP_PATTERN = /^(\w+)((?:\.\w+){1,3})\s*(===|==|!==|!=)\s*(true|false)$/;
-// G.13 fix: `name.field == "STR"` dotted equality. EQ_PATTERN only covers
-// bare-name LHS; without this branch, skills writing `result.label == "BLOCK"`
-// silently fail-closed. Same op set as BOOL_CMP for consistency.
-const STR_PATH_EQ_PATTERN = /^(\w+)((?:\.\w+){1,3})\s*(===|==|!==|!=)\s*"([^"]+)"$/;
-
-function evalCondition(expr: string, bindings: Map<string, unknown>): boolean {
-  const trimmed = expr.trim();
-
-  // Logical AND — split on the FIRST `&&` (any further ones recurse into the
-  // right-hand parse via the same path). Short-circuit semantics: if the LHS
-  // is false, the RHS is never evaluated. Both halves must themselves be one
-  // of the supported forms or the standard "unsupported" warning fires for
-  // the failing half via the recursive call.
-  const andIdx = trimmed.indexOf('&&');
-  if (andIdx !== -1) {
-    const lhs = trimmed.slice(0, andIdx).trim();
-    const rhs = trimmed.slice(andIdx + 2).trim();
-    if (lhs.length === 0 || rhs.length === 0) {
-      console.warn(`[opensquid:evaluator] Unsupported if-expression: ${JSON.stringify(expr)}.`);
-      return false;
-    }
-    return evalCondition(lhs, bindings) && evalCondition(rhs, bindings);
-  }
-
-  const eqMatch = EQ_PATTERN.exec(trimmed);
-  if (eqMatch) {
-    const name = eqMatch[1];
-    const value = eqMatch[2];
-    if (name === undefined || value === undefined) return false;
-    return String(bindings.get(name)) === value;
-  }
-
-  const cmpMatch = NUM_CMP_PATTERN.exec(trimmed);
-  if (cmpMatch) {
-    const name = cmpMatch[1];
-    const pathTail = cmpMatch[2]; // leading dot included, e.g. `.matched.length`
-    const op = cmpMatch[3];
-    const rhsRaw = cmpMatch[4];
-    if (name === undefined || pathTail === undefined || op === undefined || rhsRaw === undefined) {
-      return false;
-    }
-    const bound = bindings.get(name);
-    const fields = pathTail.split('.').filter((s) => s.length > 0);
-    const lhsNum = resolveNumericPath(bound, fields);
-    if (lhsNum === undefined) return false;
-    const rhsNum = Number.parseInt(rhsRaw, 10);
-    switch (op) {
-      case '===':
-      case '==':
-        return lhsNum === rhsNum;
-      case '!==':
-      case '!=':
-        return lhsNum !== rhsNum;
-      case '>':
-        return lhsNum > rhsNum;
-      case '<':
-        return lhsNum < rhsNum;
-      case '>=':
-        return lhsNum >= rhsNum;
-      case '<=':
-        return lhsNum <= rhsNum;
-      default:
-        return false;
-    }
-  }
-
-  // G.13 fix: `name.field == true|false` — dotted bool comparison. Must run
-  // BEFORE the bare-name fallback so `automation.value == true` is recognised
-  // as a structured form rather than falling through to "unsupported".
-  const boolMatch = BOOL_CMP_PATTERN.exec(trimmed);
-  if (boolMatch) {
-    const name = boolMatch[1];
-    const pathTail = boolMatch[2];
-    const op = boolMatch[3];
-    const rhsRaw = boolMatch[4];
-    if (name === undefined || pathTail === undefined || op === undefined || rhsRaw === undefined) {
-      return false;
-    }
-    const bound = bindings.get(name);
-    const fields = pathTail.split('.').filter((s) => s.length > 0);
-    // Walk the path; tolerate non-bool intermediate-then-bool-leaf as well
-    // as the leaf simply being missing (undefined → comparison false unless
-    // explicitly `!=`/`!==`).
-    let cur: unknown = bound;
-    for (const f of fields) {
-      if (cur === null || cur === undefined || typeof cur !== 'object') {
-        cur = undefined;
-        break;
-      }
-      cur = (cur as Record<string, unknown>)[f];
-    }
-    const lhs = typeof cur === 'boolean' ? cur : undefined;
-    const rhs = rhsRaw === 'true';
-    if (lhs === undefined) {
-      // Undefined LHS never EQUALS a literal; always NOT EQUAL.
-      return op === '!==' || op === '!=';
-    }
-    switch (op) {
-      case '===':
-      case '==':
-        return lhs === rhs;
-      case '!==':
-      case '!=':
-        return lhs !== rhs;
-      default:
-        return false;
-    }
-  }
-
-  // G.13 fix: `name.field == "STR"` dotted string equality.
-  const strPathMatch = STR_PATH_EQ_PATTERN.exec(trimmed);
-  if (strPathMatch) {
-    const name = strPathMatch[1];
-    const pathTail = strPathMatch[2];
-    const op = strPathMatch[3];
-    const rhs = strPathMatch[4];
-    if (name === undefined || pathTail === undefined || op === undefined || rhs === undefined) {
-      return false;
-    }
-    const bound = bindings.get(name);
-    const fields = pathTail.split('.').filter((s) => s.length > 0);
-    let cur: unknown = bound;
-    for (const f of fields) {
-      if (cur === null || cur === undefined || typeof cur !== 'object') {
-        cur = undefined;
-        break;
-      }
-      cur = (cur as Record<string, unknown>)[f];
-    }
-    const lhs =
-      typeof cur === 'string' || typeof cur === 'number' || typeof cur === 'boolean'
-        ? String(cur)
-        : '';
-    switch (op) {
-      case '===':
-      case '==':
-        return lhs === rhs;
-      case '!==':
-      case '!=':
-        return lhs !== rhs;
-      default:
-        return false;
-    }
-  }
-
-  if (BARE_PATTERN.test(trimmed)) {
-    return Boolean(bindings.get(trimmed));
-  }
-
-  // Unsupported expression — refuse to guess. Loud enough that pack authors
-  // notice during dev; the runtime never silently mis-evaluates a condition.
-  console.warn(
-    `[opensquid:evaluator] Unsupported if-expression: ${JSON.stringify(expr)}. ` +
-      `Supported: bare name, x == "FOO", name.field <op> N, EXPR && EXPR.`,
-  );
-  return false;
-}
-
-/**
- * Walk a sequence of property segments against the bound value and return
- * the final value as a finite number. `length` on an array short-circuits
- * to `array.length` even though Array.length isn't an own property in the
- * usual `in` sense. Returns `undefined` if any segment fails to resolve to
- * an object (until the final segment) or if the final segment isn't a
- * finite number.
- *
- * Used by the `name.field <op> N` and `name.field.subfield <op> N` forms
- * in `evalCondition`. The regex caps depth at 3 segments — deeper paths
- * fall back to the unsupported-warning path.
- */
-function resolveNumericPath(bound: unknown, fields: string[]): number | undefined {
-  let cur: unknown = bound;
-  for (let i = 0; i < fields.length; i++) {
-    if (cur === null || cur === undefined) return undefined;
-    const field = fields[i];
-    if (field === undefined) return undefined;
-    if (i === fields.length - 1) {
-      // Final segment — must resolve to a finite number.
-      if (field === 'length' && Array.isArray(cur)) return cur.length;
-      if (typeof cur !== 'object') return undefined;
-      const v = (cur as Record<string, unknown>)[field];
-      if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
-      return v;
-    }
-    // Intermediate segment — descend into an object property.
-    if (typeof cur !== 'object') return undefined;
-    cur = (cur as Record<string, unknown>)[field];
-  }
-  return undefined;
-}
 
 // ---------------------------------------------------------------------------
 // interpolateArgs — `{{name}}` substitution in string args

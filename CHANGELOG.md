@@ -1572,6 +1572,55 @@ Dogfood-verified end-to-end against the family memory.
 
 ---
 
+## [0.5.147] — 2026-05-26
+
+The H.1.6 integration cutover. The 5-regex `if:` evaluator that powered
+G.5 + G.13 is replaced wholesale by the chevrotain-backed expression
+grammar shipped across H.1.1 – H.1.5. The runtime's `evalCondition`
+becomes a one-line shim delegating to
+`src/runtime/evaluator/expression/index.ts`; all five regex constants
+plus the `resolveNumericPath` helper are deleted from `evaluator.ts`.
+
+### Changed
+
+- **Full chevrotain-backed expression grammar replaces 5 hand-rolled
+  regex patterns for `if:` conditions.** New supported forms:
+  `||` / `&&` / `!` / parens, dotted path access of any depth (up to
+  the 64-depth interpreter cap), bracket index access (numeric and
+  string), function calls (5 allow-listed: `len`, `contains`, `match`,
+  `startsWith`, `endsWith`), float literals, `null` literal. Backed by
+  a 256-entry LRU parse cache (keyed by trimmed expression string) and
+  a sandboxed tree-walking interpreter with depth cap 64, step cap
+  10 000, and `Object.hasOwn` prototype-pollution defense. No `eval()`
+  / `new Function` anywhere in the new module — audit-grepped.
+- **(§12.2) Empty `if:` now evaluates `true`** (previously a silent
+  `false` with a warn). Treats present-but-empty predicates as
+  equivalent to "no `if:` field" so trailing-whitespace YAML doesn't
+  accidentally skip steps. The `parseExpression` parse-only entry
+  (exposed for H.2's Zod refinement) still rejects empties as
+  authoring mistakes at load time.
+- **(§12.3) Equality operators are strict.** `1 == "1"` returns
+  `false`; `String(x) == "1"`-style coercion is not supported. `==`
+  and `===` are equivalent surface forms, both lowering to strict
+  equality. Mismatched-type comparisons return `false` (fail-closed),
+  matching CEL/Cerbos semantics and unifying the two inconsistent
+  coercion paths the regex-era evaluator used to ship.
+
+### Fixed
+
+- **(§12.4) The `phase-logged-before-commit` workflow rule
+  (`packs/builtin/sangmin-personal/skills/workflow/skill.yaml:48`,
+  `committing && phases != "complete"`) now fires correctly.** Was a
+  silent no-op for the entire G-track lifetime because the RHS `!=`
+  form fell outside every regex in the old grammar; the `&&`
+  short-circuit then made the whole expression always `false`
+  regardless of `committing`. If you `git commit` without first
+  calling `mcp__opensquid__log_phase` for the current phase, this
+  rule will now block — recovery is one `log_phase` call or
+  `git commit --no-verify` (one-time) to ship past the new gate.
+
+---
+
 ## [0.3.1] — 2026-05-14
 
 The "actually usable for daily work" milestone. Three load-bearing
