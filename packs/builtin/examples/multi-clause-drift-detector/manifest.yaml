@@ -1,0 +1,18 @@
+# Example — not load-bearing. Demonstrates compound `||` + `&&` + `len()`
+# inside a single `if:` clause. Ships under packs/builtin/examples/ as
+# educational material referenced from docs/skill-grammar-guide.md.
+# NOT registered in any `active.json` and NOT loaded by the runtime
+# unless a user explicitly opts in by editing their scope's active.json.
+name: multi-clause-drift-detector
+version: 0.1.0
+scope: universal
+goal: warn on memory-citing or deferring language without paired verification evidence
+description: |
+  Worked example showing how a multi-clause anti-drift rule that used to
+  live only as prose inside a SKILL.md ("if I see X AND not Y, warn") can
+  collapse into a single structured `if:` clause once the H grammar
+  supports `||`, `&&`, `!`, and `len()` together.
+
+  The prose-only equivalent ships alongside as `BEFORE.md` for direct
+  comparison. The structured rule lives in `skills/drift/skill.yaml`.
+evolves: false

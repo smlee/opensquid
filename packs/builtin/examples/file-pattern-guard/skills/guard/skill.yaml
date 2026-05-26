@@ -1,0 +1,33 @@
+# Example — not load-bearing. Worked example for docs/skill-grammar-guide.md.
+#
+# Demonstrates a single-line `if:` clause using the allow-listed
+# `match()` regex function and dotted path access on the tool-event
+# payload. The same rule under the pre-H grammar was impossible to
+# express in YAML and had to live as agent-side prose.
+#
+# Note on regex: `match()` currently uses `new RegExp(pattern).test(s)`
+# in src/runtime/evaluator/expression/functions.ts. The ReDoS-hardening
+# swap to RE2 lands as H.4. Until then, keep patterns conservative —
+# no nested quantifiers, no backreferences, no lookarounds. The pattern
+# below is a simple alternation that V8's RegExp engine handles in
+# linear time on any input length.
+name: guard
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: refuse-vendored-or-generated-edits
+    kind: track_check
+    process:
+      - call: verdict
+        if: 'match(tool_input.file_path, "node_modules|/dist/|/build/|/.git/|.lock$")'
+        args:
+          level: block
+          message: |-
+            BLOCKED: refusing to edit a vendored, generated, or VCS-internal
+            path. If this is intentional (e.g. regenerating a lockfile),
+            invoke the appropriate generator tool instead of a direct Edit.
+prose: |
+  Reference companion to BEFORE.md. The same logic, but enforced by the
+  evaluator at every PreToolUse event for Edit calls instead of held
+  only as guidance for the agent to follow.

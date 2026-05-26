@@ -1,0 +1,9 @@
+{
+  "comment": "Edit on a normal src/ path — no alternation arm matches, the if: clause is false, the rule does not fire.",
+  "if": "match(tool_input.file_path, \"node_modules|/dist/|/build/|/.git/|.lock$\")",
+  "bindings": {
+    "tool_input": {
+      "file_path": "/Users/alice/projects/example/src/index.ts"
+    }
+  }
+}

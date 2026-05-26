@@ -1,0 +1,10 @@
+{
+  "comment": "2 Bash calls in current turn — count clause false, && short-circuits → the if: clause evaluates false (rule does not fire).",
+  "if": "bash_history.count > 5 && bash_history.tools[0] == \"Bash\"",
+  "bindings": {
+    "bash_history": {
+      "tools": ["Bash", "Bash"],
+      "count": 2
+    }
+  }
+}

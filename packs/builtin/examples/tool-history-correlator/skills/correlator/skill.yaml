@@ -1,0 +1,46 @@
+# Example — not load-bearing. Worked example for docs/skill-grammar-guide.md.
+#
+# Demonstrates accessing a primitive's structured return shape inside an
+# `if:` clause via dotted path + bracket-index access. The clause exercises:
+#
+#   1. numeric comparison (`>`)        — count threshold
+#   2. bracket-index access (`.tools[0]`) — array element by integer index
+#   3. string equality (`==`)          — first-element identity check
+#   4. logical `&&`                    — both clauses must hold
+#
+# Primitive return shape (verified against src/functions/session_tool_history.ts
+# on 2026-05-25):
+#   session_tool_history → { tools: string[], count: number }
+#
+# Note: the spec's original example assumed `.calls[]` with each call
+# carrying a `.name` field. The actual primitive returns a flat
+# `tools: string[]`, so this example accesses `bash_history.tools[0]`
+# (a string) directly. This is what the user's correction note flagged:
+# the example shape must match the real primitive, not the spec.
+name: correlator
+load: preload
+triggers:
+  - kind: stop
+rules:
+  - id: bash-heavy-turn
+    kind: track_check
+    process:
+      - call: session_tool_history
+        args:
+          scope: current_turn
+          filter_names:
+            - Bash
+        as: bash_history
+      - call: verdict
+        if: 'bash_history.count > 5 && bash_history.tools[0] == "Bash"'
+        args:
+          level: warn
+          message: |-
+            More than 5 Bash invocations this turn. Consider consolidating
+            with a single multi-line script (or a one-liner with &&) so the
+            tool trace stays scannable.
+prose: |
+  Reference companion to BEFORE.md. The bracket-index access on
+  `bash_history.tools[0]` is a sanity check that the filter actually
+  matched Bash entries — guards against future shape drift in the
+  primitive.

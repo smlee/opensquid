@@ -1,0 +1,18 @@
+# Example — not load-bearing. Demonstrates `match()` regex function +
+# dotted path access on a tool-event payload. Ships under
+# packs/builtin/examples/ as educational material referenced from
+# docs/skill-grammar-guide.md.
+# NOT registered in any `active.json` and NOT loaded by the runtime
+# unless a user explicitly opts in by editing their scope's active.json.
+name: file-pattern-guard
+version: 0.1.0
+scope: universal
+goal: block edits to vendored, generated, or VCS-internal file paths
+description: |
+  Worked example showing a regex-based path guard collapsed into a
+  single-line `if:` clause via the H grammar's allow-listed `match()`
+  function.
+
+  The prose-only equivalent ships alongside as `BEFORE.md`. The
+  structured rule lives in `skills/guard/skill.yaml`.
+evolves: false

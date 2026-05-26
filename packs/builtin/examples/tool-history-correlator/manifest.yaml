@@ -1,0 +1,18 @@
+# Example — not load-bearing. Demonstrates `len()` + numeric comparison +
+# bracket-index access on a primitive's array result. Ships under
+# packs/builtin/examples/ as educational material referenced from
+# docs/skill-grammar-guide.md.
+# NOT registered in any `active.json` and NOT loaded by the runtime
+# unless a user explicitly opts in by editing their scope's active.json.
+name: tool-history-correlator
+version: 0.1.0
+scope: universal
+goal: warn when a single turn issues an unusually large number of Bash invocations
+description: |
+  Worked example showing how to access structured primitive results
+  inside an `if:` clause via dotted path + bracket-index access.
+  Demonstrates the count-threshold + first-element identity pattern.
+
+  The prose-only equivalent ships alongside as `BEFORE.md`. The
+  structured rule lives in `skills/correlator/skill.yaml`.
+evolves: false

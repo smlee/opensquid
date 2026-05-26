@@ -1,0 +1,10 @@
+{
+  "comment": "6 Bash calls in current turn — count clause true, identity clause true → the if: clause evaluates true (rule fires).",
+  "if": "bash_history.count > 5 && bash_history.tools[0] == \"Bash\"",
+  "bindings": {
+    "bash_history": {
+      "tools": ["Bash", "Bash", "Bash", "Bash", "Bash", "Bash"],
+      "count": 6
+    }
+  }
+}

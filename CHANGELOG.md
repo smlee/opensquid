@@ -7,6 +7,71 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.149] - 2026-05-26
+
+### Added
+
+- `docs/skill-grammar-guide.md` — author's reference for `if:` grammar
+  (9 sections, 612 lines). Documents operator precedence, the
+  5-function allow-list, sandbox guarantees, gotchas (strict equality,
+  empty-`if:`-truthy, ReDoS posture, no chained comparison), the
+  function-allow-list expansion checklist, and the 3-file
+  `BEFORE.md` / `SKILL.md` / `manifest.yaml` example convention.
+- 3 worked-example skills under `packs/builtin/examples/`
+  demonstrating the prose → YAML migration pattern previously
+  impossible under the bounded regex grammar:
+  - `multi-clause-drift-detector` — exercises `&&`, `len()`, dotted
+    path access. Compound clause `len(drift_hits.matched) > 0 &&
+len(verifications.matched) == 0 && tool_history.count == 0`.
+  - `file-pattern-guard` — exercises the allow-listed `match()`
+    function. Single-line regex path guard:
+    `match(tool_input.file_path, "node_modules|/dist/|/build/|/.git/|.lock$")`.
+  - `tool-history-correlator` — exercises bracket-index access on a
+    primitive's array result and numeric comparison on a path operand:
+    `bash_history.count > 5 && bash_history.tools[0] == "Bash"`.
+
+  Each example ships three files plus fixtures: `BEFORE.md` (prose-only
+  equivalent showing why prose was insufficient), `SKILL.md` (reader's
+  guide), `manifest.yaml` (pack manifest, marked
+  `# Example — not load-bearing`), `skills/<name>/skill.yaml` (the
+  structured rule), `fixtures/*.input.json` + `.expected.json` (one
+  fires the verdict, one does not).
+
+- `test/example-skills.test.ts` — three test groups: pack-load
+  cleanliness for every example, fixture-evaluation correctness for
+  every input/expected pair, and grammar-guide doc-sample parse
+  validity (every `if:` clause inside every fenced ```yaml` block in
+  `docs/skill-grammar-guide.md` parses cleanly via `parseExpression`).
+
+### Notes
+
+- BEFORE.md is a novel pattern in opensquid (zero prior matches per
+  H pre-research §8.2 verification on 2026-05-25). Documented in
+  `docs/skill-grammar-guide.md` §9 as the canonical example
+  convention.
+- Example manifests are explicitly marked non-load-bearing in their
+  header comment to prevent calcification. They live under
+  `packs/builtin/examples/` (distinct from the production packs at
+  `packs/builtin/sangmin-personal/` and `packs/builtin/cycle-pack/`)
+  and are NOT registered in any `active.json` — the discovery layer
+  only loads packs explicitly opted into by the user.
+- Primitive-shape adjustments vs the H.3 spec: the spec assumed
+  `text_pattern_match` returned `.matches[]` + `.matched_count` and
+  that `session_tool_history` returned `.calls[]` with each call
+  carrying `.name`. The real primitives (verified against
+  `src/functions/` on 2026-05-25) return
+  `{ matched: string[], phrases: [{phrase, offset}] }` and
+  `{ tools: string[], count: number }` respectively. Examples follow
+  the real shapes — spec example shapes are illustrative for the `if:`
+  clause structure, not for the wrapping primitive contracts.
+- ReDoS hardening tracked as the H.4 follow-up task — `match()` still
+  uses `new RegExp(p).test(s)` in this release. Example patterns are
+  conservative (flat alternation) and the grammar guide §6.3 warns
+  authors against nested quantifiers / backreferences / lookarounds
+  until H.4 ships RE2.
+
+---
+
 ## [Unreleased]
 
 ### Changed — 2026-05-18 (0.7.35 — anti-drift rewrite: ATOMIC CUTOVER)

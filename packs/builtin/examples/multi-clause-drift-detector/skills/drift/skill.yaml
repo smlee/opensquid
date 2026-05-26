@@ -1,0 +1,60 @@
+# Example — not load-bearing. Worked example for docs/skill-grammar-guide.md.
+#
+# Demonstrates a single structured `if:` clause replacing the prose-only
+# rule documented in ../../BEFORE.md. Exercises three new H-grammar
+# features in one expression:
+#
+#   1. logical `&&` and `||`               — compound clauses
+#   2. allow-listed `len()` function       — array length over primitive results
+#   3. dotted path access on primitive results (`drift_hits.matched`)
+#
+# Primitive return shapes (verified against src/functions/ on 2026-05-25):
+#   text_pattern_match → { matched: string[], phrases: [{ phrase, offset }] }
+#   session_tool_history → { tools: string[], count: number }
+name: drift
+load: preload
+triggers:
+  - kind: stop
+rules:
+  - id: cite-memory-without-verifying
+    kind: track_check
+    process:
+      - call: text_pattern_match
+        args:
+          text_field: assistantText
+          patterns:
+            - per memory
+            - deferred
+            - i remember
+        as: drift_hits
+      - call: text_pattern_match
+        args:
+          text_field: assistantText
+          patterns:
+            - i checked
+            - i ran
+            - i confirmed
+        as: verifications
+      - call: session_tool_history
+        args:
+          scope: current_turn
+          filter_names:
+            - Bash
+            - Read
+            - Grep
+            - mcp__opensquid__recall
+            - mcp__opensquid__inspect_skill
+        as: tool_history
+      - call: verdict
+        if: 'len(drift_hits.matched) > 0 && len(verifications.matched) == 0 && tool_history.count == 0'
+        args:
+          level: warn
+          message: |-
+            Drift signal: assistant cited memory ("per memory" / "deferred" /
+            "i remember") without paired verification language and without
+            calling any verification tool this turn. Run a Bash/Read/Grep or
+            mcp__opensquid__recall/inspect_skill before citing memory.
+prose: |
+  Reference companion to BEFORE.md. The same logic, but enforced by the
+  evaluator at every Stop event instead of held only as guidance for the
+  agent to follow.

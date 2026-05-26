@@ -1,0 +1,18 @@
+{
+  "comment": "Drift phrases present, no verification language, no verification tools — the if: clause should evaluate true (rule fires).",
+  "if": "len(drift_hits.matched) > 0 && len(verifications.matched) == 0 && tool_history.count == 0",
+  "bindings": {
+    "drift_hits": {
+      "matched": ["per memory"],
+      "phrases": [{ "phrase": "per memory", "offset": 42 }]
+    },
+    "verifications": {
+      "matched": [],
+      "phrases": []
+    },
+    "tool_history": {
+      "tools": [],
+      "count": 0
+    }
+  }
+}
