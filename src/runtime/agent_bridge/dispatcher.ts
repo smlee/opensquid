@@ -46,6 +46,8 @@ import {
   type RunAgentTurnSubscriptionOptions,
   type RunAgentTurnSubscriptionResult,
 } from './agent_loop_subscription.js';
+import { isLeaseFresh, readLease } from '../chat/live_session_lease.js';
+
 import { BatchCoordinator, type BatchCoordinatorOptions } from './batch.js';
 import type { AgentEventBus } from './event_bus.js';
 import type { SessionManager } from './session_manager.js';
@@ -91,6 +93,15 @@ export interface ChatDispatcherOptions {
   onReply?: (key: SessionKey, replyText: string, projectUuid: string) => void;
   /** Telemetry hook for agent-turn failures. */
   onTurnError?: (key: SessionKey, err: unknown) => void;
+  /**
+   * Cross-session arbitration (T-DEL): returns true if a live interactive
+   * session holds a FRESH lease for this project — the daemon then SKIPS the
+   * turn (the live session answers). Default reads the live-session lease.
+   * Injectable for tests. Fail-open: a throw is treated as "no live session".
+   */
+  isLiveSessionActive?: (projectUuid: string) => Promise<boolean>;
+  /** Telemetry hook fired when a turn is skipped because a live session owns it. */
+  onSkip?: (key: SessionKey, projectUuid: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +121,8 @@ export class ChatDispatcher {
   private readonly warn: (message: string) => void;
   private readonly onReply: (key: SessionKey, replyText: string, projectUuid: string) => void;
   private readonly onTurnError: (key: SessionKey, err: unknown) => void;
+  private readonly isLiveSessionActive: (projectUuid: string) => Promise<boolean>;
+  private readonly onSkip: (key: SessionKey, projectUuid: string) => void;
   private started = false;
   private stopped = false;
 
@@ -117,6 +130,10 @@ export class ChatDispatcher {
     this.warn = opts.onWarn ?? noopWarn;
     this.onReply = opts.onReply ?? noopReply;
     this.onTurnError = opts.onTurnError ?? noopTurnError;
+    this.isLiveSessionActive =
+      opts.isLiveSessionActive ??
+      (async (uuid: string): Promise<boolean> => isLeaseFresh(await readLease(uuid)));
+    this.onSkip = opts.onSkip ?? noop;
     this.coordinator = new BatchCoordinator({
       ...(opts.batchOptions ?? {}),
       onFlush: (key, coalesced) => this.handleFlush(key, coalesced),
@@ -178,6 +195,26 @@ export class ChatDispatcher {
   private async handleFlush(key: SessionKey, coalesced: string): Promise<void> {
     if (this.stopped) return;
     const slug = sessionKeyString(key);
+    // T-DEL arbitration: if a live interactive session holds a fresh lease for
+    // this project, it answers — the daemon stays silent. Fail-open: a throw is
+    // treated as "no live session" so a lease-read bug can't mute the daemon.
+    const projectUuid = this.projectUuidBySlug.get(slug);
+    if (projectUuid !== undefined && projectUuid !== '') {
+      let live = false;
+      try {
+        live = await this.isLiveSessionActive(projectUuid);
+      } catch {
+        live = false;
+      }
+      if (live) {
+        this.warn(
+          `[agent_bridge.dispatcher] skipping turn for session=${slug}: live session active ` +
+            `(project=${projectUuid})`,
+        );
+        this.onSkip(key, projectUuid);
+        return;
+      }
+    }
     if (this.inFlight.has(slug)) {
       const queued = this.pendingQueue.get(slug);
       if (queued === undefined) {

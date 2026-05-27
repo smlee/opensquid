@@ -42,12 +42,20 @@ interface ClientCall {
 }
 
 let tmpRoot: string;
+let savedHome: string | undefined;
 
 beforeEach(async () => {
   tmpRoot = await fs.mkdtemp(join(tmpdir(), 'wab5-dp-'));
+  // Isolate the default live-session-lease check (DEL.2) from the real
+  // ~/.opensquid — an empty tmp home means "no live session" → daemon responds,
+  // preserving the existing tests' expectations.
+  savedHome = process.env.OPENSQUID_HOME;
+  process.env.OPENSQUID_HOME = tmpRoot;
 });
 
 afterEach(async () => {
+  if (savedHome === undefined) delete process.env.OPENSQUID_HOME;
+  else process.env.OPENSQUID_HOME = savedHome;
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
@@ -571,6 +579,114 @@ describe('ChatDispatcher — subscription mode (WAB-SUB.2)', () => {
     expect(cliCalls[0]?.args).toContain('/tmp/fake-mcp.json');
     expect(replies).toHaveLength(1);
     expect(replies[0]?.text).toBe('cli reply from claude');
+
+    await dp.shutdown();
+    sm.shutdown();
+  });
+});
+
+describe('ChatDispatcher — cross-session arbitration (DEL.2)', () => {
+  it('skips the turn when a live session holds the project', async () => {
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    const calls: ClientCall[] = [];
+    const client = makeClient(['should not be used'], calls);
+    const bus = new AgentEventBus();
+    const replies: { key: SessionKey; text: string }[] = [];
+    const skips: { projectUuid: string }[] = [];
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'api',
+        client,
+        model: 'm',
+        systemPrompt: 's',
+        tools: [],
+        dispatcher: NOOP_TOOLS,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      onReply: (key, text) => replies.push({ key, text }),
+      isLiveSessionActive: () => Promise.resolve(true),
+      onSkip: (_key, projectUuid) => skips.push({ projectUuid }),
+    });
+    dp.start();
+
+    bus.emit('inbound', fixtureEvent(KEY, 'a live session is handling this', '1'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(calls).toHaveLength(0); // agent loop NOT invoked
+    expect(replies).toHaveLength(0); // daemon stayed silent
+    expect(skips).toHaveLength(1);
+    expect(skips[0]?.projectUuid).toBe(PROJECT_UUID);
+
+    await dp.shutdown();
+    sm.shutdown();
+  });
+
+  it('responds when no live session is active (lease stale/absent)', async () => {
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    const calls: ClientCall[] = [];
+    const client = makeClient(['daemon reply'], calls);
+    const bus = new AgentEventBus();
+    const replies: { key: SessionKey; text: string }[] = [];
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'api',
+        client,
+        model: 'm',
+        systemPrompt: 's',
+        tools: [],
+        dispatcher: NOOP_TOOLS,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      onReply: (key, text) => replies.push({ key, text }),
+      isLiveSessionActive: () => Promise.resolve(false),
+    });
+    dp.start();
+
+    bus.emit('inbound', fixtureEvent(KEY, 'no live session here', '1'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(calls.length).toBeGreaterThan(0); // agent loop ran
+    expect(replies.length).toBeGreaterThan(0);
+
+    await dp.shutdown();
+    sm.shutdown();
+  });
+
+  it('fails open (responds) when the live-session check throws', async () => {
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    const calls: ClientCall[] = [];
+    const client = makeClient(['daemon reply'], calls);
+    const bus = new AgentEventBus();
+    const replies: { key: SessionKey; text: string }[] = [];
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'api',
+        client,
+        model: 'm',
+        systemPrompt: 's',
+        tools: [],
+        dispatcher: NOOP_TOOLS,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      onReply: (key, text) => replies.push({ key, text }),
+      isLiveSessionActive: () => Promise.reject(new Error('lease read boom')),
+    });
+    dp.start();
+
+    bus.emit('inbound', fixtureEvent(KEY, 'check throws', '1'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(calls.length).toBeGreaterThan(0); // throw treated as "no live session"
+    expect(replies.length).toBeGreaterThan(0);
 
     await dp.shutdown();
     sm.shutdown();
