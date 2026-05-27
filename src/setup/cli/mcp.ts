@@ -32,6 +32,8 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
+import { stat } from 'node:fs/promises';
+
 import {
   buildDesiredEntries,
   projectOpensquidMcp,
@@ -39,6 +41,13 @@ import {
   writeOpensquidMcp,
   type McpWriteResult,
 } from '../wizard/mcp-writer.js';
+import {
+  ALL_HOSTS,
+  parseHosts,
+  resolveHost,
+  type HostId,
+  type HostResolveEnv,
+} from '../wizard/mcp-hosts.js';
 
 import type { Command } from 'commander';
 
@@ -46,6 +55,8 @@ export interface McpCliFlags {
   dryRun?: boolean;
   opensquidRoot?: string;
   detectProjectCleanup?: boolean;
+  /** Comma-list of host ids or `all`; default (undefined) = claude-code only. */
+  hosts?: string;
 }
 
 export interface McpCliDeps {
@@ -56,6 +67,10 @@ export interface McpCliDeps {
   stdout?: (s: string) => void;
   stderr?: (s: string) => void;
   isTty?: () => boolean;
+  /** Does this path exist? (used to skip a host whose app dir is absent). */
+  dirExists?: (path: string) => Promise<boolean>;
+  /** Platform for host-path resolution (injected for deterministic tests). */
+  platform?: () => NodeJS.Platform;
 }
 
 interface ResolvedDeps {
@@ -66,6 +81,8 @@ interface ResolvedDeps {
   out: (s: string) => void;
   err: (s: string) => void;
   isTty: () => boolean;
+  dirExists: (path: string) => Promise<boolean>;
+  platform: () => NodeJS.Platform;
 }
 
 function buildDeps(deps: McpCliDeps): ResolvedDeps {
@@ -77,6 +94,13 @@ function buildDeps(deps: McpCliDeps): ResolvedDeps {
     out: deps.stdout ?? ((s): void => void process.stdout.write(s)),
     err: deps.stderr ?? ((s): void => void process.stderr.write(s)),
     isTty: deps.isTty ?? ((): boolean => process.stdout.isTTY === true),
+    dirExists:
+      deps.dirExists ??
+      ((p: string): Promise<boolean> =>
+        stat(p)
+          .then(() => true)
+          .catch(() => false)),
+    platform: deps.platform ?? ((): NodeJS.Platform => process.platform),
   };
 }
 
@@ -136,30 +160,57 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
     process.exitCode = 1;
     return;
   }
-  const userConfig = join(r.home(), '.claude.json');
+  // D1: default = claude-code only; opt into others via --hosts.
+  const hostIds = parseHosts(flags.hosts, r.err);
+  if (hostIds.length === 0) {
+    r.err(`opensquid setup wizard mcp: no valid hosts selected (valid: ${ALL_HOSTS.join(', ')})\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const env: HostResolveEnv = { platform: r.platform(), home: r.home(), env: process.env };
+
+  // D2: skip a non-Code host whose app dir is absent (don't fabricate its tree).
+  // Claude Code's dir is the home dir — always present.
+  const hostPresent = async (id: HostId, configPath: string): Promise<boolean> =>
+    id === 'claude-code' || (await r.dirExists(dirname(configPath)));
 
   if (flags.dryRun === true) {
     r.out('opensquid setup wizard mcp — DRY RUN (no files written)\n');
-    const input = (await r.reader(userConfig)) as Parameters<typeof projectOpensquidMcp>[0];
-    const { added, replaced, preserved } = projectOpensquidMcp(input, root);
-    r.out(
-      `  ${userConfig}: would add [${added.join(', ')}], replace [${replaced.join(
-        ', ',
-      )}], preserve ${String(preserved)} unrelated mcpServer(s)\n`,
-    );
+    for (const id of hostIds) {
+      const t = resolveHost(id, env);
+      if (!(await hostPresent(id, t.configPath))) {
+        r.out(`  ${t.label}: not detected (${dirname(t.configPath)}) — would skip\n`);
+        continue;
+      }
+      const input = (await r.reader(t.configPath)) as Parameters<typeof projectOpensquidMcp>[0];
+      const { added, replaced, preserved } = projectOpensquidMcp(input, root);
+      r.out(
+        `  ${t.label} (${t.configPath}): would add [${added.join(', ')}], replace [${replaced.join(
+          ', ',
+        )}], preserve ${String(preserved)} unrelated mcpServer(s)\n`,
+      );
+    }
     const desired = buildDesiredEntries(root);
     r.out(`  opensquid       → node ${desired.opensquid.args?.[0] ?? ''}\n`);
     r.out(`  opensquid-chat  → node ${desired['opensquid-chat'].args?.[0] ?? ''}\n`);
   } else {
     r.out('opensquid setup wizard mcp — writing entries\n');
-    const result = await r.writer(userConfig, root);
-    r.out(
-      `  ${userConfig}: added [${result.added.join(', ')}], replaced [${result.replaced.join(
-        ', ',
-      )}], preserved ${String(result.preserved)} unrelated mcpServer(s) (backup: ${
-        result.backupPath
-      })\n`,
-    );
+    for (const id of hostIds) {
+      const t = resolveHost(id, env);
+      if (!(await hostPresent(id, t.configPath))) {
+        r.out(`  ${t.label}: not detected (${dirname(t.configPath)}) — skipped\n`);
+        continue;
+      }
+      const result = await r.writer(t.configPath, root);
+      r.out(
+        `  ${t.label} (${t.configPath}): added [${result.added.join(
+          ', ',
+        )}], replaced [${result.replaced.join(', ')}], preserved ${String(
+          result.preserved,
+        )} unrelated mcpServer(s) (backup: ${result.backupPath})\n`,
+      );
+      if (t.needsRestart) r.out(`  ↳ restart ${t.label} to load the servers.\n`);
+    }
   }
 
   if (flags.detectProjectCleanup !== false) {
@@ -189,10 +240,16 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
 export function registerSetupWizardMcp(wizard: Command, deps: McpCliDeps = {}): Command {
   wizard
     .command('mcp')
-    .description('Register opensquid MCP servers at user level (~/.claude.json)')
+    .description(
+      'Register opensquid MCP servers into Claude-ecosystem hosts (default: Claude Code)',
+    )
     .option('--dry-run', 'preview the projected changes without writing any file', false)
     .option('--opensquid-root <path>', 'override the auto-detected opensquid repo root')
     .option('--no-detect-project-cleanup', 'skip the project-level .mcp.json cleanup advisory')
+    .option(
+      '--hosts <list>',
+      'comma-list of hosts (claude-code, claude-desktop, cursor) or "all"; default: claude-code',
+    )
     .action(async (flags: McpCliFlags) => {
       await runMcpWizard(flags, deps);
     });

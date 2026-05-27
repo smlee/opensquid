@@ -317,3 +317,91 @@ describe('runMcpWizard — project-level cleanup advisory', () => {
     expect(stderrBuf).toBe('');
   });
 });
+
+describe('runMcpWizard — multi-host (--hosts)', () => {
+  it('defaults to claude-code only when --hosts is omitted', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+    const seen: string[] = [];
+    await runMcpWizard(
+      { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false },
+      {
+        writer: (path) => {
+          seen.push(path);
+          return Promise.resolve({ added: [], replaced: [], preserved: 0, backupPath: '' });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+    expect(seen).toEqual([join(fakeHome, '.claude.json')]);
+  });
+
+  it('writes claude-code + present hosts and skips absent ones (--hosts all)', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+    const desktopDir = join(fakeHome, 'Library', 'Application Support', 'Claude');
+
+    const seen: string[] = [];
+    await runMcpWizard(
+      { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false, hosts: 'all' },
+      {
+        writer: (path) => {
+          seen.push(path);
+          return Promise.resolve({
+            added: ['opensquid', 'opensquid-chat'],
+            replaced: [],
+            preserved: 0,
+            backupPath: `${path}.bak`,
+          });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        platform: () => 'darwin',
+        // Desktop dir present; Cursor dir (~/.cursor) absent.
+        dirExists: (p) => Promise.resolve(p === desktopDir),
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+
+    expect(seen).toContain(join(fakeHome, '.claude.json'));
+    expect(seen).toContain(join(desktopDir, 'claude_desktop_config.json'));
+    expect(seen).not.toContain(join(fakeHome, '.cursor', 'mcp.json'));
+    expect(stdoutBuf).toContain('Claude Desktop');
+    expect(stdoutBuf).toContain('restart Claude Desktop');
+    expect(stdoutBuf).toContain('Cursor: not detected');
+  });
+
+  it('errors with exit code 1 when no valid host is selected', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+    const prevExit = process.exitCode;
+    let writerCalls = 0;
+    await runMcpWizard(
+      { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false, hosts: 'bogus,nope' },
+      {
+        writer: () => {
+          writerCalls += 1;
+          return Promise.resolve({ added: [], replaced: [], preserved: 0, backupPath: '' });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+    expect(writerCalls).toBe(0);
+    expect(process.exitCode).toBe(1);
+    expect(stderrBuf).toContain('no valid hosts');
+    process.exitCode = prevExit;
+  });
+});
