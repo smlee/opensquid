@@ -35,10 +35,10 @@
  *   src/runtime/hooks/user-prompt-submit.ts (turn-reset path).
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { sessionStateFile } from './paths.js';
+import { activeTaskArchiveFile, activeTaskFile, sessionStateFile } from './paths.js';
 
 /** Max number of session-wide entries retained; trimmed on every write. */
 export const SESSION_LEDGER_CAP = 200;
@@ -154,4 +154,85 @@ export async function readSessionToolLedger(
 ): Promise<{ tools: string[] }> {
   const ledger = await readLedger(sessionId);
   return { tools: scope === 'current_turn' ? [...ledger.turn] : [...ledger.session] };
+}
+
+// ---------------------------------------------------------------------------
+// Active-task signal (AP.2)
+//
+// `active-task.json` is the "tasks-loaded" trigger the whole automation
+// gate-set keys off (design rules #1/#8/#16). It is WRITTEN by the AP.1
+// PreToolUse mirror (which reads the harness task store) — these helpers are
+// the I/O lifecycle that the mirror, the SessionEnd archive, and the gate's
+// read-side all share. Present file ⟺ an in-progress task exists. Same
+// best-effort, no-throw-on-read model as the ledger/cwd above: a malformed or
+// absent signal reads as `null` (no active task), never an exception inside a
+// hook bin.
+// ---------------------------------------------------------------------------
+
+export interface ActiveTask {
+  /** Harness numeric id (e.g. "15"). */
+  id: string;
+  subject: string;
+  /** ISO timestamp the task became active. */
+  started_at: string;
+  /** Track id from the harness `metadata.taskId` (e.g. "AP.1"); Gate A (AP.5) keys on this. */
+  taskId?: string;
+  /** `docs/tasks` spec ref from `metadata.spec`, if the generator stamped it. */
+  spec?: string;
+}
+
+/** Write the active-task signal (called by the AP.1 PreToolUse mirror). */
+export async function writeActiveTask(sessionId: string, task: ActiveTask): Promise<void> {
+  const path = activeTaskFile(sessionId);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(task, null, 2), 'utf8');
+}
+
+/** Read the active-task signal, or `null` if absent/unreadable/malformed (no throw). */
+export async function readActiveTask(sessionId: string): Promise<ActiveTask | null> {
+  try {
+    const parsed = JSON.parse(await readFile(activeTaskFile(sessionId), 'utf8')) as unknown;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as { id: unknown }).id === 'string' &&
+      typeof (parsed as { subject: unknown }).subject === 'string' &&
+      typeof (parsed as { started_at: unknown }).started_at === 'string'
+    ) {
+      const o = parsed as Record<string, unknown>;
+      return {
+        id: o.id as string,
+        subject: o.subject as string,
+        started_at: o.started_at as string,
+        ...(typeof o.taskId === 'string' ? { taskId: o.taskId } : {}),
+        ...(typeof o.spec === 'string' ? { spec: o.spec } : {}),
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Clear the active-task signal (task completed / none in progress). Ignores ENOENT. */
+export async function clearActiveTask(sessionId: string): Promise<void> {
+  try {
+    await unlink(activeTaskFile(sessionId));
+  } catch {
+    /* already absent — nothing to clear */
+  }
+}
+
+/**
+ * Archive the active-task signal on SessionEnd (rule #16): rename rather than
+ * delete, so an abandoned/in-progress task at session close leaves a trace
+ * instead of vanishing. No-op when there is no active task. Best-effort.
+ */
+export async function archiveActiveTask(sessionId: string): Promise<void> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  try {
+    await rename(activeTaskFile(sessionId), activeTaskArchiveFile(sessionId, stamp));
+  } catch {
+    /* absent (nothing to archive) or unreadable — never block session close */
+  }
 }

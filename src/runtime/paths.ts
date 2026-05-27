@@ -99,6 +99,20 @@ export const sessionStateFile = (sessionId: string, key: string): string =>
 export const sessionLogFile = (sessionId: string, name: string): string =>
   join(sessionStateDir(sessionId), `${name}.jsonl`);
 
+/**
+ * The active-task signal file (AP.2). Lives at the session ROOT, deliberately
+ * NOT under `state/`: `state/` holds pack-authored `read_state`/`write_state`
+ * keys, and the active-task signal is runtime-owned — keeping it at the root
+ * prevents a pack's `write_state` from clobbering the gate's trigger. Absent
+ * file = no active task (the "tasks-loaded" signal is off).
+ */
+export const activeTaskFile = (sessionId: string): string =>
+  join(OPENSQUID_HOME(), 'sessions', sessionId, 'active-task.json');
+
+/** Archive destination for the active-task file on SessionEnd (rule #16 — archive, never silently drop). */
+export const activeTaskArchiveFile = (sessionId: string, stamp: string): string =>
+  join(OPENSQUID_HOME(), 'sessions', sessionId, `active-task.${stamp}.archived.json`);
+
 // ---------------------------------------------------------------------------
 // Per-pack state paths (Task 5.3)
 //

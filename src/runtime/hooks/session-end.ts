@@ -18,6 +18,7 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { archiveActiveTask } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -73,6 +74,10 @@ async function main(): Promise<void> {
 
   // MAU.3 — flush authored memories to the long-term RAG at the session boundary.
   await reconcileMemoryOnSessionEnd(sessionId);
+
+  // AP.2 / rule #16 — archive (not delete) the active-task signal at session
+  // close, so an abandoned in-progress task leaves a trace. Best-effort.
+  await archiveActiveTask(sessionId);
 
   process.exit(exitCode);
 }

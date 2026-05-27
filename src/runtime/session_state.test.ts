@@ -9,20 +9,25 @@
  *   - Malformed JSON on disk → fresh empty ledger (no crash)
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { sessionStateFile } from './paths.js';
+import { activeTaskFile, sessionStateFile } from './paths.js';
 import {
   SESSION_LEDGER_CAP,
+  type ActiveTask,
   appendTool,
+  archiveActiveTask,
+  clearActiveTask,
+  readActiveTask,
   readSessionCwd,
   readSessionToolLedger,
   recordSessionCwd,
   resetTurnLedger,
+  writeActiveTask,
 } from './session_state.js';
 
 let tempHome: string;
@@ -112,5 +117,73 @@ describe('session cwd pointer (MAU.3)', () => {
     await recordSessionCwd('sid-cwd', '/first');
     await recordSessionCwd('sid-cwd', '/second');
     expect(await readSessionCwd('sid-cwd')).toBe('/second');
+  });
+});
+
+describe('active-task signal (AP.2)', () => {
+  const full: ActiveTask = {
+    id: '15',
+    subject: 'Automate the 7-layer workflow',
+    started_at: '2026-05-27T00:00:00.000Z',
+    taskId: 'AP',
+    spec: 'docs/tasks/T-automation-pipeline.md',
+  };
+
+  it('round-trips a full active task incl. provenance', async () => {
+    await writeActiveTask('sid-at', full);
+    expect(await readActiveTask('sid-at')).toEqual(full);
+  });
+
+  it('round-trips a minimal task (no provenance fields)', async () => {
+    const min: ActiveTask = { id: '7', subject: 'x', started_at: '2026-05-27T01:00:00.000Z' };
+    await writeActiveTask('sid-min', min);
+    const read = await readActiveTask('sid-min');
+    expect(read).toEqual(min);
+    expect(read).not.toHaveProperty('taskId'); // absent optional stays absent (not undefined-keyed)
+  });
+
+  it('returns null when no active task exists', async () => {
+    expect(await readActiveTask('sid-none')).toBeNull();
+  });
+
+  it('returns null on malformed JSON (no throw inside a hook bin)', async () => {
+    const path = activeTaskFile('sid-bad');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, '{ not json', 'utf8');
+    expect(await readActiveTask('sid-bad')).toBeNull();
+  });
+
+  it('returns null when a required field is missing', async () => {
+    const path = activeTaskFile('sid-partial');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify({ id: '1', subject: 'no started_at' }), 'utf8');
+    expect(await readActiveTask('sid-partial')).toBeNull();
+  });
+
+  it('clear removes the signal; subsequent read is null', async () => {
+    await writeActiveTask('sid-clear', full);
+    await clearActiveTask('sid-clear');
+    expect(await readActiveTask('sid-clear')).toBeNull();
+  });
+
+  it('clear on an absent signal does not throw', async () => {
+    await expect(clearActiveTask('sid-clear-absent')).resolves.toBeUndefined();
+  });
+
+  it('archive renames the signal (rule #16 — trace preserved, not deleted)', async () => {
+    await writeActiveTask('sid-arch', full);
+    await archiveActiveTask('sid-arch');
+    // Live signal gone:
+    expect(await readActiveTask('sid-arch')).toBeNull();
+    // …but an archived copy remains in the session dir:
+    const dir = dirname(activeTaskFile('sid-arch'));
+    const archived = (await readdir(dir)).filter(
+      (f) => f.startsWith('active-task.') && f.endsWith('.archived.json'),
+    );
+    expect(archived).toHaveLength(1);
+  });
+
+  it('archive on an absent signal is a no-op (does not throw)', async () => {
+    await expect(archiveActiveTask('sid-arch-absent')).resolves.toBeUndefined();
   });
 });
