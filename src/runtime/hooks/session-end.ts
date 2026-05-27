@@ -21,6 +21,7 @@ import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
 
 interface SessionEndPayload {
   sessionId?: string;
@@ -62,13 +63,17 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const sessionId =
-    process.env.CLAUDE_SESSION_ID ??
-    (parsed.data.kind === 'session_end' ? parsed.data.sessionId : 'unknown');
+  // Stdin-first session id (parsePayload already applied the correct precedence,
+  // matching the stop/pre-tool-use/user-prompt-submit hooks post-2026-05-26 fix).
+  const sessionId = parsed.data.kind === 'session_end' ? parsed.data.sessionId : 'unknown';
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
   if (stderr) process.stderr.write(stderr + '\n');
+
+  // MAU.3 — flush authored memories to the long-term RAG at the session boundary.
+  await reconcileMemoryOnSessionEnd(sessionId);
+
   process.exit(exitCode);
 }
 

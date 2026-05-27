@@ -19,7 +19,9 @@ import { sessionStateFile } from './paths.js';
 import {
   SESSION_LEDGER_CAP,
   appendTool,
+  readSessionCwd,
   readSessionToolLedger,
+  recordSessionCwd,
   resetTurnLedger,
 } from './session_state.js';
 
@@ -93,5 +95,22 @@ describe('session_state tool ledger', () => {
 
     const turn = await readSessionToolLedger(sid, 'current_turn');
     expect(turn).toEqual({ tools: [] });
+  });
+});
+
+describe('session cwd pointer (MAU.3)', () => {
+  it('round-trips a recorded cwd', async () => {
+    await recordSessionCwd('sid-cwd', '/Users/x/projects/loop');
+    expect(await readSessionCwd('sid-cwd')).toBe('/Users/x/projects/loop');
+  });
+
+  it('returns null when no cwd was recorded', async () => {
+    expect(await readSessionCwd('sid-absent')).toBeNull();
+  });
+
+  it('overwrites a prior cwd (latest wins)', async () => {
+    await recordSessionCwd('sid-cwd', '/first');
+    await recordSessionCwd('sid-cwd', '/second');
+    expect(await readSessionCwd('sid-cwd')).toBe('/second');
   });
 });

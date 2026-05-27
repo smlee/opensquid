@@ -102,6 +102,35 @@ export async function appendTool(sessionId: string, toolName: string): Promise<v
   await writeLedger(sessionId, ledger);
 }
 
+// ---------------------------------------------------------------------------
+// Session cwd pointer (MAU.3)
+//
+// The SessionEnd hook carries only the session id, but the memory reconcile it
+// triggers needs the project cwd to resolve the auto-memory dir
+// (`~/.claude/projects/<encoded-cwd>/memory/`). The PreToolUse hook DOES carry
+// `cwd` on tool_call events, so it records the cwd here per session; SessionEnd
+// reads it back. Best-effort, same eventual-consistency model as the ledger.
+// ---------------------------------------------------------------------------
+
+const CWD_KEY = 'cwd';
+
+/** Record the session's working directory (called by PreToolUse on tool_call). */
+export async function recordSessionCwd(sessionId: string, cwd: string): Promise<void> {
+  const path = sessionStateFile(sessionId, CWD_KEY);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, cwd, 'utf8');
+}
+
+/** Read the session's recorded cwd, or `null` if absent/unreadable/empty. */
+export async function readSessionCwd(sessionId: string): Promise<string | null> {
+  try {
+    const raw = (await readFile(sessionStateFile(sessionId, CWD_KEY), 'utf8')).trim();
+    return raw === '' ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Reset the current-turn list on `UserPromptSubmit`. The session-wide list
  * carries forward across turn boundaries — only the turn slice resets.

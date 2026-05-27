@@ -20,7 +20,7 @@
  * bottom is the last line of defense.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
-import { appendTool } from '../session_state.js';
+import { appendTool, recordSessionCwd } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -83,6 +83,15 @@ async function main(): Promise<void> {
       await appendTool(sessionId, parsed.data.tool);
     } catch (e) {
       process.stderr.write(`opensquid: tool-ledger append failed — ${String(e)}\n`);
+    }
+    // MAU.3 — record the session cwd so the SessionEnd memory reconcile can
+    // resolve this project's auto-memory dir (SessionEnd carries no cwd).
+    if (parsed.data.cwd !== undefined && parsed.data.cwd !== '') {
+      try {
+        await recordSessionCwd(sessionId, parsed.data.cwd);
+      } catch (e) {
+        process.stderr.write(`opensquid: session-cwd record failed — ${String(e)}\n`);
+      }
     }
   }
   const packs = await loadActivePacks(sessionId);
