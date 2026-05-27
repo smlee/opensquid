@@ -1,0 +1,50 @@
+# workflow — the locked 7-phase workflow gate (AP.4, rule #8).
+#
+# Blocks `git commit` until all 7 phases are logged (via
+# `mcp__opensquid__log_phase`) for the ACTIVE task — but ONLY in automation mode
+# with an active task loaded. This is the unified-evaluator trigger model
+# ([[project_opensquid_automation_layer]]): the gate-set fires together on
+# `is_automation_mode AND active-task present`. Dormant in interactive use and
+# in automation with no task — so it never blocks an ad-hoc commit.
+#
+# Severed-writer history: the G-track kept this READER but dropped the writer;
+# AP.3 restored `log_phase` (engine ledger + workflow.phases_logged state) and
+# the `workflow_phases_complete` read primitive this gate calls.
+#
+# Load: preload — workflow discipline is always-loaded; the rule's own gating
+# (automation + active task) decides when it actually fires.
+name: workflow
+load: preload
+when_to_load: []
+rules:
+  - id: workflow-phases-required
+    process:
+      - call: is_automation_mode
+        as: auto
+      - call: has_active_task
+        if: 'auto.value == true'
+        as: task
+      - call: match_command
+        if: 'auto.value == true && task.present == true'
+        args:
+          pattern: 'git\s+commit\b'
+          target: tool_args.command
+        as: committing
+      - call: workflow_phases_complete
+        if: 'auto.value == true && task.present == true && committing'
+        as: phases
+      - call: verdict
+        if: 'auto.value == true && task.present == true && committing && phases.complete == false'
+        args:
+          level: block
+          message: >-
+            BLOCKED: 7-phase workflow incomplete for the active task. Log each
+            phase via `mcp__opensquid__log_phase` (pre_research → learn → code →
+            test → audit → post_research → fix) before committing.
+prose: |
+  The locked 7-phase workflow per feedback_workflow_cycle (PRIMARY
+  drift-protection gate). In automation mode with a task loaded, every
+  substantive task runs all 7 phases before `git commit`. The gate reads
+  `workflow_phases_complete`, which is true only when all 7 phases are logged
+  for the CURRENTLY-active task (a new task never inherits a prior task's
+  completion). Log phases via `mcp__opensquid__log_phase`.

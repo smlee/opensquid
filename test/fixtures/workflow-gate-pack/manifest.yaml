@@ -1,0 +1,10 @@
+# Test fixture pack (AP.4) — loads the workflow gate for the behavior test.
+# NOT shipped, NOT active anywhere. The live deployment is the user's personal
+# pack (~/.opensquid/codexes/sangmin-personal-rules/); this is a source-controlled
+# copy so CI can exercise the rule (the personal pack is not in CI, and builtin
+# deliberately excludes it per personal≠shipping).
+# Keep skills/workflow/skill.yaml in sync with the personal-pack copy.
+name: workflow-gate-fixture
+version: 0.0.0
+scope: universal
+goal: "Test fixture: exercise the workflow gate (rule #8) end-to-end (AP.4)."
