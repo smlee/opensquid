@@ -63,7 +63,11 @@
 import type { EvalCtx, FunctionRegistry } from '../../functions/registry.js';
 import { applyDriftResponse } from '../drift_response.js';
 import { evaluateProcess } from '../evaluator.js';
-import type { DriftPolicy, Event, Pack } from '../types.js';
+import { Matcher, matchesEvent } from '../load_matchers.js';
+import { partitionSkills } from '../pinned_skills.js';
+import { advanceSkillTicks, type SkillTicks } from '../session_state.js';
+import { UnloadCondition, shouldUnload, type TickState } from '../unload_conditions.js';
+import type { DriftPolicy, Event, Pack, Skill } from '../types.js';
 
 export interface DispatchResult {
   exitCode: 0 | 2;
@@ -109,6 +113,79 @@ function emitDispatchMarker(eventKind: string, ruleCount: number, packCount: num
   );
 }
 
+// ---------------------------------------------------------------------------
+// CU.2 — skill-unload wiring helpers.
+//
+// `when_to_load` / `unloads_when` are `unknown[]` on the runtime `Skill` type
+// (the YAML schema validates them at load; the runtime view stays loose — see
+// types.ts). We parse them through the canonical Zod schemas here, dropping any
+// malformed entry rather than throwing, so a single bad matcher/condition
+// degrades that one entry, never the whole dispatch.
+// ---------------------------------------------------------------------------
+
+/** Parse a skill's `when_to_load` (loose `unknown[]`) into typed matchers; drop malformed. */
+function parseWhenToLoad(raw: readonly unknown[]): Matcher[] {
+  const out: Matcher[] = [];
+  for (const r of raw) {
+    const parsed = Matcher.safeParse(r);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+/** Parse a skill's `unloads_when` (loose `unknown[]`) into typed conditions; drop malformed. */
+function parseUnloadsWhen(raw: readonly unknown[]): UnloadCondition[] {
+  const out: UnloadCondition[] = [];
+  for (const r of raw) {
+    const parsed = UnloadCondition.safeParse(r);
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+/**
+ * The per-skill unload gate decision (pure, testable). A DYNAMIC skill is
+ * skipped this event ⟺ it has a tick AND `shouldUnload(unloads_when, tick)`
+ * fires. FAIL-SAFE = default-LOADED: a missing tick (`undefined`) NEVER
+ * skips — silently skipping a gate skill because its tick read failed would
+ * be a drift hole. Pinned skills never reach this function.
+ */
+export function shouldSkillUnload(skill: Skill, tick: TickState | undefined): boolean {
+  if (tick === undefined) return false; // fail-safe: no tick → stay loaded
+  const conditions = parseUnloadsWhen(skill.unloads_when);
+  if (conditions.length === 0) return false; // no exit conditions → never unloads
+  return shouldUnload(conditions, tick);
+}
+
+/**
+ * Advance the persisted per-skill ticks for the dynamic skill set ONCE for this
+ * event (never per-rule — that would multiply the idle count), then return the
+ * set of dynamic skill names to SKIP because their unload condition fired.
+ *
+ * Reactivation: a dynamic skill whose `when_to_load` freshly matches this event
+ * has its tick reset (idle counter restarts from zero) — so a skill that had
+ * unloaded re-loads the moment its load condition matches again. A skill with
+ * empty `when_to_load` never reactivates here; it simply advances and unloads
+ * on its idle/edge conditions.
+ */
+async function computeUnloadSkips(
+  event: Event,
+  dynamic: readonly Skill[],
+  sessionId: string,
+): Promise<{ skip: Set<string>; ticks: SkillTicks }> {
+  const dynamicIds = dynamic.map((s) => s.name);
+  const reactivated = new Set<string>();
+  for (const s of dynamic) {
+    if (matchesEvent(parseWhenToLoad(s.when_to_load), event)) reactivated.add(s.name);
+  }
+  const ticks = await advanceSkillTicks(sessionId, event, dynamicIds, reactivated);
+  const skip = new Set<string>();
+  for (const s of dynamic) {
+    if (shouldSkillUnload(s, ticks[s.name])) skip.add(s.name);
+  }
+  return { skip, ticks };
+}
+
 export async function dispatchEvent(
   event: Event,
   packs: Pack[],
@@ -126,8 +203,30 @@ export async function dispatchEvent(
   // Stderr warnings buffer when an `inject_context` fires on an event kind
   // OTHER than `prompt_submit`. Misconfiguration signal per Phase-2 lock #4.
   let warnBuf = '';
+
+  // CU.2 — skill-unload gate. Partition pinned (universal+preload, resident
+  // for the whole session) vs dynamic (subject to `unloads_when`). Advance the
+  // persisted dynamic-skill ticks ONCE for this event (before the walk, never
+  // per-rule) and compute the set of dynamic skills whose unload condition
+  // fired this event. Pinned skills are NEVER gated — they are not even passed
+  // to the tick advancer (the contradiction warning is emitted at partition
+  // time by `partitionSkills`). A dynamic skill in `unloadSkip` has both its
+  // rules suppressed AND its `inject_context` prose dropped (the `continue`
+  // below skips the whole rule walk, so nothing it would emit lands).
+  const { dynamic } = partitionSkills(packs);
+  const dynamicSkillNames = new Set(dynamic.map((d) => d.skill.name));
+  const { skip: unloadSkip } = await computeUnloadSkips(
+    event,
+    dynamic.map((d) => d.skill),
+    sessionId,
+  );
+
   for (const pack of packs) {
     for (const skill of pack.skills) {
+      // CU.2: a DYNAMIC skill whose unload condition fired this event is
+      // skipped — its rules don't evaluate and its prose isn't injected.
+      // Pinned skills (not in `dynamicSkillNames`) are exempt and always walk.
+      if (dynamicSkillNames.has(skill.name) && unloadSkip.has(skill.name)) continue;
       // AUTO.1: skip the skill entirely if no trigger subscribes to this
       // event kind. `skill.triggers` is guaranteed non-empty by the schema
       // (`.min(1)`) — an omitted YAML block defaults to `[{kind: 'tool_call'}]`.

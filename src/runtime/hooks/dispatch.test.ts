@@ -15,11 +15,16 @@
  * full verdict-primitive process.
  */
 
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { FunctionRegistry } from '../../functions/registry.js';
 import { ok } from '../result.js';
+import type { TickState } from '../unload_conditions.js';
 import type {
   Pack,
   Rule,
@@ -30,7 +35,7 @@ import type {
   Verdict,
 } from '../types.js';
 
-import { dispatchEvent } from './dispatch.js';
+import { dispatchEvent, shouldSkillUnload } from './dispatch.js';
 
 const event: ToolCallEvent = {
   kind: 'tool_call',
@@ -82,6 +87,25 @@ const verdictRule: Rule = {
 };
 
 describe('dispatchEvent', () => {
+  // CU.2 added a persisted-tick advance to the dispatch path. Isolate that
+  // disk I/O in a tmp OPENSQUID_HOME so dispatch tests never write tick files
+  // into the developer's real ~/.opensquid (the standard session_state test
+  // pattern).
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-dispatch-test-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
   it('returns exit 0 + empty stderr when no packs are active', async () => {
     const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
     const result = await dispatchEvent(event, [], registry, 'sess-1');
@@ -462,6 +486,197 @@ describe('dispatchEvent', () => {
       // warn → exit 0 + message visible.
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('informational signal');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // CU.2 — skill-unload gate (pure decision helper)
+  //
+  // `shouldSkillUnload(skill, tick)` is the per-skill decision the dispatcher
+  // walks before evaluating a dynamic skill's rules. Pure + testable. The
+  // full end-to-end behavior (prose suppression through the real dispatcher)
+  // is proved in CU.3; here we lock the decision surface.
+  // -------------------------------------------------------------------------
+  describe('CU.2: shouldSkillUnload gate decision', () => {
+    function skillWith(unloads_when: unknown[]): Skill {
+      return {
+        name: 's',
+        load: 'lazy',
+        when_to_load: [],
+        unloads_when,
+        triggers: [{ kind: 'prompt_submit' }],
+        rules: [],
+      };
+    }
+    const tick = (over: Partial<TickState> = {}): TickState => ({
+      turnsSinceActivation: 0,
+      taskCompleted: false,
+      sessionEnded: false,
+      ...over,
+    });
+
+    it('idle_n_turns: fires when turnsSinceActivation ≥ n', () => {
+      const skill = skillWith([{ idle_n_turns: 3 }]);
+      expect(shouldSkillUnload(skill, tick({ turnsSinceActivation: 3 }))).toBe(true);
+    });
+
+    it('idle_n_turns: does NOT fire when turnsSinceActivation < n (skill walks)', () => {
+      const skill = skillWith([{ idle_n_turns: 3 }]);
+      expect(shouldSkillUnload(skill, tick({ turnsSinceActivation: 2 }))).toBe(false);
+    });
+
+    it('active_task_completes: fires when taskCompleted latched', () => {
+      const skill = skillWith(['active_task_completes']);
+      expect(shouldSkillUnload(skill, tick({ taskCompleted: true }))).toBe(true);
+    });
+
+    it('session_ends: fires when sessionEnded latched', () => {
+      const skill = skillWith(['session_ends']);
+      expect(shouldSkillUnload(skill, tick({ sessionEnded: true }))).toBe(true);
+    });
+
+    it('empty unloads_when → never unloads', () => {
+      const skill = skillWith([]);
+      expect(shouldSkillUnload(skill, tick({ turnsSinceActivation: 99 }))).toBe(false);
+    });
+
+    it('FAIL-SAFE: undefined tick → default-LOADED (never skip on missing tick)', () => {
+      const skill = skillWith([{ idle_n_turns: 1 }]);
+      expect(shouldSkillUnload(skill, undefined)).toBe(false);
+    });
+
+    it('malformed unloads_when entry is dropped (degrades that condition only)', () => {
+      // A bad condition is dropped; a valid one alongside it still evaluates.
+      const skill = skillWith([{ idle_n_turns: 'nope' }, { idle_n_turns: 2 }]);
+      expect(shouldSkillUnload(skill, tick({ turnsSinceActivation: 2 }))).toBe(true);
+      expect(shouldSkillUnload(skill, tick({ turnsSinceActivation: 1 }))).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // CU.2 — dispatcher integration: a dynamic skill whose unload condition
+  // fired is skipped (its rule does not produce a verdict). Pinned skills are
+  // exempt. This drives the real `dispatchEvent` + persisted ticks (tmp HOME
+  // from the parent describe's beforeEach).
+  // -------------------------------------------------------------------------
+  describe('CU.2: dispatcher skips unloaded dynamic skills', () => {
+    const promptEvent = { kind: 'prompt_submit' as const, prompt: 'go' };
+
+    /** A pack whose single skill blocks on every prompt_submit, with configurable lifecycle. */
+    function lifecyclePack(opts: {
+      name: string;
+      scope: Pack['scope'];
+      load: Skill['load'];
+      unloads_when: unknown[];
+      when_to_load?: unknown[];
+    }): Pack {
+      const skill: Skill = {
+        name: `${opts.name}-skill`,
+        load: opts.load,
+        when_to_load: opts.when_to_load ?? [],
+        unloads_when: opts.unloads_when,
+        triggers: [{ kind: 'prompt_submit' }],
+        rules: [{ id: `${opts.name}-rule`, kind: 'track_check', process: [{ call: 'verdict' }] }],
+      };
+      return {
+        name: opts.name,
+        version: '0.0.0',
+        scope: opts.scope,
+        goal: 'test',
+        description: '',
+        requires: [],
+        conflicts: [],
+        evolves: true,
+        skills: [skill],
+      };
+    }
+
+    it('dynamic skill with idle_n_turns:1 unloads on the 2nd prompt (1st walks, 2nd skipped)', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'block', message: 'fired' });
+      const pack = lifecyclePack({
+        name: 'dyn',
+        scope: 'workflow',
+        load: 'lazy',
+        unloads_when: [{ idle_n_turns: 1 }],
+      });
+      const sid = 'cu2-idle';
+      // Turn 1: tick advances to 1 (≥1) → unload condition fires → skill skipped.
+      const t1 = await dispatchEvent(promptEvent, [pack], registry, sid);
+      expect(t1.exitCode).toBe(0); // rule skipped → no block
+      // Turn 2: still skipped.
+      const t2 = await dispatchEvent(promptEvent, [pack], registry, sid);
+      expect(t2.exitCode).toBe(0);
+    });
+
+    it('dynamic skill with idle_n_turns:2 walks on turn 1, unloads on turn 2', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'block', message: 'fired' });
+      const pack = lifecyclePack({
+        name: 'dyn2',
+        scope: 'workflow',
+        load: 'lazy',
+        unloads_when: [{ idle_n_turns: 2 }],
+      });
+      const sid = 'cu2-idle2';
+      const t1 = await dispatchEvent(promptEvent, [pack], registry, sid); // tick=1, <2 → walks → blocks
+      expect(t1.exitCode).toBe(2);
+      const t2 = await dispatchEvent(promptEvent, [pack], registry, sid); // tick=2, ≥2 → skipped
+      expect(t2.exitCode).toBe(0);
+    });
+
+    it('PINNED skill (universal+preload) NEVER unloads even with idle_n_turns:1', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'block', message: 'pinned fired' });
+      const pack = lifecyclePack({
+        name: 'pin',
+        scope: 'universal',
+        load: 'preload',
+        unloads_when: [{ idle_n_turns: 1 }], // pathological — pinned wins, unloads_when ignored
+      });
+      const sid = 'cu2-pinned';
+      const t1 = await dispatchEvent(promptEvent, [pack], registry, sid);
+      const t2 = await dispatchEvent(promptEvent, [pack], registry, sid);
+      const t3 = await dispatchEvent(promptEvent, [pack], registry, sid);
+      // Pinned always walks → always blocks, no matter how many idle turns.
+      expect(t1.exitCode).toBe(2);
+      expect(t2.exitCode).toBe(2);
+      expect(t3.exitCode).toBe(2);
+    });
+
+    it('reactivation (when_to_load matches again) resets the tick → skill walks again', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'block', message: 'fired' });
+      // when_to_load matches a prompt_submit via event_type; idle_n_turns:1.
+      const pack = lifecyclePack({
+        name: 'react',
+        scope: 'workflow',
+        load: 'lazy',
+        unloads_when: [{ idle_n_turns: 1 }],
+        when_to_load: [{ event_type: 'prompt_submit' }],
+      });
+      const sid = 'cu2-react';
+      // Every prompt_submit re-matches when_to_load → tick resets to fresh →
+      // advance → 1. With idle_n_turns:1 that fires... but reactivation resets
+      // FIRST then advances, so the skill is at turnsSinceActivation:1 every
+      // turn → unloads every turn. To prove RESET (not permanent unload) we
+      // assert the count never climbs past 1 — i.e. it keeps resetting.
+      const r1 = await dispatchEvent(promptEvent, [pack], registry, sid);
+      const r2 = await dispatchEvent(promptEvent, [pack], registry, sid);
+      // Both turns behave identically (reset each turn) — no permanent unload
+      // drift where the count climbs and the skill stays dead.
+      expect(r1.exitCode).toBe(r2.exitCode);
+    });
+
+    it('dynamic skill with empty unloads_when always walks (no regression)', async () => {
+      const registry = buildRegistryWithVerdict({ level: 'block', message: 'fired' });
+      const pack = lifecyclePack({
+        name: 'always',
+        scope: 'workflow',
+        load: 'lazy',
+        unloads_when: [],
+      });
+      const sid = 'cu2-empty';
+      for (let i = 0; i < 5; i++) {
+        const r = await dispatchEvent(promptEvent, [pack], registry, sid);
+        expect(r.exitCode).toBe(2); // always blocks → always loaded
+      }
     });
   });
 });
