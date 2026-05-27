@@ -18,7 +18,8 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
-import { archiveActiveTask } from '../session_state.js';
+import { emitProbe, groupFromTask } from '../satisfaction_probe.js';
+import { archiveActiveTask, readActiveTask } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -74,6 +75,20 @@ async function main(): Promise<void> {
 
   // MAU.3 — flush authored memories to the long-term RAG at the session boundary.
   await reconcileMemoryOnSessionEnd(sessionId);
+
+  // CMP.2 — emit a satisfaction probe for the just-closed task's feature
+  // group (async, append-only, deduped per group). The user answers at a
+  // natural boundary; a "satisfied" answer later gates the compression
+  // orchestrator (CMP.4). Read the active task BEFORE archiving it.
+  // Best-effort + fail-open: a probe-emit failure must never affect the
+  // session-end exit code.
+  try {
+    const active = await readActiveTask(sessionId);
+    const group = groupFromTask(active);
+    if (group) await emitProbe(sessionId, group);
+  } catch (e) {
+    process.stderr.write(`opensquid: satisfaction-probe emit skipped — ${String(e)}\n`);
+  }
 
   // AP.2 / rule #16 — archive (not delete) the active-task signal at session
   // close, so an abandoned in-progress task leaves a trace. Best-effort.
