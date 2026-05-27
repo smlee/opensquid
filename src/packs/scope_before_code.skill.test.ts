@@ -10,7 +10,7 @@
  * docs/research writes) nor interactive editing nor a properly-scoped task.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   HasActiveTask,
   HasGeneratedSpec,
+  TaskListGenerated,
   WorkflowPhasesComplete,
 } from '../functions/active_task.js';
 import { registerEventFunctions } from '../functions/event.js';
@@ -46,6 +47,7 @@ function buildTestRegistry(): FunctionRegistry {
   reg.register(HasActiveTask);
   reg.register(WorkflowPhasesComplete);
   reg.register(HasGeneratedSpec);
+  reg.register(TaskListGenerated);
   return reg;
 }
 
@@ -58,30 +60,42 @@ function codeWrite(filePath: string): Event {
   };
 }
 
-let gateSteps: ProcessStep[];
+let gateSteps: ProcessStep[]; // scope-before-code (Gate A)
+let gateBSteps: ProcessStep[]; // task-list-generated (Gate B)
 let tempHome: string;
 let priorHome: string | undefined;
+let priorTasksDir: string | undefined;
+let tasksDir: string;
 let specPath: string;
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
+  priorTasksDir = process.env.OPENSQUID_HARNESS_TASKS_DIR;
   delete process.env.OPENSQUID_AUTOMATION;
   tempHome = await mkdtemp(join(tmpdir(), 'ap5-gateA-'));
+  tasksDir = await mkdtemp(join(tmpdir(), 'ap5-tasks-'));
   process.env.OPENSQUID_HOME = tempHome;
+  process.env.OPENSQUID_HARNESS_TASKS_DIR = tasksDir;
   specPath = join(tempHome, 'T-track.md'); // an absolute spec path (H7)
   await writeFile(specPath, '### Task X.1', 'utf8');
 
   const pack = await loadPack(FIXTURE_PACK);
   const skill = pack.skills.find((s) => s.name === 'scope-decomposer');
-  const rule = skill?.rules.find((r) => r.id === 'scope-before-code');
-  if (rule?.kind !== 'track_check') throw new Error('scope-before-code not a track_check');
-  gateSteps = rule.process;
+  const ruleA = skill?.rules.find((r) => r.id === 'scope-before-code');
+  const ruleB = skill?.rules.find((r) => r.id === 'task-list-generated');
+  if (ruleA?.kind !== 'track_check') throw new Error('scope-before-code not a track_check');
+  if (ruleB?.kind !== 'track_check') throw new Error('task-list-generated not a track_check');
+  gateSteps = ruleA.process;
+  gateBSteps = ruleB.process;
 });
 
 afterEach(async () => {
   if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = priorHome;
+  if (priorTasksDir === undefined) delete process.env.OPENSQUID_HARNESS_TASKS_DIR;
+  else process.env.OPENSQUID_HARNESS_TASKS_DIR = priorTasksDir;
   await rm(tempHome, { recursive: true, force: true });
+  await rm(tasksDir, { recursive: true, force: true });
 });
 
 async function run(event: Event): Promise<RuleResult> {
@@ -90,6 +104,25 @@ async function run(event: Event): Promise<RuleResult> {
     { event, bindings: new Map(), sessionId: SID, packId: 'scope-gates-fixture' },
     buildTestRegistry(),
   );
+}
+
+async function runGateB(event: Event): Promise<RuleResult> {
+  return evaluateProcess(
+    gateBSteps,
+    { event, bindings: new Map(), sessionId: SID, packId: 'scope-gates-fixture' },
+    buildTestRegistry(),
+  );
+}
+
+async function putHarnessTask(t: {
+  id: string;
+  subject: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const dir = join(tasksDir, SID);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, `${t.id}.json`), JSON.stringify(t), 'utf8');
 }
 
 const GENERATED: ActiveTask = { id: '15', subject: 'x', started_at: 'z', taskId: 'X' };
@@ -134,5 +167,45 @@ describe('scope→task Gate A (fixture) / scope-before-code', () => {
     // no setAutomationFlag
     const r = await run(codeWrite('src/foo.ts'));
     expect(r.kind).toBe('no_verdict');
+  });
+});
+
+describe('scope→task Gate B (fixture) / task-list-generated', () => {
+  it('WARNS when an open task lacks provenance (smuggled in)', async () => {
+    await setAutomationFlag(SID);
+    await putHarnessTask({
+      id: '1',
+      subject: 'ok',
+      status: 'pending',
+      metadata: { taskId: 'AP.1' },
+    });
+    await putHarnessTask({ id: '2', subject: 'smuggled', status: 'in_progress' }); // no metadata
+
+    const r = await runGateB(codeWrite('src/foo.ts'));
+    expect(r.kind).toBe('verdict');
+    if (r.kind === 'verdict') expect(r.verdict.level).toBe('warn');
+  });
+
+  it('is SILENT when every open task carries provenance', async () => {
+    await setAutomationFlag(SID);
+    await putHarnessTask({
+      id: '1',
+      subject: 'a',
+      status: 'pending',
+      metadata: { taskId: 'AP.1' },
+    });
+    await putHarnessTask({
+      id: '2',
+      subject: 'b',
+      status: 'in_progress',
+      metadata: { taskId: 'AP.2' },
+    });
+
+    expect((await runGateB(codeWrite('src/foo.ts'))).kind).toBe('no_verdict');
+  });
+
+  it('is DORMANT when automation mode is off', async () => {
+    await putHarnessTask({ id: '2', subject: 'smuggled', status: 'pending' }); // ungenerated
+    expect((await runGateB(codeWrite('src/foo.ts'))).kind).toBe('no_verdict');
   });
 });

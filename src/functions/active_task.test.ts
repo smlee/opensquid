@@ -8,7 +8,7 @@
  *   - a stale ledger (phases for a now-inactive task) → complete:false
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,11 +17,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { writeActiveTask } from '../runtime/session_state.js';
 import { REQUIRED_PHASES, appendPhase } from '../runtime/workflow_phases.js';
 
-import { HasActiveTask, HasGeneratedSpec, WorkflowPhasesComplete } from './active_task.js';
+import {
+  HasActiveTask,
+  HasGeneratedSpec,
+  TaskListGenerated,
+  WorkflowPhasesComplete,
+} from './active_task.js';
 import type { EvalCtx } from './registry.js';
 
 let tempHome: string;
 let priorHome: string | undefined;
+let priorTasksDir: string | undefined;
+let tasksDir: string;
 const SID = 'sess-fn';
 
 /** Minimal EvalCtx — the primitives only read ctx.sessionId. */
@@ -36,15 +43,33 @@ function ctx(): EvalCtx {
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
+  priorTasksDir = process.env.OPENSQUID_HARNESS_TASKS_DIR;
   tempHome = await mkdtemp(join(tmpdir(), 'opensquid-fn-'));
+  tasksDir = await mkdtemp(join(tmpdir(), 'opensquid-fn-tasks-'));
   process.env.OPENSQUID_HOME = tempHome;
+  process.env.OPENSQUID_HARNESS_TASKS_DIR = tasksDir;
 });
 
 afterEach(async () => {
   if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = priorHome;
+  if (priorTasksDir === undefined) delete process.env.OPENSQUID_HARNESS_TASKS_DIR;
+  else process.env.OPENSQUID_HARNESS_TASKS_DIR = priorTasksDir;
   await rm(tempHome, { recursive: true, force: true });
+  await rm(tasksDir, { recursive: true, force: true });
 });
+
+/** Write a harness task file into the env-overridden store dir. */
+async function putHarnessTask(t: {
+  id: string;
+  subject: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const dir = join(tasksDir, SID);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, `${t.id}.json`), JSON.stringify(t), 'utf8');
+}
 
 describe('has_active_task', () => {
   it('present:false with empty ids when no active task', async () => {
@@ -129,5 +154,53 @@ describe('has_generated_spec', () => {
     });
     const r = await HasGeneratedSpec.execute({}, ctx());
     expect(r).toEqual({ ok: true, value: { present: true, generated: false } });
+  });
+});
+
+describe('task_list_generated (Gate B)', () => {
+  it('all_generated:true on an empty store', async () => {
+    const r = await TaskListGenerated.execute({}, ctx());
+    expect(r).toEqual({ ok: true, value: { all_generated: true, ungenerated: [] } });
+  });
+
+  it('all_generated:true when every open task carries metadata.taskId', async () => {
+    await putHarnessTask({
+      id: '1',
+      subject: 'a',
+      status: 'pending',
+      metadata: { taskId: 'AP.1' },
+    });
+    await putHarnessTask({
+      id: '2',
+      subject: 'b',
+      status: 'in_progress',
+      metadata: { taskId: 'AP.2' },
+    });
+    const r = await TaskListGenerated.execute({}, ctx());
+    expect(r).toEqual({ ok: true, value: { all_generated: true, ungenerated: [] } });
+  });
+
+  it('flags an open task with no provenance stamp (smuggled in)', async () => {
+    await putHarnessTask({
+      id: '1',
+      subject: 'a',
+      status: 'pending',
+      metadata: { taskId: 'AP.1' },
+    });
+    await putHarnessTask({ id: '2', subject: 'smuggled', status: 'pending' }); // no metadata
+    const r = await TaskListGenerated.execute({}, ctx());
+    expect(r).toEqual({ ok: true, value: { all_generated: false, ungenerated: ['2'] } });
+  });
+
+  it('ignores completed/deleted tasks (only open work must be generated)', async () => {
+    await putHarnessTask({ id: '1', subject: 'done', status: 'completed' }); // no metadata, but completed
+    await putHarnessTask({
+      id: '2',
+      subject: 'ok',
+      status: 'pending',
+      metadata: { taskId: 'AP.2' },
+    });
+    const r = await TaskListGenerated.execute({}, ctx());
+    expect(r).toEqual({ ok: true, value: { all_generated: true, ungenerated: [] } });
   });
 });

@@ -43,12 +43,17 @@ export interface HarnessTask {
 }
 
 /**
- * Harness task-store directory for a session. `base` is injectable for tests;
- * the default follows the codebase convention (`join(homedir(), '.claude', …)`,
- * as the auto-memory importer does) rather than a new env knob.
+ * Harness task-store directory for a session. `base` is injectable (the mirror
+ * passes it in tests); when omitted, an `OPENSQUID_HARNESS_TASKS_DIR` env
+ * override wins (lets the Gate B primitive — which has no `base` seam — be
+ * tested, and lets a user relocate the store), else the codebase-convention
+ * default `join(homedir(), '.claude', 'tasks')`.
  */
 export const harnessTasksDir = (sessionId: string, base?: string): string =>
-  join(base ?? join(homedir(), '.claude', 'tasks'), sessionId);
+  join(
+    base ?? process.env.OPENSQUID_HARNESS_TASKS_DIR ?? join(homedir(), '.claude', 'tasks'),
+    sessionId,
+  );
 
 /**
  * Read + parse the harness task store for a session. Returns `[]` on an absent

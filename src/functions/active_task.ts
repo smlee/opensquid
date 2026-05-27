@@ -23,6 +23,7 @@ import { isAbsolute, resolve } from 'node:path';
 
 import { z } from 'zod';
 
+import { readHarnessTasks } from '../runtime/hooks/active_task_mirror.js';
 import { err, ok } from '../runtime/result.js';
 import { readActiveTask } from '../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../runtime/workflow_phases.js';
@@ -135,6 +136,45 @@ export const HasGeneratedSpec: FunctionDef<z.input<typeof NoArgs>, HasGeneratedS
       return err({
         kind: 'runtime' as const,
         message: `has_generated_spec: ${String(e)}`,
+        cause: e,
+      });
+    }
+  },
+};
+
+interface TaskListGeneratedResult {
+  /** True ⟺ every open (pending/in_progress) task carries a `metadata.taskId` provenance stamp. */
+  all_generated: boolean;
+  /** Harness ids of open tasks missing the provenance stamp (the smuggled-in tasks). */
+  ungenerated: string[];
+}
+
+/**
+ * Gate B (AP.5) read-side: does the ENTIRE open task list have generator
+ * provenance? Walks the harness store (via AP.1's isolated reader) and flags any
+ * pending/in_progress task lacking `metadata.taskId` — the stamp scope→task
+ * generation applies (H6). Closes Gate A's loophole: a task smuggled into the
+ * list manually (no spec, no pre-research) would otherwise let code through once
+ * loaded. Completed/deleted tasks are ignored (only open work must be generated).
+ */
+export const TaskListGenerated: FunctionDef<z.input<typeof NoArgs>, TaskListGeneratedResult> = {
+  name: 'task_list_generated',
+  argSchema: NoArgs,
+  durable: false,
+  memoizable: false,
+  costEstimateMs: 5,
+  execute: async (_args, ctx) => {
+    try {
+      const tasks = await readHarnessTasks(ctx.sessionId);
+      const ungenerated = tasks
+        .filter((t) => t.status === 'pending' || t.status === 'in_progress')
+        .filter((t) => t.metadata?.taskId === undefined || t.metadata.taskId === '')
+        .map((t) => t.id);
+      return ok({ all_generated: ungenerated.length === 0, ungenerated });
+    } catch (e) {
+      return err({
+        kind: 'runtime' as const,
+        message: `task_list_generated: ${String(e)}`,
         cause: e,
       });
     }

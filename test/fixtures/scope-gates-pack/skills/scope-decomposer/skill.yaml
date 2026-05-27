@@ -45,6 +45,27 @@ rules:
             pre-research → `task-spec-author` FIRST, create the task with its
             spec path in metadata, load it (set in_progress), THEN code. If
             there is no active task at all, scope one first.
+
+  # Gate B — task-list-generated: every OPEN task must carry a metadata.taskId
+  # provenance stamp. Closes Gate A's loophole (a task smuggled into the list
+  # manually). `warn` (not block): Gate A already hard-blocks the code-write;
+  # Gate B surfaces list-hygiene so the agent regenerates the smuggled task.
+  - id: task-list-generated
+    process:
+      - call: is_automation_mode
+        as: auto
+      - call: task_list_generated
+        if: 'auto.value == true'
+        as: list
+      - call: verdict
+        if: 'auto.value == true && list.all_generated == false'
+        args:
+          level: warn
+          message: >-
+            Task-list hygiene: one or more open tasks have NO generator
+            provenance (missing metadata.taskId) — they were not produced by
+            scope→task-spec-author. Regenerate them through the pipeline (or
+            stamp metadata.taskId) so the whole list is task-generated.
 prose: |
   Gate A of the scope→task unskippability pair (AP.5). It targets code-writes
   (src/**) in automation mode: if the active task lacks a generated spec (or
