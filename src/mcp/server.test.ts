@@ -16,8 +16,8 @@
  * protocol.
  *
  * Cases:
- *   1. tools/list returns the 10 tools (7 read-only + G.3's `memorize`,
- *      `store_lesson`, `forget`), each with an object JSON Schema.
+ *   1. tools/list returns the 11 tools (7 read-only + G.3's `memorize`,
+ *      `store_lesson`, `forget` + AP.3's `log_phase`), each with an object JSON Schema.
  *   2. list_packs returns "no packs loaded" (Phase 1 stub).
  *   3. list_skills (no args) returns "no skills loaded".
  *   4. inspect_skill missing required arg → JSON-RPC error.
@@ -192,7 +192,7 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 10 tools (7 read-only + 3 write) with JSON Schema', async () => {
+  it('tools/list returns the 11 tools (7 read-only + 4 write) with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
@@ -203,6 +203,7 @@ describe('opensquid-mcp subprocess', () => {
       'list_drift_events',
       'list_packs',
       'list_skills',
+      'log_phase',
       'memorize',
       'read_state',
       'read_violations',

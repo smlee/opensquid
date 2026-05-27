@@ -51,6 +51,7 @@ import { handleInspectSkill } from './tools/inspect-skill.js';
 import { handleListDriftEvents } from './tools/list-drift-events.js';
 import { handleListPacks } from './tools/list-packs.js';
 import { handleListSkills } from './tools/list-skills.js';
+import { handleLogPhase, LogPhaseSchema, type LogPhaseArgs } from './tools/log_phase.js';
 import { handleMemorize, MemorizeSchema, type MemorizeArgs } from './tools/memorize.js';
 import { handleReadState } from './tools/read-state.js';
 import { handleReadViolations } from './tools/read-violations.js';
@@ -123,6 +124,11 @@ const ToolHandlers = {
     schema: ForgetSchema,
     handle: (args: ForgetArgs) => handleForget(args, getEngine()).then((r) => JSON.stringify(r)),
   },
+  log_phase: {
+    schema: LogPhaseSchema,
+    handle: (args: LogPhaseArgs) =>
+      handleLogPhase(args, getEngine()).then((r) => JSON.stringify(r)),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -143,6 +149,9 @@ const descriptions: Record<ToolName, string> = {
     'Capture a candidate lesson for Stage 1 (user validates classification). ' +
     'Use this for in-session corrections; do NOT call promote_lesson — automation handles Stage 2.',
   forget: 'Delete a memory by id. User-authored memories require force: true (eviction immunity).',
+  log_phase:
+    'Log a completed workflow phase (pre_research|learn|code|test|audit|post_research|fix) ' +
+    'for the active task. Writes the engine ledger + the gate state; the commit gate unblocks once all 7 are logged.',
 };
 
 /**
