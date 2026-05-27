@@ -55,33 +55,33 @@ These are the tools the `opensquid` MCP server actually surfaces to your agent. 
 
 ### Memory
 
-| Tool             | What it does                                                                                                                                                                                          |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`recall`**     | Find memories relevant to a query; returns up to `k` ranked hits. Runs **hybrid recall** (semantic + text + RRF fusion) so proper-noun queries like _"Gianna"_ surface even when cosine similarity would miss. Scope-aware by default. |
-| **`memorize`**   | Persist a memory. `authored_by="user"` (the default) makes it eviction-immune. Scope defaults to user; project scope is auto-detected from your git repo. Embedded for semantic recall.               |
-| **`forget`**     | Delete a memory by id. User-authored memories require `force: true` (eviction immunity).                                                                                                              |
+| Tool           | What it does                                                                                                                                                                                                                           |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`recall`**   | Find memories relevant to a query; returns up to `k` ranked hits. Runs **hybrid recall** (semantic + text + RRF fusion) so proper-noun queries like _"Gianna"_ surface even when cosine similarity would miss. Scope-aware by default. |
+| **`memorize`** | Persist a memory. `authored_by="user"` (the default) makes it eviction-immune. Scope defaults to user; project scope is auto-detected from your git repo. Embedded for semantic recall.                                                |
+| **`forget`**   | Delete a memory by id. User-authored memories require `force: true` (eviction immunity).                                                                                                                                               |
 
 ### Lessons (the agent can only propose)
 
-| Tool              | What it does                                                                                                                                                                                          |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool               | What it does                                                                                                                                                                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`store_lesson`** | Capture a candidate lesson for Stage 1 (you validate the classification). Use this for in-session corrections. There is **no `promote` tool** — the agent cannot graduate its own lesson; automation runs Stage 2 against the wedge gate. |
 
 ### Workflow
 
-| Tool            | What it does                                                                                                                                                                                          |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool            | What it does                                                                                                                                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **`log_phase`** | Log a completed workflow phase (`pre_research` \| `learn` \| `code` \| `test` \| `audit` \| `post_research` \| `fix`) for the active task. Writes both the engine ledger and the gate state; the commit gate unblocks once all seven are logged. |
 
 ### Inspection (read-only)
 
-| Tool                  | What it does                                                       |
-| --------------------- | ----------------------------------------------------------------- |
-| **`list_packs`**      | List the currently loaded packs.                                  |
-| **`list_skills`**     | List skills, optionally scoped to a pack.                         |
-| **`inspect_skill`**   | Show a skill's rules, load conditions, and drift policy.          |
-| **`read_state`**      | Read a session-state key.                                         |
-| **`read_violations`** | Return the session's `violations.jsonl`.                          |
+| Tool                    | What it does                                                    |
+| ----------------------- | --------------------------------------------------------------- |
+| **`list_packs`**        | List the currently loaded packs.                                |
+| **`list_skills`**       | List skills, optionally scoped to a pack.                       |
+| **`inspect_skill`**     | Show a skill's rules, load conditions, and drift policy.        |
+| **`read_state`**        | Read a session-state key.                                       |
+| **`read_violations`**   | Return the session's `violations.jsonl`.                        |
 | **`list_drift_events`** | Aggregate the drift catalog across packs + the current session. |
 
 ### Why `promote` isn't here
@@ -131,14 +131,14 @@ User authorship is load-bearing. If you (the human) explicitly endorse a lesson,
 
 Open Squid ships a set of Claude Code hooks that catch common agent-drift patterns even when the agent forgets to call its tools. All hooks are **opt-in** via the setup wizard, and every blocking gate fails open on opensquid's own internal errors — they never break real work because of an opensquid bug.
 
-| Hook                                  | What it catches                                                                                                                                                                                              | Skip env var                                               |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| **PreToolUse — drift patterns**       | Blocks known anti-patterns before they execute: `git commit --amend`, force-push to `main`, substrate-purity violations, implicit `git push`, etc. Catalogued in `src/hooks/drift-patterns.ts`. 🦑 prefix.   | `OPENSQUID_SKIP_DRIFT=1`                                   |
-| **PreToolUse — workflow gate**        | Blocks `git commit` when the active task's phase ledger is missing required phases (`pre_research`, `learn`, `code`, `test`, `audit`, `post_research`, `fix`). Per-task scoping; survives `/resume`.          | `OPENSQUID_SKIP_WORKFLOW_GATE=1`                           |
-| **PreToolUse — versioning gate**      | Blocks `git commit` when staged code touches `src/` without a matching `package.json` / `Cargo.toml` version bump. PATCH-only by default.                                                                    | `OPENSQUID_SKIP_VERSION_GATE=1`                            |
-| **Stop — honesty ledger**             | Reconciles claim-vs-action across a session: if the agent said "running tests" but never invoked a test tool, the gap is recorded as a broken promise. End-of-turn recap text doesn't false-positive.        | (passive recording — no skip)                              |
-| **UserPromptSubmit**                  | Surfaces last turn's broken promises + heartbeat re-anchor + resume-detection (>5 min gap) at the start of the next prompt.                                                                                  | `OPENSQUID_HEARTBEAT_TOKENS=999999999` mutes the heartbeat |
-| **SessionEnd**                        | Clears the session-scoped ledger so disk usage stays bounded.                                                                                                                                                | (cleanup only — no skip)                                   |
+| Hook                             | What it catches                                                                                                                                                                                            | Skip env var                                               |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **PreToolUse — drift patterns**  | Blocks known anti-patterns before they execute: `git commit --amend`, force-push to `main`, substrate-purity violations, implicit `git push`, etc. Catalogued in `src/hooks/drift-patterns.ts`. 🦑 prefix. | `OPENSQUID_SKIP_DRIFT=1`                                   |
+| **PreToolUse — workflow gate**   | Blocks `git commit` when the active task's phase ledger is missing required phases (`pre_research`, `learn`, `code`, `test`, `audit`, `post_research`, `fix`). Per-task scoping; survives `/resume`.       | `OPENSQUID_SKIP_WORKFLOW_GATE=1`                           |
+| **PreToolUse — versioning gate** | Blocks `git commit` when staged code touches `src/` without a matching `package.json` / `Cargo.toml` version bump. PATCH-only by default.                                                                  | `OPENSQUID_SKIP_VERSION_GATE=1`                            |
+| **Stop — honesty ledger**        | Reconciles claim-vs-action across a session: if the agent said "running tests" but never invoked a test tool, the gap is recorded as a broken promise. End-of-turn recap text doesn't false-positive.      | (passive recording — no skip)                              |
+| **UserPromptSubmit**             | Surfaces last turn's broken promises + heartbeat re-anchor + resume-detection (>5 min gap) at the start of the next prompt.                                                                                | `OPENSQUID_HEARTBEAT_TOKENS=999999999` mutes the heartbeat |
+| **SessionEnd**                   | Clears the session-scoped ledger so disk usage stays bounded.                                                                                                                                              | (cleanup only — no skip)                                   |
 
 ### Install / verify
 
@@ -203,16 +203,16 @@ Open Squid runs a single per-machine background process (the **chat-daemon**) th
 
 **Chat-bridge MCP tools:** the `opensquid-chat-bridge` server exposes exactly two tools to the agent:
 
-| Tool                  | What it does                                                                                                                                                                                                                                          |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool                  | What it does                                                                                                                                                                                                                                                                                                                              |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`chat_send`**       | Send a text message. `channel: "project:<platform>"` auto-resolves to the active project's `report_channel`; explicit `<platform>:<native_id>` still works. Response includes `via: "daemon" \| "in_process"` so you can see which path served it. When `channel` is omitted it builds a `project:<platform>` shorthand from the session. |
-| **`chat_poll_inbox`** | Read recent inbound messages from the active project's inbox. Supports `platform`, `limit`, and `since` (ISO timestamp) filters. Merges the durable per-project JSONL with the in-memory daemon-pushed buffer (dedup by `message_id`).               |
+| **`chat_poll_inbox`** | Read recent inbound messages from the active project's inbox. Supports `platform`, `limit`, and `since` (ISO timestamp) filters. Merges the durable per-project JSONL with the in-memory daemon-pushed buffer (dedup by `message_id`).                                                                                                    |
 
 **Inbox format** (`~/.opensquid/projects/<uuid>/inbox/<platform>.jsonl`): one JSON message per line (NDJSON), stable schema `v: 1`, atomic POSIX appends — consumers split on `\n` safely. Allowed-but-unrouted messages land in a catch-all orphan inbox at `~/.opensquid/inbox/orphan/<platform>.jsonl` — useful for diagnosing "where did my message go?"
 
 ### Live inbound delivery (no cron)
 
-`chat_poll_inbox` is a **pull** — the agent reads the backlog on demand. For a live session that should react the *instant* a message lands, `opensquid chat watch` is the **push** path: it tails the active project's inbox JSONL and streams each new message to stdout, one line per message. The agent wraps it in its harness's stream monitor (in Claude Code, the `Monitor` tool with `persistent: true`):
+`chat_poll_inbox` is a **pull** — the agent reads the backlog on demand. For a live session that should react the _instant_ a message lands, `opensquid chat watch` is the **push** path: it tails the active project's inbox JSONL and streams each new message to stdout, one line per message. The agent wraps it in its harness's stream monitor (in Claude Code, the `Monitor` tool with `persistent: true`):
 
 ```bash
 opensquid chat watch          # resolves the project UUID from cwd / OPENSQUID_PROJECT_UUID
@@ -373,7 +373,7 @@ On the way to 1.0:
 
 - npm distribution with pre-built per-platform engine binaries (no Rust toolchain required)
 - SemVer freeze on the agent-facing tool surface
-- Deeper automation of Stage-2 promotion (unprompted, evidence-driven) and the calibration layer that learns *when* to ask the human vs. proceed
+- Deeper automation of Stage-2 promotion (unprompted, evidence-driven) and the calibration layer that learns _when_ to ask the human vs. proceed
 - A public Claude Skill / marketplace presence
 
 See [`docs/`](./docs/) for design notes on shipped features (including [`docs/skill-grammar-guide.md`](./docs/skill-grammar-guide.md) for the `if:` grammar) and [`CHANGELOG.md`](./CHANGELOG.md) for the full release history.
