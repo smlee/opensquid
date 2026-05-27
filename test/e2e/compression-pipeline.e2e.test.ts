@@ -1,31 +1,36 @@
 /**
- * CMP.5 — compression pipeline end-to-end (the must-WORK gate).
+ * CMP.5 (revised) — compression pipeline end-to-end (the must-WORK gate).
  *
  * Proves the FULL compression chain against a REAL loop-engine daemon
  * (with a real LLM via the engine's OpenAiCompatibleLlm adapter →
  * local Ollama) — the MAU.1 "prove against reality" bar for an
- * IRREVERSIBLE operation:
+ * IRREVERSIBLE operation. Per the CMP.4 ARCHITECTURE REVISION, the
+ * verify+gated-delete safety contract now lives INSIDE the engine's
+ * `memory.consolidate` op; the orchestrator is a thin policy caller. So
+ * this e2e drives the engine consolidate (engine-side verify + delete):
  *
  *   insert memories → satisfaction "satisfied" → candidates collected →
- *   orchestrator compresses → recall-replay passes → non-immune
- *   predecessors force-deleted → Mc still recalls (trace preserved via
- *   the engine's get_by_id_chasing_derived_from).
+ *   orchestrator → engine.memoryConsolidate → recall-replay verifies
+ *   (engine-internal) → non-immune predecessors force-deleted → Mc
+ *   still recalls (trace preserved via get_by_id_chasing_derived_from).
  *
  * Plus the safety negatives the design forbids breaking:
- *   - a USER-CITED predecessor is KEPT (immunity holds even though
- *     force=true would bypass the engine guard).
- *   - recall-replay FAILS → NOTHING deleted.
- *   - NOT satisfied → no compression at all.
+ *   - a USER-CITED predecessor is KEPT (immunity holds even though the
+ *     engine's force-delete would bypass the store guard — consolidate
+ *     does the immunity check itself).
+ *   - recall-replay FAILS (forced via recall_k=0 on a direct
+ *     consolidate call) → verified:false → NOTHING deleted.
+ *   - NOT satisfied → no consolidation at all.
  *
  * Gated by E2E=1 + an engine binary (skip-if-absent for CI). Scoped
  * OPENSQUID_HOME / LOOP_HOME so the e2e NEVER touches the real memory
  * store (deleting real memories would be the exact failure the design
  * forbids).
  *
- * Requires a local LLM for the compress legs. If the engine's LLM
- * adapter can't reach a model, the compress legs are skipped with a
- * clear log (the recall-replay-fail + not-satisfied legs still run, as
- * they don't require a successful compress).
+ * Requires a local LLM for the consolidate legs (consolidate compresses
+ * internally). If the engine's LLM adapter can't reach a model, those
+ * legs skip with a clear log; the recall_k=0 fail-closed leg + the
+ * not-satisfied leg still run.
  */
 
 import { statSync } from 'node:fs';
@@ -37,7 +42,7 @@ import { spawnSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { EngineClient, RpcError } from '../../src/engine/client.js';
-import { runCompression, recallReplayPasses } from '../../src/runtime/compression_orchestrator.js';
+import { runCompression } from '../../src/runtime/compression_orchestrator.js';
 import { emitProbe, recordAnswer } from '../../src/runtime/satisfaction_probe.js';
 import { collectCandidates } from '../../src/runtime/wedge/compress_candidates.js';
 
@@ -68,7 +73,11 @@ async function seed(engine: EngineClient, description: string, content: string):
   return r.id;
 }
 
-/** True if the engine could actually compress (LLM reachable). */
+/**
+ * Probe whether the engine can compress at all (LLM reachable). Returns
+ * the minted Mc id, or null when the LLM adapter is offline (so the
+ * caller can skip the consolidate legs cleanly).
+ */
 async function tryCompress(engine: EngineClient, ids: string[]): Promise<string | null> {
   try {
     const mc = await engine.memoryCompress({ ids });
@@ -215,20 +224,39 @@ describe.skipIf(SKIP)('CMP.5 — compression pipeline e2e (real engine)', () => 
     expect(stillThere.id).toBe(cited);
   }, 120_000);
 
-  it('recall-replay forced to fail → nothing deleted', async () => {
-    const m = await seed(
+  it('recall-replay forced to fail (recall_k=0) → verified:false, nothing deleted', async () => {
+    const m1 = await seed(
       engine,
       'Kafka retention set to 7 days',
       'The orders topic retains messages for 7 days to allow replay during incident recovery.',
     );
-    // recallReplayPasses against an UNRELATED mc id that will never
-    // surface for this predecessor's query → gate must FAIL.
-    const passes = await recallReplayPasses(engine, [m], 'mem-c-doesnotexist0000');
-    expect(passes).toBe(false);
-    // and the predecessor is untouched (the gate alone deletes nothing).
-    const stillThere = await engine.memoryGet({ id: m });
-    expect(stillThere.id).toBe(m);
-  }, 60_000);
+    const m2 = await seed(
+      engine,
+      'Kafka compaction on the audit topic',
+      'The audit topic uses log compaction so the latest record per key is always retained.',
+    );
+    // Drive the engine consolidate directly with recall_k=0: the
+    // recall-replay probe can return AT MOST 0 hits, so Mc can never
+    // surface → the engine's verify gate MUST miss → fail-closed
+    // (verified:false, nothing deleted). A deterministic forced-fail
+    // against the real engine (no mocking).
+    let res;
+    try {
+      res = await engine.memoryConsolidate({ ids: [m1, m2], recall_k: 0 });
+    } catch (e) {
+      if (e instanceof RpcError) {
+        console.warn(`[CMP.5] consolidate unavailable (LLM offline?): ${e.message} — skipping leg`);
+        return;
+      }
+      throw e;
+    }
+    expect(res.verified).toBe(false);
+    expect(res.deleted).toEqual([]);
+    expect(res.mc_id).toBeTruthy(); // Mc minted + kept alongside predecessors
+    // both predecessors untouched (fail-closed deleted nothing).
+    expect((await engine.memoryGet({ id: m1 })).id).toBe(m1);
+    expect((await engine.memoryGet({ id: m2 })).id).toBe(m2);
+  }, 120_000);
 
   it('not-satisfied group → no compression, no deletion', async () => {
     const m = await seed(

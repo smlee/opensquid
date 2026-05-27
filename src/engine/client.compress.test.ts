@@ -89,19 +89,26 @@ describe.skipIf(SKIP_REAL)('CMP.1 memoryCompress / memoryRecomputeCitations (rea
     const m1 = await engine!.memoryCreate({ description: 'first', content: 'body one' });
     const m2 = await engine!.memoryCreate({ description: 'second', content: 'body two' });
 
+    let result: Awaited<ReturnType<EngineClient['memoryCompress']>> | null = null;
     let caught: RpcError | null = null;
     try {
-      await engine!.memoryCompress({ ids: [m1.id, m2.id] });
+      result = await engine!.memoryCompress({ ids: [m1.id, m2.id] });
     } catch (e) {
       caught = e as RpcError;
     }
-    // A real daemon has no LLM adapter → structured error, NOT a
-    // missing-method error. Either outcome below proves the dispatch
-    // arm exists; we only forbid METHOD_NOT_FOUND.
-    expect(caught).not.toBeNull();
-    expect(caught).toBeInstanceOf(RpcError);
-    expect(caught!.code).not.toBe(ENGINE_ERROR.METHOD_NOT_FOUND);
-  });
+    // Environment-robust: with an LLM reachable (local Ollama) the
+    // daemon mints Mc; without one it returns a structured "no LLM"
+    // error. EITHER proves the dispatch arm exists — we only forbid
+    // METHOD_NOT_FOUND.
+    if (caught) {
+      expect(caught).toBeInstanceOf(RpcError);
+      expect(caught.code).not.toBe(ENGINE_ERROR.METHOD_NOT_FOUND);
+    } else {
+      expect(result).not.toBeNull();
+      expect(typeof result!.id).toBe('string');
+      expect(Array.isArray(result!.derived_from)).toBe(true);
+    }
+  }, 120_000);
 
   it('memoryCompress with empty ids → InvalidParams (validated server-side)', async () => {
     let caught: RpcError | null = null;
@@ -119,5 +126,45 @@ describe.skipIf(SKIP_REAL)('CMP.1 memoryCompress / memoryRecomputeCitations (rea
     const got = await engine!.memoryGet({ id: created.id });
     expect(got.consumed_by_user_lessons).toBe(0);
     expect(got.derived_from).toEqual([]);
+  });
+
+  // CMP.4 (revised) — memoryConsolidate bridge wiring. The full
+  // verify+delete behavior is proven in the CMP.5 e2e (real LLM) + the
+  // Rust serve.rs unit tests (MockLlmClient). Here we only prove the
+  // dispatch arm is REACHABLE — the assertion is environment-robust:
+  // with an LLM reachable it returns a structured result, without one
+  // it throws a structured error; in NEITHER case is it
+  // METHOD_NOT_FOUND.
+  it('memoryConsolidate RPC is wired (reachable, not METHOD_NOT_FOUND)', async () => {
+    const m1 = await engine!.memoryCreate({ description: 'alpha', content: 'body a' });
+    const m2 = await engine!.memoryCreate({ description: 'beta', content: 'body b' });
+    let result: Awaited<ReturnType<EngineClient['memoryConsolidate']>> | null = null;
+    let caught: RpcError | null = null;
+    try {
+      result = await engine!.memoryConsolidate({ ids: [m1.id, m2.id] });
+    } catch (e) {
+      caught = e as RpcError;
+    }
+    if (caught) {
+      expect(caught).toBeInstanceOf(RpcError);
+      expect(caught.code).not.toBe(ENGINE_ERROR.METHOD_NOT_FOUND);
+    } else {
+      // LLM reachable → a real consolidate outcome with the wire shape.
+      expect(result).not.toBeNull();
+      expect(typeof result!.verified).toBe('boolean');
+      expect(Array.isArray(result!.deleted)).toBe(true);
+      expect(Array.isArray(result!.kept_immune)).toBe(true);
+    }
+  }, 120_000);
+
+  it('memoryConsolidate with empty ids → InvalidParams (validated server-side)', async () => {
+    let caught: RpcError | null = null;
+    try {
+      await engine!.memoryConsolidate({ ids: [] });
+    } catch (e) {
+      caught = e as RpcError;
+    }
+    expect(caught).toBeInstanceOf(RpcError);
+    expect(caught!.code).toBe(ENGINE_ERROR.INVALID_PARAMS);
   });
 });
