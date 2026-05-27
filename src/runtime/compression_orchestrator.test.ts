@@ -1,18 +1,19 @@
 /**
- * CMP.4 — compression orchestrator + recall-replay gate tests.
+ * CMP.4 (revised) — compression orchestrator (THIN policy caller) tests.
  *
  * Unit-level with a STUB engine (CMP.5 carries the live-engine e2e). The
- * load-bearing D2 contract: a predecessor is force-deleted ONLY when
- * (a) satisfied + (b) recall-replay passes + (c) not user-cited. Any
- * failure → delete nothing + drift event.
+ * verify+gated-delete contract (D2/D3) now lives INSIDE the engine's
+ * `memory.consolidate` op; the orchestrator is a thin policy caller. So
+ * these tests assert the POLICY:
+ *   D1 (WHEN): only satisfied groups trigger consolidate; not-satisfied
+ *     → no consolidate call at all.
+ *   WHAT: each candidate window → one `memoryConsolidate({ ids })`.
+ *   SURFACE: the engine's outcome (deleted / kept_immune / verified) is
+ *     reported as-is; `!verified` → skipped + drift event.
  *
- * The fixtures cover exactly the spec's four cases:
- *   1. satisfied + replay passes + non-immune  → deleted, Mc remains
- *   2. satisfied + replay FAILS                → nothing deleted, drift
- *   3. satisfied + a user-cited predecessor    → that one KEPT, others deleted
- *   4. NOT satisfied                           → no compress, no delete
- * plus: an engine error mid-flow → fail-closed; a user-citation count
- * NEVER bypassed by force.
+ * The engine's own Rust tests prove the safety internals (recall-replay
+ * gate, immunity, fail-closed). opensquid no longer runs recall-replay
+ * or issues any memory.delete — these tests verify that absence too.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -22,8 +23,9 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EngineClient } from '../engine/client.js';
+import type { ConsolidateParams, ConsolidateResult } from '../engine/types.js';
 
-import { runCompression, recallReplayPasses } from './compression_orchestrator.js';
+import { runCompression } from './compression_orchestrator.js';
 import { readAllDriftCatalogs } from './drift_catalog.js';
 import { emitProbe, recordAnswer } from './satisfaction_probe.js';
 import { collectCandidates } from './wedge/compress_candidates.js';
@@ -31,71 +33,47 @@ import { collectCandidates } from './wedge/compress_candidates.js';
 const SID = 'cmp4-sess';
 
 /**
- * Stub engine. `store` maps memory id → its current state. `mcId` is the
- * id the next memoryCompress returns; `recallSurfaces` controls whether
- * recall returns Mc for a predecessor query. `failCompress`/`failOn`
- * inject engine errors.
+ * Stub engine modeling `memory.consolidate`. `store` maps memory id →
+ * its immunity counter; the stub computes a verified outcome the way the
+ * engine would (non-immune ids → deleted, immune ids → kept_immune),
+ * unless `verified: false` or `fail` overrides it.
  */
 interface StubOpts {
-  store: Record<string, { description: string; consumed_by_user_lessons: number }>;
+  store: Record<string, { consumed_by_user_lessons: number }>;
   mcId?: string;
-  recallSurfacesMc?: boolean;
-  failCompress?: boolean;
-  deleteThrowsOn?: string;
+  /** Force the engine's verify gate to miss (nothing deleted). */
+  verified?: boolean;
+  /** Reject the consolidate RPC (engine error path). */
+  fail?: boolean;
 }
 
 function stubEngine(opts: StubOpts): {
   engine: EngineClient;
-  deleted: string[];
-  compressCalls: number;
 } {
-  const deleted: string[] = [];
-  let compressCalls = 0;
   const mcId = opts.mcId ?? 'mem-c-deadbeef';
+  const verified = opts.verified !== false;
 
   const engine = {
-    memoryCompress: vi.fn(({ ids }: { ids: string[] }) => {
-      compressCalls += 1;
-      if (opts.failCompress) return Promise.reject(new Error('engine compress failure'));
-      const sum = ids.reduce((acc, id) => acc + (opts.store[id]?.consumed_by_user_lessons ?? 0), 0);
-      return Promise.resolve({
-        id: mcId,
-        description: 'gist',
-        derived_from: ids,
-        consumed_by_user_lessons: sum,
-      });
-    }),
-    memorySearch: vi.fn(() =>
-      Promise.resolve({
-        query: 'q',
-        returned: opts.recallSurfacesMc === false ? 0 : 1,
-        results: opts.recallSurfacesMc === false ? [] : [{ kind: 'memory', id: mcId } as never],
-      }),
-    ),
-    memoryGet: vi.fn(({ id }: { id: string }) => {
-      const row = opts.store[id];
-      if (!row) return Promise.reject(new Error(`not found: ${id}`));
-      return Promise.resolve({
-        id,
-        description: row.description,
-        content: 'body',
-        created_at: 'z',
-        scope: 'user' as const,
-        consumed_by_user_lessons: row.consumed_by_user_lessons,
-        derived_from: [],
-      });
-    }),
-    memoryDelete: vi.fn(({ id }: { id: string; force?: boolean }) => {
-      if (opts.deleteThrowsOn === id) return Promise.reject(new Error(`delete failed: ${id}`));
-      deleted.push(id);
-      return Promise.resolve({ ok: true as const, id, forced: true });
+    memoryConsolidate: vi.fn((p: ConsolidateParams): Promise<ConsolidateResult> => {
+      if (opts.fail) return Promise.reject(new Error('engine consolidate failure'));
+      if (!verified) {
+        // Fail-closed: Mc minted but nothing deleted.
+        return Promise.resolve({ mc_id: mcId, deleted: [], kept_immune: [], verified: false });
+      }
+      const deleted: string[] = [];
+      const kept_immune: string[] = [];
+      for (const id of p.ids) {
+        if ((opts.store[id]?.consumed_by_user_lessons ?? 0) > 0) kept_immune.push(id);
+        else deleted.push(id);
+      }
+      return Promise.resolve({ mc_id: mcId, deleted, kept_immune, verified: true });
     }),
   } as unknown as EngineClient;
 
-  return { engine, deleted, compressCalls };
+  return { engine };
 }
 
-describe('compression_orchestrator (CMP.4)', () => {
+describe('compression_orchestrator (CMP.4 — thin policy caller)', () => {
   let home: string;
   let prior: string | undefined;
 
@@ -116,19 +94,18 @@ describe('compression_orchestrator (CMP.4)', () => {
     await recordAnswer(SID, group, true);
   }
 
-  it('1. satisfied + replay passes + non-immune → predecessors deleted, Mc remains', async () => {
+  it('1. satisfied + engine verified + non-immune → predecessors deleted, Mc remains', async () => {
     await satisfy('CMP');
     await collectCandidates(SID, {
       id: 'lesson-1',
       citedMemoryIds: ['mem-1', 'mem-2'],
       group: 'CMP',
     });
-    const { engine, deleted } = stubEngine({
+    const { engine } = stubEngine({
       store: {
-        'mem-1': { description: 'd1', consumed_by_user_lessons: 0 },
-        'mem-2': { description: 'd2', consumed_by_user_lessons: 0 },
+        'mem-1': { consumed_by_user_lessons: 0 },
+        'mem-2': { consumed_by_user_lessons: 0 },
       },
-      recallSurfacesMc: true,
     });
 
     const outcomes = await runCompression(SID, 'CMP', engine);
@@ -136,145 +113,111 @@ describe('compression_orchestrator (CMP.4)', () => {
     expect(outcomes[0]!.deleted.sort()).toEqual(['mem-1', 'mem-2']);
     expect(outcomes[0]!.skipped).toBe(false);
     expect(outcomes[0]!.mcId).toBe('mem-c-deadbeef');
-    expect(deleted.sort()).toEqual(['mem-1', 'mem-2']);
-    // Mc itself is never deleted.
-    expect(deleted).not.toContain('mem-c-deadbeef');
+    expect(outcomes[0]!.keptImmune).toEqual([]);
   });
 
-  it('2. satisfied + recall-replay FAILS → nothing deleted, Mc kept, drift emitted', async () => {
+  it('2. satisfied + engine verify FAILS → nothing deleted, Mc kept, drift emitted', async () => {
     await satisfy('CMP');
     await collectCandidates(SID, {
       id: 'lesson-1',
       citedMemoryIds: ['mem-1', 'mem-2'],
       group: 'CMP',
     });
-    const { engine, deleted } = stubEngine({
+    const { engine } = stubEngine({
       store: {
-        'mem-1': { description: 'd1', consumed_by_user_lessons: 0 },
-        'mem-2': { description: 'd2', consumed_by_user_lessons: 0 },
+        'mem-1': { consumed_by_user_lessons: 0 },
+        'mem-2': { consumed_by_user_lessons: 0 },
       },
-      recallSurfacesMc: false, // gate fails
+      verified: false, // engine gate missed
     });
 
     const outcomes = await runCompression(SID, 'CMP', engine);
     expect(outcomes[0]!.skipped).toBe(true);
     expect(outcomes[0]!.deleted).toEqual([]);
-    expect(deleted).toEqual([]);
+    expect(outcomes[0]!.mcId).toBe('mem-c-deadbeef'); // Mc kept alongside predecessors
 
     const drifts = await readAllDriftCatalogs([], SID);
     expect(drifts.length).toBeGreaterThanOrEqual(1);
     expect(drifts.some((d) => d.ruleId === 'compression-recall-replay-gate')).toBe(true);
   });
 
-  it('3. satisfied + a predecessor is user-cited → that one KEPT, others deleted', async () => {
+  it('3. satisfied + a predecessor is user-cited → engine keeps it, others deleted', async () => {
     await satisfy('CMP');
     await collectCandidates(SID, {
       id: 'lesson-1',
       citedMemoryIds: ['mem-1', 'mem-cited', 'mem-3'],
       group: 'CMP',
     });
-    const { engine, deleted } = stubEngine({
+    const { engine } = stubEngine({
       store: {
-        'mem-1': { description: 'd1', consumed_by_user_lessons: 0 },
-        'mem-cited': { description: 'dc', consumed_by_user_lessons: 2 }, // user-cited
-        'mem-3': { description: 'd3', consumed_by_user_lessons: 0 },
+        'mem-1': { consumed_by_user_lessons: 0 },
+        'mem-cited': { consumed_by_user_lessons: 2 }, // user-cited → engine keeps
+        'mem-3': { consumed_by_user_lessons: 0 },
       },
-      recallSurfacesMc: true,
     });
 
     const outcomes = await runCompression(SID, 'CMP', engine);
     expect(outcomes[0]!.keptImmune).toEqual(['mem-cited']);
     expect(outcomes[0]!.deleted.sort()).toEqual(['mem-1', 'mem-3']);
-    // The user-cited memory is NEVER passed to delete — immunity holds
-    // even though force=true would have bypassed the engine guard.
-    expect(deleted).not.toContain('mem-cited');
-    expect(deleted.sort()).toEqual(['mem-1', 'mem-3']);
+    expect(outcomes[0]!.skipped).toBe(false);
   });
 
-  it('4. NOT satisfied → no compress, no delete (orchestrator returns early)', async () => {
-    // Probe emitted but answered "false" (or never answered).
+  it('4. NOT satisfied → no consolidate call (orchestrator returns early)', async () => {
     await emitProbe(SID, 'CMP');
     await recordAnswer(SID, 'CMP', false);
     await collectCandidates(SID, { id: 'lesson-1', citedMemoryIds: ['mem-1'], group: 'CMP' });
-    const { engine, deleted, compressCalls } = stubEngine({
-      store: { 'mem-1': { description: 'd1', consumed_by_user_lessons: 0 } },
-      recallSurfacesMc: true,
+    const { engine } = stubEngine({
+      store: { 'mem-1': { consumed_by_user_lessons: 0 } },
     });
 
     const outcomes = await runCompression(SID, 'CMP', engine);
     expect(outcomes).toEqual([]);
-    expect(deleted).toEqual([]);
-    expect(compressCalls).toBe(0);
+    // The orchestrator never calls consolidate for an unsatisfied group.
+    expect((engine.memoryConsolidate as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
   it('no answered probe at all → no-op', async () => {
     await collectCandidates(SID, { id: 'l', citedMemoryIds: ['mem-1'], group: 'CMP' });
-    const { engine, deleted } = stubEngine({
-      store: { 'mem-1': { description: 'd1', consumed_by_user_lessons: 0 } },
-    });
+    const { engine } = stubEngine({ store: { 'mem-1': { consumed_by_user_lessons: 0 } } });
     expect(await runCompression(SID, 'CMP', engine)).toEqual([]);
-    expect(deleted).toEqual([]);
+    expect((engine.memoryConsolidate as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
-  it('engine error mid-flow → fail-closed (drift emitted, no delete past the error)', async () => {
+  it('consolidate RPC error → fail-closed (drift emitted, skipped)', async () => {
     await satisfy('CMP');
     await collectCandidates(SID, { id: 'l', citedMemoryIds: ['mem-1', 'mem-2'], group: 'CMP' });
-    const { engine, deleted } = stubEngine({
+    const { engine } = stubEngine({
       store: {
-        'mem-1': { description: 'd1', consumed_by_user_lessons: 0 },
-        'mem-2': { description: 'd2', consumed_by_user_lessons: 0 },
+        'mem-1': { consumed_by_user_lessons: 0 },
+        'mem-2': { consumed_by_user_lessons: 0 },
       },
-      recallSurfacesMc: true,
-      deleteThrowsOn: 'mem-1', // first delete throws
+      fail: true,
     });
 
     const outcomes = await runCompression(SID, 'CMP', engine);
     expect(outcomes[0]!.skipped).toBe(true);
-    // The throw happens on mem-1's delete → nothing recorded as deleted,
-    // and mem-2 is never reached.
-    expect(deleted).toEqual([]);
+    expect(outcomes[0]!.deleted).toEqual([]);
     const drifts = await readAllDriftCatalogs([], SID);
     expect(drifts.some((d) => d.ruleId === 'compression-recall-replay-gate')).toBe(true);
   });
 
-  it('compress refusal (engine InvalidParams) → fail-closed, nothing deleted', async () => {
+  it('passes the deduped window ids to the engine consolidate call', async () => {
     await satisfy('CMP');
-    await collectCandidates(SID, { id: 'l', citedMemoryIds: ['mem-1'], group: 'CMP' });
-    const { engine, deleted } = stubEngine({
-      store: { 'mem-1': { description: 'd1', consumed_by_user_lessons: 0 } },
-      failCompress: true,
+    // duplicate id in the window → orchestrator dedupes before the call.
+    await collectCandidates(SID, {
+      id: 'l',
+      citedMemoryIds: ['mem-1', 'mem-1', 'mem-2'],
+      group: 'CMP',
     });
-    const outcomes = await runCompression(SID, 'CMP', engine);
-    expect(outcomes[0]!.skipped).toBe(true);
-    expect(deleted).toEqual([]);
-  });
-
-  describe('recallReplayPasses', () => {
-    it('passes when Mc surfaces for every predecessor', async () => {
-      const { engine } = stubEngine({
-        store: {
-          'mem-1': { description: 'd1', consumed_by_user_lessons: 0 },
-          'mem-2': { description: 'd2', consumed_by_user_lessons: 0 },
-        },
-        recallSurfacesMc: true,
-      });
-      expect(await recallReplayPasses(engine, ['mem-1', 'mem-2'], 'mem-c-deadbeef')).toBe(true);
+    const { engine } = stubEngine({
+      store: {
+        'mem-1': { consumed_by_user_lessons: 0 },
+        'mem-2': { consumed_by_user_lessons: 0 },
+      },
     });
-
-    it('fails when Mc is missing for a predecessor', async () => {
-      const { engine } = stubEngine({
-        store: { 'mem-1': { description: 'd1', consumed_by_user_lessons: 0 } },
-        recallSurfacesMc: false,
-      });
-      expect(await recallReplayPasses(engine, ['mem-1'], 'mem-c-deadbeef')).toBe(false);
-    });
-
-    it('fails closed when a predecessor has no usable query', async () => {
-      const { engine } = stubEngine({
-        store: { 'mem-1': { description: '   ', consumed_by_user_lessons: 0 } },
-        recallSurfacesMc: true,
-      });
-      expect(await recallReplayPasses(engine, ['mem-1'], 'mem-c-deadbeef')).toBe(false);
-    });
+    await runCompression(SID, 'CMP', engine);
+    const call = (engine.memoryConsolidate as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as ConsolidateParams;
+    expect([...call.ids].sort()).toEqual(['mem-1', 'mem-2']);
   });
 });

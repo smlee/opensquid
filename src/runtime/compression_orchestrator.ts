@@ -1,36 +1,39 @@
 /**
- * CMP.4 — compression orchestrator + recall-replay drift gate.
+ * CMP.4 — compression orchestrator (THIN policy caller).
  *
- * Authoritative spec: `docs/tasks/T-compression.md` CMP.4 + pre-research
- * §4 D2/D3 (`docs/research/T-compression-pre-research-2026-05-27.md`).
+ * Authoritative spec: `docs/tasks/T-compression.md` CMP.4 (the
+ * "⚠️ ARCHITECTURE REVISION" block) + pre-research §4 D1/D2/D3
+ * (`docs/research/T-compression-pre-research-2026-05-27.md`).
  *
- * ⚠️ THIS MODULE OWNS THE ONLY IRREVERSIBLE OPERATION IN THE COMPRESSION
- * LAYER: force-deleting a predecessor memory. The user's whole design
- * guards against LOSING a memory. The locked D2 contract is enforced
- * here EXACTLY:
+ * ⚠️ ARCHITECTURE REVISION (2026-05-27): the verify+delete safety
+ * contract MOVED INTO the loop-engine (`memory.consolidate`). The
+ * loop-engine is a UNIVERSAL substrate, so recall-replay verification +
+ * gated non-immune predecessor deletion is universal memory INTEGRITY
+ * every consumer needs — NOT opensquid policy. The engine guarantees
+ * the safe-HOW (atomic, race-free, fail-closed); opensquid decides the
+ * WHEN/WHAT.
  *
- *   A predecessor is force-deleted ONLY after ALL THREE hold:
- *     (a) the group's satisfaction probe answered "satisfied" (D1), AND
- *     (b) the recall-replay drift gate PASSES — Mc still surfaces in
- *         top-k for EVERY predecessor's representative query (D3), AND
- *     (c) that predecessor is NOT user-cited (consumed_by_user_lessons
- *         === 0). force=true BYPASSES the engine's immunity guard, so
- *         this client-side check is the ONLY thing protecting a
- *         user-cited memory — it is load-bearing.
+ * THIS MODULE NO LONGER ISSUES ANY `memory.delete` AND NO LONGER RUNS
+ * RECALL-REPLAY. Both now live inside the engine's `memory.consolidate`
+ * op. opensquid's role is purely policy:
  *
- *   ON ANY failure / uncertainty / engine error: KEEP Mc ALONGSIDE the
- *   predecessors, DELETE NOTHING for that window, emit a drift event +
- *   notify. Fail-closed = keep the originals. The memory trace is never
- *   lost (Mc + the derived_from chain + transferred citations preserve
- *   it; recall chases derived_from so the predecessors' queries still
- *   surface Mc after deletion).
+ *   D1 (WHEN): only run for a group whose satisfaction probe answered
+ *     "satisfied". No satisfied probe → no-op (return []).
+ *   WHAT: read the group's CMP.3 candidate windows; call
+ *     `engine.memoryConsolidate({ ids })` per window.
+ *   SURFACE: report the engine's outcome (deleted / kept_immune /
+ *     verified); emit a drift event when `!verified` (the engine kept
+ *     `Mc` alongside the predecessors — nothing was lost, but the
+ *     window wasn't safe to consolidate yet).
  *
- * EXACTLY ONE deletion path: the single `engine.memoryDelete({ force:
- * true })` call below, reached only after the gate. The CMP.4 audit
- * greps the whole change for any other memoryDelete/delete call — there
- * must be none outside this gated terminal step.
+ * The engine's `memory.consolidate` enforces the locked D2/D3 contract
+ * internally: a predecessor is force-deleted ONLY after (a) compression
+ * succeeds, (b) the recall-replay gate passes for EVERY predecessor,
+ * and (c) that predecessor is not user-cited
+ * (`consumed_by_user_lessons === 0`). Any failure → delete nothing,
+ * `verified: false`. The memory trace is never lost.
  *
- * Imports from: ../engine/client.js, ../engine/types.js, ./drift_catalog.js,
+ * Imports from: ../engine/client.js, ./drift_catalog.js,
  *   ./satisfaction_probe.js, ./wedge/compress_candidates.js.
  * Imported by: (a session-boundary / automation-cycle trigger, TBD wiring).
  */
@@ -41,70 +44,43 @@ import { appendSessionDriftEvent } from './drift_catalog.js';
 import { readSatisfaction } from './satisfaction_probe.js';
 import { readCandidates } from './wedge/compress_candidates.js';
 
-/** Top-k for the recall-replay membership check (D3 default). */
-const RECALL_REPLAY_K = 5;
-
 /** Drift catalog tags for compression-gate events (surfaced via list_drift_events). */
 const DRIFT_PACK = '<compression>';
 const DRIFT_RULE = 'compression-recall-replay-gate';
 
-/**
- * Recall-replay drift gate (D3). For EVERY predecessor, run that
- * predecessor's representative query and require the compressed memory
- * `mcId` to appear in the top-k results. Membership, not exact rank — a
- * compressed gist legitimately re-ranks. ANY miss → the gate fails →
- * the orchestrator deletes NOTHING for the window.
- *
- * The representative query is the predecessor's own description (its
- * most compact semantic fingerprint). We read it via `memoryGet`; if a
- * predecessor can't be read, the gate FAILS CLOSED (returns false) so
- * uncertainty never green-lights a deletion.
- *
- * Any engine error propagates to the caller, which treats it as
- * "gate did not pass" and deletes nothing.
- */
-export async function recallReplayPasses(
-  engine: EngineClient,
-  predecessorIds: string[],
-  mcId: string,
-  k: number = RECALL_REPLAY_K,
-): Promise<boolean> {
-  for (const pid of predecessorIds) {
-    // Derive the representative query from the predecessor's description.
-    const pred = await engine.memoryGet({ id: pid });
-    const query = pred.description?.trim();
-    if (!query) return false; // no usable query → fail closed
-    const res = await engine.memorySearch({ query, limit: k, mode: 'hybrid' });
-    if (!res.results.some((h) => h.id === mcId)) {
-      return false; // Mc did not survive recall for this predecessor → degraded
-    }
-  }
-  return true;
-}
-
-/** Outcome of one window's compression attempt — for caller telemetry + tests. */
+/** Outcome of one window's consolidation attempt — for caller telemetry + tests. */
 export interface CompressionOutcome {
   group: string;
   promotedLessonId: string;
+  /** The minted compressed memory id (null only if compression itself failed). */
   mcId: string | null;
-  /** Predecessors actually force-deleted (gate passed + not user-cited). */
+  /** Predecessors the engine force-deleted (verified + not user-cited). */
   deleted: string[];
-  /** Predecessors KEPT because they are user-cited (immunity). */
+  /** Predecessors the engine KEPT because they are user-cited (immunity). */
   keptImmune: string[];
-  /** True when the window was skipped (gate failed / error) — nothing deleted. */
+  /**
+   * True when nothing was deleted for this window — either the engine's
+   * verify gate missed (`verified: false`) or a consolidate error. Mc
+   * (if minted) is kept alongside the predecessors; the trace is intact.
+   */
   skipped: boolean;
   /** Reason a window was skipped, for the drift event + telemetry. */
   reason?: string;
 }
 
 /**
- * Run compression for one satisfied group. Reads the group's candidate
- * windows (CMP.3), compresses each via the engine (CMP.1), runs the
- * recall-replay gate (D3), and force-deletes the non-immune predecessors
- * ONLY when the gate passes (D2). Returns one outcome per window.
+ * Run consolidation for one satisfied group. Reads the group's
+ * candidate windows (CMP.3) and calls the engine's atomic
+ * `memory.consolidate` per window (CMP.1 bridge + the revised engine
+ * op). Returns one outcome per window.
  *
  * D1: returns an empty result immediately when the group's satisfaction
- * probe is absent or not "satisfied" — no compression, no deletion.
+ * probe is absent or not "satisfied" — no consolidation requested.
+ *
+ * The orchestrator does NOT verify recall-replay or delete predecessors
+ * — the engine's `memory.consolidate` does both atomically and
+ * fail-closed. opensquid only surfaces the result + emits drift on a
+ * non-verified outcome.
  */
 export async function runCompression(
   sessionId: string,
@@ -130,48 +106,29 @@ export async function runCompression(
     };
 
     try {
-      // 1. Compress the window → Mc. The engine mints Mc with
-      //    derived_from = ids + summed citations; it does NOT delete
-      //    anything.
-      const mc = await engine.memoryCompress({ ids });
-      outcome.mcId = mc.id;
+      // The engine atomically: compress → recall-replay verify → gated
+      // delete of non-immune predecessors. It guarantees the D2/D3
+      // safety contract; opensquid issues NO memory.delete here.
+      const res = await engine.memoryConsolidate({ ids });
+      outcome.mcId = res.mc_id;
+      outcome.deleted = res.deleted;
+      outcome.keptImmune = res.kept_immune;
 
-      // 2. D3 — recall-replay gate. Mc must surface for EVERY
-      //    predecessor's query. A miss (or any uncertainty) → skip ALL
-      //    deletion for this window; keep Mc alongside the predecessors.
-      const safe = await recallReplayPasses(engine, ids, mc.id);
-      if (!safe) {
+      if (!res.verified) {
+        // Engine kept Mc alongside the predecessors (nothing deleted) —
+        // the window wasn't safe to consolidate yet. Surface drift.
         outcome.skipped = true;
-        outcome.reason = 'recall-replay gate failed: Mc did not surface for a predecessor query';
-        await emitDrift(sessionId, group, w.promotedLessonId, mc.id, ids, outcome.reason);
-        outcomes.push(outcome);
-        continue;
-      }
-
-      // 3. D2 — gated terminal deletion. The gate passed; delete each
-      //    predecessor ONLY if it is NOT user-cited. force=true bypasses
-      //    the engine immunity guard, so this per-predecessor check is
-      //    the ONLY protection for a user-cited memory.
-      //    THIS IS THE ONLY memoryDelete CALL IN THE COMPRESSION LAYER.
-      for (const pid of ids) {
-        const pred = await engine.memoryGet({ id: pid });
-        if (pred.consumed_by_user_lessons === 0) {
-          await engine.memoryDelete({ id: pid, force: true });
-          outcome.deleted.push(pid);
-        } else {
-          // user-cited predecessor → KEEP (immunity). Mc + derived_from
-          // + the transferred citation preserve the trace.
-          outcome.keptImmune.push(pid);
-        }
+        outcome.reason =
+          'engine recall-replay gate did not verify: Mc kept alongside predecessors, nothing deleted';
+        await emitDrift(sessionId, group, w.promotedLessonId, res.mc_id, ids, outcome.reason);
       }
       outcomes.push(outcome);
     } catch (e) {
-      // Fail-closed: ANY engine error mid-flow → delete NOTHING (we may
-      // have already deleted some predecessors before the error, but we
-      // never delete past an error — the loop above stops at the throw).
-      // Keep Mc + remaining predecessors; emit a drift event + notify.
+      // A consolidate RPC error is fail-closed on the engine side (it
+      // deletes nothing before it can verify). Surface it as a skipped
+      // window + drift event.
       outcome.skipped = true;
-      outcome.reason = `compression error (nothing further deleted): ${String(e)}`;
+      outcome.reason = `consolidate error (nothing deleted): ${String(e)}`;
       await emitDrift(sessionId, group, w.promotedLessonId, outcome.mcId, ids, outcome.reason);
       outcomes.push(outcome);
     }
@@ -184,7 +141,7 @@ export async function runCompression(
  * Emit a drift event recording that a window's predecessors were KEPT
  * alongside Mc (nothing deleted), surfaced to the user via
  * `list_drift_events`. Best-effort — a drift-write failure must not mask
- * the safe outcome (we already deleted nothing).
+ * the safe outcome (the engine already deleted nothing).
  */
 async function emitDrift(
   sessionId: string,
