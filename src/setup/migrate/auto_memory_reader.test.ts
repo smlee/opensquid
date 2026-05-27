@@ -160,4 +160,24 @@ body
     expect(out.frontmatter.metadata.originSessionId).toBeUndefined();
     expect(out.frontmatter.metadata.node_type).toBeUndefined();
   });
+
+  it('accepts the LEGACY flat frontmatter (top-level type, no metadata block)', async () => {
+    // Older auto-memory files predate the nested `metadata:` convention — they
+    // carry `type:` (and optional originSessionId) at the top level. MAU.6: the
+    // reader normalizes these so the backfill records them (record everything).
+    const path = await write(
+      'legacy.md',
+      `---
+name: legacy
+description: d
+type: feedback
+originSessionId: abc-123
+---
+body
+`,
+    );
+    const out = await readAutoMemory(path);
+    expect(out.frontmatter.metadata.type).toBe('feedback');
+    expect(out.frontmatter.metadata.originSessionId).toBe('abc-123');
+  });
 });

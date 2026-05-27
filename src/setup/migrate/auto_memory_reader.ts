@@ -29,15 +29,36 @@ import { promises as fs } from 'node:fs';
 import yaml from 'yaml';
 import { z } from 'zod';
 
-export const AutoMemoryFrontmatter = z.object({
-  name: z.string().min(1),
-  description: z.string().min(1),
-  metadata: z.object({
-    type: z.enum(['user', 'feedback', 'project', 'reference']),
-    originSessionId: z.string().optional(),
-    node_type: z.string().optional(),
-  }),
+const MemoryMetadata = z.object({
+  type: z.enum(['user', 'feedback', 'project', 'reference']),
+  originSessionId: z.string().optional(),
+  node_type: z.string().optional(),
 });
+
+/**
+ * Accept BOTH the current nested shape (`metadata: { type }`) and the LEGACY
+ * flat shape (`type:` at the frontmatter top level, no `metadata:` block) —
+ * older auto-memory files predate the nested convention. A `z.preprocess`
+ * normalizes the flat form into `metadata` before validation, so the
+ * "record everything" backfill (MAU.6) never drops a memory just because its
+ * frontmatter is older. The `type` data is present either way → scope stays
+ * correct (no silent mis-scope to a default).
+ */
+export const AutoMemoryFrontmatter = z.preprocess(
+  (raw) => {
+    if (raw !== null && typeof raw === 'object') {
+      const o = raw as Record<string, unknown>;
+      if (o.metadata === undefined && o.type !== undefined) {
+        return {
+          ...o,
+          metadata: { type: o.type, originSessionId: o.originSessionId, node_type: o.node_type },
+        };
+      }
+    }
+    return raw;
+  },
+  z.object({ name: z.string().min(1), description: z.string().min(1), metadata: MemoryMetadata }),
+);
 
 export type ParsedAutoMemoryFrontmatter = z.infer<typeof AutoMemoryFrontmatter>;
 
