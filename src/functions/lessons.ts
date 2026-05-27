@@ -63,6 +63,10 @@ import { ENGINE_ERROR, RpcError } from '../engine/client.js';
 import type { EngineClient } from '../engine/client.js';
 import type { LessonCreateParams, LessonPromoteResult } from '../engine/types.js';
 import { err, ok } from '../runtime/result.js';
+import { readCurrentSession } from '../runtime/hooks/session_id.js';
+import { groupFromTask } from '../runtime/satisfaction_probe.js';
+import { readActiveTask } from '../runtime/session_state.js';
+import { collectCandidates } from '../runtime/wedge/compress_candidates.js';
 
 import type { FunctionRegistry } from './registry.js';
 
@@ -168,6 +172,25 @@ export function registerLessonFunctions(registry: FunctionRegistry, client: Engi
     execute: async (args) => {
       try {
         const result = await client.lessonPromote({ id: args.id });
+        // CMP.3 — compression rides the wedge cadence. After a SUCCESSFUL
+        // promotion, nominate the lesson's cited memories as compression
+        // candidates for the orchestrator (CMP.4). STRICTLY off the
+        // critical path: any failure here is swallowed so it can never
+        // fail or delay the promotion the caller just earned.
+        try {
+          const citedMemoryIds = result.cited_memory_ids ?? [];
+          if (citedMemoryIds.length > 0) {
+            const sessionId = await readCurrentSession();
+            if (sessionId) {
+              const group = groupFromTask(await readActiveTask(sessionId));
+              if (group) {
+                await collectCandidates(sessionId, { id: result.id, citedMemoryIds, group });
+              }
+            }
+          }
+        } catch {
+          // off-critical-path: never affect the promotion result
+        }
         return ok({ status: 'promoted' as const, detail: result });
       } catch (e) {
         // T.1.E + T.1.F: gate block surfaces as RpcError code -32000 with

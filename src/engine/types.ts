@@ -301,6 +301,15 @@ export interface LessonPromoteResult {
   gate: 'passed';
   status: 'promoted';
   from: string;
+  /**
+   * Cited MEMORY ids from the promoted lesson's causal narrative (the
+   * `EvidenceRef::Memory` evidence refs; quote refs excluded). The
+   * compression-candidate collector (CMP.3) nominates these as
+   * compression candidates. May be `[]` (a lesson with no memory
+   * citations). Added in engine commit "lesson.promote returns
+   * cited_memory_ids".
+   */
+  cited_memory_ids?: string[];
 }
 
 export interface LessonDiscardResult {
