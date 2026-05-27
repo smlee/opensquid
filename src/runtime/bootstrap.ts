@@ -60,6 +60,7 @@ import { registerEventFunctions } from '../functions/event.js';
 import { IsAutomationMode } from '../functions/is_automation_mode.js';
 import { registerLessonFunctions } from '../functions/lessons.js';
 import { registerLlmFunctions } from '../functions/llm.js';
+import { HasActiveTask, WorkflowPhasesComplete } from '../functions/active_task.js';
 import { PathExists } from '../functions/path_exists.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
@@ -136,6 +137,13 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // preventing the politeness-reflex prompt from interrupting normal
   // interactive use.
   r.register(IsAutomationMode);
+  // AP.4 — workflow-gate read-side: `has_active_task` (is a task active +
+  // its provenance track id) and `workflow_phases_complete` (all 7 REQUIRED
+  // phases logged for the LIVE active task). Both read-only, memoizable:false
+  // (active task + phase ledger change mid-session). Back the personal-pack
+  // workflow gate (rule #8) + the scope→task Gate A (AP.5).
+  r.register(HasActiveTask);
+  r.register(WorkflowPhasesComplete);
   // T-loop-engine-reintegration T.3 — FIRST-EVER production wiring of the
   // RAG primitives. Resolves backend choice (env > ~/.opensquid/rag-config
   // .json > default), constructs, inits, registers. Tests override via
