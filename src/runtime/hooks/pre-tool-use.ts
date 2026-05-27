@@ -23,6 +23,7 @@ import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
 import { Event } from '../types.js';
 
+import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
 import { extractSessionId } from './session_id.js';
 
@@ -92,6 +93,14 @@ async function main(): Promise<void> {
       } catch (e) {
         process.stderr.write(`opensquid: session-cwd record failed — ${String(e)}\n`);
       }
+    }
+    // AP.1 — mirror the harness task store into active-task.json (the
+    // tasks-loaded signal the gate-set keys off). Best-effort, like the writes
+    // above: a mirror failure must never block the pending tool call.
+    try {
+      await mirrorActiveTask(sessionId, parsed.data.tool, parsed.data.args ?? {});
+    } catch (e) {
+      process.stderr.write(`opensquid: active-task mirror failed — ${String(e)}\n`);
     }
   }
   const packs = await loadActivePacks(sessionId);
