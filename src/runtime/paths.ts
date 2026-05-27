@@ -168,3 +168,13 @@ export const packLogFile = (packId: string, name: string): string =>
 export const daemonLockPath = (): string => join(OPENSQUID_HOME(), 'daemon.lock');
 export const daemonPidPath = (): string => join(OPENSQUID_HOME(), 'daemon.pid');
 export const daemonLogPath = (): string => join(OPENSQUID_HOME(), 'daemon.log');
+
+// ---------------------------------------------------------------------------
+// Per-project chat inbox. The chat-daemon appends one inbound message per line
+// to `<home>/projects/<uuid>/inbox/<platform>.jsonl` (the on-disk contract the
+// agent_bridge + `chat watch` both consume). Honors OPENSQUID_HOME so tests
+// and self-hosting relocate it with the rest of the layout.
+// ---------------------------------------------------------------------------
+
+export const inboxFile = (projectUuid: string, platform: string): string =>
+  join(OPENSQUID_HOME(), 'projects', projectUuid, 'inbox', `${platform}.jsonl`);

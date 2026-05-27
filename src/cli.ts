@@ -19,6 +19,7 @@ import { Command } from 'commander';
 
 import { registerEngineCli } from './engine/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
+import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
@@ -222,6 +223,12 @@ registerEngineCli(program);
 // owns scheduler / webhook / file-watcher lifecycle). Separate PID lock at
 // `~/.opensquid/agent-bridge.lock` so both daemons can run in parallel.
 registerAgentBridge(program);
+
+// TR.1 — `opensquid chat watch`. Stream-source for the harness Monitor tool:
+// tails the active project's inbox JSONL (`<home>/projects/<uuid>/inbox/
+// <platform>.jsonl`), emitting only NEW inbound messages so the agent gets
+// live, no-cron delivery. Distinct from `setup chat` (the wizard).
+registerChatWatch(program);
 
 // G.6 — `opensquid memory import-auto`. Bulk-imports Claude Code auto-memory
 // files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the loop-engine

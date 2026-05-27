@@ -256,8 +256,10 @@ async function readLivePid(
 }
 
 /** Walk cwd up looking for `.opensquid/project.json`. 64-level cap mirrors
- *  the same chain in `src/mcp/chat-bridge-server.ts`. */
-async function walkForProjectUuid(startDir: string): Promise<string | null> {
+ *  the same chain in `src/mcp/chat-bridge-server.ts`. Exported so other
+ *  inbox consumers (e.g. `chat watch`) resolve the project UUID identically
+ *  instead of reimplementing the walk. */
+export async function walkForProjectUuid(startDir: string): Promise<string | null> {
   let dir = resolve(startDir);
   for (let i = 0; i < 64; i++) {
     const candidate = join(dir, '.opensquid', 'project.json');
