@@ -149,6 +149,92 @@ describe('path_exists', () => {
   });
 });
 
+/**
+ * Cross-repo anchoring via `base_file` (the scope-decomposer false-block fix):
+ * a spec written in the planning repo must resolve its sibling `docs/research`
+ * even when the working cwd is a DIFFERENT (code) repo. Without `base_file` the
+ * check resolves against cwd and false-blocks; with it, it anchors to the spec
+ * file's git-repo root.
+ */
+describe('path_exists base_file anchoring', () => {
+  let planningRepo: string;
+  let codeRepo: string;
+
+  beforeAll(async () => {
+    planningRepo = await mkdtemp(join(tmpdir(), 'path-exists-plan-'));
+    codeRepo = await mkdtemp(join(tmpdir(), 'path-exists-code-'));
+    // Mark each as a git repo root, then nest the spec one level deep so the
+    // walk-up has to traverse to find `.git`.
+    await mkdir(join(planningRepo, '.git'), { recursive: true });
+    await mkdir(join(codeRepo, '.git'), { recursive: true });
+    const research = join(planningRepo, 'docs', 'research');
+    await mkdir(research, { recursive: true });
+    await mkdir(join(planningRepo, 'docs', 'tasks'), { recursive: true });
+    await writeFile(join(research, 'T-feature-pre-research-2026-05-27.md'), '# x');
+  });
+
+  afterAll(async () => {
+    await rm(planningRepo, { recursive: true, force: true });
+    await rm(codeRepo, { recursive: true, force: true });
+  });
+
+  it('anchors to the spec file repo root, finding research from a foreign cwd', async () => {
+    const reg = freshRegistry();
+    const specFile = join(planningRepo, 'docs', 'tasks', 'T-feature.md');
+    const result = await reg.call(
+      'path_exists',
+      { dir: 'docs/research', pattern: '*-pre-research-*.md', base_file: specFile },
+      // cwd is the CODE repo — without base_file this would miss the artifact.
+      ctxWith(toolCallAt(codeRepo)),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const v = result.value as PathExistsResultShape;
+      expect(v.exists).toBe(true);
+      expect(v.matches).toEqual(['T-feature-pre-research-2026-05-27.md']);
+    }
+  });
+
+  it('reproduces the false-block WITHOUT base_file (resolves against cwd)', async () => {
+    const reg = freshRegistry();
+    const result = await reg.call(
+      'path_exists',
+      { dir: 'docs/research', pattern: '*-pre-research-*.md' },
+      // cwd is the code repo (no docs/research) → exists:false = the old bug.
+      ctxWith(toolCallAt(codeRepo)),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ exists: false, matches: [] });
+    }
+  });
+
+  it('falls back to cwd when base_file has no git-repo ancestor', async () => {
+    const reg = freshRegistry();
+    // base_file under a tmp dir with no `.git` anywhere up the chain → fall
+    // back to cwd (the planning repo here), which DOES have docs/research.
+    const orphan = await mkdtemp(join(tmpdir(), 'path-exists-orphan-'));
+    try {
+      const result = await reg.call(
+        'path_exists',
+        {
+          dir: 'docs/research',
+          pattern: '*-pre-research-*.md',
+          base_file: join(orphan, 'stray.md'),
+        },
+        ctxWith(toolCallAt(planningRepo)),
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const v = result.value as PathExistsResultShape;
+        expect(v.exists).toBe(true);
+      }
+    } finally {
+      await rm(orphan, { recursive: true, force: true });
+    }
+  });
+});
+
 interface PathExistsResultShape {
   exists: boolean;
   matches: string[];

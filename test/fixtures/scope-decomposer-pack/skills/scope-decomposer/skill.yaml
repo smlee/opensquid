@@ -68,6 +68,8 @@ rules:
         args:
           dir: docs/research
           pattern: '*-pre-research-*.md'
+          # Anchor to the spec FILE's repo root, not the event cwd (cross-repo fix).
+          base_file: args.file_path
         as: research
       # Content shape — Write body is args.content, Edit body is args.new_string.
       - call: text_pattern_match

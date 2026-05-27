@@ -27,8 +27,8 @@
  * Imported by: src/runtime/bootstrap.ts (registry wiring).
  */
 
-import { readdir } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { readdir, stat } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
@@ -38,12 +38,37 @@ import type { FunctionDef } from './registry.js';
 
 export const PathExistsArgs = z
   .object({
-    /** Directory to scan, relative to the event cwd. Absolute / escaping rejected. */
+    /** Directory to scan, relative to the resolved base. Absolute / escaping rejected. */
     dir: z.string().min(1),
     /** Basename glob: `*` (any run) and `?` (single char). Matched against entry names. */
     pattern: z.string().min(1),
+    /**
+     * Optional anchor: when set, resolve `dir` against the GIT REPO ROOT of this
+     * file (walk up from its dirname to the nearest `.git`), NOT the event cwd.
+     * Fixes the cross-repo false-block: a spec written in the planning repo
+     * resolves its sibling `docs/research` correctly even when the working cwd
+     * is a different (code) repo. Write/Edit always pass an absolute file_path,
+     * so the anchor is reliable; falls back to cwd if no repo root is found.
+     */
+    base_file: z.string().min(1).optional(),
   })
   .strict();
+
+/** Walk up from `start` to the nearest dir containing `.git`; null at fs root. */
+async function repoRootOf(start: string): Promise<string | null> {
+  let dir = start;
+  for (;;) {
+    try {
+      await stat(join(dir, '.git'));
+      return dir;
+    } catch {
+      /* keep walking up */
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
 
 interface PathExistsResult {
   exists: boolean;
@@ -77,7 +102,15 @@ export const PathExists: FunctionDef<z.input<typeof PathExistsArgs>, PathExistsR
         message: `path_exists: absolute dir not allowed ("${args.dir}")`,
       });
     }
-    const base = ctx.event.kind === 'tool_call' ? (ctx.event.cwd ?? process.cwd()) : process.cwd();
+    const cwd = ctx.event.kind === 'tool_call' ? (ctx.event.cwd ?? process.cwd()) : process.cwd();
+    // base_file anchors to the file's repo root (cwd-independent) — fixes the
+    // cross-repo false-block where a planning-repo spec is edited from a code
+    // repo's cwd and its sibling docs/research can't be found.
+    let base = cwd;
+    if (args.base_file !== undefined && args.base_file !== '') {
+      const fileAbs = isAbsolute(args.base_file) ? args.base_file : resolve(cwd, args.base_file);
+      base = (await repoRootOf(dirname(fileAbs))) ?? cwd;
+    }
     const target = resolve(base, args.dir);
     const rel = relative(base, target);
     if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
