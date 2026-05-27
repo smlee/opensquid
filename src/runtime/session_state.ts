@@ -39,6 +39,9 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { activeTaskArchiveFile, activeTaskFile, sessionStateFile } from './paths.js';
+import { advanceTick, createTick } from './tick.js';
+import type { Event } from './types.js';
+import type { TickState } from './unload_conditions.js';
 
 /** Max number of session-wide entries retained; trimmed on every write. */
 export const SESSION_LEDGER_CAP = 200;
@@ -234,5 +237,101 @@ export async function archiveActiveTask(sessionId: string): Promise<void> {
     await rename(activeTaskFile(sessionId), activeTaskArchiveFile(sessionId, stamp));
   } catch {
     /* absent (nothing to archive) or unreadable — never block session close */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-skill tick state (CU.1)
+//
+// `unloads_when` is evaluated against a per-skill `TickState` (turns since
+// activation + task/session-end latches). The hooks that drive ticks
+// (`PreToolUse`, `UserPromptSubmit`, `Stop`, `SessionEnd`) each run as a
+// SEPARATE short-lived process per host event — so the tick map cannot live in
+// an in-memory `Map`; it must persist between processes exactly like the
+// tool-ledger / active-task signal above. We store it at
+// `sessionStateFile(sessionId, 'skill-ticks')` as `Record<skillId, TickState>`.
+//
+// Same eventual-consistency model as the ledger: a malformed or absent file
+// reads as `{}` (no ticks), never an exception inside a hook bin. The single
+// source of truth for `TickState` is `unload_conditions.ts`; the advance
+// transition is `tick.ts`'s `advanceTick` — both imported, never redefined.
+// ---------------------------------------------------------------------------
+
+/** Well-known session-state key for the per-skill tick map. */
+const TICKS_KEY = 'skill-ticks';
+
+/** Per-skill tick map: skill name → its current `TickState`. */
+export type SkillTicks = Record<string, TickState>;
+
+/** Narrow an unknown value to a `TickState` (all three fields present + typed). */
+function isTickState(v: unknown): v is TickState {
+  return (
+    v !== null &&
+    typeof v === 'object' &&
+    typeof (v as TickState).turnsSinceActivation === 'number' &&
+    typeof (v as TickState).taskCompleted === 'boolean' &&
+    typeof (v as TickState).sessionEnded === 'boolean'
+  );
+}
+
+/**
+ * Read the per-skill tick map. Returns `{}` on an absent/unreadable/malformed
+ * file (no throw — same best-effort model as the ledger). Each entry is
+ * shape-validated; a malformed per-skill value is dropped (the others survive).
+ */
+export async function readSkillTicks(sessionId: string): Promise<SkillTicks> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(sessionStateFile(sessionId, TICKS_KEY), 'utf8'),
+    ) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: SkillTicks = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (isTickState(v)) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Advance every CURRENTLY-LOADED skill's tick by one `event` and persist the
+ * new map. The map after this call holds EXACTLY the skills in
+ * `loadedSkillIds` — any skill no longer loaded (dropped from the set this
+ * event, e.g. it unloaded or went out of scope) is removed.
+ *
+ * Per-skill base state:
+ *   - no prior tick OR id ∈ `reactivated` → `createTick()` (fresh activation),
+ *   - otherwise the prior persisted tick (carried forward),
+ * then `advanceTick(base, event)` applies the event transition.
+ *
+ * `reactivated` = ids whose `when_to_load` freshly matched this event (CU.2
+ * supplies the set); a re-activated skill restarts its idle counter from zero.
+ */
+export async function advanceSkillTicks(
+  sessionId: string,
+  event: Event,
+  loadedSkillIds: readonly string[],
+  reactivated: ReadonlySet<string> = new Set(),
+): Promise<SkillTicks> {
+  const prev = await readSkillTicks(sessionId);
+  const next: SkillTicks = {};
+  for (const id of loadedSkillIds) {
+    const base = prev[id] === undefined || reactivated.has(id) ? createTick() : prev[id];
+    next[id] = advanceTick(base, event);
+  }
+  const path = sessionStateFile(sessionId, TICKS_KEY);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(next, null, 2), 'utf8');
+  return next;
+}
+
+/** Clear the per-skill tick map (e.g. on SessionEnd). Ignores ENOENT. */
+export async function clearSkillTicks(sessionId: string): Promise<void> {
+  try {
+    await unlink(sessionStateFile(sessionId, TICKS_KEY));
+  } catch {
+    /* already absent — nothing to clear */
   }
 }

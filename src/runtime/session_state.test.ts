@@ -19,16 +19,20 @@ import { activeTaskFile, sessionStateFile } from './paths.js';
 import {
   SESSION_LEDGER_CAP,
   type ActiveTask,
+  advanceSkillTicks,
   appendTool,
   archiveActiveTask,
   clearActiveTask,
+  clearSkillTicks,
   readActiveTask,
   readSessionCwd,
   readSessionToolLedger,
+  readSkillTicks,
   recordSessionCwd,
   resetTurnLedger,
   writeActiveTask,
 } from './session_state.js';
+import type { Event } from './types.js';
 
 let tempHome: string;
 let priorHome: string | undefined;
@@ -185,5 +189,118 @@ describe('active-task signal (AP.2)', () => {
 
   it('archive on an absent signal is a no-op (does not throw)', async () => {
     await expect(archiveActiveTask('sid-arch-absent')).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-skill tick state (CU.1)
+//
+// The tick map is the persisted backing for `unloads_when`. The load-bearing
+// property is CROSS-PROCESS persistence: each hook bin is a fresh process, so
+// two sequential `advanceSkillTicks` calls (simulating two hook processes over
+// the same OPENSQUID_HOME) must accumulate — the second read sees the first's
+// count, +1. The shape is `Record<skillId, TickState>` with the TickState
+// imported from `unload_conditions.ts` (single source).
+// ---------------------------------------------------------------------------
+
+describe('per-skill tick state (CU.1)', () => {
+  const promptSubmit: Event = { kind: 'prompt_submit', prompt: 'go' };
+  const stop: Event = { kind: 'stop', assistantText: 'done' };
+  const sessionEnd: Event = { kind: 'session_end', sessionId: 'tick-edge' };
+
+  it('advance writes a fresh tick (createTick → advance) and round-trips', async () => {
+    const sid = 'tick-fresh';
+    await advanceSkillTicks(sid, promptSubmit, ['a']);
+    const read = await readSkillTicks(sid);
+    expect(read).toEqual({
+      a: { turnsSinceActivation: 1, taskCompleted: false, sessionEnded: false },
+    });
+  });
+
+  it('persists across two sequential calls (cross-process: count accumulates)', async () => {
+    const sid = 'tick-cross-process';
+    // First "hook process".
+    await advanceSkillTicks(sid, promptSubmit, ['a']);
+    // Second "hook process" — reads the prior count off disk, +1.
+    const after = await advanceSkillTicks(sid, promptSubmit, ['a']);
+    expect(after.a?.turnsSinceActivation).toBe(2);
+    expect(await readSkillTicks(sid)).toEqual({
+      a: { turnsSinceActivation: 2, taskCompleted: false, sessionEnded: false },
+    });
+  });
+
+  it('reactivated skill resets its tick (createTick then advance → 1)', async () => {
+    const sid = 'tick-reactivate';
+    await advanceSkillTicks(sid, promptSubmit, ['a']);
+    await advanceSkillTicks(sid, promptSubmit, ['a']); // now at 2
+    const after = await advanceSkillTicks(sid, promptSubmit, ['a'], new Set(['a']));
+    // Reset to fresh then advance once → 1 (NOT 3).
+    expect(after.a?.turnsSinceActivation).toBe(1);
+  });
+
+  it('a skill dropped from loadedSkillIds is removed from the new map', async () => {
+    const sid = 'tick-drop';
+    await advanceSkillTicks(sid, promptSubmit, ['a', 'b']);
+    const after = await advanceSkillTicks(sid, promptSubmit, ['a']); // b no longer loaded
+    expect(after).toHaveProperty('a');
+    expect(after).not.toHaveProperty('b');
+    expect(await readSkillTicks(sid)).not.toHaveProperty('b');
+  });
+
+  it('newly-loaded skill (no prior tick) gets a fresh tick', async () => {
+    const sid = 'tick-new';
+    await advanceSkillTicks(sid, promptSubmit, ['a']); // a at 1
+    const after = await advanceSkillTicks(sid, promptSubmit, ['a', 'b']); // b first seen
+    expect(after.a?.turnsSinceActivation).toBe(2);
+    expect(after.b?.turnsSinceActivation).toBe(1); // fresh
+  });
+
+  it('stop event latches taskCompleted; session_end latches sessionEnded', async () => {
+    const sid = 'tick-edge';
+    const afterStop = await advanceSkillTicks(sid, stop, ['a']);
+    expect(afterStop.a?.taskCompleted).toBe(true);
+    expect(afterStop.a?.turnsSinceActivation).toBe(0); // stop is not a turn boundary
+    const afterEnd = await advanceSkillTicks(sid, sessionEnd, ['a']);
+    expect(afterEnd.a?.sessionEnded).toBe(true);
+  });
+
+  it('readSkillTicks returns {} for an absent file', async () => {
+    expect(await readSkillTicks('tick-absent')).toEqual({});
+  });
+
+  it('readSkillTicks returns {} on malformed JSON (no throw)', async () => {
+    const sid = 'tick-corrupt';
+    const path = sessionStateFile(sid, 'skill-ticks');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, '{ not valid json', 'utf8');
+    expect(await readSkillTicks(sid)).toEqual({});
+  });
+
+  it('readSkillTicks drops a per-entry malformed value, keeps the valid ones', async () => {
+    const sid = 'tick-partial';
+    const path = sessionStateFile(sid, 'skill-ticks');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({
+        good: { turnsSinceActivation: 2, taskCompleted: false, sessionEnded: false },
+        bad: { turnsSinceActivation: 'nope' },
+      }),
+      'utf8',
+    );
+    const read = await readSkillTicks(sid);
+    expect(read).toHaveProperty('good');
+    expect(read).not.toHaveProperty('bad');
+  });
+
+  it('clearSkillTicks removes the map; subsequent read is {}', async () => {
+    const sid = 'tick-clear';
+    await advanceSkillTicks(sid, promptSubmit, ['a']);
+    await clearSkillTicks(sid);
+    expect(await readSkillTicks(sid)).toEqual({});
+  });
+
+  it('clearSkillTicks on an absent file does not throw', async () => {
+    await expect(clearSkillTicks('tick-clear-absent')).resolves.toBeUndefined();
   });
 });
