@@ -25,6 +25,13 @@ import { walkForProjectUuid } from '../agent_bridge/cli.js';
 import { resolveProjectUuidFromEnv } from '../agent_bridge/daemon.js';
 import { inboxFile } from '../paths.js';
 
+import {
+  HEARTBEAT_MS,
+  refreshLease,
+  removeLease,
+  resolveSessionId,
+  writeLease,
+} from './live_session_lease.js';
 import { formatRow, watchInbox, type InboxRow, type WatchInboxOpts } from './watch.js';
 
 interface ChatWatchOptions {
@@ -64,14 +71,39 @@ export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): C
         process.exitCode = 1;
         return;
       }
-      await watch({
-        inboxFile: inboxFile(uuid, opts.platform),
-        mentionsOnly: opts.mentionsOnly,
-        format: opts.raw ? (r: InboxRow) => JSON.stringify(r) : formatRow,
-        // Flush one line per message — Monitor reads stdout line-delimited.
-        out: (line) => process.stdout.write(line + '\n'),
-        onWarn: (message) => process.stderr.write(message + '\n'),
-      });
+      // Claim the live-session lease so the always-on daemon stays silent while
+      // this session handles the project (T-DEL arbitration). Heartbeat keeps it
+      // fresh; cleanup on exit + a SIGINT/SIGTERM handler remove it (staleness is
+      // the fallback if we're killed ungracefully).
+      await writeLease(uuid, resolveSessionId());
+      const heartbeat = setInterval(() => {
+        void refreshLease(uuid).catch(() => undefined);
+      }, HEARTBEAT_MS);
+      heartbeat.unref();
+      const stopLease = async (): Promise<void> => {
+        clearInterval(heartbeat);
+        process.removeListener('SIGINT', onSignal);
+        process.removeListener('SIGTERM', onSignal);
+        await removeLease(uuid);
+      };
+      function onSignal(): void {
+        void stopLease().finally(() => process.exit(0));
+      }
+      process.once('SIGINT', onSignal);
+      process.once('SIGTERM', onSignal);
+
+      try {
+        await watch({
+          inboxFile: inboxFile(uuid, opts.platform),
+          mentionsOnly: opts.mentionsOnly,
+          format: opts.raw ? (r: InboxRow) => JSON.stringify(r) : formatRow,
+          // Flush one line per message — Monitor reads stdout line-delimited.
+          out: (line) => process.stdout.write(line + '\n'),
+          onWarn: (message) => process.stderr.write(message + '\n'),
+        });
+      } finally {
+        await stopLease();
+      }
     });
   return chat;
 }

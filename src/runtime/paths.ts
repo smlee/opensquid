@@ -178,3 +178,9 @@ export const daemonLogPath = (): string => join(OPENSQUID_HOME(), 'daemon.log');
 
 export const inboxFile = (projectUuid: string, platform: string): string =>
   join(OPENSQUID_HOME(), 'projects', projectUuid, 'inbox', `${platform}.jsonl`);
+
+// Live-session lease: while `chat watch` runs for a project, it heartbeats this
+// file so the always-on agent-bridge daemon can tell a live interactive session
+// is handling the project and stay silent (cross-session arbitration, T-DEL).
+export const liveSessionLease = (projectUuid: string): string =>
+  join(OPENSQUID_HOME(), 'projects', projectUuid, 'live-session.lease');
