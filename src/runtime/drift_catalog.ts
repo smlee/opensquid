@@ -181,6 +181,20 @@ export async function readAllDriftCatalogs(
 // a successful subagent with zero drifts produces zero catalog writes.
 // ---------------------------------------------------------------------------
 
+/**
+ * Append a single drift event to a session's drift catalog
+ * (`sessions/<sessionId>/state/drift-catalog.jsonl`). Used by the
+ * compression orchestrator (CMP.4) to surface a recall-replay-gate
+ * failure / engine error so the user sees "Mc kept alongside its
+ * predecessors; nothing deleted" via `list_drift_events`. Best-effort:
+ * the caller owns whether a write failure should propagate.
+ */
+export async function appendSessionDriftEvent(sessionId: string, event: DriftEvent): Promise<void> {
+  const path = sessionLogFile(sessionId, 'drift-catalog');
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
 export async function recordSubagentDrifts(
   parentSessionId: string,
   subagentId: string,
