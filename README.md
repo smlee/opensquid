@@ -230,6 +230,21 @@ Two deliberate properties:
 - **New messages only.** The cursor starts at end-of-file, so the backlog isn't replayed into the session on start; it stays reachable via `chat_poll_inbox`. Partial-line, malformed-row, and file-rotation cases are all handled — a bad line is skipped, never tears the watcher down.
 - **Session-scoped.** The watcher lives for the agent session and is re-started at the next session start. A CLI process can't start an agent-side monitor on the agent's behalf, so "auto-start" is an agent convention (e.g. on session start or when automation arms), not a daemon side-effect.
 
+**Per-session auto-start (the convention).** Because the watcher is session-scoped, the agent should start it once per session — at session start, or when automation arms. There is no `SessionStart` enforcement hook; this is a documented agent behavior, kept deliberately simple. While `chat watch` runs it also writes a **live-session lease** (`~/.opensquid/projects/<uuid>/live-session.lease`), heartbeated every 30s, so the always-on daemon (below) knows a live session is handling the project.
+
+### Always-on autonomous delivery (agent-bridge daemon)
+
+`chat watch` answers in _your live session_. The **agent-bridge daemon** (`opensquid agent-bridge {start|status|stop|restart}`) is the complement: a persistent background agent that watches each project's inbox and answers inbound **autonomously, even when no interactive session is open**. It runs a full agent turn (tool-use included) per coalesced batch.
+
+**Two modes** — pick via the project's pack binding:
+
+- **`subscription`** — spawns Claude with a materialized MCP config; auth flows through your Claude plan. **No metered API cost.** Recommended for an always-on responder.
+- **`api`** — uses `ANTHROPIC_API_KEY` and bills per message. Only if you want metered API usage.
+
+**Arbitration (no double-replies).** Before the daemon answers a project's message, it checks that project's live-session lease: if a **fresh** lease exists (a `chat watch` session is actively handling the project), the daemon **stays silent** — your live session answers. If the lease is stale or absent (no session open, or a crashed one), the daemon takes over. Crash-safe: a dead session's lease goes stale within ~90s and the daemon resumes automatically.
+
+> The daemon is **opt-in** — it autonomously replies to real people, so you start it deliberately (`opensquid agent-bridge start`), not as a silent side-effect. Multiple live sessions on the _same_ project all receive the stream and may both reply; one session per project is the clean case.
+
 ---
 
 ## Engine binary distribution
