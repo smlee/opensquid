@@ -22,6 +22,8 @@ const EXISTING_MEMORY: GetMemoryResult = {
   content: 'body',
   created_at: '2026-05-24T00:00:00Z',
   scope: 'user',
+  consumed_by_user_lessons: 0,
+  derived_from: [],
 };
 
 function mkEngine(opts: {

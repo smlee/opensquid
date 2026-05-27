@@ -244,6 +244,15 @@ export interface GetMemoryResult {
   created_at: string;
   scope: MemoryScope;
   origin?: MemoryOrigin | null;
+  /**
+   * Reverse-citation count enforcing user-immunity (T.1.E -32003).
+   * A host MUST check this is `0` before force-deleting (force bypasses
+   * the engine guard). Added to `memory.get` for CMP.4's per-predecessor
+   * immunity gate.
+   */
+  consumed_by_user_lessons: number;
+  /** Predecessor ids when this is a compressed memory; `[]` for raw. */
+  derived_from: string[];
 }
 
 export interface MemoryListRow {
@@ -332,4 +341,50 @@ export interface MemoryDeleteResult {
   ok: true;
   id: string;
   forced: boolean;
+}
+
+// ---- memory.compress / memory.recompute_citations (CMP.1) -----------
+
+/**
+ * Engine `memory.compress` params per serve.rs `MemoryCompressParams`.
+ *
+ * `ids` is the explicit compression window — the host (which owns the
+ * satisfaction probe + candidate collection) decides what to compress;
+ * the engine never auto-selects. `max_tokens` / `temperature` default
+ * to the engine's `CompressionConfig::default` when omitted.
+ */
+export interface CompressParams {
+  ids: string[];
+  max_tokens?: number;
+  temperature?: number;
+}
+
+/**
+ * Engine `memory.compress` result — the new compressed memory `Mc`.
+ *
+ * `derived_from` carries the predecessor ids (the trace the engine
+ * chases via `get_by_id_chasing_derived_from` so recall still surfaces
+ * `Mc` after predecessors are deleted). `consumed_by_user_lessons` is
+ * the SUM across predecessors — `> 0` means the gist inherited a
+ * user-lesson citation and the predecessors are user-immune.
+ */
+export interface CompressResult {
+  id: string;
+  description: string;
+  derived_from: string[];
+  consumed_by_user_lessons: number;
+}
+
+/**
+ * Engine `memory.recompute_citations` result — drift stats from a
+ * citation-counter recompute sweep. `counters_repaired > 0` means the
+ * live state had drifted from ground truth; `orphan_citations > 0`
+ * means a cited memory + its forward `derived_from` successors are all
+ * gone (audit-trail integrity compromised — the host should investigate).
+ */
+export interface RecomputeCitationsResult {
+  lessons_scanned: number;
+  memories_recomputed: number;
+  counters_repaired: number;
+  orphan_citations: number;
 }

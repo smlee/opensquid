@@ -47,6 +47,8 @@ import type { Socket } from 'node:net';
 
 import { acquireOrSpawnEngine } from './singleton.js';
 import type {
+  CompressParams,
+  CompressResult,
   CreateMemoryResult,
   GetMemoryResult,
   LessonCaptureFeedbackResult,
@@ -66,6 +68,7 @@ import type {
   MemorySearchParams,
   MemorySearchResult,
   MemoryUpdateResult,
+  RecomputeCitationsResult,
   ScopeFilterWire,
   TaskGetLedgerResult,
   TaskLogPhaseResult,
@@ -225,6 +228,26 @@ export class EngineClient {
 
   async memoryDelete(p: { id: string; force?: boolean }): Promise<MemoryDeleteResult> {
     return this.call('memory.delete', p);
+  }
+
+  /**
+   * Compress a window of memories into one gist `Mc` (CMP.1). Pure
+   * exposure of the engine's `compress()` lib fn — mints `Mc` with
+   * `derived_from = ids` + summed citation counters; does NOT delete
+   * predecessors (that is the host's verified, gated terminal step).
+   */
+  async memoryCompress(p: CompressParams): Promise<CompressResult> {
+    return this.call('memory.compress', p);
+  }
+
+  /**
+   * Recompute every memory's `consumed_by_user_lessons` counter to
+   * ground truth (CMP.1). A host runs this after a batch of
+   * compressions / deletions to confirm citation integrity survived
+   * the `derived_from` chain.
+   */
+  async memoryRecomputeCitations(): Promise<RecomputeCitationsResult> {
+    return this.call('memory.recompute_citations', {});
   }
 
   async manifestAssemble(p: ManifestAssembleParams): Promise<ManifestAssembleResult> {
