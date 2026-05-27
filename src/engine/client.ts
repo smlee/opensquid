@@ -49,6 +49,8 @@ import { acquireOrSpawnEngine } from './singleton.js';
 import type {
   CompressParams,
   CompressResult,
+  ConsolidateParams,
+  ConsolidateResult,
   CreateMemoryResult,
   GetMemoryResult,
   LessonCaptureFeedbackResult,
@@ -238,6 +240,24 @@ export class EngineClient {
    */
   async memoryCompress(p: CompressParams): Promise<CompressResult> {
     return this.call('memory.compress', p);
+  }
+
+  /**
+   * Atomic safe-compression (CMP.4). The engine compresses the window
+   * into one gist `Mc`, VERIFIES via recall-replay that `Mc` preserves
+   * each predecessor's recall, and ONLY THEN force-deletes the
+   * NON-immune predecessors — user-cited ones are kept. Any error or
+   * verify-miss → deletes NOTHING and returns `verified: false` with
+   * the minted `Mc` id (so the host keeps `Mc` alongside the originals
+   * + surfaces drift).
+   *
+   * The D2 safety contract (verify + immunity + fail-closed) is
+   * GUARANTEED inside the engine (race-free, universal substrate
+   * integrity) — the host no longer runs recall-replay or issues any
+   * `memory.delete` in the compression path.
+   */
+  async memoryConsolidate(p: ConsolidateParams): Promise<ConsolidateResult> {
+    return this.call('memory.consolidate', p);
   }
 
   /**

@@ -397,3 +397,46 @@ export interface RecomputeCitationsResult {
   counters_repaired: number;
   orphan_citations: number;
 }
+
+// ---- memory.consolidate (CMP.4 — atomic safe-compression) -----------
+
+/**
+ * Engine `memory.consolidate` params per serve.rs
+ * `MemoryConsolidateParams`.
+ *
+ * `ids` is the explicit window (the host decides what to consolidate).
+ * `recall_k` is the recall-replay top-k the engine uses to VERIFY that
+ * the minted `Mc` preserves each predecessor's recall before any
+ * deletion; defaults to the engine's `DEFAULT_CONSOLIDATE_RECALL_K`.
+ * `max_tokens` / `temperature` tune the internal compression step.
+ */
+export interface ConsolidateParams {
+  ids: string[];
+  max_tokens?: number;
+  temperature?: number;
+  recall_k?: number;
+}
+
+/**
+ * Engine `memory.consolidate` result — the atomic verify+gated-delete
+ * outcome. The engine GUARANTEES the D2 safety contract (verify +
+ * immunity + fail-closed) internally; this is the report.
+ *
+ * - `mc_id`: the minted compressed memory. `null` only if compression
+ *   itself failed (no `Mc` exists). Present even when `verified` is
+ *   `false` — `Mc` then sits alongside the (undeleted) predecessors.
+ * - `deleted`: predecessor ids force-deleted. Non-empty ONLY when
+ *   `verified === true` (and excludes any user-cited predecessor).
+ * - `kept_immune`: predecessors KEPT because they are user-cited
+ *   (`consumed_by_user_lessons > 0`); the `derived_from` chain still
+ *   links them to `Mc`.
+ * - `verified`: the recall-replay gate passed for ALL predecessors AND
+ *   compression succeeded. `false` ⇒ fail-closed (nothing deleted); the
+ *   host surfaces a drift event.
+ */
+export interface ConsolidateResult {
+  mc_id: string | null;
+  deleted: string[];
+  kept_immune: string[];
+  verified: boolean;
+}
