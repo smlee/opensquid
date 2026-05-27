@@ -18,11 +18,22 @@
  */
 
 import { spawn } from 'node:child_process';
+import { stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { Command } from 'commander';
 
+import { EngineClient } from '../../engine/client.js';
+import { computeMemoryDrift, renderMemoryDrift } from '../migrate/memory_drift.js';
 import { readSettingsHooks, type ParsedHookEntry } from '../wizard/settings-reader.js';
+
+/** `/`→`-`, matching Claude Code's auto-memory dir naming. Mirrors the inline
+ * copies in `memory.ts` / `memory_reconcile.ts` (stable one-liner; no shared
+ * import to avoid a cli→hooks layering edge). */
+function encodeProjectPath(projectPath: string): string {
+  return projectPath.replace(/\//g, '-');
+}
 
 /** Regex that gates which hook commands doctor will spawn. */
 export const OPENSQUID_HOOK_REGEX = /opensquid-hook|opensquid.*anti-drift/;
@@ -216,5 +227,46 @@ export function registerDoctor(program: Command): void {
       });
       const red = printReport(results);
       process.exit(red === 0 ? 0 : 1);
+    });
+
+  doc
+    .command('memory')
+    .description('Check the auto-memory ↔ engine-RAG store are in sync (MAU.4)')
+    .action(async () => {
+      // The doctor CLI runs in the project dir, so cwd resolves the auto-memory
+      // dir directly (unlike the SessionEnd hook, which needs the recorded cwd).
+      const dir = join(
+        homedir(),
+        '.claude',
+        'projects',
+        encodeProjectPath(process.cwd()),
+        'memory',
+      );
+      try {
+        await stat(dir);
+      } catch {
+        process.stdout.write(`memory: no auto-memory dir for this project (${dir})\n`);
+        process.exit(0);
+      }
+      const engine = new EngineClient();
+      try {
+        const drift = await computeMemoryDrift(dir, engine);
+        process.stdout.write(renderMemoryDrift(drift) + '\n');
+        if (!drift.inSync) {
+          if (drift.missing.length > 0)
+            process.stdout.write(`  missing:  ${drift.missing.join(', ')}\n`);
+          if (drift.stale.length > 0)
+            process.stdout.write(`  stale:    ${drift.stale.join(', ')}\n`);
+          if (drift.orphaned.length > 0)
+            process.stdout.write(`  orphaned: ${drift.orphaned.join(', ')}\n`);
+        }
+        process.exit(drift.inSync ? 0 : 1); // non-zero on drift → fail loud for CI/wrappers
+      } catch (e) {
+        // FAIL-LOUD: a probe failure must never read as "in sync".
+        process.stderr.write(`memory: drift check FAILED (engine down?) — ${String(e)}\n`);
+        process.exit(1);
+      } finally {
+        await engine.close();
+      }
     });
 }
