@@ -129,12 +129,27 @@ export async function mirrorActiveTask(
     await clearActiveTask(sessionId);
     return;
   }
+  // H4a (metadata) — a TaskUpdate that stamps metadata reaches the store only
+  // AFTER this PreToolUse fires, so the store read above is stale for it. Prefer
+  // the pending args.metadata for the active task (same rationale as the
+  // args.status merge above). Only TaskUpdate targeting the active id: TaskCreate
+  // creates a pending task (not active) and carries no id at PreToolUse.
+  const pendingMeta =
+    tool === 'TaskUpdate' &&
+    args.taskId === active.id &&
+    args.metadata !== null &&
+    typeof args.metadata === 'object'
+      ? (args.metadata as { taskId?: unknown; spec?: unknown })
+      : undefined;
+  const provTaskId =
+    typeof pendingMeta?.taskId === 'string' ? pendingMeta.taskId : active.metadata?.taskId;
+  const provSpec = typeof pendingMeta?.spec === 'string' ? pendingMeta.spec : active.metadata?.spec;
   const signal: ActiveTask = {
     id: active.id,
     subject: active.subject,
     started_at: new Date().toISOString(),
-    ...(active.metadata?.taskId !== undefined ? { taskId: active.metadata.taskId } : {}),
-    ...(active.metadata?.spec !== undefined ? { spec: active.metadata.spec } : {}),
+    ...(provTaskId !== undefined ? { taskId: provTaskId } : {}),
+    ...(provSpec !== undefined ? { spec: provSpec } : {}),
   };
   await writeActiveTask(sessionId, signal);
 }

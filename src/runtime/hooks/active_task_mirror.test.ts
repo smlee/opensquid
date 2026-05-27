@@ -153,3 +153,71 @@ describe('mirrorActiveTask', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('mirrorActiveTask — H4a metadata overlay (AP.7)', () => {
+  it('pending args.metadata wins over a stale store (provenance set in the SAME TaskUpdate)', async () => {
+    // Store has the task in_progress but WITHOUT metadata (the pre-execution lag).
+    await putTask({ id: '15', subject: 'workflow', status: 'in_progress' });
+    await mirrorActiveTask(
+      SID,
+      'TaskUpdate',
+      { taskId: '15', status: 'in_progress', metadata: { taskId: 'AP', spec: '/abs/x.md' } },
+      tasksBase,
+    );
+    const signal = await readActiveTask(SID);
+    expect(signal?.taskId).toBe('AP');
+    expect(signal?.spec).toBe('/abs/x.md');
+  });
+
+  it('pending args.metadata overrides a STALE store metadata value', async () => {
+    await putTask({
+      id: '15',
+      subject: 'workflow',
+      status: 'in_progress',
+      metadata: { taskId: 'OLD', spec: '/abs/old.md' },
+    });
+    await mirrorActiveTask(
+      SID,
+      'TaskUpdate',
+      { taskId: '15', status: 'in_progress', metadata: { taskId: 'NEW', spec: '/abs/new.md' } },
+      tasksBase,
+    );
+    const signal = await readActiveTask(SID);
+    expect(signal?.taskId).toBe('NEW');
+    expect(signal?.spec).toBe('/abs/new.md');
+  });
+
+  it('falls back to store metadata when the TaskUpdate carries none (no regression)', async () => {
+    await putTask({
+      id: '15',
+      subject: 'workflow',
+      status: 'in_progress',
+      metadata: { taskId: 'AP', spec: '/abs/x.md' },
+    });
+    await mirrorActiveTask(SID, 'TaskUpdate', { taskId: '15', status: 'in_progress' }, tasksBase);
+    const signal = await readActiveTask(SID);
+    expect(signal?.taskId).toBe('AP');
+    expect(signal?.spec).toBe('/abs/x.md');
+  });
+
+  it('does NOT cross-apply args.metadata meant for a different task', async () => {
+    // Active task is 15 (in_progress in store, with its own metadata); the
+    // TaskUpdate targets a DIFFERENT task 16 → 15's signal keeps its store metadata.
+    await putTask({
+      id: '15',
+      subject: 'workflow',
+      status: 'in_progress',
+      metadata: { taskId: 'AP', spec: '/abs/x.md' },
+    });
+    await mirrorActiveTask(
+      SID,
+      'TaskUpdate',
+      { taskId: '16', metadata: { taskId: 'WRONG', spec: '/abs/wrong.md' } },
+      tasksBase,
+    );
+    const signal = await readActiveTask(SID);
+    expect(signal?.id).toBe('15');
+    expect(signal?.taskId).toBe('AP'); // store value, NOT the cross-task args
+    expect(signal?.spec).toBe('/abs/x.md');
+  });
+});
