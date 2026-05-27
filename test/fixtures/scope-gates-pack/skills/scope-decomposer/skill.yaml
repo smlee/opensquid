@@ -1,0 +1,55 @@
+# scope→task Gate A (AP.5) — the per-item unskippability gate.
+#
+# scope-before-code: in automation mode, a code-write (src/**) whose ACTIVE
+# task has no generator provenance (a docs/tasks spec that resolves on disk) is
+# BLOCKED → "scope it first." Together with the list-integrity Gate B and the
+# existing inline-spec-block (no spec without pre-research), this makes
+# scope→task the only door to coding:
+#   - no code without a task-generated spec (Gate A)
+#   - no spec without pre-research (inline-spec-block, SD.3)
+#   - no commit without 7 phases (workflow gate, AP.4)
+#
+# Gated on is_automation_mode (sibling to the workflow gate): dormant in
+# interactive use, so it never false-blocks ad-hoc editing. Targets /src/ only —
+# writing the spec (docs/tasks) or the pre-research (docs/research) is the act of
+# SCOPING and must never be blocked (else the gate deadlocks scoping itself).
+#
+# Live home: the user's personal-pack scope-decomposer skill (this rule is
+# appended to the existing two). Passive evaluator: emits the block + directive;
+# the AGENT runs scope→task-spec-author by complying (no agent loop).
+name: scope-decomposer
+load: preload
+when_to_load:
+  - tool_match: Write
+  - tool_match: Edit
+rules:
+  - id: scope-before-code
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: is_automation_mode
+        as: auto
+      # Only evaluate provenance for a CODE write in automation mode.
+      - call: has_generated_spec
+        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/")'
+        as: prov
+      - call: verdict
+        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/") && prov.generated == false'
+        args:
+          level: block
+          message: >-
+            BLOCKED: coding before scope→task. This work's active task has no
+            generator provenance (a docs/tasks spec on disk). Run
+            pre-research → `task-spec-author` FIRST, create the task with its
+            spec path in metadata, load it (set in_progress), THEN code. If
+            there is no active task at all, scope one first.
+prose: |
+  Gate A of the scope→task unskippability pair (AP.5). It targets code-writes
+  (src/**) in automation mode: if the active task lacks a generated spec (or
+  there is no active task), the write is blocked with a directive to scope
+  first. Writing the spec/pre-research themselves is never blocked (they are
+  not /src/ writes) — so the gate cannot deadlock the act of scoping. Per
+  project_opensquid_no_agent_loop, opensquid emits the directive; the agent
+  complies.

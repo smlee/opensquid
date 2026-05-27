@@ -1,0 +1,10 @@
+# Test fixture pack (AP.5) — loads scope→task Gate A for the behavior test.
+# NOT shipped, NOT active anywhere. The live home is the user's personal pack
+# (~/.opensquid/codexes/sangmin-personal-rules/skills/scope-decomposer/), where
+# scope-before-code joins the existing scope-intent-nudge + inline-spec-block
+# rules. This source-controlled copy lets CI exercise the gate (the personal
+# pack is not in CI). Keep in sync with the personal-pack copy.
+name: scope-gates-fixture
+version: 0.0.0
+scope: universal
+goal: "Test fixture: exercise scope→task Gate A (scope-before-code, AP.5)."

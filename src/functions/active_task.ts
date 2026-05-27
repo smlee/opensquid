@@ -18,6 +18,9 @@
  * Imported by: src/runtime/bootstrap.ts (registry wiring).
  */
 
+import { stat } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
+
 import { z } from 'zod';
 
 import { err, ok } from '../runtime/result.js';
@@ -79,6 +82,59 @@ export const WorkflowPhasesComplete: FunctionDef<
       return err({
         kind: 'runtime' as const,
         message: `workflow_phases_complete: ${String(e)}`,
+        cause: e,
+      });
+    }
+  },
+};
+
+interface HasGeneratedSpecResult {
+  /** Whether there is an active task at all. */
+  present: boolean;
+  /** True ⟺ the active task carries a `spec` provenance path that resolves on disk. */
+  generated: boolean;
+}
+
+async function pathExistsAbs(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does the active task have GENERATOR PROVENANCE — a `docs/tasks` 11-field spec
+ * the scope→task pipeline produced? Backs scope→task Gate A (AP.5): a code-write
+ * whose active task has no generated spec is blocked.
+ *
+ * Provenance = `active-task.json.spec` (copied by the AP.1 mirror from the
+ * harness `metadata.spec`) resolving to a real file. H7: the spec lives in the
+ * loop PLANNING repo while the code-write is in another repo, so an ABSOLUTE
+ * `spec` is checked directly; a relative one is resolved against the event cwd
+ * (the same-repo case). No active task OR no spec OR a dangling path → not
+ * generated (the conservative verdict — Gate A then blocks "scope it first").
+ */
+export const HasGeneratedSpec: FunctionDef<z.input<typeof NoArgs>, HasGeneratedSpecResult> = {
+  name: 'has_generated_spec',
+  argSchema: NoArgs,
+  durable: false,
+  memoizable: false,
+  costEstimateMs: 4,
+  execute: async (_args, ctx) => {
+    try {
+      const active = await readActiveTask(ctx.sessionId);
+      if (active === null) return ok({ present: false, generated: false });
+      const spec = active.spec;
+      if (spec === undefined || spec === '') return ok({ present: true, generated: false });
+      const cwd = ctx.event.kind === 'tool_call' ? (ctx.event.cwd ?? process.cwd()) : process.cwd();
+      const specPath = isAbsolute(spec) ? spec : resolve(cwd, spec);
+      return ok({ present: true, generated: await pathExistsAbs(specPath) });
+    } catch (e) {
+      return err({
+        kind: 'runtime' as const,
+        message: `has_generated_spec: ${String(e)}`,
         cause: e,
       });
     }

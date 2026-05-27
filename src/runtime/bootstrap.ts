@@ -60,7 +60,11 @@ import { registerEventFunctions } from '../functions/event.js';
 import { IsAutomationMode } from '../functions/is_automation_mode.js';
 import { registerLessonFunctions } from '../functions/lessons.js';
 import { registerLlmFunctions } from '../functions/llm.js';
-import { HasActiveTask, WorkflowPhasesComplete } from '../functions/active_task.js';
+import {
+  HasActiveTask,
+  HasGeneratedSpec,
+  WorkflowPhasesComplete,
+} from '../functions/active_task.js';
 import { PathExists } from '../functions/path_exists.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
@@ -144,6 +148,10 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // workflow gate (rule #8) + the scope→task Gate A (AP.5).
   r.register(HasActiveTask);
   r.register(WorkflowPhasesComplete);
+  // AP.5 — scope→task Gate A read-side: does the active task have generator
+  // provenance (a docs/tasks spec that resolves on disk)? H7: spec is absolute
+  // (cross-repo: spec in the planning repo, code-write in another).
+  r.register(HasGeneratedSpec);
   // T-loop-engine-reintegration T.3 — FIRST-EVER production wiring of the
   // RAG primitives. Resolves backend choice (env > ~/.opensquid/rag-config
   // .json > default), constructs, inits, registers. Tests override via
