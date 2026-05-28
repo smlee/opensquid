@@ -70,6 +70,15 @@ function build(deps: Parameters<typeof registerAutomation>[1] = {}): {
       io.stderr += s;
     },
     randomSessionId: () => 'rand-fallback-uuid',
+    // ASG.2: default to "plausible" so the existing test suite (which never
+    // exercises the gate) stays green. Each ASG.2-targeted test below
+    // overrides this with the stale/fresh shape it needs.
+    isSessionPlausible: () =>
+      Promise.resolve({
+        plausible: true,
+        newestMtimeMs: Date.now(),
+        probedFiles: ['<test-stub>'],
+      }),
     ...deps,
   });
   return { program, io };
@@ -187,5 +196,115 @@ describe('opensquid automation status', () => {
       expect(io.stdout).toContain('automation: off');
     });
     expect(exit).toBe(1);
+  });
+});
+
+describe('opensquid automation — ASG.2 plausibility gate (.current-session)', () => {
+  const stalePointer = (): {
+    readCurrentSession: () => Promise<string | null>;
+    isSessionPlausible: () => Promise<{
+      plausible: boolean;
+      newestMtimeMs: number | null;
+      probedFiles: string[];
+    }>;
+  } => ({
+    readCurrentSession: () => Promise.resolve('sid-stale'),
+    isSessionPlausible: () =>
+      Promise.resolve({
+        plausible: false,
+        newestMtimeMs: null,
+        probedFiles: ['/fake/active-task.json', '/fake/tool-ledger.json'],
+      }),
+  });
+
+  it('rejects with exit 2 + actionable stderr when pointer is stale', async () => {
+    const exit = await withExit(async () => {
+      const { program, io } = build(stalePointer());
+      await program.parseAsync(argv('on'));
+      expect(io.stdout).toBe(''); // no "automation: on" — gate fired before write
+      expect(io.stderr).toContain('refusing to act');
+      expect(io.stderr).toContain('implausible');
+      expect(io.stderr).toContain('sid-stale');
+      expect(io.stderr).toContain('--force');
+    });
+    expect(exit).toBe(2);
+  });
+
+  it('accepts when pointer is fresh (action proceeds)', async () => {
+    const exit = await withExit(async () => {
+      const { program, io } = build({
+        readCurrentSession: () => Promise.resolve('sid-fresh'),
+        // default-plausible from build() already says yes; explicit for clarity:
+        isSessionPlausible: () =>
+          Promise.resolve({
+            plausible: true,
+            newestMtimeMs: Date.now(),
+            probedFiles: [],
+          }),
+      });
+      await program.parseAsync(argv('on'));
+      expect(io.stderr).toBe('');
+      expect(io.stdout).toContain('automation: on');
+      expect(io.stdout).toContain('sid-fresh');
+    });
+    expect(exit).toBe(0);
+  });
+
+  it('--force bypasses the gate with a stderr ⚠ note (and proceeds)', async () => {
+    const exit = await withExit(async () => {
+      const { program, io } = build(stalePointer());
+      await program.parseAsync(argv('on', '--force'));
+      expect(io.stdout).toContain('automation: on');
+      expect(io.stdout).toContain('sid-stale');
+      expect(io.stderr).toContain('--force bypass');
+    });
+    expect(exit).toBe(0);
+  });
+
+  it('--session-id <id> skips the plausibility check entirely', async () => {
+    // Even with the probe set to "stale", explicit --session-id source is NOT
+    // gated (it's user/wrapper intent — never the leaky-test failure mode).
+    const exit = await withExit(async () => {
+      const { program, io } = build({
+        readCurrentSession: () => Promise.resolve('sid-from-pointer'),
+        isSessionPlausible: () =>
+          Promise.resolve({ plausible: false, newestMtimeMs: null, probedFiles: [] }),
+      });
+      await program.parseAsync(argv('on', '--session-id', 'sid-explicit'));
+      expect(io.stderr).toBe('');
+      expect(io.stdout).toContain('sid-explicit');
+      expect(io.stdout).not.toContain('refusing');
+    });
+    expect(exit).toBe(0);
+  });
+
+  it('OPENSQUID_SESSION_ID env source skips the plausibility check', async () => {
+    process.env.OPENSQUID_SESSION_ID = 'sid-env';
+    const exit = await withExit(async () => {
+      const { program, io } = build({
+        // Pointer would resolve, BUT env source has higher precedence and
+        // is not gated; the probe should never even be consulted.
+        readCurrentSession: () => Promise.resolve('sid-pointer'),
+        isSessionPlausible: () =>
+          Promise.resolve({ plausible: false, newestMtimeMs: null, probedFiles: [] }),
+      });
+      await program.parseAsync(argv('on'));
+      expect(io.stderr).toBe('');
+      expect(io.stdout).toContain('sid-env');
+    });
+    expect(exit).toBe(0);
+  });
+
+  it('status against an implausible pointer exits 2 (gate beats off-report)', async () => {
+    // The gate runs BEFORE status's on/off check, so this is exit 2 (rejection),
+    // not exit 1 (would-be "off" report).
+    const exit = await withExit(async () => {
+      const { program, io } = build(stalePointer());
+      await program.parseAsync(argv('status'));
+      expect(io.stderr).toContain('refusing to act');
+      // The "off" path never runs:
+      expect(io.stdout).not.toContain('automation: off');
+    });
+    expect(exit).toBe(2);
   });
 });
