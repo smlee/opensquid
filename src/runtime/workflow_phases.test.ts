@@ -85,3 +85,41 @@ describe('workflow phase state machine (AP.3)', () => {
     expect(await readPhaseState('sess-bad')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-ASC ASC.7 — terminal-stage sanity round-trip.
+//
+// Independent regression check that the workflow phase writer/reader chain
+// survives — which is what ASC.1's chain-state transition to
+// 'phases_complete' (in src/mcp/tools/log_phase.ts) ultimately depends on.
+// G-track-era history severed the writer from the gate; this smoke locks
+// the post-AP.3 remediation as an explicit invariant.
+//
+// REQUIRED_PHASES is imported (NOT hard-coded) so this case self-evolves
+// with the canonical 7-phase list. `audit` is the deliberate omission per
+// `feedback_dont_skip_audit_cycle` — the phase most often dropped under
+// momentum pressure; a future regression that silently allows
+// audit-skipped completion surfaces here first.
+// ---------------------------------------------------------------------------
+describe('workflow_phases — T-ASC ASC.7 round-trip (terminal-stage sanity)', () => {
+  it('appendPhase × 7 then readPhaseState reports isComplete=true', async () => {
+    const sessionId = 'asc7-complete';
+    const taskId = 't-asc7c';
+    for (const phase of REQUIRED_PHASES) {
+      await appendPhase(sessionId, taskId, phase);
+    }
+    const state = await readPhaseState(sessionId);
+    expect(isComplete(state, taskId)).toBe(true);
+  });
+
+  it('appendPhase × 6 (skip audit) then readPhaseState reports isComplete=false', async () => {
+    const sessionId = 'asc7-partial';
+    const taskId = 't-asc7p';
+    for (const phase of REQUIRED_PHASES) {
+      if (phase === 'audit') continue;
+      await appendPhase(sessionId, taskId, phase);
+    }
+    const state = await readPhaseState(sessionId);
+    expect(isComplete(state, taskId)).toBe(false);
+  });
+});
