@@ -20,12 +20,17 @@
  * bottom is the last line of defense.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { transitionChainStage } from '../chain_state.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
 import { extractSessionId } from './session_id.js';
+
+/** ASC.1 PreToolUse chain-state writers — file-path / metadata patterns. */
+const RESEARCH_ARTIFACT_RE = /docs\/research\/.*-pre-research-.*\.md$/;
+const TRACK_SPEC_RE = /docs\/tasks\/T-.*\.md$/;
 
 interface PreToolUsePayload {
   tool?: string;
@@ -101,6 +106,34 @@ async function main(): Promise<void> {
       await mirrorActiveTask(sessionId, parsed.data.tool, parsed.data.args ?? {});
     } catch (e) {
       process.stderr.write(`opensquid: active-task mirror failed — ${String(e)}\n`);
+    }
+    // ASC.1 — chain-state PreToolUse writers. Detect research-artifact /
+    // track-spec writes by file_path regex and TaskCreate/TaskUpdate by
+    // metadata.taskId. transitionChainStage is idempotent on same-stage so
+    // re-entering a stage doesn't double-write history. Ordered AFTER the
+    // active-task mirror so ASC.2's `Skill.requires: chain_stage` (read by
+    // the dispatcher below) sees the post-transition value.
+    try {
+      const tool = parsed.data.tool;
+      const args = parsed.data.args ?? {};
+      if (tool === 'Write' || tool === 'Edit') {
+        const filePath =
+          typeof (args as { file_path?: unknown }).file_path === 'string'
+            ? (args as { file_path: string }).file_path
+            : '';
+        if (RESEARCH_ARTIFACT_RE.test(filePath)) {
+          await transitionChainStage(sessionId, 'researched', { pre_research_path: filePath });
+        } else if (TRACK_SPEC_RE.test(filePath)) {
+          await transitionChainStage(sessionId, 'spec_authored', { spec_path: filePath });
+        }
+      } else if (tool === 'TaskCreate' || tool === 'TaskUpdate') {
+        const meta = (args as { metadata?: { taskId?: unknown } }).metadata;
+        if (meta !== undefined && typeof meta.taskId === 'string' && meta.taskId.length > 0) {
+          await transitionChainStage(sessionId, 'tasks_loaded', { task_ids: [meta.taskId] });
+        }
+      }
+    } catch (e) {
+      process.stderr.write(`opensquid: chain-state write failed — ${String(e)}\n`);
     }
   }
   const packs = await loadActivePacks(sessionId);

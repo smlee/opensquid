@@ -17,10 +17,12 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { readChainStage, transitionChainStage } from '../chain_state.js';
 import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
 
 interface PromptSubmitPayload {
@@ -76,6 +78,24 @@ async function main(): Promise<void> {
     await resetTurnLedger(sessionId);
   } catch (e) {
     process.stderr.write(`opensquid: tool-ledger turn-reset failed — ${String(e)}\n`);
+  }
+  // ASC.1 — chain-state 'scoping' writer. Transition idle → scoping ONLY when
+  // the prompt looks like scope-authoring intent AND the chain is currently
+  // idle. The `currentStage === 'idle'` guard is load-bearing: many in-flight
+  // prompts contain 'plan' / 'design' / 'spec' even when no new scope work is
+  // starting; without the guard, every such prompt would reset the chain
+  // mid-flight ('researched' or 'spec_authored' would silently regress to
+  // 'scoping'). Best-effort — a chain-state failure must never block the
+  // turn from starting.
+  if (parsed.data.kind === 'prompt_submit') {
+    try {
+      const currentStage = await readChainStage(sessionId);
+      if (currentStage === 'idle' && SCOPE_INTENT_REGEX.test(parsed.data.prompt)) {
+        await transitionChainStage(sessionId, 'scoping');
+      }
+    } catch (e) {
+      process.stderr.write(`opensquid: chain-state scoping-transition failed — ${String(e)}\n`);
+    }
   }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();

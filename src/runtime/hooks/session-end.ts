@@ -18,6 +18,7 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { clearChainState } from '../chain_state.js';
 import { emitProbe, groupFromTask } from '../satisfaction_probe.js';
 import { archiveActiveTask, readActiveTask } from '../session_state.js';
 import { Event } from '../types.js';
@@ -93,6 +94,17 @@ async function main(): Promise<void> {
   // AP.2 / rule #16 — archive (not delete) the active-task signal at session
   // close, so an abandoned in-progress task leaves a trace. Best-effort.
   await archiveActiveTask(sessionId);
+
+  // ASC.1 — clear the chain-state file on session close. Unlike the active
+  // task (archived, not deleted, so an abandoned in-progress task leaves a
+  // trace), the chain-state object is a session-scoped state machine per
+  // T-ASC L3 and starts fresh each session; cross-session resume is a
+  // separate product question (deferred). ENOENT swallowed by the helper.
+  try {
+    await clearChainState(sessionId);
+  } catch (e) {
+    process.stderr.write(`opensquid: chain-state clear failed — ${String(e)}\n`);
+  }
 
   process.exit(exitCode);
 }
