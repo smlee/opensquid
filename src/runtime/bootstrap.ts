@@ -66,6 +66,7 @@ import {
   TaskListGenerated,
   WorkflowPhasesComplete,
 } from '../functions/active_task.js';
+import { ReadChainState } from '../functions/chain_state.js';
 import { PathExists } from '../functions/path_exists.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
@@ -157,6 +158,12 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // provenance (every pending/in_progress task carries metadata.taskId)? Closes
   // Gate A's smuggled-task loophole.
   r.register(TaskListGenerated);
+  // T-ASC ASC.5 — chain-state read primitive. Exposes the persisted T-ASC
+  // chain (stage + enrichment fields) to skill YAML `process:` chains so
+  // ASC.5's reframed scope-decomposer handoff rules can shape their
+  // directive next_action.args from the persisted stage. memoizable:false
+  // because the chain transitions mid-session via the ASC.1 writers.
+  r.register(ReadChainState);
   // T-loop-engine-reintegration T.3 — FIRST-EVER production wiring of the
   // RAG primitives. Resolves backend choice (env > ~/.opensquid/rag-config
   // .json > default), constructs, inits, registers. Tests override via

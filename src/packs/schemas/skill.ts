@@ -139,6 +139,14 @@ export type RuleKindEnum = z.infer<typeof RuleKindEnum>;
 export const TrackCheckRule = z.object({
   id: z.string().min(1),
   kind: z.literal('track_check').default('track_check'),
+  // T-ASC ASC.5: per-rule AND-preconditions evaluated at the dispatcher
+  // boundary AFTER skill.requires and BEFORE walking the process. Each entry
+  // is a SkillRequires discriminated-union variant. Empty array trivially
+  // holds (back-compat). Per-rule requires support different chain_stage
+  // values across rules in the same skill (the skill-level requires is one
+  // condition shared across all the skill's rules; per-rule is the natural
+  // place for stage-specific gating).
+  requires: z.array(SkillRequires).default([]),
   process: z.array(ProcessStep).min(1),
 });
 export type TrackCheckRule = z.infer<typeof TrackCheckRule>;

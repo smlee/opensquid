@@ -72,6 +72,7 @@ function buildRealRegistry(): FunctionRegistry {
 const scopeBeforeCodeRule: Rule = {
   id: 'scope-before-code',
   kind: 'track_check',
+  requires: [],
   process: [
     { call: 'tool_name', as: 'tool' },
     { call: 'tool_args', as: 'targs' },

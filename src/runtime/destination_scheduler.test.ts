@@ -179,6 +179,7 @@ describe('maybeRunDestinationChecks', () => {
               {
                 id: 't',
                 kind: 'track_check',
+                requires: [],
                 process: [{ call: 'verdict', args: { level: 'pass', message: '' } }],
               },
             ],
@@ -231,6 +232,7 @@ describe('maybeRunDestinationChecks', () => {
               {
                 id: 'track-rule',
                 kind: 'track_check',
+                requires: [],
                 process: [{ call: 'verdict', args: { level: 'pass', message: '' } }],
               },
               {

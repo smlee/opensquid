@@ -92,6 +92,7 @@ function makePack(
 const verdictRule: Rule = {
   id: 'fake-rule',
   kind: 'track_check',
+  requires: [],
   process: [{ call: 'verdict' }],
 };
 
@@ -135,7 +136,7 @@ describe('dispatchEvent', () => {
 
   it('returns exit 0 + empty stderr when no rules produce a verdict', async () => {
     // A pack whose only rule has an empty process → evaluator returns no_verdict.
-    const noVerdictRule: Rule = { id: 'empty', kind: 'track_check', process: [] };
+    const noVerdictRule: Rule = { id: 'empty', kind: 'track_check', requires: [], process: [] };
     const pack = makePack('p1', [noVerdictRule]);
     const registry = new FunctionRegistry();
     const result = await dispatchEvent(event, [pack], registry, 'sess-1');
@@ -437,11 +438,13 @@ describe('dispatchEvent', () => {
     const rule1: Rule = {
       id: 'dir-rule',
       kind: 'track_check',
+      requires: [],
       process: [{ call: 'verdict' }],
     };
     const rule2: Rule = {
       id: 'block-rule',
       kind: 'track_check',
+      requires: [],
       process: [{ call: 'verdict' }],
     };
     const pack = makePack('p1', [rule1, rule2], [{ kind: 'prompt_submit' }]);
@@ -578,6 +581,7 @@ describe('dispatchEvent', () => {
     const injectRule: Rule = {
       id: 'fake-inject-rule',
       kind: 'track_check',
+      requires: [],
       process: [{ call: 'inject_emitter' }],
     };
 
@@ -683,6 +687,7 @@ describe('dispatchEvent', () => {
       const blockRule: Rule = {
         id: 'v1-publish-detector',
         kind: 'track_check',
+        requires: [],
         process: [{ call: 'verdict' }],
       };
       const pack = withDrift(makePack('p1', [blockRule]), {
@@ -707,6 +712,7 @@ describe('dispatchEvent', () => {
       const rule: Rule = {
         id: 'unlisted-rule',
         kind: 'track_check',
+        requires: [],
         process: [{ call: 'verdict' }],
       };
       const pack = withDrift(makePack('p1', [rule]), {
@@ -728,6 +734,7 @@ describe('dispatchEvent', () => {
       const rule: Rule = {
         id: 'paused-rule',
         kind: 'track_check',
+        requires: [],
         process: [{ call: 'verdict' }],
       };
       const pack = withDrift(makePack('p1', [rule]), {
@@ -752,6 +759,7 @@ describe('dispatchEvent', () => {
       const rule: Rule = {
         id: 'rule-without-policy',
         kind: 'track_check',
+        requires: [],
         process: [{ call: 'verdict' }],
       };
       const pack = makePack('p1', [rule]);
@@ -774,6 +782,7 @@ describe('dispatchEvent', () => {
       const rule: Rule = {
         id: 'informational-rule',
         kind: 'track_check',
+        requires: [],
         process: [{ call: 'verdict' }],
       };
       const pack = withDrift(makePack('p1', [rule]), {
@@ -879,7 +888,14 @@ describe('dispatchEvent', () => {
         requires: [],
         unloads_when: opts.unloads_when,
         triggers: [{ kind: 'prompt_submit' }],
-        rules: [{ id: `${opts.name}-rule`, kind: 'track_check', process: [{ call: 'verdict' }] }],
+        rules: [
+          {
+            id: `${opts.name}-rule`,
+            kind: 'track_check',
+            requires: [],
+            process: [{ call: 'verdict' }],
+          },
+        ],
       };
       return {
         name: opts.name,

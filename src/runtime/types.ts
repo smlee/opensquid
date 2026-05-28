@@ -206,6 +206,8 @@ export type RuleKind = z.infer<typeof RuleKind>;
 export const TrackCheckRule = z.object({
   id: z.string(),
   kind: z.literal('track_check').default('track_check'),
+  // T-ASC ASC.5: per-rule AND-preconditions; same shape as Skill.requires.
+  requires: z.array(SkillRequires).default([]),
   process: z.array(ProcessStep),
 });
 export type TrackCheckRule = z.infer<typeof TrackCheckRule>;

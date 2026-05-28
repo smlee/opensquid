@@ -58,6 +58,7 @@ function buildFreshnessPack(): Pack {
   const rule: Rule = {
     id: 'drift-state-assertion-without-verification',
     kind: 'track_check',
+    requires: [],
     process: [
       {
         call: 'text_pattern_match',

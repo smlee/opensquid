@@ -277,6 +277,14 @@ export async function dispatchEvent(
         // through the per-event process walker. Skip them here so the
         // dispatcher only walks track_check processes.
         if (rule.kind === 'destination_check') continue;
+        // T-ASC ASC.5: per-rule requires evaluated AFTER skill-level
+        // requires and BEFORE walking the process. Same RequiresCache so
+        // skill-level + per-rule preconditions stat shared files once per
+        // fire. Empty rule.requires trivially holds (back-compat).
+        if (rule.requires.length > 0) {
+          const hold = await skillRequiresHold(rule.requires, sessionId, requiresCache);
+          if (!hold) continue;
+        }
         rulesWalked += 1;
         const ctx: EvalCtx = {
           event,

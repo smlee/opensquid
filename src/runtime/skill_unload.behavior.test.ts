@@ -80,6 +80,7 @@ function prosePack(opts: {
       {
         id: `${opts.name}-inject`,
         kind: 'track_check',
+        requires: [],
         process: [{ call: `inject_${opts.name}` }],
       },
     ],
@@ -219,7 +220,14 @@ describe('CU.3: skill-unload behavior (prose suppressed at dispatcher output)', 
       requires: [],
       unloads_when: ['active_task_completes'],
       triggers: [{ kind: 'prompt_submit' }, { kind: 'stop' }],
-      rules: [{ id: 'task-inject', kind: 'track_check', process: [{ call: 'inject_task' }] }],
+      rules: [
+        {
+          id: 'task-inject',
+          kind: 'track_check',
+          requires: [],
+          process: [{ call: 'inject_task' }],
+        },
+      ],
     };
     const pack: Pack = {
       name: 'task',

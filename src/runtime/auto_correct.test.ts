@@ -111,7 +111,7 @@ function makePack(opts: {
         requires: [],
         unloads_when: [],
         triggers: [{ kind: 'tool_call' }],
-        rules: [{ id: 'corrective-rule', kind: 'track_check', process: steps }],
+        rules: [{ id: 'corrective-rule', kind: 'track_check', requires: [], process: steps }],
       },
     ],
   };

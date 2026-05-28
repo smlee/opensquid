@@ -68,7 +68,9 @@ rules:
         args:
           dir: docs/research
           pattern: '*-pre-research-*.md'
-          # Anchor to the spec FILE's repo root, not the event cwd (cross-repo fix).
+          # Anchor to the SPEC FILE's repo root, not the event cwd. Specs +
+          # their pre-research co-locate (loop repo); without this the check
+          # resolves docs/research against a code-repo cwd and false-blocks.
           base_file: args.file_path
         as: research
       # Content shape — Write body is args.content, Edit body is args.new_string.
@@ -99,6 +101,130 @@ rules:
             Inline-spec in TASKS.md / docs/tasks/ is forbidden (handoff
             2026-05-26). To proceed: create the pre-research doc (the gate
             relaxes once it exists), or deactivate this skill for a one-off.
+
+  # AP.5 Gate A — scope-before-code. In automation mode, a code-write (src/**)
+  # whose ACTIVE task has no generator provenance (a docs/tasks spec on disk) is
+  # BLOCKED. With inline-spec-block (no spec without pre-research) + the workflow
+  # gate (no commit without 7 phases), scope→task is the only door to coding.
+  # Targets /src/ only — writing the spec/pre-research is never blocked.
+  - id: scope-before-code
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: is_automation_mode
+        as: auto
+      - call: has_generated_spec
+        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/")'
+        as: prov
+      - call: verdict
+        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/") && prov.generated == false'
+        args:
+          level: block
+          message: >-
+            BLOCKED: coding before scope→task. This work's active task has no
+            generator provenance (a docs/tasks spec on disk). Run
+            pre-research → `task-spec-author` FIRST, create the task with its
+            ABSOLUTE spec path in metadata.spec, load it (set in_progress), THEN
+            code. If there is no active task, scope one first.
+
+  # AP.5 Gate B — task-list-generated. Every OPEN task must carry a
+  # metadata.taskId provenance stamp. Closes Gate A's loophole (a task smuggled
+  # into the list manually). `warn`: Gate A hard-blocks the write; Gate B
+  # surfaces list hygiene so the agent regenerates the smuggled task.
+  - id: task-list-generated
+    process:
+      - call: is_automation_mode
+        as: auto
+      - call: task_list_generated
+        if: 'auto.value == true'
+        as: list
+      - call: verdict
+        if: 'auto.value == true && list.all_generated == false'
+        args:
+          level: warn
+          message: >-
+            Task-list hygiene: one or more open tasks have NO generator
+            provenance (missing metadata.taskId) — not produced by
+            scope→task-spec-author. Regenerate them through the pipeline (or
+            stamp metadata.taskId) so the whole list is task-generated.
+
+  # ---------------------------------------------------------------------------
+  # CHAIN-HANDOFF rules (T-ASC ASC.5) — production-grade per-stage handoffs.
+  #
+  # Each rule is gated at the dispatcher boundary by `requires: chain_stage`;
+  # the body reads the chain state via `read_chain_state` and emits a
+  # structured `directive` verdict (T-ASC ASC.3) carrying the next-action.
+  # Per project_opensquid_no_agent_loop: opensquid does NOT invoke the named
+  # skill / tool; the agent dispatches by reading the UserPromptSubmit
+  # envelope's `additionalContext` (the dispatcher serializes directives as
+  # fenced JSON under a `⛔ DIRECTIVE` marker).
+  #
+  # Per-rule `requires:` (T-ASC ASC.5 schema extension) lets a single skill
+  # carry 3 stage-gated rules without per-rule duplicate work — the
+  # dispatcher's RequiresCache amortizes the chain-state read across them.
+  # ---------------------------------------------------------------------------
+
+  - id: chain-handoff-research-to-spec
+    requires:
+      - kind: chain_stage
+        stage: researched
+    process:
+      - call: read_chain_state
+        as: chain
+      - call: verdict
+        args:
+          level: directive
+          next_action:
+            skill: task-spec-author
+            args:
+              pre_research_path: chain.pre_research_path
+            rationale: >-
+              Pre-research artifact landed (chain stage: researched). Next stage
+              requires task-spec-author to consume the artifact and produce the
+              11-field track spec. Do NOT hand-author the decomposition — let
+              the skill drive the spec shape from the substrate.
+
+  - id: chain-handoff-spec-to-tasks
+    requires:
+      - kind: chain_stage
+        stage: spec_authored
+    process:
+      - call: read_chain_state
+        as: chain
+      - call: verdict
+        args:
+          level: directive
+          next_action:
+            tool: TaskCreate
+            args:
+              spec_path: chain.spec_path
+            rationale: >-
+              Track spec on disk (chain stage: spec_authored). Each ### Task
+              block becomes one TaskCreate with metadata.taskId + metadata.spec
+              set to the spec's absolute path. The workflow gate engages once
+              tasks load with provenance.
+
+  - id: chain-handoff-resume-phases
+    requires:
+      - kind: chain_stage
+        stage: phases_in_flight
+    process:
+      - call: workflow_phases_complete
+        as: phases
+      - call: verdict
+        if: 'phases.complete == false'
+        args:
+          level: directive
+          next_action:
+            tool: mcp__opensquid__log_phase
+            rationale: >-
+              Phase logging in flight (chain stage: phases_in_flight), but the
+              7-phase workflow is incomplete for the active task. Resume at the
+              next unlogged phase immediately; log_phase as each completes. The
+              full-automation lock forbids stops while phases are incomplete.
+
 prose: |
   The SOFT side of the scope-authoring gate. It fires on prompt_submit when
   the user's message shows scope-authoring intent and nudges toward the
