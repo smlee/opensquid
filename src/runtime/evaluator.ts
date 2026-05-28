@@ -212,8 +212,20 @@ export async function evaluateProcess(
       return { kind: 'error', error: result.error.message, step: i };
     }
 
-    // 5. `verdict` primitive returns a Verdict shape → terminal
+    // 5. `verdict` primitive returns a Verdict shape → terminal.
+    // T-ASC ASC.3: route by `level`. Directive verdicts produce a
+    // `kind: 'directive'` RuleResult that the dispatcher aggregates
+    // alongside contextInjections; every other level produces the
+    // historical `kind: 'verdict'` flow into drift_response. The
+    // RuleResult's `verdict` field is typed `MessageVerdict` so
+    // drift_response.ts's handlers can read `.message` without a guard.
     if (step.call === 'verdict' && isVerdict(result.value)) {
+      if (result.value.level === 'directive') {
+        return {
+          kind: 'directive',
+          directive: { next_action: result.value.next_action },
+        };
+      }
       return { kind: 'verdict', verdict: result.value };
     }
 
@@ -558,8 +570,14 @@ function isEmpty(v: unknown): boolean {
 
 function isVerdict(v: unknown): v is Verdict {
   if (typeof v !== 'object' || v === null) return false;
-  if (!('level' in v) || !('message' in v)) return false;
-  return typeof v.level === 'string' && typeof v.message === 'string';
+  if (!('level' in v) || typeof v.level !== 'string') return false;
+  // T-ASC ASC.3: 5 levels now. The 4 message-bearing levels require
+  // `message: string`; the `directive` level requires
+  // `next_action: object` instead.
+  if (v.level === 'directive') {
+    return 'next_action' in v && typeof v.next_action === 'object' && v.next_action !== null;
+  }
+  return 'message' in v && typeof v.message === 'string';
 }
 
 // ---------------------------------------------------------------------------

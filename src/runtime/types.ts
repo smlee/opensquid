@@ -37,18 +37,91 @@ import { DriftResponseConfig } from '../packs/schemas/drift_response.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
 
 // ---------------------------------------------------------------------------
-// Verdict — rule output
+// Verdict — rule output (T-ASC ASC.3 discriminated-union refactor)
+//
+// Before T-ASC ASC.3 the Verdict was a flat object {level, message, ruleId?}
+// for 4 levels. ASC.3 adds a 5th level `directive` whose payload is
+// `next_action: NextAction` instead of `message: string`. The schema becomes
+// a discriminated union on `level` so the runtime narrows precisely — a
+// directive verdict has no `message`, a message-bearing verdict has no
+// `next_action`, and TypeScript enforces the right access at compile time.
+// `MessageVerdict` is the narrowed alias drift-path consumers (drift_response,
+// escalate, auto_correct) take; `DirectiveVerdict` is the alias the
+// dispatcher's directive-aggregation path consumes.
 // ---------------------------------------------------------------------------
 
-export const VerdictLevel = z.enum(['pass', 'block', 'warn', 'surface']);
+export const VerdictLevel = z.enum(['pass', 'block', 'warn', 'surface', 'directive']);
 export type VerdictLevel = z.infer<typeof VerdictLevel>;
 
-export const Verdict = z.object({
-  level: VerdictLevel,
-  message: z.string(),
-  ruleId: z.string().optional(),
-});
+/**
+ * NextAction — payload of a `level: 'directive'` verdict. Names the next
+ * skill OR tool the agent should run (skill XOR tool, never both); `args`
+ * threads the call through; `rationale` is the mandatory plain-English
+ * explanation that lands in the agent's pre-prompt context.
+ *
+ * Per T-ASC L7 + project_opensquid_no_agent_loop: opensquid emits the
+ * directive, the agent dispatches. The skill name here is informational —
+ * opensquid does NOT invoke it.
+ */
+export const NextAction = z
+  .object({
+    skill: z.string().min(1).optional(),
+    tool: z.string().min(1).optional(),
+    args: z.record(z.unknown()).optional(),
+    rationale: z.string().min(1),
+  })
+  .strict()
+  .refine((na) => (na.skill !== undefined) !== (na.tool !== undefined), {
+    message: 'next_action.skill XOR next_action.tool — exactly one must be set',
+    path: ['skill'],
+  });
+export type NextAction = z.infer<typeof NextAction>;
+
+export const Verdict = z.discriminatedUnion('level', [
+  z.object({
+    level: z.literal('pass'),
+    message: z.string(),
+    ruleId: z.string().optional(),
+  }),
+  z.object({
+    level: z.literal('block'),
+    message: z.string(),
+    ruleId: z.string().optional(),
+  }),
+  z.object({
+    level: z.literal('warn'),
+    message: z.string(),
+    ruleId: z.string().optional(),
+  }),
+  z.object({
+    level: z.literal('surface'),
+    message: z.string(),
+    ruleId: z.string().optional(),
+  }),
+  z.object({
+    level: z.literal('directive'),
+    next_action: NextAction,
+    ruleId: z.string().optional(),
+  }),
+]);
 export type Verdict = z.infer<typeof Verdict>;
+
+/** Verdicts that carry a human-readable message (every level except directive). */
+export type MessageVerdict = Extract<Verdict, { message: string }>;
+
+/** Directive-level verdict (level: 'directive', carries next_action). */
+export type DirectiveVerdict = Extract<Verdict, { level: 'directive' }>;
+
+/**
+ * A directive emitted by a rule and aggregated by the dispatcher. Peer to
+ * the inject_context aggregation: directives accumulate in
+ * `DispatchResult.directives` across the walk and the UserPromptSubmit hook
+ * bin serializes them into the envelope's additionalContext.
+ */
+export interface Directive {
+  next_action: NextAction;
+  ruleId?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Event + EventKind + Trigger — split into `./event.ts` per AUTO.1 file-size
@@ -265,8 +338,17 @@ export type Pack = z.infer<typeof Pack>;
 // multiple skills can stack their injections in one prompt.
 // ---------------------------------------------------------------------------
 
+/**
+ * T-ASC ASC.3: RuleResult gains a `directive` variant that the dispatcher
+ * aggregates separately from the `verdict` variant (which carries a
+ * MessageVerdict only — directives don't flow through drift_response).
+ * The evaluator forks at the verdict-primitive special-case: a value with
+ * `level === 'directive'` becomes `{kind: 'directive'}`, every other level
+ * becomes `{kind: 'verdict'}`.
+ */
 export type RuleResult =
-  | { kind: 'verdict'; verdict: Verdict }
+  | { kind: 'verdict'; verdict: MessageVerdict }
+  | { kind: 'directive'; directive: Directive }
   | { kind: 'no_verdict' }
   | { kind: 'error'; error: string; step: number }
   | { kind: 'inject_context'; content: string };

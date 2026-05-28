@@ -32,7 +32,11 @@ import type { FunctionRegistry, EvalCtx } from '../functions/registry.js';
 
 import type { CapabilityGate } from './capability_gate.js';
 import { evaluateProcess } from './evaluator.js';
-import type { Pack, ProcessStep, RuleResult, Skill, Verdict } from './types.js';
+// T-ASC ASC.3: auto_correct only processes message-bearing verdicts. The
+// directive-level verdict flows through the dispatcher's directives
+// aggregation, not through the correction pipeline. Aliased to keep the
+// existing source readable.
+import type { MessageVerdict as Verdict, Pack, ProcessStep, RuleResult, Skill } from './types.js';
 
 /**
  * `corrected: true` ⇒ caller treats the original verdict as resolved.

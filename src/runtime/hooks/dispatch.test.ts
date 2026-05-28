@@ -118,14 +118,19 @@ describe('dispatchEvent', () => {
   it('returns exit 0 + empty stderr when no packs are active', async () => {
     const registry = buildRegistryWithVerdict({ level: 'pass', message: 'unused' });
     const result = await dispatchEvent(event, [], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
   });
 
   it('returns exit 2 + stderr when a rule produces a block verdict', async () => {
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'no amend' });
     const pack = makePack('p1', [verdictRule]);
     const result = await dispatchEvent(event, [pack], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 2, stderr: 'no amend', contextInjections: [] });
+    expect(result).toEqual({
+      exitCode: 2,
+      stderr: 'no amend',
+      contextInjections: [],
+      directives: [],
+    });
   });
 
   it('returns exit 0 + empty stderr when no rules produce a verdict', async () => {
@@ -134,7 +139,7 @@ describe('dispatchEvent', () => {
     const pack = makePack('p1', [noVerdictRule]);
     const registry = new FunctionRegistry();
     const result = await dispatchEvent(event, [pack], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
   });
 
   it('first-match short-circuit: blocking pack #1 wins over later packs', async () => {
@@ -142,7 +147,12 @@ describe('dispatchEvent', () => {
     const pack1 = makePack('pack1', [verdictRule]);
     const pack2 = makePack('pack2', [verdictRule]);
     const result = await dispatchEvent(event, [pack1, pack2], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 2, stderr: 'pack1 blocks', contextInjections: [] });
+    expect(result).toEqual({
+      exitCode: 2,
+      stderr: 'pack1 blocks',
+      contextInjections: [],
+      directives: [],
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -168,14 +178,19 @@ describe('dispatchEvent', () => {
     const pack = makePack('p1', [verdictRule], [{ kind: 'schedule', cron: '0 9 * * 1' }]);
     const result = await dispatchEvent(event, [pack], registry, 'sess-1');
     // Skill subscribes only to `schedule`; tool_call must pass through.
-    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
   });
 
   it('AUTO.1: fires a schedule-only skill when the event is a schedule', async () => {
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'sched fired' });
     const pack = makePack('p1', [verdictRule], [{ kind: 'schedule', cron: '0 9 * * 1' }]);
     const result = await dispatchEvent(scheduleEvent, [pack], registry, 'sess-1');
-    expect(result).toEqual({ exitCode: 2, stderr: 'sched fired', contextInjections: [] });
+    expect(result).toEqual({
+      exitCode: 2,
+      stderr: 'sched fired',
+      contextInjections: [],
+      directives: [],
+    });
   });
 
   it('AUTO.1: fires a multi-kind skill on both tool_call and schedule', async () => {
@@ -187,8 +202,18 @@ describe('dispatchEvent', () => {
     );
     const onTool = await dispatchEvent(event, [pack], registry, 'sess-1');
     const onSched = await dispatchEvent(scheduleEvent, [pack], registry, 'sess-1');
-    expect(onTool).toEqual({ exitCode: 2, stderr: 'multi fired', contextInjections: [] });
-    expect(onSched).toEqual({ exitCode: 2, stderr: 'multi fired', contextInjections: [] });
+    expect(onTool).toEqual({
+      exitCode: 2,
+      stderr: 'multi fired',
+      contextInjections: [],
+      directives: [],
+    });
+    expect(onSched).toEqual({
+      exitCode: 2,
+      stderr: 'multi fired',
+      contextInjections: [],
+      directives: [],
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -209,7 +234,7 @@ describe('dispatchEvent', () => {
       [{ kind: 'automation_mode_on' }],
     );
     const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-1');
-    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
   });
 
   it('ASC.2: skill with requires=[automation_mode_on] and flag present → verdict fires', async () => {
@@ -222,7 +247,12 @@ describe('dispatchEvent', () => {
       [{ kind: 'automation_mode_on' }],
     );
     const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-2');
-    expect(result).toEqual({ exitCode: 2, stderr: 'auto-on fired', contextInjections: [] });
+    expect(result).toEqual({
+      exitCode: 2,
+      stderr: 'auto-on fired',
+      contextInjections: [],
+      directives: [],
+    });
   });
 
   it('ASC.2: skill with requires=[automation_mode_on, active_task_present] AND-fails on missing task', async () => {
@@ -235,7 +265,7 @@ describe('dispatchEvent', () => {
       [{ kind: 'automation_mode_on' }, { kind: 'active_task_present' }],
     );
     const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-3');
-    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
   });
 
   it('ASC.2: skill with requires=[chain_stage:researched] fires only when chain is researched', async () => {
@@ -256,6 +286,7 @@ describe('dispatchEvent', () => {
       exitCode: 2,
       stderr: 'researched fired',
       contextInjections: [],
+      directives: [],
     });
     // Transition past → no longer fires.
     await transitionChainStage('sess-asc2-4', 'spec_authored');
@@ -268,7 +299,12 @@ describe('dispatchEvent', () => {
     const pack = makePack('p1', [verdictRule]);
     // Empty requires:[] is the default — trivially holds.
     const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-5');
-    expect(result).toEqual({ exitCode: 2, stderr: 'no-req fired', contextInjections: [] });
+    expect(result).toEqual({
+      exitCode: 2,
+      stderr: 'no-req fired',
+      contextInjections: [],
+      directives: [],
+    });
   });
 
   it('ASC.2: requires gate runs BEFORE rule walk (rule primitives never called when gate fails)', async () => {
@@ -314,7 +350,108 @@ describe('dispatchEvent', () => {
       [{ kind: 'chain_stage', stage: 'researched' }],
     );
     const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-7');
-    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
+  });
+
+  // -------------------------------------------------------------------------
+  // T-ASC ASC.3 — directive verdict aggregation
+  //
+  // Directives accumulate in DispatchResult.directives parallel to
+  // contextInjections. Only the UserPromptSubmit hook bin actually surfaces
+  // them (via the envelope's additionalContext). Other hook bins drop with
+  // a warning. Block + directive coexist (block wins exit code; directive
+  // still rides through the directives field).
+  // -------------------------------------------------------------------------
+
+  const promptSubmitEvent = { kind: 'prompt_submit' as const, prompt: 'p' };
+
+  it('ASC.3: directive verdict on prompt_submit aggregates into DispatchResult.directives', async () => {
+    const directiveVerdict = {
+      level: 'directive',
+      next_action: {
+        skill: 'task-spec-author',
+        args: { pre_research_path: '/abs/p.md' },
+        rationale: 'pre-research landed — author the spec next.',
+      },
+    };
+    const registry = buildRegistryWithVerdict(directiveVerdict as unknown as Verdict);
+    const pack = makePack('p1', [verdictRule], [{ kind: 'prompt_submit' }]);
+    const result = await dispatchEvent(promptSubmitEvent, [pack], registry, 'sess-asc3-1');
+    expect(result.exitCode).toBe(0);
+    expect(result.directives).toHaveLength(1);
+    expect(result.directives[0]?.next_action.skill).toBe('task-spec-author');
+    expect(result.directives[0]?.ruleId).toBe('fake-rule');
+  });
+
+  it('ASC.3: directive on a non-prompt_submit event is dropped + warned (mirrors inject_context)', async () => {
+    const directiveVerdict = {
+      level: 'directive',
+      next_action: { skill: 's', rationale: 'r' },
+    };
+    const registry = buildRegistryWithVerdict(directiveVerdict as unknown as Verdict);
+    const pack = makePack('p1', [verdictRule]); // default trigger = tool_call
+    const result = await dispatchEvent(event, [pack], registry, 'sess-asc3-2');
+    expect(result.directives).toHaveLength(0);
+    expect(result.stderr.toLowerCase()).toContain('directive');
+    expect(result.stderr.toLowerCase()).toContain('drop');
+  });
+
+  it('ASC.3: block + directive coexist (directive emitted EARLIER, block emitted LATER → both ride)', async () => {
+    // Two skills in two packs. Pack1 emits a directive (continues), Pack2
+    // emits a block (short-circuits exit code 2). The directive from pack1
+    // still surfaces in DispatchResult.directives.
+    const directiveVerdict = {
+      level: 'directive',
+      next_action: { skill: 's', rationale: 'r' },
+    };
+    const r1 = new FunctionRegistry();
+    r1.register({
+      name: 'verdict',
+      argSchema: z.record(z.unknown()),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      execute: async () => ok(directiveVerdict),
+    });
+    const r2 = new FunctionRegistry();
+    r2.register({
+      name: 'verdict',
+      argSchema: z.record(z.unknown()),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      execute: async () => ok({ level: 'block', message: 'STOP' }),
+    });
+    // We have to walk both packs with ONE registry, so register both with
+    // priority — actually the simpler path: two skills inside one pack,
+    // one emits directive, second emits block. The dispatcher walks rules
+    // in order, so we craft two rules and the directive rule fires first.
+    const r = new FunctionRegistry();
+    let firstCall = true;
+    r.register({
+      name: 'verdict',
+      argSchema: z.record(z.unknown()),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      execute: async () => {
+        if (firstCall) {
+          firstCall = false;
+          return ok(directiveVerdict);
+        }
+        return ok({ level: 'block', message: 'STOP' });
+      },
+    });
+    const rule1: Rule = {
+      id: 'dir-rule',
+      kind: 'track_check',
+      process: [{ call: 'verdict' }],
+    };
+    const rule2: Rule = {
+      id: 'block-rule',
+      kind: 'track_check',
+      process: [{ call: 'verdict' }],
+    };
+    const pack = makePack('p1', [rule1, rule2], [{ kind: 'prompt_submit' }]);
+    const result = await dispatchEvent(promptSubmitEvent, [pack], r, 'sess-asc3-3');
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toBe('STOP');
+    expect(result.directives).toHaveLength(1);
+    expect(result.directives[0]?.ruleId).toBe('dir-rule');
   });
 
   it('ASC.2: requires:[] all-hold AND-chain — 3 preconds met → fires', async () => {
@@ -338,7 +475,12 @@ describe('dispatchEvent', () => {
       ],
     );
     const result = await dispatchEvent(event, [pack], registry, sid);
-    expect(result).toEqual({ exitCode: 2, stderr: '3-AND fired', contextInjections: [] });
+    expect(result).toEqual({
+      exitCode: 2,
+      stderr: '3-AND fired',
+      contextInjections: [],
+      directives: [],
+    });
   });
 
   // -------------------------------------------------------------------------

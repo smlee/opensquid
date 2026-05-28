@@ -99,7 +99,7 @@ async function main(): Promise<void> {
   }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
-  const { exitCode, stderr, contextInjections } = await dispatchEvent(
+  const { exitCode, stderr, contextInjections, directives } = await dispatchEvent(
     parsed.data,
     packs,
     registry,
@@ -107,27 +107,41 @@ async function main(): Promise<void> {
   );
 
   // G.4 — emit Claude Code's UserPromptSubmit JSON envelope on stdout when
-  // any rule contributed an inject_context payload. Per VERIFIED 2026-05-24
-  // behavior, raw stdout text is silently DISCARDED by Claude Code 2.x; only
-  // the `hookSpecificOutput.additionalContext` JSON shape actually injects
+  // any rule contributed an inject_context payload OR (T-ASC ASC.3) a
+  // directive-level verdict. Per VERIFIED 2026-05-24 behavior, raw stdout
+  // text is silently DISCARDED by Claude Code 2.x; only the
+  // `hookSpecificOutput.additionalContext` JSON shape actually injects
   // additional prompt context. (The older `dist/anti-drift/evaluator.js`
   // legacy code that wrote raw stdout was relying on a deprecated path.)
   //
-  // Multiple skills' injections are joined with `\n\n` so the agent sees a
-  // single coherent block of pre-prompt context. The dispatcher already
-  // dropped any `inject_context` payloads that fired on non-prompt_submit
-  // events (with a stderr warning), so by the time we get here the array
-  // is safe to emit verbatim.
+  // T-ASC L8: ONE envelope key (`additionalContext`) carries BOTH surfaces —
+  // inject_context paragraphs first, then directives as a fenced JSON block
+  // under a `⛔ DIRECTIVE` marker. No new envelope keys: Claude Code 2.x
+  // doesn't reliably honor unknown ones. The fenced JSON gives the agent
+  // human-readable context AND a future enforcer a machine-parseable
+  // structured handoff (parse the JSON between the marker and the closing
+  // fence). Per project_opensquid_no_agent_loop the AGENT dispatches — the
+  // directive names skill/tool/args/rationale; opensquid never invokes it.
   //
-  // Block-verdict coexistence (Phase-2 lock #7): if the block verdict fired
-  // AFTER an inject_context payload, both ride through — the block wins on
-  // exitCode (2), but the injection still lands on stdout so the user sees
-  // the recall context alongside the block message on the next prompt.
-  if (contextInjections.length > 0) {
+  // Block-verdict coexistence (Phase-2 lock #7 + L8 extension): if the
+  // block verdict fired AFTER an inject_context or directive payload, all
+  // ride through — block wins on exitCode (2), but the additionalContext
+  // still lands on stdout so the agent sees the recall context + directive
+  // alongside the block message on the next prompt.
+  const contextParts: string[] = [...contextInjections];
+  if (directives.length > 0) {
+    const block =
+      '⛔ DIRECTIVE — next action required:\n' +
+      '```json\n' +
+      JSON.stringify(directives, null, 2) +
+      '\n```';
+    contextParts.push(block);
+  }
+  if (contextParts.length > 0) {
     const envelope = {
       hookSpecificOutput: {
         hookEventName: 'UserPromptSubmit',
-        additionalContext: contextInjections.join('\n\n'),
+        additionalContext: contextParts.join('\n\n'),
       },
     };
     process.stdout.write(JSON.stringify(envelope));

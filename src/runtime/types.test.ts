@@ -348,7 +348,11 @@ describe('Verdict', () => {
       message: 'amend forbidden',
     });
     expect(parsed.level).toBe('block');
-    expect(parsed.message).toBe('amend forbidden');
+    // T-ASC ASC.3: Verdict is a discriminated union; narrow on `level` to
+    // access the message-bearing branch's fields.
+    if (parsed.level !== 'directive') {
+      expect(parsed.message).toBe('amend forbidden');
+    }
     expect(parsed.ruleId).toBeUndefined();
   });
 
@@ -477,6 +481,10 @@ describe('RuleResult (TS-only union)', () => {
       switch (r.kind) {
         case 'verdict':
           return `${r.verdict.level}:${r.verdict.message}`;
+        case 'directive':
+          // T-ASC ASC.3 — directive variant is a peer to verdict; surfaces
+          // the next_action's skill XOR tool target.
+          return `dir:${r.directive.next_action.skill ?? r.directive.next_action.tool ?? '?'}`;
         case 'no_verdict':
           return 'none';
         case 'error':

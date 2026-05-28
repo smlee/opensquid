@@ -43,7 +43,10 @@ import type { NotificationRouter, MulticastResult } from '../channels/router.js'
 import type { ChannelMessage, RoutingConfig } from '../channels/types.js';
 
 import type { RateLimiter } from './rate_limit.js';
-import type { Verdict } from './types.js';
+// T-ASC ASC.3: escalate only handles message-bearing verdicts. Directive
+// verdicts flow through DispatchResult.directives, never through the
+// escalation channel path.
+import type { MessageVerdict as Verdict } from './types.js';
 
 /**
  * Outcome of one escalate cycle. `escalated: true` ⇒ multicast attempted

@@ -68,7 +68,7 @@ import { partitionSkills } from '../pinned_skills.js';
 import { advanceSkillTicks, type SkillTicks } from '../session_state.js';
 import { RequiresCache, skillRequiresHold } from '../skill_requires.js';
 import { UnloadCondition, shouldUnload, type TickState } from '../unload_conditions.js';
-import type { DriftPolicy, Event, Pack, Skill } from '../types.js';
+import type { Directive, DriftPolicy, Event, Pack, Skill } from '../types.js';
 
 export interface DispatchResult {
   exitCode: 0 | 2;
@@ -88,6 +88,21 @@ export interface DispatchResult {
    * the recall context alongside the block message. Per Phase-2 lock #7.
    */
   contextInjections: string[];
+  /**
+   * T-ASC ASC.3 — aggregated `directive`-level verdicts from every rule
+   * that fired. Peer to `contextInjections`; same dispatcher-side flow
+   * (aggregate-everywhere, surface-via-prompt_submit). The UserPromptSubmit
+   * hook bin serializes the array as a fenced JSON block under a
+   * `⛔ DIRECTIVE` marker inside the same `additionalContext` envelope key
+   * (no new envelope keys — Claude Code 2.x doesn't reliably honor unknown
+   * ones).
+   *
+   * Block-verdict + directive COEXIST identically to inject_context: a
+   * block emitted by a LATER rule still raises exitCode 2, but directives
+   * emitted by EARLIER rules still surface on stdout so the agent sees
+   * both the next-action handoff and the block message.
+   */
+  directives: Directive[];
 }
 
 /**
@@ -201,8 +216,14 @@ export async function dispatchEvent(
   // skill. Kept across the full walk (verdict short-circuit still returns
   // any injections that fired BEFORE the verdict — by-design coexistence).
   const contextInjections: string[] = [];
-  // Stderr warnings buffer when an `inject_context` fires on an event kind
-  // OTHER than `prompt_submit`. Misconfiguration signal per Phase-2 lock #4.
+  // T-ASC ASC.3 — peer to contextInjections. Directives emitted on any
+  // event kind aggregate here; only the UserPromptSubmit hook bin actually
+  // surfaces them via the additionalContext envelope. Other hook bins
+  // discard with a warning (same posture as inject_context).
+  const directives: Directive[] = [];
+  // Stderr warnings buffer when an `inject_context` (or `directive`) fires
+  // on an event kind OTHER than `prompt_submit`. Misconfiguration signal
+  // per Phase-2 lock #4.
   let warnBuf = '';
 
   // CU.2 — skill-unload gate. Partition pinned (universal+preload, resident
@@ -286,6 +307,22 @@ export async function dispatchEvent(
           continue;
         }
 
+        // T-ASC ASC.3 — `directive` is a non-blocking terminal RuleResult.
+        // Aggregate and continue (mirrors inject_context). Only the
+        // UserPromptSubmit hook bin emits these via the envelope; other
+        // hook bins warn + drop.
+        if (result.kind === 'directive') {
+          if (event.kind === 'prompt_submit') {
+            directives.push({ ...result.directive, ruleId: rule.id });
+          } else {
+            warnBuf +=
+              `[opensquid] WARN: rule "${rule.id}" in skill "${skill.name}" (pack "${pack.name}") ` +
+              `emitted a directive on event kind "${event.kind}"; only "prompt_submit" surfaces ` +
+              `directives (drop). Update the skill's triggers: block.\n`;
+          }
+          continue;
+        }
+
         if (result.kind !== 'verdict') continue;
 
         // PR-followup: resolve drift-response policy from the pack's
@@ -314,6 +351,7 @@ export async function dispatchEvent(
               exitCode: 2,
               stderr: appendWarn(action.message, warnBuf),
               contextInjections,
+              directives,
             };
           case 'warn':
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
@@ -321,6 +359,7 @@ export async function dispatchEvent(
               exitCode: 0,
               stderr: appendWarn(action.message, warnBuf),
               contextInjections,
+              directives,
             };
           case 'halt':
           case 'notify_pause':
@@ -338,13 +377,14 @@ export async function dispatchEvent(
               exitCode: 0,
               stderr: appendWarn('', warnBuf),
               contextInjections,
+              directives,
             };
         }
       }
     }
   }
   emitDispatchMarker(event.kind, rulesWalked, packs.length);
-  return { exitCode: 0, stderr: appendWarn('', warnBuf), contextInjections };
+  return { exitCode: 0, stderr: appendWarn('', warnBuf), contextInjections, directives };
 }
 
 /**

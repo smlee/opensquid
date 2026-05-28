@@ -44,7 +44,15 @@
  * runtime/auto_correct.ts + runtime/escalate.ts (action-descriptor consumers).
  */
 
-import type { DriftPolicy, RuntimeAction, Verdict } from './types.js';
+import type { DriftPolicy, MessageVerdict, RuntimeAction } from './types.js';
+
+/**
+ * T-ASC ASC.3: drift_response only processes message-bearing verdicts.
+ * Directive-level verdicts flow through a separate dispatcher path
+ * (DispatchResult.directives aggregation, surfaced via UserPromptSubmit
+ * envelope) and never reach applyDriftResponse.
+ */
+type Verdict = MessageVerdict;
 
 // ---------------------------------------------------------------------------
 // DISPATCH — the lookup table. One entry per `DriftPolicy` variant; TS's

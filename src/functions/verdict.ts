@@ -45,17 +45,24 @@ import type { FunctionRegistry } from './registry.js';
 // ---------------------------------------------------------------------------
 // Zod arg schemas — `.strict()` rejects unexpected YAML keys at registry-call
 // time so typos surface as `arg_invalid` instead of silently dropping fields.
-// `level` mirrors `VerdictLevel` in runtime/types.ts; duplicated here so the
-// primitive doesn't depend on importing the schema (keeps the import graph
-// shallow and lets the registry validate without runtime-level types).
+//
+// T-ASC ASC.3: VerdictArgs becomes a discriminated union on `level` mirroring
+// the runtime Verdict schema (runtime/types.ts). The 4 message-bearing
+// levels keep `message: string`; the new `directive` level carries
+// `next_action: NextAction` instead. The shape stays in sync with
+// runtime/types.ts's Verdict via the imported NextAction schema — both
+// definitions parse the same wire representation.
 // ---------------------------------------------------------------------------
 
-const VerdictArgs = z
-  .object({
-    level: z.enum(['pass', 'block', 'warn', 'surface']),
-    message: z.string(),
-  })
-  .strict();
+import { NextAction } from '../runtime/types.js';
+
+const VerdictArgs = z.discriminatedUnion('level', [
+  z.object({ level: z.literal('pass'), message: z.string() }).strict(),
+  z.object({ level: z.literal('block'), message: z.string() }).strict(),
+  z.object({ level: z.literal('warn'), message: z.string() }).strict(),
+  z.object({ level: z.literal('surface'), message: z.string() }).strict(),
+  z.object({ level: z.literal('directive'), next_action: NextAction }).strict(),
+]);
 
 const HaltTaskArgs = z.object({ reason: z.string() }).strict();
 const RestartWorkflowArgs = z.object({ entry_skill: z.string() }).strict();
@@ -73,7 +80,11 @@ export function registerVerdictFunctions(registry: FunctionRegistry): void {
     durable: false,
     memoizable: false,
     costEstimateMs: 0.1,
-    execute: async ({ level, message }) => ok({ level, message }),
+    // T-ASC ASC.3: re-emit the parsed args as-is. The evaluator's verdict-
+    // primitive special-case (evaluator.ts) routes by `level`: directive
+    // values become a `kind: 'directive'` RuleResult, every other level
+    // becomes a `kind: 'verdict'` RuleResult.
+    execute: async (args) => ok(args),
   });
 
   registry.register({

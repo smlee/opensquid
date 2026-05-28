@@ -76,6 +76,118 @@ describe('verdict primitive', () => {
       expect(result.error.kind).toBe('arg_invalid');
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // T-ASC ASC.3 — directive-level verdict (structured next-action handoff)
+  // ---------------------------------------------------------------------------
+
+  it('accepts level: directive with next_action.skill + rationale', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+    const result = await reg.call(
+      'verdict',
+      {
+        level: 'directive',
+        next_action: {
+          skill: 'task-spec-author',
+          args: { pre_research_path: '/abs/p.md' },
+          rationale: 'pre-research landed — author the spec next.',
+        },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const v = result.value as { level: string; next_action: { skill?: string } };
+      expect(v.level).toBe('directive');
+      expect(v.next_action.skill).toBe('task-spec-author');
+    }
+  });
+
+  it('accepts level: directive with next_action.tool + rationale (XOR)', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+    const result = await reg.call(
+      'verdict',
+      {
+        level: 'directive',
+        next_action: {
+          tool: 'TaskCreate',
+          args: { metadata: { taskId: 'ASC.X' } },
+          rationale: 'spec on disk — load tasks.',
+        },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects level: directive with BOTH skill AND tool (XOR refine)', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+    const result = await reg.call(
+      'verdict',
+      {
+        level: 'directive',
+        next_action: {
+          skill: 'x',
+          tool: 'y',
+          rationale: 'ambiguous',
+        },
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe('arg_invalid');
+  });
+
+  it('rejects level: directive with NEITHER skill NOR tool (XOR refine)', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+    const result = await reg.call(
+      'verdict',
+      { level: 'directive', next_action: { rationale: 'orphan' } },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects level: directive with missing rationale', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+    const result = await reg.call(
+      'verdict',
+      { level: 'directive', next_action: { skill: 'x' } },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects level: directive carrying a stray message: field (.strict)', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+    const result = await reg.call(
+      'verdict',
+      {
+        level: 'directive',
+        next_action: { skill: 'x', rationale: 'r' },
+        message: 'unexpected',
+      },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects level: pass carrying next_action (.strict)', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx();
+    const result = await reg.call(
+      'verdict',
+      { level: 'pass', message: 'm', next_action: { skill: 'x', rationale: 'r' } },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe('halt_task primitive', () => {
