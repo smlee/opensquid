@@ -26,15 +26,40 @@
  */
 
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, '../../..');
 const TSX_BIN = resolve(REPO_ROOT, 'node_modules/.bin/tsx');
+
+// ASG.1: isolate OPENSQUID_HOME so the spawned hook bins write session state
+// into a tmp dir, not the dev's real ~/.opensquid/. Without this, every
+// `pnpm test` run scribbled sessions/test-session/state/tool-ledger.json +
+// overwrote .current-session = 'test-session' in the real home — silently
+// breaking downstream `opensquid automation` CLI invocations (the CLI's
+// .current-session fallback would write the flag to the wrong session id).
+// Mirrors session_id.test.ts:25-43 (the proven isolation pattern in this repo).
+let tempHome: string;
+let priorHome: string | undefined;
+const REAL_HOME_OPENSQUID = join(homedir(), '.opensquid');
+
+beforeEach(async () => {
+  priorHome = process.env.OPENSQUID_HOME;
+  tempHome = await mkdtemp(join(tmpdir(), 'opensquid-hooks-integration-'));
+  process.env.OPENSQUID_HOME = tempHome;
+});
+
+afterEach(async () => {
+  if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+  else process.env.OPENSQUID_HOME = priorHome;
+  await rm(tempHome, { recursive: true, force: true });
+});
 
 interface RunResult {
   exitCode: number;
@@ -114,5 +139,47 @@ describe('hook subprocess integration', () => {
     const r = await runHook('pre-tool-use.ts', stdin);
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
+  }, 15000);
+});
+
+/**
+ * ASG.1 regression net. The previous bug had hooks.integration.test.ts using
+ * `CLAUDE_SESSION_ID=test-session` with NO `OPENSQUID_HOME` isolation, so the
+ * hook bins wrote `sessions/<id>/state/tool-ledger.json` into the dev's REAL
+ * `~/.opensquid/`.
+ *
+ * Targets `state/tool-ledger.json` (NOT `automation.flag`) because that's the
+ * file `pre-tool-use`'s `appendTool` path actually writes — verified at
+ * `pre-tool-use.ts:83-88` + `session_state.ts` `appendTool` → `sessionLogFile(...,
+ * 'tool-ledger')`. `automation.flag` is only written by the `opensquid
+ * automation on` CLI, never by a hook, so asserting on it would be toothless.
+ *
+ * Uses a per-test uuid-shaped session id so the assertion can't false-positive
+ * on pre-existing state under a shared name. With isolation present (the
+ * beforeEach above), the hook writes to `tempHome` — nothing under the real
+ * home's `sessions/<probeSessionId>/` ever materializes. Removing the
+ * `OPENSQUID_HOME = tempHome` line in beforeEach causes this test to FAIL —
+ * the regression has teeth.
+ */
+describe('hook subprocess integration — does not contaminate real ~/.opensquid', () => {
+  it('writes nothing under real ~/.opensquid/sessions/<probe-id>/state/ on a hook invocation', async () => {
+    const probeSessionId = `asg1-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const probedFile = join(
+      REAL_HOME_OPENSQUID,
+      'sessions',
+      probeSessionId,
+      'state',
+      'tool-ledger.json',
+    );
+
+    const stdin = JSON.stringify({
+      tool: 'Bash',
+      args: { command: 'git status' },
+      session_id: probeSessionId,
+    });
+    await runHook('pre-tool-use.ts', stdin);
+
+    const realHomeWrite = await stat(probedFile).catch(() => null);
+    expect(realHomeWrite).toBeNull();
   }, 15000);
 });
