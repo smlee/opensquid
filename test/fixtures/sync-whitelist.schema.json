@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "sync-whitelist.schema.json",
+  "title": "T-ASC ASC.6 Fixture-Sync Whitelist",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["pairs"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "_doc": { "type": "string" },
+    "pairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["live_pack_id", "live_skill_name", "fixture_path"],
+        "properties": {
+          "live_pack_id": { "type": "string", "minLength": 1 },
+          "live_skill_name": { "type": "string", "minLength": 1 },
+          "fixture_path": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

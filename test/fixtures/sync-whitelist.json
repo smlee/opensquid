@@ -1,0 +1,16 @@
+{
+  "$schema": "./sync-whitelist.schema.json",
+  "_doc": "T-ASC ASC.6 — whitelist of (live skill, CI fixture) pairs that MUST stay byte-identical. The matcher at src/packs/fixture_sync.test.ts enforces this; the dev tool scripts/sync-fixtures-from-live.ts updates fixtures from the live source on demand. Adding a new pair requires updating this whitelist + running pnpm sync-fixtures in the same commit.",
+  "pairs": [
+    {
+      "live_pack_id": "sangmin-personal-rules",
+      "live_skill_name": "scope-decomposer",
+      "fixture_path": "test/fixtures/scope-decomposer-pack/skills/scope-decomposer/skill.yaml"
+    },
+    {
+      "live_pack_id": "sangmin-personal-rules",
+      "live_skill_name": "workflow",
+      "fixture_path": "test/fixtures/workflow-gate-pack/skills/workflow/skill.yaml"
+    }
+  ]
+}
