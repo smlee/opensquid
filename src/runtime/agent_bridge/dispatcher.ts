@@ -14,12 +14,14 @@
  *      `runAgentTurnSubscription` (subscription mode) with the coalesced
  *      text per the resolved `agentLoopOptions.mode` discriminator,
  *      persist via `SessionManager.appendTurn`, forward reply.
- *   3. Enforce the per-session mutex+queue policy closing the
- *      `FIXME(WAB.5)` in session_manager.ts: at most ONE in-flight
- *      turn per session + ONE queued coalesced batch. Subsequent
- *      flushes coalesce into the queue slot up to
- *      MAX_QUEUE_COALESCE_ATTEMPTS; the next attempt DROPS with
- *      `onWarn` so operators can spot flooding.
+ *   3. Enforce the per-session mutex+queue policy: at most ONE in-flight
+ *      turn per session (the `inFlight` map below) + ONE queued coalesced
+ *      batch (the `pendingQueue` map, depth 1). Subsequent flushes
+ *      coalesce into the queue slot up to `MAX_QUEUE_COALESCE_ATTEMPTS`
+ *      (= 2); the next attempt DROPS with `onWarn` so operators can spot
+ *      flooding. This dispatcher is the sole production caller of
+ *      `SessionManager.appendTurn` (regression-locked by
+ *      `appendturn_sole_caller.test.ts`).
  *
  * Mode dispatch (WAB-SUB.2):
  *   `agentLoopOptions` is a discriminated union — `.mode` is the

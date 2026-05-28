@@ -26,8 +26,13 @@
  *     client is shared.
  *   - Does NOT compute cache-control breakpoints. Those are derived from
  *     `history` positions at request-time by the agent loop (WAB.4).
- *   - Does NOT serialize concurrent appends to the same session. The batch
- *     coordinator (WAB.5) owns the per-session mutex; see FIXME below.
+ *   - Does NOT serialize concurrent appends to the same session. This is
+ *     intentional: the manager is the unsynchronized data plane; the
+ *     control plane (`ChatDispatcher` in `dispatcher.ts`) owns the
+ *     per-session mutex+queue policy and is the sole production caller of
+ *     `appendTurn` (regression-locked by `appendturn_sole_caller.test.ts`).
+ *     See the `Concurrency contract:` paragraph on `appendTurn` below for
+ *     the policy details.
  *
  * Imports from: lru-cache, ./session_persistence.js, ./types.js.
  * Imported by: (future) dispatcher.ts, daemon.ts.
@@ -196,10 +201,14 @@ export class SessionManager {
    * entries would corrupt the order on disk (the evicted state's flush
    * already covers it).
    *
-   * FIXME(WAB.5): No per-session mutex. Two adaptive batches firing
-   * near-simultaneously for the same session could interleave appends.
-   * The batch coordinator (WAB.5) owns the mutex; this manager assumes
-   * the caller has already serialized.
+   * Concurrency contract: this method ASSUMES the caller has serialized
+   * concurrent calls for the same session. The control plane —
+   * `ChatDispatcher.handleFlush` + `runTurnChain` in `dispatcher.ts` —
+   * enforces this via a per-session `inFlight` map (depth 1) plus a
+   * `pendingQueue` map (depth 1, coalesce up to MAX_QUEUE_COALESCE_ATTEMPTS,
+   * then DROP + warn). Adding a SECOND production caller would violate
+   * the contract; the `appendturn_sole_caller.test.ts` regression net
+   * catches that drift.
    */
   async appendTurn(key: SessionKey, entries: ChatHistoryEntry[]): Promise<void> {
     const slug = sessionKeyString(key);
