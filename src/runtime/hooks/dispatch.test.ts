@@ -429,11 +429,9 @@ describe('dispatchEvent', () => {
       argSchema: z.record(z.unknown()),
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async () => {
-        if (firstCall) {
-          firstCall = false;
-          return ok(directiveVerdict);
-        }
-        return ok({ level: 'block', message: 'STOP' });
+        const v: unknown = firstCall ? directiveVerdict : { level: 'block', message: 'STOP' };
+        firstCall = false;
+        return ok(v);
       },
     });
     const rule1: Rule = {

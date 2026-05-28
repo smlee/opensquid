@@ -16,25 +16,26 @@
 name: workflow
 load: preload
 when_to_load: []
+# T-ASC ASC.4: automation+task gate hoisted to the dispatcher boundary.
+# Behavior-preserving: rule still fires on git-commit tool_calls; the
+# match_command filter and the workflow_phases_complete check stay rule-local
+# (they're filter conditions, not gate conditions).
+requires:
+  - kind: automation_mode_on
+  - kind: active_task_present
 rules:
   - id: workflow-phases-required
     process:
-      - call: is_automation_mode
-        as: auto
-      - call: has_active_task
-        if: 'auto.value == true'
-        as: task
       - call: match_command
-        if: 'auto.value == true && task.present == true'
         args:
           pattern: 'git\s+commit\b'
           target: tool_args.command
         as: committing
       - call: workflow_phases_complete
-        if: 'auto.value == true && task.present == true && committing'
+        if: 'committing'
         as: phases
       - call: verdict
-        if: 'auto.value == true && task.present == true && committing && phases.complete == false'
+        if: 'committing && phases.complete == false'
         args:
           level: block
           message: >-

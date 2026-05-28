@@ -33,6 +33,7 @@ import type { Event } from '../runtime/event.js';
 import { evaluateProcess } from '../runtime/evaluator.js';
 import { sessionStateFile } from '../runtime/paths.js';
 import { writeActiveTask, type ActiveTask } from '../runtime/session_state.js';
+import { RequiresCache, skillRequiresHold, type SkillRequires } from '../runtime/skill_requires.js';
 import { REQUIRED_PHASES } from '../runtime/workflow_phases.js';
 import type { ProcessStep, RuleResult } from '../runtime/types.js';
 
@@ -69,6 +70,12 @@ const commitEvent: Event = {
 };
 
 let gateSteps: ProcessStep[];
+// T-ASC ASC.4: the skill's `requires:` block is now hoisted out of the rule
+// body to the dispatcher boundary. The behavior tests below mimic the
+// dispatcher's flow: read `requires`, gate, then walk the rule. Tests that
+// previously asserted dormancy via the rule body's `if:` short-circuit now
+// assert dormancy via the precondition gate (same external observation).
+let gateRequires: readonly SkillRequires[];
 let tempHome: string;
 let priorHome: string | undefined;
 
@@ -92,6 +99,7 @@ beforeEach(async () => {
   const rule = skill.rules.find((r) => r.id === 'workflow-phases-required');
   if (rule?.kind !== 'track_check') throw new Error('workflow-phases-required not a track_check');
   gateSteps = rule.process;
+  gateRequires = skill.requires;
 });
 
 afterEach(async () => {
@@ -101,6 +109,11 @@ afterEach(async () => {
 });
 
 async function run(event: Event): Promise<RuleResult> {
+  // T-ASC ASC.4: mimic the dispatcher's gate-then-walk flow. The `requires:`
+  // block was hoisted from the rule body to the skill level; we gate here
+  // with the same evaluator the dispatcher uses, then walk the steps.
+  const hold = await skillRequiresHold(gateRequires, SID, new RequiresCache());
+  if (!hold) return { kind: 'no_verdict' };
   return evaluateProcess(gateSteps, ctxWith(event), buildTestRegistry());
 }
 
