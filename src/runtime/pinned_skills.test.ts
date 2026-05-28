@@ -26,6 +26,7 @@ function makeSkill(name: string, load: LoadMode, opts: { unloads_when?: unknown[
     name,
     load,
     when_to_load: [],
+    requires: [],
     unloads_when: opts.unloads_when ?? [],
     triggers: [{ kind: 'tool_call' }],
     rules: [],

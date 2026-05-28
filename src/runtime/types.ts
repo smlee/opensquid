@@ -83,6 +83,15 @@ export {
 // re-export above (NodeNext doesn't let a file consume its own re-exports
 // without a separate import statement).
 import { Trigger, defaultTriggers } from './event.js';
+// T-ASC ASC.2: the Skill schema's new `requires:` field references
+// `SkillRequires` from the precondition evaluator module.
+import { SkillRequires } from './skill_requires.js';
+
+// Re-export so external callers can `import { SkillRequires } from
+// '../runtime/types.js'` (conventional barrel) — mirrors how Trigger
+// is exported via the './event.js' re-export above.
+export { SkillRequires } from './skill_requires.js';
+export type { RequiresCache } from './skill_requires.js';
 
 // ---------------------------------------------------------------------------
 // Rule + ProcessStep — rules are processes (sequences of primitive calls)
@@ -169,6 +178,14 @@ export const Skill = z.object({
   name: z.string(),
   load: LoadMode.default('lazy'),
   when_to_load: z.array(z.unknown()).default([]),
+  // T-ASC ASC.2: AND-semantic preconditions evaluated at the dispatcher
+  // boundary BEFORE walking rules. Same shape as the YAML-side `requires:`
+  // block (discriminated-union via `SkillRequires`). Empty array trivially
+  // holds — back-compat with every Phase 1+ pack. Each entry is a
+  // discriminated-union variant (kinds: automation_mode_on,
+  // active_task_present, chain_stage); see `skill_requires.ts` for the
+  // evaluator + RequiresCache.
+  requires: z.array(SkillRequires).default([]),
   unloads_when: z.array(z.unknown()).default([]),
   // AUTO.1: same shape as the YAML-side `triggers:` block. The runtime view
   // is the post-load contract; refusing empty arrays here keeps the

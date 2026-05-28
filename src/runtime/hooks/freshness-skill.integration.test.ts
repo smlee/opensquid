@@ -105,6 +105,7 @@ function buildFreshnessPack(): Pack {
     name: 'verify-before-citing-memory',
     load: 'preload',
     when_to_load: [],
+    requires: [],
     unloads_when: [],
     triggers: [{ kind: 'stop' }],
     rules: [rule],

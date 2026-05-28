@@ -25,6 +25,10 @@ import { z } from 'zod';
 import { FunctionRegistry } from '../../functions/registry.js';
 import { ok } from '../result.js';
 import type { TickState } from '../unload_conditions.js';
+import { setAutomationFlag } from '../automation_state.js';
+import { transitionChainStage } from '../chain_state.js';
+import { writeActiveTask } from '../session_state.js';
+import type { SkillRequires } from '../skill_requires.js';
 import type {
   Pack,
   Rule,
@@ -58,11 +62,16 @@ function makePack(
   name: string,
   rules: Rule[],
   triggers: Trigger[] = [{ kind: 'tool_call' }],
+  requires: SkillRequires[] = [],
 ): Pack {
   const skill: Skill = {
     name: `${name}-skill`,
     load: 'preload',
     when_to_load: [],
+    // T-ASC ASC.2: skills now carry a `requires:` field; defaulted to [] to
+    // preserve back-compat for every existing dispatch test. Tests targeting
+    // the precondition gate pass the explicit array via the new parameter.
+    requires,
     unloads_when: [],
     triggers,
     rules,
@@ -180,6 +189,156 @@ describe('dispatchEvent', () => {
     const onSched = await dispatchEvent(scheduleEvent, [pack], registry, 'sess-1');
     expect(onTool).toEqual({ exitCode: 2, stderr: 'multi fired', contextInjections: [] });
     expect(onSched).toEqual({ exitCode: 2, stderr: 'multi fired', contextInjections: [] });
+  });
+
+  // -------------------------------------------------------------------------
+  // T-ASC ASC.2 — Skill.requires AND-precondition gate
+  //
+  // Slots between the trigger filter and the rule walk. AND-semantics across
+  // 3 kinds (automation_mode_on, active_task_present, chain_stage). Empty
+  // requires:[] is back-compat: every existing test above relies on the
+  // default empty array and still passes.
+  // -------------------------------------------------------------------------
+
+  it('ASC.2: skill with requires=[automation_mode_on] and flag absent → no verdict', async () => {
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'should-not-fire' });
+    const pack = makePack(
+      'p1',
+      [verdictRule],
+      [{ kind: 'tool_call' }],
+      [{ kind: 'automation_mode_on' }],
+    );
+    const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-1');
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+  });
+
+  it('ASC.2: skill with requires=[automation_mode_on] and flag present → verdict fires', async () => {
+    await setAutomationFlag('sess-asc2-2');
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'auto-on fired' });
+    const pack = makePack(
+      'p1',
+      [verdictRule],
+      [{ kind: 'tool_call' }],
+      [{ kind: 'automation_mode_on' }],
+    );
+    const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-2');
+    expect(result).toEqual({ exitCode: 2, stderr: 'auto-on fired', contextInjections: [] });
+  });
+
+  it('ASC.2: skill with requires=[automation_mode_on, active_task_present] AND-fails on missing task', async () => {
+    await setAutomationFlag('sess-asc2-3');
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'should-not-fire' });
+    const pack = makePack(
+      'p1',
+      [verdictRule],
+      [{ kind: 'tool_call' }],
+      [{ kind: 'automation_mode_on' }, { kind: 'active_task_present' }],
+    );
+    const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-3');
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+  });
+
+  it('ASC.2: skill with requires=[chain_stage:researched] fires only when chain is researched', async () => {
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'researched fired' });
+    const pack = makePack(
+      'p1',
+      [verdictRule],
+      [{ kind: 'tool_call' }],
+      [{ kind: 'chain_stage', stage: 'researched' }],
+    );
+    // Initial: chain is idle → no fire.
+    const idleResult = await dispatchEvent(event, [pack], registry, 'sess-asc2-4');
+    expect(idleResult.exitCode).toBe(0);
+    // Transition chain to researched → fires.
+    await transitionChainStage('sess-asc2-4', 'researched');
+    const researchedResult = await dispatchEvent(event, [pack], registry, 'sess-asc2-4');
+    expect(researchedResult).toEqual({
+      exitCode: 2,
+      stderr: 'researched fired',
+      contextInjections: [],
+    });
+    // Transition past → no longer fires.
+    await transitionChainStage('sess-asc2-4', 'spec_authored');
+    const pastResult = await dispatchEvent(event, [pack], registry, 'sess-asc2-4');
+    expect(pastResult.exitCode).toBe(0);
+  });
+
+  it('ASC.2: skill with empty requires:[] retains back-compat (rules walk)', async () => {
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'no-req fired' });
+    const pack = makePack('p1', [verdictRule]);
+    // Empty requires:[] is the default — trivially holds.
+    const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-5');
+    expect(result).toEqual({ exitCode: 2, stderr: 'no-req fired', contextInjections: [] });
+  });
+
+  it('ASC.2: requires gate runs BEFORE rule walk (rule primitives never called when gate fails)', async () => {
+    // Build a registry where the verdict primitive THROWS — if the rule walk
+    // ran, the dispatch would surface a stderr error. The gate must prevent
+    // the rule from ever calling the primitive.
+    const r = new FunctionRegistry();
+    r.register({
+      name: 'verdict',
+      argSchema: z.record(z.unknown()),
+      // eslint-disable-next-line @typescript-eslint/require-await -- async to match FunctionDef contract
+      execute: async () => {
+        throw new Error('PRIMITIVE_CALLED — gate did not short-circuit');
+      },
+    });
+    const pack = makePack(
+      'p1',
+      [verdictRule],
+      [{ kind: 'tool_call' }],
+      [
+        { kind: 'automation_mode_on' }, // flag absent → gate fails → no rule walk
+      ],
+    );
+    const result = await dispatchEvent(event, [pack], r, 'sess-asc2-6');
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain('PRIMITIVE_CALLED');
+  });
+
+  it('ASC.2: requires gate runs AFTER trigger filter (wrong-kind event short-circuits before stat)', async () => {
+    // The skill has a chain_stage precondition and only subscribes to
+    // schedule events. A tool_call event should be filtered out by the
+    // trigger check FIRST, before the precondition's chain-state read runs.
+    // We assert by passing an active task + automation flag + chain stage
+    // and noting that the OK-no-fire outcome means the trigger filter
+    // intercepted (no verdict surfaced on the wrong-kind path).
+    await setAutomationFlag('sess-asc2-7');
+    await transitionChainStage('sess-asc2-7', 'researched');
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'should-not-fire' });
+    const pack = makePack(
+      'p1',
+      [verdictRule],
+      [{ kind: 'schedule', cron: '0 9 * * 1' }],
+      [{ kind: 'chain_stage', stage: 'researched' }],
+    );
+    const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-7');
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [] });
+  });
+
+  it('ASC.2: requires:[] all-hold AND-chain — 3 preconds met → fires', async () => {
+    const sid = 'sess-asc2-8';
+    await setAutomationFlag(sid);
+    await writeActiveTask(sid, {
+      id: 'ta',
+      subject: 'x',
+      started_at: new Date().toISOString(),
+    });
+    await transitionChainStage(sid, 'tasks_loaded');
+    const registry = buildRegistryWithVerdict({ level: 'block', message: '3-AND fired' });
+    const pack = makePack(
+      'p1',
+      [verdictRule],
+      [{ kind: 'tool_call' }],
+      [
+        { kind: 'automation_mode_on' },
+        { kind: 'active_task_present' },
+        { kind: 'chain_stage', stage: 'tasks_loaded' },
+      ],
+    );
+    const result = await dispatchEvent(event, [pack], registry, sid);
+    expect(result).toEqual({ exitCode: 2, stderr: '3-AND fired', contextInjections: [] });
   });
 
   // -------------------------------------------------------------------------
@@ -503,6 +662,7 @@ describe('dispatchEvent', () => {
         name: 's',
         load: 'lazy',
         when_to_load: [],
+        requires: [],
         unloads_when,
         triggers: [{ kind: 'prompt_submit' }],
         rules: [],
@@ -574,6 +734,9 @@ describe('dispatchEvent', () => {
         name: `${opts.name}-skill`,
         load: opts.load,
         when_to_load: opts.when_to_load ?? [],
+        // T-ASC ASC.2: requires field is now required on the runtime Skill
+        // type; empty array is back-compat (precondition trivially holds).
+        requires: [],
         unloads_when: opts.unloads_when,
         triggers: [{ kind: 'prompt_submit' }],
         rules: [{ id: `${opts.name}-rule`, kind: 'track_check', process: [{ call: 'verdict' }] }],

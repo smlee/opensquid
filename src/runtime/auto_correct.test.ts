@@ -108,6 +108,7 @@ function makePack(opts: {
         name: skillName,
         load: 'lazy',
         when_to_load: [],
+        requires: [],
         unloads_when: [],
         triggers: [{ kind: 'tool_call' }],
         rules: [{ id: 'corrective-rule', kind: 'track_check', process: steps }],

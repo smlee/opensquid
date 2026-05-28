@@ -37,6 +37,7 @@ function scheduleSkill(name: string, cronExpr: string): Pack['skills'][number] {
     name,
     load: 'lazy',
     when_to_load: [],
+    requires: [],
     unloads_when: [],
     triggers: [{ kind: 'schedule', cron: cronExpr }],
     rules: [],
@@ -74,6 +75,7 @@ describe('buildScheduleRegistry', () => {
         name: 'multi',
         load: 'lazy',
         when_to_load: [],
+        requires: [],
         unloads_when: [],
         triggers: [
           { kind: 'tool_call' },
@@ -94,6 +96,7 @@ describe('buildScheduleRegistry', () => {
         name: 's',
         load: 'lazy',
         when_to_load: [],
+        requires: [],
         unloads_when: [],
         triggers: [{ kind: 'schedule' }],
         rules: [],

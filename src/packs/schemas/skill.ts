@@ -30,6 +30,7 @@ import { z } from 'zod';
 
 import { parseExpression } from '../../runtime/evaluator/expression/index.js';
 import { Matcher } from '../../runtime/load_matchers.js';
+import { SkillRequires } from '../../runtime/skill_requires.js';
 import { EventKind, Trigger, defaultTriggers } from '../../runtime/types.js';
 import { UnloadCondition } from '../../runtime/unload_conditions.js';
 
@@ -278,6 +279,14 @@ export const Skill = z.object({
   name: z.string().min(1),
   load: LoadModeEnum.default('lazy'),
   when_to_load: z.array(Matcher).default([]),
+  // T-ASC ASC.2: AND-semantic preconditions evaluated at the dispatcher
+  // boundary BEFORE walking rules. Empty array trivially holds (back-compat
+  // with every Phase 1+ pack — defaults applied). Each entry is a
+  // discriminated-union variant from `runtime/skill_requires.ts` (kinds:
+  // automation_mode_on, active_task_present, chain_stage). A skill that
+  // declares `requires:` short-circuits at the dispatcher when any
+  // precondition fails — its rules don't evaluate.
+  requires: z.array(SkillRequires).default([]),
   unloads_when: z.array(UnloadCondition).default([]),
   // AUTO.1: `triggers:` declares which `Event` kinds fire this skill.
   // - omitted        → default to `[{kind: 'tool_call'}]` via the factory

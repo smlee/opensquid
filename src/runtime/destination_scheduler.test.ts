@@ -78,6 +78,7 @@ function makeDestinationPack(opts: {
         name: opts.skillName ?? 's1',
         load: 'lazy',
         when_to_load: [],
+        requires: [],
         unloads_when: [],
         triggers: [{ kind: 'tool_call' }],
         rules: [
@@ -171,6 +172,7 @@ describe('maybeRunDestinationChecks', () => {
             name: 's',
             load: 'lazy',
             when_to_load: [],
+            requires: [],
             unloads_when: [],
             triggers: [{ kind: 'tool_call' }],
             rules: [
@@ -222,6 +224,7 @@ describe('maybeRunDestinationChecks', () => {
             name: 's',
             load: 'lazy',
             when_to_load: [],
+            requires: [],
             unloads_when: [],
             triggers: [{ kind: 'tool_call' }],
             rules: [

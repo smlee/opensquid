@@ -23,6 +23,7 @@ function mkSkill(name: string, prose?: string): Skill {
     name,
     load: 'lazy',
     when_to_load: [],
+    requires: [],
     unloads_when: [],
     triggers: [{ kind: 'tool_call' }],
     rules: [],

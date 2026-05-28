@@ -98,6 +98,7 @@ function packWithGateA(): Pack {
     name: 'scope-decomposer',
     load: 'preload',
     when_to_load: [],
+    requires: [],
     unloads_when: [],
     triggers: [{ kind: 'tool_call' }],
     rules: [scopeBeforeCodeRule],

@@ -66,6 +66,7 @@ import { evaluateProcess } from '../evaluator.js';
 import { Matcher, matchesEvent } from '../load_matchers.js';
 import { partitionSkills } from '../pinned_skills.js';
 import { advanceSkillTicks, type SkillTicks } from '../session_state.js';
+import { RequiresCache, skillRequiresHold } from '../skill_requires.js';
 import { UnloadCondition, shouldUnload, type TickState } from '../unload_conditions.js';
 import type { DriftPolicy, Event, Pack, Skill } from '../types.js';
 
@@ -221,6 +222,11 @@ export async function dispatchEvent(
     sessionId,
   );
 
+  // T-ASC ASC.2: per-fire precondition cache. ONE instance per dispatchEvent
+  // call (NOT module-level — hook bins are short-lived processes; per-call
+  // scope amortizes within one fire across N skills sharing a precondition).
+  const requiresCache = new RequiresCache();
+
   for (const pack of packs) {
     for (const skill of pack.skills) {
       // CU.2: a DYNAMIC skill whose unload condition fired this event is
@@ -233,6 +239,17 @@ export async function dispatchEvent(
       // Using `.some` rather than `.includes` because each trigger is a
       // discriminated-union object, not a bare string.
       if (!skill.triggers.some((t) => t.kind === event.kind)) continue;
+      // T-ASC ASC.2: AND-precondition gate at the dispatcher boundary. Slots
+      // AFTER the trigger filter (so a wrong-kind event short-circuits before
+      // any stat) and BEFORE the rule walk (so rule-local guards never see a
+      // skill that the dispatcher already deactivated). Empty `requires:`
+      // trivially holds — back-compat with every Phase 1+ pack. Per L5
+      // posture: any non-ENOENT stat error inside the evaluator is treated as
+      // engaged (the gate walks rules), never silently disabled.
+      if (skill.requires.length > 0) {
+        const hold = await skillRequiresHold(skill.requires, sessionId, requiresCache);
+        if (!hold) continue;
+      }
       for (const rule of skill.rules) {
         // Phase 4: destination_check rules fire on the scheduler tick
         // (`destination_scheduler.ts` → `check_destination` primitive), not
