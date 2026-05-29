@@ -143,10 +143,10 @@ describe('discoverActivePacks — VOCAB.1 backward-compat', () => {
   beforeEach(() => {
     stderrCapture = [];
     originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
+    process.stderr.write = (chunk: string | Uint8Array) => {
       stderrCapture.push(typeof chunk === 'string' ? chunk : chunk.toString());
       return true;
-    });
+    };
   });
 
   afterEach(() => {
