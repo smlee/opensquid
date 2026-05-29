@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * T-ASC ASC.6 dev tool — sync CI fixtures from the live personal-pack
- * source under `~/.opensquid/codexes/<pack-id>/skills/<name>/skill.yaml`.
+ * source under `~/.opensquid/packs/<pack-id>/skills/<name>/skill.yaml`.
  *
  * Reads `test/fixtures/sync-whitelist.json`, copies each whitelisted
  * live skill verbatim to its declared fixture path. Idempotent: re-runs
@@ -36,7 +36,7 @@ interface Whitelist {
 }
 
 async function main(): Promise<void> {
-  const codexesRoot = join(homedir(), '.opensquid', 'codexes');
+  const packsRoot = join(homedir(), '.opensquid', 'packs');
   const whitelistPath = join(process.cwd(), 'test/fixtures/sync-whitelist.json');
   const filter = process.argv[2];
 
@@ -56,7 +56,7 @@ async function main(): Promise<void> {
       continue;
     }
     const livePath = join(
-      codexesRoot,
+      packsRoot,
       pair.live_pack_id,
       'skills',
       pair.live_skill_name,

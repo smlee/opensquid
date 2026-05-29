@@ -52,7 +52,7 @@ import { DriftPreventionReport } from './drift-prevention-report.js';
 import {
   REPO_ROOT,
   buildAutoMemoryDir,
-  buildSangminCodex,
+  buildSangminPack,
   spawnHookBin,
 } from './__util/scenario-fixtures.js';
 
@@ -107,7 +107,7 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
     process.env.OPENSQUID_HOME = tmpOpensquidHome;
     process.env.LOOP_HOME = tmpOpensquidHome;
     if (bin) process.env.OPENSQUID_ENGINE_BIN = bin;
-    await buildSangminCodex(tmpOpensquidHome);
+    await buildSangminPack(tmpOpensquidHome);
     // Spawn ONCE — every scenario reuses this client (and the underlying
     // singleton-acquired daemon process). Fail fast in beforeAll rather
     // than burning the first scenario's timeout on a bad spawn.

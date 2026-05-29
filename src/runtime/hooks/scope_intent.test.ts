@@ -3,7 +3,7 @@
  *
  * The regex is contracted to be a SUPERSET of the personal-pack
  * `scope-intent-nudge` rule's patterns at
- * `~/.opensquid/codexes/sangmin-personal-rules/skills/scope-decomposer/skill.yaml:33-39`.
+ * `~/.opensquid/packs/sangmin-personal-rules/skills/scope-decomposer/skill.yaml:33-39`.
  * We mirror those patterns here as fixtures: every example string that the
  * pack patterns would match MUST also match SCOPE_INTENT_REGEX, or the chain-
  * state transition to 'scoping' would lag behind the nudge verdict and the

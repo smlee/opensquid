@@ -1,6 +1,6 @@
 # sangmin-personal drift response policy.
 #
-# Default per project_opensquid_drift_response_is_codex_declared:
+# Default per project_opensquid_drift_response_is_pack_declared:
 # `full_stop_and_redo` — halt the entire task, restart from the user's
 # defined workflow. Per-rule overrides downshift to softer policies where
 # the legacy rule was a `severity: warn` (honesty-ledger) or where a

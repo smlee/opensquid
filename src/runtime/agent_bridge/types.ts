@@ -175,7 +175,7 @@ export type ChatHistoryEntry = z.infer<typeof chatHistoryEntrySchema>;
 //   - `modelAlias` is the RESOLVED model id string (alias→id resolution
 //     happens at session creation in WAB.6; the state carries the final
 //     string the SDK consumes).
-//   - `packId` (NOT `codexId`) per pack-rename lock.
+//   - `packId` (NOT `packId`) per pack-rename lock.
 //   - `turnInFlight` guards reentrant batches; the batch coordinator
 //     (WAB.5) reads + writes it under a per-session mutex.
 //

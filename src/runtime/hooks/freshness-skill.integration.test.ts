@@ -4,7 +4,7 @@
  * Wires the real evaluator + dispatcher + the two new G.5 primitives
  * (text_pattern_match + session_tool_history) against a hand-built Pack
  * that mirrors the YAML shipped at
- * `~/.opensquid/codexes/sangmin-personal-rules/skills/verify-before-citing-memory/skill.yaml`.
+ * `~/.opensquid/packs/sangmin-personal-rules/skills/verify-before-citing-memory/skill.yaml`.
  *
  * Covers spec acceptance criteria (lines 1082–1085 + 1094–1095):
  *   - Stop with drift phrase + no tool calls this turn → warn verdict

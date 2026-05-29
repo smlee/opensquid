@@ -65,7 +65,7 @@ function buildRealRegistry(): FunctionRegistry {
 
 /**
  * The `scope-before-code` rule, hand-built to match the live YAML at
- * `~/.opensquid/codexes/sangmin-personal-rules/skills/scope-decomposer/skill.yaml`
+ * `~/.opensquid/packs/sangmin-personal-rules/skills/scope-decomposer/skill.yaml`
  * lines 110-130. Authored in code so the test doesn't depend on the user's
  * pack being installed (works in CI).
  */

@@ -3,7 +3,7 @@
  *
  * Authoritative source: `docs/opensquid-real-design.md` §"Skill format" +
  * §"Skill properties" + memory `project_opensquid_modular_function_skill_separation`
- * + `project_opensquid_codex_load_hybrid`.
+ * + `project_opensquid_pack_load_hybrid`.
  *
  * A skill is a unit of work-discipline that loads + unloads dynamically based
  * on declared conditions. Rules inside the skill express checks as PROCESSES

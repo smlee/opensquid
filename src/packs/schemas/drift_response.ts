@@ -2,7 +2,7 @@
  * Zod schema for `drift_response.yaml` — the pack's drift-response policy.
  *
  * Authoritative source: `docs/opensquid-real-design.md` §"Drift response policies"
- * + memory `project_opensquid_drift_response_is_codex_declared`.
+ * + memory `project_opensquid_drift_response_is_pack_declared`.
  *
  * When a rule emits a verdict, the runtime needs to decide WHAT TO DO about it
  * — and that "what to do" is pack-declared policy, not a hardcoded mechanism.

@@ -124,7 +124,7 @@ describe('G.1 bootstrap composition — discoverActivePacks + sortPacksByScope',
   });
 
   async function makePackAt(scopeRoot: string, name: string, scope: string): Promise<void> {
-    const packDir = join(scopeRoot, 'codexes', name);
+    const packDir = join(scopeRoot, 'packs', name);
     await mkdir(packDir, { recursive: true });
     await writeFile(
       join(packDir, 'manifest.yaml'),

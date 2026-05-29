@@ -4,11 +4,11 @@
  * Every (live skill, CI fixture) pair declared in
  * `test/fixtures/sync-whitelist.json` must be byte-identical. Drift = CI
  * fail. The matcher loads each pair's live source under `~/.opensquid/
- * codexes/<pack-id>/skills/<name>/skill.yaml` and the fixture under the
+ * packs/<pack-id>/skills/<name>/skill.yaml` and the fixture under the
  * repo's `test/fixtures/<...>/skill.yaml` and compares the bytes.
  *
  * Dev-only enforcement compromise (L9): CI runners (GitHub Actions,
- * fresh checkouts) don't have the user's `~/.opensquid/codexes/` tree.
+ * fresh checkouts) don't have the user's `~/.opensquid/packs/` tree.
  * When the live tree is absent the matcher SKIPS the pair without
  * failure — the user's machine pre-push is the enforcement point. A
  * live skill that's individually absent (e.g. mid-edit between user
@@ -47,7 +47,7 @@ const SyncWhitelistEntry = z
 const SyncWhitelist = z.object({ pairs: z.array(SyncWhitelistEntry) }).passthrough(); // allow $schema + _doc top-level keys
 
 const WHITELIST_PATH = join(REPO_ROOT, 'test/fixtures/sync-whitelist.json');
-const CODEXES_ROOT = join(homedir(), '.opensquid', 'codexes');
+const PACKS_ROOT = join(homedir(), '.opensquid', 'packs');
 
 describe('T-ASC ASC.6 — fixture-sync byte-identity', () => {
   it('parses the whitelist and lists at least one pair', async () => {
@@ -64,16 +64,16 @@ describe('T-ASC ASC.6 — fixture-sync byte-identity', () => {
 
   it('every whitelisted (live, fixture) pair is byte-identical when the live tree exists', async () => {
     const parsed = SyncWhitelist.parse(JSON.parse(await readFile(WHITELIST_PATH, 'utf8')));
-    const codexesExists = await stat(CODEXES_ROOT)
+    const packsExists = await stat(PACKS_ROOT)
       .then(() => true)
       .catch(() => false);
-    if (!codexesExists) {
+    if (!packsExists) {
       // Dev-only enforcement (L9): no live tree → CI runner case → skip.
       return;
     }
     for (const pair of parsed.pairs) {
       const livePath = join(
-        CODEXES_ROOT,
+        PACKS_ROOT,
         pair.live_pack_id,
         'skills',
         pair.live_skill_name,

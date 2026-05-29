@@ -10,7 +10,7 @@
 #     all 7 phases are logged via `mcp__opensquid__log_phase`.
 #
 # Load: preload — workflow discipline is always-on per
-# project_opensquid_codex_load_hybrid.
+# project_opensquid_pack_load_hybrid.
 name: workflow
 load: preload
 when_to_load: []

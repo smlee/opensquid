@@ -1,12 +1,12 @@
 /**
- * Active-pack discovery — scan a scope root for `active.json` + `codexes/<name>/`.
+ * Active-pack discovery — scan a scope root for `active.json` + `packs/<name>/`.
  *
  * G.1 wires the real loader path. Given a scope root (either user-scope from
  * `resolveUserScopeRoot()` or project-scope from `resolveProjectScopeRoot(cwd)`),
  * this module:
  *
  *   1. Reads `<scopeRoot>/active.json` — schema `{ packs: string[] }`.
- *   2. For each entry, loads `<scopeRoot>/codexes/<name>/` through the
+ *   2. For each entry, loads `<scopeRoot>/packs/<name>/` through the
  *      existing `loadPack` (Phase-2 pack format: `manifest.yaml` + `skills/`).
  *
  * Behavior contract:
@@ -40,7 +40,7 @@ import type { Pack } from '../runtime/types.js';
 import { loadPack } from './loader.js';
 
 export interface ActiveJson {
-  /** Pack names (folder names under `codexes/`) declared active in this scope. */
+  /** Pack names (folder names under `packs/`) declared active in this scope. */
   packs: string[];
 }
 
@@ -80,10 +80,43 @@ export async function discoverActivePacks(scopeRoot: string | null): Promise<Pac
     }
   }
 
-  const codexesDir = join(scopeRoot, 'codexes');
+  // T-PACK-VOCAB L2 (2026-05-29) — backward-compat: prefer `<scope>/packs/`
+  // but fall back to the legacy `<scope>/codexes/` path with a deprecation
+  // warn. Users migrate at their own pace by `mv codexes/ packs/`.
+  const preferredDir = join(scopeRoot, 'packs');
+  const legacyDir = join(scopeRoot, 'codexes');
+  const dirs = await resolvePacksDir(preferredDir, legacyDir);
   const packs: Pack[] = [];
   for (const name of active.packs) {
-    packs.push(await loadPack(join(codexesDir, name)));
+    packs.push(await loadPack(join(dirs, name)));
   }
   return packs;
+}
+
+/**
+ * T-PACK-VOCAB L2 — resolve which root dir to use for pack folder lookup.
+ * Returns the preferred `packs/` dir when it exists; otherwise falls back to
+ * the legacy `codexes/` dir with a stderr deprecation warning. If neither
+ * exists, returns the preferred dir (loadPack will surface the missing-folder
+ * error with a sensible path).
+ */
+async function resolvePacksDir(preferred: string, legacy: string): Promise<string> {
+  try {
+    await fs.stat(preferred);
+    return preferred;
+  } catch {
+    // preferred missing; check legacy
+  }
+  try {
+    await fs.stat(legacy);
+    process.stderr.write(
+      `opensquid: \`codexes/\` is deprecated as the pack-folder root; ` +
+        `please \`mv ${legacy} ${preferred}\` (T-PACK-VOCAB)\n`,
+    );
+    return legacy;
+  } catch {
+    // neither exists; return preferred — loadPack's per-name join will
+    // surface the missing-folder error with a useful path.
+    return preferred;
+  }
 }

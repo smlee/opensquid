@@ -136,7 +136,7 @@ describe('partitionSkills — pinned skill with contradictory unloads_when', () 
 
 describe('partitionSkills — mixed packs', () => {
   it('splits skills across multiple packs into the correct buckets', () => {
-    const userCodex = makePack('user-codex', 'universal', [
+    const userPack = makePack('user-codex', 'universal', [
       makeSkill('pin-1', 'preload'), // pinned
       makeSkill('lazy-1', 'lazy'), // dynamic
     ]);
@@ -148,7 +148,7 @@ describe('partitionSkills — mixed packs', () => {
       makeSkill('preload-project', 'preload'), // dynamic
     ]);
 
-    const { pinned, dynamic } = partitionSkills([userCodex, workflow, project]);
+    const { pinned, dynamic } = partitionSkills([userPack, workflow, project]);
 
     expect(pinned.map((p) => p.skill.name)).toEqual(['pin-1']);
     expect(dynamic.map((d) => d.skill.name).sort()).toEqual(

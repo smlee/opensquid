@@ -20,8 +20,8 @@
  *     deterministically-shaped `.md` files into a tmpdir so the G.6
  *     scenario can exercise `importAutoMemoryDir` against a real tree.
  *
- *  3. Pack-source builders (`buildSangminCodex`) — projects the G.4 / G.5
- *     / G.7 / G.12 skill YAML into a temp `<scope>/codexes/<name>/`
+ *  3. Pack-source builders (`buildSangminPack`) — projects the G.4 / G.5
+ *     / G.7 / G.12 skill YAML into a temp `<scope>/packs/<name>/`
  *     layout + an `active.json` so the hook bins' real on-disk loader
  *     path picks them up. We could synthesize the YAML inline, but
  *     reading the user's existing canonical YAML keeps the E2E pinned to
@@ -139,9 +139,9 @@ export async function buildAutoMemoryDir(dir: string, n: number): Promise<string
  * minimal manifest.yaml. Writes `<scopeRoot>/active.json` declaring the
  * single pack. Returns the pack folder path for cleanup convenience.
  */
-export async function buildSangminCodex(scopeRoot: string): Promise<string> {
+export async function buildSangminPack(scopeRoot: string): Promise<string> {
   const packName = 'sangmin-personal-rules';
-  const packDir = join(scopeRoot, 'codexes', packName);
+  const packDir = join(scopeRoot, 'packs', packName);
   const skillsDir = join(packDir, 'skills');
   await mkdir(skillsDir, { recursive: true });
   await writeFile(
@@ -161,9 +161,9 @@ export async function buildSangminCodex(scopeRoot: string): Promise<string> {
   // Source the four skills from the user's installed codex (canonical
   // production fidelity). If a skill is missing on this machine, the
   // scenario test will skip+report rather than silently behave wrong.
-  const userCodex = join(
+  const userPack = join(
     process.env.HOME ?? '/tmp',
-    '.opensquid/codexes/sangmin-personal-rules/skills',
+    '.opensquid/packs/sangmin-personal-rules/skills',
   );
   const skills = [
     'recall-pre-inject',
@@ -172,7 +172,7 @@ export async function buildSangminCodex(scopeRoot: string): Promise<string> {
     'd9-guard',
   ];
   for (const s of skills) {
-    const src = join(userCodex, s, 'skill.yaml');
+    const src = join(userPack, s, 'skill.yaml');
     if (!existsSync(src)) continue;
     const dst = join(skillsDir, s);
     await mkdir(dst, { recursive: true });

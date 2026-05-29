@@ -10,7 +10,7 @@
  * Cross-harness portability: this primitive is harness-AGNOSTIC. It only
  * returns structured data (a `content: string`). The host-specific framing
  * (Claude Code's `hookSpecificOutput.additionalContext` JSON envelope,
- * Cursor's equivalent, Codex CLI's equivalent) lives in the per-host hook
+ * Cursor's equivalent, Pack CLI's equivalent) lives in the per-host hook
  * binary (currently `src/runtime/hooks/user-prompt-submit.ts`). Other hooks
  * that emit this kind of result get a stderr warning at dispatch time
  * (`dispatch.ts`) — only `UserPromptSubmit` actually writes it out.

@@ -41,7 +41,7 @@ export const OPENSQUID_HOME = (): string =>
 //   - project scope = `<project>/.opensquid/`      (walked from cwd upward)
 //
 // Each scope root may contain an `active.json` declaring which folders under
-// `codexes/` are active. `discoverActivePacks(scopeRoot)` consumes the result
+// `packs/` are active. `discoverActivePacks(scopeRoot)` consumes the result
 // of these resolvers; null means "this scope is not in effect (no project
 // root found walking up from cwd)".
 //

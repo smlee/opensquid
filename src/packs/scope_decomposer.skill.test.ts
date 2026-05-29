@@ -2,7 +2,7 @@
  * Behavior test for the scope-decomposer skill (Track SD.8).
  *
  * The skill's live home is the user's PERSONAL pack
- * (~/.opensquid/codexes/sangmin-personal-rules/), which is not in CI, and the
+ * (~/.opensquid/packs/sangmin-personal-rules/), which is not in CI, and the
  * builtin tree deliberately excludes it (personal ≠ shipping, commit 1fb64ac).
  * So this test loads a source-controlled COPY from test/fixtures/ and evaluates
  * the skill's real rules end-to-end. The no-artifact block case is the

@@ -1,6 +1,6 @@
 # Test fixture pack (SD.8) — loads the scope-decomposer skill for the behavior
 # test. NOT shipped, NOT active anywhere. The live deployment of the skill is the
-# user's personal pack (~/.opensquid/codexes/sangmin-personal-rules/); this is a
+# user's personal pack (~/.opensquid/packs/sangmin-personal-rules/); this is a
 # source-controlled copy so CI can exercise the rules (the personal pack is not
 # in CI, and builtin deliberately excludes the skill per personal≠shipping).
 # Keep skills/scope-decomposer/skill.yaml in sync with the personal-pack copy.

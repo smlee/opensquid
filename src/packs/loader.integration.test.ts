@@ -8,7 +8,7 @@
  * with one fast_classifier alias + per-rule drift_response overrides
  * including `block_tool` for `v1-publish-detector` and `model-name-detector`)
  * but is fully self-contained under a tmpdir so it doesn't reach into
- * `~/.opensquid/codexes/` (test isolation + CI safety).
+ * `~/.opensquid/packs/` (test isolation + CI safety).
  *
  * The live verification step from the PR-followup spec (Part 2 §4 —
  * `v1-publish-detector`'s per-rule `block_tool` resolves through the new
