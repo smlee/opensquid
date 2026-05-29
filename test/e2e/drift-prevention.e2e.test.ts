@@ -217,6 +217,11 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
           scope: 'user',
           authored_by: 'user',
           origin_label: 'explicit',
+          // T-CTX-LOOP CTX.0 verify-probe gate. Synthetic e2e quote — the test
+          // simulates the user's verbatim confirmation that would normally
+          // accompany an agent-driven memorize call.
+          verified: true,
+          confirmed_quote: 'e2e fixture: synthetic verbatim user confirmation',
         },
         engineClient,
       );
@@ -252,6 +257,9 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
           scope: 'user',
           authored_by: 'user',
           origin_label: 'explicit',
+          // T-CTX-LOOP CTX.0 verify-probe gate (synthetic e2e quote).
+          verified: true,
+          confirmed_quote: 'e2e fixture: synthetic verbatim user confirmation',
         },
         engineClient,
       );
