@@ -25,10 +25,12 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../../..');
@@ -76,6 +78,30 @@ beforeAll(() => {
 }, 90_000);
 
 describe('G.2: hook bins do not silent no-op', () => {
+  // T-ASG5 L1+L2: isolate OPENSQUID_HOME so spawned hook binaries write
+  // .current-session (and any other session_state writes) into a tmp dir,
+  // not the dev's live ~/.opensquid/. The user-prompt-submit.js binary
+  // calls recordCurrentSession with the stdin session_id ('test') —
+  // pre-T-ASG5 this contaminated the live home, breaking subsequent
+  // log_phase MCP calls until manually restored. Pattern lifted verbatim
+  // from ASG.1's hooks.integration.test.ts:41-62 (commit 019c728);
+  // tmpdir prefix matches so vitest globalSetup teardown also catches
+  // any orphaned dirs.
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-hooks-integration-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
   for (const spec of BIN_SPECS) {
     it(`${spec.bin} emits [opensquid-dispatch] marker on stderr`, async () => {
       const binPath = resolve(DIST_HOOKS, spec.bin);
@@ -92,6 +118,25 @@ describe('G.2: hook bins do not silent no-op', () => {
       expect(r.stderr).toMatch(/packs=\d+/);
     }, 20_000);
   }
+
+  // T-ASG5 L5: regression guard — prove the isolation protects the live
+  // user home. Reads ~/.opensquid/.current-session via homedir() directly
+  // (NOT OPENSQUID_HOME, which we've overridden) before+after spawning
+  // user-prompt-submit.js. The spawned bin calls recordCurrentSession
+  // with the stdin session_id; pre-T-ASG5 that overwrote the live file
+  // with 'test'. A future refactor that drops the env override trips
+  // this immediately.
+  it('T-ASG5 L5: does NOT contaminate the live ~/.opensquid/.current-session', async () => {
+    const livePath = join(homedir(), '.opensquid', '.current-session');
+    const before = existsSync(livePath) ? await readFile(livePath, 'utf8') : null;
+
+    const upsPath = resolve(DIST_HOOKS, 'user-prompt-submit.js');
+    expect(existsSync(upsPath), `compiled bin missing: ${upsPath}`).toBe(true);
+    await runBin(upsPath, JSON.stringify({ prompt: 'hello', session_id: 'test' }));
+
+    const after = existsSync(livePath) ? await readFile(livePath, 'utf8') : null;
+    expect(after).toBe(before);
+  }, 20_000);
 });
 
 async function runBin(
