@@ -143,4 +143,28 @@ describe.skipIf(SKIP)('AP.6 — automation pipeline e2e (real engine)', () => {
     const ledger = await engine.taskGetLedger({ task_id: 'ap6-task' });
     expect(ledger.phases_logged.sort()).toEqual([...REQUIRED_PHASES].sort());
   });
+
+  it('T-ATSC L6: automation ON + no active task → gate BLOCKS commit with the remedy message', async () => {
+    // SID for this case lives under the same OPENSQUID_HOME so the fixture pack's
+    // dispatcher routes here. Distinct from the main case so the active-task
+    // signal absence is clean (writeActiveTask above wrote for 'ap6-task' under
+    // SID; for L6 we use a fresh session id with no active-task.json on disk).
+    const L6_SID = 'ap6-e2e-l6-sess';
+    await setAutomationFlag(L6_SID);
+    await recordCurrentSession(L6_SID);
+    // CRITICAL: no writeActiveTask call → has_active_task returns
+    // {present: false, ...} → per-rule guard fires → BLOCK with L3 remedy.
+
+    const r = await evaluateProcess(
+      gateSteps,
+      { event: commit, bindings: new Map(), sessionId: L6_SID, packId: 'ap6' },
+      buildRegistry(),
+    );
+    expect(r.kind).toBe('verdict');
+    // The L3 remedy message names the next step verbatim (must teach the fix).
+    if (r.kind === 'verdict') {
+      expect(r.verdict.message).toMatch(/cannot git commit in automation mode with no active task/);
+      expect(r.verdict.message).toMatch(/TaskUpdate.*in_progress.*after TaskCreate/);
+    }
+  });
 });

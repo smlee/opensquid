@@ -144,10 +144,20 @@ describe('workflow gate (fixture) / workflow-phases-required', () => {
     expect((await run(commitEvent)).kind).toBe('no_verdict');
   });
 
-  it('is DORMANT when there is no active task (ad-hoc commit in automation)', async () => {
+  // T-ATSC L2/L3 (2026-05-29): the previous assertion was the FAIL-OPEN bug —
+  // automation ON + no active task fail-SKIPPED the entire skill, which let
+  // SIC commit fc0801a (0.5.199) sail through. T-ATSC moves the
+  // active-task precondition into a per-rule BLOCKING guard with a remedy
+  // message that names the next step.
+  it('T-ATSC: BLOCKS when there is no active task (automation ON + git commit) — fail-CLOSED with remedy', async () => {
     await setAutomationFlag(SID);
-    // no writeActiveTask
-    expect((await run(commitEvent)).kind).toBe('no_verdict');
+    // no writeActiveTask → active-task signal absent
+    const r = await run(commitEvent);
+    expect(r.kind).toBe('verdict');
+    if (r.kind === 'verdict') {
+      expect(r.verdict.message).toMatch(/cannot git commit in automation mode with no active task/);
+      expect(r.verdict.message).toMatch(/TaskUpdate.*in_progress.*after TaskCreate/);
+    }
   });
 
   it('does not block a non-commit Bash call', async () => {

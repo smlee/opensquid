@@ -1,28 +1,35 @@
-# workflow — the locked 7-phase workflow gate (AP.4, rule #8).
+# workflow — the locked 7-phase workflow gate (AP.4, rule #8; T-ATSC fail-CLOSED).
 #
 # Blocks `git commit` until all 7 phases are logged (via
-# `mcp__opensquid__log_phase`) for the ACTIVE task — but ONLY in automation mode
-# with an active task loaded. This is the unified-evaluator trigger model
-# ([[project_opensquid_automation_layer]]): the gate-set fires together on
-# `is_automation_mode AND active-task present`. Dormant in interactive use and
-# in automation with no task — so it never blocks an ad-hoc commit.
+# `mcp__opensquid__log_phase`) for the ACTIVE task — but ONLY in automation mode.
+# T-ATSC L2/L3 (2026-05-29): the active-task precondition moved from
+# Skill.requires (which fail-SKIPPED the whole skill when absent) to a
+# per-rule guard that BLOCKS with a remedy message naming the next step.
+# Pre-T-ATSC the gate fail-OPENED: SIC commit fc0801a (0.5.199) sailed
+# through with active-task.json absent + zero phases logged.
+#
+# Trigger model (unchanged):
+#   - automation OFF → dispatcher skips (interactive commits unaffected)
+#   - automation ON + git commit + no active task → BLOCK with L3 remedy
+#   - automation ON + git commit + active task + <7 phases → BLOCK with phases
+#     remedy
+#   - automation ON + git commit + active task + all 7 phases → PASS
 #
 # Severed-writer history: the G-track kept this READER but dropped the writer;
 # AP.3 restored `log_phase` (engine ledger + workflow.phases_logged state) and
-# the `workflow_phases_complete` read primitive this gate calls.
+# the `workflow_phases_complete` read primitive this gate calls. T-ATSC closes
+# the last hole — the signal-presence precondition.
 #
 # Load: preload — workflow discipline is always-loaded; the rule's own gating
-# (automation + active task) decides when it actually fires.
+# (automation + per-rule guards) decides when it actually fires.
 name: workflow
 load: preload
 when_to_load: []
-# T-ASC ASC.4: automation+task gate hoisted to the dispatcher boundary.
-# Behavior-preserving: rule still fires on git-commit tool_calls; the
-# match_command filter and the workflow_phases_complete check stay rule-local
-# (they're filter conditions, not gate conditions).
+# T-ATSC L2: only automation_mode_on stays at the dispatcher boundary.
+# active_task_present moved INTO the rule's process: block (below) as a
+# per-rule guard that BLOCKS with remedy, not skip-silently.
 requires:
   - kind: automation_mode_on
-  - kind: active_task_present
 rules:
   - id: workflow-phases-required
     process:
@@ -31,11 +38,30 @@ rules:
           pattern: 'git\s+commit\b'
           target: tool_args.command
         as: committing
-      - call: workflow_phases_complete
+      # T-ATSC L2 + L3: per-rule active-task guard. When automation ON +
+      # committing but the active-task mirror has no signal, BLOCK with a
+      # remedy that NAMES the next step (TaskUpdate(<id>, in_progress)
+      # after TaskCreate seeds the mirror). The L3 message MUST teach the
+      # fix, not just block.
+      - call: has_active_task
         if: 'committing'
+        as: active
+      - call: verdict
+        if: 'committing && active.present == false'
+        args:
+          level: block
+          message: >-
+            BLOCKED: cannot git commit in automation mode with no active task.
+            Activate via TaskUpdate(<taskId>, 'in_progress') after TaskCreate
+            so the active-task mirror seeds. If this is an ad-hoc commit,
+            turn off automation mode first.
+      # Existing phases-complete check, now gated on active.present == true
+      # so it doesn't fire when L3 already blocked.
+      - call: workflow_phases_complete
+        if: 'committing && active.present == true'
         as: phases
       - call: verdict
-        if: 'committing && phases.complete == false'
+        if: 'committing && active.present == true && phases.complete == false'
         args:
           level: block
           message: >-
@@ -45,7 +71,8 @@ rules:
 prose: |
   The locked 7-phase workflow per feedback_workflow_cycle (PRIMARY
   drift-protection gate). In automation mode with a task loaded, every
-  substantive task runs all 7 phases before `git commit`. The gate reads
-  `workflow_phases_complete`, which is true only when all 7 phases are logged
-  for the CURRENTLY-active task (a new task never inherits a prior task's
-  completion). Log phases via `mcp__opensquid__log_phase`.
+  substantive task runs all 7 phases before `git commit`. The gate first
+  checks for an active task (T-ATSC L2/L3 — block-with-remedy if absent),
+  then checks `workflow_phases_complete`, which is true only when all 7
+  phases are logged for the CURRENTLY-active task (a new task never inherits
+  a prior task's completion). Log phases via `mcp__opensquid__log_phase`.

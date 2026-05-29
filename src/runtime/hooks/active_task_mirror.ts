@@ -32,8 +32,20 @@ import { join } from 'node:path';
 
 import { type ActiveTask, clearActiveTask, writeActiveTask } from '../session_state.js';
 
-/** Harness task tools whose calls can change which task is active. */
-const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate']);
+/**
+ * T-ATSC L1 (2026-05-29) — mirror re-derives `active-task.json` on EVERY
+ * PreToolUse, not only on `TaskCreate`/`TaskUpdate` ticks. Pre-T-ATSC the
+ * mirror short-circuited on the harness task tools, leaving a race window
+ * where `active-task.json` could stay absent across the whole code phase
+ * (root cause of SIC commit fc0801a sailing past the workflow gate). With
+ * L1 the mirror reads the harness store on every PreToolUse: the H4a
+ * status overlay + AP.7 metadata overlay safely no-op for non-task tools
+ * (activatingId / completingId both null, args.metadata undefined → falls
+ * through to the on-disk store-derived view). Cost: ~5 ms per call
+ * (readdir + N small readFile); benefit: race-class elimination. The
+ * write path stays idempotent (writeActiveTask is tmp+rename atomic), so
+ * unchanged-state PreToolUse calls cost just the read.
+ */
 
 export interface HarnessTask {
   id: string;
@@ -106,7 +118,12 @@ export async function mirrorActiveTask(
   args: Record<string, unknown>,
   base?: string,
 ): Promise<void> {
-  if (!TASK_TOOLS.has(tool)) return;
+  // T-ATSC L1: no tool-name gate. Mirror re-derives on every PreToolUse so
+  // active-task.json stays in sync with the harness store even when the
+  // current tool is Write/Edit/Bash/Read/anything else. The H4a +
+  // AP.7 overlays below pass through for non-TaskUpdate tools (their
+  // args.taskId / args.status / args.metadata are undefined; activatingId
+  // and completingId both null; the store-derived view is canonical).
 
   const tasks = await readHarnessTasks(sessionId, base);
 

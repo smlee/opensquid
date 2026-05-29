@@ -138,12 +138,26 @@ describe('mirrorActiveTask', () => {
     expect((await readActiveTask(SID))?.id).toBe('16');
   });
 
-  it('non-task tool → no-op (does not touch the signal)', async () => {
+  // T-ATSC L1: mirror re-derives on EVERY PreToolUse (no TASK_TOOLS gate).
+  // The two cases below replace the previous "non-task tool = no-op" test.
+  it('T-ATSC L1: non-task tool re-derives from store — clears signal when no in_progress task exists', async () => {
     await writeActiveTask(SID, { id: 'keep', subject: 'x', started_at: 'z' });
-    await putTask({ id: '1', subject: 'a', status: 'pending' }); // would clear if it ran
+    await putTask({ id: '1', subject: 'a', status: 'pending' });
     await mirrorActiveTask(SID, 'Bash', { command: 'ls' }, tasksBase);
 
-    expect((await readActiveTask(SID))?.id).toBe('keep');
+    // Pre-T-ATSC: signal stayed as 'keep' (mirror skipped). Post-T-ATSC: mirror
+    // re-derives and finds no in_progress task → clears.
+    expect(await readActiveTask(SID)).toBeNull();
+  });
+
+  it('T-ATSC L1: non-task tool re-derives from store — keeps signal aligned with on-disk in_progress task', async () => {
+    await writeActiveTask(SID, { id: 'stale', subject: 'old', started_at: 'z' });
+    await putTask({ id: '7', subject: 'live', status: 'in_progress' });
+    await mirrorActiveTask(SID, 'Edit', { file_path: '/tmp/x.ts' }, tasksBase);
+
+    // Mirror re-derives; signal now matches the on-disk in_progress task.
+    expect((await readActiveTask(SID))?.id).toBe('7');
+    expect((await readActiveTask(SID))?.subject).toBe('live');
   });
 
   it('absent store dir → clears the signal, never throws', async () => {
