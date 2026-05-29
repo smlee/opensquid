@@ -10,8 +10,8 @@
  * Design tradeoff (resolved 2026-05-20): this test INLINES copies of
  * `buildRoutingIndex` + `collectInboundChannels` rather than importing
  * from `src.legacy/chat/daemon/routing.ts`. The production routing.ts
- * transitively imports from `src.legacy/codex/store.ts` which pulls in
- * `src.legacy/codex/parse.ts` — the latter has pre-existing strict-
+ * transitively imports from `src.legacy/pack/store.ts` which pulls in
+ * `src.legacy/pack/parse.ts` — the latter has pre-existing strict-
  * flag type errors. Importing routing.ts from test/ surfaces those
  * errors in the main `pnpm typecheck` because TypeScript resolves
  * module-graph types regardless of `exclude` settings. `// @ts-nocheck`
@@ -23,7 +23,7 @@
  * src.legacy/chat/daemon/routing.ts is changed without updating this
  * file, the tests still verify the spec'd behavior, but the test may
  * diverge from production. Acceptable for v1 — when src.legacy/ is
- * migrated out of quarantine OR the codex parse errors are fixed, this
+ * migrated out of quarantine OR the pack parse errors are fixed, this
  * duplication is removed and the test imports directly.
  *
  * Test scope:

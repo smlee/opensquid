@@ -2,7 +2,7 @@
 #
 # Authoritative source: docs/tasks/personal-pack.md (PERS.1 inventory at
 # loop/docs/personal-pack-inventory.md). Ports the legacy
-# src.legacy/codex/bundled-default/codex.yaml (313 LOC, 22 rules) to the
+# src.legacy/pack/bundled-default/pack.yaml (313 LOC, 22 rules) to the
 # new multi-file pack format.
 #
 # Six skill folders: git/, engine-vocab/, workflow/, versioning/,
@@ -17,7 +17,7 @@ version: 0.1.0
 scope: universal
 goal: ship verified work with sangmin's locked discipline
 description: |
-  Personal pack converted from the legacy bundled-default codex (PERS.1).
+  Personal pack converted from the legacy bundled-default pack (PERS.1).
   Encodes Sangmin's git hygiene, 7-phase workflow, PATCH-ONLY pre-1.0
   versioning, honesty-ledger claim catalog, and phase-logging discipline.
 evolves: true

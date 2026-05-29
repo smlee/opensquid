@@ -1,6 +1,6 @@
 # git — Sangmin's git hygiene rules.
 #
-# Three drift gates ported from bundled-default/codex.yaml drifts[0,1,3]
+# Three drift gates ported from bundled-default/pack.yaml drifts[0,1,3]
 # (never-amend / no-implicit-push / no-force-push-main). Each fires when
 # the host invokes Bash with a matching command. Drift response is
 # `block_tool` per drift_response.yaml — refuse the one tool call rather

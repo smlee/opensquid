@@ -301,7 +301,7 @@ describe('CapabilityGate — send_message + subprocess_call', () => {
 
   it('subprocess_call: binary allowlist match → allowed', async () => {
     const gate = gateFor({
-      subprocess_call: { binaries: ['claude', 'codex', 'gemini'], deny: [] },
+      subprocess_call: { binaries: ['claude', 'pack', 'gemini'], deny: [] },
     });
     const ok = await gate.check({ pack: 'p', capability: 'subprocess_call', target: 'claude' });
     expect(ok.allowed).toBe(true);

@@ -8,7 +8,7 @@
  * Responsibility:
  *   Drive a single agent turn by spawning the user's subscription host
  *   binary (e.g. `claude --print`) instead of hitting the Anthropic
- *   Messages API directly. The host (claude / codex / gemini) handles
+ *   Messages API directly. The host (claude / pack / gemini) handles
  *   tool-use internally — opensquid does NOT orchestrate a tool_use
  *   round-trip loop here. The reply is the FINAL stdout text the host
  *   emits after running whatever internal tool calls it wanted.

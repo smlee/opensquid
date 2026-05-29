@@ -87,7 +87,7 @@ function collisionsPath(): string {
 // TPS.5 — collision surface read path. Inlined here (not imported from
 // src.legacy/chat/daemon/collisions.ts) for the same type-poison reason
 // the routing reader is inlined in this file: src.legacy is excluded
-// from tsconfig and the codex/parse.ts transitive dep would break the
+// from tsconfig and the pack/parse.ts transitive dep would break the
 // strict-flag whole-tree typecheck.
 // ---------------------------------------------------------------------------
 

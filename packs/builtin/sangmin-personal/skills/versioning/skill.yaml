@@ -1,7 +1,7 @@
 # versioning — pre-1.0 PATCH-ONLY rule.
 #
 # Ports the legacy `versioning-pre1-patch-only` policy from
-# bundled-default/codex.yaml lines 293–306. Per
+# bundled-default/pack.yaml lines 293–306. Per
 # feedback_pre1_versioning v4: every change of any kind ships as a patch
 # bump; the agent never picks a minor or major slot — that is exclusively
 # the user's call.

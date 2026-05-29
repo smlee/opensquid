@@ -23,7 +23,7 @@
  *     property surfaces evidence-less lessons during the capture loop
  *     even when the embedder is degraded.
  *
- * What's intentionally NOT here (out of scope; codex-install only):
+ * What's intentionally NOT here (out of scope; pack-install only):
  *   - `pack_id`, `external_id`, `seed_as_promoted` on propose_lesson —
  *     pack-authored seed paths handled by a separate install flow
  *     (T.1.B notes the validation rules: `pack_id` required when
@@ -93,7 +93,7 @@ const ProposeLessonArgs = z.object({
   evidence: z.array(z.string()).optional(),
   authored_by: z.enum(['user', 'agent']).optional(),
   // pack_id / external_id / seed_as_promoted intentionally NOT exposed here.
-  // Those are codex-install-only paths handled separately (see header).
+  // Those are pack-install-only paths handled separately (see header).
 });
 
 const PromoteLessonArgs = z.object({

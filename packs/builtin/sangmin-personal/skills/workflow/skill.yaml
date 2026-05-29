@@ -1,7 +1,7 @@
 # workflow — the locked 7-phase workflow.
 #
 # Ports the legacy `standard-7-phase` workflow + `phase-logged-7-phase`
-# policy from bundled-default/codex.yaml lines 97–145, 308–313.
+# policy from bundled-default/pack.yaml lines 97–145, 308–313.
 #
 # Two rules:
 #   - workflow-phases-required (destination_check): periodic LLM judgement

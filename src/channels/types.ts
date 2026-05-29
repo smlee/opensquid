@@ -67,11 +67,11 @@ export interface ChannelAdapter {
 }
 
 /**
- * Notification routing configuration — declared by the codex, mapped to
+ * Notification routing configuration — declared by the pack, mapped to
  * concrete URIs by the user's runtime config.
  *
  * - `severityTiers`: per-severity list of abstract channel names (e.g.
- *   `['alerts', 'audit_log']`) that the codex wants notified.
+ *   `['alerts', 'audit_log']`) that the pack wants notified.
  * - `perProjectOverride`: optional per-project override keyed by project
  *   id, layered on top of severity tiers. Checked first when present.
  * - `channelMapping`: abstract-name → concrete-URI mapping the user

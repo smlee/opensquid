@@ -131,7 +131,7 @@ export async function buildAutoMemoryDir(dir: string, n: number): Promise<string
 }
 
 /**
- * Project the user's installed `sangmin-personal-rules` codex into a tmp
+ * Project the user's installed `sangmin-personal-rules` pack into a tmp
  * scope root so the hook bins' real on-disk loader picks it up.
  *
  * Copies the four skills the G.13 scenarios exercise (recall-pre-inject,
@@ -150,7 +150,7 @@ export async function buildSangminPack(scopeRoot: string): Promise<string> {
       `name: ${packName}`,
       `version: 0.0.1`,
       `scope: universal`,
-      `goal: G.13 e2e fixture codex`,
+      `goal: G.13 e2e fixture pack`,
       `description: ""`,
       `requires: []`,
       `conflicts: []`,
@@ -158,7 +158,7 @@ export async function buildSangminPack(scopeRoot: string): Promise<string> {
       ``,
     ].join('\n'),
   );
-  // Source the four skills from the user's installed codex (canonical
+  // Source the four skills from the user's installed pack (canonical
   // production fidelity). If a skill is missing on this machine, the
   // scenario test will skip+report rather than silently behave wrong.
   const userPack = join(

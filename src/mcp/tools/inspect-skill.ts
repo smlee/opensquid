@@ -9,7 +9,7 @@
  *
  * Phase 1: relies on `loadActivePacks` stub (Task 1.19 fills it). Returns a
  * "not found" message when the pack or skill isn't active. Drift-response
- * policy is reported as `(not declared)` because Task 1.19 wires the codex
+ * policy is reported as `(not declared)` because Task 1.19 wires the pack
  * manifest's `drift_response:` section into the runtime — until then there
  * is no per-pack policy to surface.
  *

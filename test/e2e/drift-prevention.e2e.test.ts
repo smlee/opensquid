@@ -187,7 +187,7 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
 
   it('G.2: hook bins emit [opensquid-dispatch] marker on stderr', async () => {
     await scenario('G.2', 'hook bins emit dispatch marker', async () => {
-      // Use a fresh OPENSQUID_HOME for this scenario so the active codex
+      // Use a fresh OPENSQUID_HOME for this scenario so the active pack
       // doesn't influence the marker shape (rules=N would shift).
       const isolated = await mkdtemp(join(tmpdir(), 'opensquid-e2e-g2-'));
       try {

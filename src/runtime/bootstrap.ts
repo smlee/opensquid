@@ -11,7 +11,7 @@
  *     last `setActivePacks(...)`'d in-process, or — for subprocess-launched
  *     hooks — packs serialized via the `OPENSQUID_TEST_PACK` env var. Phase 2
  *     replaces this with a real YAML loader that reads `~/.opensquid/active.json`,
- *     resolves codex sources, parses pack YAML, and respects per-skill load
+ *     resolves pack sources, parses pack YAML, and respects per-skill load
  *     modes. The `Promise<Pack[]>` signature is pinned now so the Phase 2
  *     swap is body-only — call sites do not refactor.
  *

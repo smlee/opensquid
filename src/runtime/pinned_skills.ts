@@ -14,9 +14,9 @@
  *     Everything else                              →  DYNAMIC
  *
  * Pinned semantics encode "this is foundational hygiene for THIS user"
- * (see `project_opensquid_personal_rules_are_user_codex` — Sangmin's
+ * (see `project_opensquid_personal_rules_are_user_pack` — Sangmin's
  * 17 anti-drift rules are exactly this kind of pack). Universal scope
- * is the user-codex tier; preload says "load immediately, do not wait
+ * is the user-pack tier; preload says "load immediately, do not wait
  * for a matcher". The intersection is the pin.
  *
  * Workflow / domain / specialty / project packs CANNOT pin even if

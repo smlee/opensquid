@@ -249,7 +249,7 @@ describe('Manifest schema', () => {
           channels: ['audit_log', 'alerts'],
         },
         subprocess_call: {
-          binaries: ['claude', 'codex', 'gemini'],
+          binaries: ['claude', 'pack', 'gemini'],
         },
       },
     });

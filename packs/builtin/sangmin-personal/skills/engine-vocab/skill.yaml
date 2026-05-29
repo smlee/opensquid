@@ -1,6 +1,6 @@
 # engine-vocab — substrate-purity warn for engine-repo commits.
 #
-# Ported from bundled-default/codex.yaml drifts[2]. Soft warn (not a block)
+# Ported from bundled-default/pack.yaml drifts[2]. Soft warn (not a block)
 # because the rule is style-level — engine commit messages must speak in
 # engine types only. The user fixes the wording and continues.
 name: engine-vocab
@@ -12,7 +12,7 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: 'loop/engine.*git\s+commit[^\n]*-m[^\n]*(codex|opensquid|MindCraftor)'
+          pattern: 'loop/engine.*git\s+commit[^\n]*-m[^\n]*(pack|opensquid|MindCraftor)'
           target: tool_args.command
         as: hit
       - call: verdict
@@ -21,7 +21,7 @@ rules:
           level: warn
           message: >-
             WARN: engine commit message references a consumer-product
-            concept (codex / opensquid / MindCraftor). Engine speaks in
+            concept (pack / opensquid / MindCraftor). Engine speaks in
             engine types only — re-word using substrate vocabulary.
 prose: |
   Substrate-purity discipline: the engine repo is the open-source

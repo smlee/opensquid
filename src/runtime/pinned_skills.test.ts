@@ -57,7 +57,7 @@ afterEach(() => {
 
 describe('partitionSkills — universal + preload', () => {
   it('pins a universal-scope preload skill', () => {
-    const pack = makePack('user-codex', 'universal', [makeSkill('always-on', 'preload')]);
+    const pack = makePack('user-pack', 'universal', [makeSkill('always-on', 'preload')]);
     const { pinned, dynamic } = partitionSkills([pack]);
     expect(pinned).toHaveLength(1);
     expect(pinned[0]!.skill.name).toBe('always-on');
@@ -86,7 +86,7 @@ describe('partitionSkills — workflow + preload is dynamic', () => {
 
 describe('partitionSkills — universal + lazy is dynamic', () => {
   it('does NOT pin a lazy skill even on a universal-scope pack', () => {
-    const pack = makePack('user-codex', 'universal', [makeSkill('on-match', 'lazy')]);
+    const pack = makePack('user-pack', 'universal', [makeSkill('on-match', 'lazy')]);
     const { pinned, dynamic } = partitionSkills([pack]);
     expect(pinned).toHaveLength(0);
     expect(dynamic).toHaveLength(1);
@@ -101,7 +101,7 @@ describe('partitionSkills — universal + lazy is dynamic', () => {
 describe('partitionSkills — pinned skill with contradictory unloads_when', () => {
   it('emits a stderr warning AND still pins the skill', () => {
     const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const pack = makePack('user-codex', 'universal', [
+    const pack = makePack('user-pack', 'universal', [
       makeSkill('contradictory', 'preload', {
         unloads_when: [{ kind: 'idle_for', minutes: 10 }],
       }),
@@ -116,14 +116,14 @@ describe('partitionSkills — pinned skill with contradictory unloads_when', () 
     // Warning emitted to stderr, mentioning both names.
     expect(errSpy).toHaveBeenCalledTimes(1);
     const warning = String(errSpy.mock.calls[0]![0]);
-    expect(warning).toContain('user-codex');
+    expect(warning).toContain('user-pack');
     expect(warning).toContain('contradictory');
     expect(warning.toLowerCase()).toContain('warning');
   });
 
   it('does NOT warn when a pinned skill has an empty unloads_when array', () => {
     const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const pack = makePack('user-codex', 'universal', [makeSkill('clean-pin', 'preload')]);
+    const pack = makePack('user-pack', 'universal', [makeSkill('clean-pin', 'preload')]);
     const { pinned } = partitionSkills([pack]);
     expect(pinned).toHaveLength(1);
     expect(errSpy).not.toHaveBeenCalled();
@@ -136,7 +136,7 @@ describe('partitionSkills — pinned skill with contradictory unloads_when', () 
 
 describe('partitionSkills — mixed packs', () => {
   it('splits skills across multiple packs into the correct buckets', () => {
-    const userPack = makePack('user-codex', 'universal', [
+    const userPack = makePack('user-pack', 'universal', [
       makeSkill('pin-1', 'preload'), // pinned
       makeSkill('lazy-1', 'lazy'), // dynamic
     ]);

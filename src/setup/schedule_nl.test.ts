@@ -1,5 +1,5 @@
 /**
- * Tests for `nlToCron` — natural-language → cron via the codex-declared
+ * Tests for `nlToCron` — natural-language → cron via the pack-declared
  * `fast_classifier` alias (SCHED.3).
  *
  * Fake-LLM approach (matches `src/functions/llm.test.ts` pattern): write a

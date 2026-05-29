@@ -1,6 +1,6 @@
 # phase-logging — three claim rules that gate on opensquid-internal tools.
 #
-# Ports lines 253–287 of bundled-default/codex.yaml:
+# Ports lines 253–287 of bundled-default/pack.yaml:
 #   - version-slot-assignment (announces minor/major bump → notify_and_pause)
 #   - phase-claim-forward (announces "Phase N — phase_name" → expect log_phase)
 #   - session-no-task (announces "I'll execute" → expect TaskCreate/Update)

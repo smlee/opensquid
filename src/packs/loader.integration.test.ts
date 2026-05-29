@@ -49,7 +49,7 @@ describe('loadPack integration — pack with both models.yaml + drift_response.y
     );
 
     // models.yaml — single fast_classifier alias, subscription+cli mode.
-    // Matches the one-alias shape that PR-shipped pack lands on (codex side
+    // Matches the one-alias shape that PR-shipped pack lands on (pack side
     // intentionally leaves cli/args/model blank for the user to fill).
     await writeFile(
       join(dir, 'models.yaml'),

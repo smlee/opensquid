@@ -5,7 +5,7 @@
  * Authoritative source: `docs/tasks/scheduling.md` SCHED.1 "Key code shapes"
  * + memory `project_opensquid_file_organization` (one concern per file).
  *
- * The YAML lives outside any pack — it's user-config, not codex-content —
+ * The YAML lives outside any pack — it's user-config, not pack-content —
  * because the same opensquid install routes webhooks for many packs. Pack
  * authors declare a `triggers: [{kind: webhook, path: ...}]` block, and the
  * user wires the secret + rate-limit + deliver_only flags here.

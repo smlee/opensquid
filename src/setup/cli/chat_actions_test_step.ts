@@ -18,14 +18,14 @@
  *     `~/.opensquid/projects/<uuid>/chat-routing.json` shape the legacy
  *     `loadProjectChatRouting()` helper reads. We inline the read (not
  *     import) because the legacy routing module transitively pulls in
- *     `src.legacy/codex/parse.ts` which has known strict-flag type
+ *     `src.legacy/pack/parse.ts` which has known strict-flag type
  *     errors — same workaround `test/e2e/telegram-multi-project-
  *     routing.test.ts` uses. Threads `report_topic_id` through as
  *     `threadId` so the test lands in the right forum topic.
  *   - Dials the chat-daemon over its Unix socket with a one-shot
  *     JSON-RPC call (same pattern `src/mcp/chat-bridge-server.ts`
  *     uses for chat_send — keeps WIZ.4 self-contained and avoids the
- *     src.legacy/codex/parse.ts type-poison referenced above).
+ *     src.legacy/pack/parse.ts type-poison referenced above).
  *   - On success: pretty-prints message_id in green.
  *   - On failure: classifies the error (daemon unreachable / routing
  *     missing / bot token invalid / generic) and prints a specific
