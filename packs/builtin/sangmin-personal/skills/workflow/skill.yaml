@@ -36,7 +36,7 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: '^git\s+commit\b' # T-WGRP L1: anchored at start of command
+          pattern: '^git\s+(?:-[cC]\s+\S+\s+)*commit\b' # T-WGRP L1: anchored at start of command
           target: tool_args.command
         as: committing
       - call: read_state

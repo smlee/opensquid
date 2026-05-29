@@ -192,6 +192,38 @@ describe('workflow gate (fixture) / workflow-phases-required', () => {
     expect(r.kind).toBe('no_verdict');
   });
 
+  // T-WGRP-2 — the L1 anchored pattern was '^git\\s+commit\\b' which under-
+  // matched the `git -c <flag> commit` form opensquid itself uses for the
+  // gpg-signing-disabled commits. VOCAB.1's prettier-fix commit (0ec8465)
+  // bypassed the gate via this form. The fix extends the pattern with an
+  // optional flag-pair group:
+  //   ^git\s+(?:-[cC]\s+\S+\s+)*commit\b
+  // so `git -c commit.gpgsign=false commit -m x` matches, while
+  // `grep "git commit" file` still doesn't.
+  it('T-WGRP-2: fires on `git -c <flag> commit` form (the flag-bypass closed)', async () => {
+    await setAutomationFlag(SID);
+    // no writeActiveTask → if the gate fires (as it should), L3 BLOCK
+    // remedy surfaces; the test asserts the verdict shape, not message text.
+    const r = await run({
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'git -c commit.gpgsign=false commit -m "test"' },
+      cwd: '/tmp',
+    });
+    expect(r.kind).toBe('verdict');
+  });
+
+  it('T-WGRP-2: fires on `git -C <path> commit` form (working-directory flag)', async () => {
+    await setAutomationFlag(SID);
+    const r = await run({
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'git -C /tmp/repo commit -m "test"' },
+      cwd: '/tmp',
+    });
+    expect(r.kind).toBe('verdict');
+  });
+
   // T-WGRP L6: same precision check on the ACTIVE-TASK-MISSING branch added
   // by T-ATSC L2/L3 — substring 'git commit' inside grep/echo should NOT
   // trip the active-task remedy either.
