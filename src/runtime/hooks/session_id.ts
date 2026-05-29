@@ -79,3 +79,29 @@ export async function readCurrentSession(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * T-MULTISESSION MS.1 (2026-05-29) — env-first session resolution for MCP
+ * tools. Each Claude Code session spawns its own MCP server process; when
+ * Claude Code sets `CLAUDE_SESSION_ID` in that process's env, the MCP server
+ * resolves its session id directly (race-free) instead of reading the
+ * global `.current-session` pointer (which is overwritten by every
+ * concurrent Claude Code session's PreToolUse hook — last writer wins).
+ *
+ * Precedent for env-first session resolution:
+ * - `src/runtime/chat/live_session_lease.ts:resolveSessionId`
+ * - `src/mcp/chat_bridge_subscriber.ts:279`
+ *
+ * Fallback chain:
+ *   1. `process.env.CLAUDE_SESSION_ID` (preferred — Claude Code sets per process)
+ *   2. `process.env.OPENSQUID_SESSION_ID` (override / test seam)
+ *   3. `readCurrentSession()` (existing pointer; cross-session-racing but
+ *      backwards-compatible for single-session use)
+ */
+export async function resolveMcpSessionId(): Promise<string | null> {
+  const fromClaudeEnv = process.env.CLAUDE_SESSION_ID;
+  if (fromClaudeEnv !== undefined && fromClaudeEnv.length > 0) return fromClaudeEnv;
+  const fromOpensquidEnv = process.env.OPENSQUID_SESSION_ID;
+  if (fromOpensquidEnv !== undefined && fromOpensquidEnv.length > 0) return fromOpensquidEnv;
+  return readCurrentSession();
+}

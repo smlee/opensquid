@@ -28,7 +28,7 @@ import { z } from 'zod';
 
 import type { EngineClient } from '../../engine/client.js';
 import { transitionChainStage } from '../../runtime/chain_state.js';
-import { readCurrentSession } from '../../runtime/hooks/session_id.js';
+import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { REQUIRED_PHASES, appendPhase, isComplete } from '../../runtime/workflow_phases.js';
 
@@ -53,10 +53,14 @@ export async function handleLogPhase(
   args: LogPhaseArgs,
   engine: EngineClient,
 ): Promise<LogPhaseOutput> {
-  const sessionId = await readCurrentSession();
+  // T-MULTISESSION MS.1 — env-first session resolution (race-free across
+  // concurrent Claude Code sessions). Falls back to .current-session when
+  // env is absent.
+  const sessionId = await resolveMcpSessionId();
   if (sessionId === null) {
     throw new Error(
-      'log_phase: no live session (.current-session absent). Cannot resolve the active task.',
+      'log_phase: cannot resolve session — no CLAUDE_SESSION_ID env, no ' +
+        'OPENSQUID_SESSION_ID env, and .current-session absent.',
     );
   }
   const active = await readActiveTask(sessionId);

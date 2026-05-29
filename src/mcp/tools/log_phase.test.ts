@@ -49,9 +49,18 @@ let priorEnv: Record<string, string | undefined> = {};
 const SID = 'sess-lp';
 
 beforeEach(async () => {
-  priorEnv = { OPENSQUID_HOME: process.env.OPENSQUID_HOME };
+  // T-MULTISESSION MS.1 — capture + clear session-resolution env so tests
+  // that drive recordCurrentSession() aren't shadowed by an inherited
+  // CLAUDE_SESSION_ID (the env-first resolution would prefer it).
+  priorEnv = {
+    OPENSQUID_HOME: process.env.OPENSQUID_HOME,
+    CLAUDE_SESSION_ID: process.env.CLAUDE_SESSION_ID,
+    OPENSQUID_SESSION_ID: process.env.OPENSQUID_SESSION_ID,
+  };
   tempHome = await mkdtemp(join(tmpdir(), 'opensquid-logphase-'));
   process.env.OPENSQUID_HOME = tempHome;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.OPENSQUID_SESSION_ID;
 });
 
 afterEach(async () => {
@@ -97,11 +106,60 @@ describe('handleLogPhase (stub engine)', () => {
     expect(out?.phases_logged).toHaveLength(7);
   });
 
-  it('throws when there is no live session', async () => {
-    // no recordCurrentSession → .current-session absent
+  it('throws when no env + .current-session absent (T-MULTISESSION MS.1 fallback chain end)', async () => {
+    // No env + no recordCurrentSession → resolveMcpSessionId returns null.
     await expect(handleLogPhase({ phase: 'code' }, stubEngine([]))).rejects.toThrow(
-      /no live session/,
+      /cannot resolve session/,
     );
+  });
+
+  // T-MULTISESSION MS.1 — env-first session resolution
+
+  it('MS.1: prefers CLAUDE_SESSION_ID env over .current-session pointer', async () => {
+    // Both env AND .current-session set; env should win + drive resolution.
+    process.env.CLAUDE_SESSION_ID = 'env-claude-session';
+    await recordCurrentSession('pointer-session'); // would be wrong if env-first failed
+    await writeActiveTask('env-claude-session', {
+      id: 'task-A',
+      subject: 'env-resolved',
+      started_at: 'z',
+    });
+
+    const calls: LoggedCall[] = [];
+    const out = await handleLogPhase({ phase: 'pre_research' }, stubEngine(calls));
+
+    expect(out.task_id).toBe('task-A');
+    expect(calls).toEqual([{ task_id: 'task-A', phase: 'pre_research' }]);
+  });
+
+  it('MS.1: prefers OPENSQUID_SESSION_ID env when CLAUDE_SESSION_ID is absent', async () => {
+    process.env.OPENSQUID_SESSION_ID = 'env-opensquid-session';
+    await writeActiveTask('env-opensquid-session', {
+      id: 'task-B',
+      subject: 'opensquid-env-resolved',
+      started_at: 'z',
+    });
+
+    const calls: LoggedCall[] = [];
+    const out = await handleLogPhase({ phase: 'learn' }, stubEngine(calls));
+
+    expect(out.task_id).toBe('task-B');
+    expect(calls).toEqual([{ task_id: 'task-B', phase: 'learn' }]);
+  });
+
+  it('MS.1: falls back to .current-session when neither env is set', async () => {
+    await recordCurrentSession('pointer-only');
+    await writeActiveTask('pointer-only', {
+      id: 'task-C',
+      subject: 'pointer-fallback',
+      started_at: 'z',
+    });
+
+    const calls: LoggedCall[] = [];
+    const out = await handleLogPhase({ phase: 'code' }, stubEngine(calls));
+
+    expect(out.task_id).toBe('task-C');
+    expect(calls).toEqual([{ task_id: 'task-C', phase: 'code' }]);
   });
 
   it('throws when there is no active task (rule #1)', async () => {
