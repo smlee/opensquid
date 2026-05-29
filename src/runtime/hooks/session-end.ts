@@ -19,6 +19,8 @@
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { clearChainState } from '../chain_state.js';
+import { runCompression } from '../compression_orchestrator.js';
+import { EngineClient } from '../../engine/client.js';
 import { emitProbe, groupFromTask } from '../satisfaction_probe.js';
 import { archiveActiveTask, readActiveTask } from '../session_state.js';
 import { Event } from '../types.js';
@@ -89,6 +91,34 @@ async function main(): Promise<void> {
     if (group) await emitProbe(sessionId, group);
   } catch (e) {
     process.stderr.write(`opensquid: satisfaction-probe emit skipped — ${String(e)}\n`);
+  }
+
+  // T-CTX-LOOP CTX.5 (2026-05-29) — wire the CMP.4 compression orchestrator at
+  // the session boundary. The orchestrator is satisfaction-gated (D1: no
+  // probe answered "satisfied" → no-op); when satisfied, it reads CMP.3
+  // candidate windows + calls engine.memoryConsolidate which atomically
+  // compresses + recall-replay verifies + force-deletes ONLY non-user-cited
+  // predecessors that the verify gate passes. The engine enforces NEVER-delete
+  // for unverified or user-cited memories — opensquid is pure policy. Fail-open
+  // per the hook contract; a compression failure must not block session-end.
+  try {
+    const active = await readActiveTask(sessionId);
+    const group = groupFromTask(active);
+    if (group) {
+      const engine = new EngineClient();
+      try {
+        const outcomes = await runCompression(sessionId, group, engine);
+        if (outcomes.length > 0) {
+          process.stderr.write(
+            `opensquid: compression — ${String(outcomes.length)} window(s) for group ${group}\n`,
+          );
+        }
+      } finally {
+        await engine.close().catch(() => undefined);
+      }
+    }
+  } catch (e) {
+    process.stderr.write(`opensquid: compression skipped — ${String(e)}\n`);
   }
 
   // AP.2 / rule #16 — archive (not delete) the active-task signal at session
