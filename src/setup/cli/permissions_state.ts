@@ -47,12 +47,11 @@
  *   src/setup/cli/permissions_actions.ts.
  */
 
-import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { minimatch } from 'minimatch';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { parseYamlFile } from '../../packs/yaml.js';
 import { Manifest, type Capability, type ManifestType } from '../../packs/schemas/index.js';
@@ -66,6 +65,13 @@ import {
 } from '../../runtime/builtin_denylist.js';
 import type { UserOverride } from '../../runtime/capability_gate.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+
+import {
+  appendJsonlEntry,
+  readJsonlEntries,
+  readKeyedYamlList,
+  writeKeyedYamlList,
+} from './state_io.js';
 
 /** One row in `permission_overrides.yaml`. */
 export interface OverrideRecord {
@@ -98,43 +104,25 @@ export const defaultPacksDir = (): string => join(OPENSQUID_HOME(), 'packs');
 // permission_overrides.yaml — read / write
 // ---------------------------------------------------------------------------
 
+const isOverrideRecord = (v: unknown): v is OverrideRecord =>
+  typeof v === 'object' &&
+  v !== null &&
+  typeof (v as OverrideRecord).pack === 'string' &&
+  typeof (v as OverrideRecord).capability === 'string' &&
+  typeof (v as OverrideRecord).target === 'string';
+
 export async function readOverridesFile(path: string): Promise<OverrideRecord[]> {
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(raw);
-  } catch (e) {
-    throw new Error(
-      `permission_overrides.yaml is malformed (${path}): ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-  if (parsed === null || parsed === undefined) return [];
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`permission_overrides.yaml must be a mapping (${path})`);
-  }
-  const list = (parsed as { overrides?: unknown }).overrides;
-  if (list === undefined) return [];
-  if (!Array.isArray(list)) {
-    throw new Error(`permission_overrides.yaml: \`overrides\` must be a list (${path})`);
-  }
-  return list.filter(
-    (s): s is OverrideRecord =>
-      typeof s === 'object' &&
-      s !== null &&
-      typeof (s as OverrideRecord).pack === 'string' &&
-      typeof (s as OverrideRecord).capability === 'string' &&
-      typeof (s as OverrideRecord).target === 'string',
+  return readKeyedYamlList<OverrideRecord>(
+    path,
+    'overrides',
+    'permission_overrides.yaml',
+    isOverrideRecord,
   );
 }
 
 /**
- * Atomic write — `tmp + rename`. Callers MUST pass the FULL desired
+ * Atomic write — delegates to `writeKeyedYamlList` (T-SIC L9 byte-preserves
+ * the `overrides: []\n` empty form). Callers MUST pass the FULL desired
  * override set; we never merge here to avoid dropping unrelated overrides
  * on concurrent CLI invocations.
  */
@@ -142,12 +130,7 @@ export async function writeOverridesFile(
   path: string,
   overrides: readonly OverrideRecord[],
 ): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const body =
-    overrides.length === 0 ? 'overrides: []\n' : stringifyYaml({ overrides: [...overrides] });
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, body, 'utf8');
-  await rename(tmp, path);
+  return writeKeyedYamlList(path, 'overrides', overrides);
 }
 
 /** Convert persisted `OverrideRecord[]` into the runtime `UserOverride[]`
@@ -162,27 +145,11 @@ export function toRuntimeOverrides(records: readonly OverrideRecord[]): UserOver
 // ---------------------------------------------------------------------------
 
 export async function appendAuditEntry(path: string, entry: AuditEntry): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await appendFile(path, JSON.stringify(entry) + '\n', 'utf8');
+  return appendJsonlEntry(path, entry);
 }
 
 export async function readAuditEntries(path: string): Promise<AuditEntry[]> {
-  try {
-    const raw = await readFile(path, 'utf8');
-    const out: AuditEntry[] = [];
-    for (const line of raw.split('\n')) {
-      if (line.length === 0) continue;
-      try {
-        out.push(JSON.parse(line) as AuditEntry);
-      } catch {
-        // Skip malformed line — don't fail the whole CLI on one bad row.
-      }
-    }
-    return out;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
+  return readJsonlEntries<AuditEntry>(path);
 }
 
 // ---------------------------------------------------------------------------

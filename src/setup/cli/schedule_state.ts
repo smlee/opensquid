@@ -32,13 +32,18 @@
  * Imported by: src/setup/cli/schedule.ts + src/setup/cli/schedule_actions.ts.
  */
 
-import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 import { scheduleOutcomeDir, type ScheduleOutcome } from '../../runtime/wedge/schedule_outcome.js';
+
+import {
+  appendJsonlEntry,
+  readJsonlEntries,
+  readKeyedYamlList,
+  writeKeyedYamlList,
+} from './state_io.js';
 
 /** One user-added schedule. Matches pack-declared `schedule` triggers in
  *  shape so the CLI can render them through one row type. */
@@ -89,41 +94,15 @@ export const defaultSessionsDir = (): string => join(OPENSQUID_HOME(), 'sessions
 // Atomic write via `tmp + rename` matches the trigger_state.yaml pattern.
 // ---------------------------------------------------------------------------
 
+const isUserSchedule = (v: unknown): v is UserSchedule => typeof v === 'object' && v !== null;
+const isString = (v: unknown): v is string => typeof v === 'string';
+
 export async function readUserSchedules(path: string): Promise<UserSchedule[]> {
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(raw);
-  } catch (e) {
-    throw new Error(
-      `schedules.yaml is malformed (${path}): ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-  if (parsed === null || parsed === undefined) return [];
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`schedules.yaml must be a mapping (${path})`);
-  }
-  const list = (parsed as { schedules?: unknown }).schedules;
-  if (list === undefined) return [];
-  if (!Array.isArray(list)) {
-    throw new Error(`schedules.yaml: \`schedules\` must be a list (${path})`);
-  }
-  return list.filter((s): s is UserSchedule => typeof s === 'object' && s !== null);
+  return readKeyedYamlList<UserSchedule>(path, 'schedules', 'schedules.yaml', isUserSchedule);
 }
 
 export async function writeUserSchedules(path: string, schedules: UserSchedule[]): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const body =
-    schedules.length === 0 ? 'schedules: []\n' : stringifyYaml({ schedules: [...schedules] });
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, body, 'utf8');
-  await rename(tmp, path);
+  return writeKeyedYamlList(path, 'schedules', schedules);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,40 +110,11 @@ export async function writeUserSchedules(path: string, schedules: UserSchedule[]
 // ---------------------------------------------------------------------------
 
 export async function readPausedSet(path: string): Promise<Set<string>> {
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
-    throw e;
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(raw);
-  } catch (e) {
-    throw new Error(
-      `schedule_paused.yaml is malformed (${path}): ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-  if (parsed === null || parsed === undefined) return new Set();
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`schedule_paused.yaml must be a mapping (${path})`);
-  }
-  const list = (parsed as { paused?: unknown }).paused;
-  if (list === undefined) return new Set();
-  if (!Array.isArray(list)) {
-    throw new Error(`schedule_paused.yaml: \`paused\` must be a list (${path})`);
-  }
-  return new Set(list.filter((s): s is string => typeof s === 'string'));
+  return new Set(await readKeyedYamlList<string>(path, 'paused', 'schedule_paused.yaml', isString));
 }
 
 export async function writePausedSet(path: string, paused: Set<string>): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const sorted = [...paused].sort();
-  const body = sorted.length === 0 ? 'paused: []\n' : stringifyYaml({ paused: sorted });
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, body, 'utf8');
-  await rename(tmp, path);
+  return writeKeyedYamlList(path, 'paused', [...paused].sort());
 }
 
 // ---------------------------------------------------------------------------
@@ -177,22 +127,18 @@ export async function writePausedSet(path: string, paused: Set<string>): Promise
 // ---------------------------------------------------------------------------
 
 export async function appendHistory(path: string, entry: HistoryEntry): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const line = JSON.stringify(entry) + '\n';
-  await appendFile(path, line, 'utf8');
+  return appendJsonlEntry(path, entry);
 }
 
+/**
+ * Read schedule history JSONL entries. T-SIC L11 NOTE: the previous
+ * impl used `.map(JSON.parse)` which throws on a malformed line; the
+ * shared helper instead skips silently — matches the lenient posture
+ * used by `permissions_state.readAuditEntries` and prevents one bad
+ * row from breaking `schedule history`.
+ */
 export async function readHistory(path: string): Promise<HistoryEntry[]> {
-  try {
-    const raw = await readFile(path, 'utf8');
-    return raw
-      .split('\n')
-      .filter((l) => l.length > 0)
-      .map((l) => JSON.parse(l) as HistoryEntry);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
+  return readJsonlEntries<HistoryEntry>(path);
 }
 
 // ---------------------------------------------------------------------------

@@ -19,13 +19,13 @@
  * Imported by: src/setup/cli/triggers.ts.
  */
 
-import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { loadPack } from '../../packs/loader.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+
+import { readKeyedYamlList, writeKeyedYamlList } from './state_io.js';
 
 import type { Pack, Trigger } from '../../runtime/types.js';
 
@@ -42,41 +42,16 @@ export interface TriggerRow {
 export const defaultPacksDir = (): string => join(OPENSQUID_HOME(), 'packs');
 export const defaultStatePath = (): string => join(OPENSQUID_HOME(), 'trigger_state.yaml');
 
+const isString = (v: unknown): v is string => typeof v === 'string';
+
 export async function readDisabledSet(statePath: string): Promise<Set<string>> {
-  let raw: string;
-  try {
-    raw = await readFile(statePath, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
-    throw e;
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(raw);
-  } catch (e) {
-    throw new Error(
-      `trigger_state.yaml is malformed (${statePath}): ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-  if (parsed === null || parsed === undefined) return new Set();
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`trigger_state.yaml must be a mapping (${statePath})`);
-  }
-  const disabled = (parsed as { disabled?: unknown }).disabled;
-  if (disabled === undefined) return new Set();
-  if (!Array.isArray(disabled)) {
-    throw new Error(`trigger_state.yaml: \`disabled\` must be a list (${statePath})`);
-  }
-  return new Set(disabled.filter((s): s is string => typeof s === 'string'));
+  return new Set(
+    await readKeyedYamlList<string>(statePath, 'disabled', 'trigger_state.yaml', isString),
+  );
 }
 
 export async function writeDisabledSet(statePath: string, disabled: Set<string>): Promise<void> {
-  await mkdir(dirname(statePath), { recursive: true });
-  const sorted = [...disabled].sort();
-  const body = sorted.length === 0 ? 'disabled: []\n' : stringifyYaml({ disabled: sorted });
-  const tmp = `${statePath}.tmp`;
-  await writeFile(tmp, body, 'utf8');
-  await rename(tmp, statePath);
+  return writeKeyedYamlList(statePath, 'disabled', [...disabled].sort());
 }
 
 export async function enumeratePacks(packsDir: string): Promise<Pack[]> {

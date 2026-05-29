@@ -7,8 +7,7 @@
  *      `~/.opensquid/webhooks.yaml`. Schema mirrors the SCHED.1 runtime
  *      loader (`src/runtime/webhook_subscriptions.ts`) so anything the CLI
  *      writes is consumable by the daemon without a second migration step.
- *      Atomic write via `tmp + rename` matches the schedule_state.yaml +
- *      trigger_state.yaml pattern.
+ *      Atomic write via `tmp + rename` (now delegated to `state_io.ts`).
  *   2. `genSecret` — `crypto.randomBytes(32).toString('hex')` returning the
  *      64-char lowercase hex string used for HMAC-SHA256 signing keys. The
  *      caller embeds it via a `literal:<hex>` URI so the runtime's secret
@@ -30,17 +29,16 @@
  *   resolver with `literalBackend()` registered (daemon, configured at
  *   setup time outside this task's scope).
  *
- * Imports from: node:crypto, node:fs/promises, yaml, ../../runtime/paths.
+ * Imports from: node:crypto, ../../runtime/paths, ./state_io.
  * Imported by: src/setup/cli/webhooks.ts + src/setup/cli/webhooks_actions.ts.
  */
 
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { join } from 'node:path';
 
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+
+import { readKeyedYamlList, writeKeyedYamlList } from './state_io.js';
 
 /** CLI-managed shape mirrors the SCHED.1 `SubscriptionYaml` exactly. */
 export interface SubscriptionRecord {
@@ -88,52 +86,27 @@ export function webhookUrl(id: string, port: number): string {
   return `http://localhost:${String(port)}/webhook/${id}`;
 }
 
+const isSubscriptionRecord = (v: unknown): v is SubscriptionRecord =>
+  typeof v === 'object' && v !== null;
+
 export async function readWebhooksFile(path: string): Promise<SubscriptionRecord[]> {
-  let raw: string;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(raw);
-  } catch (e) {
-    throw new Error(
-      `webhooks.yaml is malformed (${path}): ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-  if (parsed === null || parsed === undefined) return [];
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`webhooks.yaml must be a mapping (${path})`);
-  }
-  const list = (parsed as { subscriptions?: unknown }).subscriptions;
-  if (list === undefined) return [];
-  if (!Array.isArray(list)) {
-    throw new Error(`webhooks.yaml: \`subscriptions\` must be a list (${path})`);
-  }
-  return list.filter((s): s is SubscriptionRecord => typeof s === 'object' && s !== null);
+  return readKeyedYamlList<SubscriptionRecord>(
+    path,
+    'subscriptions',
+    'webhooks.yaml',
+    isSubscriptionRecord,
+  );
 }
 
 /**
- * Atomic write — `tmp + rename`. The `tmp` file is in the same directory
- * so `rename` stays on one filesystem (atomicity guarantee on POSIX).
- *
- * Callers MUST pass the FULL desired subscription set; we never merge
- * here because partial writes risk dropping unrelated subscriptions on
- * concurrent CLI invocations.
+ * Atomic write — delegates to `writeKeyedYamlList` (T-SIC L9 byte-preserves
+ * the `subscriptions: []\n` empty form). Callers MUST pass the FULL
+ * desired subscription set; we never merge here because partial writes
+ * risk dropping unrelated subscriptions on concurrent CLI invocations.
  */
 export async function writeWebhooksFile(
   path: string,
   subscriptions: readonly SubscriptionRecord[],
 ): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const body =
-    subscriptions.length === 0
-      ? 'subscriptions: []\n'
-      : stringifyYaml({ subscriptions: [...subscriptions] });
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, body, 'utf8');
-  await rename(tmp, path);
+  return writeKeyedYamlList(path, 'subscriptions', subscriptions);
 }
