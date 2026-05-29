@@ -24,7 +24,35 @@ when_to_load:
     type: prompt_submit
   - tool_match: Write
   - tool_match: Edit
+  - tool_match: TaskCreate # T-SD-TASKCREATE-GATE L1
 rules:
+  # T-SD-TASKCREATE-GATE SDTC.1 (2026-05-29) — block raw TaskCreate that
+  # bypasses scope-decomposer. Self-evidencing fix: this session created
+  # TaskCreate(#66 T-MULTISESSION) with "architectural; deferred" framing
+  # WITHOUT checking whether the architecture already existed (it did —
+  # live-session lease + per-project state + T-DEL track were already
+  # shipped). The gate enforces metadata.spec presence so every TaskCreate
+  # carries provenance back to a pre-research+spec artifact on disk.
+  - id: taskcreate-requires-spec-provenance
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: verdict
+        if: 'tool == "TaskCreate" && (targs.metadata == null || targs.metadata.spec == null || len(targs.metadata.spec) == 0)'
+        args:
+          level: block
+          message: >-
+            BLOCKED: TaskCreate without `metadata.spec` bypasses
+            scope-decomposer. Run pre-research → task-spec-author →
+            `docs/tasks/T-<slug>.md` FIRST, then TaskCreate with
+            metadata: { spec: '<absolute spec path>', taskId: '<task id>' }.
+            Self-evidencing fix: TaskCreate(#66 T-MULTISESSION) bypassed
+            this discipline on 2026-05-29 and queued a wrong architectural
+            framing because the agent didn't grep src/runtime/chat/ before
+            creating the task.
+
   - id: scope-intent-nudge
     process:
       - call: text_pattern_match

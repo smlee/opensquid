@@ -68,6 +68,7 @@ async function runRule(process: ProcessStep[], event: Event): Promise<RuleResult
 
 let nudgeSteps: ProcessStep[];
 let blockSteps: ProcessStep[];
+let taskcreateSteps: ProcessStep[]; // T-SD-TASKCREATE-GATE SDTC.1
 // T-ASC ASC.5 chain-handoff rules + their per-rule requires.
 let r1Steps: ProcessStep[];
 let r1Requires: readonly SkillRequires[];
@@ -84,10 +85,14 @@ beforeAll(async () => {
   if (!skill) throw new Error('scope-decomposer skill not found in fixture pack');
   const nudge = skill.rules.find((r) => r.id === 'scope-intent-nudge');
   const block = skill.rules.find((r) => r.id === 'inline-spec-block');
+  const taskcreate = skill.rules.find((r) => r.id === 'taskcreate-requires-spec-provenance');
   if (nudge?.kind !== 'track_check') throw new Error('scope-intent-nudge not a track_check');
   if (block?.kind !== 'track_check') throw new Error('inline-spec-block not a track_check');
+  if (taskcreate?.kind !== 'track_check')
+    throw new Error('taskcreate-requires-spec-provenance not a track_check');
   nudgeSteps = nudge.process;
   blockSteps = block.process;
+  taskcreateSteps = taskcreate.process;
   // ASC.5: locate the 3 chain-handoff rules + their per-rule requires.
   const r1 = skill.rules.find((r) => r.id === 'chain-handoff-research-to-spec');
   const r2 = skill.rules.find((r) => r.id === 'chain-handoff-spec-to-tasks');
@@ -321,6 +326,70 @@ describe('scope-decomposer (fixture) / chain-handoff rules (T-ASC ASC.5)', () =>
 
     it('stays silent when chain is idle (precondition fails)', async () => {
       const r = await runChainRule(r3Steps, r3Requires);
+      expect(r.kind).toBe('no_verdict');
+    });
+  });
+
+  // T-SD-TASKCREATE-GATE SDTC.1 — block raw TaskCreate without metadata.spec
+  describe('taskcreate-requires-spec-provenance (T-SD-TASKCREATE-GATE)', () => {
+    it('BLOCKS TaskCreate without metadata.spec (raw create bypassing the pipeline)', async () => {
+      const r = await runRule(taskcreateSteps, {
+        kind: 'tool_call',
+        tool: 'TaskCreate',
+        args: { subject: 'wrong-architectural-deferred-task', description: 'whatever' },
+      });
+      expect(r.kind).toBe('verdict');
+      if (r.kind === 'verdict') {
+        expect(r.verdict.level).toBe('block');
+        expect(r.verdict.message).toMatch(/metadata\.spec/);
+        expect(r.verdict.message).toMatch(/bypasses\s+scope-decomposer/);
+      }
+    });
+
+    it('BLOCKS TaskCreate when metadata is present but spec is missing', async () => {
+      const r = await runRule(taskcreateSteps, {
+        kind: 'tool_call',
+        tool: 'TaskCreate',
+        args: {
+          subject: 'partial-metadata',
+          metadata: { taskId: 'X.1' /* spec absent */ },
+        },
+      });
+      expect(r.kind).toBe('verdict');
+      if (r.kind === 'verdict') expect(r.verdict.level).toBe('block');
+    });
+
+    it('BLOCKS TaskCreate when metadata.spec is empty string', async () => {
+      const r = await runRule(taskcreateSteps, {
+        kind: 'tool_call',
+        tool: 'TaskCreate',
+        args: {
+          subject: 'empty-spec-path',
+          metadata: { spec: '' },
+        },
+      });
+      expect(r.kind).toBe('verdict');
+      if (r.kind === 'verdict') expect(r.verdict.level).toBe('block');
+    });
+
+    it('PASSES TaskCreate carrying a metadata.spec absolute path (well-formed)', async () => {
+      const r = await runRule(taskcreateSteps, {
+        kind: 'tool_call',
+        tool: 'TaskCreate',
+        args: {
+          subject: 'well-formed',
+          metadata: { spec: '/Users/slee/projects/loop/docs/tasks/T-sd-taskcreate-gate.md' },
+        },
+      });
+      expect(r.kind).toBe('no_verdict');
+    });
+
+    it('stays silent on non-TaskCreate events (skill fires on Write/Edit/etc. too; this rule only matters for TaskCreate)', async () => {
+      const r = await runRule(taskcreateSteps, {
+        kind: 'tool_call',
+        tool: 'Bash',
+        args: { command: 'echo hi' },
+      });
       expect(r.kind).toBe('no_verdict');
     });
   });
