@@ -1,8 +1,8 @@
-# sangmin-personal notification routing.
+# default-discipline notification routing.
 #
 # Minimal defaults that compose with the schema defaults: critical + error
-# go to `alerts`; warning + info go to `chat`. Sangmin's user config can
-# override per-project (e.g. route engine-repo `warning` to a dedicated
+# go to `alerts`; warning + info go to `chat`. Users can override per-project
+# in their user-scope pack (e.g. route engine-repo `warning` to a dedicated
 # Telegram topic).
 severity_tiers:
   critical: [alerts]

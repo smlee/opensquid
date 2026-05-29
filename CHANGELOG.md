@@ -7,6 +7,57 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.215] - 2026-05-29
+
+### Changed (BREAKING for users who pinned the old pack name)
+
+- **Renamed built-in pack `sangmin-personal` → `default-discipline`**
+  (`packs/builtin/sangmin-personal/` → `packs/builtin/default-discipline/`).
+  The previous name implied personal content despite the pack carrying
+  generic drift-gate discipline (workflow / versioning / git / d9-guard /
+  honesty-ledger / phase-logging / engine-vocab). The new name signals:
+  shipped-by-default, generic drift discipline, opt-in via active.json.
+  Per `docs/tasks/T-builtin-retire.md` + pre-research at
+  `docs/research/T-builtin-retire-pre-research-2026-05-29.md`.
+
+  **User-side migration:** if your scope's `active.json` lists
+  `sangmin-personal` under `packs:`, update the entry to `default-discipline`:
+
+  ```yaml
+  # before
+  packs:
+    - sangmin-personal
+
+  # after
+  packs:
+    - default-discipline
+  ```
+
+  No compat shim ships — users with the old name pinned get a clear
+  "no such pack" load error. Per `T-PUC L5` + `T-VOCAB.1` precedents
+  (no re-exports, no symlinks).
+
+  Renamed surfaces (atomic commit):
+  - `packs/builtin/sangmin-personal/` → `packs/builtin/default-discipline/`
+    (`git mv` preserves per-file blame)
+  - `packs/builtin/default-discipline/manifest.yaml`: `name`, `goal`,
+    `description`, header comment block — all rewritten to persona-neutral
+  - 4 other yaml side-files (`drift_response.yaml`, `models.yaml`,
+    `channels.yaml`, `notifications.yaml`): line 1 header comments updated
+  - `packs/builtin/default-discipline/skills/`: **byte-identical** (7 skill
+    folders untouched — d9-guard, engine-vocab, git, honesty-ledger,
+    phase-logging, versioning, workflow)
+  - `test/builtin/sangmin-personal.test.ts` →
+    `test/builtin/default-discipline.test.ts` (+ 9 internal string updates)
+  - `docs/skill-grammar-guide.md`: 5 path references updated (lines 30, 389,
+    611, 612, 614)
+  - `package.json`: `0.5.214` → `0.5.215`
+
+  Untouched (substring-collision guard — these are a DIFFERENT pack at
+  user scope): every `sangmin-personal-rules` reference in `src/`,
+  `test/fixtures/`, `test/e2e/`, integration tests, and the user's
+  personal pack at `~/.opensquid/packs/sangmin-personal-rules/`.
+
 ## [0.5.150] - 2026-05-26
 
 ### Changed (BREAKING semantic)

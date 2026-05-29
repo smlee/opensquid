@@ -26,8 +26,8 @@ real-world drift class that used to live in prose.
 
 ### The motivating story: a silently-broken production rule
 
-The user's `workflow` skill ships this rule in
-`packs/builtin/sangmin-personal/skills/workflow/skill.yaml`:
+The built-in `workflow` skill ships this rule in
+`packs/builtin/default-discipline/skills/workflow/skill.yaml`:
 
 ```yaml
 - id: phase-logged-before-commit
@@ -386,7 +386,7 @@ These don't have a dedicated example skill but appear frequently:
   if: claimed
   ```
 
-  (Shipped throughout `packs/builtin/sangmin-personal/skills/honesty-ledger/`.)
+  (Shipped throughout `packs/builtin/default-discipline/skills/honesty-ledger/`.)
 
 - **Negated truthy:**
 
@@ -606,12 +606,12 @@ The following production skills exercise specific operator families,
 which makes them useful real-world reading alongside the worked
 examples:
 
-| Skill                                                             | Feature exercised                                                                                                                                                        |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packs/builtin/sangmin-personal/skills/d9-guard/skill.yaml`       | `automation.value == true` (BOOL_CMP) + `automation.value == true && classification == "BLOCK"` (compound `&&` over BOOL_CMP — impossible under the pre-H regex grammar) |
-| `packs/builtin/sangmin-personal/skills/workflow/skill.yaml`       | `committing && phases != "complete"` — the §1 motivating story, latent rule fixed by H.1.6                                                                               |
-| `packs/builtin/cycle-pack/skills/lesson-capture/skill.yaml`       | `candidates == "NONE"` — simplest non-bare form, good intro to `==`                                                                                                      |
-| `packs/builtin/sangmin-personal/skills/honesty-ledger/skill.yaml` | 14× `if: claimed` — bare-binding (truthy) pattern, useful shared-binding anchor                                                                                          |
+| Skill                                                               | Feature exercised                                                                                                                                                        |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packs/builtin/default-discipline/skills/d9-guard/skill.yaml`       | `automation.value == true` (BOOL_CMP) + `automation.value == true && classification == "BLOCK"` (compound `&&` over BOOL_CMP — impossible under the pre-H regex grammar) |
+| `packs/builtin/default-discipline/skills/workflow/skill.yaml`       | `committing && phases != "complete"` — the §1 motivating story, latent rule fixed by H.1.6                                                                               |
+| `packs/builtin/cycle-pack/skills/lesson-capture/skill.yaml`         | `candidates == "NONE"` — simplest non-bare form, good intro to `==`                                                                                                      |
+| `packs/builtin/default-discipline/skills/honesty-ledger/skill.yaml` | 14× `if: claimed` — bare-binding (truthy) pattern, useful shared-binding anchor                                                                                          |
 
 ---
 

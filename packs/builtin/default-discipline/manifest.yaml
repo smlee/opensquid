@@ -1,0 +1,25 @@
+# default-discipline — generic drift-gate discipline as a pack.
+#
+# Renamed from `sangmin-personal` per T-BUILTIN-RETIRE BR.1 (2026-05-29):
+# the previous name implied personal content despite carrying generic
+# drift-gate discipline (workflow / versioning / git / d9-guard /
+# honesty-ledger / phase-logging / engine-vocab). Authoritative source:
+# docs/tasks/T-builtin-retire.md.
+#
+# Seven skill folders: d9-guard/, engine-vocab/, git/, honesty-ledger/,
+# phase-logging/, versioning/, workflow/.
+#
+# Ships with the npm package (see package.json `files` field) as a dormant
+# opt-in template — NOT auto-loaded. Users who want this baseline add
+# `default-discipline` to their scope's `active.json`. The user's
+# personal discipline (instance-specific rules, identity claims, etc.)
+# belongs in a user-scope pack under `~/.opensquid/packs/`, not here.
+name: default-discipline
+version: 0.1.0
+scope: universal
+goal: ship verified work with locked drift-gate discipline
+description: |
+  Default discipline pack — encodes generic git hygiene, 7-phase workflow,
+  PATCH-only pre-1.0 versioning, honesty-ledger claim catalog, and
+  phase-logging discipline. Opt-in via your scope's active.json.
+evolves: true

@@ -1,17 +1,21 @@
 /**
- * E2E test for the built-in sangmin-personal pack (PERS.2).
+ * E2E test for the built-in default-discipline pack.
  *
- * Acceptance per docs/tasks/personal-pack.md PERS.2:
+ * Renamed from `sangmin-personal` per T-BUILTIN-RETIRE BR.1 (2026-05-29):
+ * the previous name implied personal content despite the pack carrying
+ * generic drift-gate discipline. Authoritative source:
+ * docs/tasks/T-builtin-retire.md.
+ *
+ * Acceptance:
  *  - Pack folder + side-files present.
  *  - Pack loads cleanly via the Phase 2 loader.
  *  - validateUniqueSkillNames passes (no skill name collisions).
  *  - validatePackFunctions passes against the runtime registry (every
  *    `call:` resolves to a registered primitive).
- *  - Seven skill folders (d9-guard, git, engine-vocab, workflow, versioning,
- *    honesty-ledger, phase-logging). G.12 added d9-guard (automation-gated
- *    Stop-event politeness-reflex detector).
+ *  - Seven skill folders (d9-guard, engine-vocab, git, honesty-ledger,
+ *    phase-logging, versioning, workflow).
  *
- * The pack ships from packs/builtin/sangmin-personal/ (in package.json's
+ * The pack ships from packs/builtin/default-discipline/ (in package.json's
  * `files`). We resolve the path relative to process.cwd() so the test
  * runs from the repo regardless of invocation directory.
  */
@@ -25,10 +29,10 @@ import { validatePackFunctions } from '../../src/packs/validate_functions.js';
 import { validateUniqueSkillNames } from '../../src/packs/validate_uniqueness.js';
 import { buildRegistry } from '../../src/runtime/bootstrap.js';
 
-describe('builtin sangmin-personal pack', () => {
+describe('builtin default-discipline pack', () => {
   it('loads cleanly via loadPack', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
-    expect(pack.name).toBe('sangmin-personal');
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
+    expect(pack.name).toBe('default-discipline');
     expect(pack.scope).toBe('universal');
     expect(pack.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(pack.goal).toMatch(/verified work/i);
@@ -36,7 +40,7 @@ describe('builtin sangmin-personal pack', () => {
   });
 
   it('ships seven skill folders', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const skillNames = pack.skills.map((s) => s.name).sort();
     expect(skillNames).toEqual([
       'd9-guard',
@@ -50,13 +54,13 @@ describe('builtin sangmin-personal pack', () => {
   });
 
   it('passes validateUniqueSkillNames (no in-pack collisions)', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const issues = validateUniqueSkillNames([pack]);
     expect(issues).toEqual([]);
   });
 
   it('every process step references a registered primitive', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     // Inject a no-op RAG backend so the test doesn't try to spawn a live
     // loop-engine daemon (T.3 wired RAG; resolveBackendConfig() defaults
     // to loop-engine when the binary is discoverable). Registry shape is
@@ -75,7 +79,7 @@ describe('builtin sangmin-personal pack', () => {
   });
 
   it('declares git skill with the three locked block-tool rules', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const git = pack.skills.find((s) => s.name === 'git');
     expect(git).toBeDefined();
     const ruleIds = git?.rules.map((r) => r.id).sort();
@@ -84,7 +88,7 @@ describe('builtin sangmin-personal pack', () => {
   });
 
   it('declares workflow skill with a destination_check + track_check pair', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const workflow = pack.skills.find((s) => s.name === 'workflow');
     expect(workflow).toBeDefined();
     expect(workflow?.load).toBe('preload');
@@ -93,14 +97,14 @@ describe('builtin sangmin-personal pack', () => {
   });
 
   it('declares honesty-ledger with fourteen claim rules', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const ledger = pack.skills.find((s) => s.name === 'honesty-ledger');
     expect(ledger?.rules).toHaveLength(14);
     expect(ledger?.load).toBe('preload');
   });
 
   it('declares phase-logging with three claim rules', async () => {
-    const pack = await loadPack(resolve('packs/builtin/sangmin-personal'));
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const phaseLogging = pack.skills.find((s) => s.name === 'phase-logging');
     expect(phaseLogging?.rules).toHaveLength(3);
     expect(phaseLogging?.load).toBe('preload');

@@ -1,7 +1,0 @@
-# sangmin-personal channel suggestions.
-#
-# Empty: this pack does NOT declare abstract channel names. Sangmin's user
-# config at ~/.opensquid/channels.yaml maps `chat` + `alerts` + Telegram
-# topics to concrete URIs at the user layer. Keeping the pack-side file
-# empty avoids leaking personal endpoint defaults into the package.
-{}

@@ -1,0 +1,8 @@
+# default-discipline model aliases.
+#
+# Empty: this pack does not hardcode model choices. The user's local config
+# at ~/.opensquid/models.yaml maps `reasoning` + `fast_classifier` to
+# whichever subscription/SDK/API the user prefers. The pack's
+# destination_check rule references the alias `reasoning`; the user picks
+# the backend.
+{}
