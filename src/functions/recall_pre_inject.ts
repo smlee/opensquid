@@ -38,6 +38,7 @@
 import { z } from 'zod';
 
 import type { RagBackend, RecallHit } from '../rag/types.js';
+import { applyHitBudget } from '../runtime/load_budget.js';
 import { err, ok } from '../runtime/result.js';
 import { readActiveTask } from '../runtime/session_state.js';
 
@@ -63,22 +64,24 @@ function estimateTokens(s: string): number {
   return Math.ceil(s.length / 4);
 }
 
-/** Apply the score filter first (cheap), then the whole-hit token-budget guard. */
+/**
+ * T-CTX-LOOP CTX.6 — score-filter + token-budget selection now delegates
+ * to the shared `applyHitBudget` primitive. The RecallHit's `tokenCost`
+ * computation (Math.ceil(content.length / 4)) is supplied at the call site
+ * so the primitive itself stays tokenizer-agnostic.
+ */
 function selectHitsForInjection(
   hits: RecallHit[],
   minScore: number,
   maxTokens: number,
 ): { kept: RecallHit[]; truncated: boolean } {
-  const filtered = hits.filter((h) => h.score >= minScore);
-  let totalTokens = 0;
-  const kept: RecallHit[] = [];
-  for (const h of filtered) {
-    const t = estimateTokens(h.lesson.content);
-    if (totalTokens + t > maxTokens) break;
-    kept.push(h);
-    totalTokens += t;
-  }
-  return { kept, truncated: filtered.length > kept.length };
+  const budgeted = hits.map((h) => ({
+    hit: h,
+    score: h.score,
+    tokenCost: estimateTokens(h.lesson.content),
+  }));
+  const result = applyHitBudget(budgeted, minScore, maxTokens);
+  return { kept: result.kept.map((b) => b.hit), truncated: result.truncated };
 }
 
 /**
