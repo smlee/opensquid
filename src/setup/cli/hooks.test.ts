@@ -99,7 +99,7 @@ describe('runHooksWizard — dry-run', () => {
     expect(writerCalls).toBe(0);
     expect(readerCalls).toBe(1); // user-only mode
     expect(stdoutBuf).toContain('DRY RUN');
-    expect(stdoutBuf).toContain('would add 4');
+    expect(stdoutBuf).toContain('would add 5');
     expect(stderrBuf).toBe('');
   });
 });

@@ -45,7 +45,7 @@ async function readJson(p: string): Promise<unknown> {
 describe('writeOpensquidHooks — empty / nonexistent settings.json', () => {
   it('creates the file with all 4 opensquid hook entries when settings.json does not exist', async () => {
     const result = await writeOpensquidHooks(settingsPath);
-    expect(result.added).toBe(4);
+    expect(result.added).toBe(5);
     expect(result.replaced).toBe(0);
     expect(result.preserved).toBe(0);
 
@@ -90,7 +90,7 @@ describe('writeOpensquidHooks — preserves third-party entries', () => {
 
     const result = await writeOpensquidHooks(settingsPath);
     expect(result.preserved).toBe(1); // the user's Stop hook
-    expect(result.added).toBe(4);
+    expect(result.added).toBe(5);
 
     const out = (await readJson(settingsPath)) as {
       hooks: { Stop: { hooks: { command: string }[]; matcher?: string }[] };
@@ -229,11 +229,12 @@ describe('projectOpensquidHooks — pure-function projection', () => {
 
   it('handles a totally-empty input (no hooks key)', () => {
     const { output, added, replaced, preserved } = projectOpensquidHooks({});
-    expect(added).toBe(4);
+    expect(added).toBe(5);
     expect(replaced).toBe(0);
     expect(preserved).toBe(0);
     expect(Object.keys(output.hooks ?? {})).toEqual([
       'PreToolUse',
+      'PostToolUse',
       'UserPromptSubmit',
       'Stop',
       'SessionEnd',

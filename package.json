@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.209",
+  "version": "0.5.210",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -11,6 +11,7 @@
   },
   "bin": {
     "opensquid": "./dist/cli.js",
+    "opensquid-hook-posttooluse": "./dist/runtime/hooks/post-tool-use.js",
     "opensquid-hook-pretooluse": "./dist/runtime/hooks/pre-tool-use.js",
     "opensquid-hook-sessionend": "./dist/runtime/hooks/session-end.js",
     "opensquid-hook-stop": "./dist/runtime/hooks/stop.js",

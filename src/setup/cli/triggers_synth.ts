@@ -53,6 +53,11 @@ export function synthFireEvent(row: TriggerRow, trigger: Trigger, now: Date): Ev
       };
     case 'tool_call':
       return { kind: 'tool_call', tool: 'cli.fire', args: {} };
+    case 'post_tool_call':
+      // T-POSTPUSH POSTPUSH.1 — synthetic post-tool-use fire surfaces a
+      // success exit code so verify-CI-after-push-style skills can be
+      // triggered manually via `opensquid triggers fire`.
+      return { kind: 'post_tool_call', tool: 'cli.fire', args: {}, exit_code: 0 };
     case 'prompt_submit':
       return { kind: 'prompt_submit', prompt: '' };
     case 'session_end':

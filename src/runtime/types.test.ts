@@ -83,6 +83,10 @@ describe('Event', () => {
         case 'tool_call':
           expectTypeOf(e.tool).toEqualTypeOf<string>();
           return e.tool;
+        case 'post_tool_call':
+          // T-POSTPUSH POSTPUSH.1 — post-tool-use carries exit_code
+          expectTypeOf(e.exit_code).toEqualTypeOf<number>();
+          return e.tool;
         case 'prompt_submit':
           expectTypeOf(e.prompt).toEqualTypeOf<string>();
           return e.prompt;
@@ -278,9 +282,10 @@ describe('Event (AUTO.1 new variants)', () => {
 // ---------------------------------------------------------------------------
 
 describe('EventKind enum', () => {
-  it('lists exactly the 8 Event discriminator literals', () => {
+  it('lists exactly the 9 Event discriminator literals', () => {
     expect(EventKind.options).toEqual([
       'tool_call',
+      'post_tool_call', // T-POSTPUSH POSTPUSH.1
       'prompt_submit',
       'session_end',
       'stop',

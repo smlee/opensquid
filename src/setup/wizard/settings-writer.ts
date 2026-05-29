@@ -25,11 +25,15 @@
 
 import { promises as fs } from 'node:fs';
 
-// Maps opensquid's 4 supported Claude Code hook events to the bin entries
+// Maps opensquid's 5 supported Claude Code hook events to the bin entries
 // declared in package.json (resolve to `dist/runtime/hooks/*.js` binaries
 // that already wire `loadActivePacks` + `dispatchEvent`).
+// T-POSTPUSH POSTPUSH.1 (2026-05-29) added the 5th entry; existing users
+// need to re-run `opensquid setup` to register the new hook in their
+// settings.json.
 export const OPENSQUID_BIN_FOR_EVENT = {
   PreToolUse: 'opensquid-hook-pretooluse',
+  PostToolUse: 'opensquid-hook-posttooluse',
   UserPromptSubmit: 'opensquid-hook-userpromptsubmit',
   Stop: 'opensquid-hook-stop',
   SessionEnd: 'opensquid-hook-sessionend',

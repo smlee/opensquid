@@ -57,6 +57,18 @@ const BIN_SPECS: BinSpec[] = [
     }),
   },
   {
+    // T-POSTPUSH POSTPUSH.1 — post-tool-use bin smoke. Includes a
+    // `tool_result` payload to exercise the new event-schema normalization.
+    bin: 'post-tool-use.js',
+    event: 'post_tool_call',
+    stdin: JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_result: { exit_code: 0, stdout: 'hi\n' },
+      session_id: 'test',
+    }),
+  },
+  {
     bin: 'user-prompt-submit.js',
     event: 'prompt_submit',
     stdin: JSON.stringify({ prompt: 'hello', session_id: 'test' }),

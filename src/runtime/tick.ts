@@ -68,6 +68,11 @@ export function advanceTick(state: Readonly<TickState>, event: Event): TickState
       // Tool calls happen inside a turn — by design, NOT a turn boundary.
       // See module header.
       return state;
+    case 'post_tool_call':
+      // T-POSTPUSH POSTPUSH.1 — post-tool-use events are also intra-turn
+      // signals; same posture as `tool_call`. The exit_code surface is for
+      // gate skills; tick state stays unaffected.
+      return state;
     case 'schedule':
     case 'webhook':
     case 'inbound_channel':

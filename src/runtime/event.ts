@@ -50,6 +50,25 @@ export const ToolCallEvent = z.object({
 });
 export type ToolCallEvent = z.infer<typeof ToolCallEvent>;
 
+// T-POSTPUSH POSTPUSH.1 (2026-05-29) — PostToolUse event fires AFTER a tool
+// call completes. exit_code lets gate skills react to success/failure
+// (canonical case = verify-CI-after-push fires only on exit_code === 0).
+// stdout/stderr/duration_ms are payload extras Claude Code includes; skills
+// don't currently consume them but the schema accepts them for forward
+// compat. Active-task mirror is NOT re-fired from this event (PreToolUse
+// already handles that surface — double-firing would duplicate writes).
+export const PostToolCallEvent = z.object({
+  kind: z.literal('post_tool_call'),
+  tool: z.string(),
+  args: z.record(z.unknown()),
+  exit_code: z.number().int(),
+  stdout: z.string().optional(),
+  stderr: z.string().optional(),
+  cwd: z.string().optional(),
+  duration_ms: z.number().optional(),
+});
+export type PostToolCallEvent = z.infer<typeof PostToolCallEvent>;
+
 export const PromptSubmitEvent = z.object({
   kind: z.literal('prompt_submit'),
   prompt: z.string(),
@@ -145,6 +164,7 @@ export type FileChangedEvent = z.infer<typeof FileChangedEvent>;
 
 export const Event = z.discriminatedUnion('kind', [
   ToolCallEvent,
+  PostToolCallEvent, // T-POSTPUSH POSTPUSH.1
   PromptSubmitEvent,
   SessionEndEvent,
   StopEvent,
@@ -165,6 +185,7 @@ export type Event = z.infer<typeof Event>;
 
 export const EventKind = z.enum([
   'tool_call',
+  'post_tool_call', // T-POSTPUSH POSTPUSH.1
   'prompt_submit',
   'session_end',
   'stop',
@@ -218,6 +239,7 @@ const CostTier = z.enum(['cheap', 'balanced', 'premium']);
 
 export const Trigger = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool_call') }),
+  z.object({ kind: z.literal('post_tool_call') }), // T-POSTPUSH POSTPUSH.1
   z.object({ kind: z.literal('prompt_submit') }),
   z.object({ kind: z.literal('session_end') }),
   z.object({ kind: z.literal('stop') }),
