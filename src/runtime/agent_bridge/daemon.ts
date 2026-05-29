@@ -422,14 +422,6 @@ export function resolvePackRootFromEnv(env: NodeJS.ProcessEnv = process.env): st
   return join(env.OPENSQUID_HOME ?? join(homedir(), '.opensquid'), 'packs', 'default');
 }
 
-/** projectUuid resolution: env-only here; the cwd-walk for
- *  `.opensquid/project.json` lives in `cli.ts` (cwd-dependent). */
-export function resolveProjectUuidFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
-  const fromEnv = env.OPENSQUID_PROJECT_UUID;
-  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
-  return null;
-}
-
 /** Compile-time exhaustiveness helper for the mode discriminator switch. */
 function assertNever(x: never): never {
   throw new Error(

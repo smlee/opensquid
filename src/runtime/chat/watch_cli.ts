@@ -10,20 +10,17 @@
  * docs/tasks/T-telegram-realtime.md L3 on why auto-start is an agent
  * convention, not a CLI side-effect).
  *
- * Project-UUID resolution reuses the agent_bridge chain
- * (`resolveProjectUuidFromEnv` → cwd walk for `.opensquid/project.json`) so it
- * resolves identically to the daemon — never reimplemented.
+ * Project-UUID resolution reuses `resolveProjectUuid` from `runtime/paths.js`
+ * (env override → cwd walk for `.opensquid/project.json`) so it resolves
+ * identically to the daemon — never reimplemented.
  *
- * Imports from: commander, ../agent_bridge/cli.js, ../agent_bridge/daemon.js,
- *   ../paths.js, ./watch.js.
+ * Imports from: commander, ../paths.js, ./watch.js.
  * Imported by: src/cli.ts (registers the `chat` parent verb).
  */
 
 import type { Command } from 'commander';
 
-import { walkForProjectUuid } from '../agent_bridge/cli.js';
-import { resolveProjectUuidFromEnv } from '../agent_bridge/daemon.js';
-import { inboxFile } from '../paths.js';
+import { inboxFile, resolveProjectUuid } from '../paths.js';
 
 import {
   HEARTBEAT_MS,
@@ -59,9 +56,7 @@ export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): C
     .option('--project-uuid <uuid>', 'override project-UUID resolution')
     .action(async (opts: ChatWatchOptions) => {
       const uuid =
-        opts.projectUuid ??
-        resolveProjectUuidFromEnv(process.env) ??
-        (await walkForProjectUuid(process.cwd()));
+        opts.projectUuid ?? (await resolveProjectUuid({ cwd: process.cwd(), env: process.env }));
       if (uuid === null || uuid === '') {
         process.stderr.write(
           'chat watch: no project UUID. Set OPENSQUID_PROJECT_UUID, pass ' +

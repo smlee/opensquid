@@ -12,7 +12,8 @@
  *   - missing projectUuid → throws with setup-chat hint
  *   - shutdown is idempotent
  *   - SIGTERM/SIGINT handlers installed + removed across lifecycle
- *   - env helpers (resolvePackRootFromEnv / resolveProjectUuidFromEnv)
+ *   - env helpers (resolvePackRootFromEnv; resolveProjectUuidFromEnv lives in
+ *     runtime/paths.ts post-T-PUC)
  *
  * Live integration is gated by ANTHROPIC_API_KEY + WAB_AGENT_BRIDGE_LIVE
  * (see end of file) — matches the WAB.4 live-test pattern.
@@ -25,7 +26,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { AnthropicMessageClient } from './agent_loop.js';
-import { AgentBridgeDaemon, resolvePackRootFromEnv, resolveProjectUuidFromEnv } from './daemon.js';
+import { resolveProjectUuidFromEnv } from '../paths.js';
+import { AgentBridgeDaemon, resolvePackRootFromEnv } from './daemon.js';
 
 import type { ModelAliasConfig } from '../../models/types.js';
 import type { RagBackend } from '../../rag/types.js';

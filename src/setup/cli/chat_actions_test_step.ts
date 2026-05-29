@@ -42,12 +42,12 @@
 
 import { readFile } from 'node:fs/promises';
 import { connect, type Socket } from 'node:net';
-import { dirname, join, resolve } from 'node:path';
+import { join } from 'node:path';
 
 import { confirm, isCancel, note, spinner } from '@clack/prompts';
 import pc from 'picocolors';
 
-import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveProjectUuid } from '../../runtime/paths.js';
 
 import type { ChatDaemonState } from './chat_state.js';
 
@@ -134,43 +134,6 @@ export async function runChannelTestStep(deps: ChannelTestDeps): Promise<void> {
     s.stop(pc.red(`Test failed: ${describeError(err)}`));
     note(recoveryHintFor(err), 'Test');
   }
-}
-
-// ---------------------------------------------------------------------------
-// Project UUID resolution — env override > cwd walk for .opensquid/project.json
-// (Mirrors the chain in src.legacy/chat/daemon/active-project.ts so the
-// wizard test surfaces the EXACT same routing the production agent uses.)
-// ---------------------------------------------------------------------------
-
-interface ProjectCard {
-  version: 1;
-  id: string;
-  uuid: string;
-}
-
-interface ResolveDeps {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-}
-
-async function resolveProjectUuid(deps: ResolveDeps): Promise<string | null> {
-  const fromEnv = deps.env.OPENSQUID_PROJECT_UUID;
-  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
-  let dir = resolve(deps.cwd);
-  for (let i = 0; i < 64; i++) {
-    const candidate = join(dir, '.opensquid', 'project.json');
-    try {
-      const raw = await readFile(candidate, 'utf8');
-      const parsed = JSON.parse(raw) as ProjectCard;
-      if (parsed?.version === 1 && parsed.uuid && parsed.id) return parsed.uuid;
-    } catch {
-      /* keep walking */
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------

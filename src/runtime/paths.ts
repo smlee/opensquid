@@ -24,7 +24,7 @@
  * Imported by: src/functions/state.ts, src/runtime/drift_catalog.ts.
  */
 
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -63,15 +63,14 @@ export const resolveUserScopeRoot = (): string => OPENSQUID_HOME();
  * absolute path on first hit, or `null` if the walk reaches the filesystem
  * root without finding one (no project scope in effect).
  *
- * 64-level cap mirrors the cwd walk in
- * `src/runtime/agent_bridge/cli.ts:walkForProjectUuid` — protects against
- * pathological symlink cycles. In practice, real project trees bottom out
- * well before 64 levels.
+ * The 64-level cap protects against pathological symlink cycles. Real
+ * project trees bottom out well before 64 levels.
  *
  * Important: this probes for the `.opensquid/` DIRECTORY's existence, NOT
- * the agent_bridge's `.opensquid/project.json` file. The two walks have
- * different purposes (G.1 walks for "is there pack config here?";
- * agent_bridge walks for "is there a UUID-bound project here?").
+ * the `.opensquid/project.json` FILE. The two walks have different purposes
+ * (this one answers "is there pack config here?"; `walkForProjectUuid`
+ * below answers "is there a UUID-bound project here?"). Both share the
+ * 64-level cap discipline.
  */
 export const resolveProjectScopeRoot = async (cwd: string): Promise<string | null> => {
   let dir = resolve(cwd);
@@ -89,6 +88,87 @@ export const resolveProjectScopeRoot = async (cwd: string): Promise<string | nul
   }
   return null;
 };
+
+// ---------------------------------------------------------------------------
+// Project-UUID resolution (T-PUC)
+//
+// The `.opensquid/project.json` file (legacy schema `{ version: 1, id, uuid }`)
+// is how opensquid identifies a "UUID-bound project" — the unit of per-project
+// state (chat inbox, chat-routing.json, agent-bridge daemon binding). The
+// resolution chain is uniform across every consumer: env override
+// (OPENSQUID_PROJECT_UUID) takes precedence over the cwd-walk; if neither
+// returns, the caller reports "no project" and exits.
+//
+// Three exports — lower-level helpers + a combinator — so callers that need
+// just one stage (e.g. `chat watch` layers a CLI-flag override on top of the
+// env stage) compose without re-implementing.
+// ---------------------------------------------------------------------------
+
+/** The `.opensquid/project.json` schema. `version` is the on-disk discriminator. */
+export interface ProjectCard {
+  version: 1;
+  id: string;
+  uuid: string;
+}
+
+/**
+ * Env-only project-UUID lookup. Returns the value of `OPENSQUID_PROJECT_UUID`
+ * if set + non-empty, else `null`. Synchronous — no I/O.
+ *
+ * Defaults to `process.env` when called without an argument; the optional
+ * `env` parameter exists for test injection.
+ */
+export function resolveProjectUuidFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+  const fromEnv = env.OPENSQUID_PROJECT_UUID;
+  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
+  return null;
+}
+
+/**
+ * Walks up from `startDir` looking for `.opensquid/project.json`. Returns
+ * the parsed `uuid` on first hit (strict schema check: `version === 1 &&
+ * uuid && id`), or `null` when the walk exhausts the 64-level cap or
+ * reaches the filesystem root without a valid card.
+ *
+ * Malformed JSON, missing fields, and version mismatches all silently
+ * continue the walk — a bad ancestor card must not mask a good descendant
+ * one, and the same file might be valid under a different `version`-future
+ * revision that this consumer doesn't recognize.
+ */
+export async function walkForProjectUuid(startDir: string): Promise<string | null> {
+  let dir = resolve(startDir);
+  for (let i = 0; i < 64; i++) {
+    const candidate = join(dir, '.opensquid', 'project.json');
+    try {
+      const raw = await readFile(candidate, 'utf8');
+      const parsed = JSON.parse(raw) as ProjectCard;
+      if (parsed?.version === 1 && parsed.uuid && parsed.id) return parsed.uuid;
+    } catch {
+      /* keep walking */
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/**
+ * Canonical combinator: env-first then cwd-walk. The pattern 5 call sites
+ * reimplemented before T-PUC consolidated them.
+ *
+ * Returns the first non-null source, else `null`. `env` defaults to
+ * `process.env` when omitted; `cwd` is required (callers always know which
+ * directory to walk from — there is no sensible default).
+ */
+export async function resolveProjectUuid(opts: {
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string | null> {
+  const fromEnv = resolveProjectUuidFromEnv(opts.env);
+  if (fromEnv !== null) return fromEnv;
+  return walkForProjectUuid(opts.cwd);
+}
 
 export const sessionStateDir = (sessionId: string): string =>
   join(OPENSQUID_HOME(), 'sessions', sessionId, 'state');

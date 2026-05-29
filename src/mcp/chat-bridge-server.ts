@@ -41,7 +41,7 @@
 
 import { promises as fs, readFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { join } from 'node:path';
 import { connect, type Socket } from 'node:net';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -49,6 +49,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+
+import { resolveProjectUuid } from '../runtime/paths.js';
 
 import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscriber.js';
 
@@ -143,38 +145,6 @@ function formatCollisionWarnings(entries: CollisionEntry[]): string {
     '   Fix: edit one of the chat-routing.json files under ~/.opensquid/projects/ so the claim is unambiguous.',
   );
   return lines.join('\n') + '\n\n';
-}
-
-// ---------------------------------------------------------------------------
-// Active-project detection: walk up from cwd looking for
-// .opensquid/project.json. Same convention as legacy findProjectCard.
-// ---------------------------------------------------------------------------
-
-interface ProjectCard {
-  version: 1;
-  id: string;
-  uuid: string;
-}
-
-async function resolveActiveProjectUuid(): Promise<string | null> {
-  if (process.env.OPENSQUID_PROJECT_UUID) return process.env.OPENSQUID_PROJECT_UUID;
-  let dir = resolve(process.cwd());
-  for (let i = 0; i < 64; i++) {
-    const candidate = join(dir, '.opensquid', 'project.json');
-    try {
-      const raw = await fs.readFile(candidate, 'utf8');
-      const parsed = JSON.parse(raw) as ProjectCard;
-      if (parsed?.version === 1 && parsed.uuid && parsed.id) {
-        return parsed.uuid;
-      }
-    } catch {
-      /* keep walking */
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +452,7 @@ const ToolHandlers = {
   chat_poll_inbox: {
     schema: PollInboxSchema,
     handle: async (args: z.infer<typeof PollInboxSchema>): Promise<string> => {
-      const uuid = await resolveActiveProjectUuid();
+      const uuid = await resolveProjectUuid({ cwd: process.cwd(), env: process.env });
       if (!uuid) {
         return 'No active project — cwd has no .opensquid/project.json. Set OPENSQUID_PROJECT_UUID or `cd` into a project directory.';
       }
@@ -542,7 +512,7 @@ const ToolHandlers = {
           throw new Error(`unknown project shorthand: project:${platformRaw}`);
         }
         const platformName: 'telegram' | 'discord' | 'slack' = platformRaw;
-        const uuid = await resolveActiveProjectUuid();
+        const uuid = await resolveProjectUuid({ cwd: process.cwd(), env: process.env });
         if (!uuid) {
           throw new Error(
             'cannot resolve project:<platform> — no active project (cwd has no .opensquid/project.json)',
@@ -637,12 +607,13 @@ async function main(): Promise<void> {
   // per-workspace filtering itself via the active-project UUID
   // resolved on each chat_poll_inbox call. workspace_uuid /
   // workspace_path are reported to the daemon for diagnostics and
-  // for the auto-boot path (TPS.6 patch 4). If resolveActiveProjectUuid
+  // for the auto-boot path (TPS.6 patch 4). If resolveProjectUuid
   // returns null at startup, the bridge is running outside any
   // project — subscribe anyway with a sentinel uuid so the daemon
   // still pushes broadcasts (the buffer remains useful even without
   // a workspace identity).
-  const startupUuid = (await resolveActiveProjectUuid()) ?? 'no-project';
+  const startupUuid =
+    (await resolveProjectUuid({ cwd: process.cwd(), env: process.env })) ?? 'no-project';
   activeSubscriber = new ChatBridgeSubscriber({
     socketPath: daemonSocketPath(),
     sessionId: generateSessionId(),

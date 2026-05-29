@@ -32,7 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { confirm, isCancel, note, spinner } from '@clack/prompts';
 import pc from 'picocolors';
 
-import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveProjectUuid } from '../../runtime/paths.js';
 
 import type { ChatDaemonState } from './chat_state.js';
 
@@ -172,41 +172,6 @@ export async function runTopicCreateStep(deps: TopicCreateDeps): Promise<void> {
     s.stop(pc.red(`Topic-create failed: ${describeError(err)}`));
     note(recoveryHintFor(err), 'Topic');
   }
-}
-
-// ---------------------------------------------------------------------------
-// Project UUID resolution — env override > cwd walk for .opensquid/project.json
-// (Identical chain to runChannelTestStep — duplicated to avoid coupling
-// the two sibling steps via shared private state.)
-// ---------------------------------------------------------------------------
-
-interface ProjectCard {
-  version: 1;
-  id: string;
-  uuid: string;
-}
-
-async function resolveProjectUuid(deps: {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-}): Promise<string | null> {
-  const fromEnv = deps.env.OPENSQUID_PROJECT_UUID;
-  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
-  let dir = resolve(deps.cwd);
-  for (let i = 0; i < 64; i++) {
-    const candidate = join(dir, '.opensquid', 'project.json');
-    try {
-      const raw = await readFile(candidate, 'utf8');
-      const parsed = JSON.parse(raw) as ProjectCard;
-      if (parsed?.version === 1 && parsed.uuid && parsed.id) return parsed.uuid;
-    } catch {
-      /* keep walking */
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------

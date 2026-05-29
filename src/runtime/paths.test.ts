@@ -8,7 +8,7 @@
  * boundary against path traversal.
  */
 
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
@@ -20,7 +20,10 @@ import {
   packStateDir,
   packStateFile,
   resolveProjectScopeRoot,
+  resolveProjectUuid,
+  resolveProjectUuidFromEnv,
   resolveUserScopeRoot,
+  walkForProjectUuid,
 } from './paths.js';
 
 let priorHome: string | undefined;
@@ -143,6 +146,185 @@ describe('resolveProjectScopeRoot', () => {
       expect(result.startsWith(root)).toBe(false);
     } else {
       expect(result).toBeNull();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-PUC — project-UUID resolution
+// ---------------------------------------------------------------------------
+
+describe('resolveProjectUuidFromEnv', () => {
+  it('returns the value when OPENSQUID_PROJECT_UUID is set + non-empty', () => {
+    expect(resolveProjectUuidFromEnv({ OPENSQUID_PROJECT_UUID: 'abc-123' })).toBe('abc-123');
+  });
+
+  it('returns null when OPENSQUID_PROJECT_UUID is missing from env', () => {
+    expect(resolveProjectUuidFromEnv({})).toBeNull();
+  });
+
+  it('returns null when OPENSQUID_PROJECT_UUID is the empty string', () => {
+    expect(resolveProjectUuidFromEnv({ OPENSQUID_PROJECT_UUID: '' })).toBeNull();
+  });
+
+  it('defaults to process.env when no env arg supplied', () => {
+    const prior = process.env.OPENSQUID_PROJECT_UUID;
+    process.env.OPENSQUID_PROJECT_UUID = 'from-process-env';
+    try {
+      expect(resolveProjectUuidFromEnv()).toBe('from-process-env');
+    } finally {
+      if (prior === undefined) delete process.env.OPENSQUID_PROJECT_UUID;
+      else process.env.OPENSQUID_PROJECT_UUID = prior;
+    }
+  });
+});
+
+describe('walkForProjectUuid', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'opensquid-puuid-walk-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('returns the uuid when cwd contains a valid project.json directly', async () => {
+    const proj = join(root, 'proj');
+    const dotOpensquid = join(proj, '.opensquid');
+    await mkdir(dotOpensquid, { recursive: true });
+    await writeFile(
+      join(dotOpensquid, 'project.json'),
+      JSON.stringify({ version: 1, id: 'my-proj', uuid: 'aaa-bbb' }),
+      'utf8',
+    );
+
+    await expect(walkForProjectUuid(proj)).resolves.toBe('aaa-bbb');
+  });
+
+  it('walks up from a nested cwd to find an ancestor project.json', async () => {
+    const proj = join(root, 'proj');
+    const dotOpensquid = join(proj, '.opensquid');
+    const nested = join(proj, 'a', 'b', 'c');
+    await mkdir(dotOpensquid, { recursive: true });
+    await mkdir(nested, { recursive: true });
+    await writeFile(
+      join(dotOpensquid, 'project.json'),
+      JSON.stringify({ version: 1, id: 'p', uuid: 'nested-uuid' }),
+      'utf8',
+    );
+
+    await expect(walkForProjectUuid(nested)).resolves.toBe('nested-uuid');
+  });
+
+  it('returns null on version mismatch (forward-compatibility skip)', async () => {
+    const proj = join(root, 'proj');
+    const dotOpensquid = join(proj, '.opensquid');
+    await mkdir(dotOpensquid, { recursive: true });
+    await writeFile(
+      join(dotOpensquid, 'project.json'),
+      JSON.stringify({ version: 2, id: 'p', uuid: 'v2-uuid' }),
+      'utf8',
+    );
+
+    const result = await walkForProjectUuid(proj);
+    if (result !== null) expect(result.startsWith(root)).toBe(false);
+    else expect(result).toBeNull();
+  });
+
+  it('returns null when uuid field is missing', async () => {
+    const proj = join(root, 'proj');
+    const dotOpensquid = join(proj, '.opensquid');
+    await mkdir(dotOpensquid, { recursive: true });
+    await writeFile(
+      join(dotOpensquid, 'project.json'),
+      JSON.stringify({ version: 1, id: 'p' }),
+      'utf8',
+    );
+
+    const result = await walkForProjectUuid(proj);
+    if (result !== null) expect(result.startsWith(root)).toBe(false);
+    else expect(result).toBeNull();
+  });
+
+  it('returns null on malformed JSON (continues the walk, then null)', async () => {
+    const proj = join(root, 'proj');
+    const dotOpensquid = join(proj, '.opensquid');
+    await mkdir(dotOpensquid, { recursive: true });
+    await writeFile(join(dotOpensquid, 'project.json'), '{ not json', 'utf8');
+
+    const result = await walkForProjectUuid(proj);
+    if (result !== null) expect(result.startsWith(root)).toBe(false);
+    else expect(result).toBeNull();
+  });
+
+  it('returns null when no .opensquid/project.json exists in cwd or any ancestor', async () => {
+    const empty = join(root, 'nowhere', 'a', 'b');
+    await mkdir(empty, { recursive: true });
+    const result = await walkForProjectUuid(empty);
+    if (result !== null) expect(result.startsWith(root)).toBe(false);
+    else expect(result).toBeNull();
+  });
+});
+
+describe('resolveProjectUuid', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'opensquid-puuid-combinator-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('prefers env over walk when OPENSQUID_PROJECT_UUID is set', async () => {
+    const proj = join(root, 'proj');
+    const dotOpensquid = join(proj, '.opensquid');
+    await mkdir(dotOpensquid, { recursive: true });
+    await writeFile(
+      join(dotOpensquid, 'project.json'),
+      JSON.stringify({ version: 1, id: 'p', uuid: 'from-walk' }),
+      'utf8',
+    );
+
+    await expect(
+      resolveProjectUuid({ cwd: proj, env: { OPENSQUID_PROJECT_UUID: 'from-env' } }),
+    ).resolves.toBe('from-env');
+  });
+
+  it('falls through to the walk when env is unset', async () => {
+    const proj = join(root, 'proj');
+    const dotOpensquid = join(proj, '.opensquid');
+    await mkdir(dotOpensquid, { recursive: true });
+    await writeFile(
+      join(dotOpensquid, 'project.json'),
+      JSON.stringify({ version: 1, id: 'p', uuid: 'walk-uuid' }),
+      'utf8',
+    );
+
+    await expect(resolveProjectUuid({ cwd: proj, env: {} })).resolves.toBe('walk-uuid');
+  });
+
+  it('returns null when both env is unset and the walk finds nothing', async () => {
+    const empty = join(root, 'nowhere', 'a');
+    await mkdir(empty, { recursive: true });
+    const result = await resolveProjectUuid({ cwd: empty, env: {} });
+    if (result !== null) expect(result.startsWith(root)).toBe(false);
+    else expect(result).toBeNull();
+  });
+
+  it('defaults env to process.env when the env arg is omitted', async () => {
+    const proj = join(root, 'proj');
+    await mkdir(proj, { recursive: true });
+    const prior = process.env.OPENSQUID_PROJECT_UUID;
+    process.env.OPENSQUID_PROJECT_UUID = 'from-process-env';
+    try {
+      await expect(resolveProjectUuid({ cwd: proj })).resolves.toBe('from-process-env');
+    } finally {
+      if (prior === undefined) delete process.env.OPENSQUID_PROJECT_UUID;
+      else process.env.OPENSQUID_PROJECT_UUID = prior;
     }
   });
 });

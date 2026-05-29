@@ -23,24 +23,13 @@
 
 import { spawn } from 'node:child_process';
 import { readFile, rm } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { Command } from 'commander';
 
-import { OPENSQUID_HOME } from '../paths.js';
+import { OPENSQUID_HOME, resolveProjectUuid } from '../paths.js';
 
-import {
-  AgentBridgeDaemon,
-  agentBridgePidPath,
-  resolvePackRootFromEnv,
-  resolveProjectUuidFromEnv,
-} from './daemon.js';
-
-interface ProjectCard {
-  version: 1;
-  id: string;
-  uuid: string;
-}
+import { AgentBridgeDaemon, agentBridgePidPath, resolvePackRootFromEnv } from './daemon.js';
 
 export interface AgentBridgeCliDeps {
   /** Test injection — override the daemon class. Defaults to AgentBridgeDaemon. */
@@ -195,7 +184,7 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
     .command('run-foreground')
     .description('Run the daemon in the current process (foreground; used by `start` spawn).')
     .action(async () => {
-      const projectUuid = resolveProjectUuidFromEnv(env) ?? (await walkForProjectUuid(cwd()));
+      const projectUuid = await resolveProjectUuid({ cwd: cwd(), env });
       if (projectUuid === null) {
         err(
           'agent-bridge: project UUID not found. ' +
@@ -253,28 +242,6 @@ async function readLivePid(
     if (code === 'EPERM') return { alive: true, pid };
     return { alive: false, stalePid: pid };
   }
-}
-
-/** Walk cwd up looking for `.opensquid/project.json`. 64-level cap mirrors
- *  the same chain in `src/mcp/chat-bridge-server.ts`. Exported so other
- *  inbox consumers (e.g. `chat watch`) resolve the project UUID identically
- *  instead of reimplementing the walk. */
-export async function walkForProjectUuid(startDir: string): Promise<string | null> {
-  let dir = resolve(startDir);
-  for (let i = 0; i < 64; i++) {
-    const candidate = join(dir, '.opensquid', 'project.json');
-    try {
-      const raw = await readFile(candidate, 'utf8');
-      const parsed = JSON.parse(raw) as ProjectCard;
-      if (parsed?.version === 1 && parsed.uuid && parsed.id) return parsed.uuid;
-    } catch {
-      /* keep walking */
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
 }
 
 /** Wait up to `timeoutMs` for the agent-bridge pidfile to disappear. */
