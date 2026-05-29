@@ -22,6 +22,7 @@ import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { detectNewProject } from './new_project_detect.js';
 import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
 
@@ -128,7 +129,13 @@ async function main(): Promise<void> {
   // ride through — block wins on exitCode (2), but the additionalContext
   // still lands on stdout so the agent sees the recall context + directive
   // alongside the block message on the next prompt.
+  // T-CTX-LOOP CTX.4 — surface a "new project detected" prompt at most
+  // once per session. Routes through additionalContext alongside the
+  // existing inject_context + directive surfaces.
+  const newProjectLine = await detectNewProject(sessionId);
+
   const contextParts: string[] = [...contextInjections];
+  if (newProjectLine !== null) contextParts.push(newProjectLine);
   if (directives.length > 0) {
     const block =
       '⛔ DIRECTIVE — next action required:\n' +
