@@ -39,6 +39,7 @@ import { z } from 'zod';
 
 import type { RagBackend, RecallHit } from '../rag/types.js';
 import { err, ok } from '../runtime/result.js';
+import { readActiveTask } from '../runtime/session_state.js';
 
 import type { FunctionRegistry } from './registry.js';
 
@@ -78,6 +79,39 @@ function selectHitsForInjection(
     totalTokens += t;
   }
   return { kept, truncated: filtered.length > kept.length };
+}
+
+/**
+ * T-CTX-LOOP CTX.3 — compose the recall query with the active-task goal-token
+ * so retrieved hits are biased toward the CURRENT goal, not just the literal
+ * prompt vocabulary. When no active-task signal is present (interactive mode
+ * with no task seeded) the query falls through to the raw prompt — preserving
+ * the pre-CTX.3 behavior for non-automation use.
+ *
+ * Format: `task:<taskId> goal:<subject up to 80 chars> <prompt>`. The
+ * task-id surfaces the track identifier; the subject surfaces the
+ * human-readable goal vocabulary; both ride forward into the recall
+ * embedding so semantically-similar memories rank higher.
+ *
+ * Pack-hint extraction (the larger L14 spec form) is deferred to v2 —
+ * needs `packs` threaded through `EvalCtx` which is a wider change than
+ * CTX.3's scope. The active-task signal alone is the larger share of
+ * the goal-bias gain since it's already the workflow gate's source of
+ * truth.
+ */
+async function composeRecallQuery(prompt: string, sessionId: string): Promise<string> {
+  try {
+    const active = await readActiveTask(sessionId);
+    if (active === null) return prompt;
+    const taskId = active.taskId ?? '';
+    const subject = (active.subject ?? '').slice(0, 80);
+    const goalToken = `task:${taskId} goal:${subject}`.trim();
+    return goalToken.length > 0 ? `${goalToken} ${prompt}` : prompt;
+  } catch {
+    // Active-task read failure is non-fatal — fall back to the raw prompt
+    // so a corrupted state file can't break recall entirely.
+    return prompt;
+  }
 }
 
 /** Format the kept hits as a single string ready for context injection. */
@@ -125,8 +159,13 @@ export function registerRecallPreInjectFunction(
       // is the per-primitive guard; the dispatcher-level warning catches
       // misconfiguration where a pack registers this on the wrong trigger.
       if (ctx.event.kind !== 'prompt_submit') return ok(null);
-      const query = ctx.event.prompt;
-      if (query.length < minPromptChars) return ok(null);
+      const rawPrompt = ctx.event.prompt;
+      // The min-prompt-chars gate runs against the RAW prompt — the
+      // goal-token doesn't artificially satisfy a short-prompt skip.
+      if (rawPrompt.length < minPromptChars) return ok(null);
+      // T-CTX-LOOP CTX.3 — bias query toward the current goal when
+      // active-task is seeded. Falls back to raw prompt when no signal.
+      const query = await composeRecallQuery(rawPrompt, ctx.sessionId);
 
       let hits: RecallHit[];
       try {

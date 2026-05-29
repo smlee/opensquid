@@ -19,9 +19,14 @@
  * logic that's specific to `recall_pre_inject`.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RagBackend, RecallHit } from '../rag/types.js';
+import { writeActiveTask } from '../runtime/session_state.js';
 import type { Event } from '../runtime/types.js';
 
 import { type EvalCtx, FunctionRegistry } from './registry.js';
@@ -247,5 +252,97 @@ describe('recall_pre_inject', () => {
     expect(value.content).toContain('a'.repeat(80) + '…');
     // The full 150-char prompt should NOT appear verbatim in the header.
     expect(value.content).not.toContain('a'.repeat(150));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-CTX-LOOP CTX.3 — recall query composition (active-task goal-token)
+// ---------------------------------------------------------------------------
+
+describe('recall_pre_inject — CTX.3 goal-token composition', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-recall-ctx3-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('CTX.3: when active-task is seeded, prepends `task:<taskId> goal:<subject>` to the recall query', async () => {
+    const sid = 'ctx3-with-active';
+    await writeActiveTask(sid, {
+      id: '99',
+      subject: 'CTX.3 — recall composition test goal',
+      started_at: new Date().toISOString(),
+      taskId: 'CTX.3',
+      spec: '/abs/spec.md',
+    });
+
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([makeHit(0.9, 'body')]);
+    const registry = buildRegistry(makeBackend(recall));
+    const ctx: EvalCtx = {
+      event: promptEvent('how does the loop close at session end?'),
+      bindings: new Map<string, unknown>(),
+      sessionId: sid,
+      packId: 'test-pack',
+    };
+    await registry.call('recall_pre_inject', {}, ctx);
+
+    expect(recall).toHaveBeenCalledTimes(1);
+    const composedQuery = recall.mock.calls[0]?.[0] ?? '';
+    expect(composedQuery).toContain('task:CTX.3');
+    expect(composedQuery).toContain('goal:CTX.3 — recall composition test goal');
+    expect(composedQuery).toContain('how does the loop close at session end?');
+  });
+
+  it('CTX.3: when no active-task is seeded, falls back to the raw prompt (pre-CTX.3 behavior preserved)', async () => {
+    const sid = 'ctx3-no-active';
+    // intentionally NO writeActiveTask call
+
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([makeHit(0.9, 'body')]);
+    const registry = buildRegistry(makeBackend(recall));
+    const ctx: EvalCtx = {
+      event: promptEvent('plain interactive prompt'),
+      bindings: new Map<string, unknown>(),
+      sessionId: sid,
+      packId: 'test-pack',
+    };
+    await registry.call('recall_pre_inject', {}, ctx);
+
+    expect(recall).toHaveBeenCalledTimes(1);
+    expect(recall.mock.calls[0]?.[0]).toBe('plain interactive prompt');
+  });
+
+  it('CTX.3: min_prompt_chars check runs against RAW prompt — goal-token cannot mask a short prompt', async () => {
+    const sid = 'ctx3-short-prompt';
+    await writeActiveTask(sid, {
+      id: '99',
+      subject: 'a very long goal-token that would otherwise satisfy min_prompt_chars',
+      started_at: new Date().toISOString(),
+      taskId: 'CTX.3',
+    });
+
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([makeHit(0.9, 'body')]);
+    const registry = buildRegistry(makeBackend(recall));
+    const ctx: EvalCtx = {
+      event: promptEvent('hi'), // 2 chars < default min_prompt_chars=20
+      bindings: new Map<string, unknown>(),
+      sessionId: sid,
+      packId: 'test-pack',
+    };
+    const result = await registry.call('recall_pre_inject', {}, ctx);
+
+    // Short prompt → no recall call even though goal-token would make the
+    // composed query long. The skip is on the raw prompt by design.
+    expect(recall).toHaveBeenCalledTimes(0);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBeNull();
   });
 });
