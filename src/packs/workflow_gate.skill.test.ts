@@ -174,6 +174,40 @@ describe('workflow gate (fixture) / workflow-phases-required', () => {
     expect(r.kind).toBe('no_verdict');
   });
 
+  // T-WGRP L6: pre-anchor the gate fired on any Bash containing 'git commit'
+  // as substring (e.g. `grep "git commit" file`, `echo "git commit -m x"`).
+  // Post-anchor (^git\s+commit\b) the gate only fires when the command STARTS
+  // with `git commit …` — substring usage is left alone.
+  it('T-WGRP L6: does NOT fire on Bash whose command-text contains "git commit" as substring', async () => {
+    await setAutomationFlag(SID);
+    await writeActiveTask(SID, ACTIVE);
+    // Phases intentionally INCOMPLETE — if the gate fired, the phases check
+    // would BLOCK. With L1 anchor, committing=false → rule short-circuits.
+    const r = await run({
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'grep "git commit -m x" /tmp/log.txt' },
+      cwd: '/tmp',
+    });
+    expect(r.kind).toBe('no_verdict');
+  });
+
+  // T-WGRP L6: same precision check on the ACTIVE-TASK-MISSING branch added
+  // by T-ATSC L2/L3 — substring 'git commit' inside grep/echo should NOT
+  // trip the active-task remedy either.
+  it('T-WGRP L6: substring "git commit" does NOT trip T-ATSC active-task remedy either', async () => {
+    await setAutomationFlag(SID);
+    // no writeActiveTask → if pattern over-matched, gate would BLOCK with
+    // the L3 active-task remedy. With L1 anchor, committing=false → no_verdict.
+    const r = await run({
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'echo "should we git commit later? probably"' },
+      cwd: '/tmp',
+    });
+    expect(r.kind).toBe('no_verdict');
+  });
+
   it('BLOCKS when the phase ledger is for a now-inactive task (no inheritance)', async () => {
     await setAutomationFlag(SID);
     await writeActiveTask(SID, ACTIVE); // active = 15

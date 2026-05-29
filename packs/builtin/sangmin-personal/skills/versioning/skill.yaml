@@ -19,7 +19,7 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: 'npm\s+version\s+(minor|major)\b'
+          pattern: '^npm\s+version\s+(minor|major)\b' # T-WGRP L1: anchored
           target: tool_args.command
         as: cmd_hit
       - call: verdict
