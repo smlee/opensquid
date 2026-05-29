@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.197",
+  "version": "0.5.198",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
