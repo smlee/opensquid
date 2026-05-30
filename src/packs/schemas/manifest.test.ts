@@ -506,7 +506,7 @@ describe('Manifest schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('IDF.1: existing built-in packs round-trip with defaults applied', async () => {
+  it('IDF.1: existing built-in packs round-trip with defaults applied', () => {
     // Verified via separate test/builtin tests that load the actual packs;
     // here we just confirm the schema accepts the minimum + applies defaults
     // (the regression guard for back-compat).

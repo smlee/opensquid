@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.222] - 2026-05-30
+
+### Fixed
+
+- **CI lint regression on IDF.1** (`manifest.test.ts:509`) — back-compat
+  defaults test was authored as `async () =>` arrow but contains no
+  `await`. ESLint `@typescript-eslint/require-await` rejected it
+  post-push; local lint had passed in the slice prior to test addition.
+  Dropped the `async` modifier — assertions are all synchronous Zod
+  parse results. No behavior change.
+
+---
+
 ## [0.5.221] - 2026-05-30
 
 ### Added (additive schema — existing packs parse unchanged)
