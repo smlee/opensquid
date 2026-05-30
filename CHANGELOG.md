@@ -7,6 +7,47 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.232] - 2026-05-30
+
+### Added (LL.4 — UPS hook drains unacked inbox into additionalContext + ack ledger)
+
+- **`src/runtime/chat/inbox_inject.ts`** (new, 109/180 LOC) — pure
+  helpers `computeUnackedRows` / `buildInjectionEnvelope` /
+  `purgeOldAcks` / `buildAckRowsForInjected` for the UPS hook's drain
+  step. Per-session dedup via `(platform, message_id, sessionId)` key
+  (L2); 8KB envelope budget cap; overflow rows stay unacked + drain on
+  next turn (lazy push); 7-day cutoff for purge.
+- **`src/runtime/chat/inbox_writer.ts`** (new, 78/100 LOC) — durable
+  `appendAckRows` + atomic `rewriteAckedAfterPurge` under
+  `proper-lockfile` mutex (already an opensquid dep). Lock retries
+  bounded (5x factor:2 minTimeout:50ms); empty input is a no-op.
+- **`src/runtime/hooks/user-prompt-submit.ts`** — new
+  `drainInboxEnvelope(sessionId)` helper wired before
+  `dispatchEvent`. ACK-BEFORE-EMIT durability ordering: AckRows persist
+  before the envelope returns. Fail-open wrapper: any error returns
+  empty envelope; user's prompt always rides through.
+- Inbox envelope appears FIRST in `additionalContext` `contextParts`
+  array (most prominent surface), followed by existing inject_context +
+  new-project-detect + directives parts.
+- 17 new tests: inbox_inject (12) + inbox_writer (5). Full suite 2539
+  pass / 28 skip / 0 fail.
+
+### Architectural shape (combined with LL.3 — multi-session delivery operational)
+
+```
+chat-bridge-server writes inbox/<platform>.jsonl
+  └─► LL.3 watcher dispatches inbound_channel event to LIVE session
+  └─► LL.4 UPS hook drains backlog at next prompt-submit (additionalContext)
+       └─► ack ledger (acked.jsonl) is the dedup boundary
+       └─► 7-day auto-purge keeps it bounded
+```
+
+A user message in a Telegram topic now lands either via per-event
+dispatch (when the session is live) OR per-turn injection at next
+prompt-submit (when offline / orphaned).
+
+---
+
 ## [0.5.231] - 2026-05-30
 
 ### Added (LL.3 — inbound watcher + sender_pattern Trigger field + dispatcher filter)
