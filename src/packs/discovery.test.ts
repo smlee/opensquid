@@ -25,7 +25,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { DetectionContext } from '../runtime/detection.js';
 
-import { discoverActivePacks, resolvePackStateDir, validatePackId } from './discovery.js';
+import {
+  _mergeCacheSize,
+  checkAndMergeUpgrades,
+  clearMergeCache,
+  discoverActivePacks,
+  resolvePackStateDir,
+  validatePackId,
+} from './discovery.js';
 
 let scopeRoot: string;
 
@@ -526,5 +533,83 @@ describe('LP.3 validatePackId + resolvePackStateDir', () => {
   it('resolvePackStateDir rejects malicious packIds via validatePackId', () => {
     expect(() => resolvePackStateDir('escape/here')).toThrow(/path-traversal/);
     expect(() => resolvePackStateDir('foo..bar')).toThrow(/path-traversal/);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * LP.5 — checkAndMergeUpgrades + per-session cache.
+ * ──────────────────────────────────────────────────────────────────── */
+describe('LP.5 checkAndMergeUpgrades', () => {
+  let pStateDir: string;
+  let pVanillaDir: string;
+
+  beforeEach(async () => {
+    pStateDir = await mkdtemp(join(tmpdir(), 'opensquid-lp5-state-'));
+    pVanillaDir = await mkdtemp(join(tmpdir(), 'opensquid-lp5-vanilla-'));
+    clearMergeCache();
+  });
+
+  afterEach(async () => {
+    await rm(pStateDir, { recursive: true, force: true });
+    await rm(pVanillaDir, { recursive: true, force: true });
+  });
+
+  it('returns null when pack is not installed (no version.json)', async () => {
+    const r = await checkAndMergeUpgrades(pStateDir, { name: 'p', version: '1.0.0' }, pVanillaDir);
+    expect(r).toBeNull();
+  });
+
+  it('returns null when personal_revision_id is 0 (no lessons to preserve)', async () => {
+    const { initPersonalRevision } = await import('./personal_revision.js');
+    await initPersonalRevision(pStateDir, '1.0.0');
+    const r = await checkAndMergeUpgrades(pStateDir, { name: 'p', version: '2.0.0' }, pVanillaDir);
+    expect(r).toBeNull();
+  });
+
+  it('returns null when vanilla === base (not an upgrade)', async () => {
+    const { initPersonalRevision, appendLessonFile } = await import('./personal_revision.js');
+    await initPersonalRevision(pStateDir, '1.0.0');
+    await appendLessonFile(pStateDir, { rule: 'a' });
+    const r = await checkAndMergeUpgrades(pStateDir, { name: 'p', version: '1.0.0' }, pVanillaDir);
+    expect(r).toBeNull();
+  });
+
+  it('returns null when last_merged_vanilla equals vanilla (already merged)', async () => {
+    const { initPersonalRevision, appendLessonFile, writeVersionJson, readVersionJson } =
+      await import('./personal_revision.js');
+    await initPersonalRevision(pStateDir, '1.0.0');
+    await appendLessonFile(pStateDir, { rule: 'a' });
+    const v = (await readVersionJson(pStateDir))!;
+    await writeVersionJson(pStateDir, { ...v, last_merged_vanilla: '2.0.0' });
+    const r = await checkAndMergeUpgrades(pStateDir, { name: 'p', version: '2.0.0' }, pVanillaDir);
+    expect(r).toBeNull();
+  });
+
+  it('triggers merge when upgrade detected; subsequent calls short-circuit on last_merged_vanilla', async () => {
+    const { initPersonalRevision, appendLessonFile } = await import('./personal_revision.js');
+    await initPersonalRevision(pStateDir, '1.0.0');
+    await appendLessonFile(pStateDir, { rule: 'a' });
+    await mkdir(join(pStateDir, 'base'), { recursive: true });
+    const before = _mergeCacheSize();
+    const r1 = await checkAndMergeUpgrades(pStateDir, { name: 'p', version: '2.0.0' }, pVanillaDir);
+    expect(r1).not.toBeNull();
+    expect(_mergeCacheSize()).toBe(before + 1);
+    // Second call short-circuits via last_merged_vanilla update from the first
+    // merge's writeVersionJson — returns null without re-firing the merger.
+    // Cache stays populated (defense against thrash within the same session
+    // before persistence catches up, but the persisted check wins here).
+    const r2 = await checkAndMergeUpgrades(pStateDir, { name: 'p', version: '2.0.0' }, pVanillaDir);
+    expect(r2).toBeNull();
+  });
+
+  it('clearMergeCache empties the cache', async () => {
+    const { initPersonalRevision, appendLessonFile } = await import('./personal_revision.js');
+    await initPersonalRevision(pStateDir, '1.0.0');
+    await appendLessonFile(pStateDir, { rule: 'a' });
+    await mkdir(join(pStateDir, 'base'), { recursive: true });
+    await checkAndMergeUpgrades(pStateDir, { name: 'p', version: '2.0.0' }, pVanillaDir);
+    expect(_mergeCacheSize()).toBeGreaterThan(0);
+    clearMergeCache();
+    expect(_mergeCacheSize()).toBe(0);
   });
 });

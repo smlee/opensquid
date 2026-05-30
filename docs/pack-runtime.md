@@ -266,6 +266,54 @@ list by `scope` precedence (universal first), then alphabetically by
 name within a scope. First-match short-circuit in the dispatcher means
 higher-precedence packs' verdicts win.
 
+### 1.8 `base_version` + `personal_revision` — living-pack state (LP.1 + LP.3)
+
+A **living pack** consists of two layers:
+
+- **`base_version`** (immutable semver) — set once at install from the
+  vanilla source's `manifest.yaml#version`. NEVER mutated by the engine
+  after install. The anchor point for 3-way merges on subsequent vanilla
+  upgrades (see §3.5).
+- **`personal_revision`** — monotonic counter + per-lesson YAML files at
+  `~/.opensquid/packs/<id>/personal_revision/`. Grown by the
+  wedge-promote pipeline (LP.3) on each Stage 2 lesson promotion. Each
+  lesson is stored as `lesson_<n>.yaml` with `n` monotonic from 1.
+
+State file: `version.json` at `<state-dir>/personal_revision/version.json`:
+
+```json
+{
+  "base_version": "1.2.3",
+  "personal_revision_id": 5,
+  "last_merged_vanilla": "1.2.3"
+}
+```
+
+`last_merged_vanilla` records the most recent vanilla version
+successfully 3-way-merged against (or `null` if never upgraded). The
+upgrade gate (`checkAndMergeUpgrades`) compares this against the
+current vanilla `manifest.version` to decide whether to fire LP.2's
+merger.
+
+Helpers: `readVersionJson` / `writeVersionJson` / `readLessonFiles` /
+`appendLessonFile` / `initPersonalRevision` /
+`persistPromotedLesson` in `src/packs/personal_revision.ts:1-220`.
+All writes go through atomic `<file>.tmp.<pid>.<rand>` + `fs.rename`.
+
+### 1.9 Pack export modes (LP.4)
+
+`opensquid pack export <name> --mode <m>` ships a pack as a directory
+(or `.tgz` in v1.5+) with one of these stripping policies:
+
+| Mode                     | Memory citations           | Memory bodies   | Use case                  | Status          |
+| ------------------------ | -------------------------- | --------------- | ------------------------- | --------------- |
+| `lessons-only` (DEFAULT) | Stripped (regex)           | Dropped         | Safe peer-sharing path    | v1              |
+| `raw`                    | Preserved verbatim         | Preserved       | Local self-backup only    | v1              |
+| `with-evidence`          | Re-mapped `mem-export-<n>` | Included inline | Trusted team/org transfer | v1.5 (deferred) |
+
+Stripping is regex-based, deterministic, no LLM calls per
+[[feedback_stop_haiku_drift]]. See `src/cli/pack.ts:buildExportCommand`.
+
 ---
 
 ## 2. Skill format
@@ -480,6 +528,47 @@ higher-precedence packs win.
 Not shipped in v0.5.x. Skill-level `extends:` will let a pack inherit
 another pack's skill + selectively override fields. Tracked
 separately.
+
+### 3.5 Vanilla upgrade lifecycle (LP.2 + LP.5)
+
+When a user runs `opensquid pack install <newer-source>` for an
+already-installed pack OR when session-load discovery sees
+`manifest.version > base_version` AND personal_revision has lessons
+(id > 0) AND `last_merged_vanilla !== current vanilla`, the lazy 3-way
+merge resolver triggers:
+
+1. Read base snapshot (immutable installed version) from
+   `<state-dir>/base/`
+2. Read personal lesson files from
+   `<state-dir>/personal_revision/lesson_*.yaml`
+3. Read vanilla snapshot from the install source / extracted directory
+4. For each file in the union (.yaml/.yml/.md only; node_modules/.git/
+   skipped):
+   - Both base & vanilla unchanged → `unchanged`
+   - Only personal touched → `auto-merged-personal` (preserve personal)
+   - Only vanilla touched → `auto-merged-vanilla` (adopt vanilla)
+   - Both touched → `conflict`: emit `lesson_<n>.conflict.yaml` sidecar
+     with YAML-comment-safe git-style markers (`# <<<<<<< base`, `#
+=======`, `# >>>>>>> vanilla <semver>`)
+5. Update `last_merged_vanilla` in version.json on success
+
+User resolves conflicts manually by editing the `.conflict.yaml`
+sidecar + renaming back to `.yaml`. On next discovery the resolved
+file is picked up as the canonical lesson.
+
+**Lazy by design (per L10):** no background poller; the merge fires on
+next discovery only. **Idempotent (per L11):** same vanillaVersion →
+returns `noop: true` without file writes. **base_version immutable:**
+only `last_merged_vanilla` mutates; `base_version` stays the
+install-time value.
+
+Per-session cache: `(packId, base, vanilla, revisionId)` tuple
+short-circuits redundant calls. Cleared via `clearMergeCache()` (called
+by bootstrap on SessionStart).
+
+Helpers: `checkAndMergeUpgrades` + `clearMergeCache` in
+`src/packs/discovery.ts`. Underlying merger: `runThreeWayMerge` in
+`src/runtime/versioning.ts:1-250`.
 
 ### 3.4 Dispatch flow
 

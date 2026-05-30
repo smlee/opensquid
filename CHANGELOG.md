@@ -7,6 +7,69 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.243] - 2026-05-30
+
+### Added (LP.5 — auto-upgrade detection helper + pack-runtime.md docs — CLOSES T-LIVING-PACK)
+
+- **`checkAndMergeUpgrades(packStateDir, vanillaManifest, vanillaDir)`** in
+  `src/packs/discovery.ts` — lazy 3-way merge trigger:
+  - Returns null when: pack not installed, no lessons to preserve
+    (revision_id 0), already merged (last_merged_vanilla === vanilla),
+    or not an upgrade (vanilla <= base).
+  - Otherwise fires `runThreeWayMerge` (LP.2) and caches the
+    `MergeResult` in a per-session map keyed on
+    `(packId, baseVersion, vanillaVersion, personalRevisionId)`.
+- **`clearMergeCache()`** — bootstrap calls on SessionStart to empty
+  the cache (cache is module-scoped + persistent within a single
+  Node process otherwise).
+- **`_mergeCacheSize()`** — test-only helper for cache-size assertions.
+
+### Docs (pack-runtime.md extensions)
+
+- **§1.8** `base_version` + `personal_revision` — documents the
+  living-pack 2-layer state model (immutable base + monotonic
+  personal_revision lessons), the version.json shape, and the I/O
+  helpers in `src/packs/personal_revision.ts`.
+- **§1.9** Pack export modes — table of lessons-only (default) / raw /
+  with-evidence (deferred v1.5) with use-case columns.
+- **§3.5** Vanilla upgrade lifecycle — full 5-step flow from
+  install/discovery upgrade detection through 3-way merger
+  dispositions through conflict sidecar resolution. Documents lazy +
+  idempotent + base_version-immutable design invariants per L10/L11.
+
+### Tests
+
+- `src/packs/discovery.test.ts` — 6 new LP.5 cases:
+  - not installed → null
+  - no lessons (revision_id 0) → null
+  - vanilla === base (not an upgrade) → null
+  - last_merged_vanilla matches → null (already merged)
+  - upgrade detected → MergeResult returned; cache populated
+  - second call short-circuits via persisted last_merged_vanilla
+  - `clearMergeCache` empties the cache
+- Full suite: 2637 pass / 28 skip / 0 fail (+6 net)
+
+### Closes T-LIVING-PACK (5/5 shipped)
+
+| Task | What                                           | Commit    | Version |
+| ---- | ---------------------------------------------- | --------- | ------- |
+| LP.1 | BaseVersion + PersonalRevision + I/O helpers   | `cea6a06` | 0.5.239 |
+| LP.2 | 3-way merge resolver + conflict sidecar        | `217f6d4` | 0.5.240 |
+| LP.3 | persistPromotedLesson + resolvePackStateDir    | `9e915d5` | 0.5.241 |
+| LP.4 | CLI install/list/export/remove (v1 min-viable) | `984be01` | 0.5.242 |
+| LP.5 | upgrade helper + docs (this commit)            | —         | 0.5.243 |
+
+The living-pack mechanic — the heart of pack evolution per the user's
+2026-05-30 framing — is now operational: packs ship at a base_version,
+the wedge-promote pipeline writes lessons via persistPromotedLesson,
+the CLI manages install/list/export/remove, and vanilla upgrades
+trigger 3-way merges with personal-revision-preserving conflict
+sidecars. Bootstrap wiring (auto-trigger checkAndMergeUpgrades from
+discoverActivePacks at session-load) is a one-line follow-up once
+LP.1's loader fold lands.
+
+---
+
 ## [0.5.242] - 2026-05-30
 
 ### Added (LP.4 — opensquid pack CLI v1 minimum-viable: install/list/export/remove)

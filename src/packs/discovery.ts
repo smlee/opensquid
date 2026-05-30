@@ -38,9 +38,105 @@ import { join } from 'node:path';
 
 import { matchesDetectedBy, type DetectionContext } from '../runtime/detection.js';
 import type { Pack } from '../runtime/types.js';
+import { runThreeWayMerge, type MergeResult } from '../runtime/versioning.js';
 
 import { expandComposites } from './composite_resolver.js';
 import { loadPack } from './loader.js';
+import { readVersionJson } from './personal_revision.js';
+
+/**
+ * LP.5 — module-scoped per-session merge cache. Cleared by bootstrap on
+ * SessionStart via `clearMergeCache()`. Key is the (packId, baseVersion,
+ * vanillaVersion, personalRevisionId) tuple — when ANY of those change the
+ * cache is invalid.
+ */
+const mergeCache = new Map<string, MergeResult>();
+
+interface MergeCacheKey {
+  packId: string;
+  baseVersion: string;
+  vanillaVersion: string;
+  personalRevisionId: number;
+}
+
+function cacheKey(k: MergeCacheKey): string {
+  return `${k.packId}@base=${k.baseVersion}@vanilla=${k.vanillaVersion}@rev=${String(k.personalRevisionId)}`;
+}
+
+/** LP.5 — bootstrap calls this on SessionStart to clear per-session cache. */
+export function clearMergeCache(): void {
+  mergeCache.clear();
+}
+
+/** LP.5 — exposed for tests to peek cached count. */
+export function _mergeCacheSize(): number {
+  return mergeCache.size;
+}
+
+function semverLtLocal(a: string, b: string): boolean {
+  const ap = a
+    .split('-')[0]!
+    .split('.')
+    .map((n) => Number.parseInt(n, 10));
+  const bp = b
+    .split('-')[0]!
+    .split('.')
+    .map((n) => Number.parseInt(n, 10));
+  for (let i = 0; i < 3; i++) {
+    const d = (ap[i] ?? 0) - (bp[i] ?? 0);
+    if (d < 0) return true;
+    if (d > 0) return false;
+  }
+  return false;
+}
+
+/**
+ * LP.5 — lazy 3-way merge trigger. For an installed pack at `packStateDir`,
+ * check whether the on-disk vanilla is newer than the recorded base AND has
+ * lessons to preserve AND hasn't been merged yet. If so, trigger LP.2's
+ * runThreeWayMerge against the vanilla source (passed in as `vanillaDir`).
+ *
+ * Cached per-session — same (packId, base, vanilla, revisionId) tuple
+ * resolves once per session lifetime.
+ *
+ * Returns null in any skip-merge case (not installed, no lessons, already
+ * merged, not an upgrade). Returns the MergeResult when the merge actually
+ * runs.
+ *
+ * Per L10 LAZY: NO background poller; this fires on next discovery only.
+ * Per L11 IMMUTABLE base_version: only `last_merged_vanilla` mutates;
+ * base_version stays the install-time value.
+ */
+export async function checkAndMergeUpgrades(
+  packStateDir: string,
+  vanillaManifest: { name: string; version: string },
+  vanillaDir: string,
+): Promise<MergeResult | null> {
+  const version = await readVersionJson(packStateDir);
+  if (version === null) return null;
+  if (version.personal_revision_id === 0) return null;
+  if (version.last_merged_vanilla === vanillaManifest.version) return null;
+  if (!semverLtLocal(version.base_version, vanillaManifest.version)) return null;
+
+  const key = cacheKey({
+    packId: vanillaManifest.name,
+    baseVersion: version.base_version,
+    vanillaVersion: vanillaManifest.version,
+    personalRevisionId: version.personal_revision_id,
+  });
+  const cached = mergeCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const result = await runThreeWayMerge({
+    packId: vanillaManifest.name,
+    baseDir: join(packStateDir, 'base'),
+    personalStateDir: packStateDir,
+    vanillaDir,
+    vanillaVersion: vanillaManifest.version,
+  });
+  mergeCache.set(key, result);
+  return result;
+}
 
 /**
  * LP.3 — path-traversal-safe validator for pack ids that come from
