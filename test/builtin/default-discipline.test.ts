@@ -39,7 +39,7 @@ describe('builtin default-discipline pack', () => {
     expect(pack.evolves).toBe(true);
   });
 
-  it('ships seven skill folders', async () => {
+  it('ships eight skill folders (LL.5 added inbound-greeter)', async () => {
     const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const skillNames = pack.skills.map((s) => s.name).sort();
     expect(skillNames).toEqual([
@@ -47,6 +47,7 @@ describe('builtin default-discipline pack', () => {
       'engine-vocab',
       'git',
       'honesty-ledger',
+      'inbound-greeter',
       'phase-logging',
       'versioning',
       'workflow',

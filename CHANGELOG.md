@@ -7,6 +7,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.233] - 2026-05-30
+
+### Added (LL.5 — docs/pack-runtime.md inbound docs + reference inbound-greeter skill)
+
+- **`docs/pack-runtime.md` §2.4** — extended Event-kinds table row for
+  `inbound_channel` (`channel`, `sender_pattern` filter fields). Added
+  filter-semantics block + `InboundChannelEvent` payload table
+  documenting `channelUri / sender / text / threadKey / receivedAt`.
+- **`docs/pack-runtime.md` §7.5** — two new anti-pattern entries:
+  - Inbound dispatch is best-effort; unreachable sessions stay silent
+    (documents L7 / L12: chat-watch crash → unrouted.jsonl + inbox
+    backlog drained at next session-start via LL.4 UPS hook)
+  - Inbound skills are passive evaluators — never mutate the inbox
+    (documents L8: opensquid invariant "packs propose; runtime
+    disposes" — no `mark_inbound_read` / `delete_inbound` primitive)
+- **`packs/builtin/default-discipline/skills/inbound-greeter/`** (new) —
+  reference example skill for the `inbound_channel` trigger pattern:
+  - `skill.yaml` — `load: lazy` + `when_to_load: [event_type:
+inbound_channel]` + `unloads_when: [session_ends]` (stays scoped
+    to one chat-watch lifetime; won't pile up across long sessions)
+  - `triggers: [{kind: inbound_channel, sender_pattern: '^.+$'}]`
+  - Single rule `surface-acknowledgment` emits a `surface` verdict
+  - `SKILL.md` documents how the trigger fires + how to customize
+- **`test/builtin/inbound-greeter.test.ts`** (new, 4 cases) verifies
+  the skill loads + declares an `inbound_channel` trigger with
+  `sender_pattern` + emits a single `surface` rule + unloads on
+  session_ends.
+- **`test/builtin/default-discipline.test.ts`** updated — skill count
+  assertion bumped from 7 → 8 (new `inbound-greeter`).
+
+### Tests
+
+- Full suite: 2543 pass / 28 skip / 0 fail (+4 net).
+
+---
+
 ## [0.5.232] - 2026-05-30
 
 ### Added (LL.4 — UPS hook drains unacked inbox into additionalContext + ack ledger)

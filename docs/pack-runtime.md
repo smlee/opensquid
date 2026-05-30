@@ -275,20 +275,51 @@ Schema: `src/packs/schemas/skill.ts:286-329` (the
 
 Event kinds (`src/runtime/event.ts:1-200`):
 
-| Kind              | Source                        | Common matchers              |
-| ----------------- | ----------------------------- | ---------------------------- |
-| `tool_call`       | Claude Code PreToolUse hook   | `tool_used`, `command_match` |
-| `post_tool_call`  | Claude Code PostToolUse hook  | `tool_used`                  |
-| `prompt_submit`   | UserPromptSubmit hook         | `prompt_match`               |
-| `session_end`     | SessionEnd hook               | —                            |
-| `stop`            | Stop hook                     | —                            |
-| `schedule`        | scheduler tick (SCHED.1)      | `cron:` literal in trigger   |
-| `webhook`         | webhook intake (SCHED.2)      | route literal in trigger     |
-| `inbound_channel` | chat inbound (project-bridge) | channel + sender             |
-| `file_changed`    | file-watcher (SCHED.3)        | path glob in trigger         |
+| Kind              | Source                       | Common matchers              |
+| ----------------- | ---------------------------- | ---------------------------- |
+| `tool_call`       | Claude Code PreToolUse hook  | `tool_used`, `command_match` |
+| `post_tool_call`  | Claude Code PostToolUse hook | `tool_used`                  |
+| `prompt_submit`   | UserPromptSubmit hook        | `prompt_match`               |
+| `session_end`     | SessionEnd hook              | —                            |
+| `stop`            | Stop hook                    | —                            |
+| `schedule`        | scheduler tick (SCHED.1)     | `cron:` literal in trigger   |
+| `webhook`         | webhook intake (SCHED.2)     | route literal in trigger     |
+| `inbound_channel` | chat inbound (LL.3 watcher)  | `channel`, `sender_pattern`  |
+| `file_changed`    | file-watcher (SCHED.3)       | path glob in trigger         |
 
 Omitting `triggers:` defaults to `[{kind: 'tool_call'}]` —
 preserves Phase 1+ behavior verbatim.
+
+**`inbound_channel` filter semantics** (T-L3-LOOP LL.3 / LL.4):
+
+- `channel: 'telegram' | 'slack' | 'discord'` (optional). When set, the
+  trigger fires only if the parsed scheme of `event.channelUri` matches
+  (e.g. `'telegram'` matches `telegram://...`). Omit to accept all
+  platforms.
+- `sender_pattern: string` (optional). JS RegExp (first-party trust
+  boundary — packs are vendored; pack authors are trusted to write
+  non-pathological patterns). Matched against `event.sender`. Empty
+  string OR omitted = accept all senders. Malformed pattern → trigger
+  silently skipped at dispatch.
+- `cost_tier:` (optional, inherits the general trigger field).
+
+**`InboundChannelEvent` payload** (defined at `src/runtime/event.ts:136-144`):
+
+| Field        | Type    | Description                                      |
+| ------------ | ------- | ------------------------------------------------ |
+| `channelUri` | string  | `<platform>://<channel>[/<thread_id>]` per LL.3  |
+| `sender`     | string  | platform display name (e.g. Telegram first_name) |
+| `text`       | string  | message body                                     |
+| `threadKey`  | string? | thread/topic id (Telegram `message_thread_id`)   |
+| `receivedAt` | string  | ISO-8601, platform-stamped                       |
+
+Multi-platform within one skill: declare two `triggers:` entries (one
+per platform). Skill-rule composition is layered — not OR-ed at the
+trigger schema.
+
+Reference example: `packs/builtin/default-discipline/skills/inbound-greeter/`
+demonstrates the trigger pattern (surface-verdict acknowledgment of any
+inbound message).
 
 ### 2.5 `rules:` (Rule discriminated union)
 
@@ -710,6 +741,31 @@ stage via `read_chain_state`.
   on-disk state goes under `<OPENSQUID_HOME>/sessions/<sess>/` —
   never spread state across the user's home directory or arbitrary
   paths.
+- **Inbound dispatch is best-effort; unreachable sessions stay silent**
+  (T-L3-LOOP L7 / L12). When an inbound row arrives via the chat-daemon
+  but no `live-session.lease` is fresh (`chat watch` not running or
+  crashed), the LL.3 inbound watcher appends an `unrouted.jsonl` row to
+  `~/.opensquid/projects/<uuid>/inbox/` and LEAVES the inbox row
+  intact. The next session-start drains the backlog via the LL.4 UPS
+  hook — "lazy push", not "eager wake". Pack-author implication: never
+  assume your `inbound_channel` skill will fire at message-arrival
+  latency. The latency floor is `min(time_until_next_user_prompt,
+time_until_chat_watch_resume)`. Designs that depend on real-time
+  inbound reaction (e.g. on-call alert triage) belong in the
+  agent-bridge daemon path (`src/runtime/agent_bridge/`), not the
+  interactive `chat watch` path.
+- **Inbound skills are passive evaluators — never mutate the inbox**
+  (T-L3-LOOP L8). A skill triggered by `inbound_channel` can emit any
+  Verdict shape (pass / block / warn / surface / directive) but the
+  inbox + ack state are runtime-managed. There is no
+  `mark_inbound_read` or `delete_inbound` primitive at LL scope —
+  opensquid's invariant: **packs propose; runtime disposes**. Adding a
+  mutation primitive for inbound would re-introduce the cross-pack
+  race condition the ack ledger exists to prevent. If a pack needs
+  richer inbound auditing (which messages were injected this turn, in
+  what order), inspect the prompt-history `additionalContext` directly
+  via `recall`. A first-class `recall_injected_inbound` primitive is
+  deferred to post-v1.
 
 ---
 

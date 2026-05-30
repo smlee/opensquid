@@ -1,0 +1,36 @@
+# inbound-greeter — Reference example for the `inbound_channel` trigger pattern
+# shipped in T-L3-LOOP (opensquid 0.5.227 → 0.5.232).
+#
+# On any inbound chat message reaching this session via the LL.3 watcher,
+# emit a surface verdict acknowledging receipt. Pack authors copy this as
+# the starting point for higher-value inbound handling (intent classification,
+# urgency triage, etc.).
+#
+# Posture per LL.5 risk callout: ships in default-discipline with `unloads_when:
+# session_ends` so it stays scoped to a single chat watch lifetime (won't pile
+# up across long-running sessions). Pack authors who want richer inbound
+# handling should COPY this skill into their own pack rather than enabling
+# the built-in one in production.
+#
+# Cross-references:
+#   - docs/pack-runtime.md §2.4 — `inbound_channel` filter semantics
+#   - docs/pack-runtime.md §7.5 — inbound anti-patterns (best-effort + passive)
+name: inbound-greeter
+load: lazy
+when_to_load:
+  - kind: event_type
+    type: inbound_channel
+unloads_when:
+  - kind: session_ends
+triggers:
+  - kind: inbound_channel
+    # Omitting `channel` accepts telegram + slack + discord.
+    sender_pattern: '^.+$' # accept all senders (replace with `^(alice|bob)$` etc. in production)
+rules:
+  - id: surface-acknowledgment
+    kind: track_check
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: '📨 Inbound message noted (will surface at next user turn)'
