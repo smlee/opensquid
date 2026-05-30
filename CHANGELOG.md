@@ -7,6 +7,35 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.218] - 2026-05-30
+
+### Added
+
+- **scope-architect/recall-consumed skill** (DPC.3) — tool-sequence FSM
+  adapted from Letta's tool-rule pattern. Fires on Stop hook event; if
+  `mcp__opensquid__recall` fired this turn AND the prior assistant message
+  shows no recall-consumption vocabulary (per [[X]] / memory says / per
+  memory / recalled / according to memory / from memory), emits `block`
+  verdict → Stop hook exit 2 → agent emits recovery turn citing what
+  recall returned.
+
+  Architectural ceiling locked: Claude Code has no `PreAssistantMessage`
+  hook (ECC hit the same wall — verified via OSS subagent prior-art
+  research). Stop+exit-2 is the only post-emit corrective; ~1s visible
+  flash before recovery turn is the accepted trade-off (per May-17
+  unified-evaluator design C6 callout).
+
+  Uses existing primitives (`session_tool_history` + `last_assistant_message`
+  - `text_pattern_match` + `verdict`) — no new primitive needed; pre-research
+    Q4 residual resolved.
+
+### Notes
+
+- Heuristic limitations documented in skill prose: false-negatives (agent
+  re-words recall without citing) slip through; false-positives (passing
+  [[X]] reference) trigger spuriously. Future destination_check rule will
+  LLM-judge consumption via model_alias for tighter coverage.
+
 ## [0.5.217] - 2026-05-30
 
 ### Changed

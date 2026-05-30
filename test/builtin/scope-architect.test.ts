@@ -29,17 +29,26 @@ describe('builtin scope-architect pack', () => {
     expect(pack.evolves).toBe(true);
   });
 
-  it('ships six skills (one per rule kind)', async () => {
+  it('ships seven skills (DPC.1 six + DPC.3 recall-consumed)', async () => {
     const pack = await loadPack(resolve('packs/builtin/scope-architect'));
     const skillNames = pack.skills.map((s) => s.name).sort();
     expect(skillNames).toEqual([
       'chain-handoffs',
       'inline-spec-block',
+      'recall-consumed',
       'scope-before-code',
       'scope-detect',
       'task-list-generated',
       'taskcreate-spec-required',
     ]);
+  });
+
+  it('DPC.3: recall-consumed fires on stop trigger only', async () => {
+    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
+    const skill = pack.skills.find((s) => s.name === 'recall-consumed');
+    expect(skill).toBeDefined();
+    expect(skill?.triggers.map((t) => t.kind)).toEqual(['stop']);
+    expect(skill?.rules[0]?.id).toBe('block-stop-if-recall-not-consumed');
   });
 
   it('passes validateUniqueSkillNames (no in-pack collisions)', async () => {

@@ -1,0 +1,97 @@
+# recall-consumed — tool-sequence FSM enforcing "agent consumed recall
+# before responding."
+#
+# Per T-DISCIPLINE-PIPELINE-COMPLETION DPC.3 (2026-05-30): Letta-style
+# tool-sequence FSM adapted for opensquid via session_tool_history +
+# last_assistant_message primitives + Stop hook + exit-2 retry pattern.
+#
+# Architectural ceiling (locked per pre-research §1.5): Claude Code has
+# NO PreAssistantMessage hook — prose between tool calls cannot be
+# intercepted mid-generation. ECC hit the same wall. The Stop+exit-2
+# pattern is the only post-emit corrective; user sees the bad message
+# briefly (~1s flash per May-17 unified-evaluator design C6 callout)
+# before the recovery turn fires.
+#
+# Detection heuristic: if recall fired this turn AND the assistant's
+# response shows NO recall-consumption vocabulary (per memory, recalled,
+# memory says, per [[X]], etc.), the agent ignored the recall. Block stop
+# with directive forcing a recovery turn that explicitly cites what recall
+# returned + how it informed (or didn't inform) the response.
+#
+# Heuristic limitations:
+#   - Regex pattern-match for consumption vocabulary is imperfect: agent
+#     could re-word the recall content without citing (false-negative) OR
+#     reference unrelated [[memory]] markers in passing (false-positive).
+#   - Stop hook plugin-install caveat (GitHub anthropics/claude-code#10412):
+#     plugin-installed Stop hooks halt instead of looping; direct
+#     .claude/hooks/ installs (opensquid's path) loop correctly.
+#
+# Future enhancement: pair this deterministic FSM with a destination_check
+# rule that LLM-judges consumption via model_alias (per L2 model-neutral
+# lock). Out of scope for DPC.3.
+name: recall-consumed
+load: preload
+when_to_load:
+  - kind: event_type
+    type: stop
+triggers:
+  - kind: stop
+rules:
+  - id: block-stop-if-recall-not-consumed
+    process:
+      - call: session_tool_history
+        args:
+          scope: current_turn
+          filter_names:
+            - mcp__opensquid__recall
+        as: recalls
+      - call: last_assistant_message
+        as: last_msg
+      # If recall fired BUT last assistant message shows no consumption
+      # vocabulary → agent ignored the recall. text_pattern_match returns
+      # matched: [] on empty input; the verdict `if:` checks emptiness.
+      - call: text_pattern_match
+        if: 'recalls.count > 0 && last_msg != null'
+        args:
+          text_field: last_msg
+          patterns:
+            - '\bper\s+(?:memory|the\s+recall|recall)\b'
+            - '\bper\s+\[\[[a-z0-9_-]+\]\]'
+            - '\bmemory\s+says\b'
+            - '\brecalled\b'
+            - '\bmemory:'
+            - '\baccording\s+to\s+(?:memory|recall|the\s+\[\[)'
+            - '\bfrom\s+(?:memory|the\s+recall|the\s+\[\[)'
+        as: consumed
+      - call: verdict
+        if: 'recalls.count > 0 && last_msg != null && len(consumed.matched) == 0'
+        args:
+          level: block
+          message: >-
+            🦑 RECALL-CONSUMED FSM (DPC.3): mcp__opensquid__recall fired this
+            turn but the response shows no recall-consumption vocabulary
+            (per [[X]] / memory says / per memory / recalled / according to memory).
+
+            Required next action: produce a recovery turn that EXPLICITLY cites
+            what recall returned + how it informed the response. If the recall
+            was irrelevant, say so explicitly ("recall returned X, not applicable
+            here because Y"). The structural enforcement ensures memory shapes
+            the response, not just becoming background noise.
+
+            Per [[feedback_dont_ask_derivable_questions]] +
+            [[feedback-workflow-explicit-sequence]]: research-first means the
+            research output FEEDS the response, not sits unread.
+
+            Heuristic note: this gate uses regex on consumption vocabulary;
+            false-negatives (re-wording without citing) slip through, false-
+            positives (passing [[X]] reference) trigger spuriously. Future
+            destination_check rule will LLM-judge consumption.
+prose: |
+  The post-emit corrective for "agent recalled memory but ignored its
+  content." Fires only when:
+    1. mcp__opensquid__recall was called this turn (recalls.count > 0)
+    2. The Stop event carries a last assistant message (last_msg != null)
+    3. The message has zero consumption-vocabulary matches
+
+  Block verdict → exit 2 → Stop hook returns the verdict as continuation
+  prompt → agent emits recovery turn citing the recall results.
