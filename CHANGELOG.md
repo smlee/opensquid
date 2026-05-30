@@ -7,6 +7,63 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.240] - 2026-05-30
+
+### Added (LP.2 — 3-way merge resolver + conflict sidecar emission)
+
+- **`src/runtime/versioning.ts`** (new, 243/250 LOC) — pure-ish
+  `runThreeWayMerge(input)` compares 3 pack snapshots:
+  - `baseDir` (immutable installed version)
+  - `personalStateDir` (LP.1 personal_revision/ — lessons + version.json)
+  - `vanillaDir` (newer upstream version)
+- **4-disposition classifier**:
+  - `unchanged` — vanilla matches base
+  - `auto-merged-personal` — vanilla matches base, personal differs
+  - `auto-merged-vanilla` — vanilla differs from base, personal untouched
+  - `conflict` — vanilla AND personal both touched → sidecar emitted
+- **YAML-comment-safe conflict sidecar** (`lesson_<n>.conflict.yaml`):
+  - Header lines: `# CONFLICT: vanilla bump overlaps with personal...`
+  - Git-style markers prefixed with `# `: `# <<<<<<< base`,
+    `# =======`, `# >>>>>>> vanilla <semver>`
+  - Original lesson body preserved verbatim below the marker block
+  - Atomic temp+rename write (consistent with LP.1 writer pattern)
+- **Idempotent**: re-run with same `vanillaVersion` →
+  `noop: true`; no file writes.
+- **Throws on downgrade** (vanilla < base) or missing version.json
+  — operator-error signal.
+- **Recursive walker** (`readPackTextFiles`) reads .yaml/.yml/.md only,
+  skips node_modules/.git/.opensquid/personal_revision, path-traversal
+  defense via `relative()` + `..`-rejection.
+- **Substring-based `lessonReferencesSkill`** heuristic (per
+  `feedback_simplest_granular_form` — false positives surface as
+  conflicts, which is honest; auto-resolving overlap risk is dishonest).
+- **No LLM imports** — text/YAML diff only (per
+  `feedback_stop_haiku_drift`).
+
+### Tests
+
+- `src/runtime/versioning.test.ts` — 16 cases (≥15 spec cap):
+  - preconditions: missing version.json throws; downgrade throws
+  - idempotency: same vanilla → noop; higher vanilla → not noop
+  - dispositions: unchanged / auto-merged-vanilla (new file) /
+    auto-merged-personal / conflict (vanilla+personal overlap) /
+    deleted-skill conflict / empty snapshots
+  - sidecar: writes last_merged_vanilla; YAML-comment-safe markers
+    verified; multi-lesson same-skill → only first conflicts
+  - walker: skip dirs (node_modules/.git/.opensquid/personal_revision);
+    skip non-yaml/md extensions
+  - result shape carries packId + baseVersion + personalRevisionId
+- Full suite: 2607 pass / 28 skip / 0 fail (+16 net).
+
+### Notes
+
+- LP.3 (wedge-promote integration) will be the first caller of
+  `appendLessonFile` (writes lessons); LP.5 (discovery upgrade
+  detector) will be the first caller of `runThreeWayMerge` at session
+  load. LP.4 (CLI install) writes the initial version.json.
+
+---
+
 ## [0.5.239] - 2026-05-30
 
 ### Added (LP.1 — keystone of T-LIVING-PACK; pack-evolution foundation)
