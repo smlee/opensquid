@@ -364,3 +364,106 @@ describe('IDF.3: detected_by × active.json interaction', () => {
     expect(packs2).toHaveLength(0);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────
+ * MM.1 — composite pack expansion at discovery layer.
+ *
+ * Verifies that discoverActivePacks expands composite packs' includes
+ * after per-pack loading + detected_by gating. Composites missing
+ * includes throw with clear CompositeResolutionError.
+ * ──────────────────────────────────────────────────────────────────── */
+describe('MM.1: composite expansion at discoverActivePacks', () => {
+  async function writeFocusedPack(name: string, version = '1.0.0'): Promise<void> {
+    const packDir = join(scopeRoot, 'packs', name);
+    await mkdir(packDir, { recursive: true });
+    await writeFile(
+      join(packDir, 'manifest.yaml'),
+      [`name: ${name}`, `version: ${version}`, 'scope: workflow', `goal: focused ${name}`].join(
+        '\n',
+      ) + '\n',
+      'utf8',
+    );
+  }
+
+  async function writeCompositePack(
+    name: string,
+    includes: { pack_id: string; semver: string }[],
+    version = '1.0.0',
+  ): Promise<void> {
+    const packDir = join(scopeRoot, 'packs', name);
+    await mkdir(packDir, { recursive: true });
+    const incLines = includes.flatMap((inc) => [
+      `  - pack_id: ${inc.pack_id}`,
+      `    semver: "${inc.semver}"`,
+    ]);
+    const yaml = [
+      `name: ${name}`,
+      `version: ${version}`,
+      'scope: workflow',
+      `goal: composite ${name}`,
+      'kind: composite',
+      'includes:',
+      ...incLines,
+    ].join('\n');
+    await writeFile(join(packDir, 'manifest.yaml'), yaml + '\n', 'utf8');
+  }
+
+  it('composite + matching include both load (composite first, focused next)', async () => {
+    await writeFocusedPack('a', '1.5.0');
+    await writeCompositePack('meta', [{ pack_id: 'a', semver: '^1.0.0' }]);
+    await writeActive({ packs: ['meta', 'a'] });
+
+    const packs = await discoverActivePacks(scopeRoot, null);
+    expect(packs.map((p) => p.name)).toEqual(['meta', 'a']);
+  });
+
+  it('composite references missing pack → throws CompositeResolutionError', async () => {
+    await writeCompositePack('meta', [{ pack_id: 'ghost', semver: '^1.0.0' }]);
+    await writeActive({ packs: ['meta'] });
+    await expect(discoverActivePacks(scopeRoot, null)).rejects.toThrow(/ghost/);
+  });
+
+  it('composite with detected_by that fails → composite SKIPPED (includes also drop because composite is filtered out before expansion)', async () => {
+    await writeFocusedPack('a', '1.5.0');
+    // composite with detected_by that won't match
+    const packDir = join(scopeRoot, 'packs', 'meta');
+    await mkdir(packDir, { recursive: true });
+    const yaml = [
+      'name: meta',
+      'version: 1.0.0',
+      'scope: workflow',
+      'goal: composite meta',
+      'kind: composite',
+      'includes:',
+      '  - pack_id: a',
+      '    semver: "^1.0.0"',
+      'detected_by:',
+      '  - kind: file_exists',
+      '    path: nonexistent-marker.txt',
+    ].join('\n');
+    await writeFile(join(packDir, 'manifest.yaml'), yaml + '\n', 'utf8');
+    await writeActive({ packs: ['meta', 'a'] });
+
+    const ctx: DetectionContext = {
+      cwd: '/tmp',
+      files: {},
+      dirs: {},
+      fileContents: {},
+      memoryBodies: '',
+      recentPrompts: '',
+      userPinned: false,
+    };
+    // meta filters out (its detected_by doesn't match); a stays (its detected_by [] matches always).
+    const packs = await discoverActivePacks(scopeRoot, ctx);
+    expect(packs.map((p) => p.name)).toEqual(['a']);
+  });
+
+  it('back-compat: list of only focused packs → unchanged after expansion', async () => {
+    await writeFocusedPack('p1');
+    await writeFocusedPack('p2');
+    await writeActive({ packs: ['p1', 'p2'] });
+
+    const packs = await discoverActivePacks(scopeRoot, null);
+    expect(packs.map((p) => p.name)).toEqual(['p1', 'p2']);
+  });
+});

@@ -34,7 +34,14 @@ import { z } from 'zod';
 
 import { ChatAgentSchema } from '../packs/schemas/chat_agent.js';
 import { DriftResponseConfig } from '../packs/schemas/drift_response.js';
-import { ActivationScope, DetectedByCheck, Foundation } from '../packs/schemas/manifest.js';
+import {
+  ActivationScope,
+  CompositeInclude,
+  DetectedByCheck,
+  Foundation,
+  PackKind,
+  PackUsage,
+} from '../packs/schemas/manifest.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
 
 // ---------------------------------------------------------------------------
@@ -354,6 +361,14 @@ export const Pack = z.object({
   foundation: Foundation.optional(),
   activationScope: ActivationScope.optional(),
   detectedBy: z.array(DetectedByCheck).optional(),
+  // MM.1 (2026-05-30) — multi-mode pack addressing. All three optional on
+  // the runtime Pack type so test fixtures + non-loadPack callers can
+  // construct Pack literals without these fields (back-compat). The YAML
+  // loader (loader.ts) supplies the defaults explicitly. Downstream
+  // consumers read defensively via ?? coalesce ('focused' / 'active' / []).
+  kind: PackKind.optional(),
+  usage: PackUsage.optional(),
+  includes: z.array(CompositeInclude).optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

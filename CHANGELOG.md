@@ -7,6 +7,48 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.228] - 2026-05-30
+
+### Added (MM.1 — keystone of T-MULTIMODE; Phase 2 of v2 product-completion plan)
+
+- **`PackKind` enum** (`focused | composite`) in `src/packs/schemas/manifest.ts`
+- **`PackUsage` enum** (`active | profession | both`)
+- **`CompositeInclude`** strict object `{pack_id, semver}`
+- **`Manifest` extended** with three optional fields (`kind` / `usage` /
+  `includes` — all Zod-default to `focused` / `active` / `[]`) +
+  `superRefine` cross-field invariants:
+  - `focused` ⇒ empty `includes`
+  - `composite` ⇒ non-empty `includes`
+  - `composite` ⇒ no `foundation` (pure aggregator per v0.6 §4.7)
+- **`Pack` runtime type extended** in `src/runtime/types.ts` with three
+  optional camelCase fields (`kind` / `usage` / `includes`). Optional so
+  test fixtures stay back-compat; loader supplies via Zod defaults.
+- **`composite_resolver.ts`** (new, 173/200 LOC) — pure-function
+  `expandComposites(packs)` walks composite packs' `includes:` against
+  the registry, returns expanded flat list. Cycle detection per root,
+  depth-cap 3, semver matching via `semver` npm pkg's `validRange` +
+  `satisfies`. Throws `CompositeResolutionError` with `cause` field
+  (`missing-include` / `semver-mismatch` / `cycle` / `depth-exceeded` /
+  `invalid-semver`).
+- **`loader.ts`** — folds new fields + adds `team.yaml` existence check
+  when `usage: profession | both` (clear error when missing).
+- **`discovery.ts`** — calls `expandComposites(packs)` AFTER per-pack
+  detected_by gating. Composites that fail detection are filtered out
+  before expansion (their includes drop with them, consistent with the
+  composite-as-gate semantic per L12).
+- **Tests**: 10 new schema tests + 12 resolver tests + 4 discovery
+  integration tests = 26 new total (above the spec's ≥ 22 floor).
+  Full suite 2480 pass / 28 skip / 0 fail (+27 net).
+
+### Notes
+
+- Semver tightness: `semver.satisfies` tolerates malformed input
+  (returns false without throwing), so range validity is probed via
+  `semver.validRange` + `semver.valid` rather than the satisfies
+  throw branch. Tests cover all 5 `cause` variants.
+
+---
+
 ## [0.5.227] - 2026-05-30
 
 ### Fixed (SAR.1 — scope-architect regex hole — ship/make-it-work intent family)

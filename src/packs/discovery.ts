@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { matchesDetectedBy, type DetectionContext } from '../runtime/detection.js';
 import type { Pack } from '../runtime/types.js';
 
+import { expandComposites } from './composite_resolver.js';
 import { loadPack } from './loader.js';
 
 export interface ActiveJson {
@@ -106,7 +107,12 @@ export async function discoverActivePacks(
       packs.push(pack);
     }
   }
-  return packs;
+  // MM.1 (2026-05-30) — expand composite packs into their includes after
+  // per-pack detected_by gating. Composite identity is preserved (the
+  // composite stays in the list for audit); its included focused packs are
+  // appended (deduped first-occurrence-wins). Errors throw
+  // CompositeResolutionError with the composite name + cause.
+  return expandComposites(packs);
 }
 
 /**

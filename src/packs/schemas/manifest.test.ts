@@ -521,3 +521,112 @@ describe('Manifest schema', () => {
     expect(minimal.foundation).toBeUndefined();
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────
+ * MM.1 — Pack kind / usage / composite includes additive fields.
+ *
+ * Schema-side defaults + superRefine cross-field invariants. Resolver
+ * tests live in composite_resolver.test.ts; discovery integration tests
+ * live in discovery.test.ts.
+ * ──────────────────────────────────────────────────────────────────── */
+describe('MM.1: kind + usage + includes schema', () => {
+  const minimal = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: 'p',
+    version: '0.1.0',
+    scope: 'workflow',
+    goal: 'fixture',
+    ...overrides,
+  });
+
+  it('minimal manifest defaults to kind: focused, usage: active, includes: []', () => {
+    const m = Manifest.parse(minimal());
+    expect(m.kind).toBe('focused');
+    expect(m.usage).toBe('active');
+    expect(m.includes).toEqual([]);
+  });
+
+  it('parses kind: composite with non-empty includes', () => {
+    const m = Manifest.parse(
+      minimal({
+        kind: 'composite',
+        includes: [{ pack_id: 'a', semver: '^1.0.0' }],
+      }),
+    );
+    expect(m.kind).toBe('composite');
+    expect(m.includes).toHaveLength(1);
+    expect(m.includes[0]).toEqual({ pack_id: 'a', semver: '^1.0.0' });
+  });
+
+  it('rejects kind: composite with empty includes', () => {
+    const result = Manifest.safeParse(minimal({ kind: 'composite', includes: [] }));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toContain('composite REQUIRES non-empty includes');
+    }
+  });
+
+  it('rejects kind: focused with non-empty includes', () => {
+    const result = Manifest.safeParse(
+      minimal({ kind: 'focused', includes: [{ pack_id: 'a', semver: '^1.0.0' }] }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toContain('focused MUST have empty includes');
+    }
+  });
+
+  it('rejects kind: composite + foundation declared (composites are pure aggregators)', () => {
+    const result = Manifest.safeParse(
+      minimal({
+        kind: 'composite',
+        includes: [{ pack_id: 'a', semver: '^1.0.0' }],
+        foundation: { tools: [], domains: [], methodologies: [] },
+      }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.message).toContain('composite MUST NOT declare foundation');
+    }
+  });
+
+  it('parses each usage enum value (active, profession, both)', () => {
+    for (const usage of ['active', 'profession', 'both'] as const) {
+      const m = Manifest.parse(minimal({ usage }));
+      expect(m.usage).toBe(usage);
+    }
+  });
+
+  it('rejects invalid usage enum value', () => {
+    const r = Manifest.safeParse(minimal({ usage: 'invalid' }));
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects invalid kind enum value', () => {
+    const r = Manifest.safeParse(minimal({ kind: 'meta' }));
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects malformed include entry (typo: packid instead of pack_id)', () => {
+    const r = Manifest.safeParse(
+      minimal({ kind: 'composite', includes: [{ packid: 'a', semver: '^1.0.0' }] }),
+    );
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects include entry missing semver field', () => {
+    const r = Manifest.safeParse(minimal({ kind: 'composite', includes: [{ pack_id: 'a' }] }));
+    expect(r.success).toBe(false);
+  });
+
+  it('composite + detected_by IS allowed (gates WHEN to expand)', () => {
+    const m = Manifest.parse(
+      minimal({
+        kind: 'composite',
+        includes: [{ pack_id: 'a', semver: '^1.0.0' }],
+        detected_by: [{ kind: 'file_exists', path: 'package.json' }],
+      }),
+    );
+    expect(m.kind).toBe('composite');
+    expect(m.detected_by).toHaveLength(1);
+  });
+});

@@ -285,6 +285,51 @@ export const DetectedByCheck = z.discriminatedUnion('kind', [
 export type DetectedByCheck = z.infer<typeof DetectedByCheck>;
 
 // ---------------------------------------------------------------------------
+// MM.1 (2026-05-30) — Pack kind (v0.6 §4.7).
+//   - 'focused'   = own content + own foundation + own detected_by + own skills.
+//                    The default; covers every pre-MM.1 pack.
+//   - 'composite' = pure aggregator. References focused packs via `includes:`,
+//                    must NOT declare own `foundation:` or own skills' content
+//                    (the superRefine on Manifest enforces).
+// 2-value enum per L2 — no third path.
+// ---------------------------------------------------------------------------
+
+export const PackKind = z.enum(['focused', 'composite']);
+export type PackKind = z.infer<typeof PackKind>;
+
+// ---------------------------------------------------------------------------
+// MM.1 — Pack usage mode.
+//   - 'active'     = loads into parent agent's mind; rules fire via dispatcher.
+//                     The default; covers every pre-MM.1 pack.
+//   - 'profession' = spawned as a subagent via the `spawn_subagent` primitive
+//                     when a directive verdict's `next_action.profession`
+//                     references it. REQUIRES `team.yaml` at the pack root
+//                     (loader-side check; not enforced at this schema layer).
+//   - 'both'       = eligible for either load path.
+// Per L8: profession-mode packs MUST also be `kind: focused` (composites have
+// no team.yaml). The loader enforces this; this schema does not (would require
+// a cross-field refine that's clearer in the loader).
+// ---------------------------------------------------------------------------
+
+export const PackUsage = z.enum(['active', 'profession', 'both']);
+export type PackUsage = z.infer<typeof PackUsage>;
+
+// ---------------------------------------------------------------------------
+// MM.1 — Composite-pack include entry. Each entry pins a focused pack by
+// name + a semver range. Resolution happens at load time against the
+// discovered focused-pack registry (composite_resolver.ts).
+// `.strict()` rejects typos (`pack_name:` instead of `pack_id:`).
+// ---------------------------------------------------------------------------
+
+export const CompositeInclude = z
+  .object({
+    pack_id: z.string().min(1),
+    semver: z.string().min(1),
+  })
+  .strict();
+export type CompositeInclude = z.infer<typeof CompositeInclude>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -327,6 +372,40 @@ export const Manifest = z
     foundation: Foundation.optional(),
     activation_scope: ActivationScope.default('project'),
     detected_by: z.array(DetectedByCheck).default([]),
+    // MM.1 (2026-05-30) — pack kind + usage + composite includes.
+    // All three have sensible defaults so every pre-MM.1 pack parses unchanged:
+    // 'focused' / 'active' / [] mirror today's implicit single-mode behavior.
+    kind: PackKind.default('focused'),
+    usage: PackUsage.default('active'),
+    includes: z.array(CompositeInclude).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((m, ctx) => {
+    // MM.1 cross-field invariants.
+    // focused ⇒ no includes (only composites aggregate)
+    if (m.kind === 'focused' && m.includes.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['includes'],
+        message: `pack ${m.name}: kind: focused MUST have empty includes (got ${String(m.includes.length)} entries) — composites aggregate; focused packs own content`,
+      });
+    }
+    // composite ⇒ non-empty includes (a composite with no includes is malformed)
+    if (m.kind === 'composite' && m.includes.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['includes'],
+        message: `pack ${m.name}: kind: composite REQUIRES non-empty includes — a composite with no includes is a configuration error`,
+      });
+    }
+    // composite ⇒ no own foundation (pure aggregator per v0.6 §4.7)
+    if (m.kind === 'composite' && m.foundation !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['foundation'],
+        message: `pack ${m.name}: kind: composite MUST NOT declare foundation — composites are pure aggregators with no own content (v0.6 §4.7)`,
+      });
+    }
+    // composite + detected_by IS allowed — gates WHEN to expand includes per L12.
+  });
 export type Manifest = z.infer<typeof Manifest>;

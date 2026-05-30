@@ -107,6 +107,21 @@ export async function loadPack(dir: string): Promise<Pack> {
   // behavior for packs that don't ship the file. Same parse-error contract.
   const driftResponse = await loadOptionalDriftResponse(join(dir, 'drift_response.yaml'));
 
+  // MM.1 (2026-05-30) — team.yaml existence check for profession-mode packs.
+  // `usage: profession | both` REQUIRES team.yaml declaring ≥1 SubagentRole.
+  // Schema-side validation handled at dispatch time via the team.ts loader;
+  // we only check EXISTENCE here so misconfiguration surfaces at load.
+  if (manifest.usage === 'profession' || manifest.usage === 'both') {
+    const teamPath = join(dir, 'team.yaml');
+    try {
+      await stat(teamPath);
+    } catch {
+      throw new Error(
+        `pack ${manifest.name}: usage: ${manifest.usage} REQUIRES team.yaml at ${teamPath} declaring ≥1 SubagentRole (none found)`,
+      );
+    }
+  }
+
   return {
     name: manifest.name,
     version: manifest.version,
@@ -124,6 +139,11 @@ export async function loadPack(dir: string): Promise<Pack> {
     activationScope: manifest.activation_scope,
     detectedBy: manifest.detected_by,
     ...(manifest.foundation !== undefined ? { foundation: manifest.foundation } : {}),
+    // MM.1 (2026-05-30) — kind/usage/includes always present via Zod defaults
+    // (focused / active / []).
+    kind: manifest.kind,
+    usage: manifest.usage,
+    includes: manifest.includes,
     ...(manifest.extends !== undefined ? { extends: manifest.extends } : {}),
     ...(chatAgent !== undefined ? { chatAgent } : {}),
     ...(models !== undefined ? { models } : {}),
