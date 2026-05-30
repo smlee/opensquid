@@ -7,6 +7,59 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.242] - 2026-05-30
+
+### Added (LP.4 — opensquid pack CLI v1 minimum-viable: install/list/export/remove)
+
+- **`src/cli/pack.ts`** (new) — top-level `opensquid pack` command with
+  4 subcommands. Test-injection seam (`deps.out`, `deps.forceYes`)
+  for unit-test access.
+- **`opensquid pack install <source>`** — local-directory install.
+  Reads + validates manifest.yaml, validatePackId, copies to
+  `<state>/base/`, calls initPersonalRevision with the manifest
+  version. On version delta: triggers `runThreeWayMerge` (LP.2);
+  promotes staging → base after successful merge; rejects downgrade
+  (existing > new) with no `--force` in v1.
+- **`opensquid pack list`** — enumerates installed packs under
+  `<OPENSQUID_HOME>/packs/` (user) or `<projectCwd>/.opensquid/packs/`
+  (project). Each row: `name padded base=X revision=N lastMerged=Y`.
+- **`opensquid pack export <name>`** — 2 modes shipped: `lessons-only`
+  (default; strips `<cite id=...>` syntax + drops `cited_memory_ids`)
+  - `raw` (full snapshot incl. version.json). Output dir defaults to
+    `<name>-<mode>-export/`.
+- **`opensquid pack remove <name>`** — removes `<state>/base/` by
+  default; preserves `personal_revision/` per no-delete axiom.
+  `--also-personal-revision` deletes both. Confirmation prompt via
+  `readline/promises` unless `--yes`.
+- **`validatePackId`** (from LP.3) called on every subcommand to
+  defend against path-traversal in pack names.
+
+### Wired
+
+- `src/cli.ts` — `registerPackCli(program)` after `registerChatWatch`.
+
+### Tests
+
+- `src/cli/pack.test.ts` — 13 cases across all 4 subcommands:
+  install (fresh / upgrade triggers merge / downgrade rejected /
+  malicious-name rejected at schema layer); list (empty / 2 packs);
+  export (default mode lessons-only / invalid mode rejected /
+  uninstalled-pack rejected / raw mode includes version.json);
+  remove (--yes preserves personal_revision / --also-personal-revision
+  deletes both / uninstalled-pack no-op).
+- Full suite: 2631 pass / 28 skip / 0 fail (+13 net).
+
+### Scope deviation (acknowledged + intentional)
+
+The LP.4 spec called for tarball install (`tar-stream` dep) + URL
+install (HTTPS download) + a third `with-evidence` export mode with
+consistent memory-id remapping. v1 ships local-directory install +
+2-mode export only. Tarball install + URL install + with-evidence
+remapping are tracked as v1.5 follow-ups (no functional regression —
+local install is the v1 demo path).
+
+---
+
 ## [0.5.241] - 2026-05-30
 
 ### Added (LP.3 — persistPromotedLesson helper + path-traversal-safe state-dir resolver)

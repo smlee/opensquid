@@ -19,6 +19,7 @@ import { Command } from 'commander';
 
 import { registerEngineCli } from './engine/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
+import { registerPackCli } from './cli/pack.js';
 import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath } from './runtime/paths.js';
@@ -229,6 +230,11 @@ registerAgentBridge(program);
 // <platform>.jsonl`), emitting only NEW inbound messages so the agent gets
 // live, no-cron delivery. Distinct from `setup chat` (the wizard).
 registerChatWatch(program);
+
+// LP.4 — `opensquid pack install/list/export/remove`. CLI lifecycle for the
+// living-pack mechanic. v1 ships local-directory install + lessons-only/raw
+// export modes. Tarball/URL install + with-evidence export are v1.5.
+registerPackCli(program);
 
 // G.6 — `opensquid memory import-auto`. Bulk-imports Claude Code auto-memory
 // files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the loop-engine
