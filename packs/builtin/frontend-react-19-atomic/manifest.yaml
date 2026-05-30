@@ -1,0 +1,57 @@
+# frontend-react-19-atomic — v1 dogfood COMPOSITE pack.
+#
+# Composite (kind: composite per MM.1) — pure aggregator that includes
+# the three DOG.1 focused packs. Per pack-runtime.md §1.7:
+#   - composite MUST NOT declare its own `foundation:` (validation rule)
+#   - composite MAY declare its own `detected_by` (an additional gate WHEN
+#     to expand includes) — omitted here because the children already
+#     auto-activate via their own detected_by rules; no benefit from
+#     duplicating the gating at composite level.
+#   - composite_resolver (src/packs/composite_resolver.ts) walks
+#     `includes:` at discovery time and inlines the matched focused packs
+#     into the expanded registry; depth-cap 3 levels; cycle-detection on.
+#
+# This pack is the user-facing handle for the v0.6 9-step dogfood demo
+# (T-PRODUCT-COMPLETION pre-research §4). A user installs THIS pack;
+# the runtime auto-expands to focused-react-19 + focused-typescript-strict
+# + focused-atomic-design. Each child's detected_by fires independently
+# against the project's filesystem signals.
+name: frontend-react-19-atomic
+version: 0.1.0
+scope: domain
+kind: composite
+goal: Composite domain-expert pack — aggregates focused-react-19 + focused-typescript-strict + focused-atomic-design. Validates the v0.6 composite recipe end-to-end via the 9-step ship demo (T-PRODUCT-COMPLETION pre-research §4).
+description: |
+  Per pack-runtime.md §1.7 + v0.6 design §3 — composite packs declare
+  `kind: composite` + an `includes:` list of {pack_id, semver} entries.
+  At load time the composite_resolver walks the registry, validates each
+  semver range against the discovered focused pack's version, and inlines
+  the children into the expanded pack list. Each focused child's
+  detected_by, foundation, activation_scope, and skills remain owned by
+  the child — the composite is purely a named handle for the
+  three-pack assembly.
+
+  Personal-dogfood usage: opt in via `~/.opensquid/active.json`:
+    { "packs": ["frontend-react-19-atomic"] }
+  Composite expansion happens at session-start (IDF.3 caching contract).
+
+activation_scope: project
+
+includes:
+  - pack_id: focused-react-19
+    semver: '>=0.1.0'
+  - pack_id: focused-typescript-strict
+    semver: '>=0.1.0'
+  - pack_id: focused-atomic-design
+    semver: '>=0.1.0'
+
+# No `foundation:` — composites are pure aggregators per v0.6 §4.7
+# (manifest.ts validation rule at line ~439).
+#
+# No `detected_by:` — child packs each auto-activate via their own
+# detected_by rules; redundant composite-level gating would add no
+# signal value and complicate auditability.
+#
+# No `skills/` directory — composites carry no own skills; children
+# contribute their own skills which flatten into the runtime registry
+# via composite_resolver expansion.

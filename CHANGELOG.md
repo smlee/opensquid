@@ -7,6 +7,56 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.246] - 2026-05-30
+
+### Added (DOG.2 — frontend-react-19-atomic composite pack; second slice of T-DOGFOOD)
+
+Composite pack at `packs/builtin/frontend-react-19-atomic/` that aggregates
+the three DOG.1 focused packs via the MM.1 `includes:` schema field:
+
+- **`manifest.yaml`** — `kind: composite` + 3-entry `includes:` array
+  (`focused-react-19@>=0.1.0`, `focused-typescript-strict@>=0.1.0`,
+  `focused-atomic-design@>=0.1.0`). No own `foundation:` (forbidden for
+  composites per v0.6 §4.7 validation rule). No own `detected_by`
+  (children gate themselves). No own `skills/` directory.
+- **`README.md`** — user-facing description + opt-in instructions +
+  rules-table summarising composite-pack constraints from
+  pack-runtime.md §1.7.
+
+### Tests
+
+- **`test/builtin/composite-frontend.test.ts`** — 12 integration cases:
+  - 4 × manifest-shape assertions: kind=composite, includes (3 entries
+    in order), foundation undefined, detected_by empty, skills empty.
+  - `expandComposites` produces composite + 3 children in order.
+  - `expandComposites` is idempotent (expand twice → same flat list).
+  - `expandComposites` throws `CompositeResolutionError` when a child
+    is missing from the registry.
+  - `expandComposites` throws on semver mismatch (synthesized via a
+    shallow clone with version downgraded to `0.0.1`).
+  - Each child's `detected_by` fires independently against a synthetic
+    React 19 + TS-strict + atomic-design `DetectionContext` after
+    expansion.
+  - All 3 children return false on empty `DetectionContext` (no
+    spurious activations).
+  - Composite with empty `detected_by` is vacuously active per
+    `matchesDetectedBy` contract.
+  - Composite-only registry (no children loaded) throws missing-include
+    error naming the first missing child.
+
+### Why this matters
+
+DOG.2 is the keystone slice that proves the MM.1 composite-pack
+mechanism operates end-to-end against a real user-facing assembly. Pure
+config + tests at this slice — no engine code changes needed because
+`composite_resolver.expandComposites` already aggregates per MM.1.
+Spec drift resolved: DOG.2 spec referenced `extends:` (single-parent
+inheritance via `apply_extends.ts`); actual schema ships `includes:`
+(array-aggregation via `composite_resolver.ts`). This commit uses the
+schema-correct `includes:`.
+
+---
+
 ## [0.5.245] - 2026-05-30
 
 ### Added (DOG.1 — three focused built-in packs ship; first slice of T-DOGFOOD)
