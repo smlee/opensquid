@@ -259,6 +259,15 @@ export const daemonLogPath = (): string => join(OPENSQUID_HOME(), 'daemon.log');
 export const inboxFile = (projectUuid: string, platform: string): string =>
   join(OPENSQUID_HOME(), 'projects', projectUuid, 'inbox', `${platform}.jsonl`);
 
+// LL.1 (2026-05-30) — sibling helpers for the inbox directory + ack ledger.
+// `inboxDir` is the parent of the per-platform JSONL files; `inboxAckedPath`
+// is the per-project append-only ack ledger consumed by LL.4's UPS hook.
+export const inboxDir = (projectUuid: string): string =>
+  join(OPENSQUID_HOME(), 'projects', projectUuid, 'inbox');
+
+export const inboxAckedPath = (projectUuid: string): string =>
+  join(OPENSQUID_HOME(), 'projects', projectUuid, 'inbox', 'acked.jsonl');
+
 // Live-session lease: while `chat watch` runs for a project, it heartbeats this
 // file so the always-on agent-bridge daemon can tell a live interactive session
 // is handling the project and stay silent (cross-session arbitration, T-DEL).

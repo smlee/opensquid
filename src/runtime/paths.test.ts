@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   OPENSQUID_HOME,
+  inboxAckedPath,
+  inboxDir,
   packLogFile,
   packStateDir,
   packStateFile,
@@ -326,5 +328,32 @@ describe('resolveProjectUuid', () => {
       if (prior === undefined) delete process.env.OPENSQUID_PROJECT_UUID;
       else process.env.OPENSQUID_PROJECT_UUID = prior;
     }
+  });
+});
+
+describe('LL.1 inbox path helpers', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-ll1-paths-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('inboxDir(uuid) returns <home>/projects/<uuid>/inbox', () => {
+    expect(inboxDir('uuid-x')).toBe(join(tempHome, 'projects', 'uuid-x', 'inbox'));
+  });
+
+  it('inboxAckedPath(uuid) returns <home>/projects/<uuid>/inbox/acked.jsonl', () => {
+    expect(inboxAckedPath('uuid-x')).toBe(
+      join(tempHome, 'projects', 'uuid-x', 'inbox', 'acked.jsonl'),
+    );
   });
 });

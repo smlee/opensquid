@@ -7,6 +7,47 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.229] - 2026-05-30
+
+### Added (LL.1 — keystone of T-L3-LOOP; Phase 5 promoted to front per chat-delivery break)
+
+- **`src/runtime/chat/inbox.ts`** (new, 145 LOC ≤180 cap) — canonical
+  `InboxRow` + `AckRow` Zod schemas + `Platform` enum + `readInbox` +
+  `readAcked` + `ackKey` helpers. Extracted from the inline
+  `interface InboxMessage` at `src/mcp/chat-bridge-server.ts` so the
+  upcoming chokidar tail watcher (LL.3) and the UPS hook
+  (LL.4) all bind to one schema.
+  - `InboxRow.strict()` with `v: z.literal(1)` envelope marker
+  - `AckRow.strict()` with same envelope; dedup key
+    `${platform}::${message_id}::${sessionId}`
+  - Best-effort readers (ENOENT → `[]`; malformed lines silently skipped
+    per the rotation-tail-write contract); LL.5 will document
+- **`src/runtime/paths.ts`** — new `inboxDir(uuid)` +
+  `inboxAckedPath(uuid)` helpers next to the existing `inboxFile`
+- **`src/mcp/chat-bridge-server.ts`** — inline `InboxMessage` interface
+  replaced with `type InboxMessage = InboxRow` aliasing the canonical
+  schema. Field set byte-for-byte identical so daemon writes parse
+  unchanged + MCP tool surface preserved.
+- **Tests** — 14 new inbox cases (schema shapes, .strict() rejections,
+  enum rejections, reader best-effort, ackKey canonical string) +
+  2 path-helper cases = 16 new total (cap ≥ 10). 58/58 chat tests pass;
+  full suite 2496 pass / 28 skip / 0 fail (+16 net).
+
+### Why this jumped the line
+
+- T-IDENTITY-FOUNDATION shipped 5/5 + T-MULTIMODE MM.1 keystone shipped
+  (0.5.221 → 0.5.228), then the user reported the live
+  multi-session delivery bug: a Telegram message landed in
+  `~/.opensquid/projects/<uuid>/inbox/telegram.jsonl` but the open
+  Claude Code session for that project never received it. The
+  diagnostic showed an orphaned `chat watch` process whose
+  parent terminated, leaving the inbox tailing but stdout going
+  nowhere. T-L3-LOOP is the architectural fix; LL.1 is its
+  keystone. T-MULTIMODE MM.2–MM.5 + T-LIVING-PACK +
+  T-DOGFOOD queue behind T-L3-LOOP completion.
+
+---
+
 ## [0.5.228] - 2026-05-30
 
 ### Added (MM.1 — keystone of T-MULTIMODE; Phase 2 of v2 product-completion plan)

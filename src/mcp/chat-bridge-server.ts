@@ -50,6 +50,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
+import { type InboxRow } from '../runtime/chat/inbox.js';
 import { resolveProjectUuid } from '../runtime/paths.js';
 
 import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscriber.js';
@@ -151,19 +152,11 @@ function formatCollisionWarnings(entries: CollisionEntry[]): string {
 // chat_poll_inbox — filesystem read of project inbox JSONL.
 // ---------------------------------------------------------------------------
 
-interface InboxMessage {
-  v: 1;
-  id: string;
-  thread_id?: string;
-  platform: 'telegram' | 'discord' | 'slack';
-  channel: string;
-  sender: string;
-  sender_id: string;
-  text: string;
-  received_at: string;
-  enqueued_at: string;
-  mentions_bot: boolean;
-}
+// LL.1 (2026-05-30) — `InboxMessage` inline shape lifted to the canonical
+// `InboxRow` Zod schema in `src/runtime/chat/inbox.ts` so the MCP tool, the
+// LL.3 chokidar tail watcher, and the LL.4 UPS hook all bind to one parser.
+// Local alias kept so the rest of this file's call sites stay readable.
+type InboxMessage = InboxRow;
 
 // ---------------------------------------------------------------------------
 // TPS.6 patch 3 — buffer/fs merge helpers.
