@@ -193,6 +193,98 @@ export type SubprocessCallPermission = z.infer<typeof SubprocessCallPermission>;
 export type SubagentCallPermission = z.infer<typeof SubagentCallPermission>;
 
 // ---------------------------------------------------------------------------
+// IDF.1 (2026-05-30) — Foundation taxonomy + ActivationScope + DetectedByCheck
+//
+// Per T-IDENTITY-FOUNDATION Phase 1. Restores three v0.6 codex content-richness
+// fields that the lean-iteration dropped but user 2026-05-29 locked back as
+// v1 targets. All additive: existing packs parse unchanged (every field
+// optional with sensible default).
+// ---------------------------------------------------------------------------
+
+// Foundation taxonomy (v0.6 §4.2) — three optional sub-fields describing
+// what the pack KNOWS. Descriptive at IDF.1; Phase 2 will consume for
+// taxonomic matching + marketplace search.
+const FoundationTool = z
+  .object({
+    name: z.string().min(1),
+    semver: z.string().optional(),
+  })
+  .strict();
+
+export const Foundation = z
+  .object({
+    tools: z.array(FoundationTool).default([]),
+    domains: z.array(z.string().min(1)).default([]),
+    methodologies: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+export type Foundation = z.infer<typeof Foundation>;
+
+// ActivationScope (v0.6 §4.5) — WHERE the pack applies. Distinct from `scope:`
+// (which is LAYERING precedence universal→domain→specialty→workflow→project).
+// Default 'project' matches today's implicit per-cwd behavior.
+export const ActivationScope = z.enum(['project', 'user', 'hybrid', 'team', 'global']);
+export type ActivationScope = z.infer<typeof ActivationScope>;
+
+// DetectedByCheck (v0.6 §4.4) — 7-kind discriminated union for WHEN the
+// pack auto-activates. Per [[feedback_stop_haiku_drift]]: no LLM in
+// detection — pure filesystem + memory + prompt-substring regex.
+const FileExistsCheck = z
+  .object({
+    kind: z.literal('file_exists'),
+    path: z.string().min(1),
+  })
+  .strict();
+const DirExistsCheck = z
+  .object({
+    kind: z.literal('dir_exists'),
+    path: z.string().min(1),
+  })
+  .strict();
+const FileMatchCheck = z
+  .object({
+    kind: z.literal('file_match'),
+    path: z.string().min(1),
+    matches: z.record(z.string(), z.string()),
+  })
+  .strict();
+const FileGlobCheck = z
+  .object({
+    kind: z.literal('file_glob'),
+    pattern: z.string().min(1),
+    min_count: z.number().int().positive().default(1),
+  })
+  .strict();
+const MemoryMatchCheck = z
+  .object({
+    kind: z.literal('memory_match'),
+    pattern: z.string().min(1),
+  })
+  .strict();
+const ConversationSignalCheck = z
+  .object({
+    kind: z.literal('conversation_signal'),
+    pattern: z.string().min(1),
+  })
+  .strict();
+const UserPinnedCheck = z
+  .object({
+    kind: z.literal('user_pinned'),
+  })
+  .strict();
+
+export const DetectedByCheck = z.discriminatedUnion('kind', [
+  FileExistsCheck,
+  DirExistsCheck,
+  FileMatchCheck,
+  FileGlobCheck,
+  MemoryMatchCheck,
+  ConversationSignalCheck,
+  UserPinnedCheck,
+]);
+export type DetectedByCheck = z.infer<typeof DetectedByCheck>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -226,6 +318,15 @@ export const Manifest = z
     // time; the built-in denylist (`src/runtime/builtin_denylist.ts`) is
     // applied first and ALWAYS wins unless `OPENSQUID_TRUST_BUILTIN_DENY=0`.
     permissions: Permissions.optional(),
+    // IDF.1 (2026-05-30) — v0.6 codex content-richness restored as
+    // additive optional fields. See Foundation / ActivationScope /
+    // DetectedByCheck schemas above. Foundation undefined when absent;
+    // activation_scope defaults to 'project' (matches current implicit
+    // per-cwd behavior); detected_by defaults to [] (empty array =
+    // "applies always" per IDF.2 evaluator semantic).
+    foundation: Foundation.optional(),
+    activation_scope: ActivationScope.default('project'),
+    detected_by: z.array(DetectedByCheck).default([]),
   })
   .strict();
 export type Manifest = z.infer<typeof Manifest>;

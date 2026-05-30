@@ -7,6 +7,44 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.221] - 2026-05-30
+
+### Added (additive schema — existing packs parse unchanged)
+
+- **Foundation taxonomy** (v0.6 §4.2 restored per IDF.1) — manifest.yaml
+  accepts optional `foundation:` block with three sub-fields:
+  - `tools[]` — `{name, semver?}` for tool packs target (react@>=19, jupyter, etc.)
+  - `domains[]` — string array of subject areas (frontend, single-cell-genomics, etc.)
+  - `methodologies[]` — string array of ways-of-working (atomic-design, tdd, IRAC)
+    Descriptive only at IDF.1; runtime consumption is Phase 2 scope.
+- **`activation_scope:` enum** (v0.6 §4.5 restored per IDF.1) — 5 values:
+  `project` (default; per-cwd) | `user` (globally) | `hybrid` (both) | `team`
+  (declared team members; semantic inert until team-mode infrastructure) |
+  `global` (always-on for everyone). Distinct from `scope:` (which is the
+  layering hint universal→domain→specialty→workflow→project).
+- **`detected_by[]` 7-kind discriminated union** (v0.6 §4.4 restored per
+  IDF.1) — `file_exists` / `dir_exists` / `file_match` (JSON-path matches) /
+  `file_glob` (pattern + min_count) / `memory_match` / `conversation_signal`
+  / `user_pinned`. Per `[[feedback_stop_haiku_drift]]`: no LLM in detection —
+  pure filesystem + memory regex. Evaluator + auto-activation pipeline ship
+  in IDF.2 + IDF.3.
+
+### Changed
+
+- **`Pack` runtime type** extended with optional `foundation` +
+  `activationScope` + `detectedBy` (camelCase) fields. Optional on the
+  runtime type so test fixtures + non-loadPack callers construct Pack
+  literals unchanged; the YAML loader supplies them via Zod parse
+  defaults.
+
+### Removed
+
+- **`src/packs/scope_decomposer.skill.test.ts` deleted** — DPC.6 reduced
+  the user-pack scope-decomposer to a deprecation stub (rules=[]); this
+  test was loading the fixture-synced stub + asserting on rules that no
+  longer exist. Test coverage migrated to
+  `test/builtin/scope-architect.test.ts` per DPC.1.
+
 ## [0.5.220] - 2026-05-30
 
 ### Added

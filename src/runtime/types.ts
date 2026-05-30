@@ -34,6 +34,7 @@ import { z } from 'zod';
 
 import { ChatAgentSchema } from '../packs/schemas/chat_agent.js';
 import { DriftResponseConfig } from '../packs/schemas/drift_response.js';
+import { ActivationScope, DetectedByCheck, Foundation } from '../packs/schemas/manifest.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
 
 // ---------------------------------------------------------------------------
@@ -342,6 +343,17 @@ export const Pack = z.object({
   chatAgent: ChatAgentSchema.optional(),
   models: ModelsConfig.optional(),
   driftResponse: DriftResponseConfig.optional(),
+  // IDF.1 (2026-05-30) — v0.6 codex content-richness restored. camelCase
+  // runtime mapping for the snake_case manifest fields (foundation /
+  // activation_scope / detected_by). See schemas/manifest.ts for the
+  // YAML-side shapes. ALL optional on the runtime Pack type so test
+  // fixtures + non-loadPack callers can construct Pack literals without
+  // these fields (back-compat). The YAML loader (loader.ts) supplies the
+  // defaults explicitly. Downstream consumers (IDF.4 dispatcher) read
+  // `pack.activationScope ?? 'project'` defensively.
+  foundation: Foundation.optional(),
+  activationScope: ActivationScope.optional(),
+  detectedBy: z.array(DetectedByCheck).optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

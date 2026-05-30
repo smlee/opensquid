@@ -117,6 +117,13 @@ export async function loadPack(dir: string): Promise<Pack> {
     conflicts: manifest.conflicts,
     evolves: manifest.evolves,
     skills,
+    // IDF.1 (2026-05-30) — fold the 3 new optional manifest fields into the
+    // runtime Pack. `foundation` stays optional (undefined when manifest
+    // omits); `activationScope` + `detectedBy` always present via Zod
+    // defaults applied at parse time.
+    activationScope: manifest.activation_scope,
+    detectedBy: manifest.detected_by,
+    ...(manifest.foundation !== undefined ? { foundation: manifest.foundation } : {}),
     ...(manifest.extends !== undefined ? { extends: manifest.extends } : {}),
     ...(chatAgent !== undefined ? { chatAgent } : {}),
     ...(models !== undefined ? { models } : {}),

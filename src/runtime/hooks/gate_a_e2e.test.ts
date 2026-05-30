@@ -114,6 +114,8 @@ function packWithGateA(): Pack {
     conflicts: [],
     evolves: true,
     skills: [skill],
+    activationScope: 'project',
+    detectedBy: [],
   };
 }
 

@@ -29,6 +29,8 @@ function pack(name: string, skills: Pack['skills']): Pack {
     conflicts: [],
     evolves: true,
     skills,
+    activationScope: 'project',
+    detectedBy: [],
   };
 }
 

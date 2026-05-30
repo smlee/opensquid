@@ -44,6 +44,8 @@ function makePack(name: string, scope: Scope, skills: Skill[]): Pack {
     conflicts: [],
     evolves: true,
     skills,
+    activationScope: 'project',
+    detectedBy: [],
   };
 }
 

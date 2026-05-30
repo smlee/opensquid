@@ -95,6 +95,8 @@ function prosePack(opts: {
     conflicts: [],
     evolves: true,
     skills: [skill],
+    activationScope: 'project',
+    detectedBy: [],
   };
 }
 
@@ -239,6 +241,8 @@ describe('CU.3: skill-unload behavior (prose suppressed at dispatcher output)', 
       conflicts: [],
       evolves: true,
       skills: [skill],
+      activationScope: 'project',
+      detectedBy: [],
     };
     const sid = 'e2e-task-complete';
 

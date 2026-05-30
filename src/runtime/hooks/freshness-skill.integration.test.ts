@@ -121,6 +121,8 @@ function buildFreshnessPack(): Pack {
     conflicts: [],
     evolves: true,
     skills: [skill],
+    activationScope: 'project',
+    detectedBy: [],
   };
 }
 

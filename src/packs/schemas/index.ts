@@ -23,7 +23,10 @@
 
 // manifest.yaml
 export {
+  ActivationScope,
   Capability,
+  DetectedByCheck,
+  Foundation,
   Manifest,
   ManifestScope,
   Permissions,
@@ -31,8 +34,11 @@ export {
   RateLimits,
 } from './manifest.js';
 export type {
+  ActivationScope as ActivationScopeType,
   Capability as CapabilityType,
+  DetectedByCheck as DetectedByCheckType,
   FileWritePermission as FileWritePermissionType,
+  Foundation as FoundationType,
   HttpRequestPermission as HttpRequestPermissionType,
   Manifest as ManifestType,
   ManifestScope as ManifestScopeType,

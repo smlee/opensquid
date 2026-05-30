@@ -86,6 +86,8 @@ function makePack(
     conflicts: [],
     evolves: true,
     skills: [skill],
+    activationScope: 'project',
+    detectedBy: [],
   };
 }
 
@@ -907,6 +909,8 @@ describe('dispatchEvent', () => {
         conflicts: [],
         evolves: true,
         skills: [skill],
+        activationScope: 'project',
+        detectedBy: [],
       };
     }
 
