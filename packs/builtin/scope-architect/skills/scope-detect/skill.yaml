@@ -14,12 +14,23 @@ rules:
         args:
           text_field: prompt
           patterns:
+            # Original scope-decomposer patterns (user-pack source):
             - '\bspec(?:c?ing|ced)?\s+(?:out|this|the)\b'
             - '\bscope\s+(?:out|this|the|a)\b'
             - '\bnew\s+(?:task|track)\b'
             - '\badd\s+(?:a\s+|another\s+)?(?:task|track)\b'
             - '\bdesign\s+(?:a|the|this)\b'
             - '\bplan\s+(?:out|a|the)\b'
+            # DPC.2 (2026-05-30) — bulk-action patterns from drift transcripts.
+            # Today's session proved these prompts bypassed the original 6
+            # patterns ("audit and add a proper solution", "refactor based on
+            # it all", "close the gaps based your understanding").
+            - '\baudit\s+(?:memory|skills|tasks|gaps|coverage|drift|the\s+\w+)\b'
+            - '\b(?:close|fix|address|propose|build|ship)\s+(?:the\s+)?(?:gaps?|drift|items|todos|skills|gates)\b'
+            - '\bproper\s+solution\b'
+            - '\b(?:list|batch)\s+of\s+(?:tasks|todos|items|skills|gates|issues|memories|gaps|drifts?)\b'
+            - '\brefactor\b'
+            - '\bbased\s+(?:on\s+)?(?:your|the)\s+(?:understanding|picture|synthesis|integration)\b'
         as: intent
       - call: verdict
         if: 'len(intent.matched) > 0'

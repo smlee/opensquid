@@ -1,3 +1,14 @@
+# DEPRECATION STUB — DPC.1 (2026-05-30)
+# The 7 rules in this file have been PROMOTED to packs/builtin/scope-architect/
+# (split as 6 skills: scope-detect, inline-spec-block, taskcreate-spec-required,
+# scope-before-code, task-list-generated, chain-handoffs). Opt into the built-in
+# version by adding `scope-architect` to your scope's active.json packs array.
+# DPC.6 will sunset this user-pack copy once built-in coverage is verified
+# behaviorally equivalent. Until DPC.6, both load → scope precedence
+# (universal → ... → project, then user) means the user-pack version fires
+# AFTER built-in; duplicates are informational, not load-bearing.
+# Per project_opensquid_personal_rules_are_user_codex: this user-pack version
+# remains until DPC.6 cleanup; the built-in version is what other users get.
 # scope-decomposer — makes the `task-spec-author` discipline the only
 # well-formed path to authoring scope (new tasks / tracks / specs).
 #

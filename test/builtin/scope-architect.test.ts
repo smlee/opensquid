@@ -80,4 +80,46 @@ describe('builtin scope-architect pack', () => {
       'chain-handoff-spec-to-tasks',
     ]);
   });
+
+  // ----- DPC.2 (2026-05-30) — behavioral test for widened regex coverage -----
+  // Each "fire" prompt must match at least one pattern; each "silent" prompt
+  // must match zero. The test inspects the patterns directly (no full
+  // dispatcher fire) — fast + deterministic.
+  it('DPC.2: scope-detect patterns fire on drift-transcript prompts', async () => {
+    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
+    const skill = pack.skills.find((s) => s.name === 'scope-detect');
+    const rule = skill?.rules[0];
+    if (rule?.kind !== 'track_check') throw new Error('expected track_check rule');
+    const step = rule.process[0];
+    expect(step?.call).toBe('text_pattern_match');
+    const patterns = (step?.args?.patterns as string[]) ?? [];
+
+    const fireCases = [
+      'yes audit and add a proper solution to the existing batch of todos we have',
+      'place a refactor based on it all',
+      'close the gaps based your understanding',
+      'fix the items',
+      'audit memory entries for drift',
+      'spec out the next track',
+    ];
+    for (const prompt of fireCases) {
+      const matched = patterns.filter((pat) => new RegExp(pat).test(prompt));
+      expect(matched.length, `expected fire on: "${prompt}"`).toBeGreaterThan(0);
+    }
+  });
+
+  it('DPC.2: scope-detect patterns stay silent on unrelated prompts', async () => {
+    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
+    const skill = pack.skills.find((s) => s.name === 'scope-detect');
+    const rule = skill?.rules[0];
+    if (rule?.kind !== 'track_check') throw new Error('expected track_check rule');
+    const step = rule.process[0];
+    const patterns = (step?.args?.patterns as string[]) ?? [];
+
+    const silentCases = ['random unrelated chat about lunch', 'what is the time'];
+    for (const prompt of silentCases) {
+      const matched = patterns.filter((pat) => new RegExp(pat).test(prompt));
+      expect(matched.length, `expected silent on: "${prompt}"`).toBe(0);
+    }
+  });
 });

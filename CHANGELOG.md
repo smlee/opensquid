@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.217] - 2026-05-30
+
+### Changed
+
+- **scope-architect/scope-detect regex coverage widened** with 6 bulk-action
+  patterns (DPC.2): `audit`, `fix-the-gaps`, `proper solution`, `list/batch of`,
+  `refactor`, `based on your understanding`. Today's drift transcripts proved
+  the original 6 patterns (spec/scope/new task/add task/design/plan) missed
+  bulk-action prompts. Behavioral test verifies 6 drift prompts fire + 2
+  unrelated stay silent. All patterns RE2-safe (no lookarounds).
+
+### Notes
+
+- `test/fixtures/scope-decomposer-pack/skills/scope-decomposer/skill.yaml`
+  re-synced from live user pack per ASC.6 fixture-sync invariant (DPC.1
+  added a deprecation-stub header to the live user-pack skill; fixture
+  needed to track).
+
 ## [0.5.216] - 2026-05-30
 
 ### Added
