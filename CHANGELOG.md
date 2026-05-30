@@ -7,6 +7,49 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.234] - 2026-05-30
+
+### Added (LL.6 — E2E loop closure fixture — CLOSES T-L3-LOOP)
+
+- **`test/e2e/l3_inbound_e2e.test.ts`** (new) — single end-to-end test
+  that proves the full inbound communication loop closes:
+  1. Sets up tmpdir OPENSQUID_HOME + fresh `live-session.lease`
+  2. Appends synthetic Telegram-style InboxRow to `inbox/telegram.jsonl`
+  3. Starts the LL.3 inbound watcher (chokidar tail) + waits for
+     awaitWriteFinish settle, then stops
+  4. Asserts watcher dispatched (no crash; ack ledger still empty —
+     watcher fires events, UPS hook owns durability)
+  5. Spawns the UPS hook binary with synthetic prompt-submit payload
+  6. Asserts hook stdout JSON envelope contains
+     `📨 Inbound messages (1)` + `alice (telegram): hello from telegram`
+     in `hookSpecificOutput.additionalContext`
+  7. Asserts `acked.jsonl` now contains exactly one matching AckRow
+     (`message_id: 'msg-42'` + `injected_at_sessionId: SESSION_ID`)
+  8. Spawns the UPS hook a SECOND time + asserts dedup holds (no
+     re-inject + no duplicate ack)
+- Uses skip-if-no-binary pattern (`it.skipIf(!existsSync(HOOK_BIN))`)
+  so CI runs without prior `pnpm build` skip gracefully.
+
+### Closes T-L3-LOOP (6/6 shipped)
+
+| Task | What                                           | Commit    | Version |
+| ---- | ---------------------------------------------- | --------- | ------- |
+| LL.1 | InboxRow + AckRow schemas + path helpers       | `8b0f8f1` | 0.5.229 |
+| LL.2 | Session-routing resolver                       | `cdc4a27` | 0.5.230 |
+| LL.3 | Inbound watcher + sender_pattern Trigger       | `60c3e09` | 0.5.231 |
+| LL.4 | UPS hook drain + ack ledger                    | `eafbe27` | 0.5.232 |
+| LL.5 | pack-runtime.md inbound docs + inbound-greeter | `a46b863` | 0.5.233 |
+| LL.6 | E2E round-trip fixture (this commit)           | —         | 0.5.234 |
+
+The multi-session delivery break that prompted T-L3-LOOP is now closed
+both architecturally (LL.1-LL.4 runtime) AND verifiably (LL.6 E2E proof).
+
+### Tests
+
+- Full suite: 2544 pass / 28 skip / 0 fail (+1 net).
+
+---
+
 ## [0.5.233] - 2026-05-30
 
 ### Added (LL.5 — docs/pack-runtime.md inbound docs + reference inbound-greeter skill)
