@@ -7,6 +7,40 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.227] - 2026-05-30
+
+### Fixed (SAR.1 — scope-architect regex hole — ship/make-it-work intent family)
+
+- **`packs/builtin/scope-architect/skills/scope-detect/skill.yaml`** —
+  this session's user prompt _"forbidden from pausing my workflow until
+  you have open squid fully functional as intended"_ bypassed all 12
+  prior regex patterns (original 6 + DPC.2 widening 6). The gate stayed
+  dormant despite a clear scope-authoring meta-intent. Added 7 new
+  patterns to catch the "deliver the whole thing" family:
+  - `fully|completely|properly` + `functional|working|operational|wired|complete|done`
+  - `make|get|ship|bring` + `... functional|working|operational|complete|done|live|ready|v<N>`
+  - `forbidden\s+from\s+(pausing|stopping|asking|delegating)`
+  - `as|to be intended`
+  - `(remaining|outstanding|leftover) (phases|tracks|work|tasks|todos)`
+  - `rest|remainder of (the) (plan|track|phase|work|todos)`
+  - `(every|all) (remaining|leftover|outstanding) (phases|tracks|tasks|work)`
+- 4 existing built-in pack tests still pass (24/24 in `test/builtin/`).
+  Behavior-equivalent for prior matched prompts; widens coverage for
+  meta-intent prompts that DPC.2 missed.
+
+### Notes (separate from this commit — config migration leak)
+
+- DPC.6 decommissioned the user-pack rules in `sangmin-personal-rules`
+  but did NOT migrate `~/.opensquid/active.json` to subscribe to the
+  3 built-in profession packs (`scope-architect`, `task-spec-author`,
+  `default-discipline`) that received the promoted rules. Users who
+  opted in to `sangmin-personal-rules` before DPC.6 now have a stub
+  pack as their only active subscription — every gate is dormant on
+  their machine. Surfaced for explicit user migration; the runtime
+  never auto-touches active.json per opt-in invariant.
+
+---
+
 ## [0.5.226] - 2026-05-30
 
 ### Added (IDF.5 — closes T-IDENTITY-FOUNDATION — authoritative pack-runtime reference)

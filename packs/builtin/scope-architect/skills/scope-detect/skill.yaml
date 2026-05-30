@@ -31,6 +31,18 @@ rules:
             - '\b(?:list|batch)\s+of\s+(?:tasks|todos|items|skills|gates|issues|memories|gaps|drifts?)\b'
             - '\brefactor\b'
             - '\bbased\s+(?:on\s+)?(?:your|the)\s+(?:understanding|picture|synthesis|integration)\b'
+            # SAR.1 (2026-05-30) — ship/make-it-work intent family. This
+            # session's prompt "forbidden from pausing my workflow until you
+            # have open squid fully functional as intended" fell into the
+            # regex hole — none of the prior 12 patterns matched. The family
+            # below catches the meta-intent of "deliver the whole thing".
+            - '\b(?:fully|completely|properly)\s+(?:functional|working|operational|wired|complete|done)\b'
+            - '\b(?:make|get|ship|bring)\s+(?:.+\s+)?(?:functional|working|operational|complete|done|live|ready|v\d+(?:\.\d+)*)\b'
+            - '\bforbidden\s+from\s+(?:pausing|stopping|asking|delegating)\b'
+            - '\b(?:as|to be|to-be)\s+intended\b'
+            - '\b(?:remaining|outstanding|leftover)\s+(?:phases?|tracks?|work|tasks?|todos?)\b'
+            - '\b(?:rest|remainder)\s+of\s+(?:the\s+)?(?:plan|track|phase|work|todos?)\b'
+            - '\b(?:every|all)\s+(?:remaining|leftover|outstanding)\s+(?:phases?|tracks?|tasks?|work)\b'
         as: intent
       - call: verdict
         if: 'len(intent.matched) > 0'
