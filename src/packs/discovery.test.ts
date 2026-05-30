@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { DetectionContext } from '../runtime/detection.js';
 
-import { discoverActivePacks } from './discovery.js';
+import { discoverActivePacks, resolvePackStateDir, validatePackId } from './discovery.js';
 
 let scopeRoot: string;
 
@@ -465,5 +465,66 @@ describe('MM.1: composite expansion at discoverActivePacks', () => {
 
     const packs = await discoverActivePacks(scopeRoot, null);
     expect(packs.map((p) => p.name)).toEqual(['p1', 'p2']);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * LP.3 — resolvePackStateDir + validatePackId.
+ * ──────────────────────────────────────────────────────────────────── */
+describe('LP.3 validatePackId + resolvePackStateDir', () => {
+  it('validatePackId accepts normal kebab-case ids', () => {
+    expect(() => {
+      validatePackId('scope-architect');
+    }).not.toThrow();
+    expect(() => {
+      validatePackId('my-pack-v2');
+    }).not.toThrow();
+  });
+
+  it('validatePackId rejects path-traversal attempts', () => {
+    expect(() => {
+      validatePackId('foo..bar');
+    }).toThrow(/path-traversal/);
+    expect(() => {
+      validatePackId('foo/bar');
+    }).toThrow(/path-traversal/);
+    expect(() => {
+      validatePackId('a\\b');
+    }).toThrow(/path-traversal/);
+  });
+
+  it('validatePackId rejects leading-dot ids', () => {
+    expect(() => {
+      validatePackId('.hidden');
+    }).toThrow(/may not start with "\."/);
+  });
+
+  it('validatePackId rejects empty id', () => {
+    expect(() => {
+      validatePackId('');
+    }).toThrow(/empty packId/);
+  });
+
+  it('resolvePackStateDir user scope honors OPENSQUID_HOME', () => {
+    const prior = process.env.OPENSQUID_HOME;
+    process.env.OPENSQUID_HOME = '/tmp/oh';
+    try {
+      expect(resolvePackStateDir('my-pack')).toBe('/tmp/oh/packs/my-pack');
+    } finally {
+      if (prior === undefined) delete process.env.OPENSQUID_HOME;
+      else process.env.OPENSQUID_HOME = prior;
+    }
+  });
+
+  it('resolvePackStateDir project scope requires projectCwd', () => {
+    expect(() => resolvePackStateDir('my-pack', 'project')).toThrow(/projectCwd required/);
+    expect(resolvePackStateDir('my-pack', 'project', '/tmp/proj')).toBe(
+      '/tmp/proj/.opensquid/packs/my-pack',
+    );
+  });
+
+  it('resolvePackStateDir rejects malicious packIds via validatePackId', () => {
+    expect(() => resolvePackStateDir('escape/here')).toThrow(/path-traversal/);
+    expect(() => resolvePackStateDir('foo..bar')).toThrow(/path-traversal/);
   });
 });

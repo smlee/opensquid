@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   appendLessonFile,
   initPersonalRevision,
+  persistPromotedLesson,
   readLessonFiles,
   readVersionJson,
   writeVersionJson,
@@ -134,6 +135,55 @@ describe('initPersonalRevision — idempotent', () => {
     const out = await initPersonalRevision(stateDir, '99.0.0');
     expect(out.base_version).toBe('1.0.0');
     expect(out.personal_revision_id).toBe(1);
+  });
+});
+
+describe('LP.3 persistPromotedLesson', () => {
+  it('writes lesson_1.yaml with promoted_at + engine_lesson_id + lesson_body + cited_memory_ids', async () => {
+    const id = await persistPromotedLesson(stateDir, {
+      engine_lesson_id: 'eng-42',
+      lesson_body: { rule: 'never-amend' },
+      cited_memory_ids: ['m-1', 'm-2'],
+      skill: 'git/never-amend',
+      packBaseVersion: '1.2.3',
+    });
+    expect(id).toBe(1);
+    const lessons = await readLessonFiles(stateDir);
+    expect(lessons).toHaveLength(1);
+    const body = lessons[0]!.body;
+    expect(body.engine_lesson_id).toBe('eng-42');
+    expect(body.lesson_body).toEqual({ rule: 'never-amend' });
+    expect(body.cited_memory_ids).toEqual(['m-1', 'm-2']);
+    expect(body.skill).toBe('git/never-amend');
+    expect(body.retired).toBe(false);
+    expect(typeof body.promoted_at).toBe('string');
+  });
+
+  it('defensive 0.0.0 baseline when packBaseVersion absent', async () => {
+    await persistPromotedLesson(stateDir, {
+      engine_lesson_id: 'eng-1',
+      lesson_body: { x: 1 },
+    });
+    const v = await readVersionJson(stateDir);
+    expect(v?.base_version).toBe('0.0.0');
+  });
+
+  it('omits skill when caller did not pass one (engine-direct lesson)', async () => {
+    await persistPromotedLesson(stateDir, {
+      engine_lesson_id: 'eng-2',
+      lesson_body: { x: 2 },
+      packBaseVersion: '1.0.0',
+    });
+    const lessons = await readLessonFiles(stateDir);
+    expect(lessons[0]!.body.skill).toBeUndefined();
+  });
+
+  it('multiple promotions monotonically bump revision_id', async () => {
+    await persistPromotedLesson(stateDir, { engine_lesson_id: 'a', lesson_body: {} });
+    await persistPromotedLesson(stateDir, { engine_lesson_id: 'b', lesson_body: {} });
+    await persistPromotedLesson(stateDir, { engine_lesson_id: 'c', lesson_body: {} });
+    const v = await readVersionJson(stateDir);
+    expect(v?.personal_revision_id).toBe(3);
   });
 });
 

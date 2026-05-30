@@ -169,3 +169,52 @@ function randSuffix(): string {
   const t = process.hrtime.bigint();
   return (t & 0xffffffffn).toString(16).padStart(8, '0');
 }
+
+/**
+ * LP.3 — high-level "a Stage-2-promoted lesson lands in this pack's
+ * personal_revision/ directory" helper. Ensures version.json exists
+ * (idempotent init at `'0.0.0'` default — caller should pass a real
+ * baseline via `initPersonalRevision` first when known), then appends the
+ * lesson as `lesson_<n+1>.yaml` + bumps `personal_revision_id`.
+ *
+ * Lesson body shape per LP.3 spec:
+ *   promoted_at: ISO-8601 timestamp
+ *   engine_lesson_id: string (the engine's lesson id for reconciliation)
+ *   lesson_body: any (engine's lesson content)
+ *   cited_memory_ids: string[]
+ *   skill: string (originating skill name, optional)
+ *   retired: boolean (default false; user can flip via CLI later)
+ *
+ * Returns the new revision id. Throws on personal_revision write failure
+ * — caller must surface (NO silent swallow per [[feedback_no_silent_fail_open]]).
+ *
+ * Imported by: store_lesson primitive (LP.3 wiring follow-up); CLI install
+ * path (LP.4).
+ */
+export interface PromotedLessonInput {
+  /** Engine-side lesson id for reconciliation. */
+  engine_lesson_id: string;
+  /** Engine-side lesson body. */
+  lesson_body: unknown;
+  /** Memory ids cited by the lesson. */
+  cited_memory_ids?: string[];
+  /** Originating skill name (optional — engine-direct lessons omit). */
+  skill?: string;
+  /** Pack base version (passed at install time; defensive '0.0.0' default). */
+  packBaseVersion?: BaseVersion;
+}
+
+export async function persistPromotedLesson(
+  packStateDir: string,
+  lesson: PromotedLessonInput,
+): Promise<number> {
+  await initPersonalRevision(packStateDir, lesson.packBaseVersion ?? '0.0.0');
+  return appendLessonFile(packStateDir, {
+    promoted_at: new Date().toISOString(),
+    engine_lesson_id: lesson.engine_lesson_id,
+    lesson_body: lesson.lesson_body,
+    cited_memory_ids: lesson.cited_memory_ids ?? [],
+    ...(lesson.skill !== undefined ? { skill: lesson.skill } : {}),
+    retired: false,
+  });
+}

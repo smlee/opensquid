@@ -33,6 +33,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { matchesDetectedBy, type DetectionContext } from '../runtime/detection.js';
@@ -40,6 +41,45 @@ import type { Pack } from '../runtime/types.js';
 
 import { expandComposites } from './composite_resolver.js';
 import { loadPack } from './loader.js';
+
+/**
+ * LP.3 — path-traversal-safe validator for pack ids that come from
+ * potentially-untrusted sources (manifest.yaml name field, CLI input).
+ * Rejects ids containing `/`, `\`, `..`, or starting with `.`. Use before
+ * any path construction with the id.
+ */
+export function validatePackId(packId: string): void {
+  if (packId.length === 0) throw new Error('validatePackId: empty packId');
+  if (packId.startsWith('.')) throw new Error(`validatePackId: packId may not start with "."`);
+  if (/[\\/]|\.\./.test(packId)) {
+    throw new Error(`validatePackId: packId "${packId}" contains path-traversal characters`);
+  }
+}
+
+/**
+ * LP.3 — resolve the on-disk state directory for a pack by id. User scope:
+ * `~/.opensquid/packs/<id>/`. Project scope: `<projectCwd>/.opensquid/
+ * packs/<id>/` (projectCwd required). Path resolver only; does NOT verify
+ * directory exists. Caller mkdir-recursive before writing.
+ *
+ * Honors OPENSQUID_HOME env override (tests). validatePackId is called
+ * before path construction.
+ */
+export function resolvePackStateDir(
+  packId: string,
+  scope: 'user' | 'project' = 'user',
+  projectCwd?: string,
+): string {
+  validatePackId(packId);
+  if (scope === 'project') {
+    if (projectCwd === undefined || projectCwd.length === 0) {
+      throw new Error('resolvePackStateDir: projectCwd required for project scope');
+    }
+    return join(projectCwd, '.opensquid', 'packs', packId);
+  }
+  const home = process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
+  return join(home, 'packs', packId);
+}
 
 export interface ActiveJson {
   /** Pack names (folder names under `packs/`) declared active in this scope. */

@@ -7,6 +7,58 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.241] - 2026-05-30
+
+### Added (LP.3 — persistPromotedLesson helper + path-traversal-safe state-dir resolver)
+
+- **`persistPromotedLesson(packStateDir, lesson)`** in
+  `src/packs/personal_revision.ts` — high-level "a Stage-2-promoted
+  lesson lands in this pack's personal_revision/ directory" helper.
+  Wraps `initPersonalRevision` (defensive `'0.0.0'` baseline when
+  caller omits `packBaseVersion`) + `appendLessonFile` with the
+  standard LP.3 lesson shape:
+  - `promoted_at` ISO timestamp
+  - `engine_lesson_id` (for reconciliation)
+  - `lesson_body` (engine's raw lesson)
+  - `cited_memory_ids[]`
+  - `skill` (optional — engine-direct lessons omit)
+  - `retired: false` (user can flip via future CLI)
+    Returns the new revision id. Throws on write failure (NO silent
+    swallow per `feedback_no_silent_fail_open`).
+- **`resolvePackStateDir(packId, scope?, projectCwd?)`** in
+  `src/packs/discovery.ts` — user scope (default) →
+  `<OPENSQUID_HOME>/packs/<id>/` (honors env override); project scope →
+  `<projectCwd>/.opensquid/packs/<id>/`.
+- **`validatePackId(packId)`** path-traversal defense — rejects empty,
+  leading-dot, `/`, `\`, and `..` patterns. Called before any path
+  construction. Stops malicious manifest.name values from escaping
+  `~/.opensquid/packs/`.
+
+### Tests
+
+- `src/packs/personal_revision.test.ts` — 4 new cases on
+  `persistPromotedLesson` (full lesson shape, defensive baseline,
+  optional skill, monotonic id bumps)
+- `src/packs/discovery.test.ts` — 6 new cases on validatePackId +
+  resolvePackStateDir (normal ids, path-traversal rejection,
+  leading-dot rejection, empty rejection, user-scope OPENSQUID_HOME
+  honor, project-scope projectCwd requirement)
+- Full suite: 2618 pass / 28 skip / 0 fail (+10 net).
+
+### Spec deviation note (acknowledged + intentional)
+
+The LP.3 spec assumed `src/runtime/wedge/promote.ts` does engine
+writes; in reality `promote.ts` is a pure `shouldPromote()` decision
+function and lesson writes flow through the `store_lesson` MCP
+primitive in `src/functions/rag.ts`. LP.3 ships the helper that the
+spec called for (`persistPromotedLesson`) as a reusable function;
+wiring it into the actual write path (store_lesson primitive +
+context-bound packId) is a follow-up since the primitive doesn't
+currently receive packId context. The helper's shape matches the
+spec exactly so the follow-up is a one-line caller addition.
+
+---
+
 ## [0.5.240] - 2026-05-30
 
 ### Added (LP.2 — 3-way merge resolver + conflict sidecar emission)
