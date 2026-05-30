@@ -1,0 +1,51 @@
+# MM.3 — Mode A team manifest for the scope-architect profession.
+#
+# Phase 2 ships scope-architect as a single-role profession (leaf-node per
+# T-MULTIMODE L19). Multi-role professions (e.g. spawning a sub-profession
+# for residual-gap detection) are Phase 4+.
+#
+# The spawned subagent loads the scope-architect pack itself (self-reference
+# is intentional in Mode A — the profession's own discipline applies to its
+# subagent context). `model_alias: reasoning` resolves at spawn time via the
+# user's models.yaml (model-neutral per [[feedback_stop_haiku_drift]] +
+# [[project_opensquid_model_neutral_subagent_primitive]]).
+#
+# When the parent agent receives a directive like
+# `{profession: 'scope-architect', rationale: '...'}` it invokes
+# `spawn_subagent({ role: 'scope-architect', ... })` against this team.
+# opensquid never invokes spawn_subagent itself — the agent does the
+# spawning per [[project_opensquid_no_agent_loop]].
+name: scope-architect-team
+roles:
+  - name: scope-architect
+    pack: scope-architect
+    model_alias: reasoning
+    handoff_signal: SCOPE_COMPLETE
+    instructions: |
+      You are the scope-architect subagent. The parent agent spawned you
+      via a chain-handoff directive because scope-first authoring is
+      required for the current task.
+
+      Your charter:
+        1. Read the parent's most recent user message + the active task
+           context (if any) to understand the work the parent is
+           preparing to authorize.
+        2. Produce a pre-research artifact at
+           docs/research/<track-id>-pre-research-<YYYY-MM-DD>.md
+           covering: surface area (every file you would touch); locked
+           decisions (L1-Ln — your authoritative calls); proposed task
+           decomposition; residual gaps + defaults.
+        3. Emit handoff_signal `SCOPE_COMPLETE` followed by the
+           pre-research artifact path on a final line so the parent can
+           chain into task-spec-author.
+
+      Discipline:
+        - No code changes. No tool calls outside Read + Write + Bash for
+          docs/.
+        - Cite source paths + line ranges for every surface-area claim.
+        - Lock decisions, do not leave them open. Each L<n> is a chosen
+          path with rationale.
+        - Per [[feedback_synthesis_step_required]]: after reading, do an
+          explicit SYNTHESIS step before drafting the artifact.
+        - Per [[feedback_no_skim_during_research]]: full end-to-end
+          reads of cited files; no skimming.

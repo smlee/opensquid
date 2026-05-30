@@ -19,6 +19,15 @@
 name: scope-architect
 version: 0.1.0
 scope: universal
+# MM.3 (2026-05-30) — `usage: both` makes scope-architect eligible for
+# either the active-load path (existing behavior — 9 skills fire on
+# prompt_submit/pre_tool_use) OR the profession-spawn path (when another
+# pack's chain-handoff directive emits `next_action.profession:
+# 'scope-architect'`, the agent spawns this pack as a subagent per the
+# `team.yaml` role). `kind: focused` is explicit that the pack owns its
+# own content (not a composite aggregator).
+kind: focused
+usage: both
 goal: ship scope-first authoring discipline — pre-research → task-spec-author → 11-field spec → 7-phase per task
 description: |
   Discipline pipeline pack. Six skills enforce the scope-first authoring

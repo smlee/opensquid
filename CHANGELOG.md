@@ -7,6 +7,44 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.236] - 2026-05-30
+
+### Added (MM.3 — scope-architect profession-mode wiring)
+
+- **`packs/builtin/scope-architect/manifest.yaml`** — added `kind: focused`
+  - `usage: both`. The pack now ships eligible for either the
+    active-load path (existing 9-skill behavior) OR the profession-spawn
+    path (when another pack emits `next_action.profession:
+'scope-architect'`).
+- **`packs/builtin/scope-architect/team.yaml`** (new) — single-role
+  Mode A team manifest:
+  - `name: scope-architect-team`
+  - role `name: scope-architect`, `pack: scope-architect`
+    (self-reference is intentional in Mode A leaf-node), `model_alias:
+reasoning` (model-neutral), `handoff_signal: SCOPE_COMPLETE`
+  - pedagogical `instructions:` block citing
+    [[feedback_synthesis_step_required]] +
+    [[feedback_no_skim_during_research]] — guides the spawned subagent
+    to produce a pre-research artifact + emit the handoff signal
+- **3 new tests** in `test/builtin/scope-architect.test.ts`:
+  - pack loads with `kind: focused`, `usage: both`, `includes: []`
+  - team.yaml parses with exactly one scope-architect role
+  - `model_alias` is not a vendor model name (no haiku/sonnet/opus/gpt)
+
+### Notes
+
+- Zero behavior change to the 9 existing scope-architect skills
+  (scope-detect, chain-handoffs, inline-spec-block, pack-skill-authoring,
+  pre-research-authoring, recall-consumed, scope-before-code,
+  task-list-generated, taskcreate-spec-required) — MM.3 is additive
+  metadata only.
+- Combined with MM.2: a directive like `{profession:
+'scope-architect', rationale: '...'}` now passes the
+  resolveProfessionDirective validator + surfaces to the agent via
+  the UserPromptSubmit envelope.
+
+---
+
 ## [0.5.235] - 2026-05-30
 
 ### Added (MM.2 — profession auto-spawn directive validator)

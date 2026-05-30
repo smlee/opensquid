@@ -133,4 +133,30 @@ describe('builtin scope-architect pack', () => {
       expect(matched.length, `expected silent on: "${prompt}"`).toBe(0);
     }
   });
+
+  it('MM.3: loads with kind: focused + usage: both', async () => {
+    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
+    expect(pack.kind).toBe('focused');
+    expect(pack.usage).toBe('both');
+    expect(pack.includes).toEqual([]);
+  });
+
+  it('MM.3: team.yaml loads with exactly one scope-architect role', async () => {
+    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
+    expect(pack.team).toBeDefined();
+    expect(pack.team?.name).toBe('scope-architect-team');
+    expect(pack.team?.roles).toHaveLength(1);
+    const role = pack.team?.roles[0];
+    expect(role?.name).toBe('scope-architect');
+    expect(role?.pack).toBe('scope-architect');
+    expect(role?.model_alias).toBe('reasoning');
+    expect(role?.handoff_signal).toBe('SCOPE_COMPLETE');
+    expect(role?.instructions).toMatch(/scope-architect subagent/);
+  });
+
+  it('MM.3: model_alias is not a vendor model name', async () => {
+    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
+    const alias = pack.team?.roles[0]?.model_alias ?? '';
+    expect(alias).not.toMatch(/haiku|sonnet|opus|gpt-|claude-|anthropic|openai/i);
+  });
 });
