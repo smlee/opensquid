@@ -1,0 +1,16 @@
+# MM.5 — synthetic composite pack fixture for end-to-end multi-mode test.
+#
+# Lives in test/fixtures/ so it's NOT shipped in the npm package. Demonstrates
+# a composite pack referencing two built-in profession packs by name. Exercises
+# the full Phase 2 stack: schema parse (MM.1) → composite expansion (MM.1) →
+# loaded pack registry (MM.3/MM.4) → profession resolver (MM.2).
+name: composite-test
+version: 0.1.0
+scope: workflow
+goal: synthetic composite for MM.5 e2e test — aggregates scope-architect + pack-architect
+kind: composite
+includes:
+  - pack_id: scope-architect
+    semver: '>=0.1.0'
+  - pack_id: pack-architect
+    semver: '>=0.1.0'

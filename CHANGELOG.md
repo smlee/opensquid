@@ -7,6 +7,59 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.238] - 2026-05-30
+
+### Added (MM.5 — integration + docs — CLOSES T-MULTIMODE)
+
+- **`docs/pack-runtime.md` §1.1** — manifest fields table extended with
+  `kind`, `usage`, `includes` rows.
+- **`docs/pack-runtime.md` §1.7`** (new) — `kind` / `usage` / `includes`
+  semantics block covering:
+  - focused vs composite pack types
+  - active / profession / both usage modes
+  - `includes:` shape + semver range syntax
+  - profession spawn flow + no-agent-loop invariant
+- **`docs/pack-runtime.md` §3.1** — Discovery section extended with
+  step 6 (composite expansion) + `CompositeResolutionError` 5-cause
+  table (unknown-pack / semver-mismatch / cycle / depth-exceeded /
+  invalid-semver).
+- **`docs/pack-runtime.md` §3.4** — Dispatch flow ASCII diagram extended
+  with the directive-aggregation branch + profession validation
+  pipeline. Includes the 5-code `ProfessionResolutionError` table
+  (unknown-pack / wrong-usage / missing-team / no-roles /
+  role-not-found).
+- **`test/e2e/multimode_e2e.test.ts`** (new, 6 cases) — exercises the
+  full Phase 2 stack end-to-end:
+  - composite expansion: 3-pack input → composite + 2 includes in
+    expanded output (sorted)
+  - composite identity: composite preserved in expanded list for audit
+  - profession resolver: scope-architect directive resolves to
+    SCOPE_COMPLETE role
+  - profession resolver: pack-architect directive resolves to
+    PACK_AUTHORING_COMPLETE role
+  - profession resolver: unknown-pack directive dropped
+  - integrated chain: composite → expanded → directive resolution
+    against expanded registry (matches dispatcher behavior)
+- **`test/fixtures/composite-test/manifest.yaml`** (new) — synthetic
+  composite fixture; lives in test/fixtures/ so it's NOT shipped in
+  the npm package.
+
+### Closes T-MULTIMODE (5/5 shipped)
+
+| Task | What                                              | Commit    | Version |
+| ---- | ------------------------------------------------- | --------- | ------- |
+| MM.1 | manifest kind/usage/includes + composite_resolver | `5d8295e` | 0.5.228 |
+| MM.2 | profession auto-spawn directive validator         | `22db2cf` | 0.5.235 |
+| MM.3 | scope-architect profession-mode wiring            | `16b4576` | 0.5.236 |
+| MM.4 | pack-architect new built-in profession pack       | `27707db` | 0.5.237 |
+| MM.5 | integration + docs (this commit)                  | —         | 0.5.238 |
+
+### Tests
+
+- Full suite: 2575 pass / 28 skip / 0 fail (+6 net).
+
+---
+
 ## [0.5.237] - 2026-05-30
 
 ### Added (MM.4 — pack-architect built-in profession pack)

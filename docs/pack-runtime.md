@@ -53,29 +53,84 @@ Schema: `src/packs/schemas/manifest.ts:1-360` · Loader fold:
 time, so every field below has a deterministic value at runtime even
 when omitted from disk.
 
-| Field                | Type     | Default     | Purpose                                                |
-| -------------------- | -------- | ----------- | ------------------------------------------------------ |
-| `name`               | string   | required    | Pack name, must match folder name                      |
-| `version`            | semver   | required    | Pack version (independent of opensquid version)        |
-| `scope`              | enum     | required    | Layering precedence (see 1.6)                          |
-| `goal`               | string   | required    | One-line statement of what the pack does               |
-| `description`        | string   | `''`        | Longer description                                     |
-| `requires`           | string[] | `[]`        | Other packs this depends on (by name)                  |
-| `conflicts`          | string[] | `[]`        | Other packs this conflicts with (by name)              |
-| `evolves`            | bool     | `true`      | Whether lessons can mutate this pack's skills          |
-| `activation_scope`   | enum     | `'project'` | WHO the pack applies to (see 1.3)                      |
-| `detected_by`        | array    | `[]`        | WHEN the pack auto-activates (see 1.4)                 |
-| `foundation`         | object   | absent      | Taxonomy block — tools/domains/methodologies (see 1.2) |
-| `chat_agent_ref`     | string   | absent      | Reference to chat_agent.yaml (see 1.5)                 |
-| `models_ref`         | string   | absent      | Reference to models.yaml (see 1.5)                     |
-| `channels_ref`       | string   | absent      | Reference to channels.yaml (see 1.5)                   |
-| `notifications_ref`  | string   | absent      | Reference to notifications.yaml (see 1.5)              |
-| `drift_response_ref` | string   | absent      | Reference to drift_response.yaml (see 1.5)             |
-| `team_ref`           | string   | absent      | Reference to team.yaml (profession marker)             |
+| Field                | Type     | Default     | Purpose                                                    |
+| -------------------- | -------- | ----------- | ---------------------------------------------------------- |
+| `name`               | string   | required    | Pack name, must match folder name                          |
+| `version`            | semver   | required    | Pack version (independent of opensquid version)            |
+| `scope`              | enum     | required    | Layering precedence (see 1.6)                              |
+| `goal`               | string   | required    | One-line statement of what the pack does                   |
+| `description`        | string   | `''`        | Longer description                                         |
+| `requires`           | string[] | `[]`        | Other packs this depends on (by name)                      |
+| `conflicts`          | string[] | `[]`        | Other packs this conflicts with (by name)                  |
+| `evolves`            | bool     | `true`      | Whether lessons can mutate this pack's skills              |
+| `activation_scope`   | enum     | `'project'` | WHO the pack applies to (see 1.3)                          |
+| `detected_by`        | array    | `[]`        | WHEN the pack auto-activates (see 1.4)                     |
+| `foundation`         | object   | absent      | Taxonomy block — tools/domains/methodologies (see 1.2)     |
+| `chat_agent_ref`     | string   | absent      | Reference to chat_agent.yaml (see 1.5)                     |
+| `models_ref`         | string   | absent      | Reference to models.yaml (see 1.5)                         |
+| `channels_ref`       | string   | absent      | Reference to channels.yaml (see 1.5)                       |
+| `notifications_ref`  | string   | absent      | Reference to notifications.yaml (see 1.5)                  |
+| `drift_response_ref` | string   | absent      | Reference to drift_response.yaml (see 1.5)                 |
+| `team_ref`           | string   | absent      | Reference to team.yaml (profession marker)                 |
+| `kind`               | enum     | `'focused'` | Pack type (see 1.7) — `'focused' \| 'composite'`           |
+| `usage`              | enum     | `'active'`  | Load mode (see 1.7) — `'active' \| 'profession' \| 'both'` |
+| `includes`           | array    | `[]`        | Composite-only — `{pack_id, semver}` entries (see 1.7)     |
 
 The schema is `.strict()` — unknown keys at the top level are
 rejected at load time so typos surface loudly rather than silently
 no-op.
+
+### 1.7 `kind` / `usage` / `includes` (MM.1 + MM.2 + MM.3 + MM.4)
+
+Schema: `src/packs/schemas/manifest.ts:287-305` (enums + CompositeInclude)
+
+- `:330-365` (Manifest superRefine). Loader: `src/packs/loader.ts:110-150`
+  (team.yaml load + folds). Resolver: `src/packs/composite_resolver.ts`.
+
+**Pack kind semantics (MM.1):**
+
+- **focused** — own content + own foundation + own detected_by. The
+  canonical pack shape. All pre-MM.1 packs default to focused.
+- **composite** — pure aggregator with no own content. MUST have
+  non-empty `includes:`; MUST NOT declare `foundation`. References
+  focused packs via `{pack_id, semver}` entries; the loader expands
+  these at discovery time (§3.1). Composite packs appear in the
+  loaded-pack list alongside their expanded includes (for audit
+  identity); when the dispatcher walks, it traverses the focused packs
+  (composites have no own skills to walk).
+
+**Pack usage semantics (MM.1 + MM.2):**
+
+- **active** — pack loads into the parent agent's mind via discovery +
+  dispatcher walks its skills on every event. Pre-MM.1 default.
+- **profession** — pack does NOT load actively; SPAWNED as a subagent
+  via the `spawn_subagent` primitive when a directive's
+  `next_action.profession` references it. REQUIRES `team.yaml` with
+  ≥ 1 role (loader enforces existence + parse).
+- **both** — eligible for either path. Most shipped profession packs
+  (scope-architect, pack-architect) use `both` so they fire actively
+  when opted-in AND can be spawned on demand.
+
+**`includes:` shape:**
+
+```yaml
+includes:
+  - pack_id: scope-architect
+    semver: '>=0.1.0'
+  - pack_id: pack-architect
+    semver: '^0.1.0'
+```
+
+Semver ranges follow the standard `semver` npm syntax. Load-time
+resolution validates each include against the discovered pack registry
+(see §3.1 for the 5 error codes).
+
+**Profession spawn (MM.2 + MM.3 + MM.4):** when a rule emits a
+`directive` verdict with `next_action.profession: <name>`, the
+dispatcher validates the named pack exists, has `usage: profession|both`,
+and has a loaded team.yaml (see §3.4 for the 5 error codes + the
+no-agent-loop invariant — opensquid emits the directive, the agent
+invokes `spawn_subagent`).
 
 ### 1.2 `foundation:` taxonomy (IDF.1)
 
@@ -389,6 +444,27 @@ Module: `src/packs/discovery.ts:1-130`.
    opted-in packs load).
 5. **Opt-in invariant** — a pack NOT in `active.json` is NEVER
    loaded regardless of `detected_by`. No silent installs.
+6. **Composite expansion (MM.1)** — after per-pack discovery + detected_by
+   filtering, `discoverActivePacks` calls `expandComposites`
+   (`src/packs/composite_resolver.ts`) to walk every composite pack's
+   `includes:` against the discovered focused-pack registry. The
+   expanded list contains:
+   - Every original focused pack (deduped)
+   - Every composite pack (preserved for audit identity — composites have
+     no skills to walk, but stay in the list for diagnostics)
+   - Every focused pack referenced by any composite's includes (deduped;
+     first-occurrence-wins; scope-precedence preserved)
+
+   Composite resolution errors throw `CompositeResolutionError` with a
+   `cause` field:
+
+   | Cause code        | Trigger                                                                   |
+   | ----------------- | ------------------------------------------------------------------------- |
+   | `unknown-pack`    | composite references a `pack_id` not in the registry                      |
+   | `semver-mismatch` | registry version doesn't satisfy the include's range                      |
+   | `cycle`           | composite A → B → A (or longer chain) detected within one resolution walk |
+   | `depth-exceeded`  | > 3 levels of nested composite expansion                                  |
+   | `invalid-semver`  | malformed range string                                                    |
 
 ### 3.2 Load order
 
@@ -439,7 +515,35 @@ for each pack in packs (already scope-sorted):
       applyDriftResponse → {exitCode, stderr, …}
       ↓
       FIRST verdict short-circuits the walk (within the dispatchEvent call)
+
+      Special case — verdict.level === 'directive' (ASC.3 + MM.2):
+        ↓
+        Aggregate onto the per-event directives[] list (peer to contextInjections).
+        ↓
+        MM.2 — if next_action.profession is set:
+          1. Look up profession pack in loaded registry
+          2. Validate pack.usage in {'profession', 'both'}
+          3. Validate pack.team is set + has >= 1 role
+          4. On success: aggregate; UserPromptSubmit surfaces via envelope.
+          5. On failure: DROP the directive + emit a stderr warning naming
+             the ProfessionResolutionError cause; the agent never sees a
+             malformed directive (fail-safe — no misleading the agent into
+             spawning an invalid profession).
+        ↓
+        The AGENT reads the surfaced directive + invokes spawn_subagent(...).
+        opensquid NEVER invokes spawn_subagent itself per
+        [[project_opensquid_no_agent_loop]] — the invariant is preserved.
 ```
+
+Profession-directive validation error codes (`ProfessionResolutionError`):
+
+| Code             | Trigger                                                           |
+| ---------------- | ----------------------------------------------------------------- |
+| `unknown-pack`   | `next_action.profession` names a pack not in the loaded registry  |
+| `wrong-usage`    | named pack exists but `usage === 'active'`                        |
+| `missing-team`   | named pack has `usage: profession\|both` but no loaded team.yaml  |
+| `no-roles`       | team.yaml declares zero roles (defensive — schema enforces ≥ 1)   |
+| `role-not-found` | (multi-role) directive's `args.role` names a role not in the team |
 
 Exit-code mapping (`src/runtime/hooks/dispatch.ts:45-60`):
 
