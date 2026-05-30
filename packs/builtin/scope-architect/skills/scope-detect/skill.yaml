@@ -1,0 +1,40 @@
+# scope-detect — soft prompt-intent warn that fires on scope-authoring intent.
+# Extracted from user-pack scope-decomposer rule `scope-intent-nudge` (DPC.1).
+name: scope-detect
+load: preload
+when_to_load:
+  - kind: event_type
+    type: prompt_submit
+triggers:
+  - kind: prompt_submit
+rules:
+  - id: scope-intent-nudge
+    process:
+      - call: text_pattern_match
+        args:
+          text_field: prompt
+          patterns:
+            - '\bspec(?:c?ing|ced)?\s+(?:out|this|the)\b'
+            - '\bscope\s+(?:out|this|the|a)\b'
+            - '\bnew\s+(?:task|track)\b'
+            - '\badd\s+(?:a\s+|another\s+)?(?:task|track)\b'
+            - '\bdesign\s+(?:a|the|this)\b'
+            - '\bplan\s+(?:out|a|the)\b'
+        as: intent
+      - call: verdict
+        if: 'len(intent.matched) > 0'
+        args:
+          level: warn
+          message: >-
+            Scope-authoring intent detected. Before writing ANY task / track /
+            spec: (1) run pre-research → docs/research/<slug>-pre-research-<date>.md;
+            (2) invoke the `task-spec-author` profession (next_action.profession);
+            (3) verify all 11 fields. Do NOT inline-spec in TASKS.md or
+            docs/tasks/. opensquid emits this directive; YOU run the steps.
+prose: |
+  The SOFT side of the scope-authoring gate. Fires on prompt_submit when
+  the user's message shows scope-authoring intent. The HARD side
+  (inline-spec-block) blocks the actual Write/Edit when a spec lands with no
+  pre-research artifact. DPC.2 widens this skill's regex patterns to cover
+  bulk-action prompts; this initial DPC.1 version preserves the original
+  user-pack patterns to keep the promotion behavior-equivalent.

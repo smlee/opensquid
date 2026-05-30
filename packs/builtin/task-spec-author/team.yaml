@@ -1,0 +1,33 @@
+# task-spec-author profession — single-role team manifest.
+#
+# When scope-architect's chain-handoff-research-to-spec directive fires
+# with `next_action.profession: task-spec-author`, the agent uses this
+# team-role config to spawn the subagent:
+#   - pack: profession/task-spec-author (resolves to packs/builtin/task-spec-author/)
+#   - model_alias: reasoning (resolved at spawn time via user's models.yaml)
+#   - handoff_signal: SPEC_AUTHORED (sentinel parent scans for completion)
+#   - instructions: applied as system-prompt addendum
+name: task-spec-author-team
+roles:
+  - name: spec-author
+    pack: profession/task-spec-author
+    model_alias: reasoning
+    handoff_signal: SPEC_AUTHORED
+    instructions: |
+      You are acting as the task-spec-author profession. Your input is a
+      pre-research artifact at `args.pre_research_path` (or the most recent
+      `docs/research/*-pre-research-*.md` if not specified).
+
+      Your output: produce a track spec at `docs/tasks/T-<slug>.md` that
+      follows the 11-field template documented in the format authority
+      (~/.claude/skills/task-spec-author/SKILL.md). Each task in the track
+      gets all 11 fields. Refuse to land if any field is missing or contains
+      pseudocode.
+
+      Emit the literal string `SPEC_AUTHORED` on a line by itself when the
+      spec is written + ready for review. The parent agent reads this
+      signal as completion.
+
+      Per [[project_opensquid_no_agent_loop]] + [[feedback-workflow-explicit-sequence]]:
+      you produce the spec; the parent invokes TaskCreate per ### Task block
+      with metadata.spec set to the absolute spec path.

@@ -7,6 +7,55 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.216] - 2026-05-30
+
+### Added
+
+- **Two new built-in profession packs** under `packs/builtin/`:
+  - **`scope-architect/`** — the discipline pipeline (scope-intent detection,
+    inline-spec-block, taskcreate-spec-required, scope-before-code in
+    automation, task-list-generated hygiene, chain-handoff directives) as a
+    6-skill pack. Promoted from the user-pack `scope-decomposer` shipped by
+    the original maintainer; now every opensquid user can opt into the
+    discipline pipeline.
+  - **`task-spec-author/`** — profession pack wrapping the task-spec-author
+    format authority. Has no rules (validatePackFunctions no-op); ships the
+    `team.yaml` + bundled `SKILL.md` + `skills-catalog.md` as the format
+    reference. Chain-handoff-research-to-spec directive emits
+    `next_action.profession: task-spec-author` — the agent resolves the
+    profession by reading this pack's team-role + bundled SKILL.md, then
+    spawns the subagent.
+
+  Opt-in via your scope's `active.json`:
+
+  ```yaml
+  packs:
+    - default-discipline
+    - scope-architect
+    - task-spec-author
+  ```
+
+  Per `T-DISCIPLINE-PIPELINE-COMPLETION` DPC.1 — closes the gap where the
+  discipline pipeline lived only in the maintainer's user pack. Other users
+  installing opensquid now get the same anti-drift scaffolding.
+
+### Changed (additive, backward-compatible)
+
+- **`Verdict.NextAction` extended with `profession?: string` field.** The XOR
+  refine widens from 2-way (skill XOR tool) to 3-way (skill XOR tool XOR
+  profession). Existing directive verdicts using `skill:` or `tool:` are
+  unchanged. New `profession:` form is used by `scope-architect`'s
+  `chain-handoff-research-to-spec` rule to route the agent to the
+  `task-spec-author` profession pack rather than the legacy CC-skill
+  reference.
+
+  Per `T-DISCIPLINE-PIPELINE-COMPLETION` DPC.1 + spec L6.
+
+### Pre-research + spec (in private workspace)
+
+- `loop/docs/research/T-discipline-pipeline-completion-pre-research-2026-05-30.md`
+- `loop/docs/tasks/T-discipline-pipeline-completion.md` (DPC.1-DPC.6)
+
 ## [0.5.215] - 2026-05-29
 
 ### Changed (BREAKING for users who pinned the old pack name)

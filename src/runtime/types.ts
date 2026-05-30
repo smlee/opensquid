@@ -63,18 +63,37 @@ export type VerdictLevel = z.infer<typeof VerdictLevel>;
  * directive, the agent dispatches. The skill name here is informational —
  * opensquid does NOT invoke it.
  */
+/**
+ * DPC.1 (2026-05-30) — extended to 3-way XOR (skill / tool / profession).
+ * The `profession` field points at an opensquid built-in profession pack
+ * (e.g. `task-spec-author`, `scope-architect`) under `packs/builtin/<name>/`
+ * or at a user-scope profession pack under `~/.opensquid/packs/<name>/`.
+ * Chain-handoff directives (T-ASC ASC.5) use `profession:` to route the
+ * agent to spawn_subagent with the named pack's team-role manifest. The
+ * agent loads the pack, applies the role's `instructions` + pinned skills,
+ * runs the subagent — opensquid stays passive per
+ * [[project_opensquid_no_agent_loop]].
+ */
 export const NextAction = z
   .object({
     skill: z.string().min(1).optional(),
     tool: z.string().min(1).optional(),
+    profession: z.string().min(1).optional(),
     args: z.record(z.unknown()).optional(),
     rationale: z.string().min(1),
   })
   .strict()
-  .refine((na) => (na.skill !== undefined) !== (na.tool !== undefined), {
-    message: 'next_action.skill XOR next_action.tool — exactly one must be set',
-    path: ['skill'],
-  });
+  .refine(
+    (na) => {
+      const set = [na.skill, na.tool, na.profession].filter((v) => v !== undefined).length;
+      return set === 1;
+    },
+    {
+      message:
+        'next_action.skill XOR next_action.tool XOR next_action.profession — exactly one must be set',
+      path: ['skill'],
+    },
+  );
 export type NextAction = z.infer<typeof NextAction>;
 
 export const Verdict = z.discriminatedUnion('level', [

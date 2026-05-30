@@ -1,0 +1,28 @@
+# task-list-generated — AP.5 Gate B. Every OPEN task must carry a
+# metadata.taskId provenance stamp. `warn`: Gate A hard-blocks the write;
+# Gate B surfaces list hygiene so the agent regenerates smuggled tasks.
+# Extracted from user-pack scope-decomposer rule `task-list-generated` (DPC.1).
+name: task-list-generated
+load: preload
+when_to_load:
+  - kind: event_type
+    type: prompt_submit
+triggers:
+  - kind: prompt_submit
+rules:
+  - id: warn-task-list-not-fully-generated
+    process:
+      - call: is_automation_mode
+        as: auto
+      - call: task_list_generated
+        if: 'auto.value == true'
+        as: list
+      - call: verdict
+        if: 'auto.value == true && list.all_generated == false'
+        args:
+          level: warn
+          message: >-
+            Task-list hygiene: one or more open tasks have NO generator
+            provenance (missing metadata.taskId) — not produced by
+            scope→task-spec-author. Regenerate them through the pipeline
+            (or stamp metadata.taskId) so the whole list is task-generated.

@@ -1,0 +1,86 @@
+# chain-handoffs — the 3 chain-handoff directive rules (T-ASC ASC.5 pattern).
+# Each rule is gated at the dispatcher boundary by `requires: chain_stage`;
+# the body reads the chain state via `read_chain_state` and emits a
+# structured `directive` verdict (T-ASC ASC.3) carrying the next-action.
+#
+# Per project_opensquid_no_agent_loop: opensquid does NOT invoke the named
+# skill/tool/profession; the agent dispatches by reading the UserPromptSubmit
+# envelope's `additionalContext` (the dispatcher serializes directives as
+# fenced JSON under a `⛔ DIRECTIVE` marker).
+#
+# Extracted from user-pack scope-decomposer chain-handoff rules (DPC.1).
+# DPC.1 extension: research→spec directive emits `next_action.profession`
+# (not `skill`) pointing at the new sibling builtin `task-spec-author`
+# profession pack.
+name: chain-handoffs
+load: preload
+when_to_load:
+  - kind: event_type
+    type: prompt_submit
+  - tool_match: Write
+  - tool_match: Edit
+  - tool_match: TaskCreate
+triggers:
+  - kind: prompt_submit
+  - kind: tool_call
+rules:
+  - id: chain-handoff-research-to-spec
+    requires:
+      - kind: chain_stage
+        stage: researched
+    process:
+      - call: read_chain_state
+        as: chain
+      - call: verdict
+        args:
+          level: directive
+          next_action:
+            profession: task-spec-author
+            args:
+              pre_research_path: chain.pre_research_path
+            rationale: >-
+              Pre-research artifact landed (chain stage: researched). Next stage
+              requires the task-spec-author profession to consume the artifact
+              and produce the 11-field track spec. Do NOT hand-author the
+              decomposition — spawn the task-spec-author subagent with the
+              pre-research as input. The profession pack ships in
+              packs/builtin/task-spec-author/.
+
+  - id: chain-handoff-spec-to-tasks
+    requires:
+      - kind: chain_stage
+        stage: spec_authored
+    process:
+      - call: read_chain_state
+        as: chain
+      - call: verdict
+        args:
+          level: directive
+          next_action:
+            tool: TaskCreate
+            args:
+              spec_path: chain.spec_path
+            rationale: >-
+              Track spec on disk (chain stage: spec_authored). Each ### Task
+              block becomes one TaskCreate with metadata.taskId + metadata.spec
+              set to the spec's absolute path. The workflow gate engages once
+              tasks load with provenance.
+
+  - id: chain-handoff-resume-phases
+    requires:
+      - kind: chain_stage
+        stage: phases_in_flight
+    process:
+      - call: workflow_phases_complete
+        as: phases
+      - call: verdict
+        if: 'phases.complete == false'
+        args:
+          level: directive
+          next_action:
+            tool: mcp__opensquid__log_phase
+            rationale: >-
+              Phase logging in flight (chain stage: phases_in_flight), but the
+              7-phase workflow is incomplete for the active task. Resume at the
+              next unlogged phase immediately; log_phase as each completes. The
+              full-automation lock forbids stops while phases are incomplete.

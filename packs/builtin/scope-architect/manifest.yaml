@@ -1,0 +1,34 @@
+# scope-architect — discipline pipeline as an opensquid built-in pack.
+#
+# Promoted from ~/.opensquid/packs/sangmin-personal-rules/skills/scope-decomposer/
+# (a 271-LOC user-pack skill with 7 rules) per T-DISCIPLINE-PIPELINE-COMPLETION
+# DPC.1 (2026-05-30). Split into 6 skills (one per rule kind) for per-skill
+# when_to_load precision + per-skill testability.
+#
+# The pipeline (when active) enforces:
+#   scope-intent prompt → pre-research artifact → task-spec-author invocation
+#   → 11-field spec → TaskCreate with metadata.spec → 7-phase per task → ship.
+#
+# Ships in the npm package; opt-in via the active scope's `active.json`:
+#
+#   { "packs": ["default-discipline", "scope-architect"] }
+#
+# NOT auto-loaded. Per [[project_opensquid_personal_rules_are_user_codex]]:
+# personal evaluation patterns stay in user packs; this pack ships the
+# structural discipline-pipeline scaffolding everyone can opt into.
+name: scope-architect
+version: 0.1.0
+scope: universal
+goal: ship scope-first authoring discipline — pre-research → task-spec-author → 11-field spec → 7-phase per task
+description: |
+  Discipline pipeline pack. Six skills enforce the scope-first authoring
+  workflow: scope-intent detection, inline-spec blocking without prior
+  pre-research, TaskCreate provenance requirement, scope-before-code gate
+  in automation mode, task-list-generated hygiene, and three chain-handoff
+  directives that route the agent through pre-research → task-spec-author →
+  TaskCreate → 7-phase per task.
+
+  The agent uses the pack by calling the task-spec-author profession pack
+  (sibling builtin) when scope-architect's chain-handoff directives fire.
+  Opt-in via active.json.
+evolves: true

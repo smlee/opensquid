@@ -1,0 +1,27 @@
+# taskcreate-spec-required — blocks raw TaskCreate without metadata.spec.
+# Extracted from user-pack scope-decomposer rule
+# `taskcreate-requires-spec-provenance` (SDTC.1, DPC.1).
+name: taskcreate-spec-required
+load: preload
+when_to_load:
+  - tool_match: TaskCreate
+triggers:
+  - kind: tool_call
+rules:
+  - id: block-taskcreate-without-spec
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: verdict
+        if: 'tool == "TaskCreate" && (targs.metadata == null || targs.metadata.spec == null || len(targs.metadata.spec) == 0)'
+        args:
+          level: block
+          message: >-
+            BLOCKED: TaskCreate without `metadata.spec` bypasses the
+            discipline pipeline. Run pre-research → task-spec-author →
+            `docs/tasks/T-<slug>.md` FIRST, then TaskCreate with
+            metadata: { spec: '<absolute spec path>', taskId: '<task id>' }.
+            The provenance stamp lets every open task carry a verifiable
+            link back to its source spec.

@@ -1,0 +1,34 @@
+# scope-before-code — AP.5 Gate A. In automation mode, blocks code-writes
+# (src/**) whose active task has no generator provenance (a docs/tasks spec on
+# disk). Extracted from user-pack scope-decomposer rule `scope-before-code`
+# (DPC.1).
+name: scope-before-code
+load: preload
+when_to_load:
+  - tool_match: Write
+  - tool_match: Edit
+triggers:
+  - kind: tool_call
+rules:
+  - id: block-code-without-scope
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: is_automation_mode
+        as: auto
+      - call: has_generated_spec
+        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/")'
+        as: prov
+      - call: verdict
+        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/") && prov.generated == false'
+        args:
+          level: block
+          message: >-
+            BLOCKED: coding before scope→task. This work's active task has no
+            generator provenance (a docs/tasks spec on disk). Run
+            pre-research → task-spec-author profession FIRST, create the task
+            with its ABSOLUTE spec path in metadata.spec, load it
+            (set in_progress), THEN code. If there is no active task,
+            scope one first.

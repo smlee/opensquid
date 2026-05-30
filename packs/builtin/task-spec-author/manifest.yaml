@@ -1,0 +1,35 @@
+# task-spec-author — opensquid built-in PROFESSION pack wrapping the
+# task-spec-author format authority.
+#
+# The format authority itself lives at ~/.claude/skills/task-spec-author/
+# (Claude Code skill, 432 LOC SKILL.md + 114 LOC skills-catalog.md). This
+# pack provides the OPENSQUID-side handle: when scope-architect's chain-handoff
+# emits a directive with `next_action.profession: task-spec-author`, the agent
+# resolves the profession by reading this pack's `team.yaml` role + the
+# bundled SKILL.md format authority, then spawns a subagent applying both.
+#
+# Promoted per T-DISCIPLINE-PIPELINE-COMPLETION DPC.1 (2026-05-30). The CC
+# skill stays at its CC location for the format-authority + skills-catalog
+# discipline; this pack is the opensquid-side reference that makes the
+# profession addressable from chain-handoff directives.
+#
+# Ships in the npm package; opt-in via active.json:
+#
+#   { "packs": ["scope-architect", "task-spec-author"] }
+#
+# `evolves: false` — task-spec-author's format authority is locked content
+# (the 11-field template + 7-phase steps + persona-skills catalog), not a
+# wedge-gate-mutable rule set.
+name: task-spec-author
+version: 0.1.0
+scope: universal
+goal: produce verified 11-field task specs from intent + pre-research
+description: |
+  Profession pack wrapping the task-spec-author format authority. Has no
+  `rules` of its own (validatePackFunctions is a no-op for profession packs;
+  the discipline lives in the bundled SKILL.md + skills-catalog.md format
+  reference). Loaded when chain-handoff-research-to-spec directive emits
+  `next_action.profession: task-spec-author` — the agent spawns a subagent
+  with this pack's team-role and the bundled SKILL.md as its system-prompt
+  addendum, runs the spec-authoring, returns the produced docs/tasks/T-*.md.
+evolves: false
