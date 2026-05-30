@@ -1,0 +1,82 @@
+# pack-skill-authoring — warns when authoring a user-pack skill yaml
+# without prior research-tool activity this turn.
+#
+# Per T-DISCIPLINE-PIPELINE-COMPLETION DPC.4 (2026-05-30): closes the gap
+# where today's 5-skill drift batch authored pack yamls without recall +
+# without reading existing skills. The skill files all turned out to
+# pattern-match SYMPTOMS instead of addressing CAUSES (user caught it +
+# all 5 dirs were removed). This gate would have surfaced the discipline
+# violation BEFORE the writes landed.
+#
+# Trigger: PreToolUse on Write or Edit targeting paths matching
+# `.opensquid/packs/.+/skill\.yaml$` (user-pack writes; built-in pack
+# writes happen in opensquid src tree at different cwd and are gated by
+# DPC.1's normal discipline).
+#
+# Check: session_tool_history filtered to [mcp__opensquid__recall, Read].
+# If count == 0, the agent is authoring on intuition not research →
+# warn.
+#
+# Verdict level: warn (soft surface, not block). Authoring a skill IS
+# substantive work that needs prior research; warn nudges + surfaces +
+# allows the write to proceed if the agent has context the gate can't
+# detect.
+#
+# Known over-trigger surface: test fixtures at test/fixtures/*-pack/
+# skills/* match the pattern too. Acceptable: fixtures should also
+# benefit from research; warn is soft.
+name: pack-skill-authoring
+load: preload
+when_to_load:
+  - tool_match: Write
+  - tool_match: Edit
+triggers:
+  - kind: tool_call
+rules:
+  - id: warn-pack-skill-write-without-research
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: text_pattern_match
+        args:
+          text_field: 'targs.file_path'
+          patterns:
+            - '\.opensquid/packs/.+/skill\.yaml$'
+        as: is_pack_skill
+      - call: session_tool_history
+        if: '(tool == "Write" || tool == "Edit") && len(is_pack_skill.matched) > 0'
+        args:
+          scope: current_turn
+          filter_names:
+            - mcp__opensquid__recall
+            - Read
+        as: research
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && len(is_pack_skill.matched) > 0 && research.count == 0'
+        args:
+          level: warn
+          message: >-
+            🦑 PACK-SKILL AUTHORING (DPC.4): about to write a pack skill yaml
+            with NO recall or Read calls this turn.
+
+            Per the workflow (spec → research → ask gaps → task-spec-author →
+            7-phase): authoring a skill is substantive work that needs prior
+            research — read existing skills in the same pack for shape, recall
+            the discipline rules the skill enforces, read the primitive
+            contracts the skill calls. Without that, you're authoring on drift.
+
+            This is the gate today's 5-skill drift batch (2026-05-30) would
+            have fired — built skills without research, all 5 turned out to
+            pattern-match symptoms instead of addressing causes. User caught
+            it + all 5 directories were removed.
+
+            Required next action: recall the relevant discipline + read the
+            existing skill files + then author. Warn surfaces but does not
+            block.
+prose: |
+  Soft gate. Fires only when both (a) Write/Edit targets a user-pack skill
+  yaml path AND (b) session has zero recall/Read tool calls this turn.
+  Test fixtures over-trigger (acceptable); built-in pack writes don't
+  match (handled by DPC.1 discipline + inline-spec-block).

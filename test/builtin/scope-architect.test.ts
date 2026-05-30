@@ -29,12 +29,13 @@ describe('builtin scope-architect pack', () => {
     expect(pack.evolves).toBe(true);
   });
 
-  it('ships seven skills (DPC.1 six + DPC.3 recall-consumed)', async () => {
+  it('ships eight skills (DPC.1 six + DPC.3 recall-consumed + DPC.4 pack-skill-authoring)', async () => {
     const pack = await loadPack(resolve('packs/builtin/scope-architect'));
     const skillNames = pack.skills.map((s) => s.name).sort();
     expect(skillNames).toEqual([
       'chain-handoffs',
       'inline-spec-block',
+      'pack-skill-authoring',
       'recall-consumed',
       'scope-before-code',
       'scope-detect',

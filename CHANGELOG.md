@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.219] - 2026-05-30
+
+### Added
+
+- **scope-architect/pack-skill-authoring skill** (DPC.4) — warns when
+  authoring a user-pack skill yaml without prior research-tool activity
+  (recall or Read) this turn. Closes the gap where today's 5-skill drift
+  batch authored skill files without research; all 5 turned out to
+  pattern-match symptoms rather than addressing causes. Path pattern
+  scoped to user-pack writes (`.opensquid/packs/.+/skill.yaml$`); built-in
+  pack writes happen at different cwd + are gated by DPC.1 discipline +
+  inline-spec-block. Verdict level: warn (soft surface).
+
 ## [0.5.218] - 2026-05-30
 
 ### Added
