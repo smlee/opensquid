@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.230] - 2026-05-30
+
+### Added (LL.2 — session-routing resolver)
+
+- **`src/runtime/chat/session_routing.ts`** (new, 105/120 LOC) wraps the
+  existing `live_session_lease` primitives into a project-keyed lookup so
+  LL.3 (inbound watcher) and LL.4 (UPS hook) can answer "which session
+  should receive this project's inbox?" without re-implementing freshness.
+- **`resolveLiveSessionId(projectUuid, now?)`** returns `string | null`:
+  fresh lease (≤ 90s) → `session_id`; stale / missing / corrupt → null.
+- **`resolveAllLiveProjects(now?)`** enumerates every project with a fresh
+  lease, sorted by `refreshedAt` ascending (oldest-first; stable across
+  reruns). ENOENT on `~/.opensquid/projects/` → `[]`.
+- **No logging** from the resolver itself — callers log with action
+  context so failure messages include what was being attempted.
+- **Time-injectable `now`** for deterministic tests; defaults to
+  `new Date()`.
+- 8 new tests (cap ≥ 8): fresh / stale / missing / corrupt / empty
+  session_id / clock-rewind / multi-project enumeration (sorted by
+  refreshedAt) / missing-projects-root.
+
+---
+
 ## [0.5.229] - 2026-05-30
 
 ### Added (LL.1 — keystone of T-L3-LOOP; Phase 5 promoted to front per chat-delivery break)
