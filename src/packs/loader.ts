@@ -60,6 +60,7 @@ import { Manifest } from './schemas/manifest.js';
 import { ModelsConfig } from './schemas/models.js';
 import { Skill } from './schemas/skill.js';
 import { Team } from './schemas/team.js';
+import { getLivingPackVersion } from './living_pack.js';
 import { ingestSeedLessons } from './seed_lessons_ingest.js';
 import { compileVerifyGates } from './verify_gates_compiler.js';
 import { parseYamlFile } from './yaml.js';
@@ -119,6 +120,10 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
       skills.push(compileResult.skill);
     }
   }
+
+  // DOG.5 — read living-pack version triple from LP.1's version.json. Pure
+  // file read; null when pack isn't user-installed.
+  const livingVersion = await getLivingPackVersion(manifest.name);
 
   // DOG.3 — ingest seed_lessons (fire-and-forget; engine may be absent in
   // tests). Per-seed failures are LOGGED, never thrown; loadPack never
@@ -217,6 +222,10 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
     // can read without re-parsing manifest YAML.
     seedLessons: manifest.seed_lessons,
     verifyGates: manifest.verify_gates,
+    // DOG.5 — living-pack version triple from LP.1's version.json (if
+    // user-installed). Built-in packs without a personal_revision dir
+    // get undefined here.
+    ...(livingVersion !== null ? { livingVersion } : {}),
     ...(manifest.extends !== undefined ? { extends: manifest.extends } : {}),
     ...(chatAgent !== undefined ? { chatAgent } : {}),
     ...(models !== undefined ? { models } : {}),

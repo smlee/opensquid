@@ -388,6 +388,17 @@ export const Pack = z.object({
   baseVersion: BaseVersion.optional(),
   personalRevisionId: z.number().int().nonnegative().optional(),
   lastMergedVanilla: BaseVersion.nullable().optional(),
+  // DOG.5 (2026-05-30) — convenience view of the LP.1 version.json shape as
+  // `<base>.<rev>` triple. Present iff the loader read a non-null
+  // PersonalRevision from `<user-home>/.opensquid/packs/<pack-id>/
+  // personal_revision/version.json`. Absent for built-in packs that ship
+  // in the npm tree without per-user installation. Equivalent to
+  // `pack.baseVersion === version.base && pack.personalRevisionId ===
+  // version.revision` but pre-formatted as a single object for log /
+  // diagnostic surfaces.
+  livingVersion: z
+    .object({ base: z.string(), revision: z.number().int().nonnegative() })
+    .optional(),
   // DOG.3 (2026-05-30) — schema-sugar manifest blocks hoisted onto Pack so
   // downstream consumers (ingest pipeline, audit-trail surface, fixture
   // sync) can read without re-parsing the manifest YAML. Optional on the

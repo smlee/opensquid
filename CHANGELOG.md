@@ -7,6 +7,68 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.249] - 2026-05-30
+
+### Added (DOG.5 — Living-pack version triple in Pack + getLivingPackVersion wrapper)
+
+LP.1-LP.5 already shipped the version.json I/O (`readVersionJson`,
+`writeVersionJson`, `initPersonalRevision`), the lesson-append +
+revision-bump path (`appendLessonFile`), the wedge-promotion helper
+(`persistPromotedLesson`), the path-traversal-safe state-dir resolver
+(`resolvePackStateDir`), and the lazy 3-way merge trigger
+(`checkAndMergeUpgrades`). DOG.5 layers a thin convenience surface on
+top so callers reading per-pack version don't need to know the
+underlying file layout.
+
+**New: `src/packs/living_pack.ts`** (47 LOC)
+
+- `getLivingPackVersion(packId): Promise<LivingPackVersion | null>` —
+  reads `~/.opensquid/packs/<id>/personal_revision/version.json` and
+  returns `{base, revision}` or `null` when the pack isn't installed
+  (built-in pack or fresh install). Honors `OPENSQUID_HOME` env
+  override (test seam already wired through LP.3's `resolvePackStateDir`).
+  Throws on malformed JSON (LP.1 loud-failure contract preserved).
+- `LivingPackVersion` interface — `{base: string, revision: number}`.
+
+**`src/runtime/types.ts`** — `Pack` gains optional
+`livingVersion?: {base, revision}` field. Loader populates from
+`getLivingPackVersion(manifest.name)` at load time. Built-in packs that
+ship in the npm tree without per-user state get `livingVersion:
+undefined` (not present); user-installed packs get the triple.
+
+**`src/packs/loader.ts`** — wires the read once per pack alongside
+existing seed-ingest + verify-gate compile. Pure file read; null when
+pack isn't user-installed.
+
+### Tests
+
+`src/packs/living_pack.test.ts` — 10 cases:
+
+- null when pack state dir absent (built-in / never installed)
+- null when state dir exists but version.json absent
+- `{base, revision: 0}` on fresh `initPersonalRevision`
+- revision bumps after `appendLessonFile` calls
+- monotonic across multiple lesson appends
+- honors `OPENSQUID_HOME` override (env-var swap)
+- writeVersionJson + getLivingPackVersion round-trip preserves
+  `last_merged_vanilla` via underlying API (the DOG.5 triple is the
+  base.rev subset, not the full ledger)
+- throws on malformed version.json (LP.1 contract)
+- returns null for unrelated pack id when OTHER packs installed
+- two packs report independent versions
+
+### Why this matters
+
+DOG.5 closes the version-tracking loop end-to-end: a pack ships with
+a base version, lessons get promoted (LP.3 -> personal_revision.id++),
+upgrades 3-way-merge personal lessons over the new vanilla base (LP.2 +
+LP.5), and DOG.5 exposes the current `{base, revision}` triple as a
+first-class field on Pack so logs / diagnostics / merge-prompt UIs can
+read it without re-touching disk. The DOG.6 9-step dogfood recipe will
+surface this triple in the install + promote + upgrade steps.
+
+---
+
 ## [0.5.248] - 2026-05-30
 
 ### Added (DOG.4 — seed_lessons + verify_gates authored for 3 focused + composite)
