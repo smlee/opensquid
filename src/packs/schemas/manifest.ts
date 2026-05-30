@@ -330,6 +330,35 @@ export const CompositeInclude = z
 export type CompositeInclude = z.infer<typeof CompositeInclude>;
 
 // ---------------------------------------------------------------------------
+// LP.1 (2026-05-30) — BaseVersion + PersonalRevision.
+//
+// BaseVersion = semver string identifying the immutable vanilla baseline a
+// pack was installed at. Set once at install (LP.4); never mutated by the
+// engine. PersonalRevision = the version.json shape stored at
+// `~/.opensquid/packs/<pack-id>/personal_revision/version.json` — the
+// runtime-mutated state companion to the immutable base_version.
+//
+// Schema validates SUBSET of full semver (no +build metadata, simplified
+// prerelease grammar) — sufficient for v1 pack authors using `1.2.3` or
+// `1.2.3-rc.1` shapes. Full semver validation via `semver` npm package is
+// overkill at the schema layer.
+// ---------------------------------------------------------------------------
+
+export const BaseVersion = z.string().regex(/^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$/, {
+  message: 'base_version must be valid semver (e.g. "1.2.3" or "1.2.3-rc.1")',
+});
+export type BaseVersion = z.infer<typeof BaseVersion>;
+
+export const PersonalRevision = z
+  .object({
+    base_version: BaseVersion,
+    personal_revision_id: z.number().int().nonnegative().default(0),
+    last_merged_vanilla: BaseVersion.nullable().default(null),
+  })
+  .strict();
+export type PersonalRevision = z.infer<typeof PersonalRevision>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -378,6 +407,14 @@ export const Manifest = z
     kind: PackKind.default('focused'),
     usage: PackUsage.default('active'),
     includes: z.array(CompositeInclude).default([]),
+    // LP.1 (2026-05-30) — loader-populated, not author-declared. A pack
+    // author NEVER puts base_version/personal_revision in manifest.yaml
+    // directly; the LP.4 install command writes them into
+    // ~/.opensquid/packs/<name>/personal_revision/version.json and the
+    // loader hoists into Pack. Schema accepts them as optional for
+    // in-memory consistency.
+    base_version: BaseVersion.optional(),
+    personal_revision: PersonalRevision.optional(),
   })
   .strict()
   .superRefine((m, ctx) => {

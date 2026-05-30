@@ -24,6 +24,7 @@
 // manifest.yaml
 export {
   ActivationScope,
+  BaseVersion,
   Capability,
   CompositeInclude,
   DetectedByCheck,
@@ -32,12 +33,14 @@ export {
   ManifestScope,
   PackKind,
   PackUsage,
+  PersonalRevision,
   Permissions,
   RateLimitPeriod,
   RateLimits,
 } from './manifest.js';
 export type {
   ActivationScope as ActivationScopeType,
+  BaseVersion as BaseVersionType,
   Capability as CapabilityType,
   CompositeInclude as CompositeIncludeType,
   DetectedByCheck as DetectedByCheckType,
@@ -48,6 +51,7 @@ export type {
   ManifestScope as ManifestScopeType,
   PackKind as PackKindType,
   PackUsage as PackUsageType,
+  PersonalRevision as PersonalRevisionType,
   Permissions as PermissionsType,
   RateLimitPeriod as RateLimitPeriodType,
   RateLimits as RateLimitsType,

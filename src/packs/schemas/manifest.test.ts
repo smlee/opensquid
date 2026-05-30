@@ -630,3 +630,47 @@ describe('MM.1: kind + usage + includes schema', () => {
     expect(m.detected_by).toHaveLength(1);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────
+ * LP.1 — BaseVersion + PersonalRevision schemas + Manifest extensions.
+ * ──────────────────────────────────────────────────────────────────── */
+describe('LP.1: BaseVersion + PersonalRevision schemas', () => {
+  it('BaseVersion accepts valid semver shapes', () => {
+    expect(() => Manifest.parse({ ...minimal(), base_version: '1.2.3' })).not.toThrow();
+    expect(() => Manifest.parse({ ...minimal(), base_version: '1.2.3-rc.1' })).not.toThrow();
+    expect(() => Manifest.parse({ ...minimal(), base_version: '10.20.30' })).not.toThrow();
+  });
+
+  it('BaseVersion rejects malformed semver', () => {
+    expect(Manifest.safeParse({ ...minimal(), base_version: 'v1.2.3' }).success).toBe(false);
+    expect(Manifest.safeParse({ ...minimal(), base_version: '1.2' }).success).toBe(false);
+    expect(Manifest.safeParse({ ...minimal(), base_version: '' }).success).toBe(false);
+  });
+
+  it('Manifest accepts optional personal_revision block with defaults', () => {
+    const m = Manifest.parse({
+      ...minimal(),
+      personal_revision: { base_version: '1.0.0' },
+    });
+    expect(m.personal_revision?.base_version).toBe('1.0.0');
+    expect(m.personal_revision?.personal_revision_id).toBe(0);
+    expect(m.personal_revision?.last_merged_vanilla).toBeNull();
+  });
+
+  it('PersonalRevision rejects extra keys (.strict)', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      personal_revision: { base_version: '1.0.0', revision_id: 5 },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  function minimal(): Record<string, unknown> {
+    return {
+      name: 'p',
+      version: '0.1.0',
+      scope: 'workflow',
+      goal: 'fixture',
+    };
+  }
+});

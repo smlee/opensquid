@@ -36,6 +36,7 @@ import { ChatAgentSchema } from '../packs/schemas/chat_agent.js';
 import { DriftResponseConfig } from '../packs/schemas/drift_response.js';
 import {
   ActivationScope,
+  BaseVersion,
   CompositeInclude,
   DetectedByCheck,
   Foundation,
@@ -376,6 +377,15 @@ export const Pack = z.object({
   // construct Pack literals without it. Consumed by the dispatcher's
   // profession-directive validator (profession_resolver.ts).
   team: Team.optional(),
+  // LP.1 (2026-05-30) — living-pack fields. baseVersion is the immutable
+  // vanilla baseline; personalRevisionId is the monotonic count of
+  // promoted lessons; lastMergedVanilla is the most recent vanilla
+  // version successfully 3-way-merged (LP.2 will populate). All three
+  // OPTIONAL: built-in packs (bundled in npm) have no personal_revision
+  // dir; only installed packs at ~/.opensquid/packs/ carry them.
+  baseVersion: BaseVersion.optional(),
+  personalRevisionId: z.number().int().nonnegative().optional(),
+  lastMergedVanilla: BaseVersion.nullable().optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

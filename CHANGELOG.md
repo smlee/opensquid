@@ -7,6 +7,60 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.239] - 2026-05-30
+
+### Added (LP.1 — keystone of T-LIVING-PACK; pack-evolution foundation)
+
+- **`BaseVersion`** Zod schema in `src/packs/schemas/manifest.ts` —
+  semver shape (`/^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$/`) validating
+  `1.2.3`, `1.2.3-rc.1`, `10.20.30`; rejects `v1.2.3`, `1.2`, `""`.
+- **`PersonalRevision`** Zod schema — `.strict()` 3-field shape
+  `{base_version, personal_revision_id, last_merged_vanilla}` with
+  defaults (`0` + `null`).
+- **`Manifest` extended** with optional `base_version` + `personal_revision`
+  blocks (loader-populated, not author-declared).
+- **`Pack` runtime type extended** with optional camelCase fields
+  `baseVersion / personalRevisionId / lastMergedVanilla` (all
+  optional so test fixtures + built-in packs continue without
+  modification).
+- **`src/packs/personal_revision.ts`** (new, 171/180 LOC) — 5 I/O helpers:
+  - `readVersionJson(packStateDir)` — returns null on ENOENT; throws on
+    malformed JSON / schema mismatch (loud — engine-written file)
+  - `writeVersionJson(packStateDir, state)` — atomic temp+rename
+  - `readLessonFiles(packStateDir)` — enumerates `lesson_<n>.yaml` +
+    `lesson_<n>.conflict.yaml` in monotonic id order; sidecars
+    marked `hasConflict: true`
+  - `appendLessonFile(packStateDir, lessonBody)` — reads version,
+    computes next id, writes lesson atomically, bumps revision_id
+  - `initPersonalRevision(packStateDir, baseVersion)` — idempotent
+    fresh-install init (writes version.json at revision_id 0)
+- **Atomic write invariant**: every write goes via `<path>.tmp.<pid>.<rand>`
+  - `fs.rename` so a crash mid-write leaves the prior version intact.
+    No `.tmp.*` files leak.
+- **Schemas re-exported** from `src/packs/schemas/index.ts` (`BaseVersion`
+  - `PersonalRevision` + type aliases).
+
+### Tests
+
+- `src/packs/personal_revision.test.ts` — 12 cases (round-trip,
+  malformed JSON throw, schema rejection, lesson enumeration sort,
+  conflict sidecar detection, missing-init throw, sequential append
+  id bump, idempotent init, atomic-no-tmp-leak verification)
+- `src/packs/schemas/manifest.test.ts` — 4 new schema cases
+  (BaseVersion valid/invalid shapes, optional personal_revision block
+  with defaults, `.strict` rejection of extra keys)
+- Full suite: 2591 pass / 28 skip / 0 fail (+16 net)
+
+### Notes
+
+- The loader.ts fold from `~/.opensquid/packs/<name>/personal_revision/
+version.json` is deferred to LP.4 (CLI install — first writer). For
+  now, built-in packs (`packs/builtin/`) have no version.json and load
+  unchanged; installed packs at user-scope will pick up the fields
+  when LP.4 ships the writer + LP.5 wires the loader fold.
+
+---
+
 ## [0.5.238] - 2026-05-30
 
 ### Added (MM.5 — integration + docs — CLOSES T-MULTIMODE)
