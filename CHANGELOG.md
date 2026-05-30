@@ -7,6 +7,46 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.226] - 2026-05-30
+
+### Added (IDF.5 — closes T-IDENTITY-FOUNDATION — authoritative pack-runtime reference)
+
+- **`docs/pack-runtime.md`** (new, 756 LOC) — authoritative reference
+  for the pack runtime: pack identity (manifest fields, foundation,
+  activation_scope, detected_by 7 kinds, side files), skill format
+  (when_to_load, requires, triggers, rules, process steps), lifecycle
+  (discovery → load order → dispatch flow), verdict shapes (5 levels +
+  NextAction XOR + drift_response composition), primitive catalog
+  (every primitive across 17 source files), audit + drift catalog
+  (violations + chain stages), and authoring patterns (when to warn vs
+  block vs directive vs surface; anti-patterns to avoid).
+  - 7 top-level sections + 45 H2/H3 subsections
+  - Every section cites the implementing source file as a line range
+    (e.g. `src/packs/schemas/manifest.ts:200-225`) so citations
+    survive small code shifts
+  - Citation index appendix (Appendix A) for editor jump-to
+  - Glossary appendix (Appendix B) for term consistency
+
+### Packaging
+
+- **`package.json` `files` array** now ships `docs/pack-runtime.md`
+  along with the existing `docs/skill-grammar-guide.md` and
+  `docs/load-budget.md`. The reference doc travels with the npm
+  package so installers + pack authors can read it without cloning the
+  repo.
+
+### Track close-out
+
+- **T-IDENTITY-FOUNDATION shipped 5/5** (IDF.1 schema → IDF.2 detection
+  evaluator → IDF.3 auto-activation pipeline → IDF.4 dispatcher
+  routing → IDF.5 reference doc). Phase 1 of the v2 product-completion
+  plan is end-to-end operational; the v0.6 codex content-richness
+  (foundation taxonomy + detection patterns + activation_scope) is
+  restored as additive runtime behavior, and pack authors have a
+  single authoritative doc to write against.
+
+---
+
 ## [0.5.225] - 2026-05-30
 
 ### Added (IDF.4 — activation_scope dispatch routing closes T-IDENTITY-FOUNDATION runtime track)

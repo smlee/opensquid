@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.225",
+  "version": "0.5.226",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -22,7 +22,10 @@
   "files": [
     "dist",
     "schemas",
-    "packs/builtin"
+    "packs/builtin",
+    "docs/pack-runtime.md",
+    "docs/skill-grammar-guide.md",
+    "docs/load-budget.md"
   ],
   "engines": {
     "node": ">=20.0.0"
