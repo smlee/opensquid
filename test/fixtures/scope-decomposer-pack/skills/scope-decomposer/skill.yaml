@@ -1,282 +1,34 @@
-# DEPRECATION STUB — DPC.1 (2026-05-30)
-# The 7 rules in this file have been PROMOTED to packs/builtin/scope-architect/
-# (split as 6 skills: scope-detect, inline-spec-block, taskcreate-spec-required,
-# scope-before-code, task-list-generated, chain-handoffs). Opt into the built-in
-# version by adding `scope-architect` to your scope's active.json packs array.
-# DPC.6 will sunset this user-pack copy once built-in coverage is verified
-# behaviorally equivalent. Until DPC.6, both load → scope precedence
-# (universal → ... → project, then user) means the user-pack version fires
-# AFTER built-in; duplicates are informational, not load-bearing.
-# Per project_opensquid_personal_rules_are_user_codex: this user-pack version
-# remains until DPC.6 cleanup; the built-in version is what other users get.
-# scope-decomposer — makes the `task-spec-author` discipline the only
-# well-formed path to authoring scope (new tasks / tracks / specs).
+# DEPRECATION STUB (DPC.6, 2026-05-30) — fully decommissioned.
 #
-# Closes the recurring scope-authoring meta-drift (session handoff 2026-05-26):
-# the agent writes scope as inline summary prose with no pre-research and no
-# 11-field structure. Two rules:
+# The 7 rules that lived in this file are now in packs/builtin/scope-architect/
+# (split as 9 skills total per DPC.1+DPC.3+DPC.4+DPC.5 — the original 6
+# rule kinds + recall-consumed FSM + pack-skill-authoring gate +
+# pre-research-authoring gate). Opt into the built-in version by adding
+# `scope-architect` to your scope's active.json packs array.
 #
-#   scope-intent-nudge (SD.2)  — SOFT. On a prompt_submit whose text shows
-#       scope-authoring intent, emit `warn` directing the agent to run
-#       pre-research → invoke the `task-spec-author` skill → verify 11 fields.
-#   inline-spec-block  (SD.3)  — HARD. On a Write/Edit of a task/track spec
-#       into TASKS.md or docs/tasks/ with NO companion pre-research artifact
-#       on disk, emit `block`.
+# This stub is a load-only no-op: when_to_load is empty so the dispatcher
+# never fires the skill; rules is empty so even if forced to walk it,
+# nothing runs. Validation passes (Skill schema allows rules: []).
 #
-# Architecture lock (project_opensquid_no_agent_loop): opensquid is a PASSIVE
-# evaluator with no ability to invoke a Claude Code skill or run an agent
-# loop. This skill is a GATE + DIRECTIVE emitter, NOT an orchestrator — it
-# emits verdicts; the AGENT runs the orchestration by complying. Same shape
-# as the workflow / git / d9-guard skills.
+# DPC.6 ships AFTER DPC.1-DPC.5 to verify behavioral equivalence is
+# real, not just spec'd. Backup at:
+#   ~/.opensquid/packs/sangmin-personal-rules.dpc6-backup
+#
+# Per [[project_opensquid_personal_rules_are_user_codex]]: user-pack discipline
+# stays in user pack. The discipline pipeline graduates to opensquid built-in
+# because it's universal infrastructure; personal lessons + style remain in
+# this user pack's other 18 skills.
 name: scope-decomposer
-load: preload
-when_to_load:
-  - kind: event_type
-    type: prompt_submit
-  - tool_match: Write
-  - tool_match: Edit
-  - tool_match: TaskCreate # T-SD-TASKCREATE-GATE L1
-rules:
-  # T-SD-TASKCREATE-GATE SDTC.1 (2026-05-29) — block raw TaskCreate that
-  # bypasses scope-decomposer. Self-evidencing fix: this session created
-  # TaskCreate(#66 T-MULTISESSION) with "architectural; deferred" framing
-  # WITHOUT checking whether the architecture already existed (it did —
-  # live-session lease + per-project state + T-DEL track were already
-  # shipped). The gate enforces metadata.spec presence so every TaskCreate
-  # carries provenance back to a pre-research+spec artifact on disk.
-  - id: taskcreate-requires-spec-provenance
-    process:
-      - call: tool_name
-        as: tool
-      - call: tool_args
-        as: targs
-      - call: verdict
-        if: 'tool == "TaskCreate" && (targs.metadata == null || targs.metadata.spec == null || len(targs.metadata.spec) == 0)'
-        args:
-          level: block
-          message: >-
-            BLOCKED: TaskCreate without `metadata.spec` bypasses
-            scope-decomposer. Run pre-research → task-spec-author →
-            `docs/tasks/T-<slug>.md` FIRST, then TaskCreate with
-            metadata: { spec: '<absolute spec path>', taskId: '<task id>' }.
-            Self-evidencing fix: TaskCreate(#66 T-MULTISESSION) bypassed
-            this discipline on 2026-05-29 and queued a wrong architectural
-            framing because the agent didn't grep src/runtime/chat/ before
-            creating the task.
-
-  - id: scope-intent-nudge
-    process:
-      - call: text_pattern_match
-        args:
-          text_field: prompt
-          patterns:
-            - '\bspec(?:c?ing|ced)?\s+(?:out|this|the)\b'
-            - '\bscope\s+(?:out|this|the|a)\b'
-            - '\bnew\s+(?:task|track)\b'
-            - '\badd\s+(?:a\s+|another\s+)?(?:task|track)\b'
-            - '\bdesign\s+(?:a|the|this)\b'
-            - '\bplan\s+(?:out|a|the)\b'
-        as: intent
-      - call: verdict
-        if: 'len(intent.matched) > 0'
-        args:
-          level: warn
-          message: >-
-            Scope-authoring intent detected. Before writing ANY task / track /
-            spec: (1) run pre-research → docs/research/<slug>-pre-research-<date>.md;
-            (2) invoke the `task-spec-author` skill with (intent + pre-research);
-            (3) verify all 11 fields. Do NOT inline-spec in TASKS.md or
-            docs/tasks/. opensquid emits this directive; YOU run the steps.
-
-  # SD.3 — HARD gate. The DEST guard below ((Write|Edit) targeting TASKS.md or
-  # docs/tasks/) is repeated as the leading `&&` terms of the verdict `if:` so
-  # `&&` short-circuit protects the later steps' bindings (research / shape*)
-  # from being read when DEST is false — they stay unset for non-spec writes
-  # and the verdict never fires (matches the workflow skill's
-  # `committing && phases != "complete"` short-circuit pattern).
-  - id: inline-spec-block
-    process:
-      - call: tool_name
-        as: tool
-      - call: tool_args
-        as: targs
-      # Disk truth: does a companion pre-research artifact already exist?
-      # Guarded so the readdir only runs for spec destinations.
-      - call: path_exists
-        if: '(tool == "Write" || tool == "Edit") && (endsWith(targs.file_path, "TASKS.md") || contains(targs.file_path, "docs/tasks/"))'
-        args:
-          dir: docs/research
-          pattern: '*-pre-research-*.md'
-          # Anchor to the SPEC FILE's repo root, not the event cwd. Specs +
-          # their pre-research co-locate (loop repo); without this the check
-          # resolves docs/research against a code-repo cwd and false-blocks.
-          base_file: args.file_path
-        as: research
-      # Content shape — Write body is args.content, Edit body is args.new_string.
-      - call: text_pattern_match
-        if: '(tool == "Write" || tool == "Edit") && (endsWith(targs.file_path, "TASKS.md") || contains(targs.file_path, "docs/tasks/"))'
-        args:
-          text_field: args.content
-          patterns:
-            - '###\s+(?:Task\s+[A-Z0-9.]+|#\d+)'
-            - '\*\*(?:Deliverable|Required skills|Acceptance criteria|7-phase)\b'
-        as: shapeWrite
-      - call: text_pattern_match
-        if: '(tool == "Write" || tool == "Edit") && (endsWith(targs.file_path, "TASKS.md") || contains(targs.file_path, "docs/tasks/"))'
-        args:
-          text_field: args.new_string
-          patterns:
-            - '###\s+(?:Task\s+[A-Z0-9.]+|#\d+)'
-            - '\*\*(?:Deliverable|Required skills|Acceptance criteria|7-phase)\b'
-        as: shapeEdit
-      - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && (endsWith(targs.file_path, "TASKS.md") || contains(targs.file_path, "docs/tasks/")) && (len(shapeWrite.matched) > 0 || len(shapeEdit.matched) > 0) && research.exists == false'
-        args:
-          level: block
-          message: >-
-            BLOCKED: writing a task/track spec with NO pre-research artifact on
-            disk. Author docs/research/<slug>-pre-research-<date>.md FIRST, then
-            invoke the `task-spec-author` skill to produce the 11-field spec.
-            Inline-spec in TASKS.md / docs/tasks/ is forbidden (handoff
-            2026-05-26). To proceed: create the pre-research doc (the gate
-            relaxes once it exists), or deactivate this skill for a one-off.
-
-  # AP.5 Gate A — scope-before-code. In automation mode, a code-write (src/**)
-  # whose ACTIVE task has no generator provenance (a docs/tasks spec on disk) is
-  # BLOCKED. With inline-spec-block (no spec without pre-research) + the workflow
-  # gate (no commit without 7 phases), scope→task is the only door to coding.
-  # Targets /src/ only — writing the spec/pre-research is never blocked.
-  - id: scope-before-code
-    process:
-      - call: tool_name
-        as: tool
-      - call: tool_args
-        as: targs
-      - call: is_automation_mode
-        as: auto
-      - call: has_generated_spec
-        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/")'
-        as: prov
-      - call: verdict
-        if: 'auto.value == true && (tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/") && prov.generated == false'
-        args:
-          level: block
-          message: >-
-            BLOCKED: coding before scope→task. This work's active task has no
-            generator provenance (a docs/tasks spec on disk). Run
-            pre-research → `task-spec-author` FIRST, create the task with its
-            ABSOLUTE spec path in metadata.spec, load it (set in_progress), THEN
-            code. If there is no active task, scope one first.
-
-  # AP.5 Gate B — task-list-generated. Every OPEN task must carry a
-  # metadata.taskId provenance stamp. Closes Gate A's loophole (a task smuggled
-  # into the list manually). `warn`: Gate A hard-blocks the write; Gate B
-  # surfaces list hygiene so the agent regenerates the smuggled task.
-  - id: task-list-generated
-    process:
-      - call: is_automation_mode
-        as: auto
-      - call: task_list_generated
-        if: 'auto.value == true'
-        as: list
-      - call: verdict
-        if: 'auto.value == true && list.all_generated == false'
-        args:
-          level: warn
-          message: >-
-            Task-list hygiene: one or more open tasks have NO generator
-            provenance (missing metadata.taskId) — not produced by
-            scope→task-spec-author. Regenerate them through the pipeline (or
-            stamp metadata.taskId) so the whole list is task-generated.
-
-  # ---------------------------------------------------------------------------
-  # CHAIN-HANDOFF rules (T-ASC ASC.5) — production-grade per-stage handoffs.
-  #
-  # Each rule is gated at the dispatcher boundary by `requires: chain_stage`;
-  # the body reads the chain state via `read_chain_state` and emits a
-  # structured `directive` verdict (T-ASC ASC.3) carrying the next-action.
-  # Per project_opensquid_no_agent_loop: opensquid does NOT invoke the named
-  # skill / tool; the agent dispatches by reading the UserPromptSubmit
-  # envelope's `additionalContext` (the dispatcher serializes directives as
-  # fenced JSON under a `⛔ DIRECTIVE` marker).
-  #
-  # Per-rule `requires:` (T-ASC ASC.5 schema extension) lets a single skill
-  # carry 3 stage-gated rules without per-rule duplicate work — the
-  # dispatcher's RequiresCache amortizes the chain-state read across them.
-  # ---------------------------------------------------------------------------
-
-  - id: chain-handoff-research-to-spec
-    requires:
-      - kind: chain_stage
-        stage: researched
-    process:
-      - call: read_chain_state
-        as: chain
-      - call: verdict
-        args:
-          level: directive
-          next_action:
-            skill: task-spec-author
-            args:
-              pre_research_path: chain.pre_research_path
-            rationale: >-
-              Pre-research artifact landed (chain stage: researched). Next stage
-              requires task-spec-author to consume the artifact and produce the
-              11-field track spec. Do NOT hand-author the decomposition — let
-              the skill drive the spec shape from the substrate.
-
-  - id: chain-handoff-spec-to-tasks
-    requires:
-      - kind: chain_stage
-        stage: spec_authored
-    process:
-      - call: read_chain_state
-        as: chain
-      - call: verdict
-        args:
-          level: directive
-          next_action:
-            tool: TaskCreate
-            args:
-              spec_path: chain.spec_path
-            rationale: >-
-              Track spec on disk (chain stage: spec_authored). Each ### Task
-              block becomes one TaskCreate with metadata.taskId + metadata.spec
-              set to the spec's absolute path. The workflow gate engages once
-              tasks load with provenance.
-
-  - id: chain-handoff-resume-phases
-    requires:
-      - kind: chain_stage
-        stage: phases_in_flight
-    process:
-      - call: workflow_phases_complete
-        as: phases
-      - call: verdict
-        if: 'phases.complete == false'
-        args:
-          level: directive
-          next_action:
-            tool: mcp__opensquid__log_phase
-            rationale: >-
-              Phase logging in flight (chain stage: phases_in_flight), but the
-              7-phase workflow is incomplete for the active task. Resume at the
-              next unlogged phase immediately; log_phase as each completes. The
-              full-automation lock forbids stops while phases are incomplete.
-
+load: lazy
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules: []
 prose: |
-  The SOFT side of the scope-authoring gate. It fires on prompt_submit when
-  the user's message shows scope-authoring intent and nudges toward the
-  pre-research → task-spec-author → 11-field-verify discipline. The HARD side
-  (inline-spec-block, SD.3) blocks the actual Write/Edit when a spec lands
-  with no pre-research artifact.
-
-  The intent regexes run inside the `text_pattern_match` primitive (plain JS
-  RegExp — PCRE allowed), NOT inside an `if:` clause (the `if:` grammar's
-  `match()` uses RE2 and rejects lookarounds). Keep intent detection in the
-  primitive. `warn` (not `block`) keeps a false positive cheap — a prompt is
-  not a destructive action.
-
-  Per project_opensquid_no_agent_loop: opensquid cannot invoke the
-  `task-spec-author` Claude Code skill itself. It emits the directive; the
-  agent complies. This skill is a gate, never an orchestrator.
+  Deprecation stub. The discipline pipeline lives at
+  packs/builtin/scope-architect/ in opensquid 0.5.216+. Add scope-architect
+  to your scope's active.json to load it. This stub will be removed
+  entirely in a future cleanup once active.json migrations have rolled
+  out everywhere; until then it remains as a load-only no-op so any
+  reference (chain-handoff directive emitting next_action.skill:
+  scope-decomposer, etc.) resolves without error.
