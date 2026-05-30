@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.244] - 2026-05-30
+
+### Fixed (CI hotfix — transport_bridge.test.ts pre-existing flake)
+
+- **`src/runtime/agent_bridge/transport_bridge.test.ts`** — bump the
+  `emits one event per legacy JSONL row appended` test timeout from the
+  vitest default (5000ms) to `20_000ms`. The test passes in <1s
+  locally + in isolation; it occasionally exceeds 5s in GitHub Actions
+  Node-20 runners under shared-runner contention combined with the
+  chokidar polling backend. Unblocks the LP.5 CI red after `fd1df64`
+  so DOG.1 can ship next. No production behavior change.
+
+---
+
 ## [0.5.243] - 2026-05-30
 
 ### Added (LP.5 — auto-upgrade detection helper + pack-runtime.md docs — CLOSES T-LIVING-PACK)

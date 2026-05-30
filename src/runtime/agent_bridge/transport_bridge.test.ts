@@ -99,7 +99,7 @@ describe('InboxTransportBridge', () => {
     expect(ev.text).toBe('hi');
     expect(ev.projectUuid).toBe(TEST_PROJECT_UUID);
     expect(warnings).toEqual([]);
-  });
+  }, 20_000);
 
   it('emits three events in order for three rows appended in burst', async () => {
     bridge = new InboxTransportBridge({
