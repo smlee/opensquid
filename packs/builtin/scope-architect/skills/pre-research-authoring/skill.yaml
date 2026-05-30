@@ -1,0 +1,77 @@
+# pre-research-authoring — warns when authoring a pre-research doc with
+# insufficient research-tool activity this turn.
+#
+# Per T-DISCIPLINE-PIPELINE-COMPLETION DPC.5 (2026-05-30): closes the gap
+# where the agent writes pre-research files from intuition instead of
+# from actual research. Pre-research is the OUTPUT of doing research —
+# not a planning doc authored from prior beliefs.
+#
+# Trigger: PreToolUse on Write/Edit targeting paths matching
+# docs/research/[^/]*-pre-research-[^/]*\.md$ — the standard
+# pre-research file naming convention enforced by inline-spec-block +
+# scope-decomposer chain handoffs.
+#
+# Check: session_tool_history filtered to [mcp__opensquid__recall, Read,
+# Grep]. Threshold 3 = heuristic for sufficient research (at least one
+# recall + a couple of code reads/greps). Below threshold → warn.
+#
+# Verdict level: warn (soft surface). A legitimate session-2 continuation
+# pre-research can have just 1 recall (resuming prior session's research);
+# warn surfaces but allows write to proceed.
+name: pre-research-authoring
+load: preload
+when_to_load:
+  - tool_match: Write
+  - tool_match: Edit
+triggers:
+  - kind: tool_call
+rules:
+  - id: warn-preresearch-write-without-research
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: text_pattern_match
+        args:
+          text_field: 'targs.file_path'
+          patterns:
+            - 'docs/research/[^/]*-pre-research-[^/]*\.md$'
+        as: is_preresearch
+      - call: session_tool_history
+        if: '(tool == "Write" || tool == "Edit") && len(is_preresearch.matched) > 0'
+        args:
+          scope: current_turn
+          filter_names:
+            - mcp__opensquid__recall
+            - Read
+            - Grep
+        as: research
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && len(is_preresearch.matched) > 0 && research.count < 3'
+        args:
+          level: warn
+          message: >-
+            🦑 PRE-RESEARCH AUTHORING (DPC.5): about to write a pre-research
+            doc with insufficient research-tool activity this turn (recall +
+            Read + Grep combined < 3 calls).
+
+            Pre-research is the OUTPUT of doing the research — not a planning
+            doc you write from intuition. If you haven't done at least:
+            (1) recall on the topic; (2) Read of relevant local files;
+            (3) Grep of the codebase for prior art —
+            you're authoring intuition, not research. The downstream
+            task-spec-author then gets incomplete data → tasks built on
+            drift.
+
+            Required: recall + read + grep FIRST, THEN write the pre-research
+            doc summarizing findings + residual gaps. Warn surfaces but does
+            not block (a session-2 continuation pre-research may legitimately
+            ride on session-1 research; pass through with awareness).
+prose: |
+  Soft gate. Threshold of 3 research-tool calls is heuristic — biases
+  toward "agent did some looking around" without being so strict that
+  legitimate continuation pre-research gets noisily warned. False-
+  positive cost: extra context injection per warn match (acceptable).
+  False-negative cost: insufficient research slips through (no worse
+  than today's baseline).

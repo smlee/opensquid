@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.220] - 2026-05-30
+
+### Added
+
+- **scope-architect/pre-research-authoring skill** (DPC.5) — warns when
+  authoring a pre-research doc (Write/Edit to
+  `docs/research/*-pre-research-*.md`) with fewer than 3 research-tool
+  calls (recall + Read + Grep combined) this turn. Pre-research is the
+  OUTPUT of doing research — not a planning doc authored from intuition.
+  Below threshold = agent is authoring on belief; task-spec-author would
+  then get incomplete data → tasks built on drift. Threshold of 3 is
+  heuristic (allows session-2 continuation pre-research without noise).
+  Verdict level: warn (soft surface).
+
 ## [0.5.219] - 2026-05-30
 
 ### Added
