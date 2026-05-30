@@ -35,6 +35,7 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
+import { matchesDetectedBy, type DetectionContext } from '../runtime/detection.js';
 import type { Pack } from '../runtime/types.js';
 
 import { loadPack } from './loader.js';
@@ -48,8 +49,20 @@ export interface ActiveJson {
  * Scan a scope root for active packs. See module header for the full
  * contract; in short: returns `[]` on the two "scope-absent" branches
  * (`null` arg, ENOENT active.json) and throws on anything malformed.
+ *
+ * IDF.3 — optional `ctx` second arg gates loading on the per-pack
+ * `detected_by[]` rules via IDF.2's pure evaluator. When `ctx` is
+ * `null`/`undefined`, legacy behavior applies (every opted-in pack
+ * loads). When `ctx` is provided, each opted-in pack only loads if its
+ * `detectedBy` matches the staged context (empty `detectedBy[]` always
+ * matches — back-compat). Opt-in invariant preserved end-to-end: a pack
+ * NOT listed in `active.json` is never loaded by this fn, regardless of
+ * what its `detectedBy` would say.
  */
-export async function discoverActivePacks(scopeRoot: string | null): Promise<Pack[]> {
+export async function discoverActivePacks(
+  scopeRoot: string | null,
+  ctx: DetectionContext | null = null,
+): Promise<Pack[]> {
   if (scopeRoot === null) return [];
 
   const activePath = join(scopeRoot, 'active.json');
@@ -88,7 +101,10 @@ export async function discoverActivePacks(scopeRoot: string | null): Promise<Pac
   const dirs = await resolvePacksDir(preferredDir, legacyDir);
   const packs: Pack[] = [];
   for (const name of active.packs) {
-    packs.push(await loadPack(join(dirs, name)));
+    const pack = await loadPack(join(dirs, name));
+    if (ctx === null || matchesDetectedBy(pack.detectedBy ?? [], ctx)) {
+      packs.push(pack);
+    }
   }
   return packs;
 }

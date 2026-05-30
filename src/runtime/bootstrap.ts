@@ -54,6 +54,9 @@
  * Imported by: runtime/hooks/*.ts (per-hook binaries), runtime/index.ts (re-export).
  */
 
+import { promises as fsp } from 'node:fs';
+import { join } from 'node:path';
+
 import { EngineClient } from '../engine/client.js';
 import { registerDestinationCheckFunction } from '../functions/destination_check.js';
 import { registerEventFunctions } from '../functions/event.js';
@@ -77,6 +80,7 @@ import { registerSubagentFunction } from '../functions/subagent.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { discoverActivePacks } from '../packs/discovery.js';
+import { type DetectionContext } from './detection.js';
 import { sortPacksByScope } from '../packs/load_order.js';
 import { loadPack } from '../packs/loader.js';
 import { createBackend } from '../rag/backend_factory.js';
@@ -265,9 +269,15 @@ const diskPacksPromise: Promise<Pack[]> = (async () => {
 // so we pay the disk-read cost once per hook invocation, not once per call.
 const realPacksPromise: Promise<Pack[]> = (async () => {
   try {
-    const user = await discoverActivePacks(resolveUserScopeRoot());
-    const projectRoot = await resolveProjectScopeRoot(process.cwd());
-    const project = await discoverActivePacks(projectRoot);
+    const cwd = process.cwd();
+    // IDF.3 — pre-stage a DetectionContext from cwd so opted-in packs
+    // with `detected_by[]` clauses gate their load on the current
+    // project signals. Opt-in is still required (packs not in
+    // active.json never load); detected_by gates WHEN among opt-in.
+    const ctx = await buildDetectionContext(cwd);
+    const user = await discoverActivePacks(resolveUserScopeRoot(), ctx);
+    const projectRoot = await resolveProjectScopeRoot(cwd);
+    const project = await discoverActivePacks(projectRoot, ctx);
     return sortPacksByScope([...user, ...project]);
   } catch (e) {
     // Surface the path-bearing error to stderr so the user can act on it,
@@ -278,6 +288,51 @@ const realPacksPromise: Promise<Pack[]> = (async () => {
     throw e;
   }
 })();
+
+/**
+ * IDF.3 — pre-stage a `DetectionContext` from the current cwd. Reads
+ * existence flags for well-known files + parses package.json/tsconfig.json/
+ * Cargo.toml contents so `detected_by` `file_match`/`file_exists` clauses
+ * can evaluate without I/O at the dispatch layer.
+ *
+ * Perf budget (per IDF.3 spec risk callout): the real loader runs ONCE
+ * per hook subprocess (module-load `realPacksPromise`), so this fn pays
+ * its disk cost exactly once. No recursive walk in this version — IDF.3
+ * ships the eager well-known-file path; deeper traversal + memory recall
+ * are deferred follow-ups. memoryBodies + recentPrompts + userPinned
+ * stay empty/false — populated by Phase 2/3 work.
+ */
+async function buildDetectionContext(cwd: string): Promise<DetectionContext> {
+  const files: Record<string, boolean> = {};
+  const fileContents: Record<string, string> = {};
+
+  const wellKnown = [
+    'package.json',
+    'tsconfig.json',
+    'Cargo.toml',
+    'pyproject.toml',
+    'go.mod',
+  ] as const;
+  for (const name of wellKnown) {
+    try {
+      const body = await fsp.readFile(join(cwd, name), 'utf8');
+      fileContents[name] = body;
+      files[name] = true;
+    } catch {
+      // missing file — leave maps absent
+    }
+  }
+
+  return {
+    cwd,
+    files,
+    dirs: {},
+    fileContents,
+    memoryBodies: '',
+    recentPrompts: '',
+    userPinned: false,
+  };
+}
 
 let activePacks: Pack[] = envPacks;
 

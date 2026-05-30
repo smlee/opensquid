@@ -23,6 +23,8 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { DetectionContext } from '../runtime/detection.js';
+
 import { discoverActivePacks } from './discovery.js';
 
 let scopeRoot: string;
@@ -187,5 +189,178 @@ describe('discoverActivePacks — VOCAB.1 backward-compat', () => {
     expect(packs).toHaveLength(1);
     expect(packs[0]?.scope).toBe('workflow'); // from packs/ dir, not legacy
     expect(stderrCapture.join('')).not.toContain('deprecated');
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * IDF.3 — auto-activation pipeline: detected_by × active.json matrix.
+ *
+ * Validates the per-pack detected_by gate composes correctly with the
+ * existing opt-in contract:
+ *
+ *   - opt-in: pack must be in active.json to be considered at all
+ *   - detection: opted-in pack only loads if matchesDetectedBy(...) true
+ *   - back-compat: ctx === null OR pack.detectedBy === [] → always loads
+ *   - null ctx is the legacy behavior (existing tests above use this)
+ *
+ * Uses the IDF.2 DetectionContext shape; the per-pack detected_by
+ * arrives via the pack's manifest.yaml (IDF.1 schema).
+ * ──────────────────────────────────────────────────────────────────── */
+describe('IDF.3: detected_by × active.json interaction', () => {
+  /**
+   * Write a manifest.yaml with an explicit `detected_by:` block.
+   * Each clause is rendered as a YAML mapping where every field (after
+   * `kind`) is JSON-encoded inline — JSON is a valid YAML 1.2 subset, so
+   * nested `matches: {...}` round-trips through the parser unchanged.
+   */
+  async function writePackWithDetection(
+    name: string,
+    detectedBy: readonly Record<string, unknown>[],
+  ): Promise<void> {
+    const packDir = join(scopeRoot, 'packs', name);
+    await mkdir(packDir, { recursive: true });
+    const lines: string[] = [
+      `name: ${name}`,
+      'version: 0.1.0',
+      'scope: workflow',
+      'goal: idf3 fixture',
+      'detected_by:',
+    ];
+    for (const clause of detectedBy) {
+      lines.push(`  - kind: ${clause.kind as string}`);
+      for (const [k, v] of Object.entries(clause)) {
+        if (k === 'kind') continue;
+        lines.push(`    ${k}: ${JSON.stringify(v)}`);
+      }
+    }
+    await writeFile(join(packDir, 'manifest.yaml'), lines.join('\n') + '\n', 'utf8');
+  }
+
+  function ctxWith(overrides: Partial<DetectionContext> = {}): DetectionContext {
+    return {
+      cwd: '/tmp/proj',
+      files: {},
+      dirs: {},
+      fileContents: {},
+      memoryBodies: '',
+      recentPrompts: '',
+      userPinned: false,
+      ...overrides,
+    };
+  }
+
+  it('back-compat: ctx === null → all opted-in packs load regardless of detected_by', async () => {
+    await writePackWithDetection('p-need-react', [
+      { kind: 'file_exists', path: 'react.config.js' },
+    ]);
+    await writeActive({ packs: ['p-need-react'] });
+
+    const packs = await discoverActivePacks(scopeRoot, null);
+    expect(packs).toHaveLength(1);
+    expect(packs[0]?.name).toBe('p-need-react');
+  });
+
+  it('back-compat: pack with empty detected_by[] (default) loads when ctx provided', async () => {
+    await writeValidPack('p-no-detection');
+    await writeActive({ packs: ['p-no-detection'] });
+
+    const packs = await discoverActivePacks(scopeRoot, ctxWith());
+    expect(packs).toHaveLength(1);
+  });
+
+  it('gate fires: opted-in pack with detected_by file_exists MATCHES ctx → loads', async () => {
+    await writePackWithDetection('p-react-app', [{ kind: 'file_exists', path: 'package.json' }]);
+    await writeActive({ packs: ['p-react-app'] });
+
+    const packs = await discoverActivePacks(
+      scopeRoot,
+      ctxWith({ files: { 'package.json': true } }),
+    );
+    expect(packs).toHaveLength(1);
+    expect(packs[0]?.name).toBe('p-react-app');
+  });
+
+  it('gate fires: opted-in pack with detected_by does NOT match ctx → SKIPPED (dormant)', async () => {
+    await writePackWithDetection('p-rust-app', [{ kind: 'file_exists', path: 'Cargo.toml' }]);
+    await writeActive({ packs: ['p-rust-app'] });
+
+    const packs = await discoverActivePacks(scopeRoot, ctxWith()); // no Cargo.toml in files
+    expect(packs).toHaveLength(0);
+  });
+
+  it('opt-in invariant: pack NOT in active.json never loads even when detected_by would match', async () => {
+    await writePackWithDetection('p-not-opted-in', [{ kind: 'file_exists', path: 'package.json' }]);
+    await writeActive({ packs: [] });
+
+    const packs = await discoverActivePacks(
+      scopeRoot,
+      ctxWith({ files: { 'package.json': true } }),
+    );
+    expect(packs).toHaveLength(0);
+  });
+
+  it('mixed: 3 opted-in packs — 1 matches, 1 no-detection (always-on), 1 dormant', async () => {
+    await writePackWithDetection('p-react', [{ kind: 'file_exists', path: 'package.json' }]);
+    await writeValidPack('p-always');
+    await writePackWithDetection('p-rust', [{ kind: 'file_exists', path: 'Cargo.toml' }]);
+    await writeActive({ packs: ['p-react', 'p-always', 'p-rust'] });
+
+    const packs = await discoverActivePacks(
+      scopeRoot,
+      ctxWith({ files: { 'package.json': true } }),
+    );
+    const names = packs.map((p) => p.name).sort();
+    expect(names).toEqual(['p-always', 'p-react']);
+  });
+
+  it('file_match detection: package.json deps gate the pack', async () => {
+    await writePackWithDetection('p-react-19', [
+      { kind: 'file_match', path: 'package.json', matches: { 'dependencies.react': '\\^19' } },
+    ]);
+    await writeActive({ packs: ['p-react-19'] });
+
+    const pkgJson = JSON.stringify({ dependencies: { react: '^19.0.0' } });
+    const matchingCtx = ctxWith({
+      files: { 'package.json': true },
+      fileContents: { 'package.json': pkgJson },
+    });
+    const packs = await discoverActivePacks(scopeRoot, matchingCtx);
+    expect(packs).toHaveLength(1);
+
+    const wrongVersion = JSON.stringify({ dependencies: { react: '^17.0.0' } });
+    const dormantCtx = ctxWith({
+      files: { 'package.json': true },
+      fileContents: { 'package.json': wrongVersion },
+    });
+    const packs2 = await discoverActivePacks(scopeRoot, dormantCtx);
+    expect(packs2).toHaveLength(0);
+  });
+
+  it('dir_exists detection: src/components/atoms presence gates the pack', async () => {
+    await writePackWithDetection('p-atomic-ui', [
+      { kind: 'dir_exists', path: 'src/components/atoms' },
+    ]);
+    await writeActive({ packs: ['p-atomic-ui'] });
+
+    const matchingCtx = ctxWith({ dirs: { 'src/components/atoms': true } });
+    const packs = await discoverActivePacks(scopeRoot, matchingCtx);
+    expect(packs).toHaveLength(1);
+
+    const dormantCtx = ctxWith();
+    const packs2 = await discoverActivePacks(scopeRoot, dormantCtx);
+    expect(packs2).toHaveLength(0);
+  });
+
+  it('user_pinned detection: ctx.userPinned gates the pack regardless of other context', async () => {
+    await writePackWithDetection('p-pinned', [{ kind: 'user_pinned' }]);
+    await writeActive({ packs: ['p-pinned'] });
+
+    const pinnedCtx = ctxWith({ userPinned: true });
+    const packs = await discoverActivePacks(scopeRoot, pinnedCtx);
+    expect(packs).toHaveLength(1);
+
+    const unpinnedCtx = ctxWith({ userPinned: false });
+    const packs2 = await discoverActivePacks(scopeRoot, unpinnedCtx);
+    expect(packs2).toHaveLength(0);
   });
 });

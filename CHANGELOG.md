@@ -7,6 +7,54 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.224] - 2026-05-30
+
+### Added (IDF.3 — auto-activation pipeline consumes IDF.1 schema + IDF.2 evaluator)
+
+- **`discoverActivePacks(scopeRoot, ctx?)`** (`src/packs/discovery.ts`) —
+  optional second argument `DetectionContext`. When provided, each
+  opted-in pack is gated on `matchesDetectedBy(pack.detectedBy ?? [],
+ctx)`; non-matching packs are skipped from results. When `ctx` is
+  `null`/`undefined`, legacy behavior applies (all opted-in packs
+  load — existing tests pass unchanged).
+- **Opt-in invariant preserved end-to-end**: a pack NOT listed in
+  `active.json` is NEVER loaded by `discoverActivePacks` regardless of
+  what its `detected_by` would match. Explicit test covers this branch.
+- **`buildDetectionContext(cwd)`** (`src/runtime/bootstrap.ts`) —
+  pre-stages a `DetectionContext` from the current cwd. Reads existence
+  flags + contents for well-known files (`package.json`, `tsconfig.json`,
+  `Cargo.toml`, `pyproject.toml`, `go.mod`) so `file_exists` /
+  `file_match` clauses evaluate without any I/O at the dispatch layer.
+- **Module-load one-shot**: `buildDetectionContext` runs inside the
+  existing `realPacksPromise` IIFE — disk cost amortized exactly once
+  per hook subprocess (matches prior `realPacksPromise` resolution
+  pattern). Recursive cwd walk + memory recall integration deferred to
+  follow-up tasks per spec L8.
+
+### Tests
+
+- `src/packs/discovery.test.ts` — 8 new IDF.3 tests on the
+  `detected_by × active.json` interaction matrix:
+  - back-compat: `ctx === null` → all opted-in packs load
+  - back-compat: empty `detected_by[]` (default) loads when ctx provided
+  - gate fires: opted-in pack with matching `file_exists` clause loads
+  - gate fires: opted-in pack with non-matching clause is SKIPPED (dormant)
+  - opt-in invariant: pack absent from active.json never loads even if
+    `detected_by` would match
+  - mixed: 3-pack matrix (matching / always-on / dormant)
+  - `file_match` with `package.json` `dependencies.react` semver gate
+  - `dir_exists` with `src/components/atoms` gate
+  - `user_pinned` ctx bit gates the pack
+
+### Notes
+
+- `DetectionContext` fields `memoryBodies` (engine recall), `recentPrompts`
+  (session ledger), and `userPinned` (active.json `pin: true`) ship as
+  empty/false at IDF.3. Future enhancements populate via the
+  engine-recall + chat-history integrations tracked in Phase 2.
+
+---
+
 ## [0.5.223] - 2026-05-30
 
 ### Added (IDF.2 — keystone for IDF.3 auto-activation)
