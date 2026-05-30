@@ -1,0 +1,38 @@
+# focused-atomic-design — Atomic Design methodology.
+#
+# Focused pack — methodology-driven (no specific tool requirement; works with
+# any component library that follows the atoms/molecules/organisms taxonomy).
+# Aggregated into frontend-react-19-atomic (DOG.2).
+name: focused-atomic-design
+version: 0.1.0
+scope: domain
+goal: Encode Atomic Design idioms (atoms → molecules → organisms → templates → pages; token-driven theming; one-component-per-file) as opt-in discipline + recall surface.
+description: |
+  Focused pack — activates when filesystem layout shows atoms/molecules
+  directories. Methodology pack — no tool requirement. Aggregated into
+  frontend-react-19-atomic composite for the v1 dogfood demo. Skills land
+  in DOG.4.
+
+activation_scope: project
+
+foundation:
+  tools: [] # methodology pack — no specific tool requirement
+  domains:
+    - frontend
+    - design-systems
+  methodologies:
+    - atomic-design
+    - token-driven
+    - one-component-per-file
+
+detected_by:
+  # OR semantics — any of the canonical atomic-design layouts activates.
+  - kind: dir_exists
+    path: src/components/atoms
+  - kind: dir_exists
+    path: src/components/molecules
+  - kind: dir_exists
+    path: components/atoms
+  - kind: file_glob
+    pattern: 'src/components/atoms/**/*.tsx'
+    min_count: 1

@@ -7,6 +7,61 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.245] - 2026-05-30
+
+### Added (DOG.1 — three focused built-in packs ship; first slice of T-DOGFOOD)
+
+Three opt-in focused packs land as `packs/builtin/` directories:
+
+- **`focused-react-19`** — encodes React 19+ idioms (Server Components,
+  Actions, useOptimistic, hooks-of-hooks discipline). Activates when
+  `package.json` declares `react ^19` in `dependencies` OR
+  `devDependencies` via two `file_match` detected_by rules (IDF.2 regex
+  evaluator).
+- **`focused-typescript-strict`** — encodes TS 5 strict-mode idioms
+  (exhaustiveness via `never`, discriminated unions, `as const`
+  narrowing, no-fail-open at switches). Activates when `tsconfig.json`
+  exists OR has `compilerOptions.strict: true`.
+- **`focused-atomic-design`** — encodes Atomic Design idioms (atoms →
+  molecules → organisms → templates → pages; token-driven theming;
+  one-component-per-file). Methodology pack — `foundation.tools: []`
+  (no specific library requirement). Activates when
+  `src/components/atoms/` or sibling directory exists.
+
+Each pack ships at this slice:
+
+- `manifest.yaml` with `name`/`version`/`scope: domain`/`goal`/
+  `description`/`activation_scope: project`/`foundation`/`detected_by`.
+- `README.md` documenting activation + roadmap pointer to DOG.2
+  (composite aggregation) + DOG.4 (seed_lessons + verify_gates).
+- `skills/` deliberately empty — populated in DOG.4 after DOG.3 lands
+  the `seed_lessons` + `verify_gates` schema sugar.
+
+### Tests
+
+- **`test/builtin/focused-packs.test.ts`** — 11 cases:
+  - 3 × loadPack() round-trip per pack (name + scope + activation_scope
+    - detectedBy + foundation present).
+  - foundation-shape assertions per pack (react@>=19 tools entry +
+    methodologies; typescript@>=5 + strict-mode; atomic-design with
+    empty `tools` + methodologies).
+  - 4 × `matchesDetectedBy` evaluator integration with synthetic
+    `DetectionContext` fixtures: react ^19 activates / react ^17 does
+    NOT activate / atomic-design activates on dir / typescript activates
+    on tsconfig.json presence.
+  - 1 × `matchesDetectedBy` returns false on empty context (all 3
+    packs).
+
+### Why this matters
+
+DOG.1 is the first slice of T-DOGFOOD — the v1 release showcase. It
+proves the IDF.1–5 schema + IDF.2 evaluator + LP.1 pack loader operate
+end-to-end against a real opt-in domain pack composition target before
+DOG.2 wires up the composite. No production behavior change for users
+who don't opt in — pure additive built-in surface.
+
+---
+
 ## [0.5.244] - 2026-05-30
 
 ### Fixed (CI hotfix — transport_bridge.test.ts pre-existing flake)

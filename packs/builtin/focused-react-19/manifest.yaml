@@ -1,0 +1,52 @@
+# focused-react-19 — React 19+ idioms as opt-in discipline + recall surface.
+#
+# Focused pack (kind: focused per MM.1 default) — narrow domain (React 19
+# specifically; intentionally excludes React 18 and earlier idioms which
+# often conflict with Server Components + Actions). Aggregated into the
+# `frontend-react-19-atomic` composite alongside `focused-typescript-strict`
+# and `focused-atomic-design` (DOG.2).
+#
+# Per pack-runtime.md §1.5 — focused packs are reusable units; composites are
+# the user-facing assemblies. DOG.1 ships the manifest + foundation +
+# detected_by; skills land in DOG.4 (after DOG.3 ships the seed_lessons +
+# verify_gates schema sugar).
+name: focused-react-19
+version: 0.1.0
+scope: domain
+goal: Encode React 19+ idioms (Server Components, Actions, useOptimistic, hooks-of-hooks) as opt-in discipline + recall surface for a React 19 codebase.
+description: |
+  Focused pack — narrow domain. Activates when a project's package.json
+  declares react ^19 in dependencies OR devDependencies. Aggregated into
+  the frontend-react-19-atomic composite for the v1 dogfood demo.
+
+  When react 20 ships, fork as focused-react-20 (preserves activation
+  history) rather than mutating this pack.
+
+activation_scope: project
+
+foundation:
+  tools:
+    - name: react
+      semver: '>=19'
+  domains:
+    - frontend
+    - react
+  methodologies:
+    - server-components
+    - hooks
+    - actions
+    - useOptimistic
+
+detected_by:
+  # OR semantics — react in either dependencies or devDependencies triggers.
+  # Regex matches `^19.x.x` / `~19.x.x` / `>=19` / `19.x.x` variants.
+  - kind: file_match
+    path: package.json
+    matches:
+      'dependencies.react': '^(\^|~|>=|=)?\s*19'
+  - kind: file_match
+    path: package.json
+    matches:
+      'devDependencies.react': '^(\^|~|>=|=)?\s*19'
+# seed_lessons + verify_gates added in DOG.4 (schema sugar lands in DOG.3)
+# skills/ directory empty at DOG.1 — added in DOG.4

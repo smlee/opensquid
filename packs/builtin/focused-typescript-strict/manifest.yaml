@@ -1,0 +1,37 @@
+# focused-typescript-strict — TypeScript 5 strict-mode idioms.
+#
+# Focused pack — TypeScript with `strict: true` only (intentionally excludes
+# loose-typed JS or non-strict TS). Aggregated into frontend-react-19-atomic
+# (DOG.2).
+name: focused-typescript-strict
+version: 0.1.0
+scope: domain
+goal: Encode TypeScript 5 strict-mode idioms (exhaustiveness via `never`, discriminated unions, `as const` narrowing, no-fail-open at switches) as opt-in discipline + recall surface.
+description: |
+  Focused pack — activates when tsconfig.json has compilerOptions.strict: true.
+  Aggregated into frontend-react-19-atomic composite for the v1 dogfood demo.
+  Skills land in DOG.4.
+
+activation_scope: project
+
+foundation:
+  tools:
+    - name: typescript
+      semver: '>=5'
+  domains:
+    - typed-frontend
+    - typed-backend
+  methodologies:
+    - strict-mode
+    - exhaustiveness
+    - discriminated-unions
+    - no-fail-open
+
+detected_by:
+  # OR semantics — either signal activates the pack.
+  - kind: file_exists
+    path: tsconfig.json
+  - kind: file_match
+    path: tsconfig.json
+    matches:
+      'compilerOptions.strict': '^true$'
