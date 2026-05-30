@@ -35,3 +35,129 @@ detected_by:
     path: tsconfig.json
     matches:
       'compilerOptions.strict': '^true$'
+
+# DOG.4 — seed_lessons + verify_gates populated. Lessons cover the
+# strict-mode features most often misused; gates catch the patterns that
+# silently fail-open at runtime.
+seed_lessons:
+  - title: 'Exhaustiveness via assertNever — switch on a discriminated union ends in never'
+    body: |
+      Pattern: union with discriminator `type: 'a' | 'b'` switched in a
+      function. After the cases, assign the variable to a parameter
+      typed `never` and throw — adding a new variant becomes a
+      compile error. Without this, an added variant silently falls
+      through and the function returns undefined.
+
+        type T = {type: 'a'} | {type: 'b'}
+        function f(t: T) {
+          switch (t.type) {
+            case 'a': return 1
+            case 'b': return 2
+            default: const _: never = t; throw new Error(`unhandled: ${t}`)
+          }
+        }
+    scope: user
+    tags: [typescript, exhaustiveness, never]
+    source: 'https://www.typescriptlang.org/docs/handbook/2/narrowing.html#exhaustiveness-checking'
+  - title: 'as const for narrowing array + tuple literals'
+    body: |
+      `[1, 2, 3] as const` becomes `readonly [1, 2, 3]` instead of
+      `number[]`. Critical for routing tables / enum-like arrays where
+      you want each entry's literal type preserved + `typeof arr[number]`
+      to yield the union. Without `as const` you get widened `string[]`
+      and lose the union.
+    scope: user
+    tags: [typescript, as-const, narrowing]
+    source: 'https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-4.html#const-assertions'
+  - title: 'Discriminated unions over option-bag interfaces'
+    body: |
+      Don't model "either this OR that" as a single interface with
+      half-optional fields — every consumer has to defensively check
+      `if (x.a !== undefined)` and the compiler can't help. Use a
+      `kind` discriminator: `{kind: 'a', a: string} | {kind: 'b', b:
+      number}`. The compiler narrows after one `if (x.kind === 'a')`.
+    scope: user
+    tags: [typescript, discriminated-unions, modeling]
+    source: 'https://www.typescriptlang.org/docs/handbook/2/narrowing.html#discriminated-unions'
+  - title: 'noUncheckedIndexedAccess — array[i] is T | undefined'
+    body: |
+      With `noUncheckedIndexedAccess: true`, `arr[5]` yields `T |
+      undefined` even when the array is typed `T[]`. Forces explicit
+      narrowing or `??` default. Pairs with strict-mode to eliminate
+      a major source of silent runtime undefined errors. Enable in
+      every new project; gradually adopt in older ones via narrow
+      const-array patterns.
+    scope: user
+    tags: [typescript, strict-mode, tsconfig]
+    source: 'https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-1.html#noUncheckedIndexedAccess'
+  - title: 'satisfies T preserves the inferred narrow type while validating shape'
+    body: |
+      `const config = {...} satisfies AppConfig` validates `config`
+      against `AppConfig` BUT keeps the inferred literal types so
+      downstream `typeof config.handlers.x` stays the narrow shape.
+      Compare with `const config: AppConfig = {...}` which WIDENS to
+      AppConfig and loses literal narrowing.
+    scope: user
+    tags: [typescript, satisfies, inference]
+    source: 'https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-9.html#the-satisfies-operator'
+  - title: 'No `as` casts to silence the compiler — prefer type guards'
+    body: |
+      `x as Foo` tells the compiler "trust me" with zero runtime check —
+      a silent fail-open. When you genuinely know more than the
+      compiler, write a type guard: `function isFoo(x: unknown): x is
+      Foo { return ... }`. Casts are a last resort for boundaries
+      (JSON.parse, etc.); never in normal control flow.
+    scope: user
+    tags: [typescript, type-safety, anti-pattern]
+    source: 'https://www.typescriptlang.org/docs/handbook/2/narrowing.html#using-type-predicates'
+  - title: 'unknown over any at boundaries (JSON.parse, fetch, env)'
+    body: |
+      `JSON.parse(x)` returns `any` — the compiler stops checking
+      anything you do with the result. Re-type the call site as
+      `unknown` (`const data = JSON.parse(x) as unknown`) and validate
+      the shape (Zod, valibot, manual type guard). `unknown` forces
+      validation; `any` is a hole in the type system.
+    scope: user
+    tags: [typescript, type-safety, boundaries]
+    source: 'https://www.typescriptlang.org/docs/handbook/2/narrowing.html#the-unknown-type'
+
+verify_gates:
+  - name: no-any-annotation
+    when:
+      event_kind: tool_call
+    # `: any` is the strict-mode escape hatch the discipline forbids.
+    # tool_args.content is the typical Edit/Write content surface.
+    check: 'contains(tool_args.content, ": any")'
+    on_fail:
+      level: warn
+      message: |
+        focused-typescript-strict: `: any` annotation detected.
+        strict-mode discipline forbids `any` — use `unknown` at
+        boundaries + a type guard, or model the actual type.
+  - name: no-ts-ignore
+    when:
+      event_kind: tool_call
+    # @ts-ignore silently bypasses the compiler — the strict-mode
+    # discipline replaces with @ts-expect-error which fires when the
+    # underlying error is gone (forces cleanup).
+    check: contains(tool_args.content, "@ts-ignore")
+    on_fail:
+      level: warn
+      message: |
+        focused-typescript-strict: `@ts-ignore` detected — prefer
+        `@ts-expect-error` so the suppression FAILS when the
+        underlying type error is gone (forces cleanup).
+  - name: no-bang-non-null-on-array-index
+    when:
+      event_kind: tool_call
+    # arr[i]! claims "definitely not undefined" — silently fail-opens
+    # when noUncheckedIndexedAccess is on. The discipline expects ?? or
+    # explicit narrowing.
+    check: match(tool_args.content, "\\[[0-9]+\\]!")
+    on_fail:
+      level: warn
+      message: |
+        focused-typescript-strict: `arr[N]!` non-null-asserts the
+        index access. Under `noUncheckedIndexedAccess` this loses the
+        runtime-undefined check the type system was providing. Use
+        `?? <default>` or an explicit narrow.

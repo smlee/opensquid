@@ -55,3 +55,70 @@ includes:
 # No `skills/` directory — composites carry no own skills; children
 # contribute their own skills which flatten into the runtime registry
 # via composite_resolver expansion.
+
+# DOG.4 — composite-level cross-domain seed_lessons. Composites CAN
+# declare seed_lessons even though they cannot declare foundation —
+# the seeds aggregate the three domains into rules that need ALL three
+# at once (React 19 + TS strict + Atomic Design).
+seed_lessons:
+  - title: 'Atomic React 19 atom: strict-typed props, ref-as-prop, no client state'
+    body: |
+      A React 19 atom in an atomic-design system: typed prop interface
+      (no `any`), accepts `ref` as a normal prop (no forwardRef in new
+      code), renders pure JSX (no `useState`, no client APIs at this
+      level). Pattern:
+
+        type ButtonProps = {
+          ref?: Ref<HTMLButtonElement>
+          variant: 'primary' | 'ghost'
+          children: ReactNode
+        }
+        export function Button({ref, variant, children}: ButtonProps) {
+          return <button ref={ref} className={...}>{children}</button>
+        }
+
+      Discriminated `variant` union narrows downstream consumers.
+    scope: user
+    tags: [composite, react-19, typescript, atomic-design]
+    source: 'https://react.dev/blog/2024/12/05/react-19#ref-as-a-prop'
+  - title: 'Server Components + token-driven theming: theme tokens are server-rendered too'
+    body: |
+      Token CSS variables (`var(--color-primary)`) render correctly in
+      Server Components because they live in the static stylesheet,
+      not the client bundle. No "use client" needed to switch themes
+      via CSS-only mechanisms. Reserve "use client" for components
+      that read the theme value via JS (rare; usually a code smell —
+      can the styling do it instead?).
+    scope: user
+    tags: [composite, react-19, atomic-design, tokens]
+  - title: 'Page-level Server Action with strict-typed FormData parsing'
+    body: |
+      Pages (the data-binding level in atomic design) own Server
+      Actions. Strict-mode TS forces FormData unwrapping through a
+      validator (Zod/valibot) before consumption:
+
+        export async function createPost(formData: FormData) {
+          'use server'
+          const parsed = postSchema.safeParse({
+            title: formData.get('title'),
+            body: formData.get('body'),
+          })
+          if (!parsed.success) return {error: parsed.error.flatten()}
+          // parsed.data is now strict-typed
+        }
+
+      Combines the React 19 Server Action surface + TS exhaustiveness
+      + atomic-design page-level data-binding boundary.
+    scope: user
+    tags: [composite, server-actions, validation, page-level]
+    source: 'https://react.dev/reference/rsc/use-server'
+  - title: 'Storybook stories for atoms cite the design-token + TS-strict guarantees'
+    body: |
+      An atom's Storybook story should demonstrate (a) variant
+      coverage (every discriminated `variant` value renders), (b)
+      token theming (light/dark/brand variants via CSS-var swap), (c)
+      no runtime errors with `noUncheckedIndexedAccess` strict-mode
+      enabled. The composite recipe makes this routine because all
+      three packs are loaded together.
+    scope: user
+    tags: [composite, storybook, design-system, testing]

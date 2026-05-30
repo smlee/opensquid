@@ -48,5 +48,124 @@ detected_by:
     path: package.json
     matches:
       'devDependencies.react': '^(\^|~|>=|=)?\s*19'
-# seed_lessons + verify_gates added in DOG.4 (schema sugar lands in DOG.3)
-# skills/ directory empty at DOG.1 — added in DOG.4
+# DOG.4 — seed_lessons + verify_gates populated. Each lesson cites a
+# concrete React 19 source so the engine's recall surface returns
+# grounded knowledge, not opinion. Verify gates flag the two most
+# common React-19 footguns we expect to see in real code.
+seed_lessons:
+  - title: 'Server Components by default; "use client" only at the leaf'
+    body: |
+      In React 19, every component defaults to server-render. Add
+      "use client" at the leaf where interactivity is genuinely required
+      (event handlers, useState, useEffect, browser APIs). Cascading
+      "use client" from the layout level forces the whole subtree into
+      the client bundle and defeats the SC win — both bundle size AND
+      data-fetching latency regress.
+    scope: user
+    tags: [react-19, server-components, performance]
+    source: 'https://react.dev/reference/rsc/server-components'
+  - title: 'Use Actions for form mutations, useFormStatus for pending UI'
+    body: |
+      `<form action={serverAction}>` is the React 19 idiom for
+      mutations. `useFormStatus()` returns `{pending, data, method,
+      action}` for any descendant — no prop drilling. Optimistic UI
+      pairs with useOptimistic(state, reducer) for instant feedback
+      while the server-action resolves.
+    scope: user
+    tags: [react-19, actions, forms]
+    source: 'https://react.dev/reference/react-dom/components/form'
+  - title: 'useOptimistic for instant feedback during pending mutations'
+    body: |
+      `const [optimistic, addOptimistic] = useOptimistic(state, reducer)`
+      lets you render a temporary state that reverts automatically if
+      the awaiting action rejects. Pair with a Server Action invoked
+      from a form's `action={...}`; React reconciles when the action
+      resolves. Don't reach for useState + manual rollback — the hook
+      handles the rollback.
+    scope: user
+    tags: [react-19, hooks, optimistic-ui]
+    source: 'https://react.dev/reference/react/useOptimistic'
+  - title: 'use(promise) unwraps a promise inside a Server Component'
+    body: |
+      The `use(promise)` hook in React 19 unwraps a Promise inline
+      during render. Inside an `async` Server Component you can `await`
+      directly; inside a Client Component you reach for `use(promise)`
+      so Suspense streams the result. Don't pass an inline
+      `new Promise(...)` — pass a cached promise instance so re-renders
+      don't kick off new fetches.
+    scope: user
+    tags: [react-19, hooks, suspense]
+    source: 'https://react.dev/reference/react/use'
+  - title: 'Hooks at top-level only — never inside loops, conditions, or nested fns'
+    body: |
+      React's Rules of Hooks still apply in React 19: hooks must run
+      at the top level of a function component or another hook, in the
+      same order on every render. Putting useState inside an `if` or a
+      callback breaks React's index-based hook state — silent state
+      corruption that surfaces as "stale state" bugs.
+    scope: user
+    tags: [react-19, hooks, rules-of-hooks]
+    source: 'https://react.dev/reference/rules/rules-of-hooks'
+  - title: 'Server Actions need "use server" — file-level OR function-level'
+    body: |
+      A Server Action is any function with `"use server"` at the top of
+      its source file (every export becomes a Server Action) OR with
+      `"use server"` as the first line INSIDE the function body
+      (function-level opt-in). Don't mix — a file-level "use server"
+      with one local helper that ALSO has "use server" inside is
+      redundant and confuses some bundlers.
+    scope: user
+    tags: [react-19, server-actions, conventions]
+    source: 'https://react.dev/reference/rsc/use-server'
+  - title: 'forwardRef is gone — refs are a normal prop in React 19'
+    body: |
+      React 19 lets you pass `ref` as a regular prop on function
+      components. `forwardRef` still works for back-compat but new
+      components should accept `function MyButton({ref, ...props})`
+      directly. Type the prop as `Ref<HTMLButtonElement>` (or
+      whatever element). One fewer wrapper layer + cleaner devtools.
+    scope: user
+    tags: [react-19, refs, api-changes]
+    source: 'https://react.dev/blog/2024/12/05/react-19'
+
+verify_gates:
+  - name: no-react-18-imports
+    when:
+      event_kind: tool_call
+    # Catch attempts to install/use react-18-only APIs alongside React 19.
+    # React 19 callers that grep for the `react-dom/server` legacy entry
+    # are usually about to ship a Suspense-incompatible SSR path.
+    check: contains(tool_args.command, "react-dom/server")
+    on_fail:
+      level: warn
+      message: |
+        focused-react-19: `react-dom/server` is the legacy SSR entry —
+        React 19 server-rendering goes through `react-dom/server.edge`
+        or the framework's renderer (Next, Remix, etc.). Verify this
+        isn't a stale import path.
+  - name: no-class-component-creation
+    when:
+      event_kind: tool_call
+    # React 19 hooks + Server Components leave class components without a
+    # use case for new code (legacy code can stay). Flag `extends Component`.
+    check: contains(tool_args.content, "extends Component")
+    on_fail:
+      level: warn
+      message: |
+        focused-react-19: Writing a NEW `class extends Component`?
+        React 19 hooks + Server Components handle every case classes
+        do, with simpler state management. Use a function component
+        unless porting legacy code one-to-one.
+  - name: no-default-export-of-server-action
+    when:
+      event_kind: tool_call
+    # A default-exported "use server" function loses its stable name for
+    # the action-id derivation that Next/Remix bundlers use.
+    check: contains(tool_args.content, "export default async function")
+    on_fail:
+      level: warn
+      message: |
+        focused-react-19: Server Actions should be NAMED exports — the
+        action-id derivation in Next/Remix uses the export name to
+        produce stable client→server identifiers. Default-exported
+        async functions cause action-id churn across builds.

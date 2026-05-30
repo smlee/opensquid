@@ -36,3 +36,116 @@ detected_by:
   - kind: file_glob
     pattern: 'src/components/atoms/**/*.tsx'
     min_count: 1
+
+# DOG.4 — seed_lessons + verify_gates populated. Atomic Design idioms
+# encode the 5-level taxonomy + the rules that keep components
+# composable as the system grows.
+seed_lessons:
+  - title: 'Atoms are the smallest UI primitives; no app-specific logic'
+    body: |
+      An atom (Button, Input, Label, Icon) is the smallest functional
+      unit — props go in, JSX comes out. NEVER reach for app state,
+      router, or data fetching from an atom. Reuse across products
+      depends on atoms being "pure UI" — break that and the design
+      system fractures.
+    scope: user
+    tags: [atomic-design, atoms, design-system]
+    source: 'https://atomicdesign.bradfrost.com/chapter-2/#atoms'
+  - title: 'Molecules combine 2-5 atoms; one responsibility (form-field, search-box)'
+    body: |
+      A molecule (FormField = Label + Input + ErrorText, SearchBox =
+      Input + Button) groups atoms around ONE responsibility. If you
+      can name the responsibility in one phrase, it's a molecule. If
+      you need "and" / "or" you've drifted into organism territory —
+      split it.
+    scope: user
+    tags: [atomic-design, molecules, decomposition]
+    source: 'https://atomicdesign.bradfrost.com/chapter-2/#molecules'
+  - title: 'Organisms own composition; can hold ephemeral state but NOT app state'
+    body: |
+      An organism (Header, ProductCard, CommentThread) composes
+      molecules + atoms into a section of UI. May own ephemeral state
+      (open/closed, hovered) but NEVER global app state, routing, or
+      data fetching — that belongs to templates/pages. Otherwise you
+      can't preview the organism in Storybook without a mock for the
+      whole app.
+    scope: user
+    tags: [atomic-design, organisms, state-discipline]
+    source: 'https://atomicdesign.bradfrost.com/chapter-2/#organisms'
+  - title: 'Templates are layout-only; pages bind real data'
+    body: |
+      A template is an organism arrangement with NO real data — just
+      structure (e.g. HomeTemplate = Header + Hero + FeaturedGrid +
+      Footer). A page hydrates that template with real data + bindings
+      (HomePage = HomeTemplate({hero: latestPost, featured:
+      topProducts})). One template, many pages.
+    scope: user
+    tags: [atomic-design, templates, pages]
+    source: 'https://atomicdesign.bradfrost.com/chapter-2/#templates'
+  - title: 'One component per file; filename matches component name'
+    body: |
+      `Button.tsx` exports ONE Button. `Button/index.tsx` plus
+      `Button/Button.styles.ts` is acceptable but the index re-exports
+      ONE component. Co-locating multiple components in one file makes
+      barrel-imports messy and breaks tree-shaking for unused
+      sub-exports.
+    scope: user
+    tags: [atomic-design, file-layout, conventions]
+    source: 'https://atomicdesign.bradfrost.com/chapter-3/'
+  - title: 'Token-driven theming: no hex codes in component files'
+    body: |
+      Components reference design tokens (`var(--color-primary)`,
+      `theme.spacing.sm`) — never raw hex codes or px values inline.
+      Tokens centralize theming + dark/light mode + brand variants.
+      A grep for `#[0-9a-f]{6}` in component files should return
+      nothing.
+    scope: user
+    tags: [atomic-design, tokens, theming]
+    source: 'https://atomicdesign.bradfrost.com/chapter-2/#subatomic'
+  - title: 'Storybook the atom + molecule levels; integration-test the page level'
+    body: |
+      Atoms + molecules go in Storybook (visual + interaction tests).
+      Organisms + templates may go too. Pages get integration tests
+      (data binding, routing, real API). Mismatch causes pain:
+      page-level Storybook stories drift; atom-level integration
+      tests retest the design system.
+    scope: user
+    tags: [atomic-design, testing, storybook]
+    source: 'https://storybook.js.org/docs/get-started/why-storybook'
+
+verify_gates:
+  - name: no-hex-color-in-component-file
+    when:
+      event_kind: tool_call
+    # Component files should reference design tokens, not raw hex.
+    check: match(tool_args.content, "#[0-9a-fA-F]{6}\\b")
+    on_fail:
+      level: warn
+      message: |
+        focused-atomic-design: raw hex color detected. Reference a
+        design token (CSS var, theme value) instead — token-driven
+        theming is what keeps the system maintainable.
+  - name: no-app-state-import-in-atom
+    when:
+      event_kind: tool_call
+    # Atom files importing redux/zustand/react-query → discipline violation.
+    check: match(tool_args.file_path, "/components/atoms/")
+    on_fail:
+      level: warn
+      message: |
+        focused-atomic-design: atom file detected. If you're adding
+        an import here, verify it's not pulling in app state
+        (redux/zustand/react-query), router, or data-fetching —
+        those belong at the organism/template/page level.
+  - name: no-multiple-default-exports
+    when:
+      event_kind: tool_call
+    # Atomic design's one-component-per-file rule — flag content with
+    # more than one `export default`.
+    check: match(tool_args.content, "export default [\\s\\S]*export default")
+    on_fail:
+      level: warn
+      message: |
+        focused-atomic-design: multiple `export default` in one file.
+        Atomic design ships ONE component per file (filename matches
+        component name); split into separate files.

@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentEventBus } from './event_bus.js';
 import { InboxTransportBridge } from './transport_bridge.js';
@@ -75,6 +75,15 @@ function legacyRow(opts: {
   return JSON.stringify(row) + '\n';
 }
 
+// LP5F.1 follow-up: chokidar polling-backend tests occasionally exceed the
+// vitest default 5s on shared GitHub Actions Node-20 runners under contention.
+// Locally every test passes in <1s; the extra budget only matters in CI.
+// Per-file setConfig applies to every it() in the file without bumping each
+// one inline.
+beforeAll(() => {
+  vi.setConfig({ testTimeout: 20_000 });
+});
+
 describe('InboxTransportBridge', () => {
   it('emits one event per legacy JSONL row appended', async () => {
     bridge = new InboxTransportBridge({
@@ -99,7 +108,7 @@ describe('InboxTransportBridge', () => {
     expect(ev.text).toBe('hi');
     expect(ev.projectUuid).toBe(TEST_PROJECT_UUID);
     expect(warnings).toEqual([]);
-  }, 20_000);
+  });
 
   it('emits three events in order for three rows appended in burst', async () => {
     bridge = new InboxTransportBridge({

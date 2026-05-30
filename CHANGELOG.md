@@ -7,6 +7,84 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.248] - 2026-05-30
+
+### Added (DOG.4 — seed_lessons + verify_gates authored for 3 focused + composite)
+
+Each DOG.1 focused pack + the DOG.2 composite now ships grounded content
+consumed by the DOG.3 schema sugar:
+
+**`focused-react-19`** — 7 seed_lessons + 3 verify_gates
+
+- Lessons cover Server Components default + "use client" leaf, Actions
+  for form mutations + useFormStatus, useOptimistic for instant
+  feedback, use(promise) Promise-unwrap, Rules of Hooks, "use server"
+  file vs. function level, ref-as-prop replacing forwardRef.
+- Gates: no `react-dom/server` legacy SSR import, no new
+  `class extends Component`, no default-exported async Server Actions
+  (action-id stability).
+
+**`focused-typescript-strict`** — 7 seed_lessons + 3 verify_gates
+
+- Lessons cover assertNever exhaustiveness, `as const` narrowing,
+  discriminated unions over option-bag interfaces,
+  `noUncheckedIndexedAccess`, `satisfies T` for inference preservation,
+  no `as` casts, `unknown` over `any` at boundaries.
+- Gates: no `: any` annotation, no `@ts-ignore` (prefer
+  `@ts-expect-error`), no `arr[N]!` non-null-assertion on numeric
+  indexes (loses strict-mode runtime check).
+
+**`focused-atomic-design`** — 7 seed_lessons + 3 verify_gates
+
+- Lessons cover atoms as pure UI primitives, molecules as 2-5 atoms
+  with one responsibility, organisms holding ephemeral but not app
+  state, templates/pages split, one-component-per-file, token-driven
+  theming (no hex codes), Storybook-at-atom + integration-test-at-page.
+- Gates: no raw hex colors in component files, no app-state imports
+  in atom files, no multiple default exports per file.
+
+**`frontend-react-19-atomic`** (composite) — 4 cross-domain seed_lessons
+
+- Atomic React 19 atom pattern (strict-typed props + ref-as-prop +
+  zero client state at this level).
+- Server Components + token-driven theming compose cleanly (CSS vars
+  render in static stylesheet, no "use client" needed for theme).
+- Page-level Server Actions with Zod-validated FormData unwrapping —
+  combines all three pack disciplines.
+- Storybook stories for atoms must demonstrate variant coverage +
+  token theming + strict-mode safety.
+
+Totals: 25 seed_lessons (≥ 21 acceptance) + 9 verify_gates (≥ 9
+acceptance). Every check expression PARSES via parseExpression at load
+time (would throw at loadPack if any didn't).
+
+### Tests
+
+`test/builtin/focused-packs-content.test.ts` — 19 cases:
+
+- 4 × per-focused-pack: ≥ 5 seeds + ≥ 2 gates, every check parses,
+  compileVerifyGates returns ok with one rule per gate, synthetic
+  verify skill folded into pack.skills (12 cases).
+- 2 × composite assertions: ≥ 3 cross-domain seeds + 0 gates;
+  composite carries no synthetic verify skill.
+- Per-pack loadPack({engine}) fires the ingest pipeline once per seed
+  (spy assertion against fakeEngine().lessonCreate).
+- Every ingest call carries `authored_by:'pack'` + `pack_id` matching
+  pack name + `pack-seed:<sha256-24>` external_id.
+- Total seeds ≥ 21 (acceptance count); total gates ≥ 9; every
+  seed_lesson has non-placeholder title + body (> 20 chars).
+
+### Fixed (drive-by — transport_bridge testTimeout via file-level setConfig)
+
+`src/runtime/agent_bridge/transport_bridge.test.ts` — moved the LP5F.1
+hotfix's 20_000ms timeout from a single-test third-arg to a file-level
+`beforeAll(() => vi.setConfig({testTimeout: 20_000}))`. The polling-
+backend flake hits MORE than one of the 9 tests in the file under GH
+Actions Node-20 contention; covering only one was insufficient (caught
+during DOG.4 vitest run). No production behavior change.
+
+---
+
 ## [0.5.247] - 2026-05-30
 
 ### Added (DOG.3 — Phase 3 schema sugar: seed_lessons + verify_gates)
