@@ -71,6 +71,8 @@ import { UnloadCondition, shouldUnload, type TickState } from '../unload_conditi
 import type { ActivationScope } from '../../packs/schemas/manifest.js';
 import type { Directive, DriftPolicy, Event, Pack, Skill } from '../types.js';
 
+import { formatProfessionError, resolveProfessionDirective } from './profession_resolver.js';
+
 export interface DispatchResult {
   exitCode: 0 | 2;
   stderr: string;
@@ -416,6 +418,25 @@ export async function dispatchEvent(
         // hook bins warn + drop.
         if (result.kind === 'directive') {
           if (event.kind === 'prompt_submit') {
+            // MM.2 (2026-05-30) — validate profession directives against the
+            // loaded pack registry + each pack's loaded team.yaml. Invalid
+            // directives are DROPPED (not emitted to the agent) + the reason
+            // is logged to stderr. Skill + tool directives pass through.
+            const na = result.directive.next_action;
+            if (na.profession !== undefined) {
+              const teamsByPack = new Map<string, NonNullable<Pack['team']>>();
+              for (const p of packs) {
+                if (p.team !== undefined) teamsByPack.set(p.name, p.team);
+              }
+              const resolved = resolveProfessionDirective(na, packs, teamsByPack);
+              if (!resolved.ok) {
+                warnBuf +=
+                  `[opensquid] WARN: dropping invalid profession directive — ` +
+                  `${formatProfessionError(resolved.reason)} (rule "${rule.id}" in skill ` +
+                  `"${skill.name}" pack "${pack.name}")\n`;
+                continue;
+              }
+            }
             directives.push({ ...result.directive, ruleId: rule.id });
           } else {
             warnBuf +=

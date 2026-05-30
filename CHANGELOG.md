@@ -7,6 +7,44 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.235] - 2026-05-30
+
+### Added (MM.2 — profession auto-spawn directive validator)
+
+- **`src/runtime/hooks/profession_resolver.ts`** (new) — pure
+  `resolveProfessionDirective(nextAction, packs, teamsByPack)` returns
+  tagged result. 5 error codes: `unknown-pack` / `wrong-usage` /
+  `missing-team` / `no-roles` / `role-not-found`. Phase-2 leaf-node
+  default = first role; multi-role lookup honors `nextAction.args.role`
+  (future-proof).
+- **`formatProfessionError(err)`** — human-scannable rendering of
+  every error code.
+- **`src/runtime/types.ts`** — `Pack` runtime type extended with
+  optional `team?: Team` field.
+- **`src/packs/loader.ts`** — when `usage: profession | both`, loader
+  now actually LOADS + parses team.yaml (previously only checked
+  existence). Loaded team attaches to the Pack so the dispatcher
+  doesn't re-read at dispatch time.
+- **`src/runtime/hooks/dispatch.ts`** — directive aggregation path
+  validates every profession directive before pushing onto the
+  envelope: builds `teamsByPack` map from loaded packs, calls
+  `resolveProfessionDirective`, drops invalid + appends a warn to the
+  existing warn buffer. Skill + tool directives pass through unchanged
+  (back-compat).
+- **No-agent-loop invariant preserved**: opensquid NEVER invokes
+  `spawn_subagent`. The directive surfaces via the UserPromptSubmit
+  envelope; the AGENT calls `spawn_subagent` per
+  [[project_opensquid_no_agent_loop]].
+
+### Tests
+
+- `profession_resolver.test.ts` — 12 cases (7 resolver + 5
+  format-message snapshots)
+- `dispatch.test.ts` — 64 existing cases still pass unchanged
+- Full suite: 2556 pass / 28 skip / 0 fail (+12 net)
+
+---
+
 ## [0.5.234] - 2026-05-30
 
 ### Added (LL.6 — E2E loop closure fixture — CLOSES T-L3-LOOP)

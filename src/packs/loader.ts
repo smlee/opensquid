@@ -44,9 +44,10 @@
  * Imported by: setup/, runtime bootstrap (Phase 2.4+), test fixtures.
  */
 
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, stat, readFile as fsReadFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { parse as yamlParse } from 'yaml';
 import type { z } from 'zod';
 
 import type { Pack } from '../runtime/types.js';
@@ -56,7 +57,11 @@ import { DriftResponseConfig } from './schemas/drift_response.js';
 import { Manifest } from './schemas/manifest.js';
 import { ModelsConfig } from './schemas/models.js';
 import { Skill } from './schemas/skill.js';
+import { Team } from './schemas/team.js';
 import { parseYamlFile } from './yaml.js';
+
+// alias to keep the inline team-load block readable
+const fs = { readFile: fsReadFile };
 
 // Local type aliases — `z.ZodType<T>` (the constraint inside `parseYamlFile`)
 // erases the input-vs-output distinction Zod tracks, so the inferred `T` ends
@@ -109,8 +114,10 @@ export async function loadPack(dir: string): Promise<Pack> {
 
   // MM.1 (2026-05-30) — team.yaml existence check for profession-mode packs.
   // `usage: profession | both` REQUIRES team.yaml declaring ≥1 SubagentRole.
-  // Schema-side validation handled at dispatch time via the team.ts loader;
-  // we only check EXISTENCE here so misconfiguration surfaces at load.
+  // MM.2 (2026-05-30) extends this: actually LOAD + parse the team.yaml so
+  // the dispatcher's profession-directive validator can validate against it
+  // without re-reading at dispatch time.
+  let team: Team | undefined;
   if (manifest.usage === 'profession' || manifest.usage === 'both') {
     const teamPath = join(dir, 'team.yaml');
     try {
@@ -118,6 +125,15 @@ export async function loadPack(dir: string): Promise<Pack> {
     } catch {
       throw new Error(
         `pack ${manifest.name}: usage: ${manifest.usage} REQUIRES team.yaml at ${teamPath} declaring ≥1 SubagentRole (none found)`,
+      );
+    }
+    try {
+      const raw = await fs.readFile(teamPath, 'utf8');
+      const parsed = yamlParse(raw) as unknown;
+      team = Team.parse(parsed);
+    } catch (e) {
+      throw new Error(
+        `pack ${manifest.name}: team.yaml at ${teamPath} failed to parse — ${String(e)}`,
       );
     }
   }
@@ -144,6 +160,8 @@ export async function loadPack(dir: string): Promise<Pack> {
     kind: manifest.kind,
     usage: manifest.usage,
     includes: manifest.includes,
+    // MM.2 — loaded team.yaml (present iff usage is profession | both).
+    ...(team !== undefined ? { team } : {}),
     ...(manifest.extends !== undefined ? { extends: manifest.extends } : {}),
     ...(chatAgent !== undefined ? { chatAgent } : {}),
     ...(models !== undefined ? { models } : {}),

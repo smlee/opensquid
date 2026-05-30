@@ -42,6 +42,7 @@ import {
   PackKind,
   PackUsage,
 } from '../packs/schemas/manifest.js';
+import { Team } from '../packs/schemas/team.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
 
 // ---------------------------------------------------------------------------
@@ -369,6 +370,12 @@ export const Pack = z.object({
   kind: PackKind.optional(),
   usage: PackUsage.optional(),
   includes: z.array(CompositeInclude).optional(),
+  // MM.2 (2026-05-30) — loaded team.yaml. The loader (loader.ts) reads +
+  // parses team.yaml when usage is 'profession' | 'both'; absent for
+  // 'active' packs. Optional on the runtime type so test fixtures can
+  // construct Pack literals without it. Consumed by the dispatcher's
+  // profession-directive validator (profession_resolver.ts).
+  team: Team.optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 
