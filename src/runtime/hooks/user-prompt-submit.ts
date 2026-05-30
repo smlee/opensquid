@@ -18,6 +18,15 @@
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { readChainStage, transitionChainStage } from '../chain_state.js';
+import { type Platform, readAcked, readInbox } from '../chat/inbox.js';
+import {
+  buildAckRowsForInjected,
+  buildInjectionEnvelope,
+  computeUnackedRows,
+  purgeOldAcks,
+} from '../chat/inbox_inject.js';
+import { appendAckRows, rewriteAckedAfterPurge } from '../chat/inbox_writer.js';
+import { resolveProjectUuid } from '../paths.js';
 import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
 
@@ -25,6 +34,50 @@ import { dispatchEvent } from './dispatch.js';
 import { detectNewProject } from './new_project_detect.js';
 import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
+
+const INBOX_PLATFORMS: Platform[] = ['telegram', 'slack', 'discord'];
+
+/**
+ * LL.4 (2026-05-30) — drain unacked inbox rows into an additionalContext
+ * envelope. ACK-BEFORE-EMIT ordering: AckRows are persisted before the
+ * caller emits the envelope to stdout. Fail-open: any error here returns
+ * an empty string + lets the hook proceed (the user's prompt always rides
+ * through; backlog drains on next fire).
+ */
+async function drainInboxEnvelope(sessionId: string): Promise<string> {
+  try {
+    const projectUuid = await resolveProjectUuid({
+      cwd: process.cwd(),
+      env: process.env,
+    }).catch(() => null);
+    if (projectUuid === null || projectUuid === '') return '';
+    const platformReads = await Promise.all(INBOX_PLATFORMS.map((p) => readInbox(projectUuid, p)));
+    const allRows = platformReads.flat();
+    const acked = await readAcked(projectUuid);
+    const unacked = computeUnackedRows(allRows, acked, sessionId);
+
+    let envelope = '';
+    if (unacked.length > 0) {
+      const built = buildInjectionEnvelope(unacked);
+      if (built.injectedRows.length > 0) {
+        envelope = built.envelope;
+        const ackRows = buildAckRowsForInjected(built.injectedRows, sessionId);
+        // ACK BEFORE EMIT — durability gate.
+        await appendAckRows(projectUuid, ackRows);
+      }
+    }
+
+    // 7-day auto-purge — skip rewrite when nothing changes (no-op opt).
+    const kept = purgeOldAcks(acked);
+    if (kept.length !== acked.length) {
+      await rewriteAckedAfterPurge(projectUuid, kept);
+    }
+    return envelope;
+  } catch (e) {
+    process.stderr.write(`opensquid: inbox-drain failed (fail-open) — ${String(e)}\n`);
+    return '';
+  }
+}
 
 interface PromptSubmitPayload {
   prompt?: string;
@@ -133,8 +186,16 @@ async function main(): Promise<void> {
   // once per session. Routes through additionalContext alongside the
   // existing inject_context + directive surfaces.
   const newProjectLine = await detectNewProject(sessionId);
+  // LL.4 — drain the inbound-message backlog into the same additionalContext
+  // envelope as inject_context + directives + new-project. The drain block
+  // runs under its own fail-open wrapper (drainInboxEnvelope returns '' on
+  // any error). Inbox envelope appears FIRST in contextParts so it's the
+  // most prominent surface in the agent's next-turn context.
+  const inboxEnvelope = await drainInboxEnvelope(sessionId);
 
-  const contextParts: string[] = [...contextInjections];
+  const contextParts: string[] = [];
+  if (inboxEnvelope.length > 0) contextParts.push(inboxEnvelope);
+  contextParts.push(...contextInjections);
   if (newProjectLine !== null) contextParts.push(newProjectLine);
   if (directives.length > 0) {
     const block =
