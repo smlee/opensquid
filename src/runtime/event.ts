@@ -256,6 +256,13 @@ export const Trigger = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('inbound_channel'),
     channel: z.string().optional(),
+    // LL.3 (2026-05-30) — sender_pattern is OPTIONAL so existing skill
+    // manifests parse unchanged. Compiled as JS RegExp at dispatch
+    // time; malformed pattern → silent skip (filter returns false).
+    // First-party pack manifests only — NOT a user-supplied input,
+    // so JS RegExp is acceptable here (not RE2 — see pack-runtime.md
+    // §7.5 anti-patterns).
+    sender_pattern: z.string().optional(),
     cost_tier: CostTier.optional(),
   }),
   z.object({

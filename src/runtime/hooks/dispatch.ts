@@ -192,6 +192,39 @@ export interface DispatchScopeCtx {
   isUserSession: boolean;
 }
 
+/**
+ * LL.3 — inbound_channel trigger filter. Honors optional `channel:` literal
+ * (matched against the scheme prefix of `event.channelUri`) and optional
+ * `sender_pattern` regex (matched against `event.sender`). Empty/absent
+ * fields are accept-all per back-compat. Malformed regex → no match.
+ */
+interface InboundChannelTrigger {
+  kind: 'inbound_channel';
+  channel?: string;
+  sender_pattern?: string;
+}
+
+export function inboundChannelTriggerMatches(
+  trigger: InboundChannelTrigger,
+  event: Extract<Event, { kind: 'inbound_channel' }>,
+): boolean {
+  if (trigger.channel !== undefined && trigger.channel.length > 0) {
+    const m = /^(telegram|slack|discord):\/\//.exec(event.channelUri);
+    const platform = m === null ? null : m[1];
+    if (platform !== trigger.channel) return false;
+  }
+  if (trigger.sender_pattern !== undefined && trigger.sender_pattern.length > 0) {
+    let re: RegExp;
+    try {
+      re = new RegExp(trigger.sender_pattern);
+    } catch {
+      return false;
+    }
+    if (!re.test(event.sender)) return false;
+  }
+  return true;
+}
+
 export function activationScopeApplies(scope: ActivationScope, ctx: DispatchScopeCtx): boolean {
   switch (scope) {
     case 'project':
@@ -307,6 +340,21 @@ export async function dispatchEvent(
       // Using `.some` rather than `.includes` because each trigger is a
       // discriminated-union object, not a bare string.
       if (!skill.triggers.some((t) => t.kind === event.kind)) continue;
+      // LL.3 (2026-05-30) — inbound_channel triggers can carry an
+      // optional sender_pattern filter (compiled as JS RegExp at
+      // dispatch; malformed → silent skip). When the event is an
+      // inbound_channel event and ANY matching-kind trigger has a
+      // sender_pattern that doesn't match the event sender, the skill
+      // is skipped. Empty sender_pattern → accept-all (back-compat).
+      // The channel: literal field (e.g. 'telegram') is also honored:
+      // it must match the scheme prefix of event.channelUri.
+      if (event.kind === 'inbound_channel') {
+        const matchingTriggers = skill.triggers.filter((t) => t.kind === 'inbound_channel');
+        const anyMatch = matchingTriggers.some((t) =>
+          inboundChannelTriggerMatches(t as InboundChannelTrigger, event),
+        );
+        if (!anyMatch) continue;
+      }
       // T-ASC ASC.2: AND-precondition gate at the dispatcher boundary. Slots
       // AFTER the trigger filter (so a wrong-kind event short-circuits before
       // any stat) and BEFORE the rule walk (so rule-local guards never see a

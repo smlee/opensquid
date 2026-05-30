@@ -1152,3 +1152,75 @@ describe('IDF.4: dispatchEvent filters packs by activation_scope before walking 
     expect(rNoProj.exitCode).toBe(0);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────
+ * LL.3 — inbound_channel trigger filter (channel + sender_pattern).
+ *
+ * Verifies that `dispatchEvent` honors the optional `channel:` and
+ * `sender_pattern` fields on `triggers: [{kind: 'inbound_channel', ...}]`.
+ * Malformed regex → silent skip. Empty pattern → accept-all.
+ * ──────────────────────────────────────────────────────────────────── */
+import type { InboundChannelEvent } from '../event.js';
+import { inboundChannelTriggerMatches } from './dispatch.js';
+
+describe('LL.3: inboundChannelTriggerMatches pure filter', () => {
+  const baseEvent: InboundChannelEvent = {
+    kind: 'inbound_channel',
+    channelUri: 'telegram://-100123/281',
+    sender: 'alice',
+    text: 'hi',
+    receivedAt: '2026-05-30T12:00:00Z',
+  };
+
+  it('no channel + no sender_pattern → matches (accept-all)', () => {
+    expect(inboundChannelTriggerMatches({ kind: 'inbound_channel' }, baseEvent)).toBe(true);
+  });
+
+  it('channel: telegram + telegram event → matches', () => {
+    expect(
+      inboundChannelTriggerMatches({ kind: 'inbound_channel', channel: 'telegram' }, baseEvent),
+    ).toBe(true);
+  });
+
+  it('channel: slack + telegram event → does NOT match', () => {
+    expect(
+      inboundChannelTriggerMatches({ kind: 'inbound_channel', channel: 'slack' }, baseEvent),
+    ).toBe(false);
+  });
+
+  it('sender_pattern: ^alice$ + sender alice → matches', () => {
+    expect(
+      inboundChannelTriggerMatches(
+        { kind: 'inbound_channel', sender_pattern: '^alice$' },
+        baseEvent,
+      ),
+    ).toBe(true);
+  });
+
+  it('sender_pattern: ^bob$ + sender alice → does NOT match', () => {
+    expect(
+      inboundChannelTriggerMatches({ kind: 'inbound_channel', sender_pattern: '^bob$' }, baseEvent),
+    ).toBe(false);
+  });
+
+  it('malformed regex [unclosed → silent skip (returns false; no throw)', () => {
+    expect(
+      inboundChannelTriggerMatches(
+        { kind: 'inbound_channel', sender_pattern: '[unclosed' },
+        baseEvent,
+      ),
+    ).toBe(false);
+  });
+
+  it('empty sender_pattern → accept-all', () => {
+    expect(
+      inboundChannelTriggerMatches({ kind: 'inbound_channel', sender_pattern: '' }, baseEvent),
+    ).toBe(true);
+  });
+
+  it('empty channel string → accept-all (back-compat)', () => {
+    expect(inboundChannelTriggerMatches({ kind: 'inbound_channel', channel: '' }, baseEvent)).toBe(
+      true,
+    );
+  });
+});

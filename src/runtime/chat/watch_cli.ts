@@ -29,6 +29,7 @@ import {
   resolveSessionId,
   writeLease,
 } from './live_session_lease.js';
+import { startInboundWatcher } from './inbound_watch.js';
 import { formatRow, watchInbox, type InboxRow, type WatchInboxOpts } from './watch.js';
 
 interface ChatWatchOptions {
@@ -39,13 +40,17 @@ interface ChatWatchOptions {
 }
 
 /** Injection seam — tests stub `watch` so the action returns instead of
- *  blocking on the real (forever-running) watcher. Mirrors AgentBridgeCliDeps. */
+ *  blocking on the real (forever-running) watcher. Mirrors AgentBridgeCliDeps.
+ *  LL.3: `startInbound` is also injectable so lifecycle tests don't spin up
+ *  a real chokidar tail. */
 export interface ChatWatchDeps {
   watch?: (opts: WatchInboxOpts) => Promise<void>;
+  startInbound?: () => Promise<() => Promise<void>>;
 }
 
 export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): Command {
   const watch = deps.watch ?? watchInbox;
+  const startInbound = deps.startInbound ?? startInboundWatcher;
   const chat = program.command('chat').description('Live chat inbound/outbound helpers.');
   chat
     .command('watch')
@@ -87,6 +92,13 @@ export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): C
       process.once('SIGINT', onSignal);
       process.once('SIGTERM', onSignal);
 
+      // LL.3 (2026-05-30) — start the per-project inbound watcher in
+      // parallel with the existing stdout streamer. The watcher
+      // dispatches inbound rows as `inbound_channel` events to the
+      // live session's loaded packs; the streamer keeps the
+      // `Monitor`-stdout contract intact for backward-compat with
+      // existing chat watch consumers.
+      const stopInbound = await startInbound();
       try {
         await watch({
           inboxFile: inboxFile(uuid, opts.platform),
@@ -97,6 +109,7 @@ export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): C
           onWarn: (message) => process.stderr.write(message + '\n'),
         });
       } finally {
+        await stopInbound().catch(() => undefined);
         await stopLease();
       }
     });

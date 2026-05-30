@@ -7,6 +7,71 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.231] - 2026-05-30
+
+### Added (LL.3 — inbound watcher + sender_pattern Trigger field + dispatcher filter)
+
+- **`src/runtime/chat/inbound_watch.ts`** (new, 215/280 LOC) —
+  chokidar-backed tail over every live project's
+  `inbox/<platform>.jsonl`. On each appended row → parse `InboxRow` →
+  resolve session via LL.2 → if fresh, construct `InboundChannelEvent`
+  - dispatch to active packs; if stale/missing, append to
+    `~/.opensquid/projects/<uuid>/inbox/unrouted.jsonl` + leave row in
+    inbox (lazy-push per L7; LL.4 UPS hook drains on next session prompt).
+  * `buildChannelUri(row)` → `<platform>://<channel>[/<thread_id>]`
+  * `platformFromChannelUri(uri)` parses scheme back to `Platform`
+  * `extractProjectUuid(path)` parses uuid from inbox file path
+  * `processRow(uuid, row)` exported for unit-test access
+  * `startInboundWatcher()` returns cleanup fn; CLI invokes on lifecycle
+  * 60s re-scan picks up projects that come online after watcher start
+  * Byte-offset tracking handles truncation (size < lastOffset → reset)
+  * Best-effort `unrouted.jsonl` writer (never throws; parent dir
+    created on demand)
+- **`src/runtime/event.ts`** — `Trigger` `inbound_channel` variant
+  extended with optional `sender_pattern: z.string()` field. First-party
+  pack manifests only (JS RegExp acceptable; pack-runtime.md §7.5
+  documents trust boundary).
+- **`src/runtime/hooks/dispatch.ts`** — exported
+  `inboundChannelTriggerMatches(trigger, event)` pure filter:
+  - `channel` literal compared against `event.channelUri` scheme prefix
+  - `sender_pattern` regex tested against `event.sender`
+  - Empty/absent fields = accept-all (back-compat)
+  - Malformed regex → silent skip (no throw)
+  - Inserted in the dispatcher pack-walk after AUTO.1 event-kind
+    filter; an `inbound_channel` event with no matching-trigger filter
+    short-circuits before the rule walk.
+- **`src/runtime/chat/watch_cli.ts`** — integrated `startInboundWatcher`
+  into the `chat watch` lifecycle. Injection seam `deps.startInbound`
+  for test stubbing. Cleanup runs in `finally` alongside lease release.
+
+### Tests
+
+- `inbound_watch.test.ts` — 10 cases (channelUri build/parse,
+  extractProjectUuid, processRow unrouted on missing/stale lease, append
+  semantics)
+- `dispatch.test.ts` +8 new cases on `inboundChannelTriggerMatches` (no
+  filter / channel match / channel mismatch / sender_pattern match /
+  sender_pattern mismatch / malformed regex / empty pattern / empty
+  channel)
+- Full suite: 2522 pass / 28 skip / 0 fail (+18 net)
+
+### Architectural shape (closes the multi-session delivery break)
+
+When a user sends a Telegram message to a project's topic:
+
+1. chat-bridge-server writes to `inbox/telegram.jsonl` (existing)
+2. The LL.3 watcher (running in `chat watch`) sees the append
+3. Resolves the live session via the LL.2 lease lookup
+4. If fresh → dispatches an `inbound_channel` event so any pack with
+   matching `triggers:` fires
+5. If stale → logs to `unrouted.jsonl`; LL.4 drains at next prompt-submit
+
+The LL.4 UPS hook (next task) closes the loop by ALSO draining unacked
+rows at every prompt-submit so a session that comes online late still
+sees the backlog.
+
+---
+
 ## [0.5.230] - 2026-05-30
 
 ### Added (LL.2 — session-routing resolver)
