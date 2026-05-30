@@ -7,6 +7,50 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.223] - 2026-05-30
+
+### Added (IDF.2 — keystone for IDF.3 auto-activation)
+
+- **Pure-function `detected_by` evaluator** (`src/runtime/detection.ts`,
+  146 LOC) — `matchesDetectedBy(detectedBy, ctx)` returns boolean given
+  a pack's `detected_by[]` (from IDF.1 schema) + a pre-staged
+  `DetectionContext`. Implements all 7 detection kinds from v0.6 §4.4:
+  - `file_exists` / `dir_exists` — keyed lookup against staged maps
+  - `file_match` — JSON-path dotted lookup + per-key regex (AND across
+    `matches[]`); shallow path resolution only per [[feedback_simplest_granular_form]]
+  - `file_glob` — minimatch against pre-staged file keys + `min_count`
+    threshold (early-exit when threshold met)
+  - `memory_match` — regex over pre-concatenated recall body
+  - `conversation_signal` — regex over recent prompt history
+  - `user_pinned` — bare context bit (from `active.json` `pin: true`)
+- **OR semantics across clauses** — first match wins, returns true.
+  Empty `detected_by[]` returns true (back-compat: opted-in packs with
+  no detection clauses always apply).
+- **Pure** — no I/O during evaluation, no async, no side effects. Caller
+  (IDF.3 discovery pipeline) pre-stages `ctx`. Referentially
+  transparent + memoizable per (`pack.name`, `ctx.cwd`).
+- **Malformed-input safety** — malformed JSON in file_match silently
+  returns false; malformed regex in any pattern silently returns false
+  (no throw). Loud failure deferred to pack-load-time validation
+  (follow-up; not blocking IDF.2).
+
+### Tests
+
+- `src/runtime/detection.test.ts` — 23 unit tests covering every kind's
+  happy path + at least one error path + multi-clause OR + AND within
+  `file_match.matches` + empty-array back-compat + malformed regex/JSON.
+
+### Notes
+
+- Detection runs on pre-validated patterns. Pack-load-time RE2
+  validation is a deferred follow-up tracked separately — current
+  behavior fails-silent rather than throws to keep dispatch hot path
+  resilient.
+- `minimatch ^10.0.0` already in deps (capability_gate, load_matchers,
+  permissions_state precedents) — no new deps added.
+
+---
+
 ## [0.5.222] - 2026-05-30
 
 ### Fixed
