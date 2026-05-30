@@ -1,0 +1,50 @@
+# pack-architect — opensquid built-in profession pack teaching pack authoring.
+#
+# MM.4 (2026-05-30). The pack-architect persona is the meta-discipline: it
+# walks users through authoring well-formed opensquid packs (manifest + skill
+# yaml + side-files). Ships as a profession (subagent-spawn capable) AND as
+# an active-loadable pack (skills fire inline when user is editing
+# pack-config files).
+#
+# Opt-in. NOT in default active.json per BR.1. Users opt in via:
+#   { "packs": ["default-discipline", "pack-architect"] }
+#
+# Per [[project_opensquid_personal_rules_are_user_codex]]: pack-architect is
+# teaching discipline, not personal evaluation patterns. It ships for
+# everyone but only loads when the user opts in.
+name: pack-architect
+version: 0.1.0
+scope: workflow
+goal: teach pack authoring — manifest + skill yaml + side-files + focused-vs-composite + active-vs-profession decisions
+description: |
+  Profession pack for opensquid pack-authoring discipline. Three skills
+  fire when the user is preparing or editing pack-config files:
+
+  - pack-scope-elicit: detects user mentioning pack authoring without
+    prior scope work; emits chain-handoff directive to scope-architect.
+  - manifest-author-walkthrough: fires on Edit / Write of any
+    manifest.yaml; surfaces the 4-phase authoring checklist
+    (scope → manifest fields → skills → side-files).
+  - skill-yaml-author-walkthrough: fires on Edit / Write of any
+    skill.yaml; surfaces the when_to_load + triggers + rules +
+    process-steps decisions + cites skill-grammar-guide.md.
+
+  When SPAWNED AS PROFESSION (via directive
+  next_action.profession: pack-architect), the spawned subagent reads
+  docs/pack-runtime.md + the user's draft + walks them through a
+  complete pack-authoring session, producing a ready-to-ship manifest
+  + skill suite.
+
+  Foundation: this pack is the practical companion to
+  docs/pack-runtime.md. Pack-architect IS the doc, taught interactively.
+
+kind: focused
+usage: both
+evolves: true
+
+# Opt-in only — don't auto-fire even on installs. Skills inside each have
+# their own when_to_load matchers that gate firing further.
+detected_by: []
+
+# user = applies regardless of project (pack authoring spans projects).
+activation_scope: user

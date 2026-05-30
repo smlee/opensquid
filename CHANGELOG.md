@@ -7,6 +7,65 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.237] - 2026-05-30
+
+### Added (MM.4 — pack-architect built-in profession pack)
+
+- **`packs/builtin/pack-architect/`** (new) — opensquid's meta-discipline
+  pack: teaches users how to author well-formed opensquid packs. Ships
+  in dual mode (`kind: focused`, `usage: both`,
+  `activation_scope: user`).
+- **`manifest.yaml`** — opt-in (NOT in default active.json per BR.1).
+  Empty `detected_by: []` per design — opt-in posture means the user
+  explicitly adds pack-architect to their active.json.
+- **`team.yaml`** — single Mode A role with the canonical 4-phase
+  pack-authoring instructions (identify scope + persona → write
+  manifest.yaml → author skills → side-files as needed).
+  `handoff_signal: PACK_AUTHORING_COMPLETE`. `model_alias: reasoning`
+  per model-neutrality.
+- **`SKILL.md`** — pedagogical overview + opt-in instructions + 3-skill
+  table + 4-phase workflow + cross-references to pack-runtime.md +
+  skill-grammar-guide.md.
+- **`skills/pack-scope-elicit/`** — fires on UserPromptSubmit matching
+  pack-authoring intent (write/author/create/build a pack); reads
+  chain state; if chain stage is `idle`/null, emits directive
+  `next_action.profession: scope-architect` for prework.
+- **`skills/manifest-author-walkthrough/`** — fires on Write/Edit of
+  any `packs/*/manifest.yaml`; surfaces a 10-item manifest-field
+  checklist (kind/usage/activation_scope/detected_by/foundation/
+  includes/etc.).
+- **`skills/skill-yaml-author-walkthrough/`** — fires on Write/Edit
+  of any `packs/*/skills/*/skill.yaml`; surfaces a 11-item skill-field
+  checklist (load/when_to_load/triggers/requires/rules/process steps/
+  if: grammar/verdict choice/model_alias discipline/fail-open
+  prohibition).
+
+### Tests
+
+- `test/builtin/pack-architect.test.ts` — 10 cases:
+  - pack loads via loadPack
+  - kind/usage/activation_scope/detected_by shape correct
+  - team.yaml + role + handoff_signal correct
+  - 3 expected skills present
+  - pack-scope-elicit emits directive to scope-architect
+  - manifest-author-walkthrough has the expected rule id
+  - skill-yaml-author-walkthrough has the expected rule id
+  - no vendor model identifiers (claude-haiku-N, gpt-N, oN-mini etc.)
+    leak into the pack
+  - validatePackFunctions: every process step resolves to a registered
+    primitive
+  - validateUniqueSkillNames: no in-pack collisions
+
+### Notes
+
+- Combined with MM.2 + MM.3: a directive
+  `{profession: 'pack-architect', ...}` now passes the resolver, AND
+  pack-architect's own pack-scope-elicit skill emits chain-handoff
+  directives to scope-architect (composition of MM.4 + MM.3 + MM.2).
+- Full suite: 2569 pass / 28 skip / 0 fail (+13 net).
+
+---
+
 ## [0.5.236] - 2026-05-30
 
 ### Added (MM.3 — scope-architect profession-mode wiring)

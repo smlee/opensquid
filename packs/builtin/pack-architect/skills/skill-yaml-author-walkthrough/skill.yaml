@@ -1,0 +1,47 @@
+# skill-yaml-author-walkthrough — surface a skill-field checklist when
+# the user is editing any pack skill's skill.yaml.
+name: skill-yaml-author-walkthrough
+load: preload
+when_to_load:
+  - kind: event_type
+    type: tool_call
+triggers:
+  - kind: tool_call
+rules:
+  - id: surface-skill-yaml-authoring-checklist
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: text_pattern_match
+        if: 'tool == "Write" || tool == "Edit"'
+        args:
+          text_field: tool_args.file_path
+          patterns:
+            - 'packs/.+/skills/.+/skill\.yaml$'
+        as: is_skill_yaml
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && is_skill_yaml.matched == true'
+        args:
+          level: surface
+          message: |
+            🧩 Authoring a skill.yaml. Quick checklist (cite
+            docs/pack-runtime.md §2 + docs/skill-grammar-guide.md):
+              [ ] name (kebab-case)
+              [ ] load (preload | lazy)
+              [ ] when_to_load (load triggers — event_type / tool_match /
+                  prompt_match / cwd_match / path_match / command_match)
+              [ ] triggers (event kinds — at least one)
+              [ ] requires (optional AND-preconditions)
+              [ ] rules (≥ 1 rule; each track_check or destination_check)
+              [ ] Each rule's process: call / args / as / if / on_empty
+              [ ] if: grammar uses the documented operator set + helper
+                  functions per skill-grammar-guide.md
+              [ ] Final step emits a verdict
+                  (pass / block / warn / surface / directive)
+              [ ] For directive verdict: next_action is skill XOR tool
+                  XOR profession (exactly one)
+              [ ] No vendor model names anywhere (use model_alias)
+              [ ] No silent fail-open (every error path returns explicit
+                  verdict)

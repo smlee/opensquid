@@ -1,0 +1,39 @@
+# pack-scope-elicit — directive to scope-architect when user mentions
+# pack authoring AND the chain hasn't done scope decomposition yet.
+#
+# Per [[project_opensquid_no_agent_loop]] opensquid does NOT invoke
+# scope-architect; it surfaces the directive on the next
+# UserPromptSubmit envelope and the AGENT spawns the subagent.
+name: pack-scope-elicit
+load: preload
+when_to_load:
+  - kind: event_type
+    type: prompt_submit
+triggers:
+  - kind: prompt_submit
+rules:
+  - id: detect-pack-authoring-intent-without-scope
+    process:
+      - call: text_pattern_match
+        args:
+          text_field: prompt
+          patterns:
+            - 'write\s+a\s+(?:new\s+)?pack'
+            - 'author\s+a\s+(?:new\s+)?pack'
+            - 'create\s+a\s+(?:new\s+)?(?:opensquid\s+)?pack'
+            - 'build\s+a\s+(?:new\s+)?pack'
+            - 'new\s+opensquid\s+pack'
+        as: intent
+      - call: read_chain_state
+        if: 'intent.matched == true'
+        as: chain
+      - call: verdict
+        if: 'intent.matched == true && (chain.stage == "idle" || chain.stage == null)'
+        args:
+          level: directive
+          next_action:
+            profession: scope-architect
+            rationale: >-
+              pack-authoring intent detected without prior scope decomposition.
+              Spawning scope-architect to produce a pre-research artifact before
+              pack-architect walks the user through authoring.

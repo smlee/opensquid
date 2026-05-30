@@ -1,0 +1,43 @@
+# manifest-author-walkthrough — surface a manifest-field checklist when
+# the user is editing any pack's manifest.yaml.
+name: manifest-author-walkthrough
+load: preload
+when_to_load:
+  - kind: event_type
+    type: tool_call
+triggers:
+  - kind: tool_call
+rules:
+  - id: surface-manifest-authoring-checklist
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: text_pattern_match
+        if: 'tool == "Write" || tool == "Edit"'
+        args:
+          text_field: tool_args.file_path
+          patterns:
+            - 'packs/.+/manifest\.yaml$'
+        as: is_manifest
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && is_manifest.matched == true'
+        args:
+          level: surface
+          message: |
+            📋 Authoring a pack manifest. Quick checklist (cite
+            docs/pack-runtime.md §1 for field details):
+              [ ] name (kebab-case, no leading digit)
+              [ ] version (semver, e.g. 0.1.0)
+              [ ] scope (universal / domain / specialty / workflow / project)
+              [ ] goal (one sentence, destination-first)
+              [ ] kind (focused | composite — default focused)
+              [ ] usage (active | profession | both — default active)
+              [ ] activation_scope (project / user / hybrid / team / global)
+              [ ] detected_by (7 kinds; pick or leave empty for always-on)
+              [ ] foundation (tools / domains / methodologies — only for
+                  focused packs)
+              [ ] includes (only for composite packs; pack_id + semver
+                  range per entry)
+            If usage is profession or both, you ALSO need team.yaml.
