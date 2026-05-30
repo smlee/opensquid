@@ -7,6 +7,49 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.250] - 2026-05-30
+
+### Docs (DOG.6-DOCS — pack-runtime.md §1.10/§1.11/§1.12 closes T-DOGFOOD code-side surface)
+
+Three new sections in the authoritative pack-runtime.md so DOG.3-DOG.5
+features have first-class documentation alongside IDF.1-IDF.5 / MM.1 /
+LP.1-LP.5:
+
+- **§1.10 `seed_lessons:[]`** — pack-author knowledge ingest contract:
+  external_id UPSERT idempotency, authored_by: 'pack' eviction-immune,
+  seed_as_promoted bypass-the-gate, fire-and-forget failure handling.
+  Schema + ingest implementation pointers.
+- **§1.11 `verify_gates:[]`** — declarative author-gate compilation
+  contract: pre-parse validation throws loudly with offending gate
+  name, 5-fn allow-list, synthetic skill named `<pack>/verify` with
+  audit-trail rule ids `gate:<gate-name>`, trigger dedup, tool-name
+  filtering belongs in the check expression. Schema + compiler
+  pointers.
+- **§1.12 `livingVersion`** — DOG.5 runtime convenience triple on Pack:
+  `{base, revision} | undefined`, populated by loader from LP.1's
+  version.json via the DOG.5 getLivingPackVersion wrapper. Honors
+  OPENSQUID_HOME env override.
+
+### T-DOGFOOD status
+
+Code-side work (DOG.1-DOG.5) ships in 0.5.245 through 0.5.249:
+
+- DOG.1 (0.5.245) — three focused packs (focused-react-19 +
+  focused-typescript-strict + focused-atomic-design)
+- DOG.2 (0.5.246) — frontend-react-19-atomic composite pack
+- DOG.3 (0.5.247) — Phase 3 schema sugar (seed_lessons + verify_gates)
+- DOG.4 (0.5.248) — 25 seed_lessons + 9 verify_gates authored
+- DOG.5 (0.5.249) — living-pack version triple in Pack
+- DOG.6-DOCS (this commit) — pack-runtime.md §1.10/§1.11/§1.12
+
+DOG.6 spec's primary deliverable is a 1-week real-world dogfood window
+on a real React project — that's user-executed validation, not
+engineering work. The opensquid v1 product is functionally complete as
+of this commit; the findings doc + Phase 5b adjustments will follow
+from the user's dogfood window execution.
+
+---
+
 ## [0.5.249] - 2026-05-30
 
 ### Added (DOG.5 — Living-pack version triple in Pack + getLivingPackVersion wrapper)

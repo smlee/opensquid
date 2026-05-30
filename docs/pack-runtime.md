@@ -314,6 +314,104 @@ All writes go through atomic `<file>.tmp.<pid>.<rand>` + `fs.rename`.
 Stripping is regex-based, deterministic, no LLM calls per
 [[feedback_stop_haiku_drift]]. See `src/cli/pack.ts:buildExportCommand`.
 
+### 1.10 `seed_lessons:[]` — pack-author knowledge ingest (DOG.3 + DOG.4)
+
+Optional array on `manifest.yaml`. Each entry is ingested into the
+engine's lessons table at load time via `engine.lessonCreate({
+authored_by: 'pack', pack_id, external_id, seed_as_promoted: true })`.
+
+```yaml
+seed_lessons:
+  - title: 'Server Components by default; "use client" only at the leaf'
+    body: |
+      In React 19, every component defaults to server-render. Add
+      "use client" at the leaf where interactivity is genuinely required.
+    scope: user # or 'global'
+    tags: [react-19, server-components, performance]
+    source: 'https://react.dev/reference/rsc/server-components'
+```
+
+Contract:
+
+- **Idempotent re-ingest** — `external_id = pack-seed:<sha256(<pack>@<version>|<title>).slice(0,24)>`.
+  Engine returns `updated: true` for an UPSERT hit; `false` for a new
+  row. Re-running `loadPack` after a manifest edit re-ingests only the
+  delta (entries with new title text or new pack version).
+- **Eviction-immune** — `authored_by: 'pack'` mirrors the user-authored
+  immunity contract per [[feedback_user_authored_lessons_immune]].
+  The engine refuses `delete(force)` on these rows.
+- **Promoted-on-ingest** — `seed_as_promoted: true` bypasses the
+  pending → promoted gate so seed knowledge is recall-eligible from the
+  first session.
+- **Fire-and-forget failure handling** — per-seed RPC errors are
+  COLLECTED, never thrown. A missing or down engine does NOT block pack
+  load; seeds are simply absent from recall until the next loadPack
+  with an engine present.
+
+Schema: `SeedLesson` in `src/packs/schemas/manifest.ts`. Ingest
+implementation: `src/packs/seed_lessons_ingest.ts`. The runtime Pack
+type hoists `seedLessons?: SeedLesson[]` so downstream consumers
+(audit-trail, future fixture sync) can read without re-parsing YAML.
+
+### 1.11 `verify_gates:[]` — declarative author gates (DOG.3 + DOG.4)
+
+Optional array on `manifest.yaml`. Each entry compiles at load time
+into one `TrackCheckRule` whose process is a single `verdict` primitive
+call gated by the gate's `check` if-expression. The compiled rules are
+grouped under a synthetic skill named `<pack>/verify` with triggers
+derived from each gate's `when.event_kind`.
+
+```yaml
+verify_gates:
+  - name: no-rm-rf
+    when:
+      event_kind: tool_call
+    check: 'contains(tool_args.command, "rm -rf")'
+    on_fail:
+      level: block
+      message: |
+        BLOCKED: `rm -rf` is too destructive.
+```
+
+Contract:
+
+- **Pre-parse validation** — every `check` expression is run through
+  `parseExpression` at load time. A malformed expression throws at
+  `loadPack` with the offending gate name (no silent skipping).
+- **5-fn allow-list** — `check` uses `len` / `contains` / `startsWith`
+  / `endsWith` / `match`. Identifiers reference bindings the dispatcher
+  populates from the event (e.g. `tool_args.command`, `prompt`).
+- **Synthetic skill provenance** — compiled rule ids follow the
+  `gate:<gate-name>` pattern so drift-catalog greps can attribute the
+  verdict to its source gate.
+- **Trigger dedup** — multiple gates on the same `event_kind` produce
+  ONE trigger entry on the synthetic skill.
+- **Tool-name filtering belongs in the check expression** — the
+  `tool_call` `Trigger` variant in `event.ts` carries no per-trigger
+  `tool_match` field; use `match(tool, "^Bash$") && ...` inside the
+  `check` instead.
+
+Schema: `VerifyGate` + `VerifyGateWhen` in `src/packs/schemas/manifest.ts`.
+Compiler: `src/packs/verify_gates_compiler.ts`.
+
+### 1.12 `livingVersion` runtime field (DOG.5)
+
+The loader folds the per-pack `personal_revision/version.json` shape
+(LP.1) into a single convenience triple on the runtime `Pack`:
+
+```ts
+pack.livingVersion; // {base: string, revision: number} | undefined
+```
+
+- `base` — semver string the pack was installed at (immutable per LP.1).
+- `revision` — monotonic count of promoted lessons; 0 for a fresh install.
+- `undefined` — pack isn't user-installed (built-in pack with no
+  `~/.opensquid/packs/<id>/` state dir).
+
+Read API: `getLivingPackVersion(packId): Promise<LivingPackVersion |
+null>` in `src/packs/living_pack.ts`. Honors `OPENSQUID_HOME` env
+override (test seam wired through LP.3's `resolvePackStateDir`).
+
 ---
 
 ## 2. Skill format
