@@ -52,12 +52,16 @@ import type { z } from 'zod';
 
 import type { Pack } from '../runtime/types.js';
 
+import type { EngineClient } from '../engine/client.js';
+
 import { ChatAgentSchema, type ChatAgentConfig } from './schemas/chat_agent.js';
 import { DriftResponseConfig } from './schemas/drift_response.js';
 import { Manifest } from './schemas/manifest.js';
 import { ModelsConfig } from './schemas/models.js';
 import { Skill } from './schemas/skill.js';
 import { Team } from './schemas/team.js';
+import { ingestSeedLessons } from './seed_lessons_ingest.js';
+import { compileVerifyGates } from './verify_gates_compiler.js';
 import { parseYamlFile } from './yaml.js';
 
 // alias to keep the inline team-load block readable
@@ -84,7 +88,17 @@ type DriftResponseConfigOutput = z.infer<typeof DriftResponseConfig>;
 // so we conditionally spread to avoid that mismatch.
 // ---------------------------------------------------------------------------
 
-export async function loadPack(dir: string): Promise<Pack> {
+export interface LoadPackDeps {
+  /**
+   * Optional engine client. When present, DOG.3 seed_lessons are ingested
+   * fire-and-forget via `engine.lessonCreate`. Absent (test path, engine
+   * not yet handshaked) → seeds are stored on `Pack.seedLessons` but not
+   * ingested; next loadPack with `deps.engine` will UPSERT them.
+   */
+  engine?: EngineClient;
+}
+
+export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> {
   const manifestPath = join(dir, 'manifest.yaml');
   const { data } = await parseYamlFile(manifestPath, Manifest);
   // Re-cast to the schema's output type (see ManifestOutput comment above).
@@ -92,6 +106,42 @@ export async function loadPack(dir: string): Promise<Pack> {
 
   const skillsDir = join(dir, 'skills');
   const skills = await loadSkillsDir(skillsDir);
+
+  // DOG.3 — compile verify_gates -> synthetic skill `<pack>/verify`. Errors
+  // throw loudly with offending gate name so pack authors get clear feedback.
+  if (manifest.verify_gates.length > 0) {
+    const compileResult = compileVerifyGates(manifest.name, manifest.verify_gates);
+    if (!compileResult.ok) {
+      const details = compileResult.errors.map((e) => `${e.gateName}: ${e.message}`).join('; ');
+      throw new Error(`pack ${manifest.name}: verify_gates compile errors: ${details}`);
+    }
+    if (compileResult.skill.rules.length > 0) {
+      skills.push(compileResult.skill);
+    }
+  }
+
+  // DOG.3 — ingest seed_lessons (fire-and-forget; engine may be absent in
+  // tests). Per-seed failures are LOGGED, never thrown; loadPack never
+  // fails for engine-availability reasons.
+  if (deps?.engine !== undefined && manifest.seed_lessons.length > 0) {
+    const engine = deps.engine;
+    void ingestSeedLessons(manifest.name, manifest.version, manifest.seed_lessons, engine).then(
+      (r) => {
+        if (r.failed.length > 0) {
+          console.warn(
+            `opensquid pack ${manifest.name}: seed-ingest had ${String(r.failed.length)} failures (engine reachable?):`,
+            r.failed,
+          );
+        }
+      },
+      (e: unknown) => {
+        console.warn(
+          `opensquid pack ${manifest.name}: seed-ingest pipeline blew up:`,
+          e instanceof Error ? e.message : String(e),
+        );
+      },
+    );
+  }
 
   // chat_agent.yaml — WAB.6 chat-agent binding side-file. OPTIONAL: absence
   // (ENOENT) is the bind-time signal for "fall back to built-in defaults in
@@ -162,6 +212,11 @@ export async function loadPack(dir: string): Promise<Pack> {
     includes: manifest.includes,
     // MM.2 — loaded team.yaml (present iff usage is profession | both).
     ...(team !== undefined ? { team } : {}),
+    // DOG.3 — manifest schema-sugar blocks hoisted onto runtime Pack so
+    // downstream consumers (audit-trail surface, future fixture sync)
+    // can read without re-parsing manifest YAML.
+    seedLessons: manifest.seed_lessons,
+    verifyGates: manifest.verify_gates,
     ...(manifest.extends !== undefined ? { extends: manifest.extends } : {}),
     ...(chatAgent !== undefined ? { chatAgent } : {}),
     ...(models !== undefined ? { models } : {}),

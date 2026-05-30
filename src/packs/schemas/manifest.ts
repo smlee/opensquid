@@ -359,6 +359,60 @@ export const PersonalRevision = z
 export type PersonalRevision = z.infer<typeof PersonalRevision>;
 
 // ---------------------------------------------------------------------------
+// DOG.3 (2026-05-30) — seed_lessons + verify_gates schema sugar.
+//
+// SeedLesson — pack-author-provided knowledge ingested into the engine's
+// lessons table at load-time via engine.lessonCreate({authored_by: 'pack',
+// pack_id, external_id, seed_as_promoted: true}). The external_id is a
+// stable sha256 of (pack@version|title) so re-ingestion is idempotent
+// (engine UPSERT). Pack-authored lessons are eviction-immune per the
+// engine's authorship contract (mirrors user-authored behaviour).
+//
+// VerifyGate — author-declared "when X then warn/block" check. Compiled at
+// load-time into a synthetic TrackCheckRule whose process is a single
+// `verdict` primitive call gated by the `check` if-expression. The 5-fn
+// allow-list (len/contains/startsWith/endsWith/match) governs `check`
+// validity; load-time pre-parse rejects unknown functions loudly.
+// ---------------------------------------------------------------------------
+
+export const SeedLesson = z
+  .object({
+    title: z.string().min(1).max(200),
+    body: z.string().min(1),
+    scope: z.enum(['user', 'global']).default('user'),
+    tags: z.array(z.string().min(1)).default([]),
+    source: z.string().optional(),
+  })
+  .strict();
+export type SeedLesson = z.infer<typeof SeedLesson>;
+
+export const VerifyGateWhen = z
+  .object({
+    event_kind: z.enum(['tool_call', 'prompt_submit', 'stop', 'session_end']),
+  })
+  .strict();
+export type VerifyGateWhen = z.infer<typeof VerifyGateWhen>;
+
+export const VerifyGate = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[a-z0-9][a-z0-9-]*$/, 'gate name: lowercase alphanum + hyphens, no leading hyphen'),
+    when: VerifyGateWhen,
+    check: z.string().min(1),
+    on_fail: z
+      .object({
+        level: z.enum(['warn', 'block']),
+        message: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
+export type VerifyGate = z.infer<typeof VerifyGate>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -415,6 +469,12 @@ export const Manifest = z
     // in-memory consistency.
     base_version: BaseVersion.optional(),
     personal_revision: PersonalRevision.optional(),
+    // DOG.3 (2026-05-30) — schema sugar blocks. Default [] for both so every
+    // pre-DOG.3 pack parses unchanged. Loader compiles verify_gates → a
+    // synthetic skill; ingest of seed_lessons fires through engine.lessonCreate
+    // when the loader is invoked with an engine dep (bootstrap path).
+    seed_lessons: z.array(SeedLesson).default([]),
+    verify_gates: z.array(VerifyGate).default([]),
   })
   .strict()
   .superRefine((m, ctx) => {

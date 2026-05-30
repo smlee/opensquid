@@ -42,6 +42,8 @@ import {
   Foundation,
   PackKind,
   PackUsage,
+  SeedLesson,
+  VerifyGate,
 } from '../packs/schemas/manifest.js';
 import { Team } from '../packs/schemas/team.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
@@ -386,6 +388,14 @@ export const Pack = z.object({
   baseVersion: BaseVersion.optional(),
   personalRevisionId: z.number().int().nonnegative().optional(),
   lastMergedVanilla: BaseVersion.nullable().optional(),
+  // DOG.3 (2026-05-30) — schema-sugar manifest blocks hoisted onto Pack so
+  // downstream consumers (ingest pipeline, audit-trail surface, fixture
+  // sync) can read without re-parsing the manifest YAML. Optional on the
+  // runtime Pack type so test fixtures + non-loadPack callers can
+  // construct Pack literals without these fields (back-compat); the YAML
+  // loader (loader.ts) supplies the defaults explicitly.
+  seedLessons: z.array(SeedLesson).optional(),
+  verifyGates: z.array(VerifyGate).optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

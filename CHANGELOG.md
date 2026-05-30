@@ -7,6 +7,112 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.247] - 2026-05-30
+
+### Added (DOG.3 — Phase 3 schema sugar: seed_lessons + verify_gates)
+
+Two manifest-schema-sugar blocks now folded into every pack's load path
+so pack authors can declare seed knowledge + lightweight verify gates
+without hand-authoring full skill YAMLs.
+
+**Schema (`src/packs/schemas/manifest.ts`):**
+
+- `SeedLesson` — `{title, body, scope: 'user'|'global', tags, source}`.
+  `title` ≤ 200 chars; `body` ≥ 1 char; both required.
+- `VerifyGateWhen` — `{event_kind: 'tool_call' | 'prompt_submit' |
+'stop' | 'session_end'}`. Tool-name filtering, when needed, belongs
+  inside the `check` expression itself (e.g. `match(tool, '^Bash$')`)
+  because the `tool_call` `Trigger` variant in `event.ts` intentionally
+  carries no per-trigger `tool_match` field.
+- `VerifyGate` — `{name, when, check, on_fail: {level, message}}`.
+  `name` regex matches the same lowercase-alphanum-hyphen rule as pack
+  names; `on_fail.level` ∈ `{warn, block}`; `check` is a 5-fn
+  if-expression (`len`/`contains`/`startsWith`/`endsWith`/`match`).
+- `Manifest` extended with `seed_lessons: SeedLesson[]` (default `[]`)
+  - `verify_gates: VerifyGate[]` (default `[]`) — back-compat with
+    every pre-DOG.3 pack.
+
+**Runtime (`src/runtime/types.ts`):** `Pack` hoists `seedLessons?:
+SeedLesson[]` + `verifyGates?: VerifyGate[]` so downstream consumers
+(audit-trail surface, future fixture sync) can read without re-parsing
+manifest YAML.
+
+**`src/packs/verify_gates_compiler.ts`** (99 LOC) —
+`compileVerifyGates(packName, gates) -> CompileResult` returns either
+`{ok: true, skill}` (synthetic skill named `<pack>/verify`) or
+`{ok: false, errors: [{gateName, message}]}`. Each gate compiles into
+one `TrackCheckRule` whose process is a single `verdict` primitive call
+gated by the gate's `check` expression. Triggers are deduped by
+`event_kind` so two gates on `tool_call` produce one trigger.
+Load-time pre-parse of every `check` via `parseExpression` catches
+malformed if-expressions loudly — the loader throws with the offending
+gate name. Audit-trail rule id pattern: `gate:<gate-name>`.
+
+**`src/packs/seed_lessons_ingest.ts`** (87 LOC) —
+`ingestSeedLessons(packName, packVersion, seeds, engine) -> IngestResult`
+invokes `engine.lessonCreate({description, body, authored_by: 'pack',
+pack_id, external_id, seed_as_promoted: true})` per seed.
+`external_id = pack-seed:<sha256(packName@packVersion|title).slice(0,24)>`
+so re-ingestion UPSERTs (engine returns `updated: true` → counted as
+`skipped`). Per-seed failures are COLLECTED (never thrown) so one bad
+seed doesn't abort the rest, and a totally absent engine doesn't block
+pack load. Pack-authored seeds are eviction-immune per the engine's
+`authored_by: 'pack'` contract (matches user-authored behaviour per
+`feedback_user_authored_lessons_immune`).
+
+**`src/packs/loader.ts`** — wires both:
+
+- `verify_gates.length > 0` → compile + push synthetic skill into
+  `skills` array (throws loudly on compile errors).
+- `deps.engine !== undefined && seed_lessons.length > 0` → fire-and-
+  forget ingest via `void ingestSeedLessons(...).then(...)`; failures
+  log to `console.warn`, never throw.
+- `loadPack(dir)` keeps its original single-arg signature for
+  back-compat; new optional `deps?: LoadPackDeps` parameter accepts
+  `{engine?: EngineClient}` so test paths can omit and bootstrap can
+  supply.
+
+### Tests (+26 new cases across 3 files; total ≥ 26 per acceptance)
+
+- `src/packs/verify_gates_compiler.test.ts` — 10 cases: empty-input
+  defaults, one-gate compile shape, on_fail level propagation, audit-
+  trail rule ids, trigger dedup, parse-error loud failure, multi-gate
+  error collection (no early exit), prompt_submit event_kind, empty
+  preconditions, namespaced skill name.
+- `src/packs/seed_lessons_ingest.test.ts` — 9 cases: empty-input
+  zero-counts, lessonCreate call shape (authored_by/pack_id/
+  external_id/seed_as_promoted), `updated:false` → ingested,
+  `updated:true` → skipped (UPSERT), per-seed error isolation,
+  engine-totally-absent fallback, external_id determinism + uniqueness
+  across name/version/title, mixed-flag counts split.
+- `src/packs/schemas/manifest.test.ts` — 7 new DOG.3 cases: default
+  empty arrays, well-formed seed/gate accept paths, empty-title reject,
+  bad gate name reject (uppercase / leading hyphen), bad on_fail.level
+  reject, bad event_kind reject.
+
+### Why this matters
+
+DOG.3 is the keystone schema sugar that DOG.4 consumes — DOG.4 authors
+5-10 seed_lessons + 2-3 verify_gates per focused pack now that the
+compile + ingest plumbing is wired. No production behavior change for
+packs that don't declare either block; existing packs continue to load
+unchanged.
+
+### Spec drift resolved
+
+DOG.3 spec referenced (a) `memoryCreate` for ingest — actual engine
+surface is `lessonCreate` with `authored_by: 'pack'` + `external_id`
+UPSERT + `seed_as_promoted: true` per `src/engine/types.ts`. (b)
+spec's `then: {verdict: ...}` Rule shape doesn't exist — actual
+`TrackCheckRule.process[0] = {call: 'verdict', if: <check>, args: {...}}`
+matches the existing skill grammar (see
+`packs/builtin/default-discipline/skills/git/skill.yaml`).
+(c) `tool_match` on `VerifyGateWhen` dropped because the `tool_call`
+`Trigger` variant carries no per-trigger tool_match field; the check
+expression carries the tool filter when needed.
+
+---
+
 ## [0.5.246] - 2026-05-30
 
 ### Added (DOG.2 — frontend-react-19-atomic composite pack; second slice of T-DOGFOOD)

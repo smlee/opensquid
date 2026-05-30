@@ -37,6 +37,9 @@ export {
   Permissions,
   RateLimitPeriod,
   RateLimits,
+  SeedLesson,
+  VerifyGate,
+  VerifyGateWhen,
 } from './manifest.js';
 export type {
   ActivationScope as ActivationScopeType,
@@ -56,10 +59,13 @@ export type {
   RateLimitPeriod as RateLimitPeriodType,
   RateLimits as RateLimitsType,
   RateLimitTriggerConfig as RateLimitTriggerConfigType,
+  SeedLesson as SeedLessonType,
   SendMessagePermission as SendMessagePermissionType,
   ShellExecPermission as ShellExecPermissionType,
   SubagentCallPermission as SubagentCallPermissionType,
   SubprocessCallPermission as SubprocessCallPermissionType,
+  VerifyGate as VerifyGateType,
+  VerifyGateWhen as VerifyGateWhenType,
 } from './manifest.js';
 
 // models.yaml

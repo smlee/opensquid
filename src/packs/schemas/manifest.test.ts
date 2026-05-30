@@ -674,3 +674,103 @@ describe('LP.1: BaseVersion + PersonalRevision schemas', () => {
     };
   }
 });
+
+describe('DOG.3: seed_lessons + verify_gates schema', () => {
+  function minimal(): Record<string, unknown> {
+    return { name: 'p', version: '0.1.0', scope: 'workflow', goal: 'fixture' };
+  }
+
+  it('defaults seed_lessons + verify_gates to empty arrays (back-compat)', () => {
+    const r = Manifest.safeParse(minimal());
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.seed_lessons).toEqual([]);
+    expect(r.data.verify_gates).toEqual([]);
+  });
+
+  it('accepts a well-formed seed_lessons entry with all fields', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      seed_lessons: [
+        {
+          title: 'a useful idiom',
+          body: 'body of the lesson',
+          scope: 'user',
+          tags: ['react-19'],
+          source: 'https://example.com/x',
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects a seed_lessons entry with empty title (.min(1))', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      seed_lessons: [{ title: '', body: 'b' }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('accepts a well-formed verify_gates entry with all fields', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      verify_gates: [
+        {
+          name: 'no-rm-rf',
+          when: { event_kind: 'tool_call' },
+          check: 'contains(tool_args.command, "rm -rf")',
+          on_fail: { level: 'block', message: 'no rm -rf' },
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects verify_gate name with uppercase or leading hyphen', () => {
+    for (const badName of ['BadName', '-leading-hyphen', '']) {
+      const r = Manifest.safeParse({
+        ...minimal(),
+        verify_gates: [
+          {
+            name: badName,
+            when: { event_kind: 'tool_call' },
+            check: 'len("x")',
+            on_fail: { level: 'warn', message: 'bad' },
+          },
+        ],
+      });
+      expect(r.success, `should reject name=${JSON.stringify(badName)}`).toBe(false);
+    }
+  });
+
+  it('rejects verify_gate.on_fail.level outside {warn, block}', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      verify_gates: [
+        {
+          name: 'g',
+          when: { event_kind: 'tool_call' },
+          check: 'len("x")',
+          on_fail: { level: 'panic', message: 'x' },
+        },
+      ],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects verify_gate.when.event_kind outside the 4-value allow-list', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      verify_gates: [
+        {
+          name: 'g',
+          when: { event_kind: 'inbound_channel' },
+          check: 'len("x")',
+          on_fail: { level: 'warn', message: 'x' },
+        },
+      ],
+    });
+    expect(r.success).toBe(false);
+  });
+});
