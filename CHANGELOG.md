@@ -7,6 +7,54 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.225] - 2026-05-30
+
+### Added (IDF.4 — activation_scope dispatch routing closes T-IDENTITY-FOUNDATION runtime track)
+
+- **`activationScopeApplies(scope, ctx)`** pure function
+  (`src/runtime/hooks/dispatch.ts`) — returns boolean given a pack's
+  `activation_scope` enum + a `DispatchScopeCtx`. Five-case semantics
+  per v0.6 §4.5 + T-IDENTITY-FOUNDATION L7:
+  - `project` → applies when current cwd matches project context
+    (`ctx.inProject`)
+  - `user` → applies for any user session (`ctx.isUserSession`)
+  - `hybrid` → both `inProject` AND `isUserSession` must be true
+  - `team` → ships INERT (always returns false) until team-mode
+    infrastructure lands; packs declaring this scope are silently
+    dormant in IDF.4
+  - `global` → effectively `user` today (= `ctx.isUserSession`);
+    multi-user infrastructure is post-v1
+- **`DispatchScopeCtx` interface** — `{ inProject: boolean, isUserSession:
+boolean }`. New 5th optional parameter on `dispatchEvent` with
+  back-compat default `{ inProject: true, isUserSession: true }` so
+  every existing call site continues to work unchanged.
+- **Pack-walk filter** — `dispatchEvent` now skips entire packs whose
+  `activationScope` (or coalesced `'project'` default) doesn't apply in
+  the current context. Filter sits BEFORE the skill loop so a scope
+  mismatch produces zero rule walks for the pack.
+
+### Tests
+
+- `src/runtime/hooks/dispatch.test.ts` — 12 new IDF.4 cases:
+  - 5 unit tests on `activationScopeApplies` (one per enum value;
+    `team` always false; `global` mirrors `user`)
+  - 7 integration tests on `dispatchEvent` routing:
+    back-compat default ctx, project skip when `inProject=false`, user
+    walks regardless, hybrid AND-gate, team never walks, global walks
+    per isUserSession, undefined `activationScope` defaults to
+    `'project'` via `?? coalesce`
+
+### Notes
+
+- `team` packs are dormant for end users until the team-mode wiring
+  ships. Authors shipping team-scoped packs in v0.5.x should know they
+  will never fire today.
+- Phase 1 runtime tracks (IDF.1 schema + IDF.2 detection + IDF.3 auto-
+  activation + IDF.4 dispatch routing) are now end-to-end wired. IDF.5
+  ships the authoritative `docs/pack-runtime.md` reference next.
+
+---
+
 ## [0.5.224] - 2026-05-30
 
 ### Added (IDF.3 — auto-activation pipeline consumes IDF.1 schema + IDF.2 evaluator)

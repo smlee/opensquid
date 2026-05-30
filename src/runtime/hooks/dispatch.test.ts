@@ -1003,3 +1003,152 @@ describe('dispatchEvent', () => {
     });
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────
+ * IDF.4 — activation_scope routing in the dispatcher.
+ *
+ * activationScopeApplies(scope, ctx) governs whether a pack's skills
+ * walk at all. The dispatcher filters BEFORE entering the skill loop,
+ * so a scope mismatch produces zero rule walks for that pack.
+ *
+ * The pack here always emits a `block` verdict if its rules run, so the
+ * test outcome (exit 2 vs exit 0) directly maps to "did dispatchEvent
+ * walk the pack's rules". Test pack uses an explicit activationScope
+ * per case.
+ * ──────────────────────────────────────────────────────────────────── */
+import { activationScopeApplies, type DispatchScopeCtx } from './dispatch.js';
+import type { ActivationScope } from '../../packs/schemas/manifest.js';
+
+describe('IDF.4: activationScopeApplies pure function', () => {
+  it('project: true ↔ inProject', () => {
+    expect(activationScopeApplies('project', { inProject: true, isUserSession: true })).toBe(true);
+    expect(activationScopeApplies('project', { inProject: false, isUserSession: true })).toBe(
+      false,
+    );
+  });
+
+  it('user: always true when isUserSession (today, always true)', () => {
+    expect(activationScopeApplies('user', { inProject: false, isUserSession: true })).toBe(true);
+    expect(activationScopeApplies('user', { inProject: true, isUserSession: true })).toBe(true);
+    // pathological: no user session → false
+    expect(activationScopeApplies('user', { inProject: true, isUserSession: false })).toBe(false);
+  });
+
+  it('hybrid: AND of inProject + isUserSession', () => {
+    expect(activationScopeApplies('hybrid', { inProject: true, isUserSession: true })).toBe(true);
+    expect(activationScopeApplies('hybrid', { inProject: false, isUserSession: true })).toBe(false);
+    expect(activationScopeApplies('hybrid', { inProject: true, isUserSession: false })).toBe(false);
+  });
+
+  it('team: always false (inert until team-mode infrastructure ships)', () => {
+    expect(activationScopeApplies('team', { inProject: true, isUserSession: true })).toBe(false);
+    expect(activationScopeApplies('team', { inProject: false, isUserSession: false })).toBe(false);
+  });
+
+  it('global: behaves as user today (= isUserSession) until multi-user lands', () => {
+    expect(activationScopeApplies('global', { inProject: true, isUserSession: true })).toBe(true);
+    expect(activationScopeApplies('global', { inProject: false, isUserSession: true })).toBe(true);
+    expect(activationScopeApplies('global', { inProject: true, isUserSession: false })).toBe(false);
+  });
+});
+
+describe('IDF.4: dispatchEvent filters packs by activation_scope before walking skills', () => {
+  function packWithScope(scope: ActivationScope, packName = 'idf4-test'): Pack {
+    // Reuses the existing test-fixture verdict rule (always blocks if walked).
+    const skill: Skill = {
+      name: `${packName}-skill`,
+      load: 'preload',
+      when_to_load: [],
+      requires: [],
+      unloads_when: [],
+      triggers: [{ kind: 'tool_call' }],
+      rules: [verdictRule],
+    };
+    return {
+      name: packName,
+      version: '0.0.0',
+      scope: 'workflow',
+      goal: 'idf4 test',
+      description: '',
+      requires: [],
+      conflicts: [],
+      evolves: true,
+      skills: [skill],
+      activationScope: scope,
+      detectedBy: [],
+    };
+  }
+
+  const blockRegistry = () => buildRegistryWithVerdict({ level: 'block', message: 'walked' });
+
+  it('back-compat: scopeCtx defaults to inProject=true + isUserSession=true (existing tests work)', async () => {
+    const pack = packWithScope('project');
+    const r = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-default');
+    expect(r.exitCode).toBe(2); // walked → blocked
+  });
+
+  it('project pack: NOT walked when inProject=false (skill loop skipped)', async () => {
+    const pack = packWithScope('project');
+    const ctx: DispatchScopeCtx = { inProject: false, isUserSession: true };
+    const r = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-proj-skip', ctx);
+    expect(r.exitCode).toBe(0); // skipped → no block
+    expect(r.stderr).toBe('');
+  });
+
+  it('user pack: walked regardless of inProject', async () => {
+    const pack = packWithScope('user');
+    const ctx: DispatchScopeCtx = { inProject: false, isUserSession: true };
+    const r = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-user', ctx);
+    expect(r.exitCode).toBe(2);
+  });
+
+  it('hybrid pack: walked only when BOTH inProject + isUserSession', async () => {
+    const pack = packWithScope('hybrid');
+    const proj = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-hyb-1', {
+      inProject: true,
+      isUserSession: true,
+    });
+    expect(proj.exitCode).toBe(2);
+    const noProj = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-hyb-2', {
+      inProject: false,
+      isUserSession: true,
+    });
+    expect(noProj.exitCode).toBe(0);
+  });
+
+  it('team pack: NEVER walked (inert until team-mode infrastructure)', async () => {
+    const pack = packWithScope('team');
+    const r = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-team', {
+      inProject: true,
+      isUserSession: true,
+    });
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('global pack: walked when isUserSession (effectively == user today)', async () => {
+    const pack = packWithScope('global');
+    const r = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-glob', {
+      inProject: false,
+      isUserSession: true,
+    });
+    expect(r.exitCode).toBe(2);
+  });
+
+  it('Pack with undefined activationScope defaults to project at runtime via ?? coalesce', async () => {
+    const pack = packWithScope('project'); // start from a valid Pack
+    const packAny = pack as Pack & { activationScope?: ActivationScope };
+    delete packAny.activationScope;
+    const ctxProj: DispatchScopeCtx = { inProject: true, isUserSession: true };
+    const rProj = await dispatchEvent(event, [pack], blockRegistry(), 'idf4-undef-proj', ctxProj);
+    expect(rProj.exitCode).toBe(2);
+    const ctxNoProj: DispatchScopeCtx = { inProject: false, isUserSession: true };
+    const rNoProj = await dispatchEvent(
+      event,
+      [pack],
+      blockRegistry(),
+      'idf4-undef-noproj',
+      ctxNoProj,
+    );
+    expect(rNoProj.exitCode).toBe(0);
+  });
+});

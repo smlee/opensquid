@@ -68,6 +68,7 @@ import { partitionSkills } from '../pinned_skills.js';
 import { advanceSkillTicks, type SkillTicks } from '../session_state.js';
 import { RequiresCache, skillRequiresHold } from '../skill_requires.js';
 import { UnloadCondition, shouldUnload, type TickState } from '../unload_conditions.js';
+import type { ActivationScope } from '../../packs/schemas/manifest.js';
 import type { Directive, DriftPolicy, Event, Pack, Skill } from '../types.js';
 
 export interface DispatchResult {
@@ -166,6 +167,46 @@ function parseUnloadsWhen(raw: readonly unknown[]): UnloadCondition[] {
  * skips — silently skipping a gate skill because its tick read failed would
  * be a drift hole. Pinned skills never reach this function.
  */
+/**
+ * IDF.4 — activation_scope dispatch routing.
+ *
+ * Per-pack `activation_scope:` (v0.6 §4.5 restored by IDF.1 schema) gates
+ * whether the dispatcher should walk a pack's skills at all in the current
+ * context. Distinct axis from existing `scope:` (which is layering
+ * precedence — universal→domain→specialty→workflow→project).
+ *
+ * 5-case semantics (per T-IDENTITY-FOUNDATION L7):
+ *   - 'project'  → applies when current cwd matches project context
+ *   - 'user'     → always applies (per-user globally)
+ *   - 'hybrid'   → both project AND user signals must apply
+ *   - 'team'     → ships INERT — never fires until team-mode lands.
+ *                  Packs declaring this scope are silently dormant; users
+ *                  shipping team packs today should know this.
+ *   - 'global'   → effectively == 'user' today; distinguishing requires
+ *                  multi-user infrastructure (post-v1).
+ */
+export interface DispatchScopeCtx {
+  /** True when current cwd matches the pack's project context (today: always true when discovery loaded the pack at all). */
+  inProject: boolean;
+  /** Always true today; placeholder for future team/multi-user infrastructure. */
+  isUserSession: boolean;
+}
+
+export function activationScopeApplies(scope: ActivationScope, ctx: DispatchScopeCtx): boolean {
+  switch (scope) {
+    case 'project':
+      return ctx.inProject;
+    case 'user':
+      return ctx.isUserSession;
+    case 'hybrid':
+      return ctx.inProject && ctx.isUserSession;
+    case 'team':
+      return false;
+    case 'global':
+      return ctx.isUserSession;
+  }
+}
+
 export function shouldSkillUnload(skill: Skill, tick: TickState | undefined): boolean {
   if (tick === undefined) return false; // fail-safe: no tick → stay loaded
   const conditions = parseUnloadsWhen(skill.unloads_when);
@@ -207,6 +248,7 @@ export async function dispatchEvent(
   packs: Pack[],
   registry: FunctionRegistry,
   sessionId: string,
+  scopeCtx: DispatchScopeCtx = { inProject: true, isUserSession: true },
 ): Promise<DispatchResult> {
   // Count rules walked across all skills so the marker carries a meaningful
   // signal (rules=0 means dispatch ran but no skill subscribed to this kind;
@@ -249,6 +291,11 @@ export async function dispatchEvent(
   const requiresCache = new RequiresCache();
 
   for (const pack of packs) {
+    // IDF.4 — activation_scope dispatch routing. `pack.activationScope ??
+    // 'project'` covers IDF.1's optional Pack runtime field for test
+    // fixtures + back-compat. A scope mismatch (e.g. user-context-only pack
+    // when scopeCtx.inProject === false) skips the entire skill walk.
+    if (!activationScopeApplies(pack.activationScope ?? 'project', scopeCtx)) continue;
     for (const skill of pack.skills) {
       // CU.2: a DYNAMIC skill whose unload condition fired this event is
       // skipped — its rules don't evaluate and its prose isn't injected.
