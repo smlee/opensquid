@@ -7,6 +7,81 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.253] - 2026-05-31
+
+### Fixed (LL4FIX.1 — drop sessionId from ackKey; cross-session dedup)
+
+**Root cause:** `src/runtime/chat/inbox.ts` `ackKey(platform, messageId, sessionId)`
+included sessionId in the dedup key. Result: ack records written by
+session A never deduped injection for session B. Every new Claude Code
+session re-injected the entire inbox backlog as the first UPS
+`additionalContext` envelope.
+
+**Symptom verified live on 2026-05-31:** user's
+`~/.opensquid/projects/da96385b-.../inbox/` held 66 unique message_ids ×
+4 distinct sessionIds = 264 ack records, while `telegram.jsonl` still
+contained all 66 messages. The user's RaumPilates Claude session
+hung/crashed after several restarts, each restart re-flooding the
+session with ~12KB of stale loop-project messages.
+
+This bug was MASKED until commit `f93aaf1` (BPDISC) made hooks actually
+run. Before BPDISC, the discovery-crash short-circuited the UPS hook
+before LL.4 could drain; LL.4's pre-existing per-session-dedup design
+was invisible.
+
+**Fix:**
+
+- **`src/runtime/chat/inbox.ts`** — `ackKey` is now 2-arg
+  `(platform: Platform, messageId: string): string` returning
+  `${platform}::${messageId}`. JSDoc captures the LL4FIX.1 rationale +
+  preserves "AckRow.injected_at_sessionId is still RECORDED as audit
+  metadata" contract.
+- **`src/runtime/chat/inbox_inject.ts`** — `computeUnackedRows` builds
+  the dedup set using the 2-arg key. The `sessionId` parameter stays on
+  the function signature because `buildAckRowsForInjected` still uses
+  it to record `injected_at_sessionId` (the audit-trail field that
+  drives the 7-day purge). Added `void sessionId` so linters don't
+  flag the now-unused-in-the-dedup-loop arg.
+- **`src/runtime/chat/inbox.test.ts`** — updated the `ackKey` canonical
+  format test from `telegram::42::sess-A` to `telegram::42` + added a
+  per-platform-distinct-keys assertion.
+- **`src/runtime/chat/inbox_inject.test.ts`** — rewrote the
+  per-session-dedup test as a cross-session-dedup test (an ack from
+  session OTHER now correctly dedupes for session A). Added a
+  per-platform isolation test (telegram ack does NOT dedupe a slack
+  row with the same id).
+
+**Live verification on user's da96385b project:**
+
+```
+$ echo '{"hook_event_name":"UserPromptSubmit","session_id":"verify-A","prompt":"x"}' \
+    | opensquid-hook-userpromptsubmit | wc -c
+57
+
+$ echo '{"hook_event_name":"UserPromptSubmit","session_id":"verify-B","prompt":"x"}' \
+    | opensquid-hook-userpromptsubmit | wc -c
+57
+```
+
+Both new sessions (verify-A + verify-B) see the existing 4-session ack
+backlog and emit empty envelopes (57 bytes = just the
+`[opensquid-dispatch] event=prompt_submit rules=N packs=N` log line —
+no additionalContext). Pre-fix, each would have emitted ~12KB of stale
+messages.
+
+**Back-compat:** `acked.jsonl` shape on disk is unchanged — the fix
+only reads `platform` + `message_id` from existing records (ignoring
+the `injected_at_sessionId` field in dedup-key derivation, while still
+writing it as audit metadata on new acks). No migration needed.
+
+**Out of scope:** project-UUID resolution behavior (the `T-PUIDFIX`
+hypothesis from the 2026-05-31 incident pre-research turned out to be
+a false alarm — the UPS hook correctly uses `process.cwd()`, which in
+production is the Claude session's project cwd; my test had spoofed
+the JSON payload's cwd field which is ignored by the hook).
+
+---
+
 ## [0.5.252] - 2026-05-30
 
 ### Fixed (BPDISC — built-in pack auto-discovery; closes the silent-stop-gate bug)

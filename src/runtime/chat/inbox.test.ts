@@ -158,8 +158,11 @@ describe('readInbox / readAcked best-effort readers', () => {
   });
 });
 
-describe('ackKey canonical dedup string', () => {
-  it("returns 'telegram::42::sess-A' for that triple", () => {
-    expect(ackKey('telegram', '42', 'sess-A')).toBe('telegram::42::sess-A');
+describe('ackKey canonical dedup string (LL4FIX.1 — 2-arg)', () => {
+  it("returns 'telegram::42' for (platform, messageId)", () => {
+    expect(ackKey('telegram', '42')).toBe('telegram::42');
+  });
+  it('different platforms produce different keys for the same id', () => {
+    expect(ackKey('telegram', '42')).not.toBe(ackKey('slack', '42'));
   });
 });

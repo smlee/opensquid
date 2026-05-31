@@ -37,7 +37,7 @@ function ackRow(over: Partial<AckRow> & { message_id: string }): AckRow {
   };
 }
 
-describe('computeUnackedRows — per-session dedup', () => {
+describe('computeUnackedRows — cross-session dedup (LL4FIX.1)', () => {
   it('1 row + empty acked + sessionId sess-A → unacked = [row]', () => {
     const rows = [inboxRow({ id: '1', received_at: '2026-05-30T12:00:00Z' })];
     expect(computeUnackedRows(rows, [], 'sess-A').map((r) => r.id)).toEqual(['1']);
@@ -49,10 +49,27 @@ describe('computeUnackedRows — per-session dedup', () => {
     expect(computeUnackedRows(rows, acked, 'sess-A')).toEqual([]);
   });
 
-  it('1 row + AckRow for DIFFERENT sessionId → unacked = [row] (per-session dedup)', () => {
+  // LL4FIX.1 STRENGTHENED CONTRACT: an ack from session A dedupes for session B.
+  // Previously this returned [row] (per-session re-flood); the new contract
+  // returns [] because dedup key is (platform, message_id) only.
+  it('1 row + AckRow for DIFFERENT sessionId → unacked = [] (cross-session dedup)', () => {
     const rows = [inboxRow({ id: '1', received_at: '2026-05-30T12:00:00Z' })];
     const acked = [ackRow({ message_id: '1', injected_at_sessionId: 'sess-OTHER' })];
-    expect(computeUnackedRows(rows, acked, 'sess-A').map((r) => r.id)).toEqual(['1']);
+    expect(computeUnackedRows(rows, acked, 'sess-A')).toEqual([]);
+  });
+
+  it('per-platform isolation preserved: telegram ack does not dedupe slack row with same id', () => {
+    const rows = [
+      inboxRow({
+        id: '42',
+        platform: 'slack',
+        received_at: '2026-05-30T12:00:00Z',
+      }),
+    ];
+    const acked = [
+      ackRow({ message_id: '42', platform: 'telegram', injected_at_sessionId: 'sess-A' }),
+    ];
+    expect(computeUnackedRows(rows, acked, 'sess-A').map((r) => r.id)).toEqual(['42']);
   });
 
   it('5 rows + 2 already acked → unacked = 3 sorted by received_at', () => {

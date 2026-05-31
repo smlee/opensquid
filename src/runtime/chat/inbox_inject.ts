@@ -27,9 +27,13 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const ENVELOPE_BUDGET_BYTES = 8 * 1024;
 
 /**
- * Filter inbox rows to those NOT yet acked for this session. Dedup key is
- * `(platform, message_id, sessionId)` per L2 — re-injecting the same
- * message into a DIFFERENT session is intentional (per-session dedup).
+ * Filter inbox rows to those NOT yet acked. Dedup key is
+ * `(platform, message_id)` per LL4FIX.1 (2026-05-31). Was previously
+ * keyed with sessionId — that re-flooded every new session with the
+ * entire backlog because no prior-session ack matched. The fix drops
+ * sessionId from the SET-key derivation; the arg stays on this fn
+ * signature because `buildAckRowsForInjected` still records
+ * `injected_at_sessionId` as audit metadata + drives 7-day purge.
  */
 export function computeUnackedRows(
   rows: readonly InboxRow[],
@@ -38,14 +42,17 @@ export function computeUnackedRows(
 ): InboxRow[] {
   const ackedKeys = new Set<string>();
   for (const a of acked) {
-    ackedKeys.add(ackKey(a.platform, a.message_id, a.injected_at_sessionId));
+    ackedKeys.add(ackKey(a.platform, a.message_id));
   }
   const unacked: InboxRow[] = [];
   for (const row of rows) {
-    const key = ackKey(row.platform, row.id, sessionId);
+    const key = ackKey(row.platform, row.id);
     if (ackedKeys.has(key)) continue;
     unacked.push(row);
   }
+  // sessionId is intentionally unused inside the dedup loop — see fn-level
+  // JSDoc. Linters might flag it; suppress at the call site if needed.
+  void sessionId;
   unacked.sort((a, b) => a.received_at.localeCompare(b.received_at));
   return unacked;
 }

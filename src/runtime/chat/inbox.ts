@@ -143,7 +143,16 @@ export async function readAcked(projectUuid: string): Promise<AckRow[]> {
   return out;
 }
 
-/** Build the canonical dedup-key string used by the inject/ack loop. */
-export function ackKey(platform: Platform, messageId: string, sessionId: string): string {
-  return `${platform}::${messageId}::${sessionId}`;
+/**
+ * Build the canonical dedup-key string used by the inject/ack loop.
+ *
+ * LL4FIX.1 (2026-05-31): drops `sessionId` from the key. Previously the
+ * key was `${platform}::${messageId}::${sessionId}`, making acks per-session
+ * — every new Claude Code session re-injected the entire backlog because
+ * no prior-session ack matched. The fix derives dedup keys from
+ * (platform, message_id) only; AckRow.injected_at_sessionId is still
+ * RECORDED as audit metadata + drives 7-day purge eligibility.
+ */
+export function ackKey(platform: Platform, messageId: string): string {
+  return `${platform}::${messageId}`;
 }
