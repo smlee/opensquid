@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.251] - 2026-05-30
+
+### Added (`scripts/h2-walk-builtin-packs.mjs`)
+
+Standalone pack-load verification CLI that walks every directory under
+`packs/builtin/` and invokes `loadPack(dir)` on each. Reports per-pack
+`[OK]` with skill-name list, or `[FAIL]` with the load-time error
+verbatim. Exits 1 if any pack fails to load. Originally authored for
+the H.2 skill-grammar refinement report; useful as a smoke test before
+shipping any pack-loader change.
+
+Usage: `pnpm build && node scripts/h2-walk-builtin-packs.mjs`
+
+### Build (`.gitignore`)
+
+- `.mcp.json` — local Claude Code MCP config carrying absolute paths
+  to this developer's install. Per-machine config, not project state.
+
+---
+
 ## [0.5.250] - 2026-05-30
 
 ### Docs (DOG.6-DOCS — pack-runtime.md §1.10/§1.11/§1.12 closes T-DOGFOOD code-side surface)
