@@ -27,6 +27,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const OPENSQUID_HOME = (): string =>
   process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
@@ -57,6 +58,28 @@ export const OPENSQUID_HOME = (): string =>
  * not exist yet (`discoverActivePacks` treats absent active.json as empty).
  */
 export const resolveUserScopeRoot = (): string => OPENSQUID_HOME();
+
+/**
+ * BPDISC — Returns the built-in pack scope root: the directory whose
+ * `<root>/<name>/manifest.yaml` paths hold the packs that ship inside the
+ * opensquid npm install (`packs/builtin/`). When a user's `active.json`
+ * names a pack not found under user or project scope, the loader falls back
+ * to this root. Mirrors the OPENSQUID_HOME pattern: `OPENSQUID_BUILTIN_PACKS_ROOT`
+ * env var wins for test isolation; otherwise the path is computed relative
+ * to the dist file location at module import time.
+ *
+ * From a dist file at `<npm-root>/dist/runtime/paths.js`, the built-in
+ * packs sit at `<npm-root>/packs/builtin/` — three dirs up + `packs/builtin`.
+ * Works for both the local checkout layout (`src/runtime/paths.ts` → up to
+ * `opensquid/packs/builtin/`) and the npm-install layout (`node_modules/opensquid/dist/...`).
+ */
+export const resolveBuiltinScopeRoot = (): string => {
+  const envOverride = process.env.OPENSQUID_BUILTIN_PACKS_ROOT;
+  if (envOverride !== undefined && envOverride.length > 0) return envOverride;
+  const here = fileURLToPath(import.meta.url);
+  // dist/runtime/paths.js → dist/runtime → dist → <npm-root> → <npm-root>/packs/builtin
+  return resolve(dirname(here), '..', '..', 'packs', 'builtin');
+};
 
 /**
  * Walks up from `cwd` looking for a `.opensquid/` directory. Returns its

@@ -7,6 +7,68 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.252] - 2026-05-30
+
+### Fixed (BPDISC — built-in pack auto-discovery; closes the silent-stop-gate bug)
+
+**Root cause:** `discoverActivePacks(scopeRoot, ctx)` joined
+`<scopeRoot>/packs/<name>` and ENOENT-crashed whenever `active.json`
+listed a BUILT-IN pack name (`default-discipline`, `scope-architect`,
+`task-spec-author`, `focused-react-19`, `focused-typescript-strict`,
+`focused-atomic-design`, `frontend-react-19-atomic`, `pack-architect`)
+— those packs live at `<npm-install>/packs/builtin/<name>/`, NOT at
+the user-scope `~/.opensquid/packs/<name>/`. Every Stop hook
+invocation crashed BEFORE the dispatcher walked, so `pause-prompt-extended`
+never matched its regex patterns + every DOG.1-DOG.5 pack was
+unreachable from a running session.
+
+The bug existed since BR.1 renamed `sangmin-personal` →
+`default-discipline` + DPC.1 promoted `scope-architect` +
+`task-spec-author` to built-in profession packs, but no follow-up
+wired up built-in discovery.
+
+**Fix:**
+
+- **`src/runtime/paths.ts`** — added `resolveBuiltinScopeRoot()`:
+  returns `OPENSQUID_BUILTIN_PACKS_ROOT` env var when set; else
+  computes the dist-relative path (`<dist>/runtime/paths.js` →
+  `<npm-install>/packs/builtin/`). Mirrors the `OPENSQUID_HOME` test
+  seam pattern.
+- **`src/packs/discovery.ts`** — `discoverActivePacks` gains optional
+  third `builtinRoot: string | null = null` arg. New
+  `loadPackWithBuiltinFallback(name, scopePacksDir, builtinRoot)`
+  helper: tries user/project scope first, falls back to
+  `<builtinRoot>/<name>/` ONLY on ENOENT (preserves loud-failure for
+  YAML parse / Zod validation errors). When neither has it, throws a
+  helpful error naming BOTH attempted paths + the
+  `opensquid pack install` remediation hint.
+- **`src/runtime/bootstrap.ts`** — resolves the built-in root once at
+  module load and passes it through to both user-scope + project-scope
+  `discoverActivePacks` calls.
+
+**Scope-precedence preserved:** user-installed packs win over
+built-in when names collide. Built-in is fallback-only, not
+default-include — opt-in via active.json is still the gate.
+
+**Back-compat:** the new `builtinRoot` arg defaults to `null` so
+existing call sites continue to behave unchanged. All 38 existing
+`discovery.test.ts` cases pass without modification.
+
+**Live verification:** `opensquid-hook-stop` no longer ENOENT-crashes
+against this user's actual `active.json` (which lists
+`sangmin-personal-rules` + 3 built-ins); reports
+`event=stop rules=3 packs=4` and exits 0. Pre-fix output was:
+`[opensquid] active pack load failed: ENOENT: no such file or directory,
+open '/Users/slee/.opensquid/packs/default-discipline/manifest.yaml'`.
+
+**Deferred follow-up (BPDISC.2):** add a dedicated test fixture
+covering the 5 cases (built-in load, scope-precedence, neither-has-it
+error message, null-builtinRoot back-compat, mixed user+builtin list).
+Blocked this commit by the scope-decomposer "coding before scope→task"
+discipline gate — needs a docs/tasks spec authored first.
+
+---
+
 ## [0.5.251] - 2026-05-30
 
 ### Added (`scripts/h2-walk-builtin-packs.mjs`)

@@ -86,7 +86,7 @@ import { loadPack } from '../packs/loader.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
 
-import { resolveProjectScopeRoot, resolveUserScopeRoot } from './paths.js';
+import { resolveBuiltinScopeRoot, resolveProjectScopeRoot, resolveUserScopeRoot } from './paths.js';
 
 import type { RagBackend } from '../rag/types.js';
 import type { Pack } from './types.js';
@@ -275,9 +275,15 @@ const realPacksPromise: Promise<Pack[]> = (async () => {
     // project signals. Opt-in is still required (packs not in
     // active.json never load); detected_by gates WHEN among opt-in.
     const ctx = await buildDetectionContext(cwd);
-    const user = await discoverActivePacks(resolveUserScopeRoot(), ctx);
+    // BPDISC — resolve the built-in pack root so discoverActivePacks can
+    // fall back to `<npm-install>/packs/builtin/<name>/` when an active.json
+    // entry isn't installed at user / project scope. Without this fallback,
+    // listing a built-in pack name in active.json (default-discipline,
+    // scope-architect, focused-react-19, ...) ENOENT-crashes the hook.
+    const builtinRoot = resolveBuiltinScopeRoot();
+    const user = await discoverActivePacks(resolveUserScopeRoot(), ctx, builtinRoot);
     const projectRoot = await resolveProjectScopeRoot(cwd);
-    const project = await discoverActivePacks(projectRoot, ctx);
+    const project = await discoverActivePacks(projectRoot, ctx, builtinRoot);
     return sortPacksByScope([...user, ...project]);
   } catch (e) {
     // Surface the path-bearing error to stderr so the user can act on it,

@@ -199,6 +199,7 @@ export interface ActiveJson {
 export async function discoverActivePacks(
   scopeRoot: string | null,
   ctx: DetectionContext | null = null,
+  builtinRoot: string | null = null,
 ): Promise<Pack[]> {
   if (scopeRoot === null) return [];
 
@@ -238,7 +239,7 @@ export async function discoverActivePacks(
   const dirs = await resolvePacksDir(preferredDir, legacyDir);
   const packs: Pack[] = [];
   for (const name of active.packs) {
-    const pack = await loadPack(join(dirs, name));
+    const pack = await loadPackWithBuiltinFallback(name, dirs, builtinRoot);
     if (ctx === null || matchesDetectedBy(pack.detectedBy ?? [], ctx)) {
       packs.push(pack);
     }
@@ -249,6 +250,42 @@ export async function discoverActivePacks(
   // appended (deduped first-occurrence-wins). Errors throw
   // CompositeResolutionError with the composite name + cause.
   return expandComposites(packs);
+}
+
+/**
+ * BPDISC — Try to load `<name>` from the scope's packs/ dir; if that path
+ * doesn't exist, fall back to `<builtinRoot>/<name>/`. The fallback only
+ * fires on ENOENT at the manifest level — every other loadPack error
+ * (YAML parse, Zod validation, missing skill file) propagates verbatim
+ * from the user-scope attempt so the user sees the right blame path.
+ *
+ * Why a fallback rather than always-search-both: scope-precedence is
+ * explicit (user-installed wins over built-in even when names collide),
+ * matching the layering contract in pack-runtime.md §1.6.
+ */
+async function loadPackWithBuiltinFallback(
+  name: string,
+  scopePacksDir: string,
+  builtinRoot: string | null,
+): Promise<Pack> {
+  const userPath = join(scopePacksDir, name);
+  try {
+    return await loadPack(userPath);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' || builtinRoot === null) throw e;
+    try {
+      return await loadPack(join(builtinRoot, name));
+    } catch (fallbackErr) {
+      const fbCode = (fallbackErr as NodeJS.ErrnoException).code;
+      if (fbCode === 'ENOENT') {
+        throw new Error(
+          `opensquid: pack "${name}" listed in active.json was not found at user-scope (${userPath}) OR built-in (${join(builtinRoot, name)}). Either install the pack via \`opensquid pack install\` or drop the entry from active.json.`,
+        );
+      }
+      throw fallbackErr;
+    }
+  }
 }
 
 /**
