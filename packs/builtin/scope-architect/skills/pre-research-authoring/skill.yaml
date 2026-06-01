@@ -64,7 +64,7 @@ rules:
         args:
           level: warn
           message: >-
-            🦑 PRE-RESEARCH AUTHORING (DPC.5): about to write a pre-research
+            PRE-RESEARCH AUTHORING (DPC.5): about to write a pre-research
             doc with insufficient research-tool activity this turn (recall +
             Read + Grep combined < 3 calls).
 
@@ -111,7 +111,7 @@ rules:
         args:
           level: warn
           message: >-
-            🦑 SCOPE COMPLETENESS (SG.1): this pre-research doc is missing one
+            SCOPE COMPLETENESS (SG.1): this pre-research doc is missing one
             or more hole-finding sections. A complete scope answers all three
             BEFORE authoring tasks:
             ## Alternatives (>=2 options + why this one wins);

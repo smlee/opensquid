@@ -26,7 +26,7 @@ import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
-import { buildPreToolUseDeny } from './permission_decision.js';
+import { buildPreToolUseDeny, emitDriftStderrAndExit } from './hook_output.js';
 import { extractSessionId } from './session_id.js';
 
 /** ASC.1 PreToolUse chain-state writers — file-path / metadata patterns. */
@@ -151,8 +151,7 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify(buildPreToolUseDeny(stderr)));
     process.exit(0);
   }
-  if (stderr) process.stderr.write(stderr + '\n');
-  process.exit(exitCode);
+  emitDriftStderrAndExit(exitCode, stderr);
 }
 
 main().catch((e: unknown) => {

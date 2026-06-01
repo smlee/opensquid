@@ -34,6 +34,7 @@ import { dispatchEvent } from './dispatch.js';
 import { detectNewProject } from './new_project_detect.js';
 import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
+import { emitDriftStderrAndExit } from './hook_output.js';
 import { readLastAssistantText, readLastNTurns } from './transcript.js';
 
 /** FU.2: how many recent text-bearing turns lesson-capture classifies. Small to
@@ -250,8 +251,7 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify(envelope));
   }
 
-  if (stderr) process.stderr.write(stderr + '\n');
-  process.exit(exitCode);
+  emitDriftStderrAndExit(exitCode, stderr);
 }
 
 main().catch((e: unknown) => {

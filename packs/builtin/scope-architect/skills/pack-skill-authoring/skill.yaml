@@ -59,7 +59,7 @@ rules:
         args:
           level: warn
           message: >-
-            🦑 PACK-SKILL AUTHORING (DPC.4): about to write a pack skill yaml
+            PACK-SKILL AUTHORING (DPC.4): about to write a pack skill yaml
             with NO recall or Read calls this turn.
 
             Per the workflow (spec → research → ask gaps → task-spec-author →

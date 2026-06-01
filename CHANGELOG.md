@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.273] - 2026-06-01
+
+### Changed (drift-message squid marker + hook-output DRY + no-implicit-push removed)
+
+- **🦑 on drift/block messages, centralized.** Every user-facing drift message a
+  hook surfaces (block / warn) now carries a leading 🦑 so it's unmistakably
+  opensquid speaking — added at the hook EMIT boundary (`squidPrefix` in the new
+  `src/runtime/hooks/hook_output.ts`), NOT in skill YAML or the dispatch layer.
+  Skill `message:` fields were de-emoji'd (pre-research-authoring, pack-skill-authoring).
+  The marker is for drift/block messages only — chat replies via `chat_send` stay
+  unprefixed (it was briefly mis-added there; reverted).
+- **DRY hook output.** The repeated `if (stderr) write(squidPrefix(stderr)); exit`
+  tail across pre-tool-use / stop / user-prompt-submit is now one
+  `emitDriftStderrAndExit` helper; `buildPreToolUseDeny` moved into the same
+  module (renamed `permission_decision.ts` → `hook_output.ts`).
+- **Removed `no-implicit-push`** from default-discipline/git — it was NOT the
+  user's rule (standing policy is "push is pre-authorized"); a temporary
+  versioning-era guard. `no-force-push-main` stays (force-push does need OK).
+
 ## [0.5.272] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.14 — command gates match compound `cd … && git commit`)

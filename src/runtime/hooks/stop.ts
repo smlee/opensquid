@@ -22,6 +22,7 @@ import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
 import { extractSessionId } from './session_id.js';
+import { emitDriftStderrAndExit } from './hook_output.js';
 import { readLastAssistantText } from './transcript.js';
 
 interface StopPayload {
@@ -100,8 +101,7 @@ async function main(): Promise<void> {
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
-  if (stderr) process.stderr.write(stderr + '\n');
-  process.exit(exitCode);
+  emitDriftStderrAndExit(exitCode, stderr);
 }
 
 main().catch((e: unknown) => {
