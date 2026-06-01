@@ -44,7 +44,28 @@
  * runtime/auto_correct.ts + runtime/escalate.ts (action-descriptor consumers).
  */
 
-import type { DriftPolicy, MessageVerdict, RuntimeAction } from './types.js';
+import type { DriftPolicy, MessageVerdict, RuntimeAction, VerdictLevel } from './types.js';
+
+/**
+ * Fallback drift-response policy when a pack ships no `drift_response.yaml`
+ * (no per-rule entry, no pack default). DERIVES the policy from the verdict
+ * level so a rule's authored `level:` is honored without a separate policy
+ * file:
+ *
+ *   block                              → block_tool   (hard block; exit 2)
+ *   warn | surface | pass | directive  → warn         (non-blocking notice; exit 0)
+ *
+ * This replaces the historical blanket `block_tool` default, which silently
+ * hard-blocked every warn/surface-level rule in any pack lacking the file —
+ * discarding the level the author wrote. `drift_response.yaml` remains an
+ * OVERRIDE (per_rule / default) layered on top of this; precedence is
+ * unchanged (the dispatcher consults the file first, this fallback last).
+ *
+ * Total over the closed `VerdictLevel` enum by construction (single branch).
+ */
+export function defaultPolicyForLevel(level: VerdictLevel): DriftPolicy {
+  return level === 'block' ? 'block_tool' : 'warn';
+}
 
 /**
  * T-ASC ASC.3: drift_response only processes message-bearing verdicts.

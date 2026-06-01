@@ -7,6 +7,42 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.262] - 2026-06-01
+
+### Fixed (T-SCOPE-GATES SG.4 — default drift-response policy honors the verdict level)
+
+The dispatcher's fallback drift-response policy (when a pack ships no
+`drift_response.yaml`) was a blanket `block_tool` that **ignored the verdict
+`level`**. A rule author writing `level: warn` got a hard block (exit 2), not a
+warn — the level they wrote was silently discarded. This footgun hit every pack
+lacking the file: `scope-architect`'s soft gates (`scope-detect`,
+`pre-research-authoring`, `pack-skill-authoring`, `task-list-generated`, all
+`level: warn`) hard-blocked despite `pack-skill-authoring`'s own comment reading
+"warn (soft surface, not block)".
+
+**Root fix (class-wide, not a per-pack patch):** the fallback now derives from
+the level via the new pure `defaultPolicyForLevel(level)` — `block → block_tool`,
+everything else (`warn`/`surface`/`pass`/`directive`) → `warn`. An authored
+`level:` is honored by default; `drift_response.yaml` reverts to being an
+_override_ (per-rule / pack default still take precedence, unchanged).
+
+- `src/runtime/drift_response.ts` — new exported `defaultPolicyForLevel`.
+- `src/runtime/hooks/dispatch.ts` — `resolvedPolicy` fallback is now
+  `defaultPolicyForLevel(result.verdict.level)` instead of `'block_tool'`;
+  stale "Phase 1 hard-coded block_tool" comments rewritten.
+
+**Bounded blast radius:** block-level rules are byte-for-byte unchanged (still
+`block_tool`). `scope-architect`'s hard gates (`inline-spec-block`,
+`scope-before-code`, `taskcreate-spec-required`, `level: block`) still block;
+its soft gates now warn — with **no `drift_response.yaml` added** (the `level:`
+declarations are now self-enforcing; a yaml restating `warn→warn` would be a
+redundant exception). `default-discipline` (the only built-in shipping a yaml)
+is untouched — its per-rule `warn` downshifts override the pack's own
+`full_stop_and_redo` default, independent of this fallback.
+
+**Lexicon:** "level:warn ≠ soft without a drift_response.yaml" superseded by
+"the default drift-response policy honors the verdict level".
+
 ## [0.5.261] - 2026-06-01
 
 ### Removed (T-SCOPE-GATES SG.3 — `recall-consumed`, the wrong-hook gate)

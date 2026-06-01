@@ -51,8 +51,16 @@ other (the failure this file exists to prevent). Grow it as we label things.
   cycles (→ loops). `recall-consumed` was removed (SG.3) for violating this;
   `honesty-ledger` / `phase-logging` read `assistantText` at Stop and inherit
   the off-by-one (audit pending).
-- **Soft vs hard verdict ≠ verdict level** — a rule's `level: warn` does NOT
-  make it soft. The _effective_ action is the pack's `drift_response` POLICY;
-  with no `drift_response.yaml` the default is `block_tool`, so every rule
-  (even `level: warn`) HARD-BLOCKS. To make a gate actually warn, the pack must
-  ship a `drift_response.yaml` mapping that rule to the `warn` policy.
+- **The default drift-response policy honors the verdict level** — the
+  _effective_ action is the pack's `drift_response` POLICY, but when a pack
+  ships no `drift_response.yaml` (no per-rule, no pack default) the fallback
+  DERIVES from the verdict `level`: `block → block_tool` (hard block),
+  everything else → `warn` (non-blocking). So a `level: warn` rule warns by
+  default and a `level: block` rule blocks — a yaml is an OVERRIDE, not a
+  prerequisite for level-correct behavior (`defaultPolicyForLevel`, SG.4).
+  _Superseded the earlier rule "level:warn ≠ soft without a drift_response.yaml"_,
+  which described the old blanket `block_tool` default that silently discarded
+  the level and hard-blocked every warn-level rule. A pack still ships a yaml
+  to OVERRIDE the level-derived default — e.g. `default-discipline` uses
+  `default: full_stop_and_redo` and per-rule `warn` downshifts; its overrides
+  fight the pack's own aggressive default, independent of this fallback.

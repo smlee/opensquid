@@ -754,7 +754,7 @@ describe('dispatchEvent', () => {
       expect(result.stderr).toBe('');
     });
 
-    it('pack without driftResponse falls back to historical block_tool default', async () => {
+    it('pack without driftResponse: block-level verdict → block_tool (level-derived default)', async () => {
       const registry = buildRegistryWithVerdict({
         level: 'block',
         message: 'no policy → block_tool',
@@ -767,11 +767,34 @@ describe('dispatchEvent', () => {
         process: [{ call: 'verdict' }],
       };
       const pack = makePack('p1', [rule]);
-      // No driftResponse on pack — preserves pre-PR-followup behavior.
+      // No driftResponse on pack — fallback derives from the verdict level.
+      // A block-level verdict still maps to block_tool (exit 2), unchanged.
       expect(pack.driftResponse).toBeUndefined();
       const result = await dispatchEvent(event, [pack], registry, 'sess-1');
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toBe('no policy → block_tool');
+    });
+
+    it('pack without driftResponse: warn-level verdict → warn (SG.4 — honors authored level, no hard block)', async () => {
+      // SG.4 root fix: before, the blanket block_tool default hard-blocked
+      // every warn-level rule in a pack lacking drift_response.yaml. Now the
+      // fallback derives from the level → warn → exit 0 (non-blocking notice).
+      const registry = buildRegistryWithVerdict({
+        level: 'warn',
+        message: 'soft nudge, do not block',
+        ruleId: 'soft-rule-without-policy',
+      });
+      const rule: Rule = {
+        id: 'soft-rule-without-policy',
+        kind: 'track_check',
+        requires: [],
+        process: [{ call: 'verdict' }],
+      };
+      const pack = makePack('p1', [rule]);
+      expect(pack.driftResponse).toBeUndefined();
+      const result = await dispatchEvent(event, [pack], registry, 'sess-1');
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('soft nudge, do not block');
     });
 
     it('per-rule warn override on a rule that would otherwise block routes through warn', async () => {

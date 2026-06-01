@@ -21,8 +21,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { applyDriftResponse } from './drift_response.js';
-import type { DriftPolicy, Verdict } from './types.js';
+import { applyDriftResponse, defaultPolicyForLevel } from './drift_response.js';
+import type { DriftPolicy, Verdict, VerdictLevel } from './types.js';
 
 const baseVerdict: Verdict = { level: 'block', message: 'never amend' };
 
@@ -107,4 +107,22 @@ describe('applyDriftResponse', () => {
       expect(action.reason).toContain('mystery_policy');
     }
   });
+});
+
+describe('defaultPolicyForLevel (SG.4 — level-derived fallback default)', () => {
+  // block-level verdicts hard-block by default (preserves the historical
+  // behavior for the only level that ever should); every other level becomes
+  // a non-blocking warn so an authored `level:` is honored without a yaml.
+  const cases: [VerdictLevel, DriftPolicy][] = [
+    ['block', 'block_tool'],
+    ['warn', 'warn'],
+    ['surface', 'warn'],
+    ['pass', 'warn'],
+    ['directive', 'warn'],
+  ];
+  for (const [level, expected] of cases) {
+    it(`level "${level}" → policy "${expected}"`, () => {
+      expect(defaultPolicyForLevel(level)).toBe(expected);
+    });
+  }
 });

@@ -25,14 +25,17 @@
  * default trigger list (when the YAML block is omitted) is a single
  * `tool_call` entry — preserves Phase 1–7 dispatcher behavior verbatim.
  *
- * PR-followup policy resolution (replaces hard-coded `block_tool`):
+ * Drift-response policy resolution:
  *   1. Pack-shipped `drift_response.yaml` → `Pack.driftResponse` (loaded by
  *      `loadPack`). For each fired rule, the dispatcher consults
  *      `pack.driftResponse?.per_rule[rule.id] ?? pack.driftResponse?.default`.
- *   2. Pack without `drift_response.yaml` → falls back to the historical
- *      Phase 1 default of `block_tool` (NOT the schema's `block_tool`
- *      default — that only fires when the file IS present but omits the
- *      field; here we want the "no policy declared at all" branch).
+ *   2. Pack without `drift_response.yaml` → falls back to `defaultPolicyForLevel`,
+ *      which DERIVES the policy from the fired verdict's `level` (block →
+ *      block_tool; warn/surface/pass/directive → warn). This honors the
+ *      author's `level:` by default — a `level: warn` rule warns instead of
+ *      hard-blocking — so a policy file is an OVERRIDE, not a prerequisite for
+ *      level-correct behavior. (Replaces the old blanket `block_tool` default,
+ *      which discarded the level.)
  *   3. `corrective_skills` map (`auto_correct` policy support) is threaded
  *      into `applyDriftResponse` via the `DriftDispatchCtx` argument so
  *      `auto_correct` policies can look up their corrective skill name.
@@ -61,7 +64,7 @@
  */
 
 import type { EvalCtx, FunctionRegistry } from '../../functions/registry.js';
-import { applyDriftResponse } from '../drift_response.js';
+import { applyDriftResponse, defaultPolicyForLevel } from '../drift_response.js';
 import { evaluateProcess } from '../evaluator.js';
 import { Matcher, matchesEvent } from '../load_matchers.js';
 import { partitionSkills } from '../pinned_skills.js';
@@ -455,17 +458,20 @@ export async function dispatchEvent(
 
         if (result.kind !== 'verdict') continue;
 
-        // PR-followup: resolve drift-response policy from the pack's
-        // `drift_response.yaml` (folded into `Pack.driftResponse` by
-        // `loadPack`). Precedence: per-rule override → pack default →
-        // historical Phase 1 hard-coded `block_tool` (preserves the previous
-        // behavior for packs that don't ship the file at all).
+        // Resolve drift-response policy from the pack's `drift_response.yaml`
+        // (folded into `Pack.driftResponse` by `loadPack`). Precedence:
+        // per-rule override → pack default → level-derived fallback
+        // (`defaultPolicyForLevel`). The fallback honors the verdict's authored
+        // `level:` (block→block_tool, else→warn) for packs that ship no file —
+        // so a `level: warn` rule warns by default instead of hard-blocking.
         //
         // `rule.id` is required on every rule by the Skill schema, so the
         // `per_rule` lookup is always well-defined.
         const driftResponse = pack.driftResponse;
         const resolvedPolicy: DriftPolicy =
-          driftResponse?.per_rule[rule.id] ?? driftResponse?.default ?? 'block_tool';
+          driftResponse?.per_rule[rule.id] ??
+          driftResponse?.default ??
+          defaultPolicyForLevel(result.verdict.level);
         // `corrective_skills` is only consulted by the `auto_correct` policy
         // inside `applyDriftResponse`; passing it unconditionally is safe
         // because the dispatcher ignores it for every other policy.
