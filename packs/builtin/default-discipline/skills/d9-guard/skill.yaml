@@ -1,17 +1,25 @@
-# d9-guard — Stop-event "politeness reflex" detector, AUTOMATION-GATED (G.12).
+# d9-guard — "politeness reflex" detector, AUTOMATION-GATED (G.12).
 #
 # The original D9 rule (the inline `~/.claude/settings.json` prompt hook) was
-# firing on every Stop event, including normal interactive turns where a
-# blocking question to the user is the CORRECT behavior. The G.12 pack-managed
-# version short-circuits the llm_classify call unless the session is in
-# automation mode (the user is running `/loop` or similar full-automation
-# track that explicitly forbids ping-pong AskUserQuestion). Outside
-# automation, the rule is a no-op.
+# firing on every turn, including normal interactive turns where a blocking
+# question to the user is the CORRECT behavior. The G.12 pack-managed version
+# short-circuits the llm_classify call unless the session is in automation mode
+# (the user is running `/loop` or similar full-automation track that explicitly
+# forbids ping-pong AskUserQuestion). Outside automation, the rule is a no-op.
 #
 # Two automation signals are OR'd by the `is_automation_mode` primitive:
 #   1. `OPENSQUID_AUTOMATION=1` env var (manual / wrapper override)
 #   2. `~/.opensquid/sessions/<id>/automation.flag` (the `opensquid automation
 #      on|off` CLI writes/removes this)
+#
+# T-RESPONSE-JUDGING-UPS RJ.3 (2026-06-01): runs at UserPromptSubmit, NOT Stop.
+# Two fixes land here: (1) per the lexicon law, a gate that judges the
+# just-emitted response belongs at UPS (the prior turn is SETTLED — no
+# off-by-one). (2) The classifier was fed a CONTENTLESS prompt — it said "the
+# assistant message below" but interpolated nothing and never captured the
+# message. Now `last_assistant_message` captures the settled prior turn (RJ.1
+# priorAssistantText) into `msg`, and the prompt interpolates it via `{{msg}}`
+# so the classifier actually sees what it's judging.
 #
 # The cleanup of the legacy inline D9-guard prompt hook in ~/.claude/settings
 # .json is a SEPARATE concern: this pack-version supersedes it but does not
@@ -22,15 +30,17 @@ name: d9-guard
 load: preload
 when_to_load:
   - kind: event_type
-    type: stop
+    type: prompt_submit
 triggers:
-  - kind: stop
+  - kind: prompt_submit
 rules:
   - id: d9-blocking-question-check
     kind: track_check
     process:
       - call: is_automation_mode
         as: automation
+      - call: last_assistant_message
+        as: msg
       - call: llm_classify
         if: automation.value == true
         as: classification
@@ -47,6 +57,9 @@ rules:
             Emit one label: BLOCK if it's a politeness reflex that should
             have been auto-decided; ALLOW if it's a genuine blocking
             question or not a question at all.
+
+            --- ASSISTANT MESSAGE ---
+            {{msg}}
           allowed_labels:
             - ALLOW
             - BLOCK
@@ -64,4 +77,6 @@ prose: |
 
   Gating model: `if: automation.value == true` short-circuits BOTH the
   llm_classify call AND the verdict. Outside automation, the rule executes
-  zero LLM calls and emits no verdict — a true no-op.
+  zero LLM calls and emits no verdict — a true no-op. The classifier judges
+  the settled prior assistant turn (priorAssistantText), interpolated into
+  the prompt via `{{msg}}`.

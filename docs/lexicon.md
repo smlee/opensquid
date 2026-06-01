@@ -48,9 +48,18 @@ other (the failure this file exists to prevent). Grow it as we label things.
   settled in the transcript and the turn ledger has reset. A `Stop` hook fires
   _before_ its triggering response is flushed → it reads the PRIOR response
   (off-by-one) and its per-turn trigger never resets across Stop-feedback
-  cycles (→ loops). `recall-consumed` was removed (SG.3) for violating this;
-  `honesty-ledger` / `phase-logging` read `assistantText` at Stop and inherit
-  the off-by-one (audit pending).
+  cycles (→ loops). `recall-consumed` was removed (SG.3) for violating this.
+  The capability that makes UPS the correct home is `priorAssistantText` (RJ.1):
+  the UPS hook fills it from the transcript, and because the prior turn is
+  already flushed at UPS-fire there is NO off-by-one (CC provides
+  `transcript_path` on UserPromptSubmit; the prior turn is readable).
+  `honesty-ledger`, `phase-logging`, and `d9-guard` were relocated to UPS on
+  this capability (RJ.2/RJ.3). _Correction (2026-06-01):_ the earlier claim that
+  they "read assistantText at Stop and inherit the off-by-one" was a WRONG
+  premise — the audit found they never ran at Stop at all (honesty-ledger /
+  phase-logging default-triggered on `tool_call` with a stop-only/tool_call-only
+  primitive mismatch → silent no-ops; d9-guard ran at Stop but fed a CONTENTLESS
+  prompt to its classifier). The empirical-spike gate caught the bad premise.
 - **The default drift-response policy honors the verdict level** — the
   _effective_ action is the pack's `drift_response` POLICY, but when a pack
   ships no `drift_response.yaml` (no per-rule, no pack default) the fallback

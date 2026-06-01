@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.265] - 2026-06-01
+
+### Fixed (T-RESPONSE-JUDGING-UPS RJ.3 — `d9-guard` now sees the message it judges)
+
+`d9-guard` (the automation-mode politeness-reflex detector) fired at `Stop` but
+its `llm_classify` prompt said "the assistant message below" while interpolating
+**nothing** and never capturing the message — so the classifier judged a
+contentless instruction. Rebuilt on the RJ.1 capability:
+
+- Triggers + `when_to_load` moved to `prompt_submit` (the prior turn is settled —
+  obeys the "response-judging → UPS, not Stop" lexicon law).
+- Captures the prior turn via `last_assistant_message` (now works at
+  `prompt_submit`) into `msg` and interpolates it into the classifier prompt via
+  `{{msg}}` — the classifier finally sees what it's judging.
+- The automation-gate is preserved verbatim: outside automation mode the rule
+  makes zero LLM calls and emits no verdict (true no-op).
+
+Also corrects the `docs/lexicon.md` "Response-judging → UserPromptSubmit" note,
+whose earlier claim that these gates "inherit the off-by-one at Stop" was a wrong
+premise — the audit found they never ran correctly at Stop at all. Completes the
+T-RESPONSE-JUDGING-UPS track (RJ.1–RJ.3).
+
 ## [0.5.264] - 2026-06-01
 
 ### Fixed (T-RESPONSE-JUDGING-UPS RJ.2 — `honesty-ledger` + `phase-logging` now actually fire)
