@@ -46,11 +46,18 @@ describe('builtin cycle-pack', () => {
     expect(rule?.kind).toBe('track_check');
     // The track-check rule has a `process` array.
     if (rule?.kind !== 'track_check') throw new Error('expected track_check rule');
-    expect(rule.process.length).toBeGreaterThanOrEqual(2);
-    // First step is the classifier call.
-    expect(rule.process[0]?.call).toBe('llm_classify');
-    // Second step is the verdict gate.
-    expect(rule.process[1]?.call).toBe('verdict');
-    expect(rule.process[1]?.if).toMatch(/NONE/);
+    expect(rule.process.length).toBeGreaterThanOrEqual(3);
+    // FU.2: first step captures the recent turns (UPS-filled), which are then
+    // interpolated into the classifier prompt; second is the classifier; third
+    // is the verdict gate.
+    expect(rule.process[0]?.call).toBe('recent_turns');
+    expect(rule.process[1]?.call).toBe('llm_classify');
+    expect(rule.process[2]?.call).toBe('verdict');
+    expect(rule.process[2]?.if).toMatch(/NONE/);
+  });
+
+  it('FU.2: triggers on prompt_submit (was defaulting to tool_call)', async () => {
+    const pack = await loadPack(resolve('packs/builtin/cycle-pack'));
+    expect(pack.skills[0]?.triggers.map((t) => t.kind)).toEqual(['prompt_submit']);
   });
 });

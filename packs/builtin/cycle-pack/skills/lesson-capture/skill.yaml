@@ -9,17 +9,29 @@ name: lesson-capture
 load: preload
 when_to_load:
   - event_type: prompt_submit
+# T-RJ-FOLLOWUPS FU.2 (2026-06-01): triggers on prompt_submit (was defaulting to
+# tool_call — fired a contentless llm_classify on every tool call). Now captures
+# the settled recent turns via `recent_turns` (UPS-filled from the transcript)
+# and interpolates them into the classifier prompt via `{{turns}}`, so the model
+# actually sees the conversation it's triaging.
+triggers:
+  - kind: prompt_submit
 rules:
   - id: triage
     kind: track_check
     process:
+      - call: recent_turns
+        as: turns
       - call: llm_classify
         args:
           model: fast_classifier
           prompt: |
-            Inspect the user's last few turns. Identify candidate lessons
-            (workflow, preference, skill_upgrade) suitable for offload to
-            RAG via the wedge gate. Emit one label.
+            Inspect the recent conversation turns below. Identify candidate
+            lessons (workflow, preference, skill_upgrade) suitable for offload
+            to RAG via the wedge gate. Emit one label.
+
+            --- RECENT TURNS ---
+            {{turns}}
           allowed_labels:
             - WORKFLOW
             - PREFERENCE

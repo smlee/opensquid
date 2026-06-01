@@ -168,6 +168,37 @@ describe('last_assistant_message', () => {
 });
 
 // ---------------------------------------------------------------------------
+// recent_turns (FU.2) — returns recentTurns on prompt_submit, null otherwise.
+// ---------------------------------------------------------------------------
+
+describe('recent_turns', () => {
+  it('returns recentTurns on a prompt_submit event', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx({
+      kind: 'prompt_submit',
+      prompt: 'next',
+      recentTurns: 'User: a\n\nAssistant: b',
+    });
+
+    expect(await reg.call('recent_turns', {}, ctx)).toEqual(ok('User: a\n\nAssistant: b'));
+  });
+
+  it('returns ok(null) on a prompt_submit event without recentTurns', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx({ kind: 'prompt_submit', prompt: 'next' });
+
+    expect(await reg.call('recent_turns', {}, ctx)).toEqual(ok(null));
+  });
+
+  it('returns ok(null) on a stop event (wrong kind)', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx({ kind: 'stop', assistantText: 'hi' });
+
+    expect(await reg.call('recent_turns', {}, ctx)).toEqual(ok(null));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // match_command — regex against tool_args.command by default, with
 // invalid-regex + wrong-kind + custom-target coverage.
 // ---------------------------------------------------------------------------

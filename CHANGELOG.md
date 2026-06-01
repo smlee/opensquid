@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.268] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.2 — `lesson-capture` classifies real turns, not a contentless prompt)
+
+cycle-pack's `lesson-capture` (the wedge-gate triage) default-triggered on
+`tool_call` and fed `llm_classify` a contentless prompt ("inspect the last few
+turns" with nothing interpolated) — the same contentless-classifier bug as
+d9-guard, plus the wrong event. Rebuilt with a multi-turn capability:
+
+- `src/runtime/hooks/transcript.ts` — `readLastNTurns(path, n)`: the last N
+  text-bearing turns, role-labeled, oldest→newest (parallels
+  `readLastAssistantText`; fail-open `''`).
+- `PromptSubmitEvent.recentTurns` (additive) — filled by the UserPromptSubmit
+  hook (N=6) alongside `priorAssistantText`.
+- `recent_turns` primitive — exposes `recentTurns` on `prompt_submit`.
+- `lesson-capture` now `triggers: [{kind: prompt_submit}]`, captures
+  `recent_turns`, and interpolates `{{turns}}` into the classifier prompt.
+
+Clears the contentless-`llm_classify` bug class across the builtin packs
+(d9-guard RJ.3 + lesson-capture FU.2).
+
 ## [0.5.267] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.3 — race-free MCP session resolution via a project-scoped pointer)

@@ -68,3 +68,48 @@ export async function readLastAssistantText(transcriptPath: string): Promise<str
   }
   return '';
 }
+
+/**
+ * Return the last `n` text-bearing turns (user + assistant), oldest→newest,
+ * role-labeled (`User:` / `Assistant:`). Used by the wedge-gate `lesson-capture`
+ * skill (FU.2), which classifies the recent conversation for offloadable
+ * lessons — it needs multi-turn context, not just the single prior assistant
+ * turn `readLastAssistantText` provides.
+ *
+ * Same defensive contract as `readLastAssistantText`: per-line try/catch,
+ * pure-tool_use turns skipped, `''` on absent/unreadable/all-malformed. `n <= 0`
+ * returns `''`.
+ */
+export async function readLastNTurns(transcriptPath: string, n: number): Promise<string> {
+  if (n <= 0) return '';
+  let raw: string;
+  try {
+    raw = await readFile(transcriptPath, 'utf8');
+  } catch {
+    return '';
+  }
+  const lines = raw.split('\n');
+  const collected: string[] = []; // newest→oldest while collecting
+  for (let i = lines.length - 1; i >= 0 && collected.length < n; i--) {
+    const line = lines[i];
+    if (line === undefined || line.trim().length === 0) continue;
+    let entry: TranscriptEntry;
+    try {
+      entry = JSON.parse(line) as TranscriptEntry;
+    } catch {
+      continue;
+    }
+    const role =
+      entry.message?.role ??
+      (entry.type === 'assistant' || entry.type === 'user' ? entry.type : undefined);
+    if (role !== 'assistant' && role !== 'user') continue;
+    const text = (entry.message?.content ?? [])
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('\n');
+    if (text.trim().length === 0) continue; // skip pure tool_use turns
+    const label = role === 'assistant' ? 'Assistant' : 'User';
+    collected.push(`${label}: ${text}`);
+  }
+  return collected.reverse().join('\n\n'); // oldest→newest
+}

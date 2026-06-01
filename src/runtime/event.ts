@@ -83,6 +83,11 @@ export const PromptSubmitEvent = z.object({
   kind: z.literal('prompt_submit'),
   prompt: z.string(),
   priorAssistantText: z.string().optional(),
+  // T-RJ-FOLLOWUPS FU.2 — the last N text-bearing turns (role-labeled), filled
+  // by the UPS hook from the transcript. Consumed by the wedge-gate
+  // `lesson-capture` skill via the `recent_turns` primitive; multi-turn context
+  // (vs `priorAssistantText`'s single prior turn).
+  recentTurns: z.string().optional(),
 });
 export type PromptSubmitEvent = z.infer<typeof PromptSubmitEvent>;
 

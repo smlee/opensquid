@@ -34,7 +34,11 @@ import { dispatchEvent } from './dispatch.js';
 import { detectNewProject } from './new_project_detect.js';
 import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
-import { readLastAssistantText } from './transcript.js';
+import { readLastAssistantText, readLastNTurns } from './transcript.js';
+
+/** FU.2: how many recent text-bearing turns lesson-capture classifies. Small to
+ *  bound the classifier prompt size (the wedge gate runs every prompt_submit). */
+const RECENT_TURNS_N = 6;
 
 const INBOX_PLATFORMS: Platform[] = ['telegram', 'slack', 'discord'];
 
@@ -145,6 +149,8 @@ async function main(): Promise<void> {
     const transcriptPath = extractTranscriptPath(raw);
     if (transcriptPath !== null) {
       parsed.data.priorAssistantText = await readLastAssistantText(transcriptPath);
+      // FU.2: multi-turn context for the wedge-gate lesson-capture skill.
+      parsed.data.recentTurns = await readLastNTurns(transcriptPath, RECENT_TURNS_N);
     }
   }
 

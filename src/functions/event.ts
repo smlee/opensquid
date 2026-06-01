@@ -129,6 +129,20 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
   });
 
   registry.register({
+    name: 'recent_turns',
+    argSchema: EmptyArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
+    execute: async (_args, ctx) => {
+      // FU.2: the last N conversation turns (role-labeled), filled by the UPS
+      // hook from the transcript. Only present on prompt_submit; null elsewhere.
+      if (ctx.event.kind === 'prompt_submit') return ok(ctx.event.recentTurns ?? null);
+      return ok(null);
+    },
+  });
+
+  registry.register({
     name: 'match_command',
     argSchema: MatchCommandArgs,
     durable: false,
