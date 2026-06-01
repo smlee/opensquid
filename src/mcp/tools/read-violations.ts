@@ -18,10 +18,13 @@
 
 import { readFile } from 'node:fs/promises';
 
+import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { sessionLogFile } from '../../runtime/paths.js';
 
 export async function handleReadViolations(): Promise<string> {
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // FU.8 — resolve the real session (was `?? 'unknown'`). null → empty log.
+  const sessionId = await resolveMcpSessionId();
+  if (sessionId === null) return '';
   const file = sessionLogFile(sessionId, 'violations');
   try {
     return await readFile(file, 'utf8');

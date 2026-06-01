@@ -22,6 +22,7 @@
  */
 
 import { loadActivePacks } from '../../runtime/bootstrap.js';
+import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import type { Rule, Skill } from '../../runtime/types.js';
 
 export interface InspectSkillArgs {
@@ -65,7 +66,9 @@ function formatSkill(packName: string, skill: Skill): string {
 }
 
 export async function handleInspectSkill(args: InspectSkillArgs): Promise<string> {
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // FU.8 — resolve the real session (was `?? 'unknown'`). null → pack not active.
+  const sessionId = await resolveMcpSessionId();
+  if (sessionId === null) return `pack "${args.pack}" not active`;
   const packs = await loadActivePacks(sessionId);
   const pack = packs.find((p) => p.name === args.pack);
   if (!pack) return `pack "${args.pack}" not active`;

@@ -63,7 +63,7 @@ import { ENGINE_ERROR, RpcError } from '../engine/client.js';
 import type { EngineClient } from '../engine/client.js';
 import type { LessonCreateParams, LessonPromoteResult } from '../engine/types.js';
 import { err, ok } from '../runtime/result.js';
-import { readCurrentSession } from '../runtime/hooks/session_id.js';
+import { resolveMcpSessionId } from '../runtime/hooks/session_id.js';
 import { groupFromTask } from '../runtime/satisfaction_probe.js';
 import { readActiveTask } from '../runtime/session_state.js';
 import { collectCandidates } from '../runtime/wedge/compress_candidates.js';
@@ -180,7 +180,7 @@ export function registerLessonFunctions(registry: FunctionRegistry, client: Engi
         try {
           const citedMemoryIds = result.cited_memory_ids ?? [];
           if (citedMemoryIds.length > 0) {
-            const sessionId = await readCurrentSession();
+            const sessionId = await resolveMcpSessionId();
             if (sessionId) {
               const group = groupFromTask(await readActiveTask(sessionId));
               if (group) {

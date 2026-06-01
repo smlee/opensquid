@@ -20,6 +20,7 @@
 
 import { readFile } from 'node:fs/promises';
 
+import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { sessionStateFile } from '../../runtime/paths.js';
 
 export interface ReadStateArgs {
@@ -27,7 +28,11 @@ export interface ReadStateArgs {
 }
 
 export async function handleReadState(args: ReadStateArgs): Promise<string> {
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // FU.5/FU.8 — resolve the REAL session (was `process.env.CLAUDE_SESSION_ID ??
+  // 'unknown'`, which CC never sets → always read sessions/unknown/). null → no
+  // session resolvable → same graceful empty as a missing key.
+  const sessionId = await resolveMcpSessionId();
+  if (sessionId === null) return 'null';
   const file = sessionStateFile(sessionId, args.key);
   try {
     const raw = await readFile(file, 'utf8');

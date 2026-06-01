@@ -17,13 +17,16 @@
  */
 
 import { loadActivePacks } from '../../runtime/bootstrap.js';
+import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 
 export interface ListSkillsArgs {
   pack?: string;
 }
 
 export async function handleListSkills(args: ListSkillsArgs): Promise<string> {
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // FU.8 — resolve the real session (was `?? 'unknown'`). null → no skills.
+  const sessionId = await resolveMcpSessionId();
+  if (sessionId === null) return 'no skills loaded';
   const packs = await loadActivePacks(sessionId);
   const filtered = args.pack ? packs.filter((p) => p.name === args.pack) : packs;
   if (filtered.length === 0) {

@@ -22,13 +22,16 @@
  */
 
 import { readAllDriftCatalogs } from '../../runtime/drift_catalog.js';
+import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 
 export interface ListDriftEventsArgs {
   packs?: string[];
 }
 
 export async function handleListDriftEvents(args: ListDriftEventsArgs): Promise<string> {
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // FU.8 — resolve the real session (was `?? 'unknown'`). null → no events.
+  const sessionId = await resolveMcpSessionId();
+  if (sessionId === null) return '[]';
   try {
     const events = await readAllDriftCatalogs(args.packs ?? [], sessionId);
     return JSON.stringify(events);

@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.278] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.5+6+8 — unify MCP-side session resolution + regression guard)
+
+Six read-only MCP tools (`read_state`, `read_violations`, `list_drift_events`,
+`list_skills`, `list_packs`, `inspect_skill`) resolved the session via
+`process.env.CLAUDE_SESSION_ID ?? 'unknown'` — but CC never sets that env, so
+every one read `sessions/unknown/` for real sessions (FU.5 was `read_state`; the
+other five are the same bug). `lessons.ts` (FU.6) used the global
+`readCurrentSession()` MCP-side → cross-project clobber race. All now route
+through `resolveMcpSessionId()` (the FU.3 resolver: env → project-scoped pointer
+→ global), each null-guarding to its existing graceful-empty result (no
+`sessions/null` path built). An ESLint `no-restricted-syntax` rule scoped to
+`src/mcp/**` + `src/functions/**` (FU.8) forbids both raw forms so the bypass
+can't regress; the resolver's own internals live in `src/runtime/hooks/` and are
+out of scope. `log_phase` was already correct and is unchanged.
+
+- `src/mcp/tools/{read-state,read-violations,list-drift-events,list-skills,list-packs,inspect-skill}.ts`
+- `src/functions/lessons.ts` — `readCurrentSession` → `resolveMcpSessionId`
+- `eslint.config.js` — the FU.8 audit gate (two AST selectors)
+- `src/mcp/tools/session-resolution.test.ts` (new)
+
 ## [0.5.277] - 2026-06-01
 
 ### Fixed (T-ATM ATM.2 — Gate B reads the transcript-derived open-task list, not the stale store)

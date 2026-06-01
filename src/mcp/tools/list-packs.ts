@@ -16,9 +16,12 @@
  */
 
 import { loadActivePacks } from '../../runtime/bootstrap.js';
+import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 
 export async function handleListPacks(): Promise<string> {
-  const sessionId = process.env.CLAUDE_SESSION_ID ?? 'unknown';
+  // FU.8 — resolve the real session (was `?? 'unknown'`). null → no packs.
+  const sessionId = await resolveMcpSessionId();
+  if (sessionId === null) return 'no packs loaded';
   const packs = await loadActivePacks(sessionId);
   if (packs.length === 0) return 'no packs loaded';
   return packs.map((p) => p.name).join('\n');

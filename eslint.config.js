@@ -25,6 +25,31 @@ export default tseslint.config(
     },
   },
   {
+    // FU.8 audit gate — MCP-side session reads MUST go through resolveMcpSessionId()
+    // (src/runtime/hooks/session_id.ts). Raw `process.env.CLAUDE_SESSION_ID` resolves
+    // to sessions/unknown (CC never sets it); the global `readCurrentSession()` races
+    // cross-project. The resolver itself lives in src/runtime/hooks (out of this glob),
+    // so its legitimate internal use is unaffected. Tests excluded (they seed env).
+    files: ['src/mcp/**/*.ts', 'src/functions/**/*.ts'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "MemberExpression[property.name='CLAUDE_SESSION_ID'][object.property.name='env'][object.object.name='process']",
+          message:
+            'MCP-side session reads must use resolveMcpSessionId() (FU.8), not process.env.CLAUDE_SESSION_ID (resolves to sessions/unknown).',
+        },
+        {
+          selector: "CallExpression[callee.name='readCurrentSession']",
+          message:
+            'MCP-side session reads must use resolveMcpSessionId() (FU.8), not the global readCurrentSession() (cross-project race).',
+        },
+      ],
+    },
+  },
+  {
     ignores: [
       'dist/**',
       'node_modules/**',
