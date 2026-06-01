@@ -152,7 +152,7 @@ async function main(): Promise<void> {
   // Record the live session id so out-of-band processes (the `opensquid
   // automation on|off` CLI, run from a terminal that never sees this stdin)
   // can target the session the hooks actually key on. Best-effort.
-  await recordCurrentSession(sessionId);
+  await recordCurrentSession(sessionId, process.cwd());
   // G.5 — a new turn starts on every UserPromptSubmit. Reset the per-turn
   // slice of the tool-call ledger so the freshness rule (read on the next
   // Stop event) sees only tools called during THIS turn. Session-wide list

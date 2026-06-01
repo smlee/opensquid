@@ -23,9 +23,9 @@
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
-import { OPENSQUID_HOME } from '../paths.js';
+import { OPENSQUID_HOME, projectCurrentSessionPath, resolveProjectUuid } from '../paths.js';
 
 interface SessionIdCarrier {
   session_id?: unknown;
@@ -60,17 +60,31 @@ export const currentSessionPath = (): string => join(OPENSQUID_HOME(), '.current
  * target the session the hooks actually see. Best-effort: never throws, and
  * never records the `'unknown'` sentinel (that would mislead the CLI).
  */
-export async function recordCurrentSession(sessionId: string): Promise<void> {
+export async function recordCurrentSession(sessionId: string, cwd?: string): Promise<void> {
   if (sessionId === 'unknown' || sessionId === '') return;
   try {
     await mkdir(OPENSQUID_HOME(), { recursive: true });
+    // Global pointer — back-compat for the automation CLI + lessons.ts (which
+    // read it without a project context). Last-writer-wins across all sessions.
     await writeFile(currentSessionPath(), sessionId, 'utf-8');
+    // FU.3: project-scoped pointer — the race-free authority the MCP server
+    // reads. A concurrent session in ANOTHER project writes a different uuid's
+    // pointer and can't clobber this one. Skipped (no error) for a cwd that
+    // isn't inside a uuid-bound project (`.opensquid/project.json` absent).
+    if (cwd !== undefined && cwd !== '') {
+      const uuid = await resolveProjectUuid({ cwd });
+      if (uuid !== null) {
+        const scoped = projectCurrentSessionPath(uuid);
+        await mkdir(dirname(scoped), { recursive: true });
+        await writeFile(scoped, sessionId, 'utf-8');
+      }
+    }
   } catch {
     // best-effort: a write failure must never break the hook
   }
 }
 
-/** Read the live session id, or `null` if the pointer is absent/unreadable/empty. */
+/** Read the global live session id, or `null` if absent/unreadable/empty. */
 export async function readCurrentSession(): Promise<string | null> {
   try {
     const raw = (await readFile(currentSessionPath(), 'utf-8')).trim();
@@ -80,28 +94,56 @@ export async function readCurrentSession(): Promise<string | null> {
   }
 }
 
+/** Read the project-scoped live session id, or `null` if absent/unreadable/empty. */
+export async function readProjectCurrentSession(projectUuid: string): Promise<string | null> {
+  try {
+    const raw = (await readFile(projectCurrentSessionPath(projectUuid), 'utf-8')).trim();
+    return raw === '' ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * T-MULTISESSION MS.1 (2026-05-29) — env-first session resolution for MCP
- * tools. Each Claude Code session spawns its own MCP server process; when
- * Claude Code sets `CLAUDE_SESSION_ID` in that process's env, the MCP server
- * resolves its session id directly (race-free) instead of reading the
- * global `.current-session` pointer (which is overwritten by every
- * concurrent Claude Code session's PreToolUse hook — last writer wins).
+ * Session resolution for MCP tools (the MCP server is a separate process from
+ * the hooks, so it can't read hook stdin).
  *
- * Precedent for env-first session resolution:
- * - `src/runtime/chat/live_session_lease.ts:resolveSessionId`
- * - `src/mcp/chat_bridge_subscriber.ts:279`
+ * T-RJ-FOLLOWUPS FU.3 (2026-06-01) — CORRECTION to MS.1. MS.1 assumed Claude
+ * Code sets `CLAUDE_SESSION_ID` in the MCP server's env; it does NOT (verified
+ * against the CC hook/MCP docs — CC sets ONLY `CLAUDE_PROJECT_DIR` for stdio
+ * MCP servers, no session id and no per-request session context). So the env
+ * step never fired and resolution always fell through to the GLOBAL
+ * `.current-session`, which any concurrent session in any project clobbers
+ * (last-writer-wins) — silently breaking this session's `log_phase` mid-task.
  *
- * Fallback chain:
- *   1. `process.env.CLAUDE_SESSION_ID` (preferred — Claude Code sets per process)
+ * Fix: resolve via the PROJECT-SCOPED pointer, keyed by `CLAUDE_PROJECT_DIR`
+ * (which CC DOES provide) → `resolveProjectUuid`. A concurrent session in
+ * another repo writes a different project's pointer and can't clobber this one.
+ *
+ * ⚠️ Residual (documented, not solved here): two concurrent CC sessions in the
+ * SAME project still share one project pointer and race. Rare; a
+ * most-recently-active-task tiebreak is a follow-up.
+ *
+ * Precedence:
+ *   1. `process.env.CLAUDE_SESSION_ID` (kept — harmless if CC ever sets it)
  *   2. `process.env.OPENSQUID_SESSION_ID` (override / test seam)
- *   3. `readCurrentSession()` (existing pointer; cross-session-racing but
- *      backwards-compatible for single-session use)
+ *   3. project-scoped pointer via `CLAUDE_PROJECT_DIR`→`resolveProjectUuid`
+ *      (race-free across projects — the real fix)
+ *   4. global `.current-session` (back-compat: single-session / no-project cwd)
  */
 export async function resolveMcpSessionId(): Promise<string | null> {
-  const fromClaudeEnv = process.env.CLAUDE_SESSION_ID;
+  const env = process.env;
+  const fromClaudeEnv = env.CLAUDE_SESSION_ID;
   if (fromClaudeEnv !== undefined && fromClaudeEnv.length > 0) return fromClaudeEnv;
-  const fromOpensquidEnv = process.env.OPENSQUID_SESSION_ID;
+  const fromOpensquidEnv = env.OPENSQUID_SESSION_ID;
   if (fromOpensquidEnv !== undefined && fromOpensquidEnv.length > 0) return fromOpensquidEnv;
+  const projectDir = env.CLAUDE_PROJECT_DIR;
+  if (projectDir !== undefined && projectDir.length > 0) {
+    const uuid = await resolveProjectUuid({ cwd: projectDir, env });
+    if (uuid !== null) {
+      const scoped = await readProjectCurrentSession(uuid);
+      if (scoped !== null) return scoped;
+    }
+  }
   return readCurrentSession();
 }

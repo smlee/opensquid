@@ -7,6 +7,33 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.267] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.3 — race-free MCP session resolution via a project-scoped pointer)
+
+`log_phase` (and any MCP tool using `resolveMcpSessionId`) could silently bind to
+the WRONG session mid-task: MS.1 assumed Claude Code sets `CLAUDE_SESSION_ID` in
+the MCP server's env, but CC sets **only `CLAUDE_PROJECT_DIR`** (verified against
+the CC docs) — so resolution always fell through to the global `.current-session`
+pointer, which any concurrent session in any project clobbers (last-writer-wins).
+Hit live during this session (a non-loop session repeatedly clobbered the pointer).
+
+Fix: the UserPromptSubmit hook now ALSO writes a **project-scoped** pointer at
+`~/.opensquid/projects/<uuid>/.current-session` (keyed by `resolveProjectUuid(cwd)`),
+and `resolveMcpSessionId` reads it via `CLAUDE_PROJECT_DIR` before the global
+fallback. A concurrent session in another repo can no longer clobber this
+session's resolution.
+
+- `src/runtime/paths.ts` — `projectCurrentSessionPath(uuid)`.
+- `src/runtime/hooks/session_id.ts` — `recordCurrentSession(sessionId, cwd?)`
+  dual-writes global + project-scoped; `readProjectCurrentSession`;
+  `resolveMcpSessionId` precedence: env → project-scoped → global.
+- `src/runtime/hooks/user-prompt-submit.ts` — passes `process.cwd()`.
+- Precedence preserved (`OPENSQUID_SESSION_ID` env still wins); global pointer
+  still written for the automation CLI + `lessons.ts`.
+- Residual (documented): two concurrent sessions in the SAME project still share
+  one pointer — a most-recently-active tiebreak is a follow-up.
+
 ## [0.5.266] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.1 — `ci-verify-after-push` advice matches the CI-verify discipline)

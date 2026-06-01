@@ -296,3 +296,12 @@ export const inboxAckedPath = (projectUuid: string): string =>
 // is handling the project and stay silent (cross-session arbitration, T-DEL).
 export const liveSessionLease = (projectUuid: string): string =>
   join(OPENSQUID_HOME(), 'projects', projectUuid, 'live-session.lease');
+
+// T-RJ-FOLLOWUPS FU.3 (2026-06-01) — project-scoped live-session pointer. The
+// UPS hook writes the real session id here (keyed by project), and the MCP
+// server reads it via `CLAUDE_PROJECT_DIR`→`resolveProjectUuid`. Race-free
+// across projects: a concurrent session in ANOTHER repo writes a DIFFERENT
+// project's pointer and can't clobber this one (the global `.current-session`
+// is last-writer-wins across all sessions; this is not).
+export const projectCurrentSessionPath = (projectUuid: string): string =>
+  join(OPENSQUID_HOME(), 'projects', projectUuid, '.current-session');

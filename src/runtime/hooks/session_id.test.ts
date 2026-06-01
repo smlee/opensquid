@@ -17,28 +17,56 @@ import {
   currentSessionPath,
   extractSessionId,
   readCurrentSession,
+  readProjectCurrentSession,
   recordCurrentSession,
+  resolveMcpSessionId,
 } from './session_id.js';
 
 let tempHome: string;
 let priorHome: string | undefined;
-let priorEnv: string | undefined;
+const savedEnv: Record<string, string | undefined> = {};
+const ENV_KEYS = [
+  'CLAUDE_SESSION_ID',
+  'OPENSQUID_SESSION_ID',
+  'CLAUDE_PROJECT_DIR',
+  'OPENSQUID_PROJECT_UUID',
+];
+const projDirs: string[] = [];
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
-  priorEnv = process.env.CLAUDE_SESSION_ID;
+  for (const k of ENV_KEYS) {
+    savedEnv[k] = process.env[k];
+    delete process.env[k];
+  }
   tempHome = await mkdtemp(join(tmpdir(), 'opensquid-session-id-'));
   process.env.OPENSQUID_HOME = tempHome;
-  delete process.env.CLAUDE_SESSION_ID;
 });
 
 afterEach(async () => {
   if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = priorHome;
-  if (priorEnv === undefined) delete process.env.CLAUDE_SESSION_ID;
-  else process.env.CLAUDE_SESSION_ID = priorEnv;
+  for (const k of ENV_KEYS) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
   await rm(tempHome, { recursive: true, force: true });
+  for (const d of projDirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
+
+/** Create a temp dir bound to `uuid` via `.opensquid/project.json` (so
+ *  `resolveProjectUuid({cwd})` resolves it through the real walk). */
+async function makeProject(uuid: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquid-proj-'));
+  projDirs.push(dir);
+  await mkdir(join(dir, '.opensquid'), { recursive: true });
+  await writeFile(
+    join(dir, '.opensquid', 'project.json'),
+    JSON.stringify({ version: 1, uuid, id: 'test-proj' }),
+    'utf-8',
+  );
+  return dir;
+}
 
 describe('extractSessionId', () => {
   it('prefers stdin session_id (snake_case) over the env fallback', () => {
@@ -101,5 +129,54 @@ describe('recordCurrentSession / readCurrentSession', () => {
     await recordCurrentSession('first');
     await recordCurrentSession('second');
     expect(await readCurrentSession()).toBe('second');
+  });
+});
+
+describe('FU.3 — project-scoped session pointer', () => {
+  const UUID = 'da96385b-8d0d-43c0-a637-35b70915b68b';
+
+  it('dual-writes the global AND project-scoped pointer for a uuid-bound cwd', async () => {
+    const proj = await makeProject(UUID);
+    await recordCurrentSession('sess-1', proj);
+    expect(await readCurrentSession()).toBe('sess-1'); // global
+    expect(await readProjectCurrentSession(UUID)).toBe('sess-1'); // project-scoped
+  });
+
+  it('writes ONLY the global pointer when the cwd is not in a uuid-bound project', async () => {
+    const noProj = await mkdtemp(join(tmpdir(), 'opensquid-noproj-'));
+    projDirs.push(noProj);
+    await recordCurrentSession('sess-1', noProj);
+    expect(await readCurrentSession()).toBe('sess-1');
+    expect(await readProjectCurrentSession(UUID)).toBeNull();
+  });
+
+  it('resolveMcpSessionId prefers the project pointer over a CLOBBERED global (the FU.3 regression)', async () => {
+    const proj = await makeProject(UUID);
+    await recordCurrentSession('mine', proj); // global+project = 'mine'
+    // A concurrent session in ANOTHER project clobbers the GLOBAL pointer:
+    await writeFile(currentSessionPath(), 'other-session', 'utf-8');
+    process.env.CLAUDE_PROJECT_DIR = proj;
+    // Project-scoped pointer still says 'mine' → resolution is NOT clobbered.
+    expect(await resolveMcpSessionId()).toBe('mine');
+  });
+
+  it('resolveMcpSessionId: OPENSQUID_SESSION_ID env wins over everything', async () => {
+    const proj = await makeProject(UUID);
+    await recordCurrentSession('mine', proj);
+    process.env.CLAUDE_PROJECT_DIR = proj;
+    process.env.OPENSQUID_SESSION_ID = 'env-wins';
+    expect(await resolveMcpSessionId()).toBe('env-wins');
+  });
+
+  it('resolveMcpSessionId falls back to the global pointer when no CLAUDE_PROJECT_DIR', async () => {
+    await recordCurrentSession('global-only'); // no cwd → global only
+    expect(await resolveMcpSessionId()).toBe('global-only');
+  });
+
+  it('resolveMcpSessionId falls back to global when the project has no scoped pointer', async () => {
+    const proj = await makeProject(UUID);
+    process.env.CLAUDE_PROJECT_DIR = proj;
+    await writeFile(currentSessionPath(), 'global-fallback', 'utf-8'); // no project pointer written
+    expect(await resolveMcpSessionId()).toBe('global-fallback');
   });
 });
