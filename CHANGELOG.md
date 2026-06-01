@@ -7,6 +7,16 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.266] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.1 — `ci-verify-after-push` advice matches the CI-verify discipline)
+
+The `ci-verify-after-push` honesty-ledger rule (which started firing in RJ.2)
+advised `gh run watch <id>` — the exact command the documented CI-verify
+discipline warns against (it has falsely reported success). Corrected to
+`gh run view <id> --json conclusion`. Message text only — rule id, trigger,
+regex, and `drift_response.yaml` mapping unchanged.
+
 ## [0.5.265] - 2026-06-01
 
 ### Fixed (T-RESPONSE-JUDGING-UPS RJ.3 — `d9-guard` now sees the message it judges)

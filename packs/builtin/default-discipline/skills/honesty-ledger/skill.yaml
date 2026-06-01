@@ -159,7 +159,11 @@ rules:
         as: claimed
       - call: verdict
         if: 'len(claimed.matched) > 0'
-        args: { level: warn, message: verify via `gh run watch <id>` before claiming CI green }
+        args:
+          {
+            level: warn,
+            message: verify CI via `gh run view <id> --json conclusion` (NOT `gh run watch`) before claiming CI green,
+          }
 prose: |
   Honesty-ledger catalog. Each rule maps a claim pattern in the assistant's
   message to a warn verdict. Matching runs at UserPromptSubmit against the
