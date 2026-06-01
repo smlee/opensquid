@@ -22,7 +22,7 @@
  *   record); setup/cli/automation.ts (read).
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { OPENSQUID_HOME, projectCurrentSessionPath, resolveProjectUuid } from '../paths.js';
@@ -105,6 +105,20 @@ export async function readProjectCurrentSession(projectUuid: string): Promise<st
 }
 
 /**
+ * FU.7 — does `sessions/<id>/` exist? The existence of the per-session dir
+ * (created by the session's own hooks when they first write state) is the
+ * signal that an id is a REAL persisted session, not a stale/`--resume` env id.
+ * Fail-false on any stat error (absent dir → ENOENT → false).
+ */
+async function sessionDirExists(id: string): Promise<boolean> {
+  try {
+    return (await stat(join(OPENSQUID_HOME(), 'sessions', id))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Session resolution for MCP tools (the MCP server is a separate process from
  * the hooks, so it can't read hook stdin).
  *
@@ -137,9 +151,14 @@ export async function readProjectCurrentSession(projectUuid: string): Promise<st
  * Precedence:
  *   1. `process.env.CLAUDE_SESSION_ID` (kept — harmless if CC ever sets it)
  *   2. `process.env.OPENSQUID_SESSION_ID` (override / test seam)
- *   3. project-scoped pointer via `CLAUDE_PROJECT_DIR`→`resolveProjectUuid`
+ *   3. `process.env.CLAUDE_CODE_SESSION_ID` GUARDED by `sessions/<id>/` existence
+ *      (FU.7) — CC's per-process id. When its session dir exists it is a real
+ *      persisted session, which disambiguates two concurrent sessions in the
+ *      SAME repo (distinct per-process ids → distinct dirs). Under `--resume`
+ *      the env id is NEW and has no dir → the guard fails → fall through (safe).
+ *   4. project-scoped pointer via `CLAUDE_PROJECT_DIR`→`resolveProjectUuid`
  *      (race-free across projects — the real fix)
- *   4. global `.current-session` (back-compat: single-session / no-project cwd)
+ *   5. global `.current-session` (back-compat: single-session / no-project cwd)
  */
 export async function resolveMcpSessionId(): Promise<string | null> {
   const env = process.env;
@@ -147,6 +166,11 @@ export async function resolveMcpSessionId(): Promise<string | null> {
   if (fromClaudeEnv !== undefined && fromClaudeEnv.length > 0) return fromClaudeEnv;
   const fromOpensquidEnv = env.OPENSQUID_SESSION_ID;
   if (fromOpensquidEnv !== undefined && fromOpensquidEnv.length > 0) return fromOpensquidEnv;
+  // FU.7 — CC's per-process id, but ONLY when its session dir exists on disk
+  // (proves it's the id state actually lives under). Dir-less → --resume's new
+  // id → ignore, fall through to the project pointer.
+  const ccEnv = env.CLAUDE_CODE_SESSION_ID;
+  if (ccEnv !== undefined && ccEnv.length > 0 && (await sessionDirExists(ccEnv))) return ccEnv;
   const projectDir = env.CLAUDE_PROJECT_DIR;
   if (projectDir !== undefined && projectDir.length > 0) {
     const uuid = await resolveProjectUuid({ cwd: projectDir, env });

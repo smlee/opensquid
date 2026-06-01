@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.279] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.7 — disambiguate same-project concurrent sessions via a guarded CLAUDE_CODE_SESSION_ID)
+
+`resolveMcpSessionId` gained a precedence level between the explicit env seams
+and the project-scoped pointer: it returns `process.env.CLAUDE_CODE_SESSION_ID`
+(CC's per-process id) ONLY when `sessions/<that-id>/` exists on disk. That dir
+proves the id is a real persisted session (its hooks wrote state under it),
+which disambiguates two concurrent CC sessions in the SAME repo — they share one
+project pointer (FU.3's residual race) but have distinct per-process ids and
+distinct dirs. Under `--resume` the env id is NEW and has no dir → the guard
+fails → resolution falls through to the project pointer (the FU.3/FU.4-safe
+path). `OPENSQUID_SESSION_ID` / `CLAUDE_SESSION_ID` still outrank it.
+
+- `src/runtime/hooks/session_id.ts` — `sessionDirExists()` helper + the guarded level; precedence doc-comment updated (5 levels).
+
 ## [0.5.278] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.5+6+8 — unify MCP-side session resolution + regression guard)

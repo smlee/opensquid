@@ -28,6 +28,7 @@ const savedEnv: Record<string, string | undefined> = {};
 const ENV_KEYS = [
   'CLAUDE_SESSION_ID',
   'OPENSQUID_SESSION_ID',
+  'CLAUDE_CODE_SESSION_ID',
   'CLAUDE_PROJECT_DIR',
   'OPENSQUID_PROJECT_UUID',
 ];
@@ -178,5 +179,39 @@ describe('FU.3 — project-scoped session pointer', () => {
     process.env.CLAUDE_PROJECT_DIR = proj;
     await writeFile(currentSessionPath(), 'global-fallback', 'utf-8'); // no project pointer written
     expect(await resolveMcpSessionId()).toBe('global-fallback');
+  });
+});
+
+describe('FU.7 — CLAUDE_CODE_SESSION_ID guarded by session-dir existence', () => {
+  const UUID = 'da96385b-8d0d-43c0-a637-35b70915b68b';
+
+  it('prefers CLAUDE_CODE_SESSION_ID over the project pointer when its session dir EXISTS', async () => {
+    const proj = await makeProject(UUID);
+    await recordCurrentSession('project-session', proj); // project pointer says 'project-session'
+    process.env.CLAUDE_PROJECT_DIR = proj;
+    process.env.CLAUDE_CODE_SESSION_ID = 'cc-per-process';
+    await mkdir(join(tempHome, 'sessions', 'cc-per-process'), { recursive: true }); // real persisted dir
+    // Same-project concurrency: the per-process id (dir-backed) wins.
+    expect(await resolveMcpSessionId()).toBe('cc-per-process');
+  });
+
+  it('IGNORES CLAUDE_CODE_SESSION_ID when its session dir is ABSENT (--resume safety) → project pointer', async () => {
+    const proj = await makeProject(UUID);
+    await recordCurrentSession('project-session', proj);
+    process.env.CLAUDE_PROJECT_DIR = proj;
+    process.env.CLAUDE_CODE_SESSION_ID = 'resumed-new-id'; // NO sessions/<id>/ dir created
+    expect(await resolveMcpSessionId()).toBe('project-session');
+  });
+
+  it('OPENSQUID_SESSION_ID still outranks a dir-backed CLAUDE_CODE_SESSION_ID', async () => {
+    process.env.OPENSQUID_SESSION_ID = 'override-wins';
+    process.env.CLAUDE_CODE_SESSION_ID = 'cc-per-process';
+    await mkdir(join(tempHome, 'sessions', 'cc-per-process'), { recursive: true });
+    expect(await resolveMcpSessionId()).toBe('override-wins');
+  });
+
+  it('unset CLAUDE_CODE_SESSION_ID leaves resolution unchanged (global fallback)', async () => {
+    await recordCurrentSession('global-only');
+    expect(await resolveMcpSessionId()).toBe('global-only');
   });
 });
