@@ -82,10 +82,13 @@ async function main(): Promise<void> {
 
   // HH7.1: Claude Code omits the assistant response text from Stop stdin, so
   // `assistantText` is empty here. Recover the last assistant message from the
-  // transcript `.jsonl` (CC always provides `transcript_path`) so destination /
-  // recall-consumed gates evaluate what was actually written instead of an
-  // empty string (the false-positive root cause). Fail-open: a transcript-read
-  // failure leaves assistantText '' (pre-fix behavior), never crashes the hook.
+  // transcript `.jsonl` (CC always provides `transcript_path`) so Stop-event
+  // gates that read assistantText (honesty-ledger, phase-logging) see what was
+  // written instead of an empty string. Fail-open: a transcript-read failure
+  // leaves assistantText '' (pre-fix behavior), never crashes the hook.
+  // ⚠️ SG.3 caveat: this is off-by-one (returns the PRIOR response if the
+  // triggering one isn't flushed yet) — see transcript.ts. recall-consumed was
+  // removed for relying on this to judge its own triggering response.
   if (parsed.data.kind === 'stop' && parsed.data.assistantText === '') {
     const transcriptPath = extractTranscriptPath(raw);
     if (transcriptPath !== null) {

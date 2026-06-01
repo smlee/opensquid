@@ -2,12 +2,20 @@
  * Transcript reader (T-HANDOFF-HARDENING HH7.1).
  *
  * Claude Code does NOT include the assistant's response text in a hook's stdin
- * payload — but it DOES provide `transcript_path` (the session `.jsonl`). The
- * `recall-consumed` (DPC.3) gate relied on `event.assistantText`, which was
- * therefore always `''`, so it regex-matched consumption vocabulary against an
- * empty string and false-positive-looped. This helper recovers the last
- * assistant message text from the transcript so the gate sees what was actually
- * written.
+ * payload — but it DOES provide `transcript_path` (the session `.jsonl`). This
+ * helper recovers the last assistant message text from the transcript so
+ * Stop-event gates that read `event.assistantText` (honesty-ledger,
+ * phase-logging) see what was written instead of an empty string.
+ *
+ * ⚠️ KNOWN LIMITATION (SG.3, 2026-06-01): at the moment a Stop hook fires, the
+ * response that TRIGGERED it may not be flushed to the transcript yet — so this
+ * returns the PRIOR assistant message (off-by-one). A Stop gate therefore
+ * cannot reliably judge its own triggering response. `recall-consumed` was
+ * REMOVED for exactly this (it judged the wrong message → 9× loop). The rule:
+ * gates that judge the just-emitted response belong at the next
+ * `UserPromptSubmit` (prior response settled + turn ledger reset), NOT at Stop.
+ * Remaining Stop consumers (honesty-ledger, phase-logging) inherit this
+ * off-by-one and should be audited.
  *
  * Defensive by construction: the transcript schema is harness-owned and can
  * shift across Claude Code versions, so EVERY line is parsed in its own

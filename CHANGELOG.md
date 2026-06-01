@@ -7,6 +7,48 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.261] - 2026-06-01
+
+### Removed (T-SCOPE-GATES SG.3 — `recall-consumed`, the wrong-hook gate)
+
+`recall-consumed` (DPC.3) is removed from `scope-architect`. It was architecturally
+unsound at the `Stop` hook for THREE independent reasons (found by running the
+scope flow on the question itself):
+
+1. **Off-by-one read.** A Stop hook fires _before_ the response that triggered it
+   is flushed to the transcript, so `readLastAssistantText` (HH7.1) returns the
+   _prior_ response. The gate judged the wrong message and could never see the
+   current turn's consumption vocabulary. Proven live: it fired despite the
+   message containing `per [[…]]`; dist confirmed fresh; transcript confirmed to
+   contain the message. HH7.1's read-patch can't fix the timing.
+2. **Non-resetting trigger.** `recalls.count` only resets on `UserPromptSubmit`
+   (`resetTurnLedger`); Stop-feedback cycles aren't real prompts, so the trigger
+   stayed armed → the gate re-fired every Stop (**9× loop** observed this session).
+3. **Unverifiable predicate.** "Did prose consume recalled memory?" has no clean
+   detector (the pre-existing reason).
+
+**Architectural rule recorded:** gates that judge the just-emitted assistant
+response belong at the next `UserPromptSubmit` (prior response settled in the
+transcript + turn ledger reset), **NOT at `Stop`**. A Stop hook cannot reliably
+read its own triggering response.
+
+**Kept:** the HH7.1 transcript-read infra (`stop.ts` + `transcript.ts`) stays —
+`honesty-ledger` + `phase-logging` also read `assistantText`. They **inherit the
+same off-by-one** (now documented in `transcript.ts`) and are flagged for a
+follow-up audit (move to UPS or accept prior-response semantics).
+
+### Tests
+
+`test/builtin/scope-architect.test.ts`: skill-list 9 → 8; the "recall-consumed
+fires on stop" test removed.
+
+### Note
+
+This is the root fix for the recurring Stop-loop, superseding the considered
+"fire-cap" band-aid. Running gates drop the gate after rebuild + next session.
+
+---
+
 ## [0.5.260] - 2026-06-01
 
 ### Fixed (T-SCOPE-GATES SG.2 — three more silent-no-op gates + a second bug class)

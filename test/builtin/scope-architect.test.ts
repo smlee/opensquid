@@ -29,7 +29,7 @@ describe('builtin scope-architect pack', () => {
     expect(pack.evolves).toBe(true);
   });
 
-  it('ships nine skills (DPC.1 six + DPC.3/4/5 three)', async () => {
+  it('ships eight skills (recall-consumed removed in SG.3)', async () => {
     const pack = await loadPack(resolve('packs/builtin/scope-architect'));
     const skillNames = pack.skills.map((s) => s.name).sort();
     expect(skillNames).toEqual([
@@ -37,21 +37,16 @@ describe('builtin scope-architect pack', () => {
       'inline-spec-block',
       'pack-skill-authoring',
       'pre-research-authoring',
-      'recall-consumed',
       'scope-before-code',
       'scope-detect',
       'task-list-generated',
       'taskcreate-spec-required',
     ]);
   });
-
-  it('DPC.3: recall-consumed fires on stop trigger only', async () => {
-    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
-    const skill = pack.skills.find((s) => s.name === 'recall-consumed');
-    expect(skill).toBeDefined();
-    expect(skill?.triggers.map((t) => t.kind)).toEqual(['stop']);
-    expect(skill?.rules[0]?.id).toBe('block-stop-if-recall-not-consumed');
-  });
+  // SG.3 (2026-06-01): recall-consumed removed — it was unsound at the Stop
+  // hook (off-by-one read of the triggering response + non-resetting trigger
+  // → 9× loop) and gated an unverifiable predicate. Response-judging gates
+  // belong at UserPromptSubmit, not Stop. See docs/tasks/T-scope-gates.md SG.3.
 
   it('passes validateUniqueSkillNames (no in-pack collisions)', async () => {
     const pack = await loadPack(resolve('packs/builtin/scope-architect'));

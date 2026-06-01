@@ -39,3 +39,20 @@ other (the failure this file exists to prevent). Grow it as we label things.
 - **Chat FSM** — per channel, states `{LIVE, AUTONOMOUS}`; transition _claim_ =
   `SessionStart`, transition _release_ = `SessionEnd`; the `AUTONOMOUS`
   occupant is a subscription-spawned agent (no metered cost).
+
+## Hooks / gates
+
+- **Response-judging → UserPromptSubmit, not Stop** — a gate that judges the
+  assistant's just-emitted response (did it cite recall? stay honest? consume
+  memory?) must run at the NEXT `UserPromptSubmit`, where the prior response is
+  settled in the transcript and the turn ledger has reset. A `Stop` hook fires
+  _before_ its triggering response is flushed → it reads the PRIOR response
+  (off-by-one) and its per-turn trigger never resets across Stop-feedback
+  cycles (→ loops). `recall-consumed` was removed (SG.3) for violating this;
+  `honesty-ledger` / `phase-logging` read `assistantText` at Stop and inherit
+  the off-by-one (audit pending).
+- **Soft vs hard verdict ≠ verdict level** — a rule's `level: warn` does NOT
+  make it soft. The _effective_ action is the pack's `drift_response` POLICY;
+  with no `drift_response.yaml` the default is `block_tool`, so every rule
+  (even `level: warn`) HARD-BLOCKS. To make a gate actually warn, the pack must
+  ship a `drift_response.yaml` mapping that rule to the `warn` policy.
