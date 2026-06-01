@@ -7,6 +7,32 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.281] - 2026-06-01
+
+### Fixed (T-CHAT-TOPIC-AUTOBOOT CHAT.1 — auto-boot `createForumTopic` "chat not found")
+
+The chat-daemon logged `auto-boot: resolveOrCreateTopic failed … createForumTopic
+(400: chat not found)` for every project. Root cause (verified live): the
+supergroup exists and the bot is in it, but `TelegramAdapter.createTopic` passed
+the routing `report_channel` form (`telegram:-1003923174632`) **raw** to
+`createForumTopic`, whereas the send path strips the `telegram:` prefix via
+`parseTelegramChannel` first — so Telegram rejected the prefixed string. It
+retried endlessly because no routing file carried `auto_bound`, so
+`resolveOrCreateTopic` never hit its idempotency short-circuit.
+
+- `src.legacy/chat/adapters/telegram.ts` — `createTopic` now resolves the bare
+  numeric chat_id via `parseTelegramChannel` (accepts a bare numeric id as-is).
+- `src.legacy/chat/adapters/telegram.test.ts` — `createTopic` prefix-strip tests.
+- Data (operational, not in-repo): each project's `chat-routing.json` gained an
+  `auto_bound` block (`created_by: "manual"`) recording the EXISTING topic (15 for
+  loop+opensquid, 281 for RaumPilates) so auto-boot binds to it instead of
+  creating a duplicate. This is what stops the live error (short-circuit before
+  `createTopic`); verified — no new failure after a subscribe.
+
+Note: deploying the code fix to `dist/chat` is currently blocked by pre-existing
+legacy-build rot (`src.legacy/{index,origin,scope}.ts` reference removed modules),
+tracked separately; the data fix resolves the live error regardless.
+
 ## [0.5.280] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.10 — `notify_and_pause` surfaces its message; the rest stay principled stubs)
