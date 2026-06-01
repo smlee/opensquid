@@ -83,6 +83,14 @@ const BIN_SPECS: BinSpec[] = [
     event: 'session_end',
     stdin: JSON.stringify({ session_id: 'test' }),
   },
+  {
+    // T-HANDOFF-HARDENING HH6.1 — session-start bin smoke. `source: 'startup'`
+    // dispatches (emits the marker); the clear/compact short-circuit is
+    // covered by its own test below.
+    bin: 'session-start.js',
+    event: 'session_start',
+    stdin: JSON.stringify({ session_id: 'test', source: 'startup' }),
+  },
 ];
 
 beforeAll(() => {
@@ -149,6 +157,19 @@ describe('G.2: hook bins do not silent no-op', () => {
     const after = existsSync(livePath) ? await readFile(livePath, 'utf8') : null;
     expect(after).toBe(before);
   }, 20_000);
+
+  // T-HANDOFF-HARDENING HH6.1 L3 — session-start short-circuits on
+  // clear/compact (mid-session sources): exit 0 and NO dispatch marker
+  // (it returns before loadActivePacks/dispatchEvent).
+  for (const source of ['compact', 'clear'] as const) {
+    it(`session-start.js skips dispatch on source=${source} (exit 0, no marker)`, async () => {
+      const binPath = resolve(DIST_HOOKS, 'session-start.js');
+      expect(existsSync(binPath), `compiled bin missing: ${binPath}`).toBe(true);
+      const r = await runBin(binPath, JSON.stringify({ session_id: 'test', source }));
+      expect(r.exitCode, `stderr: ${r.stderr}`).toBe(0);
+      expect(r.stderr).not.toContain('[opensquid-dispatch]');
+    }, 20_000);
+  }
 });
 
 async function runBin(

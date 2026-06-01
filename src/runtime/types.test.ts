@@ -96,6 +96,9 @@ describe('Event', () => {
         case 'stop':
           expectTypeOf(e.assistantText).toEqualTypeOf<string>();
           return e.assistantText;
+        case 'session_start':
+          expectTypeOf(e.source).toEqualTypeOf<'startup' | 'resume' | 'clear' | 'compact'>();
+          return e.source;
         case 'schedule':
           expectTypeOf(e.scheduleId).toEqualTypeOf<string>();
           return e.scheduleId;
@@ -119,6 +122,7 @@ describe('Event', () => {
     expect(fn({ kind: 'prompt_submit', prompt: 'p' })).toBe('p');
     expect(fn({ kind: 'session_end', sessionId: 's' })).toBe('s');
     expect(fn({ kind: 'stop', assistantText: 'a' })).toBe('a');
+    expect(fn({ kind: 'session_start', source: 'startup' })).toBe('startup');
     expect(
       fn({
         kind: 'schedule',
@@ -282,13 +286,14 @@ describe('Event (AUTO.1 new variants)', () => {
 // ---------------------------------------------------------------------------
 
 describe('EventKind enum', () => {
-  it('lists exactly the 9 Event discriminator literals', () => {
+  it('lists exactly the 10 Event discriminator literals', () => {
     expect(EventKind.options).toEqual([
       'tool_call',
       'post_tool_call', // T-POSTPUSH POSTPUSH.1
       'prompt_submit',
       'session_end',
       'stop',
+      'session_start', // T-HANDOFF-HARDENING HH6.1
       'schedule',
       'webhook',
       'inbound_channel',

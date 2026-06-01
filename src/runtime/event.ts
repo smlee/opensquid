@@ -12,10 +12,12 @@
  * "Key code shapes" (the four new event variants + `triggers:` block).
  *
  * What lives here:
- *   - The 8 Event variants (tool_call, prompt_submit, session_end, stop,
- *     schedule, webhook, inbound_channel, file_changed)
+ *   - The Event variants (tool_call, post_tool_call, prompt_submit,
+ *     session_end, stop, session_start, schedule, webhook, inbound_channel,
+ *     file_changed) — post_tool_call added by POSTPUSH.1, session_start by
+ *     HH6.1
  *   - The `Event` discriminated union
- *   - `EventKind` enum (the 8 discriminator literals)
+ *   - `EventKind` enum (the matching discriminator literals)
  *   - `Trigger` discriminated union + `DEFAULT_TRIGGERS` + `defaultTriggers()`
  *
  * What does NOT live here:
@@ -87,6 +89,23 @@ export const StopEvent = z.object({
 });
 export type StopEvent = z.infer<typeof StopEvent>;
 
+// T-HANDOFF-HARDENING HH6.1 (2026-05-31) — SessionStart fires ONCE when a
+// session begins (Claude Code's `SessionStart` hook, the missing enforcement
+// point this track adds). `source` is the CC-supplied trigger: `startup`
+// (new), `resume` (--resume/--continue), `clear` (/clear), `compact`
+// (auto/manual compaction). The session-start bin acts only on startup|resume
+// (skips clear|compact — those fire mid-session and would re-inject noise).
+// `sessionId`/`cwd` are optional carriers (CC supplies them; the bin defaults
+// cwd to process.cwd()). First consumer = the connection-check pack rule
+// (HH6.2), which subscribes via `triggers: [{kind: session_start}]`.
+export const SessionStartEvent = z.object({
+  kind: z.literal('session_start'),
+  source: z.enum(['startup', 'resume', 'clear', 'compact']),
+  sessionId: z.string().optional(),
+  cwd: z.string().optional(),
+});
+export type SessionStartEvent = z.infer<typeof SessionStartEvent>;
+
 // ---------------------------------------------------------------------------
 // AUTO.1 — non-tool-call event variants.
 //
@@ -152,13 +171,13 @@ export const FileChangedEvent = z.object({
 export type FileChangedEvent = z.infer<typeof FileChangedEvent>;
 
 // ---------------------------------------------------------------------------
-// Event — eight-variant discriminated union on `kind`.
+// Event — discriminated union on `kind`.
 //
-// The order below puts the four host-hook events first (tool_call,
-// prompt_submit, session_end, stop) and the four trigger-source events
-// after, matching the load order in `EventKind` (see below) and the
+// The order below puts the host-hook events first (tool_call, post_tool_call,
+// prompt_submit, session_end, stop, session_start) and the trigger-source
+// events after, matching the load order in `EventKind` (see below) and the
 // matcher allow-list in `load_matchers.ts`. Pack authors can declare any
-// of the eight as a skill `triggers:` entry; the dispatcher filters skills
+// kind as a skill `triggers:` entry; the dispatcher filters skills
 // per event kind before evaluating rules.
 // ---------------------------------------------------------------------------
 
@@ -168,6 +187,7 @@ export const Event = z.discriminatedUnion('kind', [
   PromptSubmitEvent,
   SessionEndEvent,
   StopEvent,
+  SessionStartEvent, // T-HANDOFF-HARDENING HH6.1
   ScheduleEvent,
   WebhookEvent,
   InboundChannelEvent,
@@ -176,7 +196,7 @@ export const Event = z.discriminatedUnion('kind', [
 export type Event = z.infer<typeof Event>;
 
 // ---------------------------------------------------------------------------
-// EventKind — the eight discriminator literals as a Zod enum + TS type.
+// EventKind — the discriminator literals as a Zod enum + TS type.
 //
 // Lives next to `Event` so consumers that need the bare set of kinds
 // (skill `triggers:`, load matchers' `event_type` filter, scheduler audit
@@ -189,6 +209,7 @@ export const EventKind = z.enum([
   'prompt_submit',
   'session_end',
   'stop',
+  'session_start', // T-HANDOFF-HARDENING HH6.1
   'schedule',
   'webhook',
   'inbound_channel',
@@ -243,6 +264,7 @@ export const Trigger = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('prompt_submit') }),
   z.object({ kind: z.literal('session_end') }),
   z.object({ kind: z.literal('stop') }),
+  z.object({ kind: z.literal('session_start') }), // T-HANDOFF-HARDENING HH6.1
   z.object({
     kind: z.literal('schedule'),
     cron: z.string().optional(),

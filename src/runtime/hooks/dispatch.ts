@@ -401,13 +401,19 @@ export async function dispatchEvent(
         // Aggregate and continue walking; only `UserPromptSubmit` hook bin
         // actually emits the array. Other hook bins discard with a warning.
         if (result.kind === 'inject_context') {
-          if (event.kind === 'prompt_submit') {
+          // HH6.1 (2026-05-31): inject_context now surfaces on BOTH
+          // prompt_submit (UPS bin) AND session_start (session-start bin) —
+          // each bin reads `contextInjections` and emits the host's
+          // `additionalContext` envelope. Any OTHER event kind still drops
+          // with a warning (no bin surfaces it). The set of surfacing kinds
+          // is intentionally explicit so a misrouted trigger stays visible.
+          if (event.kind === 'prompt_submit' || event.kind === 'session_start') {
             contextInjections.push(result.content);
           } else {
             warnBuf +=
               `[opensquid] WARN: rule "${rule.id}" in skill "${skill.name}" (pack "${pack.name}") ` +
-              `emitted inject_context on event kind "${event.kind}"; only "prompt_submit" surfaces ` +
-              `injections (drop). Update the skill's triggers: block.\n`;
+              `emitted inject_context on event kind "${event.kind}"; only "prompt_submit" / ` +
+              `"session_start" surface injections (drop). Update the skill's triggers: block.\n`;
           }
           continue;
         }

@@ -228,13 +228,14 @@ describe('Skill schema — AUTO.1 triggers block', () => {
     expect(result.success).toBe(false);
   });
 
-  it('TriggerKind enum is the same 9 literals as EventKind (T-POSTPUSH POSTPUSH.1)', () => {
+  it('TriggerKind enum is the same 10 literals as EventKind (HH6.1)', () => {
     expect(TriggerKind.options).toEqual([
       'tool_call',
       'post_tool_call', // T-POSTPUSH POSTPUSH.1
       'prompt_submit',
       'session_end',
       'stop',
+      'session_start', // T-HANDOFF-HARDENING HH6.1
       'schedule',
       'webhook',
       'inbound_channel',

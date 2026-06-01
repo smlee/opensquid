@@ -175,6 +175,7 @@ export {
   PromptSubmitEvent,
   ScheduleEvent,
   SessionEndEvent,
+  SessionStartEvent,
   StopEvent,
   ToolCallEvent,
   Trigger,

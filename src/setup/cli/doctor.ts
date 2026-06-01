@@ -58,6 +58,25 @@ const PROBE_PAYLOADS: Record<string, { kind: string; stdin: string }> = {
     stdin: JSON.stringify({ assistant_text: 'doctor-probe', session_id: 'doctor-probe' }),
   },
   SessionEnd: { kind: 'session_end', stdin: JSON.stringify({ session_id: 'doctor-probe' }) },
+  // T-POSTPUSH POSTPUSH.1 — PostToolUse is in OPENSQUID_BIN_FOR_EVENT, so a
+  // setup re-run installs it; doctor must have a probe so it greens instead
+  // of red-flagging "no probe payload registered".
+  PostToolUse: {
+    kind: 'post_tool_call',
+    stdin: JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'echo probe' },
+      tool_result: { exit_code: 0 },
+      session_id: 'doctor-probe',
+    }),
+  },
+  // T-HANDOFF-HARDENING HH6.1 — SessionStart probe MUST use a dispatching
+  // source (startup), not clear/compact, so the dispatch marker is emitted
+  // and the probe greens.
+  SessionStart: {
+    kind: 'session_start',
+    stdin: JSON.stringify({ session_id: 'doctor-probe', source: 'startup' }),
+  },
 };
 
 type Status = 'green' | 'red' | 'skipped';

@@ -33,7 +33,9 @@ import type {
   Pack,
   Rule,
   ScheduleEvent,
+  SessionStartEvent,
   Skill,
+  StopEvent,
   ToolCallEvent,
   Trigger,
   Verdict,
@@ -1222,5 +1224,73 @@ describe('LL.3: inboundChannelTriggerMatches pure filter', () => {
     expect(inboundChannelTriggerMatches({ kind: 'inbound_channel', channel: '' }, baseEvent)).toBe(
       true,
     );
+  });
+});
+
+// T-HANDOFF-HARDENING HH6.1 — inject_context now surfaces on session_start
+// (was prompt_submit-only). The session-start bin reads contextInjections and
+// emits the additionalContext envelope; every non-surfacing kind still drops
+// with a warning.
+describe('dispatchEvent — inject_context surfacing on session_start (HH6.1)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-dispatch-ss-test-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  function buildRegistryWithInject(content: string): FunctionRegistry {
+    const r = new FunctionRegistry();
+    r.register({
+      name: 'test_emit_inject',
+      argSchema: z.record(z.unknown()),
+      durable: false,
+      // eslint-disable-next-line @typescript-eslint/require-await -- async to match FunctionDef contract
+      execute: async () => ok({ kind: 'inject_context', content }),
+    });
+    return r;
+  }
+  const injectRule: Rule = {
+    id: 'inject-rule',
+    kind: 'track_check',
+    requires: [],
+    process: [{ call: 'test_emit_inject' }],
+  };
+  const sessionStartEvent: SessionStartEvent = { kind: 'session_start', source: 'startup' };
+  const stopEvent: StopEvent = { kind: 'stop', assistantText: '' };
+
+  it('aggregates inject_context into contextInjections on a session_start event', async () => {
+    const registry = buildRegistryWithInject('🔌 connection report');
+    const pack = makePack('p1', [injectRule], [{ kind: 'session_start' }]);
+    const result = await dispatchEvent(sessionStartEvent, [pack], registry, 'sess-ss-1');
+    expect(result.contextInjections).toEqual(['🔌 connection report']);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('still aggregates inject_context on prompt_submit (no regression)', async () => {
+    const registry = buildRegistryWithInject('recall blob');
+    const pack = makePack('p1', [injectRule], [{ kind: 'prompt_submit' }]);
+    const result = await dispatchEvent(
+      { kind: 'prompt_submit', prompt: 'hi' },
+      [pack],
+      registry,
+      'sess-ss-2',
+    );
+    expect(result.contextInjections).toEqual(['recall blob']);
+  });
+
+  it('drops inject_context on a non-surfacing kind (stop) and warns', async () => {
+    const registry = buildRegistryWithInject('should not surface');
+    const pack = makePack('p1', [injectRule], [{ kind: 'stop' }]);
+    const result = await dispatchEvent(stopEvent, [pack], registry, 'sess-ss-3');
+    expect(result.contextInjections).toEqual([]);
+    expect(result.stderr).toContain('only "prompt_submit" / "session_start" surface');
   });
 });

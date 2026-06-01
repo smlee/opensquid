@@ -73,6 +73,11 @@ export function advanceTick(state: Readonly<TickState>, event: Event): TickState
       // signals; same posture as `tool_call`. The exit_code surface is for
       // gate skills; tick state stays unaffected.
       return state;
+    case 'session_start':
+      // T-HANDOFF-HARDENING HH6.1 — session begin fires ONCE before the
+      // first prompt; it is not a turn boundary and signals neither task nor
+      // session end. No tick effect (same posture as the trigger sources).
+      return state;
     case 'schedule':
     case 'webhook':
     case 'inbound_channel':

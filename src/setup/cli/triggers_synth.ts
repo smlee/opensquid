@@ -64,5 +64,10 @@ export function synthFireEvent(row: TriggerRow, trigger: Trigger, now: Date): Ev
       return { kind: 'session_end', sessionId: 'cli.fire' };
     case 'stop':
       return { kind: 'stop', assistantText: '' };
+    case 'session_start':
+      // T-HANDOFF-HARDENING HH6.1 — a manual CLI fire models a fresh
+      // session begin (`startup`); the real hook also delivers resume/
+      // clear/compact, but `triggers fire` only needs one representative.
+      return { kind: 'session_start', source: 'startup', sessionId: 'cli.fire' };
   }
 }

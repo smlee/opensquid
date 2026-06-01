@@ -7,6 +7,83 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.256] - 2026-05-31
+
+### Added (T-HANDOFF-HARDENING HH6.1 — SessionStart hook mechanism)
+
+**Why:** opensquid registered only four Claude Code hooks (`PreToolUse`,
+`UserPromptSubmit`, `Stop`, `SessionEnd`) and **no `SessionStart`**. So
+"check chat connections / start chat watch at session start" was a documented
+convention with no enforcement point — reproduced live 2026-05-31 (a fresh
+session never ran the check, the umbrella routing pair had silently drifted,
+and inbound messages sat unread). This ships the missing enforcement point as
+reusable infrastructure; the connection-check consumer is HH6.2. Spec:
+`docs/tasks/T-handoff-hardening.md` (loop repo) Problem 6.
+
+**What shipped:**
+
+- New `session_start` Event variant (`src/runtime/event.ts`) + `EventKind` +
+  `Trigger` literal (`TriggerKind = EventKind`, auto-derived). `source ∈
+  {startup, resume, clear, compact}`.
+- New `src/runtime/hooks/session-start.ts` bin (→ `opensquid-hook-sessionstart`
+  in `package.json` `bin`), modeled 1:1 on `user-prompt-submit.ts`: fail-open
+  (exit 0 on every error + `main().catch`), dispatches through
+  `loadActivePacks` + `dispatchEvent`, emits any aggregated `contextInjections`
+  via `hookSpecificOutput.additionalContext` (`hookEventName: 'SessionStart'`).
+- Dispatcher widening (`src/runtime/hooks/dispatch.ts`): `inject_context` now
+  surfaces on `prompt_submit` **OR** `session_start` (was prompt_submit-only);
+  every other kind still drops with a warning.
+- `SessionStart` added to `OPENSQUID_BIN_FOR_EVENT` (`settings-writer.ts`) so
+  `opensquid setup` installs it idempotently (preserving third-party entries
+  via the `@opensquid` marker). The same re-run reconciles `PostToolUse`
+  (POSTPUSH.1 added it to the map but it was never in live settings.json).
+- `doctor` PROBE_PAYLOADS gain `SessionStart` (probe uses `source: startup` so
+  the dispatch marker greens) + `PostToolUse` (closes a pre-existing doctor gap
+  that would have red-flagged the newly-installed PostToolUse hook).
+
+**L3 (source gating):** the bin acts only on `startup`/`resume`; `clear` and
+`compact` fire mid-session and short-circuit (exit 0, no dispatch) so the
+connection report isn't re-injected after the connection is established.
+
+**L2 (output contract):** raw stdout from a hook is silently discarded by
+Claude Code 2.x (VERIFIED, documented at `user-prompt-submit.ts:163-216`);
+the bin emits the `additionalContext` JSON envelope, never plain stdout.
+
+### Audit walk-through (per `[[feedback-audit-is-walk-through]]`)
+
+- **Trace:** CC fires SessionStart → `session-start.js` reads stdin →
+  `parsePayload` normalizes to a `session_start` Event → `Event.safeParse`
+  (fail-open on reject) → L3 short-circuit for clear/compact → `dispatchEvent`
+  walks packs/skills whose `triggers` include `session_start` → any
+  `inject_context` aggregates into `contextInjections` (HH6.1 widening) → bin
+  emits the `additionalContext` envelope. Ships with ZERO rules subscribed
+  (HH6.2 adds the first), so today the bin emits the dispatch marker + no
+  stdout.
+- **Adjacent callers / exhaustiveness:** the new Event variant broke three
+  exhaustive consumers (caught at compile/test): `tick.ts` `switch(event.kind)`
+  (`never` guard — added a no-tick-effect case, same posture as the AUTO.1
+  trigger sources), `triggers_synth.ts` (CLI `triggers fire` — added a
+  `startup` synthetic), and `types.test.ts`/`skill.test.ts` exact-literal
+  lists. `load_matchers` (`event_type` keys off `EventKind`) and
+  `extractSessionId` (reads `session_id`) needed NO change.
+- **Side-effects:** none new. The bin is read+dispatch only; it spawns no
+  daemons and writes no files (report-don't-act stays in HH6.2's primitive).
+- **Error-surface:** fail-open at four points (empty stdin, JSON parse,
+  schema reject, top-level catch) — a SessionStart hook can never block a
+  session from starting.
+- **User-visible delta:** none until the user re-runs `opensquid setup` (to
+  install the hook) AND HH6.2 ships (to emit a report). The bin is installed
+  but inert until then.
+- **Rollback:** revert the commit + re-run `opensquid setup` (the writer
+  removes the SessionStart entry it no longer maps).
+
+### Migration
+
+Existing users must re-run `opensquid setup` to register the SessionStart hook
+(and reconcile PostToolUse) in their `~/.claude/settings.json`.
+
+---
+
 ## [0.5.255] - 2026-05-31
 
 ### Fixed (ACTRACE.1 — defensive active_task_mirror clear closes log_phase mid-task race)

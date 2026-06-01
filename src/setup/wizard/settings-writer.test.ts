@@ -43,9 +43,9 @@ async function readJson(p: string): Promise<unknown> {
 }
 
 describe('writeOpensquidHooks — empty / nonexistent settings.json', () => {
-  it('creates the file with all 4 opensquid hook entries when settings.json does not exist', async () => {
+  it('creates the file with one opensquid hook entry per event when settings.json does not exist', async () => {
     const result = await writeOpensquidHooks(settingsPath);
-    expect(result.added).toBe(5);
+    expect(result.added).toBe(Object.keys(OPENSQUID_BIN_FOR_EVENT).length);
     expect(result.replaced).toBe(0);
     expect(result.preserved).toBe(0);
 
@@ -90,7 +90,7 @@ describe('writeOpensquidHooks — preserves third-party entries', () => {
 
     const result = await writeOpensquidHooks(settingsPath);
     expect(result.preserved).toBe(1); // the user's Stop hook
-    expect(result.added).toBe(5);
+    expect(result.added).toBe(Object.keys(OPENSQUID_BIN_FOR_EVENT).length);
 
     const out = (await readJson(settingsPath)) as {
       hooks: { Stop: { hooks: { command: string }[]; matcher?: string }[] };
@@ -229,7 +229,7 @@ describe('projectOpensquidHooks — pure-function projection', () => {
 
   it('handles a totally-empty input (no hooks key)', () => {
     const { output, added, replaced, preserved } = projectOpensquidHooks({});
-    expect(added).toBe(5);
+    expect(added).toBe(Object.keys(OPENSQUID_BIN_FOR_EVENT).length);
     expect(replaced).toBe(0);
     expect(preserved).toBe(0);
     expect(Object.keys(output.hooks ?? {})).toEqual([
@@ -238,7 +238,42 @@ describe('projectOpensquidHooks — pure-function projection', () => {
       'UserPromptSubmit',
       'Stop',
       'SessionEnd',
+      'SessionStart',
     ]);
+  });
+});
+
+// T-HANDOFF-HARDENING HH6.1 — SessionStart registration.
+describe('writeOpensquidHooks — SessionStart (HH6.1)', () => {
+  it('emits a SessionStart group with the opensquid bin + @opensquid marker', async () => {
+    await writeOpensquidHooks(settingsPath);
+    const out = (await readJson(settingsPath)) as {
+      hooks: Record<string, { hooks: { command: string; '@opensquid'?: boolean }[] }[]>;
+    };
+    expect(out.hooks.SessionStart).toHaveLength(1);
+    const inner = out.hooks.SessionStart?.[0]?.hooks?.[0];
+    expect(inner?.command).toBe('opensquid-hook-sessionstart');
+    expect(inner?.['@opensquid']).toBe(true);
+  });
+
+  it("preserves a user's third-party SessionStart hook and appends opensquid's", async () => {
+    const userHook = {
+      hooks: [{ type: 'command', command: 'bun run /scripts/my-session-start.ts' }],
+    };
+    await writeFile(
+      settingsPath,
+      JSON.stringify({ hooks: { SessionStart: [userHook] } }, null, 2),
+      'utf8',
+    );
+
+    await writeOpensquidHooks(settingsPath);
+
+    const out = (await readJson(settingsPath)) as {
+      hooks: { SessionStart: { hooks: { command: string }[] }[] };
+    };
+    expect(out.hooks.SessionStart).toHaveLength(2);
+    expect(out.hooks.SessionStart[0]).toEqual(userHook);
+    expect(out.hooks.SessionStart[1]?.hooks?.[0]?.command).toBe('opensquid-hook-sessionstart');
   });
 });
 

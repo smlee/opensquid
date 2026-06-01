@@ -1,8 +1,10 @@
 /**
  * Idempotent writer for Claude Code's `settings.json` hook block (G.1 Part B).
  *
- * Writes opensquid's 4 anti-drift hook entries (PreToolUse, UserPromptSubmit,
- * Stop, SessionEnd) while preserving every non-opensquid hook entry verbatim.
+ * Writes opensquid's anti-drift hook entries (one per event in
+ * `OPENSQUID_BIN_FOR_EVENT`: PreToolUse, PostToolUse, UserPromptSubmit, Stop,
+ * SessionEnd, SessionStart) while preserving every non-opensquid hook entry
+ * verbatim.
  *
  * Two recognition rules identify entries the writer OWNS:
  *   1. `'@opensquid': true` marker on the inner hook entry — every entry the
@@ -25,18 +27,23 @@
 
 import { promises as fs } from 'node:fs';
 
-// Maps opensquid's 5 supported Claude Code hook events to the bin entries
+// Maps opensquid's supported Claude Code hook events to the bin entries
 // declared in package.json (resolve to `dist/runtime/hooks/*.js` binaries
 // that already wire `loadActivePacks` + `dispatchEvent`).
-// T-POSTPUSH POSTPUSH.1 (2026-05-29) added the 5th entry; existing users
-// need to re-run `opensquid setup` to register the new hook in their
-// settings.json.
+// T-POSTPUSH POSTPUSH.1 (2026-05-29) added PostToolUse; T-HANDOFF-HARDENING
+// HH6.1 (2026-05-31) added SessionStart. Existing users need to re-run
+// `opensquid setup` to register newly-added hooks in their settings.json.
 export const OPENSQUID_BIN_FOR_EVENT = {
   PreToolUse: 'opensquid-hook-pretooluse',
   PostToolUse: 'opensquid-hook-posttooluse',
   UserPromptSubmit: 'opensquid-hook-userpromptsubmit',
   Stop: 'opensquid-hook-stop',
   SessionEnd: 'opensquid-hook-sessionend',
+  // T-HANDOFF-HARDENING HH6.1 (2026-05-31) — SessionStart is the 6th entry.
+  // Like POSTPUSH.1's PostToolUse, existing users must re-run `opensquid
+  // setup` to register the new hook in their settings.json (the same re-run
+  // reconciles any prior-added-but-uninstalled event, e.g. PostToolUse).
+  SessionStart: 'opensquid-hook-sessionstart',
 } as const;
 
 export type ClaudeEvent = keyof typeof OPENSQUID_BIN_FOR_EVENT;
@@ -65,7 +72,7 @@ interface SettingsJson {
 export const LEGACY_OPENSQUID_PATTERN = /node\s+\S*opensquid\S*dist\/index\.js\s+anti-drift/;
 
 export interface WriteResult {
-  /** Number of fresh opensquid entries added across all 4 events. Always 4. */
+  /** Number of fresh opensquid entries added — one per `OPENSQUID_BIN_FOR_EVENT` key. */
   added: number;
   /** Number of legacy / prior @opensquid entries removed (replaced). */
   replaced: number;
