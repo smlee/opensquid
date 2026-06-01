@@ -516,15 +516,32 @@ export async function dispatchEvent(
               directives,
             };
           case 'notify_pause':
+            // T-RJ-FOLLOWUPS FU.10: `notify_and_pause` now SURFACES its message
+            // (exit 0 + stderr) instead of the old exit-0 + EMPTY stub that
+            // silently dropped it. A hook can't truly pause the agent loop
+            // (exit 0/2 + stderr is the only lever), so "notify + pause" = surface
+            // the reminder so the agent/user acts on it. The ONLY consumer,
+            // `version-slot-assignment`, is a prompt_submit/warn reminder that
+            // minor/major version slots need user authorization — the actual
+            // BLOCK of an unauthorized bump is the companion `tool_call` rule
+            // `versioning-pre1-patch-only` (halt → exit 2, FU.9). Exit-2 here
+            // would wrongly block the user's prompt. Also surfaces the
+            // auto_correct-degrade + unknown-policy fail-safe reasons.
+            emitDispatchMarker(event.kind, rulesWalked, packs.length);
+            return {
+              exitCode: 0,
+              stderr: appendWarn(action.reason, warnBuf),
+              contextInjections,
+              directives,
+            };
           case 'auto_correct':
           case 'escalate':
-            // Phase 1 stub: real notify = Task 1.18; `auto_correct` + `escalate`
-            // action descriptors are interpreted by `runtime/auto_correct.ts` +
-            // `runtime/escalate.ts` at the hook-binary layer (out of scope for
-            // this dispatcher's per-event walk). Until those layers wire from
-            // this site, return allow + empty stderr so a pack-declared
-            // future-policy verdict doesn't accidentally block the tool call.
-            // (FU.10 will decide whether notify_pause should block/surface.)
+            // No pack rule maps to these policies yet — safe exit-0 + empty stub
+            // so a future pack-declared verdict doesn't accidentally block. When
+            // a rule opts in, wire `runtime/auto_correct.ts` / `runtime/escalate.ts`
+            // (their side-effect layers) from here; building now is speculative
+            // (FU.10's "build when a rule opts in" gate). The destructive
+            // `restart` action stays unbuilt for the same reason.
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
             return {
               exitCode: 0,

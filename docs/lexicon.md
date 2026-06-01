@@ -82,7 +82,17 @@ other (the failure this file exists to prevent). Grow it as we label things.
   message (the directive). The destructive chain-state/ledger reset to a restart
   `entrySkill` is an OPT-IN `restart` action (FU.10), not applied on plain halt —
   an incomplete-phases commit just needs the agent to finish the phases, not a
-  wipe. `notify_pause`/`auto_correct`/`escalate` remain exit-0 stubs pending FU.10.
+  wipe.
+- **`notify_and_pause` surfaces its message; `auto_correct`/`escalate`/`restart` stay stubs (FU.10)** —
+  a hook can't pause the agent loop (exit 0/2 + stderr is the only lever), so
+  `notify_pause` now returns `exitCode 0` + the verdict reason (was an exit-0 +
+  EMPTY stub that silently dropped it). Its only consumer, `version-slot-assignment`,
+  is a `prompt_submit`/`warn` reminder that minor/major version slots need user
+  authorization — the actual BLOCK of an unauthorized bump is the companion
+  `tool_call` rule `versioning-pre1-patch-only` (`halt` → exit 2). `auto_correct`,
+  `escalate`, and the destructive `restart` action have NO rule consumer and stay
+  safe exit-0 stubs; their side-effect layers are wired only when a rule opts in
+  (building now would be speculative).
 - **PreToolUse blocks MUST use `permissionDecision:"deny"` JSON, not `exit 2` (FU.11)** —
   `--dangerously-skip-permissions` (= `bypassPermissions` mode) silently IGNORES a
   hook's `exit 2`, so a bare-exit-2 gate does NOT block in that mode (proven live:

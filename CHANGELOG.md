@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.280] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.10 — `notify_and_pause` surfaces its message; the rest stay principled stubs)
+
+`notify_pause` was grouped with `auto_correct`/`escalate` in an exit-0 +
+**empty-stderr** stub that silently dropped its message. Its only consumer,
+`version-slot-assignment`, is a `prompt_submit`/`warn` reminder that minor/major
+version slots need user authorization — so the reminder never reached the agent.
+A hook can't truly pause the loop (exit 0/2 + stderr is the only lever), so
+`notify_pause` now returns `exitCode 0` + the verdict reason (surfaces the
+reminder); the actual BLOCK of an unauthorized bump remains the companion
+`tool_call` rule `versioning-pre1-patch-only` (`halt` → exit 2, FU.9).
+`auto_correct`, `escalate`, and the destructive `restart` action have **no rule
+consumer** and stay safe exit-0 stubs — their side-effect layers are wired only
+when a rule opts in (building now would be speculative). Closes the FU backlog.
+
+- `src/runtime/hooks/dispatch.ts` — split `notify_pause` out of the stub group.
+- `docs/lexicon.md` — the FU.10 drift-policy note.
+
 ## [0.5.279] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.7 — disambiguate same-project concurrent sessions via a guarded CLAUDE_CODE_SESSION_ID)

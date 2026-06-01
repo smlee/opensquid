@@ -138,6 +138,45 @@ describe('dispatchEvent', () => {
     });
   });
 
+  it('FU.10: notify_pause surfaces its message (exit 0 + stderr), not the dropped empty stub', async () => {
+    const registry = buildRegistryWithVerdict({
+      level: 'warn',
+      message: 'minor/major slots need user authorization',
+    });
+    const pack = makePack('p1', [verdictRule]);
+    pack.driftResponse = { default: 'notify_and_pause', per_rule: {}, corrective_skills: {} };
+    const result = await dispatchEvent(event, [pack], registry, 'sess-fu10-1');
+    expect(result).toEqual({
+      exitCode: 0,
+      stderr: 'minor/major slots need user authorization',
+      contextInjections: [],
+      directives: [],
+    });
+  });
+
+  it('FU.10: escalate stays a safe exit-0 + empty stub (no rule consumer yet)', async () => {
+    const registry = buildRegistryWithVerdict({ level: 'warn', message: 'unused' });
+    const pack = makePack('p1', [verdictRule]);
+    pack.driftResponse = { default: 'escalate', per_rule: {}, corrective_skills: {} };
+    const result = await dispatchEvent(event, [pack], registry, 'sess-fu10-2');
+    expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
+  });
+
+  it('FU.10: auto_correct with no corrective skill degrades to notify_pause + surfaces the diagnostic', async () => {
+    // applyDriftResponse degrades an unresolvable auto_correct to notify_pause
+    // with a diagnostic reason — which now surfaces instead of being dropped.
+    const registry = buildRegistryWithVerdict({
+      level: 'warn',
+      message: 'x',
+      ruleId: 'fake-rule',
+    });
+    const pack = makePack('p1', [verdictRule]);
+    pack.driftResponse = { default: 'auto_correct', per_rule: {}, corrective_skills: {} };
+    const result = await dispatchEvent(event, [pack], registry, 'sess-fu10-3');
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('auto_correct');
+  });
+
   it('returns exit 0 + empty stderr when no rules produce a verdict', async () => {
     // A pack whose only rule has an empty process → evaluator returns no_verdict.
     const noVerdictRule: Rule = { id: 'empty', kind: 'track_check', requires: [], process: [] };
@@ -729,7 +768,7 @@ describe('dispatchEvent', () => {
       expect(result.stderr).toBe('no per-rule override');
     });
 
-    it('notify_and_pause policy maps to exit 0 + empty stderr (Phase 1 stub path)', async () => {
+    it('FU.10: notify_and_pause SURFACES its message (exit 0 + stderr), not the old empty stub', async () => {
       const registry = buildRegistryWithVerdict({
         level: 'block',
         message: 'pause via channel',
@@ -747,11 +786,13 @@ describe('dispatchEvent', () => {
         corrective_skills: {},
       });
       const result = await dispatchEvent(event, [pack], registry, 'sess-1');
-      // Real channel routing lands in Task 1.18; dispatcher stub returns
-      // exit 0 + empty stderr so a pack-declared notify_and_pause doesn't
-      // accidentally block the tool call during Phase 1.
+      // FU.10: a hook can't pause the loop (exit 0/2 + stderr only), so
+      // notify_and_pause now SURFACES its reason at exit 0 (was dropped to an
+      // empty stub). The actual block of e.g. an unauthorized version bump is
+      // the companion tool_call rule (halt → exit 2, FU.9), not this prompt
+      // reminder.
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).toBe('');
+      expect(result.stderr).toBe('pause via channel');
     });
 
     it('FU.9: full_stop_and_redo (halt) BLOCKS with exit 2 + the verdict message (was an exit-0 stub)', async () => {
