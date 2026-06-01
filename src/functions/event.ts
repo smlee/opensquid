@@ -118,8 +118,13 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
     memoizable: false,
     costEstimateMs: 0.1,
     execute: async (_args, ctx) => {
-      if (ctx.event.kind !== 'stop') return ok(null);
-      return ok(ctx.event.assistantText);
+      // RJ.1: the prior assistant turn is available at BOTH stop (current
+      // turn, but off-by-one-prone) and prompt_submit (the SETTLED prior turn,
+      // filled by the UPS hook from the transcript — no off-by-one). Every
+      // other event kind has no assistant text → null.
+      if (ctx.event.kind === 'stop') return ok(ctx.event.assistantText);
+      if (ctx.event.kind === 'prompt_submit') return ok(ctx.event.priorAssistantText ?? null);
+      return ok(null);
     },
   });
 

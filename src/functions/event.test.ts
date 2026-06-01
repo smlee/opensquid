@@ -141,6 +141,30 @@ describe('last_assistant_message', () => {
 
     expect(result).toEqual(ok(null));
   });
+
+  // RJ.1 — the prior assistant turn is also available at prompt_submit, filled
+  // by the UPS hook from the transcript (the settled, no-off-by-one path).
+  it('returns priorAssistantText on a prompt_submit event', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx({
+      kind: 'prompt_submit',
+      prompt: 'next',
+      priorAssistantText: 'I just committed the fix',
+    });
+
+    const result = await reg.call('last_assistant_message', {}, ctx);
+
+    expect(result).toEqual(ok('I just committed the fix'));
+  });
+
+  it('returns ok(null) on a prompt_submit event without priorAssistantText', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx({ kind: 'prompt_submit', prompt: 'next' });
+
+    const result = await reg.call('last_assistant_message', {}, ctx);
+
+    expect(result).toEqual(ok(null));
+  });
 });
 
 // ---------------------------------------------------------------------------

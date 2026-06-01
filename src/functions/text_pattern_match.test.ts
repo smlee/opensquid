@@ -35,6 +35,29 @@ function ctxWith(event: Event): EvalCtx {
 }
 
 describe('text_pattern_match', () => {
+  // RJ.1 — response-judging gates read the prior assistant turn at UPS via the
+  // top-level `priorAssistantText` field; confirm extractField resolves it.
+  it('resolves the top-level priorAssistantText field on a prompt_submit event', async () => {
+    const reg = freshRegistry();
+    const ctx = ctxWith({
+      kind: 'prompt_submit',
+      prompt: 'next',
+      priorAssistantText: 'I just committed the fix and pushed it',
+    });
+
+    const result = await reg.call(
+      'text_pattern_match',
+      { text_field: 'priorAssistantText', patterns: ['\\bcommitted\\b'] },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const v = result.value as { matched: string[] };
+      expect(v.matched).toEqual(['committed']);
+    }
+  });
+
   it('matches a single phrase at offset 0 in a Stop event', async () => {
     const reg = freshRegistry();
     const ctx = ctxWith({ kind: 'stop', assistantText: 'the plan is to X' });

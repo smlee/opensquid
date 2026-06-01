@@ -71,9 +71,18 @@ export const PostToolCallEvent = z.object({
 });
 export type PostToolCallEvent = z.infer<typeof PostToolCallEvent>;
 
+// T-RESPONSE-JUDGING-UPS RJ.1 (2026-06-01) — `priorAssistantText` carries the
+// SETTLED prior assistant turn so response-judging gates (honesty-ledger,
+// phase-logging, d9-guard) can run at UserPromptSubmit instead of Stop. CC
+// provides `transcript_path` on UserPromptSubmit and the prior turn is already
+// flushed at fire-time (confirmed against CC hook docs), so the UPS hook bin
+// fills this via `readLastAssistantText` with NO off-by-one (unlike Stop, where
+// the triggering response isn't flushed yet). Optional: absent on the synthetic
+// events tests construct + when no transcript is available (fail-open '').
 export const PromptSubmitEvent = z.object({
   kind: z.literal('prompt_submit'),
   prompt: z.string(),
+  priorAssistantText: z.string().optional(),
 });
 export type PromptSubmitEvent = z.infer<typeof PromptSubmitEvent>;
 

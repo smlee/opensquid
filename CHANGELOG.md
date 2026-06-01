@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.263] - 2026-06-01
+
+### Added (T-RESPONSE-JUDGING-UPS RJ.1 — `priorAssistantText` at UserPromptSubmit)
+
+Foundation for relocating response-judging gates off the `Stop` hook (where the
+triggering response isn't flushed → off-by-one) to `UserPromptSubmit` (where the
+prior assistant turn is settled and readable). Invisible on its own; consumed by
+RJ.2/RJ.3 (rebuilding `honesty-ledger`, `phase-logging`, `d9-guard`).
+
+- `PromptSubmitEvent` gains optional `priorAssistantText`.
+- The UserPromptSubmit hook bin reads `transcript_path` (which CC provides) and
+  fills `priorAssistantText` via `readLastAssistantText` — the same recovery
+  `stop.ts` uses, but with **no off-by-one**: at UPS the prior turn is already
+  written. Fail-open: a read failure leaves the field undefined and never blocks
+  the prompt.
+- `last_assistant_message` now returns `priorAssistantText` on `prompt_submit`
+  (in addition to `assistantText` on `stop`).
+- `text_pattern_match` resolves `text_field: 'priorAssistantText'` (top-level).
+
+Audit context: this track exists because the entire response-judging family was
+found non-functional (SG.4 follow-on) — `honesty-ledger`/`phase-logging` never
+fired (wrong trigger + stop-only/tool_call-only primitive mismatch) and
+`d9-guard` fed a contentless prompt to its classifier.
+
 ## [0.5.262] - 2026-06-01
 
 ### Fixed (T-SCOPE-GATES SG.4 — default drift-response policy honors the verdict level)

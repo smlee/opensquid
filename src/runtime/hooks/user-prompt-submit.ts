@@ -34,6 +34,7 @@ import { dispatchEvent } from './dispatch.js';
 import { detectNewProject } from './new_project_detect.js';
 import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
+import { readLastAssistantText } from './transcript.js';
 
 const INBOX_PLATFORMS: Platform[] = ['telegram', 'slack', 'discord'];
 
@@ -82,6 +83,8 @@ async function drainInboxEnvelope(sessionId: string): Promise<string> {
 interface PromptSubmitPayload {
   prompt?: string;
   user_prompt?: string;
+  transcript_path?: string;
+  transcriptPath?: string;
 }
 
 function parsePayload(raw: string): unknown {
@@ -90,6 +93,17 @@ function parsePayload(raw: string): unknown {
     kind: 'prompt_submit',
     prompt: obj.prompt ?? obj.user_prompt ?? '',
   };
+}
+
+/** Extract the transcript `.jsonl` path from a UserPromptSubmit payload (snake/camel). */
+export function extractTranscriptPath(raw: string): string | null {
+  try {
+    const obj = JSON.parse(raw) as PromptSubmitPayload;
+    const p = obj.transcript_path ?? obj.transcriptPath;
+    return typeof p === 'string' && p.length > 0 ? p : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readStdin(): Promise<string> {
@@ -117,6 +131,21 @@ async function main(): Promise<void> {
   if (!parsed.success) {
     process.stderr.write('opensquid: invalid UserPromptSubmit payload schema\n');
     process.exit(0);
+  }
+
+  // RJ.1: recover the SETTLED prior assistant turn from the transcript so
+  // response-judging gates (honesty-ledger, phase-logging, d9-guard) can run
+  // here at UserPromptSubmit instead of Stop. CC provides `transcript_path` and
+  // the prior turn is already flushed at fire-time, so this has NO off-by-one
+  // (contrast `stop.ts`, where the triggering response isn't flushed yet).
+  // Fail-open: a read failure leaves `priorAssistantText` undefined (gates see
+  // no claim) and never blocks the prompt — UPS always exits 0 on the happy
+  // path; the prompt rides through regardless.
+  if (parsed.data.kind === 'prompt_submit') {
+    const transcriptPath = extractTranscriptPath(raw);
+    if (transcriptPath !== null) {
+      parsed.data.priorAssistantText = await readLastAssistantText(transcriptPath);
+    }
   }
 
   const sessionId = extractSessionId(raw);
