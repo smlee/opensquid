@@ -9,21 +9,31 @@
 # opensquid-internal tool calls (mcp__opensquid__log_phase,
 # TaskCreate/TaskUpdate, AskUserQuestion) rather than on shell commands.
 # Drift response policy per drift_response.yaml.
+#
+# T-RESPONSE-JUDGING-UPS RJ.2 (2026-06-01): these are response-judging gates —
+# they inspect the assistant's just-emitted prose for a claim. Per the lexicon
+# law, such gates run at UserPromptSubmit (where the prior turn is SETTLED — no
+# off-by-one), NOT Stop. They detect the claim via `text_pattern_match` on the
+# `priorAssistantText` event field (RJ.1). The prior `last_assistant_message` +
+# `match_command target: tool_args.msg` composition NEVER fired: the trigger
+# defaulted to tool_call (where last_assistant_message is null) and match_command
+# only runs on tool_call AND reads event.args, not the binding.
 name: phase-logging
 load: preload
 when_to_load: []
+triggers:
+  - kind: prompt_submit
 rules:
   - id: version-slot-assignment
     process:
-      - call: last_assistant_message
-        as: msg
-      - call: match_command
+      - call: text_pattern_match
         args:
-          pattern: '\b(?:next\s+minor|next\s+major|bump(?:ing)?\s+(?:to\s+)?(?:minor|major)|ships?\s+as\s+v?[0-9]+\.[0-9]+\.[0-9]+)\b'
-          target: tool_args.msg
+          text_field: 'priorAssistantText'
+          patterns:
+            - '\b(?:next\s+minor|next\s+major|bump(?:ing)?\s+(?:to\s+)?(?:minor|major)|ships?\s+as\s+v?[0-9]+\.[0-9]+\.[0-9]+)\b'
         as: claimed
       - call: verdict
-        if: claimed
+        if: 'len(claimed.matched) > 0'
         args:
           level: warn
           message: >-
@@ -33,15 +43,14 @@ rules:
 
   - id: phase-claim-forward
     process:
-      - call: last_assistant_message
-        as: msg
-      - call: match_command
+      - call: text_pattern_match
         args:
-          pattern: '\bPhase\s+[1-7](?:\s*\/\s*7)?\s*[—\-:]\s*(?:pre[_-]?research|learn|code|test|audit|post[_-]?research|fix)\b'
-          target: tool_args.msg
+          text_field: 'priorAssistantText'
+          patterns:
+            - '\bPhase\s+[1-7](?:\s*\/\s*7)?\s*[—\-:]\s*(?:pre[_-]?research|learn|code|test|audit|post[_-]?research|fix)\b'
         as: claimed
       - call: verdict
-        if: claimed
+        if: 'len(claimed.matched) > 0'
         args:
           level: warn
           message: >-
@@ -49,15 +58,14 @@ rules:
 
   - id: session-no-task
     process:
-      - call: last_assistant_message
-        as: msg
-      - call: match_command
+      - call: text_pattern_match
         args:
-          pattern: "\\b(?:let\\s+me\\s+(?:run|execute|implement|fix|build|wire)|now\\s+i'?ll\\s+(?:run|implement|fix|build|wire))\\b"
-          target: tool_args.msg
+          text_field: 'priorAssistantText'
+          patterns:
+            - "\\b(?:let\\s+me\\s+(?:run|execute|implement|fix|build|wire)|now\\s+i'?ll\\s+(?:run|implement|fix|build|wire))\\b"
         as: claimed
       - call: verdict
-        if: claimed
+        if: 'len(claimed.matched) > 0'
         args:
           level: warn
           message: >-

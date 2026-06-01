@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.264] - 2026-06-01
+
+### Fixed (T-RESPONSE-JUDGING-UPS RJ.2 — `honesty-ledger` + `phase-logging` now actually fire)
+
+Both skills (17 claim rules total) had **never fired**: they default-triggered on
+`tool_call`, where `last_assistant_message` returns null, and used
+`match_command` — which only runs on `tool_call` and reads `event.args`, not the
+`msg` binding. A triple wiring mismatch that made every rule a silent no-op since
+authoring.
+
+Rebuilt on the RJ.1 capability: both skills now `triggers: [{kind: prompt_submit}]`
+and detect their claim via `text_pattern_match` on `priorAssistantText` (the
+settled prior turn — no off-by-one), emitting the same `warn` verdicts. Every
+rule id, regex, and message is preserved verbatim; `drift_response.yaml` per-rule
+mapping is unchanged (all 17 ids already mapped). First-ever rule-FIRING tests
+added for both skills (the coverage gap that let the no-op ship).
+
+- `packs/builtin/default-discipline/skills/honesty-ledger/skill.yaml` — 14 rules.
+- `packs/builtin/default-discipline/skills/phase-logging/skill.yaml` — 3 rules.
+- Note: `text_pattern_match` is case-insensitive by default (vs `match_command`'s
+  case-sensitivity) — broadens claim detection; harmless for warn-level nudges and
+  no regression since the rules never fired before.
+
 ## [0.5.263] - 2026-06-01
 
 ### Added (T-RESPONSE-JUDGING-UPS RJ.1 — `priorAssistantText` at UserPromptSubmit)
