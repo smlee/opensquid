@@ -30,16 +30,20 @@ export interface PreToolUseDeny {
   };
 }
 
-/** Build the PreToolUse deny envelope (squid-prefixed reason). Falls back to a
- *  generic reason when none is given. */
-export function buildPreToolUseDeny(reason: string): PreToolUseDeny {
+/**
+ * Build the PreToolUse deny envelope (squid-prefixed reason). Optional `guidance`
+ * (the FC.2 forward map) is appended beneath the gate message so every block
+ * points the agent FORWARD (current stage + next step), not just "no." Falls
+ * back to a generic reason when none is given.
+ */
+export function buildPreToolUseDeny(reason: string, guidance?: string): PreToolUseDeny {
+  const base = squidPrefix(reason.length > 0 ? reason : 'opensquid: blocked by a drift gate');
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: squidPrefix(
-        reason.length > 0 ? reason : 'opensquid: blocked by a drift gate',
-      ),
+      permissionDecisionReason:
+        guidance !== undefined && guidance.length > 0 ? `${base}\n\n${guidance}` : base,
     },
   };
 }

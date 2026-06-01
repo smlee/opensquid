@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.275] - 2026-06-01
+
+### Fixed (T-FLOW-COHESION FC.2 — every block carries the forward map; no more backward thrash)
+
+The "gates too broken apart" flaw: hard blocks fired on `tool_call` with no
+in-the-moment forward guidance (the orchestration directive only surfaced a turn
+later at `prompt_submit`), so the agent bounced backward through prerequisites,
+restarting at each. Now every PreToolUse block folds the stage-aware forward map
+into its deny message — the locked path + the current chain-stage (from the
+FC.1-atomic FSM) + the single next step. One coherent "you're at X, do Y next"
+instead of scattered walls.
+
+- `src/runtime/workflow_map.ts` (new) — `STAGE_NEXT` (the single stage→next-step
+  source) + `forwardMap(sessionId)`; fail-open to the `idle` map.
+- `src/runtime/hooks/hook_output.ts` — `buildPreToolUseDeny(reason, guidance?)`
+  appends the map beneath the gate message.
+- `src/runtime/hooks/pre-tool-use.ts` — computes `forwardMap` on every block.
+
+Live-verified: a `git commit` at an incomplete stage now denies with the path +
+"You are at: tasks_loaded" + "Next: …", so the agent goes forward, not backward.
+
 ## [0.5.274] - 2026-06-01
 
 ### Fixed (T-FLOW-COHESION FC.1 — atomic session/chain state writes, trustworthy FSM)

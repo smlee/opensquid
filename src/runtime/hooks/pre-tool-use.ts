@@ -27,6 +27,7 @@ import { Event } from '../types.js';
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
 import { buildPreToolUseDeny, emitDriftStderrAndExit } from './hook_output.js';
+import { forwardMap } from '../workflow_map.js';
 import { extractSessionId } from './session_id.js';
 
 /** ASC.1 PreToolUse chain-state writers — file-path / metadata patterns. */
@@ -148,7 +149,10 @@ async function main(): Promise<void> {
   // gates enforce in BOTH normal and bypass modes. Gated strictly on
   // `exitCode === 2` so a non-block never accidentally denies the tool.
   if (exitCode === 2) {
-    process.stdout.write(JSON.stringify(buildPreToolUseDeny(stderr)));
+    // FC.2: fold the stage-aware forward map into the block so the agent is
+    // pointed FORWARD (where you are → next step), not just walled.
+    const guidance = await forwardMap(sessionId);
+    process.stdout.write(JSON.stringify(buildPreToolUseDeny(stderr, guidance)));
     process.exit(0);
   }
   emitDriftStderrAndExit(exitCode, stderr);

@@ -36,4 +36,20 @@ describe('buildPreToolUseDeny', () => {
       '🦑 opensquid: blocked by a drift gate',
     );
   });
+
+  it('FC.2: appends the forward-map guidance beneath the reason when provided', () => {
+    const r = buildPreToolUseDeny('BLOCKED: x', 'You are at: scoping\nNext: write the doc');
+    expect(r.hookSpecificOutput.permissionDecisionReason).toBe(
+      '🦑 BLOCKED: x\n\nYou are at: scoping\nNext: write the doc',
+    );
+  });
+
+  it('omits the guidance block cleanly when none/empty', () => {
+    expect(buildPreToolUseDeny('BLOCKED: x').hookSpecificOutput.permissionDecisionReason).toBe(
+      '🦑 BLOCKED: x',
+    );
+    expect(buildPreToolUseDeny('BLOCKED: x', '').hookSpecificOutput.permissionDecisionReason).toBe(
+      '🦑 BLOCKED: x',
+    );
+  });
 });
