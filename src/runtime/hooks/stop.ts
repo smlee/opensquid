@@ -22,11 +22,14 @@ import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
 import { extractSessionId } from './session_id.js';
+import { readLastAssistantText } from './transcript.js';
 
 interface StopPayload {
   assistantText?: string;
   assistant_text?: string;
   message?: string;
+  transcript_path?: string;
+  transcriptPath?: string;
 }
 
 function parsePayload(raw: string): unknown {
@@ -37,6 +40,17 @@ function parsePayload(raw: string): unknown {
     // accept camelCase, snake_case, or a generic `message` field.
     assistantText: obj.assistantText ?? obj.assistant_text ?? obj.message ?? '',
   };
+}
+
+/** Extract the transcript `.jsonl` path from a Stop payload (snake/camel). */
+function extractTranscriptPath(raw: string): string | null {
+  try {
+    const obj = JSON.parse(raw) as StopPayload;
+    const p = obj.transcript_path ?? obj.transcriptPath;
+    return typeof p === 'string' && p.length > 0 ? p : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readStdin(): Promise<string> {
@@ -64,6 +78,19 @@ async function main(): Promise<void> {
   if (!parsed.success) {
     process.stderr.write('opensquid: invalid Stop payload schema\n');
     process.exit(0);
+  }
+
+  // HH7.1: Claude Code omits the assistant response text from Stop stdin, so
+  // `assistantText` is empty here. Recover the last assistant message from the
+  // transcript `.jsonl` (CC always provides `transcript_path`) so destination /
+  // recall-consumed gates evaluate what was actually written instead of an
+  // empty string (the false-positive root cause). Fail-open: a transcript-read
+  // failure leaves assistantText '' (pre-fix behavior), never crashes the hook.
+  if (parsed.data.kind === 'stop' && parsed.data.assistantText === '') {
+    const transcriptPath = extractTranscriptPath(raw);
+    if (transcriptPath !== null) {
+      parsed.data.assistantText = await readLastAssistantText(transcriptPath);
+    }
   }
 
   const sessionId = extractSessionId(raw);

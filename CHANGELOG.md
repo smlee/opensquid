@@ -7,6 +7,57 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.258] - 2026-05-31
+
+### Fixed (T-HANDOFF-HARDENING HH7.1 — recall-consumed gate empty-message false-positive loop)
+
+**Root cause (traced live 2026-05-31):** the `recall-consumed` (DPC.3) gate
+calls `last_assistant_message`, which returns `ctx.event.assistantText`;
+`stop.ts` filled that from Stop stdin. But **Claude Code's Stop hook stdin does
+not include the assistant's response text** (it sends `{session_id,
+stop_hook_active, transcript_path}`), so `assistantText` was always `''`. The
+gate then regex-matched consumption vocabulary against an empty string — always
+"no consumption" — and blocked **every** turn where `mcp__opensquid__recall`
+had fired, regardless of what the agent actually wrote (the `!= null` guard
+passed because `'' != null`). Result: an unbreakable Stop-loop where each
+recovery turn re-triggered the gate.
+
+**Fix:**
+
+- `src/runtime/hooks/transcript.ts` (new) — `readLastAssistantText(path)`:
+  walks the transcript `.jsonl` from the end, returns the concatenated `text`
+  blocks of the most recent `type:"assistant"` entry that has text (skips pure
+  `tool_use` turns); `''` on absent/unreadable/no-text. Defensive per-line
+  parsing (harness-owned schema); never throws. Shared helper for future
+  Stop/SessionStart consumers.
+- `src/runtime/hooks/stop.ts` — captures `transcript_path` from stdin; when
+  `assistantText` is empty, populates it via `readLastAssistantText`. Fail-open:
+  a read failure leaves `''` (pre-fix behavior), never crashes the hook.
+- `packs/builtin/scope-architect/skills/recall-consumed/skill.yaml` — both
+  `if:` guards now require `len(last_msg) > 0` so an empty / tool-only turn
+  can't false-positive (the `len` fn is in the frozen allow-list).
+
+**True-positive preserved:** a turn that genuinely ignores recalled memory
+still blocks (real message text, zero consumption vocabulary).
+
+**Note:** the running gate only picks up this fix after a rebuild + the next
+session (hooks `loadActivePacks` from the rebuilt `dist` per fire).
+
+### Audit walk-through
+
+- **Trace:** Stop fires → `stop.ts` reads stdin (no text) → recovers last
+  assistant text from `transcript_path` → dispatches → `recall-consumed` reads
+  the real `last_msg` → regex now matches actual consumption vocabulary.
+- **Side-effects:** one extra `readFile` of an existing transcript on Stop when
+  stdin omits text; gated behind the empty-check. No writes.
+- **Error-surface:** `readLastAssistantText` is fail-open (`''`); `stop.ts`
+  keeps its `main().catch` → the Stop hook can never crash on a transcript read.
+- **User-visible delta:** the recall-consumed gate stops false-positive-looping;
+  it fires only on a real ignored-recall turn.
+- **Rollback:** revert; `stop.ts` falls back to the empty-string read.
+
+---
+
 ## [0.5.257] - 2026-05-31
 
 ### Added (T-HANDOFF-HARDENING HH6.2 — SessionStart connection-check)

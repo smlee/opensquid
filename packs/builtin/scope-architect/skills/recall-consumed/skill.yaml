@@ -51,7 +51,7 @@ rules:
       # vocabulary → agent ignored the recall. text_pattern_match returns
       # matched: [] on empty input; the verdict `if:` checks emptiness.
       - call: text_pattern_match
-        if: 'recalls.count > 0 && last_msg != null'
+        if: 'recalls.count > 0 && last_msg != null && len(last_msg) > 0'
         args:
           text_field: last_msg
           patterns:
@@ -64,7 +64,7 @@ rules:
             - '\bfrom\s+(?:memory|the\s+recall|the\s+\[\[)'
         as: consumed
       - call: verdict
-        if: 'recalls.count > 0 && last_msg != null && len(consumed.matched) == 0'
+        if: 'recalls.count > 0 && last_msg != null && len(last_msg) > 0 && len(consumed.matched) == 0'
         args:
           level: block
           message: >-
@@ -90,7 +90,11 @@ prose: |
   The post-emit corrective for "agent recalled memory but ignored its
   content." Fires only when:
     1. mcp__opensquid__recall was called this turn (recalls.count > 0)
-    2. The Stop event carries a last assistant message (last_msg != null)
+    2. A non-empty last assistant message is available (last_msg != null &&
+       len(last_msg) > 0) — HH7.1: Claude Code omits the response text from
+       Stop stdin, so stop.ts now recovers it from the transcript via
+       readLastAssistantText; the len > 0 guard skips empty / tool-only turns
+       so they don't false-positive.
     3. The message has zero consumption-vocabulary matches
 
   Block verdict → exit 2 → Stop hook returns the verdict as continuation
