@@ -80,12 +80,14 @@ describe('builtin default-discipline pack', () => {
     expect(issues).toEqual([]);
   });
 
-  it('declares git skill with the three locked block-tool rules', async () => {
+  it('declares git skill with the two locked block-tool rules (no-implicit-push removed — not the user rule)', async () => {
     const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const git = pack.skills.find((s) => s.name === 'git');
     expect(git).toBeDefined();
     const ruleIds = git?.rules.map((r) => r.id).sort();
-    expect(ruleIds).toEqual(['never-amend', 'no-force-push-main', 'no-implicit-push']);
+    // no-implicit-push removed 2026-06-01: the user's standing rule is "push is
+    // pre-authorized" (force-push still gated by no-force-push-main).
+    expect(ruleIds).toEqual(['never-amend', 'no-force-push-main']);
     expect(git?.load).toBe('lazy');
   });
 

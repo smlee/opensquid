@@ -59,13 +59,6 @@ const CASES: Case[] = [
     quoted: 'echo "git commit --amend"',
   },
   {
-    skill: 'git',
-    rule: 'no-implicit-push',
-    bare: 'git push origin main',
-    compound: 'cd /repo && git push origin main',
-    quoted: 'echo "git push"',
-  },
-  {
     skill: 'versioning',
     rule: 'versioning-pre1-patch-only',
     bare: 'npm version minor',

@@ -9,7 +9,6 @@ default: full_stop_and_redo
 per_rule:
   # Git hygiene — block the one tool call, don't halt the whole task.
   never-amend: block_tool
-  no-implicit-push: block_tool
   no-force-push-main: block_tool
 
   # Substrate-purity is a soft warn (engine-side smell, not a stop signal).
