@@ -14,7 +14,7 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: '^git\s+(?:-[cC]\s+\S+\s+)*commit\b[^\n]*\s--amend\b' # T-WGRP L1: anchored
+          pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*commit\b[^\n]*\s--amend\b' # FU.14: command-boundary (catches `cd … && git commit --amend`)
           target: tool_args.command
         as: hit
       - call: verdict
@@ -31,7 +31,7 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: '^git\s+(?:-[cC]\s+\S+\s+)*push\b' # T-WGRP L1: anchored
+          pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*push\b' # FU.14: command-boundary (catches `cd … && git push`)
           target: tool_args.command
         as: hit
       - call: verdict
@@ -46,7 +46,7 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: '^git\s+(?:-[cC]\s+\S+\s+)*push\b[^\n]*(--force|-f)\b[^\n]*\b(main|master)\b' # T-WGRP L1: anchored
+          pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*push\b[^\n]*(--force|-f)\b[^\n]*\b(main|master)\b' # FU.14: command-boundary
           target: tool_args.command
         as: hit
       - call: verdict

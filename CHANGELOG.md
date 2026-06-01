@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.272] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.14 — command gates match compound `cd … && git commit`)
+
+The default-discipline command gates were start-anchored (`^git…`, `^npm…`,
+T-WGRP L1), so they never matched the `cd /path && git commit` form the Bash tool
+actually sends — leaving them dormant on real commands. Replaced the `^` anchor
+with a command-boundary prefix `(?:^|[;&|\n(])\s*` (start OR after a shell
+separator `; & | newline (`) across all 5 patterns: `workflow` commit gate,
+`git` never-amend / no-implicit-push / no-force-push-main, `versioning`
+npm-version. Still does NOT match a quoted mention (`echo "git commit"`).
+
+**With FU.9 + FU.11 + FU.14 together, the gates now enforce LIVE** — verified in a
+`--dangerously-skip-permissions` session: a `cd … && git commit` at 2/7 phases was
+DENIED ("BLOCKED: 7-phase workflow incomplete"), the commit never ran.
+
 ## [0.5.271] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.11 — PreToolUse blocks survive `--dangerously-skip-permissions`)

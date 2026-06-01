@@ -19,7 +19,7 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: '^npm\s+version\s+(minor|major)\b' # T-WGRP L1: anchored
+          pattern: '(?:^|[;&|\n(])\s*npm\s+version\s+(minor|major)\b' # FU.14: command-boundary (catches `cd … && npm version minor`)
           target: tool_args.command
         as: cmd_hit
       - call: verdict
