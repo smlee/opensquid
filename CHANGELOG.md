@@ -7,6 +7,50 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.254] - 2026-05-31
+
+### Fixed (scope-detect false-positive on tech-idiom "working as intended")
+
+**Symptom:** user typed a frustrated message "that's why I keep saying nothing is fixed because nothing is working as intended..." in a Claude Code session. The opensquid `scope-intent-nudge` rule (in built-in `scope-architect/skills/scope-detect/skill.yaml`) matched `\bas\s+intended\b` against "working as intended" → emitted warn verdict → Claude Code's UI surfaced as "UserPromptSubmit operation blocked by hook" with a scope-authoring directive. User's actual frustration message never reached the conversation; gate fired on a tech idiom.
+
+**Root cause:** SAR.1 (2026-05-30) added the bare pattern `\b(?:as|to be|to-be)\s+intended\b` to catch the source phrase "fully functional as intended" (delivery-intent). The pattern was too broad — caught the standard tech idiom "working as intended" (meaning "behaves correctly"), which has zero scope-authoring intent.
+
+**Fix:** Narrowed the pattern into two more specific forms in `packs/builtin/scope-architect/skills/scope-detect/skill.yaml`:
+
+- `\b(?:deliver(?:ed)?|ship(?:ped)?|build|built|finish(?:ed)?|complete[ds]?)\s+(?:.+\s+)?(?:as|to be|to-be)\s+intended\b` — delivery-verb form ("ship/deliver/build X as intended")
+- `\b(?:fully|completely|properly)\s+(?:functional|operational|working|complete|wired|done|ready|live)\s+(?:as|to be|to-be)\s+intended\b` — delivery-adjective form (the SAR.1 source phrase "fully functional as intended")
+
+Either pattern triggers the warn. Bare tech idioms ("working as intended", "behaves as intended", "functions as intended", "the code does what was intended") have neither pattern → correctly excluded.
+
+**Live regex verification:**
+
+```
+HIT  | open squid fully functional as intended
+HIT  | fully functional as intended
+HIT  | completely working as intended
+HIT  | properly wired as intended
+HIT  | deliver this as intended
+HIT  | ship the feature as intended
+MISS | that's why I keep saying nothing is fixed because nothing is working as intended
+MISS | working as intended
+MISS | behaves as intended
+MISS | functions as intended
+MISS | the code does what was intended
+```
+
+**Audit walk-through performed:**
+
+1. Trace: prompt → UPS hook → scope-detect skill → text_pattern_match against `prompt` field → matched.length > 0 → warn verdict → additionalContext injection
+2. Side effects: none (read-only regex eval)
+3. Verification pollution: node-only test, no opensquid state touched
+4. Assumptions: YAML single-quoted strings preserve backslashes for regex
+5. Adjacent callers: scope-detect has many other rules; only `scope-intent-nudge` changes; others untouched
+6. Error surface: regex parse failure would surface via Zod schema check on skill load (BPDISC pattern)
+7. User-visible delta: before — "working as intended" triggered scope-authoring directive. After — only delivery-intent phrasings trigger
+8. Rollback: 1-line `git revert`
+
+---
+
 ## [0.5.253] - 2026-05-31
 
 ### Fixed (LL4FIX.1 — drop sessionId from ackKey; cross-session dedup)

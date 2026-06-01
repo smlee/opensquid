@@ -39,7 +39,17 @@ rules:
             - '\b(?:fully|completely|properly)\s+(?:functional|working|operational|wired|complete|done)\b'
             - '\b(?:make|get|ship|bring)\s+(?:.+\s+)?(?:functional|working|operational|complete|done|live|ready|v\d+(?:\.\d+)*)\b'
             - '\bforbidden\s+from\s+(?:pausing|stopping|asking|delegating)\b'
-            - '\b(?:as|to be|to-be)\s+intended\b'
+            # 2026-05-31 narrowing: bare \bas\s+intended\b was too broad —
+            # falsely fired on "working as intended" (tech idiom for "behaves
+            # correctly"), blocking a legitimate user frustration message. Two
+            # narrower patterns split the intent:
+            # (a) delivery-verb form: "ship/build/deliver/finish X as intended"
+            # (b) delivery-adjective form: "fully/completely/properly <state> as
+            #     intended" — the SAR.1 source phrase "fully functional as intended"
+            # Tech idioms ("working as intended", "behaves as intended", "functions
+            # as intended") have neither pattern → correctly excluded.
+            - '\b(?:deliver(?:ed)?|ship(?:ped)?|build|built|finish(?:ed)?|complete[ds]?)\s+(?:.+\s+)?(?:as|to be|to-be)\s+intended\b'
+            - '\b(?:fully|completely|properly)\s+(?:functional|operational|working|complete|wired|done|ready|live)\s+(?:as|to be|to-be)\s+intended\b'
             - '\b(?:remaining|outstanding|leftover)\s+(?:phases?|tracks?|work|tasks?|todos?)\b'
             - '\b(?:rest|remainder)\s+of\s+(?:the\s+)?(?:plan|track|phase|work|todos?)\b'
             - '\b(?:every|all)\s+(?:remaining|leftover|outstanding)\s+(?:phases?|tracks?|tasks?|work)\b'
