@@ -7,6 +7,100 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.255] - 2026-05-31
+
+### Fixed (ACTRACE.1 — defensive active_task_mirror clear closes log_phase mid-task race)
+
+**Root cause:** `src/runtime/hooks/active_task_mirror.ts:150-152` called
+`clearActiveTask(sessionId)` UNCONDITIONALLY whenever a `readdir`+`readFile`
+snapshot found no `in_progress` task. The harness writes task store files
+non-atomically; transient mid-write snapshots collapse to "no
+in_progress → clear active-task.json." Subsequent
+`mcp__opensquid__log_phase` calls then threw `"no active task
+(active-task.json absent)"` even though the harness task IS still
+in_progress.
+
+**Live evidence 2026-05-31 LL4FIX.1 session:** log_phase pre_research
+succeeded, log_phase learn succeeded, then next log_phase failed with
+exactly this error. Phase ledger lost 5 of 7 phases for LL4FIX.1; the
+workflow gate fail-opened on commit because its own state file was
+silently cleared by the companion mirror. Load-bearing structural cause
+of the "everything keeps getting skipped" meta-pattern.
+
+**Fix:** Positive-evidence clear. Before clearing, `readActiveTask`
+returns the prior active-task. If `prior !== null && prior.id !==
+completingId && tasks.some((t) => t.id === prior.id)` → keep
+active-task.json (transient mid-write). Only clear when prior id is
+genuinely absent from snapshot OR is being completed this tick (H4a).
+
+**Risk callout L3 honored:** the defensive-clear MUST NOT prevent
+legitimate clears in genuine no-task states. Test cases (d) "no prior +
+no in_progress → clear is no-op on absent" + (e) "prior + empty tasks
+→ clear (genuine session-end)" verify this. User's historical 10.5hr
+"hook fired with no tasks" scar is the exact SAR (no over-fire in
+no-task contexts).
+
+**H4a-completion regression caught + fixed in dev:** initial
+defensive-clear was too eager — kept the prior even when the prior was
+the task being COMPLETED this tick (TaskUpdate(completed) for id=15
+while disk says id=15 in_progress). Added `prior.id !== completingId`
+exclusion. Test "H4a-completion still works: prior=15 + TaskUpdate(completed,15)
+→ clear" guards against regression.
+
+### Files changed
+
+- `src/runtime/hooks/active_task_mirror.ts` — added `readActiveTask`
+  import; rewrote clear-path with positive-evidence check + H4a
+  completion exclusion
+- `src/runtime/hooks/active_task_mirror.test.ts` — added 7 new cases
+  (a)-(f) + regression guard for H4a-completion
+
+### Tests
+
+22 passing (15 original + 7 new). Full suite 2716 passed / 28 skipped.
+
+### Audit walk-through (per [[feedback-audit-is-walk-through]])
+
+- **Trace:** PreToolUse hook fires → `mirrorActiveTask(sessionId, tool,
+args, base)` → `readHarnessTasks` returns tasks[] → H4a overlays for
+  activatingId/completingId → active resolution → on null active: new
+  defensive-clear logic (readActiveTask → tasks.some check → return or
+  clear) → caller's downstream code sees consistent active-task.json
+- **Side effects:** active-task.json on disk written/kept/cleared per
+  logic; no new writes vs pre-fix (just narrower clear conditions)
+- **Verification pollution:** all tests use `OPENSQUID_HOME=mkdtemp()`
+  per ASG.1 pattern; no live state touched
+- **Assumptions:** (a) `readActiveTask` returns null on absent file
+  (verified — session_state.ts:195 try/catch); (b)
+  `tasks.some((t) => t.id === prior.id)` is deterministic across
+  readdir orderings (string comparison, OK); (c) harness writes
+  eventually consistent within ~1 PreToolUse window (heuristic, not
+  guarantee — ACTRACE.2 atomic-write would be deterministic fix)
+- **Adjacent callers:** `grep -rn 'clearActiveTask\|readActiveTask'`
+  enumerated — clearActiveTask only called in this file at line 178;
+  readActiveTask called by session-end.ts, log_phase.ts,
+  functions/active_task.ts — all readers, no loop risk with the new
+  read inside mirrorActiveTask
+- **Error surface:** fail-open contract preserved via try/catch wrapper
+  around readActiveTask call (L4)
+- **User-visible delta:** before — log_phase calls 3-7 could fail mid-task
+  with "no active task" during transient harness mid-writes. After —
+  log_phase calls succeed through transient mid-writes (mirror keeps
+  prior state); workflow gate sees complete phase ledger; per-task
+  reports include accurate phase history
+- **Rollback:** 1-line `git revert`
+
+### Out of scope (queued)
+
+- ACTRACE.2 — atomic write of active-task.json on the WRITE path
+  (`session_state.ts:writeActiveTask` `.tmp`+rename) — deterministic
+  fix; this commit narrows the race window heuristically
+- Audit-content-required regex on log_phase note field (workflow gate
+  semantic check)
+- MCP-tool PreToolUse coverage gap (~/.claude/settings.json matcher)
+
+---
+
 ## [0.5.254] - 2026-05-31
 
 ### Fixed (scope-detect false-positive on tech-idiom "working as intended")

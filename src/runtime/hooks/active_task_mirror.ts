@@ -30,7 +30,12 @@ import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { type ActiveTask, clearActiveTask, writeActiveTask } from '../session_state.js';
+import {
+  type ActiveTask,
+  clearActiveTask,
+  readActiveTask,
+  writeActiveTask,
+} from '../session_state.js';
 
 /**
  * T-ATSC L1 (2026-05-29) — mirror re-derives `active-task.json` on EVERY
@@ -143,6 +148,39 @@ export async function mirrorActiveTask(
   active ??= tasks.find((t) => t.status === 'in_progress' && t.id !== completingId) ?? null;
 
   if (!active) {
+    // T-ACTRACE.1 (2026-05-31): defensive clear. Before clearing,
+    // verify the previously-active task is GENUINELY absent from the
+    // harness store — not just transiently non-in_progress (mid-write
+    // snapshot). If the prior task is still present at ANY status, keep
+    // active-task.json intact + return; subsequent PreToolUse re-mirrors
+    // will rewrite once the harness mid-write completes. Race scenario:
+    // log_phase pre_research → ok; intervening Edit triggers PreToolUse
+    // → mirror reads store mid-TaskUpdate write → no in_progress
+    // visible → pre-fix would clear → next log_phase throws "no active
+    // task". This narrows the clear path to require positive evidence
+    // (prior id genuinely absent from tasks[]).
+    //
+    // L3 risk callout: this MUST NOT prevent legitimate clears in
+    // genuine no-task states. If readActiveTask returns null (no prior
+    // active-task.json) OR tasks.some(t.id === prior.id) is FALSE
+    // (prior genuinely removed), clear proceeds as before. Test cases
+    // (d) and (e) verify this.
+    try {
+      const prior = await readActiveTask(sessionId);
+      // Don't defensive-keep if the prior IS the task being completed
+      // this tick — H4a completion case: TaskUpdate(completed) for the
+      // active task while disk still says in_progress. The completingId
+      // signal is the authoritative "you ARE done" message; the prior's
+      // continued presence on disk at in_progress reflects the
+      // pre-execution state. Test "H4a completion: excludes a task
+      // being completed even though disk still says in_progress" asserts
+      // this — we MUST clear.
+      if (prior !== null && prior.id !== completingId && tasks.some((t) => t.id === prior.id)) {
+        return; // transient mid-write — keep prior active-task.json
+      }
+    } catch {
+      // L4 fail-open: readActiveTask error → fall through to clear.
+    }
     await clearActiveTask(sessionId);
     return;
   }
