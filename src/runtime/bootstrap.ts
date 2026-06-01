@@ -77,6 +77,7 @@ import { FunctionRegistry } from '../functions/registry.js';
 import { SessionToolHistory } from '../functions/session_tool_history.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
+import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { discoverActivePacks } from '../packs/discovery.js';
@@ -127,6 +128,12 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // a separate registry; the production bootstrap always uses the lazy
   // dynamic-import path.
   registerSubagentFunction(r);
+  // T-HANDOFF-HARDENING HH6.2 — `check_chat_connection` is a read-only,
+  // fail-quiet primitive that the `session-connection-check` skill calls on
+  // `session_start` to surface the project's chat-connection state (+ generic
+  // umbrella-routing-drift) as an inject_context. No backend dep → sync
+  // registration here.
+  registerCheckChatConnectionFunction(r);
   // G.5 — text-pattern matcher + per-turn tool-call ledger reader. Both are
   // pure (no I/O for text_pattern_match; one read for session_tool_history)
   // so they ship pre-registered as FunctionDef objects rather than via a

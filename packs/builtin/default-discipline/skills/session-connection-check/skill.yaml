@@ -1,0 +1,35 @@
+# session-connection-check — T-HANDOFF-HARDENING HH6.2.
+#
+# The first consumer of the SessionStart hook mechanism (HH6.1). On session
+# begin it surfaces the project's chat-connection state (telegram configured +
+# whether `chat watch` is running, or a wizard nudge if nothing is wired) plus
+# a generic umbrella-routing-drift warning, as an inject_context that the
+# SessionStart hook bin emits via hookSpecificOutput.additionalContext.
+#
+# REPORT-ONLY (per project_opensquid_no_agent_loop): the primitive reads state
+# and composes a message; it never starts chat watch, spawns a daemon, or
+# repairs routing. The agent reads the surfaced report and acts.
+#
+# Opt-out: set `chat.session_start_check: "off"` in ~/.opensquid/config.json
+# and check_chat_connection returns null (no injection).
+#
+# unloads_when: session_ends — scoped to one session begin; the event only
+# fires once per session anyway, but this keeps it off the long-running
+# dynamic-skill set.
+name: session-connection-check
+load: lazy
+when_to_load:
+  - kind: event_type
+    type: session_start
+unloads_when:
+  - kind: session_ends
+triggers:
+  - kind: session_start
+rules:
+  # The primitive returns a RuleResult.inject_context directly (terminal),
+  # exactly like recall_pre_inject — no verdict/if step needed. A null return
+  # (opt-out, or nothing worth surfacing) is the no-verdict branch.
+  - id: surface-connection-state
+    kind: track_check
+    process:
+      - call: check_chat_connection

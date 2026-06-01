@@ -7,6 +7,60 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.257] - 2026-05-31
+
+### Added (T-HANDOFF-HARDENING HH6.2 — SessionStart connection-check)
+
+**Why:** the first consumer of the HH6.1 SessionStart mechanism. On session
+begin it surfaces whether inbound chat is actually wired for the project — the
+"check chat connections at session start" convention, now with enforcement.
+Spec: `docs/tasks/T-handoff-hardening.md` (loop repo) HH6.2.
+
+**What shipped:**
+
+- `src/functions/check_chat_connection.ts` — read-only, fail-quiet primitive.
+  On `session_start` it returns a `RuleResult.inject_context` (terminal, same
+  pattern as `recall_pre_inject`): telegram configured (routing + bot token) →
+  reports the topic + whether a `chat watch` live-session lease is held; else
+  another configured platform → reports that; else → `opensquid setup` nudge.
+- **Generic umbrella-drift check:** groups every project's telegram routing by
+  destination (`report_channel` + `report_topic_id`); a group with >1 member is
+  an "umbrella" that should carry consistent inbound routing. Inconsistent
+  inbound config → flagged. **No hardcoded project UUIDs** — the umbrella is
+  derived from whatever shares a destination, so it's builtin-safe (works for
+  any user's project layout, not just the author's loop/RaumPilates umbrellas).
+- `packs/builtin/default-discipline/skills/session-connection-check/` — the
+  skill (`triggers: session_start`, `unloads_when: session_ends`); its single
+  rule calls `check_chat_connection`.
+- Registered in `bootstrap.buildRegistry`.
+
+**Opt-out (L7):** `chat.session_start_check: "off"` in `~/.opensquid/config.json`
+→ the primitive returns null (no injection).
+
+**Report-only (L6):** the primitive reads state + composes a message; it never
+starts `chat watch`, spawns the agent-bridge daemon, or repairs routing. The
+agent reads the surfaced report and acts. Per `[[project_opensquid_no_agent_loop]]`.
+
+**v1 scope:** connection-check only (no active-task / inbox priming). A live
+Telegram `getChat` reachability call is deliberately omitted — a network hang
+must never delay session start, so "configured" is read from routing + token
+presence (config-only, fail-fast).
+
+### Audit walk-through
+
+- **Trace:** session_start → `session-connection-check` rule → `check_chat_connection`
+  reads config.json (opt-out) → resolveProjectUuid → chat-routing.json + lease →
+  composes report + generic umbrella-drift scan → `inject_context` → HH6.1 hook
+  bin surfaces it via `additionalContext`.
+- **Side-effects:** none — every fs access is a read; fail-quiet `ok(null)` on
+  any error. No writes, no spawns (report-don't-act).
+- **Adjacent callers:** new registry entry only; no existing primitive touched.
+- **User-visible delta:** on the next session (after `opensquid setup` installs
+  the SessionStart hook) the agent sees a one-line chat-connection report.
+- **Rollback:** revert; the skill + primitive are additive.
+
+---
+
 ## [0.5.256] - 2026-05-31
 
 ### Added (T-HANDOFF-HARDENING HH6.1 — SessionStart hook mechanism)
@@ -24,7 +78,7 @@ reusable infrastructure; the connection-check consumer is HH6.2. Spec:
 
 - New `session_start` Event variant (`src/runtime/event.ts`) + `EventKind` +
   `Trigger` literal (`TriggerKind = EventKind`, auto-derived). `source ∈
-  {startup, resume, clear, compact}`.
+{startup, resume, clear, compact}`.
 - New `src/runtime/hooks/session-start.ts` bin (→ `opensquid-hook-sessionstart`
   in `package.json` `bin`), modeled 1:1 on `user-prompt-submit.ts`: fail-open
   (exit 0 on every error + `main().catch`), dispatches through
