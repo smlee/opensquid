@@ -422,15 +422,7 @@ export class TelegramAdapter implements ChatAdapter {
     if (options.iconColor !== undefined) apiOpts.icon_color = options.iconColor;
     if (options.iconCustomEmojiId !== undefined)
       apiOpts.icon_custom_emoji_id = options.iconCustomEmojiId;
-    // Callers pass the routing `report_channel` form (`telegram:<chat_id>`); the
-    // Telegram API wants the bare numeric chat_id. The send path already strips
-    // the prefix via parseTelegramChannel — createTopic must too, or the API
-    // rejects `telegram:-100…` as "chat not found" (the auto-boot bug). Accept a
-    // bare numeric id as-is for non-channel callers.
-    const numericChatId = chatId.startsWith("telegram:")
-      ? parseTelegramChannel(chatId).chatId
-      : chatId;
-    const res = await this.bot.api.createForumTopic(numericChatId, name, apiOpts);
+    const res = await this.bot.api.createForumTopic(chatId, name, apiOpts);
     return { message_thread_id: res.message_thread_id, name: res.name };
   }
 

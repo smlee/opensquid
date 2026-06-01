@@ -389,33 +389,3 @@ describe("TelegramAdapter.send — TopicGoneError re-throw (TPS.7)", () => {
     ).rejects.toThrow("ECONNRESET");
   });
 });
-
-describe("TelegramAdapter.createTopic — strips the telegram: prefix (auto-boot chat-not-found bug)", () => {
-  function makeAdapterCapturingCreate(captured: { chatId?: string | number }): TelegramAdapter {
-    const adapter = new TelegramAdapter({ bot_token: "123:ABCDEF" });
-    adapter._testSeed({
-      api: {
-        createForumTopic: (chatId: string | number, name: string) => {
-          captured.chatId = chatId;
-          return Promise.resolve({ message_thread_id: 99, name });
-        },
-      },
-    });
-    return adapter;
-  }
-
-  it("passes the bare numeric chat_id to createForumTopic for a 'telegram:<id>' channel", async () => {
-    const captured: { chatId?: string | number } = {};
-    const adapter = makeAdapterCapturingCreate(captured);
-    const res = await adapter.createTopic("telegram:-1003923174632", "loop");
-    expect(captured.chatId).toBe("-1003923174632"); // prefix stripped → not "chat not found"
-    expect(res).toEqual({ message_thread_id: 99, name: "loop" });
-  });
-
-  it("passes a bare numeric chat_id through unchanged (non-channel caller)", async () => {
-    const captured: { chatId?: string | number } = {};
-    const adapter = makeAdapterCapturingCreate(captured);
-    await adapter.createTopic("-1003923174632", "loop");
-    expect(captured.chatId).toBe("-1003923174632");
-  });
-});
