@@ -7,6 +7,33 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.276] - 2026-06-01
+
+### Fixed (T-ATM ATM.1 — active-task mirror reads the transcript, the source THIS CC version uses)
+
+`active_task_mirror` derived `active-task.json` from `~/.claude/tasks/<session>/<id>.json`,
+but this Claude Code version keeps the task list in the session **transcript**
+(`.jsonl`) — that path is empty, so the mirror never saw the real tasks and
+`active-task.json` went stale/cleared. `log_phase` and the commit gate then
+mis-resolved the active task (wedged on a stale task #16 all session). Now the
+PreToolUse mirror derives the active task from `transcript_path` (which the hook
+already receives): correlate `TaskCreate` `tool_use` (subject/metadata) → its
+`tool_result` (`Task #<n> created` → id), fold `TaskUpdate` statuses/metadata in
+order, pick the most-recent `in_progress` task not later closed. Immune to the
+`--resume` session-id split (no derived session dir). The legacy
+`~/.claude/tasks/` store stays as a back-compat fallback for older CC versions.
+
+- `src/runtime/hooks/transcript_tasks.ts` (new) — `readActiveTaskFromTranscript`;
+  defensive per-line parse, fail-open to no-active-task (never a WRONG task);
+  H4a overlay for the in-flight `TaskUpdate`.
+- `src/runtime/hooks/active_task_mirror.ts` — uses the transcript when
+  `transcriptPath` is supplied, else the harness store.
+- `src/runtime/hooks/pre-tool-use.ts` — extracts `transcript_path` (snake/camel).
+
+Known sibling (carved out as ATM.2): `task_list_generated` (Gate B) still reads
+the stale store directly — the function layer has `sessionId` but no
+`transcript_path`, a distinct fix.
+
 ## [0.5.275] - 2026-06-01
 
 ### Fixed (T-FLOW-COHESION FC.2 — every block carries the forward map; no more backward thrash)

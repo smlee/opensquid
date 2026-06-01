@@ -40,6 +40,19 @@ interface PreToolUsePayload {
   args?: Record<string, unknown>;
   tool_input?: Record<string, unknown>;
   cwd?: string;
+  transcript_path?: string;
+  transcriptPath?: string;
+}
+
+/** ATM.1: the session transcript path (where THIS CC version stores the task list). */
+function extractTranscriptPath(raw: string): string | undefined {
+  try {
+    const obj = JSON.parse(raw) as PreToolUsePayload;
+    const p = obj.transcript_path ?? obj.transcriptPath;
+    return typeof p === 'string' && p.length > 0 ? p : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parsePayload(raw: string): unknown {
@@ -105,7 +118,13 @@ async function main(): Promise<void> {
     // tasks-loaded signal the gate-set keys off). Best-effort, like the writes
     // above: a mirror failure must never block the pending tool call.
     try {
-      await mirrorActiveTask(sessionId, parsed.data.tool, parsed.data.args ?? {});
+      await mirrorActiveTask(
+        sessionId,
+        parsed.data.tool,
+        parsed.data.args ?? {},
+        undefined,
+        extractTranscriptPath(raw),
+      );
     } catch (e) {
       process.stderr.write(`opensquid: active-task mirror failed — ${String(e)}\n`);
     }

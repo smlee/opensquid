@@ -1,0 +1,141 @@
+/**
+ * Tests for transcript-derived active task (T-ATM ATM.1).
+ */
+
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { readActiveTaskFromTranscript } from './transcript_tasks.js';
+
+let dir: string;
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), 'opensquid-txtasks-'));
+});
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+// Transcript entry helpers (mirror the verified CC jsonl shape).
+const create = (tuid: string, subject: string, metadata?: Record<string, unknown>) => ({
+  message: {
+    content: [
+      {
+        type: 'tool_use',
+        id: tuid,
+        name: 'TaskCreate',
+        input: { subject, ...(metadata ? { metadata } : {}) },
+      },
+    ],
+  },
+});
+const createResult = (tuid: string, id: string, subject: string) => ({
+  message: {
+    content: [
+      {
+        type: 'tool_result',
+        tool_use_id: tuid,
+        content: `Task #${id} created successfully: ${subject}`,
+      },
+    ],
+  },
+});
+const update = (taskId: string, status: string, metadata?: Record<string, unknown>) => ({
+  message: {
+    content: [
+      {
+        type: 'tool_use',
+        id: `u-${taskId}-${status}`,
+        name: 'TaskUpdate',
+        input: { taskId, status, ...(metadata ? { metadata } : {}) },
+      },
+    ],
+  },
+});
+
+async function tx(lines: unknown[]): Promise<string> {
+  const p = join(dir, 'transcript.jsonl');
+  await writeFile(p, lines.map((l) => JSON.stringify(l)).join('\n'), 'utf8');
+  return p;
+}
+
+describe('readActiveTaskFromTranscript', () => {
+  it('resolves the in_progress task with subject + metadata (id from the result)', async () => {
+    const p = await tx([
+      create('tu1', 'Task A', { taskId: 'A', spec: '/abs/a.md' }),
+      createResult('tu1', '16', 'Task A'),
+      update('16', 'in_progress'),
+    ]);
+    expect(await readActiveTaskFromTranscript(p)).toMatchObject({
+      id: '16',
+      subject: 'Task A',
+      taskId: 'A',
+      spec: '/abs/a.md',
+    });
+  });
+
+  it('switches to the newer task after the old one completes', async () => {
+    const p = await tx([
+      create('tu1', 'A', { taskId: 'A' }),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+      update('16', 'completed'),
+      create('tu2', 'B', { taskId: 'B' }),
+      createResult('tu2', '17', 'B'),
+      update('17', 'in_progress'),
+    ]);
+    expect((await readActiveTaskFromTranscript(p))?.id).toBe('17');
+  });
+
+  it('with two in_progress, the most recent wins', async () => {
+    const p = await tx([
+      create('tu1', 'A'),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+      create('tu2', 'B'),
+      createResult('tu2', '17', 'B'),
+      update('17', 'in_progress'),
+    ]);
+    expect((await readActiveTaskFromTranscript(p))?.id).toBe('17');
+  });
+
+  it('returns null when all tasks are completed', async () => {
+    const p = await tx([
+      create('tu1', 'A'),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+      update('16', 'completed'),
+    ]);
+    expect(await readActiveTaskFromTranscript(p)).toBeNull();
+  });
+
+  it('H4a: pending in-flight TaskUpdate(in_progress) wins even before it is in the transcript', async () => {
+    const p = await tx([create('tu1', 'A', { taskId: 'A' }), createResult('tu1', '16', 'A')]);
+    // No in_progress in the transcript yet; the pending overlay activates 16.
+    expect(
+      (await readActiveTaskFromTranscript(p, { taskId: '16', status: 'in_progress' }))?.id,
+    ).toBe('16');
+  });
+
+  it('returns null for an absent transcript (fail-open)', async () => {
+    expect(await readActiveTaskFromTranscript(join(dir, 'nope.jsonl'))).toBeNull();
+  });
+
+  it('skips malformed lines and still resolves', async () => {
+    const p = join(dir, 't.jsonl');
+    await writeFile(
+      p,
+      [
+        '{bad json',
+        JSON.stringify(create('tu1', 'A', { taskId: 'A' })),
+        '',
+        JSON.stringify(createResult('tu1', '16', 'A')),
+        JSON.stringify(update('16', 'in_progress')),
+      ].join('\n'),
+      'utf8',
+    );
+    expect((await readActiveTaskFromTranscript(p))?.id).toBe('16');
+  });
+});

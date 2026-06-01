@@ -36,6 +36,7 @@ import {
   readActiveTask,
   writeActiveTask,
 } from '../session_state.js';
+import { readActiveTaskFromTranscript } from './transcript_tasks.js';
 
 /**
  * T-ATSC L1 (2026-05-29) — mirror re-derives `active-task.json` on EVERY
@@ -122,7 +123,31 @@ export async function mirrorActiveTask(
   tool: string,
   args: Record<string, unknown>,
   base?: string,
+  transcriptPath?: string,
 ): Promise<void> {
+  // T-ATM ATM.1: this Claude Code version keeps the task list in the SESSION
+  // TRANSCRIPT, not at ~/.claude/tasks/<session>/. When the hook supplies
+  // `transcriptPath`, derive the active task from there (the real source) — with
+  // the in-flight TaskUpdate overlaid (H4a). Immune to the `--resume` session-id
+  // split (no derived session dir). The legacy harness-store path below stays as
+  // a fallback for older CC versions that DO write ~/.claude/tasks/.
+  if (transcriptPath !== undefined && transcriptPath.length > 0) {
+    const pending =
+      tool === 'TaskUpdate' && typeof args.taskId === 'string' && typeof args.status === 'string'
+        ? {
+            taskId: args.taskId,
+            status: args.status,
+            ...(args.metadata !== null && typeof args.metadata === 'object'
+              ? { metadata: args.metadata as Record<string, unknown> }
+              : {}),
+          }
+        : undefined;
+    const active = await readActiveTaskFromTranscript(transcriptPath, pending);
+    if (active !== null) await writeActiveTask(sessionId, active);
+    else await clearActiveTask(sessionId);
+    return;
+  }
+
   // T-ATSC L1: no tool-name gate. Mirror re-derives on every PreToolUse so
   // active-task.json stays in sync with the harness store even when the
   // current tool is Write/Edit/Bash/Read/anything else. The H4a +
