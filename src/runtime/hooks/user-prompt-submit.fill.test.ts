@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { readLastAssistantText } from './transcript.js';
+import { readOpenTasksFromTranscript } from './transcript_tasks.js';
 import { extractTranscriptPath } from './user-prompt-submit.js';
 
 let dir: string;
@@ -88,5 +89,56 @@ describe('UPS priorAssistantText fill (composition)', () => {
     const raw = JSON.stringify({ prompt: 'x', transcript_path: join(dir, 'missing.jsonl') });
     const prior = await readLastAssistantText(extractTranscriptPath(raw)!);
     expect(prior).toBe('');
+  });
+});
+
+describe('UPS openTasks fill (ATM.2 composition)', () => {
+  const taskCreate = (tuid: string, subject: string, metadata?: Record<string, unknown>) => ({
+    message: {
+      content: [
+        {
+          type: 'tool_use',
+          id: tuid,
+          name: 'TaskCreate',
+          input: { subject, ...(metadata ? { metadata } : {}) },
+        },
+      ],
+    },
+  });
+  const taskCreateResult = (tuid: string, id: string) => ({
+    message: {
+      content: [
+        { type: 'tool_result', tool_use_id: tuid, content: `Task #${id} created successfully` },
+      ],
+    },
+  });
+  const taskUpdate = (taskId: string, status: string) => ({
+    message: {
+      content: [
+        { type: 'tool_use', id: `u-${taskId}`, name: 'TaskUpdate', input: { taskId, status } },
+      ],
+    },
+  });
+
+  it('derives the open-task list (with provenance) the hook puts on the event', async () => {
+    const path = await writeTranscript([
+      taskCreate('t1', 'A', { taskId: 'ATM.1' }),
+      taskCreateResult('t1', '16'),
+      taskUpdate('16', 'in_progress'),
+      taskCreate('t2', 'smuggled'), // no metadata
+      taskCreateResult('t2', '18'),
+      taskUpdate('18', 'pending'),
+    ]);
+    const raw = JSON.stringify({ prompt: 'go', transcript_path: path });
+    const open = await readOpenTasksFromTranscript(extractTranscriptPath(raw)!);
+    expect(open).toEqual([
+      { id: '16', status: 'in_progress', taskId: 'ATM.1' },
+      { id: '18', status: 'pending' },
+    ]);
+  });
+
+  it('yields [] (fail-open) when the transcript file is absent', async () => {
+    const raw = JSON.stringify({ prompt: 'x', transcript_path: join(dir, 'missing.jsonl') });
+    expect(await readOpenTasksFromTranscript(extractTranscriptPath(raw)!)).toEqual([]);
   });
 });

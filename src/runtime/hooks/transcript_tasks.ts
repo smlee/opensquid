@@ -58,21 +58,30 @@ export interface PendingUpdate {
   metadata?: Record<string, unknown>;
 }
 
+interface TaskState {
+  subject: string;
+  status: string;
+  metadata: Record<string, unknown>;
+}
+
 /**
- * Resolve the active task from the session transcript, or `null` if none /
- * unreadable. Most-recent `in_progress` (not later closed) wins. `pending`
- * overlays the in-flight TaskUpdate (H4a) so a task being activated THIS tick
- * wins even though disk/transcript still lags.
+ * Shared transcript walk (ATM.1 + ATM.2): parse `TaskCreate`/`TaskUpdate`
+ * records into the latest state per harness task id, plus the most-recent
+ * `in_progress` id (not subsequently closed). Status is SEEDED to `pending` on
+ * `TaskCreate` (the harness default) so a created-but-never-updated task still
+ * counts as open. `pending` overlays the in-flight TaskUpdate (H4a), applied
+ * last. Defensive per-line parse; an unreadable transcript yields an empty map
+ * (fail-open — never a wrong task).
  */
-export async function readActiveTaskFromTranscript(
+async function parseTranscriptTasks(
   transcriptPath: string,
   pending?: PendingUpdate,
-): Promise<ActiveTask | null> {
+): Promise<{ taskById: Map<string, TaskState>; activeId: string | null }> {
   let raw: string;
   try {
     raw = await readFile(transcriptPath, 'utf8');
   } catch {
-    return null;
+    return { taskById: new Map(), activeId: null };
   }
 
   const createByToolUse = new Map<string, { subject: string; metadata: Record<string, unknown> }>();
@@ -120,10 +129,11 @@ export async function readActiveTaskFromTranscript(
     }
   }
 
-  const taskById = new Map<string, { subject: string; metadata: Record<string, unknown> }>();
+  const taskById = new Map<string, TaskState>();
   for (const [tuid, c] of createByToolUse) {
     const id = idByToolUse.get(tuid);
-    if (id !== undefined) taskById.set(id, { subject: c.subject, metadata: { ...c.metadata } });
+    if (id !== undefined)
+      taskById.set(id, { subject: c.subject, status: 'pending', metadata: { ...c.metadata } });
   }
 
   // H4a: apply the in-flight TaskUpdate LAST (it's not in the transcript yet).
@@ -133,16 +143,31 @@ export async function readActiveTaskFromTranscript(
   for (const u of updates) {
     let t = taskById.get(u.taskId);
     if (t === undefined) {
-      t = { subject: '', metadata: {} };
+      t = { subject: '', status: 'pending', metadata: {} };
       taskById.set(u.taskId, t);
     }
     if (u.metadata !== undefined) t.metadata = { ...t.metadata, ...u.metadata };
+    t.status = u.status;
     if (u.status === 'in_progress') activeId = u.taskId;
     else if ((u.status === 'completed' || u.status === 'deleted') && activeId === u.taskId) {
       activeId = null;
     }
   }
 
+  return { taskById, activeId };
+}
+
+/**
+ * Resolve the active task from the session transcript, or `null` if none /
+ * unreadable. Most-recent `in_progress` (not later closed) wins. `pending`
+ * overlays the in-flight TaskUpdate (H4a) so a task being activated THIS tick
+ * wins even though disk/transcript still lags.
+ */
+export async function readActiveTaskFromTranscript(
+  transcriptPath: string,
+  pending?: PendingUpdate,
+): Promise<ActiveTask | null> {
+  const { taskById, activeId } = await parseTranscriptTasks(transcriptPath, pending);
   if (activeId === null) return null;
   const t = taskById.get(activeId);
   if (t === undefined) return null;
@@ -154,4 +179,32 @@ export async function readActiveTaskFromTranscript(
     ...(typeof meta.taskId === 'string' ? { taskId: meta.taskId } : {}),
     ...(typeof meta.spec === 'string' ? { spec: meta.spec } : {}),
   };
+}
+
+/** An OPEN task (latest status `pending`|`in_progress`) + its generator provenance. */
+export interface OpenTask {
+  id: string;
+  status: string;
+  taskId?: string;
+}
+
+/**
+ * The OPEN tasks from the transcript (latest status ∈ {`pending`,
+ * `in_progress`}), each with its `metadata.taskId` provenance if present.
+ * Consumed by Gate B (`task_list_generated`) to flag tasks smuggled into the
+ * list without going through scope→task-spec-author. Empty on an unreadable
+ * transcript (fail-open). Shares the ATM.1 walk via `parseTranscriptTasks`.
+ */
+export async function readOpenTasksFromTranscript(
+  transcriptPath: string,
+  pending?: PendingUpdate,
+): Promise<OpenTask[]> {
+  const { taskById } = await parseTranscriptTasks(transcriptPath, pending);
+  const open: OpenTask[] = [];
+  for (const [id, t] of taskById) {
+    if (t.status === 'completed' || t.status === 'deleted') continue;
+    const taskId = typeof t.metadata.taskId === 'string' ? t.metadata.taskId : undefined;
+    open.push({ id, status: t.status, ...(taskId !== undefined ? { taskId } : {}) });
+  }
+  return open;
 }

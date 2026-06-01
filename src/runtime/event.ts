@@ -88,6 +88,15 @@ export const PromptSubmitEvent = z.object({
   // `lesson-capture` skill via the `recent_turns` primitive; multi-turn context
   // (vs `priorAssistantText`'s single prior turn).
   recentTurns: z.string().optional(),
+  // T-ATM ATM.2 — the OPEN tasks (latest status pending|in_progress) derived
+  // from the transcript by the UPS hook (THIS CC version keeps the task list in
+  // the transcript, not ~/.claude/tasks/). Consumed by Gate B
+  // (`task_list_generated`) to flag tasks lacking `metadata.taskId` provenance.
+  // Absent on synthetic test events + older CC (the function falls back to the
+  // harness-store read).
+  openTasks: z
+    .array(z.object({ id: z.string(), status: z.string(), taskId: z.string().optional() }))
+    .optional(),
 });
 export type PromptSubmitEvent = z.infer<typeof PromptSubmitEvent>;
 

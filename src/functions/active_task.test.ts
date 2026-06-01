@@ -203,4 +203,59 @@ describe('task_list_generated (Gate B)', () => {
     const r = await TaskListGenerated.execute({}, ctx());
     expect(r).toEqual({ ok: true, value: { all_generated: true, ungenerated: [] } });
   });
+
+  // ATM.2: when the UPS hook supplies the transcript-derived open-task list on
+  // the prompt_submit event, Gate B reads it (NOT the stale ~/.claude/tasks
+  // store, empty on this CC version).
+  describe('reads event.openTasks (prompt_submit) over the harness store', () => {
+    const promptCtx = (openTasks?: { id: string; status: string; taskId?: string }[]): EvalCtx => ({
+      event: {
+        kind: 'prompt_submit',
+        prompt: 'go',
+        ...(openTasks !== undefined ? { openTasks } : {}),
+      },
+      bindings: new Map(),
+      sessionId: SID,
+      packId: 'test',
+    });
+
+    it('all_generated:true when every open task in the event carries taskId', async () => {
+      const r = await TaskListGenerated.execute(
+        {},
+        promptCtx([
+          { id: '16', status: 'in_progress', taskId: 'ATM.1' },
+          { id: '17', status: 'pending', taskId: 'ATM.2' },
+        ]),
+      );
+      expect(r).toEqual({ ok: true, value: { all_generated: true, ungenerated: [] } });
+    });
+
+    it('flags an open event task lacking taskId provenance', async () => {
+      const r = await TaskListGenerated.execute(
+        {},
+        promptCtx([
+          { id: '16', status: 'in_progress', taskId: 'ATM.1' },
+          { id: '18', status: 'pending' }, // smuggled — no taskId
+        ]),
+      );
+      expect(r).toEqual({ ok: true, value: { all_generated: false, ungenerated: ['18'] } });
+    });
+
+    it('ignores the harness store entirely when the event field is present', async () => {
+      // A smuggled task in the (stale) store must NOT be read when the event
+      // carries the authoritative transcript-derived list.
+      await putHarnessTask({ id: '99', subject: 'stale-smuggled', status: 'pending' });
+      const r = await TaskListGenerated.execute(
+        {},
+        promptCtx([{ id: '16', status: 'in_progress', taskId: 'ATM.1' }]),
+      );
+      expect(r).toEqual({ ok: true, value: { all_generated: true, ungenerated: [] } });
+    });
+
+    it('falls back to the harness store when the event has no openTasks', async () => {
+      await putHarnessTask({ id: '2', subject: 'smuggled', status: 'pending' }); // no metadata
+      const r = await TaskListGenerated.execute({}, promptCtx()); // prompt_submit, openTasks undefined
+      expect(r).toEqual({ ok: true, value: { all_generated: false, ungenerated: ['2'] } });
+    });
+  });
 });

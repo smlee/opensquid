@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.277] - 2026-06-01
+
+### Fixed (T-ATM ATM.2 — Gate B reads the transcript-derived open-task list, not the stale store)
+
+The sibling ATM.1 surfaced: `task_list_generated` (AP.5 **Gate B**) read the same
+empty `~/.claude/tasks/` store, so on this CC version it always returned
+`all_generated: true` — a silent no-op that let a task smuggled into the list
+without `metadata.taskId` provenance sail through. The function layer has
+`sessionId` but no `transcript_path` (only hooks do), so — following the RJ.1 /
+FU.2 precedent — the UserPromptSubmit hook now derives the open-task list from
+the transcript and puts it on `PromptSubmitEvent.openTasks`; Gate B reads that
+(falling back to the harness store for older CC). Gate B's `prompt_submit`-only
+trigger makes the UPS fill the natural site (no new PreToolUse hot-path cost).
+
+- `src/runtime/hooks/transcript_tasks.ts` — extracted the shared
+  `parseTranscriptTasks` walk (status now seeded `pending` on `TaskCreate`);
+  added `readOpenTasksFromTranscript`. `readActiveTaskFromTranscript` behavior
+  unchanged.
+- `src/runtime/event.ts` — `PromptSubmitEvent.openTasks` (optional).
+- `src/runtime/hooks/user-prompt-submit.ts` — fills `openTasks` from the transcript.
+- `src/functions/active_task.ts` — `task_list_generated` reads `event.openTasks`
+  when present, else `readHarnessTasks` (back-compat).
+
 ## [0.5.276] - 2026-06-01
 
 ### Fixed (T-ATM ATM.1 — active-task mirror reads the transcript, the source THIS CC version uses)

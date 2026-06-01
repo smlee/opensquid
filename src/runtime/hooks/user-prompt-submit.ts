@@ -36,6 +36,7 @@ import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
 import { emitDriftStderrAndExit } from './hook_output.js';
 import { readLastAssistantText, readLastNTurns } from './transcript.js';
+import { readOpenTasksFromTranscript } from './transcript_tasks.js';
 
 /** FU.2: how many recent text-bearing turns lesson-capture classifies. Small to
  *  bound the classifier prompt size (the wedge gate runs every prompt_submit). */
@@ -152,6 +153,10 @@ async function main(): Promise<void> {
       parsed.data.priorAssistantText = await readLastAssistantText(transcriptPath);
       // FU.2: multi-turn context for the wedge-gate lesson-capture skill.
       parsed.data.recentTurns = await readLastNTurns(transcriptPath, RECENT_TURNS_N);
+      // ATM.2: the OPEN-task list for Gate B (task_list_generated). THIS CC
+      // version keeps tasks in the transcript, not ~/.claude/tasks/, and the
+      // function layer has no transcript_path — so the hook derives it here.
+      parsed.data.openTasks = await readOpenTasksFromTranscript(transcriptPath);
     }
   }
 

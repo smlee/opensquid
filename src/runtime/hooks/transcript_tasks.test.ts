@@ -1,5 +1,5 @@
 /**
- * Tests for transcript-derived active task (T-ATM ATM.1).
+ * Tests for transcript-derived active task (T-ATM ATM.1) + open-task list (ATM.2).
  */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { readActiveTaskFromTranscript } from './transcript_tasks.js';
+import { readActiveTaskFromTranscript, readOpenTasksFromTranscript } from './transcript_tasks.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -137,5 +137,61 @@ describe('readActiveTaskFromTranscript', () => {
       'utf8',
     );
     expect((await readActiveTaskFromTranscript(p))?.id).toBe('16');
+  });
+});
+
+describe('readOpenTasksFromTranscript (ATM.2 — Gate B open-task list)', () => {
+  it('returns open tasks with taskId provenance from metadata', async () => {
+    const p = await tx([
+      create('tu1', 'A', { taskId: 'ATM.1' }),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+    ]);
+    expect(await readOpenTasksFromTranscript(p)).toEqual([
+      { id: '16', status: 'in_progress', taskId: 'ATM.1' },
+    ]);
+  });
+
+  it('a created-but-never-updated task is open + pending (seeded), provenance from create', async () => {
+    const p = await tx([create('tu1', 'A', { taskId: 'ATM.1' }), createResult('tu1', '18', 'A')]);
+    expect(await readOpenTasksFromTranscript(p)).toEqual([
+      { id: '18', status: 'pending', taskId: 'ATM.1' },
+    ]);
+  });
+
+  it('flags an open task lacking taskId (no provenance)', async () => {
+    const p = await tx([
+      create('tu1', 'smuggled'), // no metadata
+      createResult('tu1', '18', 'smuggled'),
+      update('18', 'in_progress'),
+    ]);
+    expect(await readOpenTasksFromTranscript(p)).toEqual([{ id: '18', status: 'in_progress' }]);
+  });
+
+  it('excludes completed/deleted tasks', async () => {
+    const p = await tx([
+      create('tu1', 'A', { taskId: 'ATM.1' }),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+      update('16', 'completed'),
+      create('tu2', 'B', { taskId: 'ATM.2' }),
+      createResult('tu2', '17', 'B'),
+      update('17', 'in_progress'),
+    ]);
+    expect(await readOpenTasksFromTranscript(p)).toEqual([
+      { id: '17', status: 'in_progress', taskId: 'ATM.2' },
+    ]);
+  });
+
+  it('returns [] for an absent transcript (fail-open)', async () => {
+    expect(await readOpenTasksFromTranscript(join(dir, 'nope.jsonl'))).toEqual([]);
+  });
+
+  it('H4a: the in-flight pending TaskUpdate is folded into the open list', async () => {
+    const p = await tx([create('tu1', 'A', { taskId: 'ATM.1' }), createResult('tu1', '16', 'A')]);
+    // pending overlay moves 16 → in_progress before it is in the transcript.
+    expect(await readOpenTasksFromTranscript(p, { taskId: '16', status: 'in_progress' })).toEqual([
+      { id: '16', status: 'in_progress', taskId: 'ATM.1' },
+    ]);
   });
 });

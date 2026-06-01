@@ -165,10 +165,23 @@ export const TaskListGenerated: FunctionDef<z.input<typeof NoArgs>, TaskListGene
   costEstimateMs: 5,
   execute: async (_args, ctx) => {
     try {
-      const tasks = await readHarnessTasks(ctx.sessionId);
-      const ungenerated = tasks
+      // ATM.2: THIS CC version keeps the task list in the session transcript,
+      // not ~/.claude/tasks/. The UPS hook (which has transcript_path; this
+      // function layer does not) derives the open-task list onto
+      // `event.openTasks` for the prompt_submit Gate B fires on. Prefer it;
+      // fall back to the harness-store read for older CC / non-UPS events.
+      const ev = ctx.event;
+      const open =
+        ev.kind === 'prompt_submit' && ev.openTasks !== undefined
+          ? ev.openTasks
+          : (await readHarnessTasks(ctx.sessionId)).map((t) => ({
+              id: t.id,
+              status: t.status,
+              taskId: t.metadata?.taskId,
+            }));
+      const ungenerated = open
         .filter((t) => t.status === 'pending' || t.status === 'in_progress')
-        .filter((t) => t.metadata?.taskId === undefined || t.metadata.taskId === '')
+        .filter((t) => t.taskId === undefined || t.taskId === '')
         .map((t) => t.id);
       return ok({ all_generated: ungenerated.length === 0, ungenerated });
     } catch (e) {
