@@ -498,16 +498,33 @@ export async function dispatchEvent(
               directives,
             };
           case 'halt':
+            // T-RJ-FOLLOWUPS FU.9: `full_stop_and_redo` → `halt` now ENFORCES
+            // as a hard block (exit 2) instead of the old exit-0 stub that made
+            // every full_stop_and_redo gate (the commit / versioning /
+            // workflow-phases gates + default-discipline's `default`) silently
+            // no-op. A hook can't literally halt the agent's loop, so "stop and
+            // redo" = block the drift action + surface the verdict's message
+            // (the directive — e.g. "log each phase before committing"). The
+            // destructive chain-state/ledger reset to `entrySkill` is an opt-in
+            // `restart` action (FU.10), NOT applied here — an incomplete-phases
+            // commit just needs the agent to finish the phases, not a wipe.
+            emitDispatchMarker(event.kind, rulesWalked, packs.length);
+            return {
+              exitCode: 2,
+              stderr: appendWarn(action.reason, warnBuf),
+              contextInjections,
+              directives,
+            };
           case 'notify_pause':
           case 'auto_correct':
           case 'escalate':
-            // Phase 1 stub: real halt = Task 1.14; real notify = Task 1.18;
-            // `auto_correct` + `escalate` action descriptors are interpreted
-            // by `runtime/auto_correct.ts` + `runtime/escalate.ts` at the
-            // hook-binary layer (out of scope for this dispatcher's per-event
-            // walk). Until those layers wire from this site, return allow +
-            // empty stderr so a pack-declared future-policy verdict doesn't
-            // accidentally block the tool call.
+            // Phase 1 stub: real notify = Task 1.18; `auto_correct` + `escalate`
+            // action descriptors are interpreted by `runtime/auto_correct.ts` +
+            // `runtime/escalate.ts` at the hook-binary layer (out of scope for
+            // this dispatcher's per-event walk). Until those layers wire from
+            // this site, return allow + empty stderr so a pack-declared
+            // future-policy verdict doesn't accidentally block the tool call.
+            // (FU.10 will decide whether notify_pause should block/surface.)
             emitDispatchMarker(event.kind, rulesWalked, packs.length);
             return {
               exitCode: 0,

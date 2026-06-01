@@ -754,6 +754,32 @@ describe('dispatchEvent', () => {
       expect(result.stderr).toBe('');
     });
 
+    it('FU.9: full_stop_and_redo (halt) BLOCKS with exit 2 + the verdict message (was an exit-0 stub)', async () => {
+      const registry = buildRegistryWithVerdict({
+        level: 'block',
+        message: 'BLOCKED: 7-phase workflow incomplete — log each phase before committing',
+        ruleId: 'phase-logged-before-commit',
+      });
+      const rule: Rule = {
+        id: 'phase-logged-before-commit',
+        kind: 'track_check',
+        requires: [],
+        process: [{ call: 'verdict' }],
+      };
+      const pack = withDrift(makePack('p1', [rule]), {
+        default: 'full_stop_and_redo',
+        per_rule: {},
+        corrective_skills: {},
+      });
+      const result = await dispatchEvent(event, [pack], registry, 'sess-1');
+      // Was exit 0 (silent no-op) before FU.9 — now a real hard block, the
+      // verdict message carried through as the redo directive.
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toBe(
+        'BLOCKED: 7-phase workflow incomplete — log each phase before committing',
+      );
+    });
+
     it('pack without driftResponse: block-level verdict → block_tool (level-derived default)', async () => {
       const registry = buildRegistryWithVerdict({
         level: 'block',

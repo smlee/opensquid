@@ -73,6 +73,16 @@ other (the failure this file exists to prevent). Grow it as we label things.
   to OVERRIDE the level-derived default — e.g. `default-discipline` uses
   `default: full_stop_and_redo` and per-rule `warn` downshifts; its overrides
   fight the pack's own aggressive default, independent of this fallback.
+- **`full_stop_and_redo` enforces as a hard block (FU.9)** — the policy maps to a
+  `halt` action which now returns `exitCode 2` + the verdict message. Before FU.9
+  it was an exit-0 Phase-1 stub, so EVERY `full_stop_and_redo` rule (the commit /
+  versioning / workflow-phases gates + default-discipline's `default`) silently
+  no-op'd — the gates looked installed but never bit. A hook can't literally halt
+  the agent's loop; "stop and redo" = block the drift action + surface the
+  message (the directive). The destructive chain-state/ledger reset to a restart
+  `entrySkill` is an OPT-IN `restart` action (FU.10), not applied on plain halt —
+  an incomplete-phases commit just needs the agent to finish the phases, not a
+  wipe. `notify_pause`/`auto_correct`/`escalate` remain exit-0 stubs pending FU.10.
 - **MCP-side session resolution → project-scoped pointer, not the env id** — an
   MCP server is a separate process from the hooks and can't read hook stdin.
   Claude Code exposes `CLAUDE_PROJECT_DIR` AND `CLAUDE_CODE_SESSION_ID` to stdio

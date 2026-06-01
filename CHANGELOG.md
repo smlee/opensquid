@@ -7,6 +7,36 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.270] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.9 — `full_stop_and_redo` gates now actually block)
+
+The `full_stop_and_redo` policy mapped to a `halt` action that `dispatch.ts`
+returned as `exitCode 0` (a Phase-1 stub) — so every gate on that policy (the
+pack `default`, `phase-logged-before-commit`, `workflow-phases-required`,
+`versioning-pre1-patch-only`) silently no-op'd. `halt` now returns `exitCode 2`
+
+- the verdict message (the redo directive). A hook can't halt the agent's loop;
+  the destructive chain-state/ledger restart stays an opt-in `restart` action
+  (deferred). `notify_pause`/`auto_correct`/`escalate` remain exit-0 stubs.
+
+**Coupled fix (required):** `workflow/skill.yaml` `phase-logged-before-commit`
+compared `read_state(workflow.phases_logged) != "complete"`, but `read_state`
+returns the ledger OBJECT `{task_id, phases:[…]}` — never the string `"complete"`
+— so the predicate was always true. Paired with the old exit-0 halt stub the two
+bugs cancelled (never blocked); fixing only halt would have blocked EVERY commit.
+Predicate is now `len(phases.phases) < 7` (`len` of a null/absent ledger = 0 →
+blocks a zero-phase commit). Verified end-to-end via direct hook-bin invocation:
+a `git commit` at 3/7 phases → exit 2 + "BLOCKED: 7-phase workflow incomplete."
+
+- `src/runtime/hooks/dispatch.ts` — `halt` → exit 2 + reason (own case).
+- `packs/builtin/default-discipline/skills/workflow/skill.yaml` — correct predicate.
+- `docs/lexicon.md` — `full_stop_and_redo` enforces; restart is opt-in (FU.10).
+
+Note: a separate wiring defect (FU.11) keeps the PreToolUse hook from firing on
+tool calls live (the installed hook config lacks a `matcher`) — the gate logic is
+correct, but won't fire in-session until FU.11 lands.
+
 ## [0.5.269] - 2026-06-01
 
 ### Docs (T-RJ-FOLLOWUPS FU.4 — correct the MCP session-env comment)

@@ -44,8 +44,13 @@ rules:
         args:
           key: workflow.phases_logged
         as: phases
+      # FU.9: `read_state` returns the ledger OBJECT `{task_id, phases:[...]}`,
+      # never the string "complete" — the prior `phases != "complete"` was always
+      # true (object !== string), so paired with the old exit-0 halt stub the gate
+      # silently no-op'd. Block when fewer than all 7 phases are logged. `len`
+      # returns 0 for a null/absent ledger → 0 < 7 → blocks a zero-phase commit.
       - call: verdict
-        if: 'committing && phases != "complete"'
+        if: 'committing && len(phases.phases) < 7'
         args:
           level: block
           message: >-
