@@ -83,6 +83,16 @@ other (the failure this file exists to prevent). Grow it as we label things.
   `entrySkill` is an OPT-IN `restart` action (FU.10), not applied on plain halt —
   an incomplete-phases commit just needs the agent to finish the phases, not a
   wipe. `notify_pause`/`auto_correct`/`escalate` remain exit-0 stubs pending FU.10.
+- **PreToolUse blocks MUST use `permissionDecision:"deny"` JSON, not `exit 2` (FU.11)** —
+  `--dangerously-skip-permissions` (= `bypassPermissions` mode) silently IGNORES a
+  hook's `exit 2`, so a bare-exit-2 gate does NOT block in that mode (proven live:
+  a `git commit` at 1/7 phases ran anyway). But CC HONORS a PreToolUse
+  `{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason}}`
+  envelope (exit 0) even under the flag (proven live: the call was denied). So
+  `pre-tool-use.ts` emits the deny-JSON on block — enforcement survives
+  `bypassPermissions`. Corollary: the matcher is NOT required for firing (an
+  omitted `matcher` = match-all per the CC docs); the exit-code-vs-JSON signal is
+  what mattered.
 - **MCP-side session resolution → project-scoped pointer, not the env id** — an
   MCP server is a separate process from the hooks and can't read hook stdin.
   Claude Code exposes `CLAUDE_PROJECT_DIR` AND `CLAUDE_CODE_SESSION_ID` to stdio

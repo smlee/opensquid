@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.271] - 2026-06-01
+
+### Fixed (T-RJ-FOLLOWUPS FU.11 — PreToolUse blocks survive `--dangerously-skip-permissions`)
+
+A PreToolUse hook signalling a block via `exit 2` is silently IGNORED under
+`--dangerously-skip-permissions` (= `bypassPermissions` mode) — proven live: a
+`git commit` the gate should block ran anyway. But a `permissionDecision:"deny"`
+JSON envelope IS honored under the flag (proven live: the call was denied). So
+`pre-tool-use.ts` now emits the deny envelope (via the new pure
+`buildPreToolUseDeny`) on every block (`exitCode === 2`) and exits 0 — drift gates
+enforce in BOTH normal and bypass permission modes.
+
+- `src/runtime/hooks/permission_decision.ts` (new) — `buildPreToolUseDeny`.
+- `src/runtime/hooks/pre-tool-use.ts` — emit the deny envelope on block.
+- `docs/lexicon.md` — record the exit-2-vs-deny-JSON rule.
+
+Diagnosis note: the matcher was NOT the cause (an omitted `matcher` = match-all
+per the CC docs; the opensquid hook does fire — confirmed by capturing its live
+stdin). A SECOND coupled cause remains (FU.14): the workflow commit gate's
+command regex is start-anchored (`^git…commit`), so it misses the
+`cd … && git commit` compound form the Bash tool sends — that's why the live
+`git commit` still wasn't caught even with deny-JSON. FU.11 fixes the signalling;
+FU.14 fixes the matching.
+
 ## [0.5.270] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.9 — `full_stop_and_redo` gates now actually block)

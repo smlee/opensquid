@@ -26,6 +26,7 @@ import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
+import { buildPreToolUseDeny } from './permission_decision.js';
 import { extractSessionId } from './session_id.js';
 
 /** ASC.1 PreToolUse chain-state writers — file-path / metadata patterns. */
@@ -139,6 +140,17 @@ async function main(): Promise<void> {
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
+  // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
+  // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
+  // under `--dangerously-skip-permissions` (= bypassPermissions) Claude Code
+  // IGNORES a hook's `exit 2` (the tool runs anyway), but it HONORS a
+  // `permissionDecision: "deny"` envelope. Emitting the JSON (exit 0) makes drift
+  // gates enforce in BOTH normal and bypass modes. Gated strictly on
+  // `exitCode === 2` so a non-block never accidentally denies the tool.
+  if (exitCode === 2) {
+    process.stdout.write(JSON.stringify(buildPreToolUseDeny(stderr)));
+    process.exit(0);
+  }
   if (stderr) process.stderr.write(stderr + '\n');
   process.exit(exitCode);
 }

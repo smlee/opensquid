@@ -127,13 +127,20 @@ function envWithSmokePack(): NodeJS.ProcessEnv {
 }
 
 describe('runtime smoke (subprocess hook + on-disk YAML pack)', () => {
-  it('blocks git commit --amend with exit code 2 + stderr', async () => {
+  it('blocks git commit --amend via a permissionDecision:deny envelope (FU.11)', async () => {
+    // FU.11: a block is now signalled as a PreToolUse `permissionDecision:"deny"`
+    // JSON envelope (exit 0), NOT a bare exit 2 — exit 2 is silently ignored
+    // under `--dangerously-skip-permissions`, the deny envelope is honored.
     const result = await runHook(
       { tool: 'Bash', args: { command: 'git commit --amend -m "oops"' } },
       envWithSmokePack(),
     );
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toMatch(/amend/i);
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(result.stdout) as {
+      hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string };
+    };
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/amend/i);
   });
 
   it('allows safe git commands with exit code 0 + empty stderr', async () => {
