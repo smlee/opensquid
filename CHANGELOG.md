@@ -7,6 +7,41 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.260] - 2026-06-01
+
+### Fixed (T-SCOPE-GATES SG.2 — three more silent-no-op gates + a second bug class)
+
+The `text_field`-no-op audit (follow-up to SG.1). Three guard skills never
+fired because their `text_field` used a _binding_ path (`targs.`/`tool_args.`)
+that `text_pattern_match` can't resolve — it reads `ctx.event` fields only:
+
+- **`pack-skill-authoring`** (scope-architect): `targs.file_path` → `args.file_path`.
+- **`manifest-author-walkthrough`** (pack-architect): **double-broken** —
+  `tool_args.file_path` → `args.file_path` AND `is_manifest.matched == true`
+  (matched is a `string[]`, so `== true` never held) → `len(is_manifest.matched) > 0`.
+- **`skill-yaml-author-walkthrough`** (pack-architect): same double bug → fixed.
+
+So a SECOND silent-no-op class surfaced: `<binding>.matched == true` comparisons
+(an array compared to a boolean) — fixed alongside the field paths. A full sweep
+confirms no remaining binding-path `text_field` in any builtin skill
+(`recall-consumed`'s `last_msg` is intentionally excluded — it is
+retirement-bound per T-coding-flow CF.3).
+
+### Tests
+
+Added `src/packs/pack_skill_authoring.skill.test.ts` +
+`src/packs/pack_architect_walkthroughs.skill.test.ts` — the rule-FIRING tests
+these skills never had (only pattern-tests, which is why the no-ops shipped).
+Prove each fires on its target path and is silent off-path.
+
+### Note
+
+Running gates pick up the fix after rebuild + next session. This + SG.1 mean the
+scope-flow's `text_field` guards now actually fire — a likely contributor to the
+"flow gets skipped" symptom.
+
+---
+
 ## [0.5.259] - 2026-06-01
 
 ### Fixed + Added (T-SCOPE-GATES SG.1 — scope-completeness warn + a silent-no-op fix)

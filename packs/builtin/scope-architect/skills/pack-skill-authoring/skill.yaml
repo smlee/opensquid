@@ -37,11 +37,12 @@ rules:
     process:
       - call: tool_name
         as: tool
-      - call: tool_args
-        as: targs
+      # SG.2 fix (2026-06-01): was 'targs.file_path' — a binding path
+      # text_pattern_match can't resolve (it reads ctx.event fields only) →
+      # silent no-op. Event path 'args.file_path' actually fires.
       - call: text_pattern_match
         args:
-          text_field: 'targs.file_path'
+          text_field: 'args.file_path'
           patterns:
             - '\.opensquid/packs/.+/skill\.yaml$'
         as: is_pack_skill

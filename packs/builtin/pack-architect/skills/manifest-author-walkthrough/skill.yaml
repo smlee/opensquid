@@ -12,17 +12,20 @@ rules:
     process:
       - call: tool_name
         as: tool
-      - call: tool_args
-        as: targs
+      # SG.2 fix (2026-06-01): was 'tool_args.file_path' — a binding path
+      # text_pattern_match can't resolve → silent no-op. Event path
+      # 'args.file_path' fires.
       - call: text_pattern_match
         if: 'tool == "Write" || tool == "Edit"'
         args:
-          text_field: tool_args.file_path
+          text_field: 'args.file_path'
           patterns:
             - 'packs/.+/manifest\.yaml$'
         as: is_manifest
+      # SG.2 fix: was 'is_manifest.matched == true' — `matched` is a string[],
+      # so `== true` never held even with a real match. Use len(...) > 0.
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && is_manifest.matched == true'
+        if: '(tool == "Write" || tool == "Edit") && len(is_manifest.matched) > 0'
         args:
           level: surface
           message: |
