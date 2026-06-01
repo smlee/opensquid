@@ -57,9 +57,8 @@
  *   - src/functions/chain_state.ts (ASC.5 — `read_chain_state` primitive)
  */
 
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
+import { readFile, unlink } from 'node:fs/promises';
+import { atomicWriteFile } from './atomic_write.js';
 import { sessionStateFile } from './paths.js';
 
 /** The 7 stages, in pipeline order. `as const` so ChainStage narrows to the literal union. */
@@ -164,8 +163,9 @@ export async function transitionChainStage(
     ...(enrich?.task_ids !== undefined ? { task_ids: enrich.task_ids } : {}),
     history: [...(current?.history ?? []), { stage: next, at: now }],
   };
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(merged, null, 2), 'utf8');
+  // FC.1: atomic publish so concurrent transitions can't tear/lose the stage —
+  // the stage the gates read is always the last fully-committed one.
+  await atomicWriteFile(path, JSON.stringify(merged, null, 2));
 }
 
 /**

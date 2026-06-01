@@ -197,3 +197,26 @@ describe('chain_state — reach every stage', () => {
     });
   }
 });
+
+describe('chain_state — atomic write (FC.1)', () => {
+  it('never leaves a torn/empty state file under overlapping transitions', async () => {
+    const sid = 'sess-race';
+    // Overlapping transitions to different real stages. With tmp+rename publish
+    // a reader always sees a fully-written file holding one real stage — never
+    // an empty/partial JSON (the ACTRACE failure the atomic write closes).
+    await Promise.all(CHAIN_STAGES.map((s) => transitionChainStage(sid, s)));
+    const parsed = JSON.parse(await readFile(sessionStateFile(sid, 'chain-state'), 'utf8')) as {
+      stage: string;
+    };
+    expect(CHAIN_STAGES).toContain(parsed.stage as (typeof CHAIN_STAGES)[number]);
+    expect(CHAIN_STAGES).toContain(await readChainStage(sid));
+  });
+
+  it('leaves no stray .tmp file behind after a transition', async () => {
+    const sid = 'sess-tmp';
+    await transitionChainStage(sid, 'researched');
+    const { readdir } = await import('node:fs/promises');
+    const entries = await readdir(dirname(sessionStateFile(sid, 'chain-state')));
+    expect(entries.some((e) => e.includes('.tmp.'))).toBe(false);
+  });
+});

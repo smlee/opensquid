@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.274] - 2026-06-01
+
+### Fixed (T-FLOW-COHESION FC.1 — atomic session/chain state writes, trustworthy FSM)
+
+`transitionChainStage` (and every session-state writer) wrote non-atomically
+(read→merge→`writeFile`) — under overlapping writes the chain-state FSM (the
+backbone the workflow gates read for "where are we") could tear/lose its stage.
+New `src/runtime/atomic_write.ts` (`atomicWriteFile`: tmp + `rename`, unique temp
+per call) now publishes atomically; `chain_state.ts` + all four `session_state.ts`
+writers (tool-ledger, current-session, active-task mirror, pause) use it. Readers
+see old-or-new, never partial. This makes the stage trustworthy — the prerequisite
+for FC.2 (blocks carrying the forward map). (`workflow_phases.ts` was already
+atomic.)
+
 ## [0.5.273] - 2026-06-01
 
 ### Changed (drift-message squid marker + hook-output DRY + no-implicit-push removed)

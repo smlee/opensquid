@@ -25,18 +25,20 @@
  * for long-running sessions without coordinating a separate trim job.
  *
  * Concurrency: hook bins run as short-lived subprocesses, one per host
- * tool-call. Concurrent writes to the same session ledger are rare (the
- * host serializes its own tool calls). We use mkdir-then-writeFile, no
- * atomic rename — same trade-off the destination scheduler makes.
+ * tool-call. FC.1 (2026-06-01): all session-state writes publish atomically via
+ * `atomicWriteFile` (tmp + rename) so concurrent writers (e.g. the active-task
+ * mirror touched on overlapping events) can never tear/lose state — readers see
+ * old-or-new, never partial.
  *
- * Imports from: node:fs/promises, node:path, ./paths.js.
+ * Imports from: node:fs/promises, node:path, ./atomic_write.js, ./paths.js.
  * Imported by: src/functions/session_tool_history.ts (read path);
  *   src/runtime/hooks/pre-tool-use.ts (append path);
  *   src/runtime/hooks/user-prompt-submit.ts (turn-reset path).
  */
 
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile, rename, unlink } from 'node:fs/promises';
+
+import { atomicWriteFile } from './atomic_write.js';
 
 import { activeTaskArchiveFile, activeTaskFile, sessionStateFile } from './paths.js';
 import { advanceTick, createTick } from './tick.js';
@@ -86,8 +88,7 @@ async function readLedger(sessionId: string): Promise<ToolLedger> {
 
 async function writeLedger(sessionId: string, ledger: ToolLedger): Promise<void> {
   const path = sessionStateFile(sessionId, LEDGER_KEY);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(ledger, null, 2), 'utf8');
+  await atomicWriteFile(path, JSON.stringify(ledger, null, 2));
 }
 
 /**
@@ -120,8 +121,7 @@ const CWD_KEY = 'cwd';
 /** Record the session's working directory (called by PreToolUse on tool_call). */
 export async function recordSessionCwd(sessionId: string, cwd: string): Promise<void> {
   const path = sessionStateFile(sessionId, CWD_KEY);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, cwd, 'utf8');
+  await atomicWriteFile(path, cwd);
 }
 
 /** Read the session's recorded cwd, or `null` if absent/unreadable/empty. */
@@ -187,8 +187,7 @@ export interface ActiveTask {
 /** Write the active-task signal (called by the AP.1 PreToolUse mirror). */
 export async function writeActiveTask(sessionId: string, task: ActiveTask): Promise<void> {
   const path = activeTaskFile(sessionId);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(task, null, 2), 'utf8');
+  await atomicWriteFile(path, JSON.stringify(task, null, 2));
 }
 
 /** Read the active-task signal, or `null` if absent/unreadable/malformed (no throw). */
@@ -322,8 +321,7 @@ export async function advanceSkillTicks(
     next[id] = advanceTick(base, event);
   }
   const path = sessionStateFile(sessionId, TICKS_KEY);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(next, null, 2), 'utf8');
+  await atomicWriteFile(path, JSON.stringify(next, null, 2));
   return next;
 }
 
