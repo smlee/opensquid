@@ -7,6 +7,64 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.259] - 2026-06-01
+
+### Fixed + Added (T-SCOPE-GATES SG.1 — scope-completeness warn + a silent-no-op fix)
+
+**Fixed (silent no-op):** `pre-research-authoring`'s `warn-preresearch-write-without-research`
+rule used `text_field: 'targs.file_path'` — a _binding_ path. But
+`text_pattern_match` resolves `text_field` only against `ctx.event` fields
+(`extractField(ctx.event, …)`), never bindings — so `targs.file_path` → undefined
+→ `matched: []` → the path guard was always false → **the warn never fired.**
+Changed to the event path `args.file_path` (the working convention, cf.
+`inline-spec-block`). The rule now actually fires. (Same bug class — a guard that
+silently doesn't fire — as the chat orphan / recall-consumed loop. Sibling
+skills `pack-skill-authoring` + two pack-architect skills have the same
+`targs`/`tool_args` text_field bug; deferred to a follow-up audit.)
+
+**Added (scope-completeness):** a second rule `warn-scope-incomplete`. On a Write
+of a pre-research doc, it scans `args.content` (the full doc on Write) for the
+three hole-finding section headers — `## Alternatives`, `## Failure modes`,
+`## Empirical spikes` — and warns if any are missing. These are the locked
+scope-gate questions: optimality (alternatives), logical holes (inversion), and
+premise holes (empirical spike). Domain-neutral. Warn, never block (the doc must
+stay authorable). Write-only (Edit content is partial); header-presence only (v1).
+
+**Why it matters:** front-loads hole-finding to scope (the cheapest place), per
+`docs/lexicon.md` (Simplicity / inversion / empirical-spike). The hard
+block-at-authoring-advance version needs a file-content-reading primitive — a
+deferred follow-up.
+
+### Tests
+
+Added `src/packs/pre_research_authoring.skill.test.ts` — the rule-FIRING test the
+skill never had (it had only regex-pattern tests, which is _why_ the silent
+no-op shipped). Loads the real `scope-architect` pack and evaluates each rule via
+`evaluateProcess`: proves `warn-scope-incomplete` fires on a missing section /
+is silent when complete / non-path / Edit, and proves the fixed
+`warn-preresearch-write-without-research` now fires.
+
+### Audit walk-through
+
+- **Trace:** Write of a `docs/research/*-pre-research-*.md` doc → `tool_name` →
+  `text_pattern_match(args.file_path)` path guard → on match, `text_pattern_match(args.content)`
+  for the 3 headers → `verdict(warn)` if <3. Short-circuit on `tool == "Write"`
+  guards the unset-`sections` case.
+- **Side-effects:** none — pure event-field reads; warn only.
+- **Adjacent:** the existing rule's path fix is behavior-restoring (it now fires
+  as originally intended); no other rule touched.
+- **User-visible delta:** authoring an incomplete pre-research doc now surfaces a
+  warn naming the missing hole-finding sections.
+- **Rollback:** revert; both rules are additive/path-only.
+
+### Note
+
+The running gate picks up the fix after rebuild + next session. `pack-skill-authoring`
+
+- pack-architect `text_field` bugs are a tracked follow-up audit.
+
+---
+
 ## [0.5.258] - 2026-05-31
 
 ### Fixed (T-HANDOFF-HARDENING HH7.1 — recall-consumed gate empty-message false-positive loop)

@@ -1,5 +1,14 @@
-# pre-research-authoring — warns when authoring a pre-research doc with
-# insufficient research-tool activity this turn.
+# pre-research-authoring — two soft warns guarding pre-research docs:
+#   1. warn-preresearch-write-without-research (DPC.5): insufficient
+#      research-tool activity this turn (did you DO the research?).
+#   2. warn-scope-incomplete (SG.1, 2026-06-01): the doc doesn't answer the
+#      three hole-finding questions — ## Alternatives / ## Failure modes /
+#      ## Empirical spikes (does the doc ANSWER them?).
+#
+# SG.1 also FIXED rule 1's `text_field: 'targs.file_path'` → `'args.file_path'`:
+# `targs.X` is a binding path, but text_pattern_match resolves text_field only
+# against ctx.event fields — so rule 1 silently never fired. Both rules now use
+# the event path `args.X` (the working convention, cf. inline-spec-block).
 #
 # Per T-DISCIPLINE-PIPELINE-COMPLETION DPC.5 (2026-05-30): closes the gap
 # where the agent writes pre-research files from intuition instead of
@@ -30,11 +39,14 @@ rules:
     process:
       - call: tool_name
         as: tool
-      - call: tool_args
-        as: targs
+      # FIX (SG.1, 2026-06-01): was `targs.file_path` — a BINDING path that
+      # text_pattern_match cannot resolve (it reads ctx.event fields only), so
+      # this guard silently never matched and the warn never fired. The event
+      # field is `args.file_path` (see inline-spec-block for the correct
+      # convention). Now the rule actually fires.
       - call: text_pattern_match
         args:
-          text_field: 'targs.file_path'
+          text_field: 'args.file_path'
           patterns:
             - 'docs/research/[^/]*-pre-research-[^/]*\.md$'
         as: is_preresearch
@@ -68,10 +80,63 @@ rules:
             doc summarizing findings + residual gaps. Warn surfaces but does
             not block (a session-2 continuation pre-research may legitimately
             ride on session-1 research; pass through with awareness).
+  # SG.1 (2026-06-01) — scope-completeness check. Complements the
+  # research-activity warn above: that one asks "did you DO research?"; this
+  # one asks "does the doc ANSWER the three hole-finding questions?"
+  - id: warn-scope-incomplete
+    process:
+      - call: tool_name
+        as: tool
+      - call: text_pattern_match
+        args:
+          text_field: 'args.file_path'
+          patterns:
+            - 'docs/research/[^/]*-pre-research-[^/]*\.md$'
+        as: is_preresearch
+      # On a Write of a pre-research doc, the event carries the full doc in
+      # args.content → scan it for the three section headers. Write-only: Edit
+      # carries partial content (new_string), so the full-doc check is
+      # unreliable there (block-at-authoring-advance follow-up covers Edit).
+      - call: text_pattern_match
+        if: 'tool == "Write" && len(is_preresearch.matched) > 0'
+        args:
+          text_field: 'args.content'
+          patterns:
+            - '##\s+Alternatives'
+            - '##\s+Failure modes'
+            - '##\s+Empirical spikes'
+        as: sections
+      - call: verdict
+        if: 'tool == "Write" && len(is_preresearch.matched) > 0 && len(sections.matched) < 3'
+        args:
+          level: warn
+          message: >-
+            🦑 SCOPE COMPLETENESS (SG.1): this pre-research doc is missing one
+            or more hole-finding sections. A complete scope answers all three
+            BEFORE authoring tasks:
+            ## Alternatives (>=2 options + why this one wins);
+            ## Failure modes (inversion — each "how does this fail?" answered);
+            ## Empirical spikes (each empirical open-question resolved by a
+            cheap throwaway spike before locking the design).
+            Holes found at scope are the cheapest you will ever fix — add the
+            missing section(s), then re-write. (Warn, not block: the doc must
+            stay authorable.)
 prose: |
-  Soft gate. Threshold of 3 research-tool calls is heuristic — biases
-  toward "agent did some looking around" without being so strict that
-  legitimate continuation pre-research gets noisily warned. False-
-  positive cost: extra context injection per warn match (acceptable).
-  False-negative cost: insufficient research slips through (no worse
-  than today's baseline).
+  Two soft gates on pre-research authoring:
+
+  - warn-preresearch-write-without-research (DPC.5): threshold of 3
+    research-tool calls is heuristic — biases toward "agent did some
+    looking around" without being so strict that legitimate continuation
+    pre-research gets noisily warned. (SG.1 fixed its silent-no-op
+    text_field bug; it now actually fires.)
+  - warn-scope-incomplete (SG.1): on a Write of a pre-research doc, checks
+    args.content for the three hole-finding section headers (Alternatives /
+    Failure modes / Empirical spikes). Warn, never block — the doc must
+    stay authorable. Write-only: Edit carries partial content; a hard block
+    that reads the full artifact from disk at the authoring-advance gate is
+    a follow-up (needs a file-content-reading primitive). Header-presence
+    only (v1) — section non-emptiness is a later refinement.
+
+  Both fire only on the pre-research path convention; both are soft
+  (warn) — they surface, never block. False-positive cost: an extra
+  context injection. False-negative cost: no worse than baseline.
