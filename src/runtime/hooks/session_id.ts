@@ -109,12 +109,22 @@ export async function readProjectCurrentSession(projectUuid: string): Promise<st
  * the hooks, so it can't read hook stdin).
  *
  * T-RJ-FOLLOWUPS FU.3 (2026-06-01) — CORRECTION to MS.1. MS.1 assumed Claude
- * Code sets `CLAUDE_SESSION_ID` in the MCP server's env; it does NOT (verified
- * against the CC hook/MCP docs — CC sets ONLY `CLAUDE_PROJECT_DIR` for stdio
- * MCP servers, no session id and no per-request session context). So the env
- * step never fired and resolution always fell through to the GLOBAL
- * `.current-session`, which any concurrent session in any project clobbers
- * (last-writer-wins) — silently breaking this session's `log_phase` mid-task.
+ * Code sets `CLAUDE_SESSION_ID` in the MCP server's env; it does NOT — that
+ * exact name is never set, so the env step never fired and resolution always
+ * fell through to the GLOBAL `.current-session`, which any concurrent session in
+ * any project clobbers (last-writer-wins) — silently breaking this session's
+ * `log_phase` mid-task.
+ *
+ * FU.4 correction: CC DOES expose a session-id env var to stdio MCP servers —
+ * `CLAUDE_CODE_SESSION_ID` (plus `CLAUDE_PROJECT_DIR`). But it is NOT safe to key
+ * on: under `--resume` it holds a NEW id that differs from the persisted /
+ * transcript / hook-stdin id the state actually lives under (observed live:
+ * env `6c7527de…` while state + transcript were under `1200bc00…`, whose
+ * `sessions/<id>/` dir is the real one). So resolving by the env session id
+ * would point at an EMPTY session under resume. The project-scoped pointer is
+ * correct precisely because the UPS hook writes it with the hook-stdin id — the
+ * same id the state uses. (Using `CLAUDE_CODE_SESSION_ID` *guarded by
+ * `sessions/<id>/` existence* to also kill the same-project race is FU.7.)
  *
  * Fix: resolve via the PROJECT-SCOPED pointer, keyed by `CLAUDE_PROJECT_DIR`
  * (which CC DOES provide) → `resolveProjectUuid`. A concurrent session in

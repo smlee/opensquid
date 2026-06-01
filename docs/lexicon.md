@@ -73,3 +73,14 @@ other (the failure this file exists to prevent). Grow it as we label things.
   to OVERRIDE the level-derived default — e.g. `default-discipline` uses
   `default: full_stop_and_redo` and per-rule `warn` downshifts; its overrides
   fight the pack's own aggressive default, independent of this fallback.
+- **MCP-side session resolution → project-scoped pointer, not the env id** — an
+  MCP server is a separate process from the hooks and can't read hook stdin.
+  Claude Code exposes `CLAUDE_PROJECT_DIR` AND `CLAUDE_CODE_SESSION_ID` to stdio
+  MCP servers, but the session-id env var is NOT safe to key on: under `--resume`
+  it's a NEW id that differs from the persisted/transcript/hook-stdin id the
+  state lives under (so `sessions/<env-id>/` is empty). Resolve via the
+  project-scoped `.current-session` pointer (`resolveProjectUuid(CLAUDE_PROJECT_DIR)`),
+  which the UPS hook writes with the hook-stdin id — the id the state actually
+  uses. Race-free across projects; same-project residue tracked (FU.3/FU.4/FU.7).
+  The global `.current-session` is last-writer-wins across all sessions — never
+  the authority for MCP resolution.

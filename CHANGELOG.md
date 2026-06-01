@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.269] - 2026-06-01
+
+### Docs (T-RJ-FOLLOWUPS FU.4 — correct the MCP session-env comment)
+
+No behavior change. Corrects the `resolveMcpSessionId` docblock + adds a lexicon
+entry: Claude Code DOES expose `CLAUDE_CODE_SESSION_ID` (and `CLAUDE_PROJECT_DIR`)
+to stdio MCP servers, but the session-id env var is unsafe to key on — under
+`--resume` it differs from the persisted/transcript/hook-stdin id the state lives
+under (observed live: env `6c7527de…` vs state under `1200bc00…`). The
+project-scoped pointer is correct because it tracks the hook-stdin id. Prevents a
+future "simplification" into the broken `read CLAUDE_CODE_SESSION_ID` form.
+
 ## [0.5.268] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.2 — `lesson-capture` classifies real turns, not a contentless prompt)
