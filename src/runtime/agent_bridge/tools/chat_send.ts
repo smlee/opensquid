@@ -86,6 +86,9 @@ export interface DaemonSendParams {
   text: string;
   replyTo?: string;
   threadId?: string;
+  /** CAT.4 — absolute path to a local image to deliver as a photo (text →
+   *  caption). Forwarded to the daemon `send` RPC as `mediaPath`. */
+  imagePath?: string;
 }
 
 export type DaemonSendFn = (params: DaemonSendParams) => Promise<DaemonSendResult>;
@@ -104,6 +107,8 @@ export const defaultDaemonSend: DaemonSendFn = (params) => {
           text: params.text,
           ...(params.replyTo !== undefined ? { replyTo: params.replyTo } : {}),
           ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+          // CAT.4 — the daemon `send` RPC's media field is `mediaPath`.
+          ...(params.imagePath !== undefined ? { mediaPath: params.imagePath } : {}),
         },
       }) + '\n';
 
@@ -169,10 +174,19 @@ export const defaultDaemonSend: DaemonSendFn = (params) => {
 // `channel` overrides for callers that need to cross-post.
 // ---------------------------------------------------------------------------
 
-const ChatSendInput = z.object({
-  text: z.string().min(1),
-  channel: z.string().min(1).optional(),
-});
+const ChatSendInput = z
+  .object({
+    text: z.string(),
+    channel: z.string().min(1).optional(),
+    /** CAT.4 — optional absolute path to a local image to attach. When set,
+     *  `text` becomes the photo caption and may be empty. */
+    imagePath: z.string().min(1).optional(),
+  })
+  // A reply must carry SOMETHING: either non-empty text or an image. (Was
+  // `text.min(1)`; relaxed so image-only sends are valid, with caption empty.)
+  .refine((v) => v.text.length > 0 || v.imagePath !== undefined, {
+    message: 'chat_send requires non-empty text or an imagePath',
+  });
 type ChatSendInputT = z.infer<typeof ChatSendInput>;
 
 export const chatSendSpec: ToolSpec = {
@@ -182,11 +196,19 @@ export const chatSendSpec: ToolSpec = {
   input_schema: {
     type: 'object',
     properties: {
-      text: { type: 'string', description: 'Reply body (plain text).' },
+      text: {
+        type: 'string',
+        description: 'Reply body (plain text). Becomes the caption when imagePath is set.',
+      },
       channel: {
         type: 'string',
         description:
           'Optional channel override. Defaults to "project:<platform>" derived from the inbound session.',
+      },
+      imagePath: {
+        type: 'string',
+        description:
+          'Optional absolute path to a local image to send as a photo. When set, text is the caption and may be empty.',
       },
     },
     required: ['text'],
@@ -208,6 +230,7 @@ export function makeChatSendHandler(daemonSend: DaemonSendFn = defaultDaemonSend
       channel,
       text: parsed.text,
       ...(ctx.sessionKey.threadId !== undefined ? { threadId: ctx.sessionKey.threadId } : {}),
+      ...(parsed.imagePath !== undefined ? { imagePath: parsed.imagePath } : {}),
     };
     const result = await daemonSend(params);
     return `sent ok (platform=${result.platform}, message_id=${result.message_id})`;

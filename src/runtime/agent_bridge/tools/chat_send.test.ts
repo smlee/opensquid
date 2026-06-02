@@ -105,6 +105,40 @@ describe('makeChatSendHandler', () => {
     expect(sends[0]?.threadId).toBe('42');
   });
 
+  it('forwards imagePath to the daemon (CAT.4 outbound media)', async () => {
+    const sends: DaemonSendParams[] = [];
+    const stub: DaemonSendFn = (params) => {
+      sends.push(params);
+      return Promise.resolve(fakeOk());
+    };
+    const handler = makeChatSendHandler(stub);
+    const validated = chatSendSpec.validate!({
+      text: 'here you go',
+      imagePath: '/abs/out.png',
+    });
+    await handler(validated, CTX);
+    expect(sends).toEqual([
+      { channel: 'project:telegram', text: 'here you go', imagePath: '/abs/out.png' },
+    ]);
+  });
+
+  it('allows an image-only send (empty text) and forwards imagePath', async () => {
+    const sends: DaemonSendParams[] = [];
+    const stub: DaemonSendFn = (params) => {
+      sends.push(params);
+      return Promise.resolve(fakeOk());
+    };
+    const handler = makeChatSendHandler(stub);
+    const validated = chatSendSpec.validate!({ text: '', imagePath: '/abs/out.png' });
+    await handler(validated, CTX);
+    expect(sends[0]?.imagePath).toBe('/abs/out.png');
+    expect(sends[0]?.text).toBe('');
+  });
+
+  it('rejects empty text with no imagePath (must carry something)', () => {
+    expect(() => chatSendSpec.validate?.({ text: '' })).toThrow();
+  });
+
   it('propagates daemon RPC failures verbatim', async () => {
     const stub: DaemonSendFn = () => Promise.reject(new Error('daemon down'));
     const handler = makeChatSendHandler(stub);

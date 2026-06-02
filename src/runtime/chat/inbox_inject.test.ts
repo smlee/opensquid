@@ -124,6 +124,29 @@ describe('buildInjectionEnvelope — header + per-row format + 8KB budget', () =
     expect(injectedRows).toHaveLength(3);
   });
 
+  // CAT.4 — a row carrying media gets a Read-pointer line per attachment.
+  it('emits a 📎 Read-pointer line per media item under the text line', () => {
+    const rows = [
+      inboxRow({
+        id: '1',
+        received_at: '2026-05-30T12:00:00Z',
+        text: 'see attached',
+        media: [
+          { kind: 'photo', path: '/tmp/a.jpg', caption: 'see attached' },
+          { kind: 'document', path: '/tmp/b.pdf' },
+        ],
+      }),
+    ];
+    const { envelope, injectedRows } = buildInjectionEnvelope(rows);
+    expect(envelope).toBe(
+      '📨 Inbound messages (1)\n' +
+        'alice (telegram): see attached\n' +
+        '📎 photo: /tmp/a.jpg — Read this file to view\n' +
+        '📎 document: /tmp/b.pdf — Read this file to view',
+    );
+    expect(injectedRows.map((r) => r.id)).toEqual(['1']);
+  });
+
   it('overflow >8KB → injects only what fits; remaining rows stay unacked', () => {
     const bigText = 'x'.repeat(4000);
     const rows = [

@@ -9,11 +9,19 @@
  * vitest's fake timers to advance time deterministically.
  */
 
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { InboundChatMessage } from '../types.js';
 
 // Mock state shared across the vi.mock factory + tests.
 interface MockBotState {
   sendMessage: ReturnType<typeof vi.fn>;
+  sendPhoto: ReturnType<typeof vi.fn>;
+  getFile: ReturnType<typeof vi.fn>;
   deleteWebhook: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
@@ -21,15 +29,20 @@ interface MockBotState {
   /** AUTO.6 — grammy `bot.on('message', ...)` listeners. The mock fires them
    *  in registration order when a test calls `fireMessage(ctx)`. */
   messageListeners: ((ctx: unknown) => void | Promise<void>)[];
+  /** CAT.4 — captured `new InputFile(path)` constructions. */
+  inputFiles: string[];
 }
 
 const mockState: MockBotState = {
   sendMessage: vi.fn(),
+  sendPhoto: vi.fn(),
+  getFile: vi.fn(),
   deleteWebhook: vi.fn(),
   start: vi.fn(),
   stop: vi.fn(),
   startCallCount: 0,
   messageListeners: [],
+  inputFiles: [],
 };
 
 class FakeGrammyError extends Error {
@@ -46,10 +59,18 @@ class FakeHttpError extends Error {
   override readonly name = 'HttpError';
 }
 
+class FakeInputFile {
+  constructor(public readonly path: string) {
+    mockState.inputFiles.push(path);
+  }
+}
+
 vi.mock('grammy', () => {
   class Bot {
     api = {
       sendMessage: (...args: unknown[]): unknown => mockState.sendMessage(...args),
+      sendPhoto: (...args: unknown[]): unknown => mockState.sendPhoto(...args),
+      getFile: (...args: unknown[]): unknown => mockState.getFile(...args),
       deleteWebhook: (...args: unknown[]): unknown => mockState.deleteWebhook(...args),
     };
     start(...args: unknown[]): Promise<void> {
@@ -70,7 +91,12 @@ vi.mock('grammy', () => {
       void token;
     }
   }
-  return { Bot, GrammyError: FakeGrammyError, HttpError: FakeHttpError };
+  return {
+    Bot,
+    GrammyError: FakeGrammyError,
+    HttpError: FakeHttpError,
+    InputFile: FakeInputFile,
+  };
 });
 
 // Import AFTER vi.mock so the mocked module is used.
@@ -78,12 +104,16 @@ const { telegramAdapter } = await import('./telegram.js');
 
 beforeEach(() => {
   mockState.sendMessage.mockReset();
+  mockState.sendPhoto.mockReset();
+  mockState.getFile.mockReset();
   mockState.deleteWebhook.mockReset();
   mockState.start.mockReset();
   mockState.stop.mockReset();
   mockState.startCallCount = 0;
   mockState.messageListeners = [];
+  mockState.inputFiles = [];
   mockState.sendMessage.mockResolvedValue({ message_id: 1, date: 0 });
+  mockState.sendPhoto.mockResolvedValue({ message_id: 2, date: 0 });
   mockState.deleteWebhook.mockResolvedValue(true);
   // Default: start hangs (resolves only on shutdown).
   mockState.start.mockReturnValue(
@@ -452,5 +482,158 @@ describe('telegramAdapter — subscribeTransport (CAT.1b rich envelope)', () => 
     await sub.unsubscribe();
     await fireMessage({ chat: { id: -1, type: 'supergroup' }, from: { id: 1 }, message: { message_id: 2, text: 'b' } });
     expect(msgs).toHaveLength(1);
+  });
+});
+
+describe('telegramAdapter — CAT.4 inbound media (download seam)', () => {
+  let mediaDir: string;
+  beforeEach(async () => {
+    mediaDir = await mkdtemp(join(tmpdir(), 'cat4-media-'));
+  });
+  afterEach(async () => {
+    await rm(mediaDir, { recursive: true, force: true });
+  });
+
+  it('downloads the LARGEST photo + emits InboundMedia with path + caption', async () => {
+    const downloaded: string[] = [];
+    const download = async (url: string): Promise<Uint8Array> => {
+      downloaded.push(url);
+      return new Uint8Array([1, 2, 3, 4]);
+    };
+    mockState.getFile.mockResolvedValue({ file_path: 'photos/file_9.jpg' });
+
+    const msgs: InboundChatMessage[] = [];
+    const a = telegramAdapter({
+      token: 'TOK',
+      allowlistChatIds: [1],
+      mediaDownloadDir: mediaDir,
+      download,
+    });
+    await a.subscribeTransport(async (m) => {
+      msgs.push(m);
+    });
+    await fireMessage({
+      chat: { id: -100, type: 'supergroup' },
+      from: { id: 7 },
+      api: { getFile: (id: string): unknown => mockState.getFile(id) },
+      message: {
+        message_id: 55,
+        caption: 'look at this',
+        // ascending sizes — adapter must pick the largest by file_size.
+        photo: [
+          { file_id: 'small', file_size: 100, width: 90 },
+          { file_id: 'large', file_size: 9000, width: 1280 },
+        ],
+      },
+    });
+
+    expect(msgs).toHaveLength(1);
+    const m = msgs[0]!;
+    // getFile was called with the LARGEST photo's file_id.
+    expect(mockState.getFile).toHaveBeenCalledWith('large');
+    // Download hit the canonical Telegram file URL for the resolved file_path.
+    expect(downloaded).toEqual([
+      'https://api.telegram.org/file/botTOK/photos/file_9.jpg',
+    ]);
+    expect(m.media).toHaveLength(1);
+    expect(m.media?.[0]).toEqual({
+      kind: 'photo',
+      path: join(mediaDir, 'telegram-55-0.jpg'),
+      caption: 'look at this',
+    });
+    // caption mirrored into text (caption-only photo still drives a turn).
+    expect(m.text).toBe('look at this');
+    // bytes actually landed on disk.
+    const bytes = await readFile(join(mediaDir, 'telegram-55-0.jpg'));
+    expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('downloads a document + carries its mime', async () => {
+    mockState.getFile.mockResolvedValue({ file_path: 'documents/file_3.pdf' });
+    const msgs: InboundChatMessage[] = [];
+    const a = telegramAdapter({
+      token: 'TOK',
+      allowlistChatIds: [1],
+      mediaDownloadDir: mediaDir,
+      download: async () => new Uint8Array([9]),
+    });
+    await a.subscribeTransport(async (m) => {
+      msgs.push(m);
+    });
+    await fireMessage({
+      chat: { id: -100, type: 'supergroup' },
+      from: { id: 7 },
+      api: { getFile: (id: string): unknown => mockState.getFile(id) },
+      message: {
+        message_id: 60,
+        document: { file_id: 'doc1', file_name: 'spec.pdf', mime_type: 'application/pdf' },
+      },
+    });
+    expect(msgs[0]?.media).toEqual([
+      {
+        kind: 'document',
+        path: join(mediaDir, 'telegram-60-0.pdf'),
+        mime: 'application/pdf',
+      },
+    ]);
+  });
+
+  it('a text-only message carries no media (unchanged)', async () => {
+    const msgs: InboundChatMessage[] = [];
+    const a = telegramAdapter({
+      token: 'TOK',
+      allowlistChatIds: [1],
+      mediaDownloadDir: mediaDir,
+      download: async () => new Uint8Array([0]),
+    });
+    await a.subscribeTransport(async (m) => {
+      msgs.push(m);
+    });
+    await fireMessage({
+      chat: { id: -100, type: 'supergroup' },
+      from: { id: 7 },
+      api: { getFile: (id: string): unknown => mockState.getFile(id) },
+      message: { message_id: 70, text: 'just text' },
+    });
+    expect(msgs[0]?.media).toBeUndefined();
+    expect(mockState.getFile).not.toHaveBeenCalled();
+    expect(msgs[0]?.text).toBe('just text');
+  });
+});
+
+describe('telegramAdapter — CAT.4 sendPhoto (outbound)', () => {
+  it('sends a photo via bot.api.sendPhoto with InputFile + caption + thread', async () => {
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    const r = await a.sendPhoto('telegram://12345/777', {
+      path: '/abs/pic.png',
+      caption: 'hi there',
+    });
+    expect(r).toEqual({ ok: true, messageId: '2' });
+    expect(mockState.inputFiles).toEqual(['/abs/pic.png']);
+    expect(mockState.sendPhoto).toHaveBeenCalledTimes(1);
+    const call = mockState.sendPhoto.mock.calls[0]!;
+    expect(call[0]).toBe(12345);
+    expect((call[1] as { path: string }).path).toBe('/abs/pic.png');
+    expect(call[2]).toEqual({ caption: 'hi there', message_thread_id: 777 });
+  });
+
+  it('explicit threadId overrides any topic embedded in the URI', async () => {
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    await a.sendPhoto('telegram://12345/1', { path: '/p.jpg', threadId: 99 });
+    expect(mockState.sendPhoto.mock.calls[0]?.[2]).toEqual({ message_thread_id: 99 });
+  });
+
+  it('rejects a chat not in the allowlist BEFORE any API call', async () => {
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    const r = await a.sendPhoto('telegram://99999', { path: '/p.jpg' });
+    expect(r).toEqual({ ok: false, error: 'chat not in allowlist' });
+    expect(mockState.sendPhoto).not.toHaveBeenCalled();
+  });
+
+  it('maps a GrammyError to the canonical failure shape', async () => {
+    mockState.sendPhoto.mockRejectedValueOnce(new FakeGrammyError(400, 'Bad Request: wrong file'));
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
+    const r = await a.sendPhoto('telegram://12345', { path: '/p.jpg' });
+    expect(r).toEqual({ ok: false, error: 'telegram api 400: Bad Request: wrong file' });
   });
 });

@@ -21,7 +21,7 @@
  * Imports from: ./types. Imported by: ./daemon/{rpc_server,worker}.ts + tests.
  */
 
-import type { ChannelAdapter } from './types.js';
+import type { ChannelAdapter, SendResult } from './types.js';
 import type { ChatPlatform } from './factory.js';
 
 /** Telegram forum-topic creation seam (telegram-only `create_topic` RPC). */
@@ -49,6 +49,21 @@ export interface GatewaySendParams {
   replyTo?: string;
   /** Explicit thread/topic id; overrides any suffix embedded in `channel`. */
   threadId?: string;
+  /**
+   * CAT.4 — ADDITIVE. Absolute path to a local image; when present the gateway
+   * dispatches via the adapter's `sendPhoto` (text → caption) instead of the
+   * text `send`. Telegram only; other platforms throw (no `sendPhoto` surface).
+   */
+  mediaPath?: string;
+}
+
+/** CAT.4 — structural slice of the telegram adapter's photo surface, so the
+ *  gateway can route media without importing the concrete adapter type. */
+interface PhotoCapableAdapter {
+  sendPhoto(
+    uri: string,
+    opts: { path: string; caption?: string; threadId?: number },
+  ): Promise<SendResult>;
 }
 
 export interface GatewaySendResult {
@@ -165,7 +180,25 @@ export class ChatGateway {
         `no adapter active for platform '${platform}' (channel '${params.channel}')`,
       );
     }
-    const result = await adapter.send(uri, { text: params.text });
+
+    let result: SendResult;
+    if (params.mediaPath !== undefined && params.mediaPath.length > 0) {
+      // CAT.4 — media path. The adapter URI already carries the thread, so
+      // sendPhoto re-derives it; text (when non-empty) becomes the caption.
+      const photoAdapter = adapter as unknown as Partial<PhotoCapableAdapter>;
+      if (typeof photoAdapter.sendPhoto !== 'function') {
+        throw new GatewayError(
+          `platform '${platform}' does not support media send (channel '${params.channel}')`,
+        );
+      }
+      result = await photoAdapter.sendPhoto(uri, {
+        path: params.mediaPath,
+        ...(params.text.length > 0 ? { caption: params.text } : {}),
+      });
+    } else {
+      result = await adapter.send(uri, { text: params.text });
+    }
+
     if (!result.ok) {
       throw new GatewayError(result.error ?? `send failed for ${params.channel}`);
     }

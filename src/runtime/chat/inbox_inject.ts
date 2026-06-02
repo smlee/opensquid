@@ -80,12 +80,20 @@ export function buildInjectionEnvelope(rows: readonly InboxRow[]): {
   const injected: InboxRow[] = [];
   let bytes = 0;
   for (const row of rows) {
+    // CAT.4 — a row may carry downloaded media. Inject the text line plus one
+    // Read-pointer line per attachment: hooks inject TEXT only (no image
+    // content blocks), so the agent Reads the path to view the file. Media
+    // pointers are cheap text; they count against the same byte budget.
     const line = `${row.sender} (${row.platform}): ${row.text}`;
-    const projected = bytes + line.length + 1;
+    const mediaLines = (row.media ?? []).map(
+      (m) => `📎 ${m.kind}: ${m.path} — Read this file to view`,
+    );
+    const block = [line, ...mediaLines].join('\n');
+    const projected = bytes + block.length + 1;
     if (projected > ENVELOPE_BUDGET_BYTES && injected.length > 0) {
       break;
     }
-    lines.push(line);
+    lines.push(block);
     injected.push(row);
     bytes = projected;
   }

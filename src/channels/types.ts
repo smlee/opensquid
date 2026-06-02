@@ -47,6 +47,26 @@ export interface InboundSubscription {
  * the DM flag, and the raw chat/topic ids. The adapter builds this once per
  * inbound message; the lossy `InboundChannelEvent` is derived from it.
  */
+/**
+ * CAT.4 — an inbound media attachment downloaded to the local filesystem.
+ *
+ * Claude Code hooks inject TEXT only — they cannot inject image content
+ * blocks. So inbound images/documents are downloaded to a FILE and the inbox
+ * drain injects a Read-POINTER (`📎 <kind>: <path>`); the agent Reads the
+ * path to view it (Read handles images), exactly like a terminal user opening
+ * a file. `path` is an absolute on-disk path the agent can hand to `Read`.
+ */
+export interface InboundMedia {
+  /** Telegram `photo` (PhotoSize) vs `document` (arbitrary file). */
+  kind: 'photo' | 'document';
+  /** Absolute on-disk path the file was downloaded to. */
+  path: string;
+  /** The attachment caption, when the platform supplied one. */
+  caption?: string;
+  /** Best-effort MIME type, when the platform reported one. */
+  mime?: string;
+}
+
 export interface InboundChatMessage {
   platform: 'telegram' | 'discord' | 'slack';
   /** Platform message id (→ InboxRow.id + ack dedup). */
@@ -67,6 +87,13 @@ export interface InboundChatMessage {
   mentionsBot: boolean;
   /** True iff a private chat (Telegram: chat.id === from.id) → DM routing. */
   direct: boolean;
+  /**
+   * CAT.4 — downloaded inbound attachments (photos/documents). Absent on
+   * text-only messages. A photo's caption is mirrored into both `text` and the
+   * media entry's `caption`. A message with media but no text still produces a
+   * valid envelope (no more text-only drop).
+   */
+  media?: InboundMedia[];
 }
 
 /**

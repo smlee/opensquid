@@ -55,6 +55,20 @@ export type Platform = z.infer<typeof Platform>;
 // the asymmetry is intentional).
 // ---------------------------------------------------------------------------
 
+// CAT.4 — inbound media attachment (downloaded-to-file). ADDITIVE: rows
+// written before CAT.4 carry no `media` key and still parse (optional). The
+// agent Reads `path` to view the file (Read handles images). `.strict()`
+// inside so an unknown media key is rejected, consistent with the row schema.
+export const InboxMedia = z
+  .object({
+    kind: z.enum(['photo', 'document']),
+    path: z.string().min(1),
+    caption: z.string().optional(),
+    mime: z.string().optional(),
+  })
+  .strict();
+export type InboxMedia = z.infer<typeof InboxMedia>;
+
 export const InboxRow = z
   .object({
     v: z.literal(1),
@@ -68,6 +82,7 @@ export const InboxRow = z
     received_at: z.string(),
     enqueued_at: z.string(),
     mentions_bot: z.boolean(),
+    media: z.array(InboxMedia).optional(),
   })
   .strict();
 export type InboxRow = z.infer<typeof InboxRow>;

@@ -29,12 +29,17 @@
  * long-poll). `start()` becomes a no-op in this state.
  */
 
-import { Bot, GrammyError, HttpError } from 'grammy';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { Bot, GrammyError, HttpError, InputFile } from 'grammy';
 import type { InboundChannelEvent } from '../../runtime/event.js';
+import { inboundMediaDir } from '../../runtime/paths.js';
 import type {
   ChannelAdapter,
   ChannelMessage,
   InboundChatMessage,
+  InboundMedia,
   InboundSubscription,
   SendResult,
 } from '../types.js';
@@ -52,6 +57,19 @@ export interface TelegramAdapterOpts {
    * startup and passes it here. Unset ⇒ `mentionsBot` is always false.
    */
   botUsername?: string;
+  /**
+   * CAT.4 — directory inbound media (photos/documents) is downloaded into.
+   * Defaults to `inboundMediaDir()` (`~/.opensquid/media/inbound`). Tests
+   * point it at an `mkdtemp` so downloads never escape the sandbox.
+   */
+  mediaDownloadDir?: string;
+  /**
+   * CAT.4 — injectable download seam. Given the fully-qualified Telegram file
+   * URL (`https://api.telegram.org/file/bot<token>/<file_path>`), resolves to
+   * the raw bytes. Defaults to `fetch`-based download; tests inject a stub so
+   * the suite never hits the network.
+   */
+  download?: (url: string) => Promise<Uint8Array>;
 }
 
 export interface TelegramAdapter extends ChannelAdapter {
@@ -74,6 +92,16 @@ export interface TelegramAdapter extends ChannelAdapter {
   subscribeTransport(
     handler: (msg: InboundChatMessage) => Promise<void>,
   ): Promise<InboundSubscription>;
+  /**
+   * CAT.4 — deliver a photo from a local file. `uri` is the same
+   * `telegram://<chat>[/<topic>]` shape as `send`; the optional `caption`
+   * becomes the photo caption; `threadId` overrides any topic in the URI.
+   * Returns the delivered `message_id` like `send`. Allowlist-enforced.
+   */
+  sendPhoto(
+    uri: string,
+    opts: { path: string; caption?: string; threadId?: number },
+  ): Promise<SendResult>;
 }
 
 /** Maximum 409 retry attempts before falling back to outbound-only. */
@@ -96,12 +124,40 @@ function parseUri(uri: string): { chatId: number; topicId?: number } | null {
   return topicId === undefined ? { chatId } : { chatId, topicId };
 }
 
+/** Map a grammy/transport error to the canonical `SendResult` failure shape.
+ *  Shared by `send` + `sendPhoto` so the wire-error contract stays identical. */
+function mapSendError(e: unknown): SendResult {
+  if (e instanceof GrammyError) {
+    return { ok: false, error: `telegram api ${e.error_code}: ${e.description}` };
+  }
+  if (e instanceof HttpError) {
+    return { ok: false, error: `network: ${e.message}` };
+  }
+  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+}
+
 /**
  * Minimal grammy Context shape used by `subscribeInbound`. Declared
  * structurally so the adapter doesn't pull grammy's transitive `@grammyjs/types`
  * surface into our public types — the real `Context` is provided by grammy
  * at runtime.
  */
+/** A Telegram `PhotoSize` (one entry in `message.photo`). */
+interface CtxPhotoSize {
+  file_id: string;
+  file_size?: number;
+  width?: number;
+  height?: number;
+}
+
+/** A Telegram `Document` (`message.document`). */
+interface CtxDocument {
+  file_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
 interface InboundCtx {
   chat?: { id: number; type?: string };
   from?: { id: number | string; username?: string; first_name?: string };
@@ -109,8 +165,56 @@ interface InboundCtx {
     message_id?: number;
     date?: number;
     text?: string;
+    caption?: string;
     message_thread_id?: number;
+    /** CAT.4 — Telegram delivers a photo as an array of size variants. */
+    photo?: CtxPhotoSize[];
+    /** CAT.4 — arbitrary uploaded file. */
+    document?: CtxDocument;
   };
+  /** grammy's `ctx.api.getFile` — used to resolve a file_id → file_path.
+   *  Declared structurally so the adapter doesn't pull grammy's full Api type. */
+  api?: { getFile: (fileId: string) => Promise<{ file_path?: string }> };
+}
+
+/** Default download seam — fetch the bytes from the Telegram file URL. */
+const defaultDownload = async (url: string): Promise<Uint8Array> => {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`download failed: HTTP ${String(res.status)}`);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+};
+
+/** Extension from a Telegram `file_path` (`photos/file_42.jpg` → `jpg`);
+ *  falls back to `bin` when none is present. */
+function extFromFilePath(filePath: string): string {
+  const dot = filePath.lastIndexOf('.');
+  if (dot === -1 || dot === filePath.length - 1) return 'bin';
+  return filePath.slice(dot + 1).toLowerCase();
+}
+
+/** One attachment queued for download inside `downloadMedia`. */
+interface PendingDownload {
+  kind: 'photo' | 'document';
+  fileId: string;
+  mime?: string;
+}
+
+/** Pick the largest PhotoSize by file_size, then width (Telegram orders
+ *  ascending but we don't rely on that). Returns undefined for an empty array. */
+function largestPhoto(photos: readonly CtxPhotoSize[]): CtxPhotoSize | undefined {
+  let best: CtxPhotoSize | undefined;
+  for (const p of photos) {
+    if (best === undefined) {
+      best = p;
+      continue;
+    }
+    const pScore = p.file_size ?? p.width ?? 0;
+    const bScore = best.file_size ?? best.width ?? 0;
+    if (pScore > bScore) best = p;
+  }
+  return best;
 }
 
 /** Internal handler slot — one per `subscribeInbound` call. `enabled`
@@ -142,7 +246,10 @@ function buildTransportMessage(
   if (ctx.chat === undefined) return null;
   const fromId = ctx.from?.id;
   const senderId = fromId !== undefined ? String(fromId) : '';
-  const text = ctx.message?.text ?? '';
+  // CAT.4 — a media message carries its body as `caption`, not `text`. Mirror
+  // the caption into `text` so caption-only photos still drive a non-empty
+  // envelope (it's ALSO carried on each media entry's `caption`).
+  const text = ctx.message?.text ?? ctx.message?.caption ?? '';
   const threadId = ctx.message?.message_thread_id;
   const date = ctx.message?.date;
   const mentionsBot =
@@ -170,6 +277,60 @@ export function telegramAdapter(opts: TelegramAdapterOpts): TelegramAdapter {
   const inboundHandlers: InboundHandlerSlot[] = [];
   const transportHandlers: TransportHandlerSlot[] = [];
   let inboundMiddlewareInstalled = false;
+  const download = opts.download ?? defaultDownload;
+
+  /**
+   * CAT.4 — download every photo/document on the message to the media dir and
+   * return the resulting `InboundMedia` pointers (empty when none). Resolves
+   * each `file_id` → `file_path` via `getFile`, downloads the bytes via the
+   * injectable seam, and writes `telegram-<message_id>-<n>.<ext>`. A per-item
+   * failure is swallowed (best-effort) so one broken attachment can't drop the
+   * whole message; the surviving items + text still flow through.
+   */
+  async function downloadMedia(ctx: InboundCtx, messageId: string): Promise<InboundMedia[]> {
+    const api = ctx.api;
+    if (api === undefined) return [];
+    const dir = opts.mediaDownloadDir ?? inboundMediaDir();
+    const caption = ctx.message?.caption;
+    const out: InboundMedia[] = [];
+    let n = 0;
+
+    const pending: PendingDownload[] = [];
+    const photo = largestPhoto(ctx.message?.photo ?? []);
+    if (photo !== undefined) pending.push({ kind: 'photo', fileId: photo.file_id });
+    const doc = ctx.message?.document;
+    if (doc !== undefined) {
+      pending.push({
+        kind: 'document',
+        fileId: doc.file_id,
+        ...(doc.mime_type !== undefined ? { mime: doc.mime_type } : {}),
+      });
+    }
+
+    for (const item of pending) {
+      try {
+        const file = await api.getFile(item.fileId);
+        const filePath = file.file_path;
+        if (filePath === undefined || filePath.length === 0) continue;
+        const url = `https://api.telegram.org/file/bot${opts.token}/${filePath}`;
+        const bytes = await download(url);
+        const ext = extFromFilePath(filePath);
+        const dest = join(dir, `telegram-${messageId}-${String(n)}.${ext}`);
+        await mkdir(dir, { recursive: true });
+        await writeFile(dest, bytes);
+        out.push({
+          kind: item.kind,
+          path: dest,
+          ...(caption !== undefined ? { caption } : {}),
+          ...(item.mime !== undefined ? { mime: item.mime } : {}),
+        });
+        n += 1;
+      } catch {
+        // best-effort: skip a failed attachment, keep the rest + the text.
+      }
+    }
+    return out;
+  }
 
   /**
    * Install the single grammy `'message'` middleware (idempotent). Builds the
@@ -181,8 +342,12 @@ export function telegramAdapter(opts: TelegramAdapterOpts): TelegramAdapter {
     if (inboundMiddlewareInstalled) return;
     inboundMiddlewareInstalled = true;
     bot.on('message', async (ctx: InboundCtx) => {
-      const msg = buildTransportMessage(ctx, opts.botUsername, new Date().toISOString());
-      if (msg === null) return;
+      const base = buildTransportMessage(ctx, opts.botUsername, new Date().toISOString());
+      if (base === null) return;
+      // CAT.4 — download any attachments + attach the pointers. A message with
+      // media but no text still produces a non-null envelope here (no drop).
+      const media = await downloadMedia(ctx, base.messageId);
+      const msg: InboundChatMessage = media.length > 0 ? { ...base, media } : base;
       for (const slot of transportHandlers) {
         if (!slot.enabled) continue;
         try {
@@ -274,13 +439,34 @@ export function telegramAdapter(opts: TelegramAdapterOpts): TelegramAdapter {
         const sentId = sent?.message_id;
         return sentId !== undefined ? { ok: true, messageId: String(sentId) } : { ok: true };
       } catch (e: unknown) {
-        if (e instanceof GrammyError) {
-          return { ok: false, error: `telegram api ${e.error_code}: ${e.description}` };
-        }
-        if (e instanceof HttpError) {
-          return { ok: false, error: `network: ${e.message}` };
-        }
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        return mapSendError(e);
+      }
+    },
+
+    async sendPhoto(
+      uri: string,
+      photoOpts: { path: string; caption?: string; threadId?: number },
+    ): Promise<SendResult> {
+      const parsed = parseUri(uri);
+      if (parsed === null) return { ok: false, error: 'bad uri' };
+      if (!opts.allowlistChatIds.includes(parsed.chatId)) {
+        return { ok: false, error: 'chat not in allowlist' };
+      }
+      // Explicit threadId arg wins over any topic embedded in the URI.
+      const thread = photoOpts.threadId ?? parsed.topicId;
+      try {
+        const extra: Record<string, number | string> = {};
+        if (photoOpts.caption !== undefined) extra.caption = photoOpts.caption;
+        if (thread !== undefined) extra.message_thread_id = thread;
+        const sent = (await bot.api.sendPhoto(
+          parsed.chatId,
+          new InputFile(photoOpts.path),
+          extra,
+        )) as { message_id?: number } | undefined;
+        const sentId = sent?.message_id;
+        return sentId !== undefined ? { ok: true, messageId: String(sentId) } : { ok: true };
+      } catch (e: unknown) {
+        return mapSendError(e);
       }
     },
 

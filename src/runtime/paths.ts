@@ -364,6 +364,12 @@ export const umbrellaCurrentSessionPath = (umbrellaId: string): string =>
 export const umbrellaChatDrivenMarker = (umbrellaId: string): string =>
   join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, '.chat-driven');
 
+// CAT.4 — inbound media download dir. The telegram adapter downloads photos +
+// documents here before emitting an `InboundMedia` pointer; the inbox drain
+// injects `📎 <kind>: <path>` and the agent Reads the path to view the file.
+// Honors OPENSQUID_HOME so tests relocate downloads into an mkdtemp.
+export const inboundMediaDir = (): string => join(OPENSQUID_HOME(), 'media', 'inbound');
+
 // Transport-level orphan inbox: a message that resolves to no umbrella
 // (`resolveInboundUmbrella` → null). Kept at the legacy top-level path so the
 // existing orphan-audit tooling keeps working.

@@ -51,6 +51,13 @@ export interface SendParams {
   replyTo?: string;
   /** Telegram forum-topic id; overrides any suffix embedded in `channel`. */
   threadId?: string;
+  /**
+   * CAT.4 — ADDITIVE. Absolute path to a local image to deliver via the
+   * transport's photo API. When present the daemon routes to `sendPhoto` and
+   * `text` becomes the photo caption (empty `text` ⇒ no caption). Absent ⇒ the
+   * legacy text-only `send` contract is byte-for-byte preserved.
+   */
+  mediaPath?: string;
 }
 
 export interface SendResult {

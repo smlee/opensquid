@@ -211,6 +211,8 @@ export class RpcServer {
             text: p.text,
             ...(p.replyTo !== undefined ? { replyTo: p.replyTo } : {}),
             ...(p.threadId !== undefined ? { threadId: p.threadId } : {}),
+            // CAT.4 — additive media path (text → caption when present).
+            ...(p.mediaPath !== undefined ? { mediaPath: p.mediaPath } : {}),
           });
           return success<SendResult>(req.id, {
             ok: true,

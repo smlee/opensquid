@@ -73,6 +73,27 @@ describe('buildInboxLine', () => {
     const line = buildInboxLine(tgMsg(), '2026-06-02T04:55:11.295Z');
     expect(InboxRow.safeParse(line).success).toBe(true);
   });
+
+  // CAT.4 — media carried through buildInboxLine + round-trips under InboxRow.
+  it('carries media through + the row still parses under InboxRow', () => {
+    const line = buildInboxLine(
+      tgMsg({
+        media: [{ kind: 'photo', path: '/tmp/x.jpg', caption: 'hi' }],
+      }),
+      'now',
+    );
+    expect(line.media).toEqual([{ kind: 'photo', path: '/tmp/x.jpg', caption: 'hi' }]);
+    const parsed = InboxRow.safeParse(line);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.media).toEqual([{ kind: 'photo', path: '/tmp/x.jpg', caption: 'hi' }]);
+    }
+  });
+
+  it('omits media when the message has none (text-only unchanged)', () => {
+    const line = buildInboxLine(tgMsg(), 'now');
+    expect('media' in line).toBe(false);
+  });
 });
 
 describe('routeAndWriteInbound', () => {

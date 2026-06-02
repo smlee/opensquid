@@ -32,7 +32,15 @@ import { dirname } from 'node:path';
 import { orphanInboxFile, umbrellaInboxFile } from '../runtime/paths.js';
 
 import { resolveInboundUmbrella, type ChannelsConfig } from './routing.js';
-import type { InboundChatMessage } from './types.js';
+import type { InboundChatMessage, InboundMedia } from './types.js';
+
+/** CAT.4 — on-disk media entry (mirrors `InboxMedia` in inbox.ts). */
+interface InboxLineMedia {
+  kind: 'photo' | 'document';
+  path: string;
+  caption?: string;
+  mime?: string;
+}
 
 /** The byte-compatible inbox row (kept in field order matching live bytes). */
 interface InboxLine {
@@ -47,6 +55,19 @@ interface InboxLine {
   received_at: string;
   enqueued_at: string;
   mentions_bot: boolean;
+  /** CAT.4 — downloaded attachments; omitted on text-only messages. */
+  media?: InboxLineMedia[];
+}
+
+/** Project an `InboundMedia` to its on-disk shape, dropping absent optionals so
+ *  text-only rows + caption-less media stay byte-minimal (exactOptionalProps). */
+function toLineMedia(m: InboundMedia): InboxLineMedia {
+  return {
+    kind: m.kind,
+    path: m.path,
+    ...(m.caption !== undefined ? { caption: m.caption } : {}),
+    ...(m.mime !== undefined ? { mime: m.mime } : {}),
+  };
 }
 
 /**
@@ -68,6 +89,9 @@ export function buildInboxLine(msg: InboundChatMessage, enqueuedAtIso: string): 
     received_at: msg.receivedAt,
     enqueued_at: enqueuedAtIso,
     mentions_bot: msg.mentionsBot,
+    ...(msg.media !== undefined && msg.media.length > 0
+      ? { media: msg.media.map(toLineMedia) }
+      : {}),
   };
 }
 

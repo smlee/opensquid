@@ -37,21 +37,46 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-/** Fake telegram adapter — records every send URI, returns ok by default. */
+/** A recorded `sendPhoto` call (CAT.4). */
+interface PhotoCall {
+  uri: string;
+  path: string;
+  caption?: string;
+  threadId?: number;
+}
+
+/** Fake telegram adapter — records every send URI, returns ok by default.
+ *  CAT.4: also exposes a `sendPhoto` that records its args. */
 function fakeTelegram(opts: { sendResult?: SendResult } = {}): {
   adapter: ChannelAdapter;
   sentUris: string[];
+  photoCalls: PhotoCall[];
 } {
   const sentUris: string[] = [];
-  const adapter: ChannelAdapter = {
+  const photoCalls: PhotoCall[] = [];
+  const adapter: ChannelAdapter & {
+    sendPhoto: (
+      uri: string,
+      o: { path: string; caption?: string; threadId?: number },
+    ) => Promise<SendResult>;
+  } = {
     scheme: 'telegram',
     validate: () => true,
     send: async (uri: string, _msg: ChannelMessage): Promise<SendResult> => {
       sentUris.push(uri);
       return opts.sendResult ?? { ok: true };
     },
+    sendPhoto: async (uri, o): Promise<SendResult> => {
+      photoCalls.push({
+        uri,
+        path: o.path,
+        ...(o.caption !== undefined ? { caption: o.caption } : {}),
+        ...(o.threadId !== undefined ? { threadId: o.threadId } : {}),
+      });
+      return opts.sendResult ?? { ok: true, messageId: 'photo-1' };
+    },
   };
-  return { adapter, sentUris };
+  return { adapter, sentUris, photoCalls };
 }
 
 /** One-shot JSON-RPC call over the daemon socket (mirrors the live callers). */
@@ -130,6 +155,34 @@ describe('RpcServer over a real Unix socket', () => {
       expect(typeof res.result.delivered_at).toBe('string');
       // delivered_at is an ISO-8601 string.
       expect(Number.isNaN(Date.parse(res.result.delivered_at))).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('send with mediaPath routes to sendPhoto (text → caption)', async () => {
+    const { adapter, sentUris, photoCalls } = fakeTelegram();
+    const gateway = new ChatGateway({ adapters: new Map([['telegram', adapter]]) });
+    const server = new RpcServer({ gateway, version: 'test' });
+    await server.listen();
+    try {
+      const res = (await rpcCall(daemonSockAddress(), {
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'send',
+        params: {
+          channel: 'telegram:-100:15',
+          text: 'a caption',
+          mediaPath: '/abs/pic.png',
+        },
+      })) as { result: { ok: boolean; platform: string; message_id: string } };
+      // Routed to sendPhoto, NOT the text send.
+      expect(sentUris).toEqual([]);
+      expect(photoCalls).toEqual([
+        { uri: 'telegram://-100/15', path: '/abs/pic.png', caption: 'a caption' },
+      ]);
+      expect(res.result.ok).toBe(true);
+      expect(res.result.message_id).toBe('photo-1');
     } finally {
       await server.close();
     }
