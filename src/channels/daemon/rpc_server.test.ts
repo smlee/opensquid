@@ -147,7 +147,9 @@ describe('RpcServer over a real Unix socket', () => {
         id: 1,
         method: 'send',
         params: { channel: 'telegram:-1003923174632:15', text: 'hello' },
-      })) as { result: { ok: boolean; platform: string; message_id: string; delivered_at: string } };
+      })) as {
+        result: { ok: boolean; platform: string; message_id: string; delivered_at: string };
+      };
       expect(sentUris).toEqual(['telegram://-1003923174632/15']);
       expect(res.result.ok).toBe(true);
       expect(res.result.platform).toBe('telegram');

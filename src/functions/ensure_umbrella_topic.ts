@@ -139,16 +139,25 @@ function daemonRpc<R>(method: string, params: unknown, timeoutMs: number): Promi
       clearTimeout(timer);
       cleanup();
       try {
-        const parsed = JSON.parse(line) as { result?: R; error?: { code: number; message: string } };
+        const parsed = JSON.parse(line) as {
+          result?: R;
+          error?: { code: number; message: string };
+        };
         if (parsed.error) {
-          rejectCall(new Error(`chat-daemon RPC error ${String(parsed.error.code)}: ${parsed.error.message}`));
+          rejectCall(
+            new Error(
+              `chat-daemon RPC error ${String(parsed.error.code)}: ${parsed.error.message}`,
+            ),
+          );
         } else if (parsed.result !== undefined) {
           resolveCall(parsed.result);
         } else {
           rejectCall(new Error('chat-daemon RPC: malformed response'));
         }
       } catch (e) {
-        rejectCall(new Error(`chat-daemon RPC: invalid JSON: ${e instanceof Error ? e.message : String(e)}`));
+        rejectCall(
+          new Error(`chat-daemon RPC: invalid JSON: ${e instanceof Error ? e.message : String(e)}`),
+        );
       }
     });
   });

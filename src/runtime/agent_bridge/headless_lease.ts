@@ -142,7 +142,9 @@ export class HeadlessLeaseManager {
       this.held = true;
       return true;
     } catch (err) {
-      this.warn(`[agent_bridge.headless_lease] acquire failed (${this.umbrellaId}): ${describe(err)}`);
+      this.warn(
+        `[agent_bridge.headless_lease] acquire failed (${this.umbrellaId}): ${describe(err)}`,
+      );
       this.held = false;
       return false;
     }

@@ -75,7 +75,10 @@ describe('buildChatAdapters — telegram', () => {
   });
 
   it('builds nothing for an empty config', async () => {
-    const result = await buildChatAdapters({ config: {}, resolveBotUsername: async () => undefined });
+    const result = await buildChatAdapters({
+      config: {},
+      resolveBotUsername: async () => undefined,
+    });
     expect(result.activated).toEqual([]);
     expect(result.adapters.size).toBe(0);
   });

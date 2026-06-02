@@ -37,7 +37,11 @@ const row = (id: string, text: string): string =>
 async function writeLease(umbrellaId: string, sessionId: string): Promise<void> {
   await writeFile(
     umbrellaLiveSessionLease(umbrellaId),
-    JSON.stringify({ session_id: sessionId, pid: process.pid, refreshed_at: new Date().toISOString() }),
+    JSON.stringify({
+      session_id: sessionId,
+      pid: process.pid,
+      refreshed_at: new Date().toISOString(),
+    }),
     'utf8',
   );
 }

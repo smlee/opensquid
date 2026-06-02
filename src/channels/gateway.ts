@@ -96,9 +96,7 @@ interface ParsedChannel {
 export function parseChannel(channel: string, threadId?: string): ParsedChannel {
   const firstColon = channel.indexOf(':');
   if (firstColon === -1) {
-    throw new GatewayError(
-      `malformed channel '${channel}' — expected '<platform>:<native_id>'`,
-    );
+    throw new GatewayError(`malformed channel '${channel}' — expected '<platform>:<native_id>'`);
   }
   const platformRaw = channel.slice(0, firstColon);
   if (platformRaw !== 'telegram' && platformRaw !== 'discord' && platformRaw !== 'slack') {
@@ -220,7 +218,9 @@ export class ChatGateway {
       chatId: args.chatId,
       name: args.name,
       ...(args.iconColor !== undefined ? { iconColor: args.iconColor } : {}),
-      ...(args.iconCustomEmojiId !== undefined ? { iconCustomEmojiId: args.iconCustomEmojiId } : {}),
+      ...(args.iconCustomEmojiId !== undefined
+        ? { iconCustomEmojiId: args.iconCustomEmojiId }
+        : {}),
     });
   }
 }

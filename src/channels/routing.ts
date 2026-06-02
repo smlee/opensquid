@@ -69,9 +69,12 @@ export type TelegramTarget = z.infer<typeof TelegramTarget>;
 const UmbrellaRow = z
   .object({
     /** Stable umbrella id (e.g. `loop`). MUST NOT be the reserved `general`. */
-    id: z.string().min(1).refine((s) => s !== GENERAL_UMBRELLA, {
-      message: `umbrella id must not be the reserved "${GENERAL_UMBRELLA}"`,
-    }),
+    id: z
+      .string()
+      .min(1)
+      .refine((s) => s !== GENERAL_UMBRELLA, {
+        message: `umbrella id must not be the reserved "${GENERAL_UMBRELLA}"`,
+      }),
     /** Absolute cwd prefixes that belong to this umbrella (cwd→umbrella). */
     members: z.array(z.string().min(1)),
     telegram: TelegramTarget.optional(),
@@ -247,7 +250,10 @@ export function resolveUmbrellaForCwd(cfg: ChannelsConfig, cwd: string): Umbrell
   let best: { id: string; len: number } | null = null;
   for (const u of cfg.umbrellas) {
     for (const member of u.members) {
-      if ((cwd === member || cwd.startsWith(`${member}/`)) && (best === null || member.length > best.len)) {
+      if (
+        (cwd === member || cwd.startsWith(`${member}/`)) &&
+        (best === null || member.length > best.len)
+      ) {
         best = { id: u.id, len: member.length };
       }
     }

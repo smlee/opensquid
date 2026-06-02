@@ -199,11 +199,7 @@ export class RpcServer {
 
         case 'send': {
           const p = req.params as SendParams | undefined;
-          if (
-            p === undefined ||
-            typeof p.channel !== 'string' ||
-            typeof p.text !== 'string'
-          ) {
+          if (p === undefined || typeof p.channel !== 'string' || typeof p.text !== 'string') {
             return failure(req.id, JSON_RPC_INVALID_PARAMS, 'send: channel + text required');
           }
           const result = await this.opts.gateway.send({
@@ -248,7 +244,11 @@ export class RpcServer {
         }
 
         default:
-          return failure(req.id, JSON_RPC_METHOD_NOT_FOUND, `unknown method: ${String(req.method)}`);
+          return failure(
+            req.id,
+            JSON_RPC_METHOD_NOT_FOUND,
+            `unknown method: ${String(req.method)}`,
+          );
       }
     } catch (err) {
       return failure(

@@ -114,9 +114,7 @@ export async function buildChatAdapters(
   // the CAT.1b rich subscribeTransport envelope the transport inbox writer
   // requires. Report, don't drop, so an operator sees why nothing happened.
   if (config.discord) {
-    issues.push(
-      'discord skipped — adapter has no subscribeTransport (CAT.1b rich envelope) yet',
-    );
+    issues.push('discord skipped — adapter has no subscribeTransport (CAT.1b rich envelope) yet');
   }
   if (config.slack) {
     issues.push('slack skipped — adapter has no subscribeTransport (CAT.1b rich envelope) yet');

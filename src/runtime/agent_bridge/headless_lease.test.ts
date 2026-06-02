@@ -25,10 +25,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { umbrellaLiveSessionLease } from '../paths.js';
-import {
-  type LiveSessionLease,
-  readLease,
-} from '../chat/live_session_lease.js';
+import { type LiveSessionLease, readLease } from '../chat/live_session_lease.js';
 
 import { HeadlessLeaseManager, headlessSessionId } from './headless_lease.js';
 

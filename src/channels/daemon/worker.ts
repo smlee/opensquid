@@ -223,7 +223,9 @@ async function shutdown(state: WorkerState, signal: string): Promise<void> {
   try {
     if (state.rpcServer) await state.rpcServer.close();
   } catch (err) {
-    log(`[chat-daemon] rpc close error (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    log(
+      `[chat-daemon] rpc close error (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   try {
     if (state.gateway) await state.gateway.stop();

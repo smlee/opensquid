@@ -21,7 +21,11 @@
 import { readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { loadChannelsConfig, resolveOutbound, resolveUmbrellaForCwd } from '../../channels/routing.js';
+import {
+  loadChannelsConfig,
+  resolveOutbound,
+  resolveUmbrellaForCwd,
+} from '../../channels/routing.js';
 import type { DaemonSendFn } from '../agent_bridge/tools/chat_send.js';
 import { defaultDaemonSend } from '../agent_bridge/tools/chat_send.js';
 import { umbrellaChatDrivenMarker } from '../paths.js';

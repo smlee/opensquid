@@ -59,7 +59,11 @@ describe('drainUmbrellaInbox', () => {
   });
 
   it('returns an envelope for unacked inbound + acks it (second call is empty)', async () => {
-    await writeFile(umbrellaInboxFile('loop', 'telegram'), inboxRow('1', 'hello from phone'), 'utf8');
+    await writeFile(
+      umbrellaInboxFile('loop', 'telegram'),
+      inboxRow('1', 'hello from phone'),
+      'utf8',
+    );
     const first = await drainUmbrellaInbox(SESSION, CWD);
     expect(first).toContain('hello from phone');
     // Ack-before-return ⇒ the same message is not re-drained.
@@ -70,7 +74,11 @@ describe('drainUmbrellaInbox', () => {
   it('drains only the new message on a later call (incremental)', async () => {
     await writeFile(umbrellaInboxFile('loop', 'telegram'), inboxRow('1', 'first'), 'utf8');
     expect(await drainUmbrellaInbox(SESSION, CWD)).toContain('first');
-    await writeFile(umbrellaInboxFile('loop', 'telegram'), inboxRow('1', 'first') + inboxRow('2', 'second'), 'utf8');
+    await writeFile(
+      umbrellaInboxFile('loop', 'telegram'),
+      inboxRow('1', 'first') + inboxRow('2', 'second'),
+      'utf8',
+    );
     const out = await drainUmbrellaInbox(SESSION, CWD);
     expect(out).toContain('second');
     expect(out).not.toContain('first');

@@ -397,7 +397,12 @@ describe('telegramAdapter — subscribeTransport (CAT.1b rich envelope)', () => 
     await fireMessage({
       chat: { id: -1003923174632, type: 'supergroup' },
       from: { id: 8075471258, username: 'L0g1cProphet', first_name: 'S' },
-      message: { message_id: 510, date: 1764649200, text: 'hello @SquidBot', message_thread_id: 15 },
+      message: {
+        message_id: 510,
+        date: 1764649200,
+        text: 'hello @SquidBot',
+        message_thread_id: 15,
+      },
     });
     expect(msgs).toHaveLength(1);
     expect(msgs[0]).toEqual({
@@ -477,10 +482,18 @@ describe('telegramAdapter — subscribeTransport (CAT.1b rich envelope)', () => 
     const sub = await a.subscribeTransport(async (m) => {
       msgs.push(m);
     });
-    await fireMessage({ chat: { id: -1, type: 'supergroup' }, from: { id: 1 }, message: { message_id: 1, text: 'a' } });
+    await fireMessage({
+      chat: { id: -1, type: 'supergroup' },
+      from: { id: 1 },
+      message: { message_id: 1, text: 'a' },
+    });
     expect(msgs).toHaveLength(1);
     await sub.unsubscribe();
-    await fireMessage({ chat: { id: -1, type: 'supergroup' }, from: { id: 1 }, message: { message_id: 2, text: 'b' } });
+    await fireMessage({
+      chat: { id: -1, type: 'supergroup' },
+      from: { id: 1 },
+      message: { message_id: 2, text: 'b' },
+    });
     expect(msgs).toHaveLength(1);
   });
 });
@@ -532,9 +545,7 @@ describe('telegramAdapter — CAT.4 inbound media (download seam)', () => {
     // getFile was called with the LARGEST photo's file_id.
     expect(mockState.getFile).toHaveBeenCalledWith('large');
     // Download hit the canonical Telegram file URL for the resolved file_path.
-    expect(downloaded).toEqual([
-      'https://api.telegram.org/file/botTOK/photos/file_9.jpg',
-    ]);
+    expect(downloaded).toEqual(['https://api.telegram.org/file/botTOK/photos/file_9.jpg']);
     expect(m.media).toHaveLength(1);
     expect(m.media?.[0]).toEqual({
       kind: 'photo',

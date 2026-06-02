@@ -58,7 +58,13 @@ function fakeTransportAdapter(): {
 
 const CONFIG: ChannelsConfig = {
   v: 1,
-  umbrellas: [{ id: 'loop', members: ['/Users/slee/projects/loop'], telegram: { chat_id: '-100', topic_id: 15 } }],
+  umbrellas: [
+    {
+      id: 'loop',
+      members: ['/Users/slee/projects/loop'],
+      telegram: { chat_id: '-100', topic_id: 15 },
+    },
+  ],
 };
 
 describe('wireInboundTransport', () => {

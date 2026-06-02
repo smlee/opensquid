@@ -92,7 +92,10 @@ describe('migrate', () => {
   ): Promise<void> {
     const dir = join(home, 'projects', uuid, 'inbox');
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `${platform}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    await writeFile(
+      join(dir, `${platform}.jsonl`),
+      rows.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    );
   }
 
   /** The canonical mirror layout: da96 + 0742 → loop (topic 15); raum → topic
@@ -203,10 +206,7 @@ describe('migrate', () => {
     const cfg = await synthChannelsConfig();
     const loop = cfg.umbrellas.find((u) => u.id === 'loop');
     const raum = cfg.umbrellas.find((u) => u.id === 'raumpilates-fe');
-    expect(loop?.members).toEqual([
-      '/Users/x/projects/loop',
-      '/Users/x/projects/opensquid',
-    ]);
+    expect(loop?.members).toEqual(['/Users/x/projects/loop', '/Users/x/projects/opensquid']);
     expect(loop?.telegram).toEqual({ chat_id: SUPERGROUP, topic_id: 15 });
     expect(raum?.telegram).toEqual({ chat_id: SUPERGROUP, topic_id: 281 });
     expect(cfg.general?.telegram?.dm_user_ids).toEqual([DM_USER]);
@@ -283,8 +283,14 @@ describe('migrate', () => {
     it('dedups mirrored rows by (platform,id), preserving received_at order', async () => {
       await seedMirrorLayout();
       // da96 + 0742 share message m2 (the mirror); each has a unique one too.
-      await seedInbox(DA96, 'telegram', [row('m1', '2026-01-01T00:00:00Z'), row('m2', '2026-01-01T00:01:00Z')]);
-      await seedInbox(ZERO742, 'telegram', [row('m2', '2026-01-01T00:01:00Z'), row('m3', '2026-01-01T00:02:00Z')]);
+      await seedInbox(DA96, 'telegram', [
+        row('m1', '2026-01-01T00:00:00Z'),
+        row('m2', '2026-01-01T00:01:00Z'),
+      ]);
+      await seedInbox(ZERO742, 'telegram', [
+        row('m2', '2026-01-01T00:01:00Z'),
+        row('m3', '2026-01-01T00:02:00Z'),
+      ]);
 
       const cfg = await synthChannelsConfig();
       const { copied } = await migrateInboxData(cfg);
@@ -308,7 +314,10 @@ describe('migrate', () => {
     it('is non-destructive — source inbox files are untouched', async () => {
       await seedMirrorLayout();
       await seedInbox(DA96, 'telegram', [row('m1', '2026-01-01T00:00:00Z')]);
-      const before = await readFile(join(home, 'projects', DA96, 'inbox', 'telegram.jsonl'), 'utf8');
+      const before = await readFile(
+        join(home, 'projects', DA96, 'inbox', 'telegram.jsonl'),
+        'utf8',
+      );
       const cfg = await synthChannelsConfig();
       await migrateInboxData(cfg);
       const after = await readFile(join(home, 'projects', DA96, 'inbox', 'telegram.jsonl'), 'utf8');
@@ -321,11 +330,25 @@ describe('migrate', () => {
       const ackDir742 = join(home, 'projects', ZERO742, 'inbox');
       await mkdir(ackDir96, { recursive: true });
       await mkdir(ackDir742, { recursive: true });
-      await writeFile(join(ackDir96, 'acked.jsonl'), JSON.stringify({ message_id: 'a1' }) + '\n' + JSON.stringify({ message_id: 'shared' }) + '\n');
-      await writeFile(join(ackDir742, 'acked.jsonl'), JSON.stringify({ message_id: 'shared' }) + '\n' + JSON.stringify({ message_id: 'a2' }) + '\n');
+      await writeFile(
+        join(ackDir96, 'acked.jsonl'),
+        JSON.stringify({ message_id: 'a1' }) +
+          '\n' +
+          JSON.stringify({ message_id: 'shared' }) +
+          '\n',
+      );
+      await writeFile(
+        join(ackDir742, 'acked.jsonl'),
+        JSON.stringify({ message_id: 'shared' }) +
+          '\n' +
+          JSON.stringify({ message_id: 'a2' }) +
+          '\n',
+      );
       const cfg = await synthChannelsConfig();
       await migrateInboxData(cfg);
-      const acked = (await readFile(join(home, 'umbrellas', 'loop', 'inbox', 'acked.jsonl'), 'utf8'))
+      const acked = (
+        await readFile(join(home, 'umbrellas', 'loop', 'inbox', 'acked.jsonl'), 'utf8')
+      )
         .split('\n')
         .filter((l) => l.trim().length > 0)
         .map((l) => parseJson<{ message_id: string }>(l).message_id);

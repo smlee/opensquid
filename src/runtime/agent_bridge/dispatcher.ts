@@ -251,7 +251,8 @@ export class ChatDispatcher {
         skip = false;
       }
       if (skip) {
-        const owner = umbrellaId !== undefined ? `umbrella=${umbrellaId}` : `project=${projectUuid}`;
+        const owner =
+          umbrellaId !== undefined ? `umbrella=${umbrellaId}` : `project=${projectUuid}`;
         this.warn(
           `[agent_bridge.dispatcher] skipping turn for session=${slug}: another session ` +
             `holds the lease (${owner})`,

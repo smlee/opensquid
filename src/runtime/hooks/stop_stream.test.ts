@@ -21,7 +21,9 @@ const SESSION = 'sess-holder';
 const CWD = '/x/loop';
 
 function fakeSend(): {
-  fn: (p: DaemonSendParams) => Promise<{ ok: boolean; platform: string; message_id: string; delivered_at: string }>;
+  fn: (
+    p: DaemonSendParams,
+  ) => Promise<{ ok: boolean; platform: string; message_id: string; delivered_at: string }>;
   calls: DaemonSendParams[];
 } {
   const calls: DaemonSendParams[] = [];
@@ -29,7 +31,12 @@ function fakeSend(): {
     calls,
     fn: vi.fn((p: DaemonSendParams) => {
       calls.push(p);
-      return Promise.resolve({ ok: true, platform: 'telegram', message_id: '99', delivered_at: 'now' });
+      return Promise.resolve({
+        ok: true,
+        platform: 'telegram',
+        message_id: '99',
+        delivered_at: 'now',
+      });
     }),
   };
 }
@@ -61,7 +68,9 @@ describe('maybeStreamOutput', () => {
     const send = fakeSend();
     const sent = await maybeStreamOutput(SESSION, CWD, 'here is my answer', send.fn);
     expect(sent).toBe(true);
-    expect(send.calls).toEqual([{ channel: 'telegram:-100', text: 'here is my answer', threadId: '15' }]);
+    expect(send.calls).toEqual([
+      { channel: 'telegram:-100', text: 'here is my answer', threadId: '15' },
+    ]);
     // Marker consumed → a second call is a no-op.
     expect(await maybeStreamOutput(SESSION, CWD, 'again', send.fn)).toBe(false);
   });

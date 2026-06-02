@@ -57,7 +57,6 @@ function extractTranscriptPath(raw: string): string | null {
   }
 }
 
-
 async function readStdin(): Promise<string> {
   let data = '';
   for await (const chunk of process.stdin) data += chunk as string;

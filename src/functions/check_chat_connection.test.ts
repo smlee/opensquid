@@ -89,9 +89,7 @@ describe('check_chat_connection', () => {
     await writeConfig({ chat_connections: { telegram: { bot_token: 'tok' } } });
     await writeChannels({
       v: 1,
-      umbrellas: [
-        { id: 'loop', members: [CWD], telegram: { chat_id: '-100', topic_id: 15 } },
-      ],
+      umbrellas: [{ id: 'loop', members: [CWD], telegram: { chat_id: '-100', topic_id: 15 } }],
     });
     await seedUmbrellaLease('loop');
 
@@ -106,9 +104,7 @@ describe('check_chat_connection', () => {
     await writeConfig({ chat_connections: { telegram: { bot_token: 'tok' } } });
     await writeChannels({
       v: 1,
-      umbrellas: [
-        { id: 'loop', members: [CWD], telegram: { chat_id: '-100', topic_id: 15 } },
-      ],
+      umbrellas: [{ id: 'loop', members: [CWD], telegram: { chat_id: '-100', topic_id: 15 } }],
     });
 
     const v = (await call()) as { content: string };

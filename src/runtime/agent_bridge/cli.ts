@@ -27,7 +27,11 @@ import { join, resolve } from 'node:path';
 
 import type { Command } from 'commander';
 
-import { GENERAL_UMBRELLA, loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
+import {
+  GENERAL_UMBRELLA,
+  loadChannelsConfig,
+  resolveUmbrellaForCwd,
+} from '../../channels/routing.js';
 import { OPENSQUID_HOME, resolveProjectUuid } from '../paths.js';
 
 import {
@@ -215,7 +219,9 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
           exit(1);
           return;
         }
-        out(`agent-bridge: running (general, umbrella=${GENERAL_UMBRELLA}, pack=${generalPackRoot})\n`);
+        out(
+          `agent-bridge: running (general, umbrella=${GENERAL_UMBRELLA}, pack=${generalPackRoot})\n`,
+        );
         await waitForever();
         return;
       }

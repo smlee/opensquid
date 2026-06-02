@@ -72,7 +72,9 @@ export function registerChatDaemon(program: Command): Command {
     .action(async () => {
       const res = await stopDaemon();
       process.stdout.write(
-        res.stopped ? `[chat-daemon] stopped (pid ${String(res.pid)})\n` : '[chat-daemon] not running\n',
+        res.stopped
+          ? `[chat-daemon] stopped (pid ${String(res.pid)})\n`
+          : '[chat-daemon] not running\n',
       );
     });
 
@@ -87,7 +89,9 @@ export function registerChatDaemon(program: Command): Command {
         return;
       }
       if (s.stale_pid !== undefined) {
-        process.stdout.write(`[chat-daemon] not running (stale pidfile points at ${String(s.stale_pid)})\n`);
+        process.stdout.write(
+          `[chat-daemon] not running (stale pidfile points at ${String(s.stale_pid)})\n`,
+        );
         process.exitCode = 1;
         return;
       }
