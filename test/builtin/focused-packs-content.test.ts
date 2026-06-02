@@ -144,7 +144,11 @@ describe('DOG.4 — focused + composite pack content (seed_lessons + verify_gate
       const pack = await loadPack(resolve('packs/builtin', name));
       for (const seed of pack.seedLessons ?? []) {
         expect(seed.title.length, `${name}: empty seed title`).toBeGreaterThan(0);
-        expect(seed.body.length, `${name}: empty seed body`).toBeGreaterThan(20);
+        if (seed.body !== undefined) {
+          expect(seed.body.length, `${name}: empty seed body`).toBeGreaterThan(20);
+        } else {
+          expect(seed.body_path, `${name}: seed has neither body nor body_path`).toBeTruthy();
+        }
       }
     }
   });

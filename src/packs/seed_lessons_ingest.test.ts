@@ -7,6 +7,10 @@
  * (one failure does not block subsequent seeds), engine-down fallback
  * (failures collected, never thrown), external_id determinism.
  */
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { ingestSeedLessons, makeExternalId } from './seed_lessons_ingest.js';
@@ -18,6 +22,9 @@ interface FakeEngine {
   engine: EngineClient;
   spy: ReturnType<typeof vi.fn<(p: LessonCreateParams) => Promise<LessonCreateResult>>>;
 }
+
+// Inline-body seeds never read packDir; a constant suffices for those calls.
+const PACK_DIR = join(tmpdir(), 'seed-ingest-inline');
 
 function fakeEngine(impl: (p: LessonCreateParams) => Promise<LessonCreateResult>): FakeEngine {
   const spy = vi.fn(impl);
@@ -49,14 +56,14 @@ function lessonResult(overrides: Partial<LessonCreateResult> = {}): LessonCreate
 describe('DOG.3 — ingestSeedLessons', () => {
   it('returns zero-counts when seeds is empty + makes NO engine call', async () => {
     const f = fakeEngine(() => Promise.resolve(lessonResult()));
-    const r = await ingestSeedLessons('p', '0.1.0', [], f.engine);
+    const r = await ingestSeedLessons('p', '0.1.0', [], f.engine, PACK_DIR);
     expect(r).toEqual({ ingested: 0, skipped: 0, failed: [] });
     expect(f.spy).not.toHaveBeenCalled();
   });
 
   it('invokes engine.lessonCreate with pack-authored shape (authored_by + pack_id + external_id + seed_as_promoted)', async () => {
     const f = fakeEngine(() => Promise.resolve(lessonResult()));
-    await ingestSeedLessons('mypack', '0.2.3', [seed()], f.engine);
+    await ingestSeedLessons('mypack', '0.2.3', [seed()], f.engine, PACK_DIR);
     expect(f.spy).toHaveBeenCalledTimes(1);
     const arg = f.spy.mock.calls[0]![0];
     expect(arg.description).toBe('use Server Components by default');
@@ -69,14 +76,14 @@ describe('DOG.3 — ingestSeedLessons', () => {
 
   it('engine `updated: false` increments ingested', async () => {
     const f = fakeEngine(() => Promise.resolve(lessonResult({ updated: false })));
-    const r = await ingestSeedLessons('p', '0.1.0', [seed()], f.engine);
+    const r = await ingestSeedLessons('p', '0.1.0', [seed()], f.engine, PACK_DIR);
     expect(r.ingested).toBe(1);
     expect(r.skipped).toBe(0);
   });
 
   it('engine `updated: true` increments skipped (UPSERT hit = idempotent re-ingest)', async () => {
     const f = fakeEngine(() => Promise.resolve(lessonResult({ updated: true })));
-    const r = await ingestSeedLessons('p', '0.1.0', [seed()], f.engine);
+    const r = await ingestSeedLessons('p', '0.1.0', [seed()], f.engine, PACK_DIR);
     expect(r.ingested).toBe(0);
     expect(r.skipped).toBe(1);
   });
@@ -93,6 +100,7 @@ describe('DOG.3 — ingestSeedLessons', () => {
       '0.1.0',
       [seed({ title: 'a' }), seed({ title: 'b' }), seed({ title: 'c' })],
       f.engine,
+      PACK_DIR,
     );
     expect(r.ingested).toBe(2);
     expect(r.failed).toHaveLength(1);
@@ -107,6 +115,7 @@ describe('DOG.3 — ingestSeedLessons', () => {
       '0.1.0',
       [seed({ title: 'a' }), seed({ title: 'b' })],
       f.engine,
+      PACK_DIR,
     );
     expect(r.ingested).toBe(0);
     expect(r.skipped).toBe(0);
@@ -137,9 +146,46 @@ describe('DOG.3 — ingestSeedLessons', () => {
       '0.1.0',
       [seed({ title: 'a' }), seed({ title: 'b' }), seed({ title: 'c' })],
       f.engine,
+      PACK_DIR,
     );
     expect(r.ingested).toBe(2);
     expect(r.skipped).toBe(1);
     expect(r.failed).toEqual([]);
+  });
+  it('body_path: reads the lesson body from a pack-relative file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'seed-bp-'));
+    await mkdir(join(dir, 'lessons', 'x'), { recursive: true });
+    await writeFile(
+      join(dir, 'lessons', 'x', 'lesson.md'),
+      'BODY FROM FILE — long enough.\n',
+      'utf8',
+    );
+    const f = fakeEngine(() => Promise.resolve(lessonResult()));
+    const r = await ingestSeedLessons(
+      'p',
+      '0.1.0',
+      [{ title: 't', body_path: 'lessons/x/lesson.md', scope: 'user', tags: [] }],
+      f.engine,
+      dir,
+    );
+    expect(r.ingested).toBe(1);
+    expect(f.spy.mock.calls[0]![0].body).toBe('BODY FROM FILE — long enough.');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('body_path: a traversal escape is isolated as a per-seed failure (not thrown)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'seed-bp-'));
+    const f = fakeEngine(() => Promise.resolve(lessonResult()));
+    const r = await ingestSeedLessons(
+      'p',
+      '0.1.0',
+      [{ title: 't', body_path: '../escape.md', scope: 'user', tags: [] }],
+      f.engine,
+      dir,
+    );
+    expect(r.ingested).toBe(0);
+    expect(r.failed).toHaveLength(1);
+    expect(r.failed[0]?.error).toMatch(/escapes the pack dir/);
+    await rm(dir, { recursive: true, force: true });
   });
 });

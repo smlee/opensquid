@@ -712,6 +712,30 @@ describe('DOG.3: seed_lessons + verify_gates schema', () => {
     expect(r.success).toBe(false);
   });
 
+  it('accepts a seed_lessons entry with body_path instead of inline body', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      seed_lessons: [{ title: 't', body_path: 'lessons/x/lesson.md' }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects a seed_lessons entry with BOTH body and body_path (XOR refine)', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      seed_lessons: [{ title: 't', body: 'b', body_path: 'lessons/x/lesson.md' }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects a seed_lessons entry with NEITHER body nor body_path (XOR refine)', () => {
+    const r = Manifest.safeParse({
+      ...minimal(),
+      seed_lessons: [{ title: 't' }],
+    });
+    expect(r.success).toBe(false);
+  });
+
   it('accepts a well-formed verify_gates entry with all fields', () => {
     const r = Manifest.safeParse({
       ...minimal(),

@@ -130,7 +130,13 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
   // fails for engine-availability reasons.
   if (deps?.engine !== undefined && manifest.seed_lessons.length > 0) {
     const engine = deps.engine;
-    void ingestSeedLessons(manifest.name, manifest.version, manifest.seed_lessons, engine).then(
+    void ingestSeedLessons(
+      manifest.name,
+      manifest.version,
+      manifest.seed_lessons,
+      engine,
+      dir,
+    ).then(
       (r) => {
         if (r.failed.length > 0) {
           console.warn(

@@ -378,12 +378,22 @@ export type PersonalRevision = z.infer<typeof PersonalRevision>;
 export const SeedLesson = z
   .object({
     title: z.string().min(1).max(200),
-    body: z.string().min(1),
+    // Exactly one of `body` (inline prose) or `body_path` (a file pointer
+    // relative to the pack dir, e.g. `lessons/<id>/lesson.md`). body_path keeps
+    // the manifest SMALL (structure only) with the lesson prose living in its
+    // own file (content), per the Simplicity Principle ("yaml defines
+    // structure, files are content"). The ingest resolves body_path against the
+    // pack directory and is path-traversal-confined to it.
+    body: z.string().min(1).optional(),
+    body_path: z.string().min(1).optional(),
     scope: z.enum(['user', 'global']).default('user'),
     tags: z.array(z.string().min(1)).default([]),
     source: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .refine((s) => (s.body === undefined) !== (s.body_path === undefined), {
+    message: 'SeedLesson requires exactly one of `body` (inline) or `body_path` (file pointer)',
+  });
 export type SeedLesson = z.infer<typeof SeedLesson>;
 
 export const VerifyGateWhen = z
