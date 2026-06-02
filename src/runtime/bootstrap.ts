@@ -78,6 +78,7 @@ import { SessionToolHistory } from '../functions/session_tool_history.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
+import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { discoverActivePacks } from '../packs/discovery.js';
@@ -134,6 +135,15 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // umbrella-routing-drift) as an inject_context. No backend dep → sync
   // registration here.
   registerCheckChatConnectionFunction(r);
+  // T-CHAT-AS-TERMINAL CAT.7 — `ensure_umbrella_topic` is the SessionStart
+  // topic-assurance ACTION (sanctioned by the remote-terminal override). On
+  // `session_start`, IF a chat daemon is live and the session's umbrella owns a
+  // telegram chat_id but ZERO topic, it creates exactly one topic via the
+  // daemon `create_topic` RPC and writes topic_id back into channels.json. Once
+  // set, it's a no-op — the umbrella↔topic ≤1:1 invariant holds by
+  // construction. Fail-quiet (never blocks session start). Default seams dial
+  // the real daemon socket; tests inject stubs via a separate registry.
+  registerEnsureUmbrellaTopicFunction(r);
   // G.5 — text-pattern matcher + per-turn tool-call ledger reader. Both are
   // pure (no I/O for text_pattern_match; one read for session_tool_history)
   // so they ship pre-registered as FunctionDef objects rather than via a

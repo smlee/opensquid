@@ -33,3 +33,14 @@ rules:
     kind: track_check
     process:
       - call: check_chat_connection
+  # CAT.7 — SessionStart topic assurance (umbrella-level ≤1 topic). Unlike the
+  # report-only rule above, this one takes an ACTION (sanctioned by the
+  # remote-terminal override): if a chat daemon is live and the session's
+  # umbrella owns a telegram chat_id but ZERO topic, it creates exactly one
+  # topic and writes topic_id back into channels.json. Idempotent: once set
+  # it's a no-op. Always returns null (pure side effect — no inject_context),
+  # so it never short-circuits the rule above and fail-quiets on any error.
+  - id: ensure-umbrella-topic
+    kind: track_check
+    process:
+      - call: ensure_umbrella_topic
