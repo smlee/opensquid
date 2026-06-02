@@ -26,6 +26,7 @@ import type { z } from 'zod';
 import type { ModelsConfig } from '../packs/schemas/models.js';
 import { type Result, err } from '../runtime/result.js';
 import type { Event } from '../runtime/types.js';
+import type { Fsm } from '../runtime/fsm.js';
 
 // ---------------------------------------------------------------------------
 // EvalCtx — the per-call context handed to every primitive
@@ -49,6 +50,13 @@ export interface EvalCtx {
    * no `models.yaml` and for non-pack call sites (legacy daemon).
    */
   packModels?: ModelsConfig;
+  /**
+   * Slice A3b: the calling pack's declared lifecycle FSM (`Pack.fsm`), threaded
+   * like `packModels` so `read_fsm_state` / `advance_fsm` can read + advance the
+   * machine without re-loading the pack. `undefined` when the pack ships no
+   * `fsm.yaml` (those primitives then no-op).
+   */
+  packFsm?: Fsm;
 }
 
 // ---------------------------------------------------------------------------

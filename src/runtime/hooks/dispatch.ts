@@ -397,6 +397,9 @@ export async function dispatchEvent(
           // that ship no `models.yaml` (`exactOptionalPropertyTypes` rejects
           // explicit `undefined` on an optional slot).
           ...(pack.models !== undefined ? { packModels: pack.models } : {}),
+          // Slice A3b: thread the pack's declared lifecycle FSM so the
+          // read_fsm_state / advance_fsm primitives can read + advance it.
+          ...(pack.fsm !== undefined ? { packFsm: pack.fsm } : {}),
         };
         const result = await evaluateProcess(rule.process, ctx, registry);
 

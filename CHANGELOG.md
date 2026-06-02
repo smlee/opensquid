@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.286] - 2026-06-02
+
+### Added (T-PACK-FSM-STANDARDIZATION slice A3b — `read_fsm_state` / `advance_fsm` primitives)
+
+A pack's declared lifecycle FSM (`Pack.fsm`) is now LIVE from its own rules. The
+dispatcher threads `pack.fsm` as `ctx.packFsm` (mirroring `packModels`), and two
+primitives use it: `read_fsm_state()` → the current state (bind via `as`, gate
+via `if: st == "..."`); `advance_fsm({ event })` → fires an event, advancing
+ONLY along a declared transition (the total `step`; `when` guards evaluated
+through the expression engine over current bindings) and persisting. Both no-op
+(null) when the pack ships no `fsm.yaml`. This closes the loop: a pack declares
+an FSM (A2), persists state (A3), and now drives + gates on it (A3b) — with the
+generic interpreter untouched.
+
+- `src/functions/fsm.ts` (NEW) — registerFsmFunctions.
+- `src/functions/registry.ts` — `EvalCtx.packFsm`; `src/runtime/hooks/dispatch.ts` — thread it; `src/runtime/bootstrap.ts` — register.
+
 ## [0.5.285] - 2026-06-02
 
 ### Added (T-PACK-FSM-STANDARDIZATION slice A3 — per-session pack-FSM state store)

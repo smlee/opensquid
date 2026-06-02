@@ -76,6 +76,7 @@ import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.
 import { FunctionRegistry } from '../functions/registry.js';
 import { SessionToolHistory } from '../functions/session_tool_history.js';
 import { registerStateFunctions } from '../functions/state.js';
+import { registerFsmFunctions } from '../functions/fsm.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
 import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
@@ -114,6 +115,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerStateFunctions(r);
+  registerFsmFunctions(r);
   registerVerdictFunctions(r);
   registerLlmFunctions(r);
   // Phase 4: `check_destination` is the destination-side anti-drift
