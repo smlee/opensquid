@@ -26,26 +26,34 @@ import { startInboundWatcher } from '../../src/runtime/chat/inbound_watch.js';
 const HOOK_BIN = join(process.cwd(), 'dist/runtime/hooks/user-prompt-submit.js');
 
 let home: string;
-const PROJECT_UUID = 'l3-test-uuid';
+// CAT.1c: the inbox + lease are keyed by UMBRELLA. The UPS hook resolves the
+// active umbrella from cwd via channels.json (`members` prefix), so the
+// fixture wires a channels.json whose member prefix matches process.cwd().
+const UMBRELLA = 'l3-test-umbrella';
 const SESSION_ID = 'sess-l3-e2e';
 let priorHome: string | undefined;
 let priorSession: string | undefined;
-let priorProjectUuid: string | undefined;
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
   priorSession = process.env.CLAUDE_SESSION_ID;
-  priorProjectUuid = process.env.OPENSQUID_PROJECT_UUID;
 
   home = await mkdtemp(join(tmpdir(), 'opensquid-l3-'));
   process.env.OPENSQUID_HOME = home;
   process.env.CLAUDE_SESSION_ID = SESSION_ID;
-  process.env.OPENSQUID_PROJECT_UUID = PROJECT_UUID;
 
-  const leaseDir = join(home, 'projects', PROJECT_UUID);
-  await mkdir(leaseDir, { recursive: true });
+  // channels.json: claim the current cwd as a member of UMBRELLA so the hook
+  // (and the watcher) route this session's inbox to the umbrella.
   await writeFile(
-    join(leaseDir, 'live-session.lease'),
+    join(home, 'channels.json'),
+    JSON.stringify({ v: 1, umbrellas: [{ id: UMBRELLA, members: [process.cwd()] }] }),
+    'utf8',
+  );
+
+  const umbrellaDir = join(home, 'umbrellas', UMBRELLA);
+  await mkdir(umbrellaDir, { recursive: true });
+  await writeFile(
+    join(umbrellaDir, 'live-session.lease'),
     JSON.stringify({
       session_id: SESSION_ID,
       pid: process.pid,
@@ -53,7 +61,7 @@ beforeEach(async () => {
     }),
     'utf8',
   );
-  await mkdir(join(leaseDir, 'inbox'), { recursive: true });
+  await mkdir(join(umbrellaDir, 'inbox'), { recursive: true });
 });
 
 afterEach(async () => {
@@ -61,8 +69,6 @@ afterEach(async () => {
   else process.env.OPENSQUID_HOME = priorHome;
   if (priorSession === undefined) delete process.env.CLAUDE_SESSION_ID;
   else process.env.CLAUDE_SESSION_ID = priorSession;
-  if (priorProjectUuid === undefined) delete process.env.OPENSQUID_PROJECT_UUID;
-  else process.env.OPENSQUID_PROJECT_UUID = priorProjectUuid;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -75,7 +81,7 @@ interface HookResult {
 async function runHook(stdinPayload: string): Promise<HookResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('node', [HOOK_BIN], {
-      env: { ...process.env, OPENSQUID_HOME: home, OPENSQUID_PROJECT_UUID: PROJECT_UUID },
+      env: { ...process.env, OPENSQUID_HOME: home },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let out = '';
@@ -99,7 +105,7 @@ describe('T-L3-LOOP — inbound E2E loop closure', () => {
   it.skipIf(!existsSync(HOOK_BIN))(
     'inbound row → dispatch → UPS hook → additionalContext envelope + ack write + dedup',
     async () => {
-      const inboxPath = join(home, 'projects', PROJECT_UUID, 'inbox', 'telegram.jsonl');
+      const inboxPath = join(home, 'umbrellas', UMBRELLA, 'inbox', 'telegram.jsonl');
 
       const row = {
         v: 1,
@@ -123,7 +129,7 @@ describe('T-L3-LOOP — inbound E2E loop closure', () => {
 
       // Watcher dispatched (no crash). LL.7 split: watcher fires events;
       // UPS hook owns the ack ledger. No ack written yet.
-      const ackedBeforeFirst = await readAcked(PROJECT_UUID);
+      const ackedBeforeFirst = await readAcked(UMBRELLA);
       expect(ackedBeforeFirst).toHaveLength(0);
 
       // First UPS fire — should inject envelope + ack the row
@@ -143,7 +149,7 @@ describe('T-L3-LOOP — inbound E2E loop closure', () => {
       expect(ac1).toContain('alice (telegram): hello from telegram');
 
       // Ack ledger now has exactly one matching row
-      const ackedAfterFirst = await readAcked(PROJECT_UUID);
+      const ackedAfterFirst = await readAcked(UMBRELLA);
       expect(ackedAfterFirst).toHaveLength(1);
       expect(ackedAfterFirst[0]).toMatchObject({
         v: 1,
@@ -160,7 +166,7 @@ describe('T-L3-LOOP — inbound E2E loop closure', () => {
       ) as { hookSpecificOutput?: { additionalContext?: string } };
       const ac2 = parsedSecond.hookSpecificOutput?.additionalContext ?? '';
       expect(ac2).not.toContain('📨 Inbound messages');
-      const ackedAfterSecond = await readAcked(PROJECT_UUID);
+      const ackedAfterSecond = await readAcked(UMBRELLA);
       expect(ackedAfterSecond).toHaveLength(1);
     },
     20_000,

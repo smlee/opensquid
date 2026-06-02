@@ -22,6 +22,7 @@ import {
 } from './live_session_lease.js';
 
 const UUID = 'proj-del';
+const LEASE = (): string => liveSessionLease(UUID);
 let home: string;
 let savedHome: string | undefined;
 
@@ -39,21 +40,21 @@ afterEach(async () => {
 describe('live-session lease', () => {
   it('writes (creating the dir) and round-trips a lease', async () => {
     const now = new Date('2026-05-27T12:00:00Z');
-    await writeLease(UUID, 'sess-1', now);
-    const lease = await readLease(UUID);
+    await writeLease(LEASE(), 'sess-1', now);
+    const lease = await readLease(LEASE());
     expect(lease?.session_id).toBe('sess-1');
     expect(lease?.pid).toBe(process.pid);
     expect(lease?.refreshed_at).toBe(now.toISOString());
   });
 
   it('reads null for an absent lease', async () => {
-    expect(await readLease('no-such-uuid')).toBeNull();
+    expect(await readLease(liveSessionLease('no-such-uuid'))).toBeNull();
   });
 
   it('reads null for a malformed lease file', async () => {
-    await writeLease(UUID, 'sess-1'); // creates the dir
+    await writeLease(LEASE(), 'sess-1'); // creates the dir
     await writeFile(liveSessionLease(UUID), 'not json', 'utf8');
-    expect(await readLease(UUID)).toBeNull();
+    expect(await readLease(LEASE())).toBeNull();
   });
 
   it('isLeaseFresh: now → fresh, beyond STALE_MS → stale, null → not fresh', () => {
@@ -75,19 +76,19 @@ describe('live-session lease', () => {
 
   it('refreshLease advances refreshed_at while keeping session_id', async () => {
     const t0 = new Date('2026-05-27T12:00:00Z');
-    await writeLease(UUID, 'sess-keep', t0);
+    await writeLease(LEASE(), 'sess-keep', t0);
     const t1 = new Date('2026-05-27T12:00:45Z');
-    await refreshLease(UUID, t1);
-    const lease = await readLease(UUID);
+    await refreshLease(LEASE(), t1);
+    const lease = await readLease(LEASE());
     expect(lease?.session_id).toBe('sess-keep');
     expect(lease?.refreshed_at).toBe(t1.toISOString());
   });
 
   it('removeLease deletes the lease and is a no-op when absent', async () => {
-    await writeLease(UUID, 'sess-1');
-    await removeLease(UUID);
-    expect(await readLease(UUID)).toBeNull();
-    await removeLease(UUID); // no throw on already-gone
+    await writeLease(LEASE(), 'sess-1');
+    await removeLease(LEASE());
+    expect(await readLease(LEASE())).toBeNull();
+    await removeLease(LEASE()); // no throw on already-gone
   });
 
   it('resolveSessionId prefers CLAUDE_SESSION_ID, falls back to pid', () => {

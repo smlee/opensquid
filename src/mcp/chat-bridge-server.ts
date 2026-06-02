@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * `opensquid-chat-bridge-mcp` — MCP server bridging Claude Code sessions
- * to the running chat-daemon's per-project Telegram routing.
+ * to the running chat-daemon's UMBRELLA Telegram routing.
  *
  * Why this is a SEPARATE MCP server from `opensquid-mcp`:
  *   `src/mcp/server.ts` is intentionally read-only by design (per its
@@ -16,20 +16,23 @@
  *
  * Tools (2):
  *   - `chat_poll_inbox` — read-only. Returns inbound messages from the
- *     active project's `~/.opensquid/projects/<uuid>/inbox/<platform>.jsonl`
+ *     active UMBRELLA's `~/.opensquid/umbrellas/<id>/inbox/<platform>.jsonl`
  *     since an optional `since` ISO-8601 timestamp. Caller tracks the
  *     cursor; server is stateless. Honors per-platform filter.
  *
  *   - `chat_send` — explicit mutation. Connects to the chat-daemon's
  *     UDS RPC server at `~/.opensquid/chat-daemon.sock` and calls its
  *     `send` JSON-RPC method. Accepts the `project:<platform>` shorthand
- *     that resolves to the active project's `report_channel` +
- *     `report_topic_id` from `chat-routing.json`. Daemon must already
- *     be running (this server does NOT spawn it).
+ *     that resolves to the active umbrella's outbound Telegram target via
+ *     `channels.json`. Daemon must already be running (this server does
+ *     NOT spawn it).
  *
- * Active-project resolution: walk up from `process.cwd()` looking for
- * `.opensquid/project.json` (legacy convention). Falls back to
- * `OPENSQUID_PROJECT_UUID` env override.
+ * Active-umbrella resolution (T-CHAT-AS-TERMINAL CAT.1c): resolve the cwd
+ * (`CLAUDE_PROJECT_DIR` env, else `process.cwd()`) to its umbrella via
+ * `loadChannelsConfig()` + `resolveUmbrellaForCwd` (longest-prefix over
+ * `members`). `channels.json` is synthesized at the CAT.1d cutover, so an
+ * absent config / unresolved umbrella is treated as "no inbox" (empty,
+ * fail-quiet), never an error.
  *
  * Transport: stdio. stdout reserved for MCP JSON-RPC; diagnostics to
  * stderr only. NO `console.log` in this binary or its imports.
@@ -50,8 +53,13 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
+import {
+  GENERAL_UMBRELLA,
+  loadChannelsConfig,
+  resolveOutbound,
+  resolveUmbrellaForCwd,
+} from '../channels/routing.js';
 import { type InboxRow } from '../runtime/chat/inbox.js';
-import { resolveProjectUuid } from '../runtime/paths.js';
 
 import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscriber.js';
 
@@ -72,84 +80,25 @@ function daemonSocketPath(): string {
   return join(resolveDataRoot(), 'chat-daemon.sock');
 }
 
-function projectInboxDir(projectUuid: string): string {
-  return join(resolveDataRoot(), 'projects', projectUuid, 'inbox');
+function umbrellaInboxDir(umbrellaId: string): string {
+  return join(resolveDataRoot(), 'umbrellas', umbrellaId, 'inbox');
 }
 
-function projectChatRoutingPath(projectUuid: string): string {
-  return join(resolveDataRoot(), 'projects', projectUuid, 'chat-routing.json');
-}
-
-function collisionsPath(): string {
-  return join(resolveDataRoot(), 'collisions.jsonl');
-}
-
-// ---------------------------------------------------------------------------
-// TPS.5 — collision surface read path. Inlined here (not imported from
-// src.legacy/chat/daemon/collisions.ts) for the same type-poison reason
-// the routing reader is inlined in this file: src.legacy is excluded
-// from tsconfig and the pack/parse.ts transitive dep would break the
-// strict-flag whole-tree typecheck.
-// ---------------------------------------------------------------------------
-
-interface CollisionEntry {
-  v: 1;
-  occurred_at: string;
-  channel_key: string;
-  claimants: string[];
-  winner_uuid: string;
-  notified_via_telegram: boolean;
-}
-
-async function loadActiveCollisions(
-  activeUuid: string,
-  maxAgeMinutes = 24 * 60,
-): Promise<CollisionEntry[]> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(collisionsPath(), 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    return [];
-  }
-  const cutoff = Date.now() - maxAgeMinutes * 60 * 1000;
-  const out: CollisionEntry[] = [];
-  for (const line of raw.split('\n')) {
-    if (line.length === 0) continue;
-    let parsed: CollisionEntry;
-    try {
-      parsed = JSON.parse(line) as CollisionEntry;
-    } catch {
-      continue;
-    }
-    if (parsed.v !== 1) continue;
-    if (!Array.isArray(parsed.claimants)) continue;
-    if (!parsed.claimants.includes(activeUuid)) continue;
-    const t = Date.parse(parsed.occurred_at);
-    if (!Number.isFinite(t) || t < cutoff) continue;
-    out.push(parsed);
-  }
-  return out;
-}
-
-function formatCollisionWarnings(entries: CollisionEntry[]): string {
-  if (entries.length === 0) return '';
-  const lines = [
-    `⚠️  ${entries.length} unresolved routing collision${entries.length === 1 ? '' : 's'} affecting this workspace:`,
-  ];
-  for (const e of entries) {
-    lines.push(
-      `   - ${e.channel_key} claimed by ${e.claimants.join(' + ')}; winner=${e.winner_uuid}`,
-    );
-  }
-  lines.push(
-    '   Fix: edit one of the chat-routing.json files under ~/.opensquid/projects/ so the claim is unambiguous.',
-  );
-  return lines.join('\n') + '\n\n';
+/**
+ * Resolve the active umbrella from the session's cwd. Prefers
+ * `CLAUDE_PROJECT_DIR` (the dir Claude Code launched in) over `process.cwd()`
+ * (the MCP server's own cwd, which may differ). Absent channels.json or an
+ * unresolved cwd → null (no umbrella bound; the caller treats it as no inbox).
+ */
+async function resolveActiveUmbrella(): Promise<string | null> {
+  const cwd = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  const cfg = await loadChannelsConfig();
+  if (cfg === null) return null;
+  return resolveUmbrellaForCwd(cfg, cwd);
 }
 
 // ---------------------------------------------------------------------------
-// chat_poll_inbox — filesystem read of project inbox JSONL.
+// chat_poll_inbox — filesystem read of the umbrella inbox JSONL.
 // ---------------------------------------------------------------------------
 
 // LL.1 (2026-05-30) — `InboxMessage` inline shape lifted to the canonical
@@ -206,12 +155,12 @@ function mergeAndSortInboxMessages(
 }
 
 async function pollInbox(opts: {
-  projectUuid: string;
+  umbrellaId: string;
   platform?: 'telegram' | 'discord' | 'slack';
   limit: number;
   since?: string;
 }): Promise<{ messages: InboxMessage[]; scanned_platforms: string[] }> {
-  const dir = projectInboxDir(opts.projectUuid);
+  const dir = umbrellaInboxDir(opts.umbrellaId);
   const platforms: ('telegram' | 'discord' | 'slack')[] = opts.platform
     ? [opts.platform]
     : ['telegram', 'discord', 'slack'];
@@ -361,46 +310,30 @@ async function daemonSend(params: {
 }
 
 // ---------------------------------------------------------------------------
-// `project:<platform>` shorthand resolution. Reads the active project's
-// chat-routing.json and returns the resolved channel + thread_id.
+// `project:<platform>` shorthand resolution (CAT.1c). Resolves the active
+// umbrella's outbound Telegram target from `channels.json` (REPLACING the
+// per-project chat-routing.json read). The `project:` prefix is kept as the
+// stable agent-facing shorthand — it now means "this session's umbrella".
+// Only telegram has a structured outbound target in channels.json today;
+// discord/slack have no umbrella-level binding yet → null (caller errors).
 // ---------------------------------------------------------------------------
 
-interface TelegramRouting {
-  report_channel?: string;
-  report_topic_id?: number;
-}
-interface ProjectChatRouting {
-  telegram?: TelegramRouting;
-  discord?: { report_channel?: string };
-  slack?: { report_channel?: string };
-}
-
 async function resolveProjectChannel(
-  projectUuid: string,
   platform: 'telegram' | 'discord' | 'slack',
 ): Promise<{ channel: string; threadId?: string } | null> {
-  try {
-    const raw = await fs.readFile(projectChatRoutingPath(projectUuid), 'utf8');
-    const cfg = JSON.parse(raw) as ProjectChatRouting;
-    if (platform === 'telegram') {
-      const channel = cfg.telegram?.report_channel;
-      if (!channel) return null;
-      const threadId =
-        cfg.telegram?.report_topic_id !== undefined
-          ? String(cfg.telegram.report_topic_id)
-          : undefined;
-      return threadId === undefined ? { channel } : { channel, threadId };
-    }
-    if (platform === 'discord' && cfg.discord?.report_channel) {
-      return { channel: cfg.discord.report_channel };
-    }
-    if (platform === 'slack' && cfg.slack?.report_channel) {
-      return { channel: cfg.slack.report_channel };
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  if (platform !== 'telegram') return null;
+  const cfg = await loadChannelsConfig();
+  if (cfg === null) return null;
+  const cwd = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  const umbrella = resolveUmbrellaForCwd(cfg, cwd) ?? GENERAL_UMBRELLA;
+  const tg = resolveOutbound(cfg, umbrella);
+  if (tg === null) return null;
+  // The daemon's `send` RPC / gateway parseChannel require the
+  // `<platform>:<native_id>` wire form — bare `chat_id` has no colon and is
+  // rejected as malformed. Prefix the platform.
+  const channel = `telegram:${tg.chat_id}`;
+  const threadId = tg.topic_id !== undefined ? String(tg.topic_id) : undefined;
+  return threadId === undefined ? { channel } : { channel, threadId };
 }
 
 // ---------------------------------------------------------------------------
@@ -445,17 +378,17 @@ const ToolHandlers = {
   chat_poll_inbox: {
     schema: PollInboxSchema,
     handle: async (args: z.infer<typeof PollInboxSchema>): Promise<string> => {
-      const uuid = await resolveProjectUuid({ cwd: process.cwd(), env: process.env });
-      if (!uuid) {
-        return 'No active project — cwd has no .opensquid/project.json. Set OPENSQUID_PROJECT_UUID or `cd` into a project directory.';
+      const umbrellaId = await resolveActiveUmbrella();
+      if (umbrellaId === null) {
+        return 'No active umbrella — cwd has no umbrella in ~/.opensquid/channels.json. Add a matching `members` prefix or `cd` into a member directory.';
       }
       const arg: {
-        projectUuid: string;
+        umbrellaId: string;
         limit: number;
         platform?: 'telegram' | 'discord' | 'slack';
         since?: string;
       } = {
-        projectUuid: uuid,
+        umbrellaId,
         limit: args.limit,
       };
       if (args.platform) arg.platform = args.platform;
@@ -467,26 +400,22 @@ const ToolHandlers = {
       // De-dupe by message_id (the platform-native id is stable
       // across both sources). Filter by `since` AFTER merge; apply
       // limit as the last step.
-      const [{ messages: fsMessages, scanned_platforms }, collisions] = await Promise.all([
-        pollInbox(arg),
-        loadActiveCollisions(uuid),
-      ]);
+      const { messages: fsMessages, scanned_platforms } = await pollInbox(arg);
       const bufferMessages = activeSubscriber
         ? mergeSubscriberBuffer(activeSubscriber, args.platform)
         : [];
       const merged = mergeAndSortInboxMessages(fsMessages, bufferMessages);
       const filtered = args.since ? merged.filter((m) => m.enqueued_at > args.since!) : merged;
       const limited = filtered.slice(-args.limit);
-      const warningPrefix = formatCollisionWarnings(collisions);
       if (limited.length === 0) {
-        return `${warningPrefix}No new messages in project ${uuid} (scanned: ${scanned_platforms.join(', ') || '<none>'}).`;
+        return `No new messages in umbrella ${umbrellaId} (scanned: ${scanned_platforms.join(', ') || '<none>'}).`;
       }
       const cursor = limited[limited.length - 1]?.enqueued_at ?? '';
       const lines = limited.map(
         (m) =>
           `[${m.enqueued_at}] ${m.platform}/${m.channel}${m.thread_id ? ':' + m.thread_id : ''} <${m.sender}> ${m.text}`,
       );
-      return `${warningPrefix}${lines.join('\n')}\n\n--\nProject: ${uuid}\nScanned: ${scanned_platforms.join(', ')}\nReturned: ${limited.length}\nNext cursor (pass as 'since'): ${cursor}`;
+      return `${lines.join('\n')}\n\n--\nUmbrella: ${umbrellaId}\nScanned: ${scanned_platforms.join(', ')}\nReturned: ${limited.length}\nNext cursor (pass as 'since'): ${cursor}`;
     },
   },
   chat_send: {
@@ -505,16 +434,16 @@ const ToolHandlers = {
           throw new Error(`unknown project shorthand: project:${platformRaw}`);
         }
         const platformName: 'telegram' | 'discord' | 'slack' = platformRaw;
-        const uuid = await resolveProjectUuid({ cwd: process.cwd(), env: process.env });
-        if (!uuid) {
+        const umbrellaId = await resolveActiveUmbrella();
+        if (umbrellaId === null) {
           throw new Error(
-            'cannot resolve project:<platform> — no active project (cwd has no .opensquid/project.json)',
+            'cannot resolve project:<platform> — no active umbrella (cwd has no umbrella in channels.json)',
           );
         }
-        const resolved = await resolveProjectChannel(uuid, platformName);
+        const resolved = await resolveProjectChannel(platformName);
         if (!resolved) {
           throw new Error(
-            `active project ${uuid} has no ${platformName} report_channel in chat-routing.json`,
+            `active umbrella ${umbrellaId} has no ${platformName} outbound target in channels.json`,
           );
         }
         channel = resolved.channel;
@@ -536,9 +465,9 @@ type ToolName = keyof typeof ToolHandlers;
 
 const descriptions: Record<ToolName, string> = {
   chat_poll_inbox:
-    "Read inbound messages for the active project's chat inbox (resolved from cwd's .opensquid/project.json or OPENSQUID_PROJECT_UUID env). Returns messages with `enqueued_at` greater than the optional `since` ISO-8601 cursor. Caller tracks the cursor between calls; server is stateless.",
+    "Read inbound messages for the active umbrella's chat inbox (resolved from cwd via ~/.opensquid/channels.json). Returns messages with `enqueued_at` greater than the optional `since` ISO-8601 cursor. Caller tracks the cursor between calls; server is stateless.",
   chat_send:
-    "Send a text message via the chat-daemon's owned bot. Supports `<platform>:<native_id>` literal channels OR the `project:<platform>` magic shorthand that resolves to the active project's report_channel + report_topic_id (Telegram forum topic). Requires the chat-daemon to be running.",
+    "Send a text message via the chat-daemon's owned bot. Supports `<platform>:<native_id>` literal channels OR the `project:<platform>` magic shorthand that resolves to the active umbrella's outbound Telegram target (chat + forum topic) from channels.json. Requires the chat-daemon to be running.",
 };
 
 // ---------------------------------------------------------------------------
@@ -597,20 +526,18 @@ async function main(): Promise<void> {
 
   // TPS.6 patch 3 (v0.5.127): boot the long-lived UDS subscriber.
   // Wildcard subscription (chat_ids=[]) — the MCP bridge handles
-  // per-workspace filtering itself via the active-project UUID
-  // resolved on each chat_poll_inbox call. workspace_uuid /
-  // workspace_path are reported to the daemon for diagnostics and
-  // for the auto-boot path (TPS.6 patch 4). If resolveProjectUuid
-  // returns null at startup, the bridge is running outside any
-  // project — subscribe anyway with a sentinel uuid so the daemon
-  // still pushes broadcasts (the buffer remains useful even without
-  // a workspace identity).
-  const startupUuid =
-    (await resolveProjectUuid({ cwd: process.cwd(), env: process.env })) ?? 'no-project';
+  // per-workspace filtering itself via the active UMBRELLA resolved
+  // on each chat_poll_inbox call. workspace_uuid / workspace_path are
+  // reported to the daemon for diagnostics and for the auto-boot path
+  // (TPS.6 patch 4). If the cwd resolves to no umbrella at startup, the
+  // bridge is running outside any umbrella — subscribe anyway with a
+  // sentinel so the daemon still pushes broadcasts (the buffer remains
+  // useful even without an umbrella identity).
+  const startupUmbrella = (await resolveActiveUmbrella()) ?? 'no-umbrella';
   activeSubscriber = new ChatBridgeSubscriber({
     socketPath: daemonSocketPath(),
     sessionId: generateSessionId(),
-    workspaceUuid: startupUuid,
+    workspaceUuid: startupUmbrella,
     workspacePath: process.cwd(),
     chatIds: [],
   });

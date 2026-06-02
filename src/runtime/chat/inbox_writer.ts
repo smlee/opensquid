@@ -12,6 +12,9 @@
  * lock; we touch via empty `appendFile('')` on the first call before the
  * lock acquisition.
  *
+ * Keyed by UMBRELLA (T-CHAT-AS-TERMINAL CAT.1c) — was per-cwd project_uuid;
+ * the ack ledger now lives under `umbrellas/<id>/inbox/acked.jsonl`.
+ *
  * Imports from: node:fs/promises, node:path, proper-lockfile, ../paths.
  * Imported by: src/runtime/hooks/user-prompt-submit.ts (LL.4 drain block).
  */
@@ -21,7 +24,7 @@ import { dirname } from 'node:path';
 
 import lockfile from 'proper-lockfile';
 
-import { inboxAckedPath } from '../paths.js';
+import { umbrellaInboxAckedPath } from '../paths.js';
 
 import type { AckRow } from './inbox.js';
 
@@ -30,14 +33,14 @@ const LOCK_OPTS = {
 };
 
 /**
- * Append a batch of AckRows to the project's acked.jsonl under a
+ * Append a batch of AckRows to the umbrella's acked.jsonl under a
  * proper-lockfile mutex. No-op for empty input. Creates parent dir +
  * touches the target file on first call (proper-lockfile requires
  * existence).
  */
-export async function appendAckRows(projectUuid: string, rows: readonly AckRow[]): Promise<void> {
+export async function appendAckRows(umbrellaId: string, rows: readonly AckRow[]): Promise<void> {
   if (rows.length === 0) return;
-  const path = inboxAckedPath(projectUuid);
+  const path = umbrellaInboxAckedPath(umbrellaId);
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, '');
   const release = await lockfile.lock(path, LOCK_OPTS);
@@ -55,10 +58,10 @@ export async function appendAckRows(projectUuid: string, rows: readonly AckRow[]
  * a half-written file. Empty `kept` produces an empty file (cleared).
  */
 export async function rewriteAckedAfterPurge(
-  projectUuid: string,
+  umbrellaId: string,
   kept: readonly AckRow[],
 ): Promise<void> {
-  const path = inboxAckedPath(projectUuid);
+  const path = umbrellaInboxAckedPath(umbrellaId);
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, '');
   const release = await lockfile.lock(path, LOCK_OPTS);

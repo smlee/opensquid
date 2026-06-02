@@ -10,17 +10,21 @@
  * docs/tasks/T-telegram-realtime.md L3 on why auto-start is an agent
  * convention, not a CLI side-effect).
  *
- * Project-UUID resolution reuses `resolveProjectUuid` from `runtime/paths.js`
- * (env override → cwd walk for `.opensquid/project.json`) so it resolves
- * identically to the daemon — never reimplemented.
+ * Umbrella resolution (T-CHAT-AS-TERMINAL CAT.1c): chat is keyed by UMBRELLA,
+ * not per-cwd project_uuid. The cwd is resolved to its umbrella via
+ * `loadChannelsConfig()` + `resolveUmbrellaForCwd` (longest-prefix over
+ * `members`). `channels.json` is synthesized at the CAT.1d cutover, so an
+ * absent config / unresolved umbrella exits with a clear message (graceful,
+ * never throws). The `--umbrella` flag overrides resolution for tests + ops.
  *
- * Imports from: commander, ../paths.js, ./watch.js.
+ * Imports from: commander, ../../channels/routing.js, ../paths.js, ./watch.js.
  * Imported by: src/cli.ts (registers the `chat` parent verb).
  */
 
 import type { Command } from 'commander';
 
-import { inboxFile, resolveProjectUuid } from '../paths.js';
+import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
+import { umbrellaInboxFile, umbrellaLiveSessionLease } from '../paths.js';
 
 import {
   HEARTBEAT_MS,
@@ -36,7 +40,7 @@ interface ChatWatchOptions {
   platform: string;
   raw: boolean;
   mentionsOnly: boolean;
-  projectUuid?: string;
+  umbrella?: string;
 }
 
 /** Injection seam — tests stub `watch` so the action returns instead of
@@ -58,33 +62,41 @@ export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): C
     .option('--platform <name>', 'inbox platform (telegram, discord, …)', 'telegram')
     .option('--raw', 'emit raw JSONL rows instead of the formatted line', false)
     .option('--mentions-only', 'only emit rows where mentions_bot is true', false)
-    .option('--project-uuid <uuid>', 'override project-UUID resolution')
+    .option('--umbrella <id>', 'override cwd→umbrella resolution')
     .action(async (opts: ChatWatchOptions) => {
-      const uuid =
-        opts.projectUuid ?? (await resolveProjectUuid({ cwd: process.cwd(), env: process.env }));
-      if (uuid === null || uuid === '') {
+      // CAT.1c: resolve the cwd to its UMBRELLA via channels.json (the single
+      // authoritative routing source). `--umbrella` overrides for tests/ops.
+      // Absent config / unresolved umbrella → exit cleanly (channels.json is
+      // synthesized at the CAT.1d cutover; before then there is no inbox).
+      let umbrellaId = opts.umbrella ?? null;
+      if (umbrellaId === null) {
+        const cfg = await loadChannelsConfig();
+        umbrellaId = cfg === null ? null : resolveUmbrellaForCwd(cfg, process.cwd());
+      }
+      if (umbrellaId === null || umbrellaId === '') {
         process.stderr.write(
-          'chat watch: no project UUID. Set OPENSQUID_PROJECT_UUID, pass ' +
-            '--project-uuid, or run `opensquid setup chat` to create ' +
-            '`.opensquid/project.json`.\n',
+          'chat watch: no umbrella for this cwd. Pass --umbrella, or add a ' +
+            'matching `members` prefix to an umbrella in ~/.opensquid/channels.json ' +
+            '(run `opensquid setup chat` to wire it).\n',
         );
         process.exitCode = 1;
         return;
       }
+      const leasePath = umbrellaLiveSessionLease(umbrellaId);
       // Claim the live-session lease so the always-on daemon stays silent while
-      // this session handles the project (T-DEL arbitration). Heartbeat keeps it
+      // this session handles the umbrella (T-DEL arbitration). Heartbeat keeps it
       // fresh; cleanup on exit + a SIGINT/SIGTERM handler remove it (staleness is
       // the fallback if we're killed ungracefully).
-      await writeLease(uuid, resolveSessionId());
+      await writeLease(leasePath, resolveSessionId());
       const heartbeat = setInterval(() => {
-        void refreshLease(uuid).catch(() => undefined);
+        void refreshLease(leasePath).catch(() => undefined);
       }, HEARTBEAT_MS);
       heartbeat.unref();
       const stopLease = async (): Promise<void> => {
         clearInterval(heartbeat);
         process.removeListener('SIGINT', onSignal);
         process.removeListener('SIGTERM', onSignal);
-        await removeLease(uuid);
+        await removeLease(leasePath);
       };
       function onSignal(): void {
         void stopLease().finally(() => process.exit(0));
@@ -92,7 +104,7 @@ export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): C
       process.once('SIGINT', onSignal);
       process.once('SIGTERM', onSignal);
 
-      // LL.3 (2026-05-30) — start the per-project inbound watcher in
+      // LL.3 (2026-05-30) — start the per-umbrella inbound watcher in
       // parallel with the existing stdout streamer. The watcher
       // dispatches inbound rows as `inbound_channel` events to the
       // live session's loaded packs; the streamer keeps the
@@ -101,7 +113,7 @@ export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): C
       const stopInbound = await startInbound();
       try {
         await watch({
-          inboxFile: inboxFile(uuid, opts.platform),
+          inboxFile: umbrellaInboxFile(umbrellaId, opts.platform),
           mentionsOnly: opts.mentionsOnly,
           format: opts.raw ? (r: InboxRow) => JSON.stringify(r) : formatRow,
           // Flush one line per message — Monitor reads stdout line-delimited.

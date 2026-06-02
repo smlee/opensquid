@@ -1,23 +1,29 @@
 /**
  * Live-session lease (Track T-DEL, DEL.1) — the cross-session arbitration
- * primitive. While `opensquid chat watch` runs for a project, it writes +
+ * primitive. While `opensquid chat watch` runs for a session, it writes +
  * heartbeats a lease file; the always-on agent-bridge daemon reads it (DEL.2)
  * and stays silent while a FRESH lease exists (a live interactive session is
- * handling the project), so the two delivery paths never double-respond.
+ * handling the work), so the two delivery paths never double-respond.
  *
  * Freshness — not mere existence — is the signal: a crashed `chat watch` leaves
  * a stale lease, and the daemon must resume once it goes stale. So `removeLease`
  * is best-effort cleanup; `isLeaseFresh` is the authority.
  *
- * Imports from: node:fs/promises, ../paths.
- * Imported by: src/runtime/chat/watch_cli.ts (writer/heartbeat),
- *   src/runtime/agent_bridge/dispatcher.ts (reader, DEL.2).
+ * KEY-AGNOSTIC (T-CHAT-AS-TERMINAL CAT.1c): the lease functions take the
+ * lease-file PATH directly, not a project_uuid. This decouples the lease
+ * envelope/freshness logic from how the key resolves to a path, so the chat
+ * surfaces can lease per-UMBRELLA (`umbrellaLiveSessionLease(id)`) while the
+ * agent-bridge daemon keeps leasing per-project (`liveSessionLease(uuid)`).
+ * The caller resolves the path; this module owns only the envelope + I/O.
+ *
+ * Imports from: node:fs/promises.
+ * Imported by: src/runtime/chat/watch_cli.ts (writer/heartbeat, umbrella path),
+ *   src/runtime/chat/session_routing.ts (reader, umbrella path),
+ *   src/runtime/agent_bridge/dispatcher.ts (reader, project path, DEL.2).
  */
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-
-import { liveSessionLease } from '../paths.js';
 
 /** A lease older than this is stale → the daemon may respond. */
 export const STALE_MS = 90_000;
@@ -36,7 +42,7 @@ export function resolveSessionId(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 export async function writeLease(
-  uuid: string,
+  leasePath: string,
   sessionId: string,
   now: Date = new Date(),
 ): Promise<void> {
@@ -45,20 +51,19 @@ export async function writeLease(
     pid: process.pid,
     refreshed_at: now.toISOString(),
   };
-  const path = liveSessionLease(uuid);
-  await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
-  await writeFile(path, JSON.stringify(lease), 'utf8');
+  await mkdir(dirname(leasePath), { recursive: true }).catch(() => undefined);
+  await writeFile(leasePath, JSON.stringify(lease), 'utf8');
 }
 
 /** Refresh just the timestamp (keeps session_id/pid). */
-export async function refreshLease(uuid: string, now: Date = new Date()): Promise<void> {
-  const existing = await readLease(uuid);
-  await writeLease(uuid, existing?.session_id ?? resolveSessionId(), now);
+export async function refreshLease(leasePath: string, now: Date = new Date()): Promise<void> {
+  const existing = await readLease(leasePath);
+  await writeLease(leasePath, existing?.session_id ?? resolveSessionId(), now);
 }
 
-export async function readLease(uuid: string): Promise<LiveSessionLease | null> {
+export async function readLease(leasePath: string): Promise<LiveSessionLease | null> {
   try {
-    const raw = await readFile(liveSessionLease(uuid), 'utf8');
+    const raw = await readFile(leasePath, 'utf8');
     const parsed = JSON.parse(raw) as LiveSessionLease;
     if (typeof parsed.refreshed_at !== 'string') return null;
     return parsed;
@@ -75,6 +80,6 @@ export function isLeaseFresh(lease: LiveSessionLease | null, now: Date = new Dat
 }
 
 /** Best-effort removal on `chat watch` exit. Never throws. */
-export async function removeLease(uuid: string): Promise<void> {
-  await rm(liveSessionLease(uuid), { force: true }).catch(() => undefined);
+export async function removeLease(leasePath: string): Promise<void> {
+  await rm(leasePath, { force: true }).catch(() => undefined);
 }

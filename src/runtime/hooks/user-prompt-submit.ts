@@ -26,7 +26,7 @@ import {
   purgeOldAcks,
 } from '../chat/inbox_inject.js';
 import { appendAckRows, rewriteAckedAfterPurge } from '../chat/inbox_writer.js';
-import { resolveProjectUuid } from '../paths.js';
+import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
 import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
 
@@ -53,14 +53,15 @@ const INBOX_PLATFORMS: Platform[] = ['telegram', 'slack', 'discord'];
  */
 async function drainInboxEnvelope(sessionId: string): Promise<string> {
   try {
-    const projectUuid = await resolveProjectUuid({
-      cwd: process.cwd(),
-      env: process.env,
-    }).catch(() => null);
-    if (projectUuid === null || projectUuid === '') return '';
-    const platformReads = await Promise.all(INBOX_PLATFORMS.map((p) => readInbox(projectUuid, p)));
+    // CAT.1c: the inbox is keyed by UMBRELLA. Resolve cwd→umbrella via
+    // channels.json. Absent config / unresolved umbrella ⇒ no inbox (the
+    // file is synthesized at the CAT.1d cutover); drain nothing, fail-open.
+    const cfg = await loadChannelsConfig().catch(() => null);
+    const umbrellaId = cfg === null ? null : resolveUmbrellaForCwd(cfg, process.cwd());
+    if (umbrellaId === null || umbrellaId === '') return '';
+    const platformReads = await Promise.all(INBOX_PLATFORMS.map((p) => readInbox(umbrellaId, p)));
     const allRows = platformReads.flat();
-    const acked = await readAcked(projectUuid);
+    const acked = await readAcked(umbrellaId);
     const unacked = computeUnackedRows(allRows, acked, sessionId);
 
     let envelope = '';
@@ -70,14 +71,14 @@ async function drainInboxEnvelope(sessionId: string): Promise<string> {
         envelope = built.envelope;
         const ackRows = buildAckRowsForInjected(built.injectedRows, sessionId);
         // ACK BEFORE EMIT — durability gate.
-        await appendAckRows(projectUuid, ackRows);
+        await appendAckRows(umbrellaId, ackRows);
       }
     }
 
     // 7-day auto-purge — skip rewrite when nothing changes (no-op opt).
     const kept = purgeOldAcks(acked);
     if (kept.length !== acked.length) {
-      await rewriteAckedAfterPurge(projectUuid, kept);
+      await rewriteAckedAfterPurge(umbrellaId, kept);
     }
     return envelope;
   } catch (e) {

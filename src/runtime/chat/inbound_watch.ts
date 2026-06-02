@@ -1,12 +1,13 @@
 /**
- * Inbound watcher (T-L3-LOOP LL.3) — chokidar-backed tail of every live
- * project's `~/.opensquid/projects/<uuid>/inbox/<platform>.jsonl`. On each
- * new row, parses to `InboxRow`, resolves the target session via LL.2,
- * constructs an `InboundChannelEvent`, and calls `dispatchEvent` so any
- * loaded pack with `triggers: [{kind: 'inbound_channel', ...}]` fires.
+ * Inbound watcher (T-L3-LOOP LL.3; re-keyed project_uuid → UMBRELLA in
+ * T-CHAT-AS-TERMINAL CAT.1c) — chokidar-backed tail of every live umbrella's
+ * `~/.opensquid/umbrellas/<id>/inbox/<platform>.jsonl`. On each new row, parses
+ * to `InboxRow`, resolves the target session via LL.2, constructs an
+ * `InboundChannelEvent`, and calls `dispatchEvent` so any loaded pack with
+ * `triggers: [{kind: 'inbound_channel', ...}]` fires.
  *
  * "Lazy push" semantics per L7: rows with no fresh session are appended
- * to `~/.opensquid/projects/<uuid>/inbox/unrouted.jsonl` + LEFT in the
+ * to `~/.opensquid/umbrellas/<id>/inbox/unrouted.jsonl` + LEFT in the
  * inbox (no ack). The LL.4 UPS hook drains the backlog on demand at the
  * next session prompt-submit.
  *
@@ -38,10 +39,10 @@ import chokidar from 'chokidar';
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import type { InboundChannelEvent } from '../event.js';
 import { dispatchEvent } from '../hooks/dispatch.js';
-import { OPENSQUID_HOME, inboxDir } from '../paths.js';
+import { umbrellaInboxDir, umbrellaInboxFile } from '../paths.js';
 
 import { InboxRow, type Platform } from './inbox.js';
-import { resolveAllLiveProjects, resolveLiveSessionId } from './session_routing.js';
+import { resolveAllLiveUmbrellas, resolveLiveSessionId } from './session_routing.js';
 
 const PLATFORMS = ['telegram', 'slack', 'discord'] as const;
 const RESCAN_MS = 60_000;
@@ -72,15 +73,15 @@ export function platformFromChannelUri(uri: string): Platform | null {
 }
 
 /**
- * Append a row to the project's `inbox/unrouted.jsonl`. Best-effort: never
+ * Append a row to the umbrella's `inbox/unrouted.jsonl`. Best-effort: never
  * throws (parent dir created on demand; append errors swallowed).
  */
-async function appendUnrouted(projectUuid: string, row: InboxRow, reason: string): Promise<void> {
-  const path = join(inboxDir(projectUuid), 'unrouted.jsonl');
+async function appendUnrouted(umbrellaId: string, row: InboxRow, reason: string): Promise<void> {
+  const path = join(umbrellaInboxDir(umbrellaId), 'unrouted.jsonl');
   const entry = {
     v: 1,
     occurred_at: new Date().toISOString(),
-    project_uuid: projectUuid,
+    umbrella_id: umbrellaId,
     message_id: row.id,
     platform: row.platform,
     reason,
@@ -97,10 +98,10 @@ async function appendUnrouted(projectUuid: string, row: InboxRow, reason: string
  * Process one newly-appended inbox row: resolve target session, fire
  * event, or record unrouted. Pure-ish (one lease read + one dispatch).
  */
-export async function processRow(projectUuid: string, row: InboxRow): Promise<void> {
-  const sessionId = await resolveLiveSessionId(projectUuid);
+export async function processRow(umbrellaId: string, row: InboxRow): Promise<void> {
+  const sessionId = await resolveLiveSessionId(umbrellaId);
   if (sessionId === null) {
-    await appendUnrouted(projectUuid, row, 'no_fresh_live_session_lease');
+    await appendUnrouted(umbrellaId, row, 'no_fresh_live_session_lease');
     return;
   }
 
@@ -124,7 +125,7 @@ export async function processRow(projectUuid: string, row: InboxRow): Promise<vo
  * (size < lastOffset) by resetting to 0 and re-reading from start.
  */
 async function drainAppended(
-  projectUuid: string,
+  umbrellaId: string,
   filePath: string,
   state: WatcherState,
 ): Promise<void> {
@@ -153,22 +154,22 @@ async function drainAppended(
       }
       const safe = InboxRow.safeParse(parsed);
       if (!safe.success) continue;
-      await processRow(projectUuid, safe.data);
+      await processRow(umbrellaId, safe.data);
     }
   } finally {
     await handle.close();
   }
 }
 
-/** Extract `<uuid>` from `~/.opensquid/projects/<uuid>/inbox/<platform>.jsonl`. */
-export function extractProjectUuid(path: string): string | null {
-  const m = /projects\/([^/]+)\/inbox\//.exec(path);
+/** Extract `<id>` from `~/.opensquid/umbrellas/<id>/inbox/<platform>.jsonl`. */
+export function extractUmbrellaId(path: string): string | null {
+  const m = /umbrellas\/([^/]+)\/inbox\//.exec(path);
   return m === null ? null : (m[1] ?? null);
 }
 
 /**
- * Start watching every live project's inbox files. Returns a cleanup
- * function the CLI calls on exit. Re-scans every 60s to pick up projects
+ * Start watching every live umbrella's inbox files. Returns a cleanup
+ * function the CLI calls on exit. Re-scans every 60s to pick up umbrellas
  * that come online after the watcher started.
  */
 export async function startInboundWatcher(): Promise<() => Promise<void>> {
@@ -180,28 +181,27 @@ export async function startInboundWatcher(): Promise<() => Promise<void>> {
     offsets: new Map(),
   };
 
-  async function attachLiveProjects(): Promise<void> {
-    const bindings = await resolveAllLiveProjects();
-    for (const { projectUuid } of bindings) {
+  async function attachLiveUmbrellas(): Promise<void> {
+    const bindings = await resolveAllLiveUmbrellas();
+    for (const { umbrellaId } of bindings) {
       for (const platform of PLATFORMS) {
-        const path = join(OPENSQUID_HOME(), 'projects', projectUuid, 'inbox', `${platform}.jsonl`);
-        state.watcher.add(path);
+        state.watcher.add(umbrellaInboxFile(umbrellaId, platform));
       }
     }
   }
 
-  await attachLiveProjects();
+  await attachLiveUmbrellas();
   const rescan = setInterval(() => {
-    void attachLiveProjects();
+    void attachLiveUmbrellas();
   }, RESCAN_MS);
 
   state.watcher.on('add', (filePath: string) => {
-    const uuid = extractProjectUuid(filePath);
-    if (uuid !== null) void drainAppended(uuid, filePath, state);
+    const id = extractUmbrellaId(filePath);
+    if (id !== null) void drainAppended(id, filePath, state);
   });
   state.watcher.on('change', (filePath: string) => {
-    const uuid = extractProjectUuid(filePath);
-    if (uuid !== null) void drainAppended(uuid, filePath, state);
+    const id = extractUmbrellaId(filePath);
+    if (id !== null) void drainAppended(id, filePath, state);
   });
 
   return async () => {

@@ -1,13 +1,14 @@
 /**
- * Session-routing resolver — maps a `projectUuid` to its currently-live
+ * Session-routing resolver — maps an `umbrellaId` to its currently-live
  * Claude Code session id by reading the `live-session.lease` heartbeat file
- * (T-L3-LOOP LL.2).
+ * (T-L3-LOOP LL.2; re-keyed project_uuid → UMBRELLA in T-CHAT-AS-TERMINAL
+ * CAT.1c).
  *
  * The lease file (`src/runtime/chat/live_session_lease.ts`) is written by
  * `opensquid chat watch` every HEARTBEAT_MS (30s) and considered stale after
- * STALE_MS (90s). LL.2 wraps the existing primitive into a project-keyed
+ * STALE_MS (90s). LL.2 wraps the existing primitive into an umbrella-keyed
  * lookup so the inbound watcher (LL.3) and the UPS hook (LL.4) can answer
- * "which session should receive this project's inbox?" without re-implementing
+ * "which session should receive this umbrella's inbox?" without re-implementing
  * freshness logic.
  *
  * Semantics:
@@ -17,8 +18,8 @@
  *   - Missing lease (file ENOENT) → returns null
  *   - Corrupt lease (malformed JSON or missing required fields) → returns null
  *
- * `resolveAllLiveProjects` is the multi-project enumeration used by the LL.3
- * chokidar watcher to know which project-uuid roots to attach to at boot
+ * `resolveAllLiveUmbrellas` is the multi-umbrella enumeration used by the LL.3
+ * chokidar watcher to know which umbrella roots to attach to at boot
  * (and re-scan on a stale-detected event).
  *
  * **No logging from this module.** The resolver is a pure lookup; callers
@@ -31,7 +32,7 @@
  * returns null. The next resolver call (next message) succeeds. Documented
  * here so callers don't add defensive retry loops.
  *
- * Imports from: node:fs/promises, node:path, ../paths, ./live_session_lease.
+ * Imports from: node:fs/promises, ../paths, ./live_session_lease.
  * Imported by: src/runtime/chat/inbound_watch.ts (LL.3); LL.4 UPS hook;
  *   tests.
  */
@@ -39,60 +40,60 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { OPENSQUID_HOME } from '../paths.js';
+import { OPENSQUID_HOME, umbrellaLiveSessionLease } from '../paths.js';
 
 import { isLeaseFresh, readLease, type LiveSessionLease } from './live_session_lease.js';
 
 /**
- * Return the fresh sessionId for a project, or null if no live session.
+ * Return the fresh sessionId for an umbrella, or null if no live session.
  * Pure function over the lease file (one fs.readFile + a comparison).
  *
  * `now` is injected for test determinism; defaults to `new Date()`.
  */
 export async function resolveLiveSessionId(
-  projectUuid: string,
+  umbrellaId: string,
   now: Date = new Date(),
 ): Promise<string | null> {
-  const lease = await readLease(projectUuid);
+  const lease = await readLease(umbrellaLiveSessionLease(umbrellaId));
   if (lease === null) return null;
   if (!isLeaseFresh(lease, now)) return null;
   if (typeof lease.session_id !== 'string' || lease.session_id.length === 0) return null;
   return lease.session_id;
 }
 
-export interface LiveProjectBinding {
-  projectUuid: string;
+export interface LiveUmbrellaBinding {
+  umbrellaId: string;
   sessionId: string;
   refreshedAt: string;
 }
 
 /**
- * Enumerate every project with a fresh lease. Used by LL.3 watcher at boot
- * to know which projects to chokidar-tail. Sorted by `refreshedAt` ascending
+ * Enumerate every umbrella with a fresh lease. Used by LL.3 watcher at boot
+ * to know which umbrellas to chokidar-tail. Sorted by `refreshedAt` ascending
  * (oldest-first) so log output stays stable across reruns.
  *
- * ENOENT on `~/.opensquid/projects/` returns `[]` (watcher boot before any
- * project exists). Non-directory entries are silently skipped (their
+ * ENOENT on `~/.opensquid/umbrellas/` returns `[]` (watcher boot before any
+ * umbrella exists). Non-directory entries are silently skipped (their
  * `readLease` returns null).
  */
-export async function resolveAllLiveProjects(
+export async function resolveAllLiveUmbrellas(
   now: Date = new Date(),
-): Promise<LiveProjectBinding[]> {
-  const projectsRoot = join(OPENSQUID_HOME(), 'projects');
+): Promise<LiveUmbrellaBinding[]> {
+  const umbrellasRoot = join(OPENSQUID_HOME(), 'umbrellas');
   let entries: string[];
   try {
-    entries = await readdir(projectsRoot);
+    entries = await readdir(umbrellasRoot);
   } catch {
     return [];
   }
-  const out: LiveProjectBinding[] = [];
-  for (const projectUuid of entries) {
-    const lease = await readLease(projectUuid);
+  const out: LiveUmbrellaBinding[] = [];
+  for (const umbrellaId of entries) {
+    const lease = await readLease(umbrellaLiveSessionLease(umbrellaId));
     if (lease === null) continue;
     if (!isLeaseFresh(lease, now)) continue;
     if (typeof lease.session_id !== 'string' || lease.session_id.length === 0) continue;
     out.push({
-      projectUuid,
+      umbrellaId,
       sessionId: lease.session_id,
       refreshedAt: lease.refreshed_at,
     });

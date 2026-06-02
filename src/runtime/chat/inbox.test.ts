@@ -21,13 +21,13 @@ import { AckRow, InboxRow, ackKey, readAcked, readInbox } from './inbox.js';
 
 let tempHome: string;
 let priorHome: string | undefined;
-const PROJECT_UUID = 'uuid-x';
+const UMBRELLA = 'umb-x';
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
   tempHome = await mkdtemp(join(tmpdir(), 'opensquid-ll1-inbox-'));
   process.env.OPENSQUID_HOME = tempHome;
-  await mkdir(join(tempHome, 'projects', PROJECT_UUID, 'inbox'), { recursive: true });
+  await mkdir(join(tempHome, 'umbrellas', UMBRELLA, 'inbox'), { recursive: true });
 });
 
 afterEach(async () => {
@@ -107,7 +107,7 @@ describe('AckRow schema', () => {
 
 describe('readInbox / readAcked best-effort readers', () => {
   it('readInbox against absent file → []', async () => {
-    const rows = await readInbox(PROJECT_UUID, 'discord');
+    const rows = await readInbox(UMBRELLA, 'discord');
     expect(rows).toEqual([]);
   });
 
@@ -120,11 +120,11 @@ describe('readInbox / readAcked best-effort readers', () => {
       '{"v":1,"id":"3","platform":"telegram","channel":"c","sender":"s","sender_id":"u","text":"hi3","received_at":"r","enqueued_at":"e","mentions_bot":false}';
     const partial = '{"v":1,"id":"4","plat'; // truncated tail
     await writeFile(
-      join(tempHome, 'projects', PROJECT_UUID, 'inbox', 'telegram.jsonl'),
+      join(tempHome, 'umbrellas', UMBRELLA, 'inbox', 'telegram.jsonl'),
       [valid1, valid2, valid3, partial].join('\n') + '\n',
       'utf8',
     );
-    const rows = await readInbox(PROJECT_UUID, 'telegram');
+    const rows = await readInbox(UMBRELLA, 'telegram');
     expect(rows.map((r) => r.id)).toEqual(['1', '2', '3']);
   });
 
@@ -134,11 +134,11 @@ describe('readInbox / readAcked best-effort readers', () => {
     const r2 =
       '{"v":1,"message_id":"2","platform":"discord","injected_at_sessionId":"s2","injected_at_timestamp":"t2"}';
     await writeFile(
-      join(tempHome, 'projects', PROJECT_UUID, 'inbox', 'acked.jsonl'),
+      join(tempHome, 'umbrellas', UMBRELLA, 'inbox', 'acked.jsonl'),
       [r1, r2].join('\n') + '\n',
       'utf8',
     );
-    const rows = await readAcked(PROJECT_UUID);
+    const rows = await readAcked(UMBRELLA);
     expect(rows.map((r) => r.message_id)).toEqual(['1', '2']);
   });
 
@@ -148,11 +148,11 @@ describe('readInbox / readAcked best-effort readers', () => {
     const r2 =
       '{"v":2,"message_id":"2","platform":"telegram","injected_at_sessionId":"s2","injected_at_timestamp":"t2"}';
     await writeFile(
-      join(tempHome, 'projects', PROJECT_UUID, 'inbox', 'acked.jsonl'),
+      join(tempHome, 'umbrellas', UMBRELLA, 'inbox', 'acked.jsonl'),
       [r1, r2].join('\n') + '\n',
       'utf8',
     );
-    const rows = await readAcked(PROJECT_UUID);
+    const rows = await readAcked(UMBRELLA);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.message_id).toBe('1');
   });

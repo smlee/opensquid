@@ -1,16 +1,17 @@
 /**
- * Tests for `opensquid chat watch` argument resolution (Track T-TR, TR.1).
+ * Tests for `opensquid chat watch` argument resolution (Track T-TR, TR.1;
+ * re-keyed project_uuid → UMBRELLA in T-CHAT-AS-TERMINAL CAT.1c).
  *
  * The action would block forever on the real watcher, so we inject a `watch`
  * stub (ChatWatchDeps) that captures the resolved opts and returns. Covers:
- *   - --project-uuid + --platform → correct inbox file
+ *   - --umbrella + --platform → correct umbrella inbox file
  *   - --raw swaps the formatter; default formatter is human-readable
  *   - --mentions-only sets the filter
- *   - OPENSQUID_PROJECT_UUID env resolution
- *   - no resolvable UUID → stub not called, exitCode 1, stderr guidance
+ *   - cwd→umbrella resolution via channels.json (members prefix)
+ *   - no resolvable umbrella → stub not called, exitCode 1, stderr guidance
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,7 +21,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboxRow, WatchInboxOpts } from './watch.js';
 import { registerChatWatch } from './watch_cli.js';
 
-const HOME = '/tmp/osq-chat-watch-test-home';
 const sampleRow: InboxRow = {
   id: 'm',
   platform: 'telegram',
@@ -34,19 +34,18 @@ const sampleRow: InboxRow = {
 };
 
 describe('chat watch CLI', () => {
+  let home: string;
   let savedHome: string | undefined;
-  let savedUuid: string | undefined;
   let savedCwd: string;
   let savedExit: typeof process.exitCode;
   let stderr: string[];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     savedHome = process.env.OPENSQUID_HOME;
-    savedUuid = process.env.OPENSQUID_PROJECT_UUID;
     savedCwd = process.cwd();
     savedExit = process.exitCode;
-    process.env.OPENSQUID_HOME = HOME;
-    delete process.env.OPENSQUID_PROJECT_UUID;
+    home = await mkdtemp(join(tmpdir(), 'osq-chat-watch-'));
+    process.env.OPENSQUID_HOME = home;
     process.exitCode = undefined;
     stderr = [];
     vi.spyOn(process.stderr, 'write').mockImplementation((s: string | Uint8Array): boolean => {
@@ -55,15 +54,18 @@ describe('chat watch CLI', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (savedHome === undefined) delete process.env.OPENSQUID_HOME;
     else process.env.OPENSQUID_HOME = savedHome;
-    if (savedUuid === undefined) delete process.env.OPENSQUID_PROJECT_UUID;
-    else process.env.OPENSQUID_PROJECT_UUID = savedUuid;
     process.chdir(savedCwd);
     process.exitCode = savedExit;
     vi.restoreAllMocks();
+    await rm(home, { recursive: true, force: true });
   });
+
+  async function writeChannels(config: unknown): Promise<void> {
+    await writeFile(join(home, 'channels.json'), JSON.stringify(config), 'utf8');
+  }
 
   async function run(argv: string[], capture: (o: WatchInboxOpts) => void): Promise<void> {
     const program = new Command();
@@ -73,22 +75,24 @@ describe('chat watch CLI', () => {
         capture(o);
         return Promise.resolve();
       },
+      // Don't spin up a real chokidar tail in the lifecycle test.
+      startInbound: () => Promise.resolve(() => Promise.resolve()),
     });
     await program.parseAsync(['chat', 'watch', ...argv], { from: 'user' });
   }
 
-  it('resolves --project-uuid + --platform to the inbox file', async () => {
+  it('resolves --umbrella + --platform to the umbrella inbox file', async () => {
     let captured: WatchInboxOpts | undefined;
-    await run(['--project-uuid', 'proj-X', '--platform', 'discord'], (o) => {
+    await run(['--umbrella', 'loop', '--platform', 'discord'], (o) => {
       captured = o;
     });
-    expect(captured?.inboxFile).toBe(`${HOME}/projects/proj-X/inbox/discord.jsonl`);
+    expect(captured?.inboxFile).toBe(`${home}/umbrellas/loop/inbox/discord.jsonl`);
     expect(captured?.mentionsOnly).toBe(false);
   });
 
   it('--raw swaps the formatter to JSON', async () => {
     let captured: WatchInboxOpts | undefined;
-    await run(['--project-uuid', 'p', '--raw'], (o) => {
+    await run(['--umbrella', 'loop', '--raw'], (o) => {
       captured = o;
     });
     expect(captured?.format(sampleRow)).toBe(JSON.stringify(sampleRow));
@@ -96,7 +100,7 @@ describe('chat watch CLI', () => {
 
   it('uses the human-readable formatter by default', async () => {
     let captured: WatchInboxOpts | undefined;
-    await run(['--project-uuid', 'p'], (o) => {
+    await run(['--umbrella', 'loop'], (o) => {
       captured = o;
     });
     expect(captured?.format({ ...sampleRow, thread_id: '9', sender: 'z', text: 'q' })).toBe(
@@ -104,33 +108,39 @@ describe('chat watch CLI', () => {
     );
   });
 
-  it('resolves the UUID from OPENSQUID_PROJECT_UUID when no flag is given', async () => {
-    process.env.OPENSQUID_PROJECT_UUID = 'env-uuid';
+  it('resolves the umbrella from channels.json members prefix (cwd walk)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'osq-member-'));
+    await mkdir(cwd, { recursive: true });
+    process.chdir(cwd);
+    // Seed the member as the REALPATH cwd (macOS /tmp → /private/tmp), which is
+    // what resolveUmbrellaForCwd compares against via process.cwd().
+    await writeChannels({ v: 1, umbrellas: [{ id: 'loop', members: [process.cwd()] }] });
     let captured: WatchInboxOpts | undefined;
     await run([], (o) => {
       captured = o;
     });
-    expect(captured?.inboxFile).toBe(`${HOME}/projects/env-uuid/inbox/telegram.jsonl`);
+    expect(captured?.inboxFile).toBe(`${home}/umbrellas/loop/inbox/telegram.jsonl`);
+    await rm(cwd, { recursive: true, force: true });
   });
 
   it('--mentions-only sets the filter', async () => {
     let captured: WatchInboxOpts | undefined;
-    await run(['--project-uuid', 'p', '--mentions-only'], (o) => {
+    await run(['--umbrella', 'loop', '--mentions-only'], (o) => {
       captured = o;
     });
     expect(captured?.mentionsOnly).toBe(true);
   });
 
-  it('hard-fails with guidance + exit code 1 when no UUID resolves', async () => {
+  it('hard-fails with guidance + exit code 1 when no umbrella resolves', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'chat-cli-'));
-    process.chdir(tmp); // no .opensquid/project.json up-tree
+    process.chdir(tmp); // no channels.json → no umbrella
     let called = false;
     await run([], () => {
       called = true;
     });
     expect(called).toBe(false);
     expect(process.exitCode).toBe(1);
-    expect(stderr.join('')).toContain('no project UUID');
+    expect(stderr.join('')).toContain('no umbrella for this cwd');
     await rm(tmp, { recursive: true, force: true });
   });
 });

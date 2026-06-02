@@ -49,6 +49,7 @@ import {
   type RunAgentTurnSubscriptionResult,
 } from './agent_loop_subscription.js';
 import { isLeaseFresh, readLease } from '../chat/live_session_lease.js';
+import { liveSessionLease } from '../paths.js';
 
 import { BatchCoordinator, type BatchCoordinatorOptions } from './batch.js';
 import type { AgentEventBus } from './event_bus.js';
@@ -134,7 +135,8 @@ export class ChatDispatcher {
     this.onTurnError = opts.onTurnError ?? noopTurnError;
     this.isLiveSessionActive =
       opts.isLiveSessionActive ??
-      (async (uuid: string): Promise<boolean> => isLeaseFresh(await readLease(uuid)));
+      (async (uuid: string): Promise<boolean> =>
+        isLeaseFresh(await readLease(liveSessionLease(uuid))));
     this.onSkip = opts.onSkip ?? noop;
     this.coordinator = new BatchCoordinator({
       ...(opts.batchOptions ?? {}),

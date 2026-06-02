@@ -7,14 +7,14 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { inboxAckedPath } from '../paths.js';
+import { umbrellaInboxAckedPath } from '../paths.js';
 
 import type { AckRow } from './inbox.js';
 import { appendAckRows, rewriteAckedAfterPurge } from './inbox_writer.js';
 
 let tempHome: string;
 let priorHome: string | undefined;
-const UUID = 'uuid-x';
+const UMBRELLA = 'umb-x';
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
@@ -40,13 +40,13 @@ function row(message_id: string, ts = '2026-05-30T12:00:00Z'): AckRow {
 
 describe('appendAckRows — durable append with mutex', () => {
   it('empty rows → no-op (file not created)', async () => {
-    await appendAckRows(UUID, []);
-    await expect(readFile(inboxAckedPath(UUID), 'utf8')).rejects.toThrow();
+    await appendAckRows(UMBRELLA, []);
+    await expect(readFile(umbrellaInboxAckedPath(UMBRELLA), 'utf8')).rejects.toThrow();
   });
 
   it('appends 2 rows to a new acked.jsonl', async () => {
-    await appendAckRows(UUID, [row('1'), row('2')]);
-    const body = await readFile(inboxAckedPath(UUID), 'utf8');
+    await appendAckRows(UMBRELLA, [row('1'), row('2')]);
+    const body = await readFile(umbrellaInboxAckedPath(UMBRELLA), 'utf8');
     const lines = body.trim().split('\n');
     expect(lines).toHaveLength(2);
     expect((JSON.parse(lines[0]!) as AckRow).message_id).toBe('1');
@@ -54,10 +54,10 @@ describe('appendAckRows — durable append with mutex', () => {
   });
 
   it('appends to an existing acked.jsonl (preserves prior rows)', async () => {
-    const path = inboxAckedPath(UUID);
+    const path = umbrellaInboxAckedPath(UMBRELLA);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, JSON.stringify(row('0')) + '\n', 'utf8');
-    await appendAckRows(UUID, [row('1')]);
+    await appendAckRows(UMBRELLA, [row('1')]);
     const body = await readFile(path, 'utf8');
     expect(body.trim().split('\n')).toHaveLength(2);
   });
@@ -65,17 +65,17 @@ describe('appendAckRows — durable append with mutex', () => {
 
 describe('rewriteAckedAfterPurge — atomic replace', () => {
   it('rewrites file with kept rows only', async () => {
-    await appendAckRows(UUID, [row('1'), row('2'), row('3')]);
-    await rewriteAckedAfterPurge(UUID, [row('2')]);
-    const body = await readFile(inboxAckedPath(UUID), 'utf8');
+    await appendAckRows(UMBRELLA, [row('1'), row('2'), row('3')]);
+    await rewriteAckedAfterPurge(UMBRELLA, [row('2')]);
+    const body = await readFile(umbrellaInboxAckedPath(UMBRELLA), 'utf8');
     expect(body.trim().split('\n')).toHaveLength(1);
     expect((JSON.parse(body.trim()) as AckRow).message_id).toBe('2');
   });
 
   it('rewrites to empty file when kept is empty', async () => {
-    await appendAckRows(UUID, [row('1')]);
-    await rewriteAckedAfterPurge(UUID, []);
-    const body = await readFile(inboxAckedPath(UUID), 'utf8');
+    await appendAckRows(UMBRELLA, [row('1')]);
+    await rewriteAckedAfterPurge(UMBRELLA, []);
+    const body = await readFile(umbrellaInboxAckedPath(UMBRELLA), 'utf8');
     expect(body).toBe('');
   });
 });

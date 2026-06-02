@@ -9,9 +9,9 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { liveSessionLease } from '../paths.js';
+import { umbrellaLiveSessionLease } from '../paths.js';
 
-import { resolveAllLiveProjects, resolveLiveSessionId } from './session_routing.js';
+import { resolveAllLiveUmbrellas, resolveLiveSessionId } from './session_routing.js';
 
 let tempHome: string;
 let priorHome: string | undefined;
@@ -29,11 +29,11 @@ afterEach(async () => {
 });
 
 async function seedLease(
-  uuid: string,
+  umbrellaId: string,
   body: Record<string, unknown>,
   rawOverride?: string,
 ): Promise<void> {
-  const path = liveSessionLease(uuid);
+  const path = umbrellaLiveSessionLease(umbrellaId);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, rawOverride ?? JSON.stringify(body), 'utf8');
 }
@@ -90,24 +90,24 @@ describe('resolveLiveSessionId — fresh / stale / missing / corrupt', () => {
   });
 });
 
-describe('resolveAllLiveProjects — multi-project enumeration', () => {
-  it('3 projects (2 fresh + 1 stale) → returns 2 sorted by refreshedAt', async () => {
+describe('resolveAllLiveUmbrellas — multi-umbrella enumeration', () => {
+  it('3 umbrellas (2 fresh + 1 stale) → returns 2 sorted by refreshedAt', async () => {
     const now = new Date('2026-05-30T12:00:00Z');
     const tsFresh1 = new Date(now.getTime() - 60_000).toISOString();
     const tsFresh2 = new Date(now.getTime() - 30_000).toISOString();
     const tsStale = new Date(now.getTime() - 120_000).toISOString();
-    await seedLease('uuid-a', { session_id: 'sess-A', pid: 1, refreshed_at: tsFresh1 });
-    await seedLease('uuid-b', { session_id: 'sess-B', pid: 2, refreshed_at: tsFresh2 });
-    await seedLease('uuid-c', { session_id: 'sess-C', pid: 3, refreshed_at: tsStale });
+    await seedLease('umb-a', { session_id: 'sess-A', pid: 1, refreshed_at: tsFresh1 });
+    await seedLease('umb-b', { session_id: 'sess-B', pid: 2, refreshed_at: tsFresh2 });
+    await seedLease('umb-c', { session_id: 'sess-C', pid: 3, refreshed_at: tsStale });
 
-    const out = await resolveAllLiveProjects(now);
+    const out = await resolveAllLiveUmbrellas(now);
     expect(out).toHaveLength(2);
-    expect(out.map((b) => b.projectUuid)).toEqual(['uuid-a', 'uuid-b']);
+    expect(out.map((b) => b.umbrellaId)).toEqual(['umb-a', 'umb-b']);
     expect(out[0]?.refreshedAt).toBe(tsFresh1);
     expect(out[1]?.refreshedAt).toBe(tsFresh2);
   });
 
-  it('missing ~/.opensquid/projects/ → returns []', async () => {
-    expect(await resolveAllLiveProjects(new Date())).toEqual([]);
+  it('missing ~/.opensquid/umbrellas/ → returns []', async () => {
+    expect(await resolveAllLiveUmbrellas(new Date())).toEqual([]);
   });
 });

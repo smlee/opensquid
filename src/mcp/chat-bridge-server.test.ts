@@ -2,17 +2,21 @@
  * T-CBT CBT.1 — subprocess integration test for `opensquid-chat-bridge-mcp`.
  *
  * Mirrors `src/mcp/server.test.ts` (the read-only opensquid-mcp server's
- * subprocess pattern). Covers both tools:
+ * subprocess pattern). Covers both tools (re-keyed project_uuid → UMBRELLA in
+ * T-CHAT-AS-TERMINAL CAT.1c):
  *   - `chat_poll_inbox` — read-only inbox merge (fs JSONL + the long-lived
- *     ChatBridgeSubscriber's LRU push-buffer), filter by since/platform/limit,
- *     collision warning prefix.
+ *     ChatBridgeSubscriber's LRU push-buffer), filter by since/platform/limit.
  *   - `chat_send` — line-delimited JSON-RPC over UDS to the chat-daemon's
  *     `send` method, including `project:<platform>` shorthand resolution via
- *     chat-routing.json.
+ *     the active umbrella's outbound target in channels.json.
  *
- * Per-test isolation: every case owns its own tmp `OPENSQUID_HOME`, optional
- * tmp cwd (for project.json cwd-walk cases), and a fresh `FakeChatDaemon`
- * UDS server at `<tmp-HOME>/chat-daemon.sock`.
+ * The active umbrella is resolved from the session cwd (`CLAUDE_PROJECT_DIR`)
+ * via `~/.opensquid/channels.json` (`members` prefix). Each case seeds a
+ * channels.json claiming the test cwd for an umbrella.
+ *
+ * Per-test isolation: every case owns its own tmp `OPENSQUID_HOME`, a tmp cwd
+ * (claimed as the umbrella member), and a fresh `FakeChatDaemon` UDS server at
+ * `<tmp-HOME>/chat-daemon.sock`.
  *
  * `FakeChatDaemon` handles BOTH `send` (one-shot canned reply + capture
  * params) AND `subscribe` (ack + keep-alive). The keep-alive matters: the
@@ -317,30 +321,29 @@ function validInboxMsg(
 
 async function seedInbox(
   home: string,
-  projectUuid: string,
+  umbrellaId: string,
   pf: 'telegram' | 'discord' | 'slack',
   lines: string[],
 ): Promise<void> {
-  const dir = join(home, 'projects', projectUuid, 'inbox');
+  const dir = join(home, 'umbrellas', umbrellaId, 'inbox');
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${pf}.jsonl`), lines.map((l) => l + '\n').join(''), 'utf8');
 }
 
-async function seedChatRouting(
+/** Wire a channels.json claiming `cwd` as a member of `umbrellaId`, with an
+ *  optional telegram outbound binding (for the project:<platform> shorthand). */
+async function seedChannels(
   home: string,
-  projectUuid: string,
-  routing: { telegram?: { report_channel: string; report_topic_id?: number } },
+  umbrellaId: string,
+  cwd: string,
+  telegram?: { chat_id: string; topic_id?: number },
 ): Promise<void> {
-  const dir = join(home, 'projects', projectUuid);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'chat-routing.json'), JSON.stringify(routing), 'utf8');
-}
-
-async function seedCollisions(home: string, entries: object[]): Promise<void> {
   await mkdir(home, { recursive: true });
+  const umbrella: Record<string, unknown> = { id: umbrellaId, members: [cwd] };
+  if (telegram !== undefined) umbrella.telegram = telegram;
   await writeFile(
-    join(home, 'collisions.jsonl'),
-    entries.map((e) => JSON.stringify(e) + '\n').join(''),
+    join(home, 'channels.json'),
+    JSON.stringify({ v: 1, umbrellas: [umbrella] }),
     'utf8',
   );
 }
@@ -362,14 +365,32 @@ const RUN = platform() === 'win32' ? describe.skip : describe;
 
 RUN('opensquid-chat-bridge-mcp subprocess', () => {
   let tempHome: string;
+  let tempCwd: string;
   let priorHome: string | undefined;
   let fakeDaemon: FakeChatDaemon;
   let client: MCPClient | null = null;
+  // Default umbrella every case shares; the tempCwd is claimed as its member
+  // (so the server's cwd→umbrella resolution lands on UMB unless overridden).
+  const UMB = 'umb';
+
+  /** Spawn the bridge with `CLAUDE_PROJECT_DIR` pinned to `tempCwd` so the
+   *  server resolves the active umbrella deterministically from channels.json. */
+  function spawnClient(extraEnv: NodeJS.ProcessEnv = {}, cwd: string = tempCwd): MCPClient {
+    return new MCPClient(
+      { ...process.env, OPENSQUID_HOME: tempHome, CLAUDE_PROJECT_DIR: cwd, ...extraEnv },
+      cwd,
+    );
+  }
 
   beforeEach(async () => {
     priorHome = process.env.OPENSQUID_HOME;
     tempHome = await mkdtemp(join(tmpdir(), 'opensquid-cbt-'));
+    tempCwd = await mkdtemp(join(tmpdir(), 'opensquid-cbt-cwd-'));
     process.env.OPENSQUID_HOME = tempHome;
+
+    // Default: tempCwd belongs to UMB. Cases that test "no umbrella" overwrite
+    // channels.json (or use a cwd outside any member prefix).
+    await seedChannels(tempHome, UMB, tempCwd);
 
     // L14 — UDS socket path < 104 bytes (macOS cap; Linux is 108). Fail
     // loud with the path in the message if a future TMPDIR exceeds it.
@@ -391,6 +412,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
     if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
     else process.env.OPENSQUID_HOME = priorHome;
     await rm(tempHome, { recursive: true, force: true });
+    await rm(tempCwd, { recursive: true, force: true });
   });
 
   // -------------------------------------------------------------------------
@@ -398,7 +420,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   // -------------------------------------------------------------------------
 
   it('A1: tools/list returns 2 tools (chat_poll_inbox + chat_send), each with object inputSchema', async () => {
-    client = new MCPClient({ ...process.env, OPENSQUID_HOME: tempHome });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/list');
     const result = r.result as ToolsListResult;
@@ -410,7 +432,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   }, 15000);
 
   it('A2: each tool schema documents its expected args', async () => {
-    client = new MCPClient({ ...process.env, OPENSQUID_HOME: tempHome });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/list');
     const result = r.result as ToolsListResult;
@@ -428,56 +450,44 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   // Group B — chat_poll_inbox happy paths (5 cases)
   // -------------------------------------------------------------------------
 
-  it('B1: no active project → "No active project — …"', async () => {
-    const cwdEmpty = await mkdtemp(join(tmpdir(), 'opensquid-cbt-cwd-'));
+  it('B1: no active umbrella → "No active umbrella — …"', async () => {
+    const cwdEmpty = await mkdtemp(join(tmpdir(), 'opensquid-cbt-noumb-'));
     try {
-      client = new MCPClient(
-        { ...process.env, OPENSQUID_HOME: tempHome, OPENSQUID_PROJECT_UUID: '' },
-        cwdEmpty,
-      );
+      // cwdEmpty is NOT a member of any umbrella in channels.json.
+      client = spawnClient({}, cwdEmpty);
       await client.initialize();
       const r = await client.request('tools/call', {
         name: 'chat_poll_inbox',
         arguments: { limit: 10 },
       });
       const text = (r.result as ToolCallResult).content[0]!.text;
-      expect(text).toContain('No active project');
+      expect(text).toContain('No active umbrella');
     } finally {
       await rm(cwdEmpty, { recursive: true, force: true });
     }
   }, 15000);
 
-  it('B2: active project + empty inbox → "No new messages …"', async () => {
-    const uuid = randomUUID();
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+  it('B2: active umbrella + empty inbox → "No new messages …"', async () => {
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
       arguments: { limit: 10 },
     });
     const text = (r.result as ToolCallResult).content[0]!.text;
-    expect(text).toContain('No new messages in project');
-    expect(text).toContain(uuid);
+    expect(text).toContain('No new messages in umbrella');
+    expect(text).toContain(UMB);
   }, 15000);
 
-  it('B3: active project + 1 message → formatted output + cursor', async () => {
-    const uuid = randomUUID();
-    await seedInbox(tempHome, uuid, 'telegram', [
+  it('B3: active umbrella + 1 message → formatted output + cursor', async () => {
+    await seedInbox(tempHome, UMB, 'telegram', [
       validInboxMsg({
         text: 'hello',
         sender: 'alice',
         enqueued_at: '2026-05-29T00:00:00Z',
       }),
     ]);
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
@@ -485,28 +495,23 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
     });
     const text = (r.result as ToolCallResult).content[0]!.text;
     expect(text).toContain('[2026-05-29T00:00:00Z] telegram/-1001234 <alice> hello');
-    expect(text).toContain(`Project: ${uuid}`);
+    expect(text).toContain(`Umbrella: ${UMB}`);
     expect(text).toContain('Scanned: telegram');
     expect(text).toContain('Returned: 1');
     expect(text).toContain("Next cursor (pass as 'since'): 2026-05-29T00:00:00Z");
   }, 15000);
 
   it('B4: messages across 3 platforms without filter → all scanned + merged sort', async () => {
-    const uuid = randomUUID();
-    await seedInbox(tempHome, uuid, 'telegram', [
+    await seedInbox(tempHome, UMB, 'telegram', [
       validInboxMsg({ text: 'tg-1', enqueued_at: '2026-05-29T00:00:01Z', platform: 'telegram' }),
     ]);
-    await seedInbox(tempHome, uuid, 'discord', [
+    await seedInbox(tempHome, UMB, 'discord', [
       validInboxMsg({ text: 'dc-1', enqueued_at: '2026-05-29T00:00:00Z', platform: 'discord' }),
     ]);
-    await seedInbox(tempHome, uuid, 'slack', [
+    await seedInbox(tempHome, UMB, 'slack', [
       validInboxMsg({ text: 'sl-1', enqueued_at: '2026-05-29T00:00:02Z', platform: 'slack' }),
     ]);
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
@@ -525,17 +530,12 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   }, 15000);
 
   it('B5: since cursor + limit cap → returns only the tail', async () => {
-    const uuid = randomUUID();
-    await seedInbox(tempHome, uuid, 'telegram', [
+    await seedInbox(tempHome, UMB, 'telegram', [
       validInboxMsg({ text: 'a', enqueued_at: '2026-05-29T00:00:00Z' }),
       validInboxMsg({ text: 'b', enqueued_at: '2026-05-29T00:00:01Z' }),
       validInboxMsg({ text: 'c', enqueued_at: '2026-05-29T00:00:02Z' }),
     ]);
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
@@ -553,17 +553,12 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   // -------------------------------------------------------------------------
 
   it('C1: malformed JSONL line in the middle → skipped, walk continues', async () => {
-    const uuid = randomUUID();
-    await seedInbox(tempHome, uuid, 'telegram', [
+    await seedInbox(tempHome, UMB, 'telegram', [
       validInboxMsg({ text: 'first', enqueued_at: '2026-05-29T00:00:00Z' }),
       '{ not json',
       validInboxMsg({ text: 'third', enqueued_at: '2026-05-29T00:00:02Z' }),
     ]);
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
@@ -576,18 +571,13 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   }, 15000);
 
   it('C2: platform filter narrows the scan to one file', async () => {
-    const uuid = randomUUID();
-    await seedInbox(tempHome, uuid, 'telegram', [
+    await seedInbox(tempHome, UMB, 'telegram', [
       validInboxMsg({ text: 'tg-only', enqueued_at: '2026-05-29T00:00:00Z' }),
     ]);
-    await seedInbox(tempHome, uuid, 'discord', [
+    await seedInbox(tempHome, UMB, 'discord', [
       validInboxMsg({ text: 'dc-only', enqueued_at: '2026-05-29T00:00:00Z', platform: 'discord' }),
     ]);
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
@@ -600,34 +590,33 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
     expect(text).not.toContain('dc-only');
   }, 15000);
 
-  it('C3: collision entry for active uuid → response carries a warning prefix', async () => {
-    const uuid = randomUUID();
-    const otherUuid = randomUUID();
-    await seedCollisions(tempHome, [
-      {
+  it('C3: cwd resolves to an umbrella by longest-prefix member match', async () => {
+    // Nested member: a deeper prefix wins over a shorter sibling.
+    const nested = join(tempCwd, 'pkg', 'sub');
+    await mkdir(nested, { recursive: true });
+    await writeFile(
+      join(tempHome, 'channels.json'),
+      JSON.stringify({
         v: 1,
-        occurred_at: new Date().toISOString(),
-        channel_key: 'telegram:-1001234',
-        claimants: [uuid, otherUuid],
-        winner_uuid: otherUuid,
-        notified_via_telegram: false,
-      },
+        umbrellas: [
+          { id: 'outer', members: [tempCwd] },
+          { id: 'inner', members: [join(tempCwd, 'pkg')] },
+        ],
+      }),
+      'utf8',
+    );
+    await seedInbox(tempHome, 'inner', 'telegram', [
+      validInboxMsg({ text: 'nested-msg', enqueued_at: '2026-05-29T00:00:00Z' }),
     ]);
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient({}, nested);
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
       arguments: { limit: 10 },
     });
     const text = (r.result as ToolCallResult).content[0]!.text;
-    // L12 — contains-check on a stable phrase, NOT strict text match.
-    // The full collision prefix references chat-routing.json paths that
-    // vary per test HOME.
-    expect(text.toLowerCase()).toMatch(/collision|chat-routing|claimant/);
+    expect(text).toContain('Umbrella: inner');
+    expect(text).toContain('nested-msg');
   }, 15000);
 
   // -------------------------------------------------------------------------
@@ -635,12 +624,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   // -------------------------------------------------------------------------
 
   it('D1: chat_send(telegram:1234, hello) → fake daemon captures + bridge returns ok', async () => {
-    const uuid = randomUUID();
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_send',
@@ -654,12 +638,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   }, 15000);
 
   it('D2: chat_send with reply_to + thread_id → payload carries both (camelCase)', async () => {
-    const uuid = randomUUID();
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_send',
@@ -681,16 +660,9 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
     });
   }, 15000);
 
-  it('D3: project:telegram shorthand resolves via chat-routing.json', async () => {
-    const uuid = randomUUID();
-    await seedChatRouting(tempHome, uuid, {
-      telegram: { report_channel: '-1009876', report_topic_id: 42 },
-    });
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+  it('D3: project:telegram shorthand resolves via the umbrella outbound in channels.json', async () => {
+    await seedChannels(tempHome, UMB, tempCwd, { chat_id: '-1009876', topic_id: 42 });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_send',
@@ -700,7 +672,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
     const sends = fakeDaemon.sentRequests.filter((s) => s.text === 'shorthand');
     expect(sends).toHaveLength(1);
     expect(sends[0]).toEqual({
-      channel: '-1009876',
+      channel: 'telegram:-1009876', // <platform>:<native_id> — the daemon rejects a bare id
       text: 'shorthand',
       threadId: '42',
     });
@@ -713,12 +685,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   it('E1: daemon socket missing → unreachable / timeout error surface', async () => {
     // Tear down the fake daemon BEFORE the call so the connect fails.
     await fakeDaemon.close();
-    const uuid = randomUUID();
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_send',
@@ -729,12 +696,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   }, 15000);
 
   it('E2: project:<unknown-platform> → unknown shorthand error', async () => {
-    const uuid = randomUUID();
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_send',
@@ -746,13 +708,11 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
     expect(fakeDaemon.sentRequests.filter((s) => s.text === 'nope')).toHaveLength(0);
   }, 15000);
 
-  it('E3: project:telegram with no active project → "cannot resolve" error', async () => {
-    const cwdEmpty = await mkdtemp(join(tmpdir(), 'opensquid-cbt-cwd-'));
+  it('E3: project:telegram with no active umbrella → "cannot resolve" error', async () => {
+    const cwdEmpty = await mkdtemp(join(tmpdir(), 'opensquid-cbt-noumb-'));
     try {
-      client = new MCPClient(
-        { ...process.env, OPENSQUID_HOME: tempHome, OPENSQUID_PROJECT_UUID: '' },
-        cwdEmpty,
-      );
+      // cwdEmpty is NOT a member of any umbrella in channels.json.
+      client = spawnClient({}, cwdEmpty);
       await client.initialize();
       const r = await client.request('tools/call', {
         name: 'chat_send',
@@ -771,12 +731,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   // -------------------------------------------------------------------------
 
   it('F1: chat_send({}) (missing required channel + text) → SDK reports the missing args', async () => {
-    const uuid = randomUUID();
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', { name: 'chat_send', arguments: {} });
     // The MCP SDK may serialize Zod validation as a JSON-RPC -32602 error
@@ -788,12 +743,7 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
   }, 15000);
 
   it('F2: chat_poll_inbox({limit: -5}) → Zod limit-bounds violation surfaces', async () => {
-    const uuid = randomUUID();
-    client = new MCPClient({
-      ...process.env,
-      OPENSQUID_HOME: tempHome,
-      OPENSQUID_PROJECT_UUID: uuid,
-    });
+    client = spawnClient();
     await client.initialize();
     const r = await client.request('tools/call', {
       name: 'chat_poll_inbox',
