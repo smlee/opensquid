@@ -168,6 +168,26 @@ describe('AgentBridgeDaemon.start', () => {
     await d.shutdown(); // second call: no-op, no throw
   });
 
+  it('umbrella daemon acquires the umbrella lease on start + releases on shutdown (CAT.5)', async () => {
+    const priorHome = process.env.OPENSQUID_HOME;
+    process.env.OPENSQUID_HOME = daemonHome; // so umbrellaLiveSessionLease lands in sandbox
+    try {
+      const { umbrellaLiveSessionLease } = await import('../paths.js');
+      const { readLease } = await import('../chat/live_session_lease.js');
+      const { headlessSessionId } = await import('./headless_lease.js');
+      const d = makeDaemon({ umbrellaId: 'loop' });
+      await d.start();
+      const held = await readLease(umbrellaLiveSessionLease('loop'));
+      expect(held?.session_id).toBe(headlessSessionId('loop'));
+      await d.shutdown();
+      // Our headless lease is released on clean shutdown.
+      expect(await readLease(umbrellaLiveSessionLease('loop'))).toBeNull();
+    } finally {
+      if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+      else process.env.OPENSQUID_HOME = priorHome;
+    }
+  });
+
   it('start after shutdown throws (single-use contract)', async () => {
     const d = makeDaemon();
     await d.start();

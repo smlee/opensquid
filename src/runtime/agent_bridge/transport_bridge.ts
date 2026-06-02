@@ -49,6 +49,8 @@ import { join } from 'node:path';
 
 import { type FSWatcher, watch } from 'chokidar';
 
+import { umbrellaInboxDir } from '../paths.js';
+
 import type { AgentEventBus } from './event_bus.js';
 import { type InboundChatEvent, inboundChatEventSchema, type SessionKey } from './types.js';
 
@@ -82,7 +84,17 @@ export interface TransportBridgeOptions {
   bus: AgentEventBus;
   projectUuid: string;
   /**
-   * Override the inbox root (default: `~/.opensquid/projects/<uuid>/inbox/`).
+   * Owning umbrella id (T-CHAT-AS-TERMINAL CAT.5). When set, the bridge
+   * watches the UMBRELLA inbox (`~/.opensquid/umbrellas/<id>/inbox/`) instead
+   * of the per-project inbox, and stamps `umbrellaId` onto every emitted
+   * event so the dispatcher's T-DEL arbitration can read the umbrella lease.
+   * Omitted ⇒ legacy per-project inbox + lease (the general/project path).
+   * `inboxRoot` (tests) still wins over both when provided.
+   */
+  umbrellaId?: string;
+  /**
+   * Override the inbox root (default: `~/.opensquid/projects/<uuid>/inbox/`,
+   * or `~/.opensquid/umbrellas/<id>/inbox/` when `umbrellaId` is set).
    * Provided ONLY for tests — production callers must not pass this.
    * Distinct from "env-override" because there is no env var that flips
    * this; the caller wires it explicitly in test setUp.
@@ -130,7 +142,10 @@ export class InboxTransportBridge {
   constructor(private readonly opts: TransportBridgeOptions) {
     this.warn = opts.onWarn ?? noopWarn;
     this.inboxDir =
-      opts.inboxRoot ?? join(homedir(), '.opensquid', 'projects', opts.projectUuid, 'inbox');
+      opts.inboxRoot ??
+      (opts.umbrellaId !== undefined
+        ? umbrellaInboxDir(opts.umbrellaId)
+        : join(homedir(), '.opensquid', 'projects', opts.projectUuid, 'inbox'));
     this.fileGlob = opts.fileGlob ?? '*.jsonl';
   }
 
@@ -355,6 +370,9 @@ export class InboxTransportBridge {
       receivedAt: String(r.received_at ?? ''),
       enqueuedAt: String(r.enqueued_at ?? ''),
       projectUuid: this.opts.projectUuid,
+      // Stamp the owning umbrella (CAT.5) so the dispatcher's arbitration
+      // reads the umbrella lease, not the project lease.
+      ...(this.opts.umbrellaId !== undefined ? { umbrellaId: this.opts.umbrellaId } : {}),
       raw: r,
     };
     return event;

@@ -48,8 +48,8 @@ import {
   type RunAgentTurnSubscriptionOptions,
   type RunAgentTurnSubscriptionResult,
 } from './agent_loop_subscription.js';
-import { isLeaseFresh, readLease } from '../chat/live_session_lease.js';
-import { liveSessionLease } from '../paths.js';
+import { isLeaseFresh, isLeaseFreshAndOwnedBy, readLease } from '../chat/live_session_lease.js';
+import { liveSessionLease, umbrellaLiveSessionLease } from '../paths.js';
 
 import { BatchCoordinator, type BatchCoordinatorOptions } from './batch.js';
 import type { AgentEventBus } from './event_bus.js';
@@ -97,14 +97,36 @@ export interface ChatDispatcherOptions {
   /** Telemetry hook for agent-turn failures. */
   onTurnError?: (key: SessionKey, err: unknown) => void;
   /**
-   * Cross-session arbitration (T-DEL): returns true if a live interactive
-   * session holds a FRESH lease for this project — the daemon then SKIPS the
-   * turn (the live session answers). Default reads the live-session lease.
-   * Injectable for tests. Fail-open: a throw is treated as "no live session".
+   * This daemon's own chat-answering session id (T-CHAT-AS-TERMINAL CAT.5).
+   * For the always-on headless daemon this is `headless-<umbrellaId>`. The
+   * arbitration only answers an inbound when the umbrella lease is fresh AND
+   * owned by THIS id (the double-holder guard); a fresh lease owned by anyone
+   * else (a human terminal, another daemon) means STAND DOWN. Omitted ⇒
+   * legacy presence-only arbitration (skip when SOMEONE is live).
    */
-  isLiveSessionActive?: (projectUuid: string) => Promise<boolean>;
-  /** Telemetry hook fired when a turn is skipped because a live session owns it. */
-  onSkip?: (key: SessionKey, projectUuid: string) => void;
+  ownSessionId?: string;
+  /**
+   * Cross-session arbitration (T-DEL + CAT.5). Returns true when this daemon
+   * must SKIP the turn because the lease is held by a DIFFERENT session.
+   *
+   * Default behavior:
+   *   - umbrella-keyed event (`umbrellaId` set): read
+   *     `umbrellaLiveSessionLease(umbrellaId)`. With `ownSessionId` set, skip
+   *     unless the fresh lease is OURS (ownership guard). Without it, skip when
+   *     the lease is fresh (presence-only, legacy semantics).
+   *   - project-keyed event (no `umbrellaId`): read `liveSessionLease(uuid)`,
+   *     presence-only (the original T-DEL behavior).
+   *
+   * Injectable for tests. Fail-open: a throw is treated as "do not skip" so a
+   * lease-read bug can't mute the daemon.
+   */
+  shouldSkipTurn?: (arg: {
+    umbrellaId: string | undefined;
+    projectUuid: string;
+    ownSessionId: string | undefined;
+  }) => Promise<boolean>;
+  /** Telemetry hook fired when a turn is skipped because another session owns the lease. */
+  onSkip?: (key: SessionKey, ownerKey: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,11 +143,20 @@ export class ChatDispatcher {
   private readonly pendingQueue = new Map<string, QueuedBatch>();
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly projectUuidBySlug = new Map<string, string>();
+  // umbrellaIdBySlug: bridge the umbrella id across the BatchCoordinator's
+  // event-boundary coalesce (same pattern as projectUuidBySlug) so the
+  // arbitration + resume have the umbrella at flush time.
+  private readonly umbrellaIdBySlug = new Map<string, string>();
   private readonly warn: (message: string) => void;
   private readonly onReply: (key: SessionKey, replyText: string, projectUuid: string) => void;
   private readonly onTurnError: (key: SessionKey, err: unknown) => void;
-  private readonly isLiveSessionActive: (projectUuid: string) => Promise<boolean>;
-  private readonly onSkip: (key: SessionKey, projectUuid: string) => void;
+  private readonly ownSessionId: string | undefined;
+  private readonly shouldSkipTurn: (arg: {
+    umbrellaId: string | undefined;
+    projectUuid: string;
+    ownSessionId: string | undefined;
+  }) => Promise<boolean>;
+  private readonly onSkip: (key: SessionKey, ownerKey: string) => void;
   private started = false;
   private stopped = false;
 
@@ -133,10 +164,8 @@ export class ChatDispatcher {
     this.warn = opts.onWarn ?? noopWarn;
     this.onReply = opts.onReply ?? noopReply;
     this.onTurnError = opts.onTurnError ?? noopTurnError;
-    this.isLiveSessionActive =
-      opts.isLiveSessionActive ??
-      (async (uuid: string): Promise<boolean> =>
-        isLeaseFresh(await readLease(liveSessionLease(uuid))));
+    this.ownSessionId = opts.ownSessionId;
+    this.shouldSkipTurn = opts.shouldSkipTurn ?? defaultShouldSkipTurn;
     this.onSkip = opts.onSkip ?? noop;
     this.coordinator = new BatchCoordinator({
       ...(opts.batchOptions ?? {}),
@@ -168,6 +197,7 @@ export class ChatDispatcher {
     await Promise.allSettled(Array.from(this.inFlight.values()));
     this.inFlight.clear();
     this.projectUuidBySlug.clear();
+    this.umbrellaIdBySlug.clear();
   }
 
   get pendingBatchCount(): number {
@@ -184,7 +214,9 @@ export class ChatDispatcher {
 
   private handleInbound(event: InboundChatEvent): void {
     if (this.stopped) return;
-    this.projectUuidBySlug.set(sessionKeyString(event.sessionKey), event.projectUuid);
+    const slug = sessionKeyString(event.sessionKey);
+    this.projectUuidBySlug.set(slug, event.projectUuid);
+    if (event.umbrellaId !== undefined) this.umbrellaIdBySlug.set(slug, event.umbrellaId);
     this.coordinator.ingest(event.sessionKey, event.text);
   }
 
@@ -199,23 +231,32 @@ export class ChatDispatcher {
   private async handleFlush(key: SessionKey, coalesced: string): Promise<void> {
     if (this.stopped) return;
     const slug = sessionKeyString(key);
-    // T-DEL arbitration: if a live interactive session holds a fresh lease for
-    // this project, it answers — the daemon stays silent. Fail-open: a throw is
-    // treated as "no live session" so a lease-read bug can't mute the daemon.
+    // T-DEL + CAT.5 arbitration: re-read the lease at flush time (it can flip
+    // between ingest and flush — a human terminal may have just taken over).
+    // For the headless daemon (ownSessionId set) this is the DOUBLE-HOLDER
+    // GUARD: answer only when the umbrella lease is fresh AND ours; stand down
+    // when anyone else holds it. Fail-open: a throw is treated as "do not skip"
+    // so a lease-read bug can't mute the daemon.
     const projectUuid = this.projectUuidBySlug.get(slug);
-    if (projectUuid !== undefined && projectUuid !== '') {
-      let live = false;
+    const umbrellaId = this.umbrellaIdBySlug.get(slug);
+    if ((projectUuid !== undefined && projectUuid !== '') || umbrellaId !== undefined) {
+      let skip = false;
       try {
-        live = await this.isLiveSessionActive(projectUuid);
+        skip = await this.shouldSkipTurn({
+          umbrellaId,
+          projectUuid: projectUuid ?? '',
+          ownSessionId: this.ownSessionId,
+        });
       } catch {
-        live = false;
+        skip = false;
       }
-      if (live) {
+      if (skip) {
+        const owner = umbrellaId !== undefined ? `umbrella=${umbrellaId}` : `project=${projectUuid}`;
         this.warn(
-          `[agent_bridge.dispatcher] skipping turn for session=${slug}: live session active ` +
-            `(project=${projectUuid})`,
+          `[agent_bridge.dispatcher] skipping turn for session=${slug}: another session ` +
+            `holds the lease (${owner})`,
         );
-        this.onSkip(key, projectUuid);
+        this.onSkip(key, owner);
         return;
       }
     }
@@ -280,7 +321,17 @@ export class ChatDispatcher {
     }
     this.opts.sessionManager.beginTurn(key);
     try {
-      const result = await runResolvedTurn(state, text, this.opts.agentLoopOptions);
+      // CAT.5 resume: in subscription mode, thread the umbrella-stable resume
+      // id so the headless turn continues the SAME claude session/transcript
+      // (not a fresh one). The api-mode hydration is already umbrella-stable
+      // via the session slug, so resume is a subscription-only concern.
+      const resumeSessionId = this.resolveResumeSessionId(slug);
+      const result = await runResolvedTurn(
+        state,
+        text,
+        this.opts.agentLoopOptions,
+        resumeSessionId,
+      );
       await this.opts.sessionManager.appendTurn(key, result.assistantEntries);
       this.onReply(key, result.replyText, state.projectUuid);
     } catch (err) {
@@ -290,6 +341,22 @@ export class ChatDispatcher {
       this.warn(`[agent_bridge.dispatcher] turn failed ${slug}: ${describeErr(err)}`);
       this.onTurnError(key, err);
     }
+  }
+
+  /**
+   * The `--resume <id>` to thread into a subscription turn so it continues the
+   * umbrella's existing transcript. Priority:
+   *   1. an explicit `resumeSessionId` already on the subscription options
+   *      (caller continuing a claude session started outside opensquid),
+   *   2. this daemon's `ownSessionId` (the headless id, umbrella-stable — same
+   *      across every turn so resume always lands on the same session),
+   *   3. undefined (api mode / general path with no resume binding).
+   */
+  private resolveResumeSessionId(_slug: string): string | undefined {
+    const loop = this.opts.agentLoopOptions;
+    if (loop.mode !== 'subscription') return undefined;
+    if (loop.resumeSessionId !== undefined) return loop.resumeSessionId;
+    return this.ownSessionId;
   }
 }
 
@@ -313,18 +380,23 @@ async function runResolvedTurn(
   state: Parameters<typeof runAgentTurn>[0],
   text: string,
   loop: DispatcherAgentLoopOptions,
+  resumeSessionId?: string,
 ): Promise<ResolvedTurnResult> {
   switch (loop.mode) {
     case 'api':
       // The structural type of `loop` (post-narrowing) is compatible with
       // RunAgentTurnOptions — the extra `mode` field is harmless excess
       // property at the call site (TS allows it; runAgentTurn ignores it).
+      // api-mode resume is implicit: SessionManager hydrates history by the
+      // umbrella-stable slug, so the next turn already sees the same transcript.
       return runAgentTurn(state, text, loop);
     case 'subscription': {
+      const subOpts: RunAgentTurnSubscriptionOptions =
+        resumeSessionId !== undefined ? { ...loop, resumeSessionId } : loop;
       const result: RunAgentTurnSubscriptionResult = await runAgentTurnSubscription(
         state,
         text,
-        loop,
+        subOpts,
       );
       return { assistantEntries: result.assistantEntries, replyText: result.replyText };
     }
@@ -342,6 +414,36 @@ function assertNever(x: never): never {
 
 function describeErr(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Default cross-session arbitration (T-DEL + CAT.5). Returns true ⇒ SKIP the
+ * turn (another session owns the lease).
+ *
+ * - Umbrella-keyed (`umbrellaId` set): read `umbrellaLiveSessionLease`.
+ *     - With `ownSessionId`: skip unless the lease is fresh AND ours
+ *       (the double-holder guard — never answer while a human/other holds it).
+ *     - Without `ownSessionId`: presence-only (skip when SOMEONE is fresh).
+ * - Project-keyed (no `umbrellaId`): read `liveSessionLease`, presence-only —
+ *   the original T-DEL semantics (a live `chat watch` answers).
+ */
+async function defaultShouldSkipTurn(arg: {
+  umbrellaId: string | undefined;
+  projectUuid: string;
+  ownSessionId: string | undefined;
+}): Promise<boolean> {
+  if (arg.umbrellaId !== undefined) {
+    const lease = await readLease(umbrellaLiveSessionLease(arg.umbrellaId));
+    if (arg.ownSessionId !== undefined) {
+      // Answer only when WE hold a fresh lease; skip otherwise.
+      return !isLeaseFreshAndOwnedBy(lease, arg.ownSessionId);
+    }
+    return isLeaseFresh(lease);
+  }
+  if (arg.projectUuid !== '') {
+    return isLeaseFresh(await readLease(liveSessionLease(arg.projectUuid)));
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

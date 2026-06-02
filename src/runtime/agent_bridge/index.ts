@@ -105,6 +105,13 @@ export {
   type DispatcherAgentLoopOptions,
 } from './dispatcher.js';
 export {
+  HeadlessLeaseManager,
+  type HeadlessLeaseManagerOptions,
+  headlessSessionId,
+  HEADLESS_HEARTBEAT_MS,
+  HEADLESS_RECLAIM_MS,
+} from './headless_lease.js';
+export {
   buildChatToolDispatcher,
   type BuildChatToolDispatcherOptions,
   type BuildChatToolDispatcherResult,

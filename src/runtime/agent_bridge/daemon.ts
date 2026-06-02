@@ -65,6 +65,7 @@ import { OPENSQUID_HOME } from '../paths.js';
 import type { AnthropicMessageClient } from './agent_loop.js';
 import { ChatDispatcher, type DispatcherAgentLoopOptions } from './dispatcher.js';
 import { AgentEventBus } from './event_bus.js';
+import { HeadlessLeaseManager, headlessSessionId } from './headless_lease.js';
 import { resolveMcpConfigPath } from './mcp_config.js';
 import { buildChatToolDispatcher, type BuildChatToolDispatcherResult } from './pack_binding.js';
 import { SessionManager } from './session_manager.js';
@@ -82,6 +83,15 @@ export const agentBridgeLogPath = (): string => join(OPENSQUID_HOME(), 'agent-br
 export interface AgentBridgeDaemonOptions {
   /** Required — the project whose inbox + sessions this daemon serves. */
   projectUuid: string;
+  /**
+   * Owning umbrella id (T-CHAT-AS-TERMINAL CAT.5). When set, the daemon runs
+   * UMBRELLA-keyed: the transport watches the umbrella inbox, the dispatcher's
+   * arbitration reads the umbrella lease (ownership-aware against the headless
+   * id `headless-<umbrellaId>`), and a {@link HeadlessLeaseManager} holds the
+   * lease while no human session is live (standing down when one appears).
+   * Omitted ⇒ legacy per-project keying (no headless lease handoff).
+   */
+  umbrellaId?: string;
   /** Required — absolute path to the pack folder (contains manifest.yaml + chat_agent.yaml). */
   packRoot: string;
   /**
@@ -127,6 +137,7 @@ export class AgentBridgeDaemon {
   private dispatcher: ChatDispatcher | null = null;
   private sessionManager: SessionManager | null = null;
   private bus: AgentEventBus | null = null;
+  private headlessLease: HeadlessLeaseManager | null = null;
   private signalHandlers: { signal: NodeJS.Signals; handler: () => void }[] = [];
   private bindingResult: BuildChatToolDispatcherResult | null = null;
 
@@ -206,9 +217,11 @@ export class AgentBridgeDaemon {
         defaultModelAlias: this.bindingResult.resolvedModel,
       });
       this.bus = new AgentEventBus();
+      const umbrellaId = this.opts.umbrellaId;
       this.transport = new InboxTransportBridge({
         bus: this.bus,
         projectUuid: this.opts.projectUuid,
+        ...(umbrellaId !== undefined ? { umbrellaId } : {}),
         onWarn: (m) => this.warn(m),
       });
       this.dispatcher = new ChatDispatcher({
@@ -216,10 +229,24 @@ export class AgentBridgeDaemon {
         sessionManager: this.sessionManager,
         agentLoopOptions,
         onWarn: (m) => this.warn(m),
+        // CAT.5: umbrella daemons run as the stable headless session id so the
+        // dispatcher's ownership guard answers ONLY while WE hold the umbrella
+        // lease (and resume threads the same session). Default arbitration
+        // reads the umbrella lease ownership-aware against this id.
+        ...(umbrellaId !== undefined ? { ownSessionId: headlessSessionId(umbrellaId) } : {}),
         ...(this.opts.onReply !== undefined ? { onReply: this.opts.onReply } : {}),
       });
       this.dispatcher.start();
       await this.transport.start();
+      // CAT.5: hold the umbrella's chat lease while no human session is live.
+      // acquireIfFree + a 30s fs-only heartbeat (zero idle token cost).
+      if (umbrellaId !== undefined) {
+        this.headlessLease = new HeadlessLeaseManager({
+          umbrellaId,
+          onWarn: (m) => this.warn(m),
+        });
+        await this.headlessLease.start();
+      }
       await writeFile(pidPath, String(process.pid), 'utf8');
       this.installSignalHandlers();
       this.state = 'running';
@@ -309,12 +336,19 @@ export class AgentBridgeDaemon {
 
   /** Shared teardown — used by both shutdown() and start()'s rollback path.
    *  Order: dispatcher (drops batch timers + awaits in-flight turn) →
-   *  transport (closes watcher + drains tail reads) → sessionManager
-   *  (drains LRU, fires onEvict('shutdown')) → release lock → pidfile. */
+   *  headlessLease (stop heartbeat + release our hold) → transport (closes
+   *  watcher + drains tail reads) → sessionManager (drains LRU, fires
+   *  onEvict('shutdown')) → release lock → pidfile. */
   private async teardown(pidPath: string): Promise<void> {
     if (this.dispatcher !== null) {
       await safeAsync(() => this.dispatcher?.shutdown() ?? Promise.resolve());
       this.dispatcher = null;
+    }
+    // CAT.5: stop the heartbeat + release OUR hold (only if still ours) so a
+    // freshly-opened terminal isn't blocked by a stale headless lease.
+    if (this.headlessLease !== null) {
+      await safeAsync(() => this.headlessLease?.stop() ?? Promise.resolve());
+      this.headlessLease = null;
     }
     if (this.transport !== null) {
       await safeAsync(() => this.transport?.shutdown() ?? Promise.resolve());

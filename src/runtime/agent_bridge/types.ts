@@ -87,6 +87,15 @@ export const inboundChatEventSchema = z.object({
   receivedAt: z.string().datetime({ offset: true }),
   enqueuedAt: z.string().datetime({ offset: true }),
   projectUuid: z.string().uuid(),
+  /**
+   * Owning umbrella id (T-CHAT-AS-TERMINAL CAT.5). Stamped by a
+   * umbrella-keyed transport bridge (one umbrella ↔ one chat session,
+   * invariants #2/#4). The dispatcher's T-DEL arbitration reads
+   * `umbrellaLiveSessionLease(umbrellaId)` to decide whether to answer. A
+   * project-keyed transport (legacy / general session) omits it, in which case
+   * the dispatcher falls back to the project lease (`liveSessionLease`).
+   */
+  umbrellaId: z.string().min(1).optional(),
   raw: z.record(z.unknown()).optional(),
 });
 export type InboundChatEvent = z.infer<typeof inboundChatEventSchema>;

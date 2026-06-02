@@ -27,6 +27,7 @@ import { join, resolve } from 'node:path';
 
 import type { Command } from 'commander';
 
+import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
 import { OPENSQUID_HOME, resolveProjectUuid } from '../paths.js';
 
 import { AgentBridgeDaemon, agentBridgePidPath, resolvePackRootFromEnv } from './daemon.js';
@@ -194,7 +195,15 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
         return;
       }
       const packRoot = resolvePackRootFromEnv(env);
-      const daemon = new Ctor({ projectUuid, packRoot });
+      // CAT.5: resolve cwd → umbrella so the daemon runs umbrella-keyed (headless
+      // lease handoff). A missing/absent channels.json or an unclaimed cwd leaves
+      // umbrellaId undefined → the daemon falls back to legacy per-project keying.
+      const umbrellaId = await resolveUmbrellaForCwdSafe(cwd());
+      const daemon = new Ctor({
+        projectUuid,
+        packRoot,
+        ...(umbrellaId !== null ? { umbrellaId } : {}),
+      });
       try {
         await daemon.start();
       } catch (e) {
@@ -255,6 +264,22 @@ async function waitForPidfileGone(env: NodeJS.ProcessEnv, timeoutMs: number): Pr
       return;
     }
     await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+/**
+ * Resolve a cwd → umbrella id via `channels.json` (CAT.5). Returns null when
+ * there is no config, no umbrella claims the cwd, or any read error — the
+ * daemon then runs legacy per-project keyed (no headless lease handoff). Never
+ * throws: a broken routing config must not block the daemon from booting.
+ */
+async function resolveUmbrellaForCwdSafe(cwd: string): Promise<string | null> {
+  try {
+    const cfg = await loadChannelsConfig();
+    if (cfg === null) return null;
+    return resolveUmbrellaForCwd(cfg, cwd);
+  } catch {
+    return null;
   }
 }
 

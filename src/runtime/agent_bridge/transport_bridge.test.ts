@@ -312,3 +312,50 @@ describe('InboxTransportBridge', () => {
     expect(warnings.some((w) => w.includes("unsupported platform 'sms'"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CAT.5 — umbrella-keyed transport. With `umbrellaId` set (and no inboxRoot
+// override), the bridge watches `~/.opensquid/umbrellas/<id>/inbox/` and stamps
+// `umbrellaId` onto every emitted event so the dispatcher arbitration reads the
+// umbrella lease. We point OPENSQUID_HOME at the tmp dir so the path resolver
+// lands inside the test sandbox.
+// ---------------------------------------------------------------------------
+
+describe('InboxTransportBridge — umbrella keyed (CAT.5)', () => {
+  let priorHome: string | undefined;
+
+  beforeEach(() => {
+    priorHome = process.env.OPENSQUID_HOME;
+    process.env.OPENSQUID_HOME = tmpRoot;
+  });
+
+  afterEach(() => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+  });
+
+  it('watches the umbrella inbox dir + stamps umbrellaId onto events', async () => {
+    const umbrellaId = 'loop';
+    const umbInboxDir = path.join(tmpRoot, 'umbrellas', umbrellaId, 'inbox');
+    await fs.mkdir(umbInboxDir, { recursive: true });
+    const umbFile = path.join(umbInboxDir, 'telegram.jsonl');
+
+    bridge = new InboxTransportBridge({
+      bus,
+      projectUuid: TEST_PROJECT_UUID,
+      umbrellaId, // no inboxRoot → resolves to umbrellaInboxDir(umbrellaId)
+      usePolling: true,
+      onWarn: (m) => warnings.push(m),
+    });
+    await bridge.start();
+    await fs.appendFile(
+      umbFile,
+      legacyRow({ id: '1', channel: 'telegram:8075471258', senderId: '8075471258', text: 'hi' }),
+    );
+    await waitFor(() => received.length >= 1);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.umbrellaId).toBe(umbrellaId);
+    expect(received[0]?.text).toBe('hi');
+    expect(warnings).toEqual([]);
+  });
+});

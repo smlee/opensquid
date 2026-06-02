@@ -79,6 +79,24 @@ export function isLeaseFresh(lease: LiveSessionLease | null, now: Date = new Dat
   return Number.isFinite(age) && age >= 0 && age < STALE_MS;
 }
 
+/**
+ * Ownership-aware freshness (T-CHAT-AS-TERMINAL CAT.5). True iff the lease is
+ * fresh AND owned by `expectedSessionId`. This is the double-holder guard: a
+ * headless daemon answers an inbound ONLY when it both holds a fresh lease and
+ * that lease carries ITS OWN session id — never while a human (or any other)
+ * session holds a fresh lease, which would double-answer (409 / mingling).
+ *
+ * `isLeaseFresh` alone answers "is SOMEONE live?"; this answers "are WE live?".
+ */
+export function isLeaseFreshAndOwnedBy(
+  lease: LiveSessionLease | null,
+  expectedSessionId: string,
+  now: Date = new Date(),
+): boolean {
+  if (!isLeaseFresh(lease, now)) return false;
+  return lease !== null && lease.session_id === expectedSessionId;
+}
+
 /** Best-effort removal on `chat watch` exit. Never throws. */
 export async function removeLease(leasePath: string): Promise<void> {
   await rm(leasePath, { force: true }).catch(() => undefined);

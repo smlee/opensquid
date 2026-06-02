@@ -28,9 +28,12 @@ import {
 } from './agent_loop.js';
 import { ChatDispatcher } from './dispatcher.js';
 import { AgentEventBus } from './event_bus.js';
+import { headlessSessionId } from './headless_lease.js';
 import { SessionManager } from './session_manager.js';
 import { SessionPersistence } from './session_persistence.js';
 import type { InboundChatEvent, SessionKey, ToolDispatcher } from './types.js';
+import { writeLease } from '../chat/live_session_lease.js';
+import { umbrellaLiveSessionLease } from '../paths.js';
 
 const PROJECT_UUID = '0742f358-c0fd-4690-ae9d-da8f4102ab4a';
 const KEY: SessionKey = { platform: 'telegram', chatId: '8075471258' };
@@ -593,7 +596,7 @@ describe('ChatDispatcher — cross-session arbitration (DEL.2)', () => {
     const client = makeClient(['should not be used'], calls);
     const bus = new AgentEventBus();
     const replies: { key: SessionKey; text: string }[] = [];
-    const skips: { projectUuid: string }[] = [];
+    const skips: { owner: string }[] = [];
     const dp = new ChatDispatcher({
       bus,
       sessionManager: sm,
@@ -607,8 +610,8 @@ describe('ChatDispatcher — cross-session arbitration (DEL.2)', () => {
       },
       batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
       onReply: (key, text) => replies.push({ key, text }),
-      isLiveSessionActive: () => Promise.resolve(true),
-      onSkip: (_key, projectUuid) => skips.push({ projectUuid }),
+      shouldSkipTurn: () => Promise.resolve(true),
+      onSkip: (_key, owner) => skips.push({ owner }),
     });
     dp.start();
 
@@ -618,7 +621,7 @@ describe('ChatDispatcher — cross-session arbitration (DEL.2)', () => {
     expect(calls).toHaveLength(0); // agent loop NOT invoked
     expect(replies).toHaveLength(0); // daemon stayed silent
     expect(skips).toHaveLength(1);
-    expect(skips[0]?.projectUuid).toBe(PROJECT_UUID);
+    expect(skips[0]?.owner).toBe(`project=${PROJECT_UUID}`);
 
     await dp.shutdown();
     sm.shutdown();
@@ -644,7 +647,7 @@ describe('ChatDispatcher — cross-session arbitration (DEL.2)', () => {
       },
       batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
       onReply: (key, text) => replies.push({ key, text }),
-      isLiveSessionActive: () => Promise.resolve(false),
+      shouldSkipTurn: () => Promise.resolve(false),
     });
     dp.start();
 
@@ -678,7 +681,7 @@ describe('ChatDispatcher — cross-session arbitration (DEL.2)', () => {
       },
       batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
       onReply: (key, text) => replies.push({ key, text }),
-      isLiveSessionActive: () => Promise.reject(new Error('lease read boom')),
+      shouldSkipTurn: () => Promise.reject(new Error('lease read boom')),
     });
     dp.start();
 
@@ -687,6 +690,182 @@ describe('ChatDispatcher — cross-session arbitration (DEL.2)', () => {
 
     expect(calls.length).toBeGreaterThan(0); // throw treated as "no live session"
     expect(replies.length).toBeGreaterThan(0);
+
+    await dp.shutdown();
+    sm.shutdown();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CAT.5 — umbrella-keyed ownership guard (default arbitration). These use the
+// REAL defaultShouldSkipTurn (no shouldSkipTurn injection) reading the umbrella
+// lease under the test's tmp OPENSQUID_HOME, so they exercise the actual
+// double-holder guard. The agent loop is a counting stub → a model call only
+// happens when the daemon ANSWERS, proving "no answer" = "no tokens".
+// ---------------------------------------------------------------------------
+
+const UMB = 'loop';
+const HEADLESS_ID = headlessSessionId(UMB);
+
+function umbrellaEvent(key: SessionKey, text: string, id = '1'): InboundChatEvent {
+  return { ...fixtureEvent(key, text, id), umbrellaId: UMB };
+}
+
+describe('ChatDispatcher — CAT.5 umbrella ownership guard', () => {
+  it('does NOT answer (no agent-loop call) while a fresh HUMAN holds the umbrella lease', async () => {
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    const calls: ClientCall[] = [];
+    const client = makeClient(['must not be used'], calls);
+    const bus = new AgentEventBus();
+    const replies: { key: SessionKey; text: string }[] = [];
+    const skips: { owner: string }[] = [];
+    // A human terminal holds a FRESH umbrella lease.
+    await writeLease(umbrellaLiveSessionLease(UMB), 'human-terminal-session');
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'api',
+        client,
+        model: 'm',
+        systemPrompt: 's',
+        tools: [],
+        dispatcher: NOOP_TOOLS,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      ownSessionId: HEADLESS_ID,
+      onReply: (key, text) => replies.push({ key, text }),
+      onSkip: (_key, owner) => skips.push({ owner }),
+    });
+    dp.start();
+
+    bus.emit('inbound', umbrellaEvent(KEY, 'a human is live', '1'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(calls).toHaveLength(0); // ZERO tokens — never called the loop
+    expect(replies).toHaveLength(0);
+    expect(skips).toHaveLength(1);
+    expect(skips[0]?.owner).toBe(`umbrella=${UMB}`);
+
+    await dp.shutdown();
+    sm.shutdown();
+  });
+
+  it('answers when WE hold a fresh umbrella lease (our headless id)', async () => {
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    const calls: ClientCall[] = [];
+    const client = makeClient(['headless reply'], calls);
+    const bus = new AgentEventBus();
+    const replies: { key: SessionKey; text: string }[] = [];
+    // WE hold a fresh lease (the headless daemon acquired it).
+    await writeLease(umbrellaLiveSessionLease(UMB), HEADLESS_ID);
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'api',
+        client,
+        model: 'm',
+        systemPrompt: 's',
+        tools: [],
+        dispatcher: NOOP_TOOLS,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      ownSessionId: HEADLESS_ID,
+      onReply: (key, text) => replies.push({ key, text }),
+    });
+    dp.start();
+
+    bus.emit('inbound', umbrellaEvent(KEY, 'headless answers', '1'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(calls.length).toBeGreaterThan(0); // we own → we answer
+    expect(replies.length).toBeGreaterThan(0);
+    expect(replies[0]?.text).toBe('headless reply');
+
+    await dp.shutdown();
+    sm.shutdown();
+  });
+
+  it('does NOT answer when the umbrella lease is ABSENT (ownership guard: only answer when we provably hold it)', async () => {
+    // Safety invariant: the dispatcher answers ONLY when the lease is fresh +
+    // ours. Acquiring the lease is the HeadlessLeaseManager's job (it writes it
+    // before the daemon takes turns); the dispatcher never answers on a bare
+    // absent lease — that would risk a double-answer the instant a human's
+    // unsynced lease lands. No lease on disk → skip → ZERO tokens.
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    const calls: ClientCall[] = [];
+    const client = makeClient(['must not be used'], calls);
+    const bus = new AgentEventBus();
+    const replies: { key: SessionKey; text: string }[] = [];
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'api',
+        client,
+        model: 'm',
+        systemPrompt: 's',
+        tools: [],
+        dispatcher: NOOP_TOOLS,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      ownSessionId: HEADLESS_ID,
+      onReply: (key, text) => replies.push({ key, text }),
+    });
+    dp.start();
+
+    bus.emit('inbound', umbrellaEvent(KEY, 'nobody holds it', '1'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(calls).toHaveLength(0); // no lease ⇒ not ours ⇒ stand down
+    expect(replies).toHaveLength(0);
+
+    await dp.shutdown();
+    sm.shutdown();
+  });
+});
+
+describe('ChatDispatcher — CAT.5 resume threads the same session (subscription)', () => {
+  it('passes --resume <headlessId> so the headless turn continues the umbrella transcript', async () => {
+    const sm = makeManager();
+    await sm.getOrCreate(KEY, PROJECT_UUID);
+    const cliCalls: { args: string[] }[] = [];
+    const stubCli = {
+      run: (req: { cli: string; args: string[]; stdin: string }) => {
+        cliCalls.push({ args: req.args });
+        return Promise.resolve('cli reply');
+      },
+    };
+    const bus = new AgentEventBus();
+    // WE hold the umbrella lease so the daemon answers.
+    await writeLease(umbrellaLiveSessionLease(UMB), HEADLESS_ID);
+    const dp = new ChatDispatcher({
+      bus,
+      sessionManager: sm,
+      agentLoopOptions: {
+        mode: 'subscription',
+        cli: 'claude',
+        args: ['--print'],
+        systemPrompt: 'tested',
+        client: stubCli,
+      },
+      batchOptions: { fastDelayMs: 1, defaultDelayMs: 1 },
+      ownSessionId: HEADLESS_ID,
+    });
+    dp.start();
+
+    bus.emit('inbound', umbrellaEvent(KEY, 'continue the conversation', '1'));
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(cliCalls).toHaveLength(1);
+    const args = cliCalls[0]?.args ?? [];
+    const resumeIdx = args.indexOf('--resume');
+    expect(resumeIdx).toBeGreaterThanOrEqual(0);
+    expect(args[resumeIdx + 1]).toBe(HEADLESS_ID);
 
     await dp.shutdown();
     sm.shutdown();
