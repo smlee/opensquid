@@ -29,8 +29,7 @@ Cross-references:
 
 ## 1. Pack identity
 
-A pack is a directory under `<scope-root>/packs/<name>/` (legacy
-`codexes/` is still accepted with a deprecation warning) containing:
+A pack is a directory under `<scope-root>/packs/<name>/` containing:
 
 ```
 packs/<name>/
