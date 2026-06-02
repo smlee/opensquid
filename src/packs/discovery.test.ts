@@ -128,74 +128,35 @@ describe('discoverActivePacks — happy path', () => {
 });
 
 // ---------------------------------------------------------------------------
-// T-PACK-VOCAB L2 — discovery backward-compat for the renamed `packs/` dir.
-// Old layout: `<scope>/packs/<pack>/`. New layout: `<scope>/packs/<pack>/`.
-// Existing users have `packs/` on disk; discovery accepts both with a
-// stderr deprecation warn for the legacy form.
+// Codex→pack standardization (T-CHAT-AS-TERMINAL) — `packs/` is the sole
+// pack-folder layout. The legacy `<scope>/codexes/` fallback was removed, so
+// a pack that lives only under a `codexes/` dir is NOT discovered.
 // ---------------------------------------------------------------------------
 
-async function writeValidPackInLegacyDir(name: string, scope = 'workflow'): Promise<void> {
-  // Legacy dir name `codexes/` (pre-VOCAB.1) — backward-compat fallback target.
-  const packDir = join(scopeRoot, 'codexes', name);
-  await mkdir(packDir, { recursive: true });
-  await writeFile(
-    join(packDir, 'manifest.yaml'),
-    [`name: ${name}`, 'version: 0.1.0', `scope: ${scope}`, 'goal: legacy fixture'].join('\n') +
-      '\n',
-    'utf8',
-  );
-}
-
-describe('discoverActivePacks — VOCAB.1 backward-compat', () => {
-  let stderrCapture: string[];
-  let originalWrite: typeof process.stderr.write;
-
-  beforeEach(() => {
-    stderrCapture = [];
-    originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = (chunk: string | Uint8Array) => {
-      stderrCapture.push(typeof chunk === 'string' ? chunk : chunk.toString());
-      return true;
-    };
-  });
-
-  afterEach(() => {
-    process.stderr.write = originalWrite;
-  });
-
-  it('VOCAB.1: prefers `<scope>/packs/` when only that dir exists (no warn)', async () => {
+describe('discoverActivePacks — packs/ is the sole pack-folder layout', () => {
+  it('loads packs from `<scope>/packs/`', async () => {
     await writeValidPack('pack-only', 'workflow');
     await writeActive({ packs: ['pack-only'] });
 
     const packs = await discoverActivePacks(scopeRoot);
     expect(packs).toHaveLength(1);
     expect(packs[0]?.name).toBe('pack-only');
-    expect(stderrCapture.join('')).not.toContain('deprecated');
   });
 
-  it('VOCAB.1: falls back to legacy `<scope>/packs/` with stderr deprecation warn', async () => {
-    await writeValidPackInLegacyDir('legacy-only', 'workflow');
+  it('does NOT fall back to a legacy `<scope>/codexes/` dir', async () => {
+    // A pack present only under the removed legacy dir must not be found.
+    const legacyDir = join(scopeRoot, 'codexes', 'legacy-only');
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(
+      join(legacyDir, 'manifest.yaml'),
+      ['name: legacy-only', 'version: 0.1.0', 'scope: workflow', 'goal: legacy fixture'].join(
+        '\n',
+      ) + '\n',
+      'utf8',
+    );
     await writeActive({ packs: ['legacy-only'] });
 
-    const packs = await discoverActivePacks(scopeRoot);
-    expect(packs).toHaveLength(1);
-    expect(packs[0]?.name).toBe('legacy-only');
-    const captured = stderrCapture.join('');
-    expect(captured).toContain('codexes/');
-    expect(captured).toContain('deprecated');
-    expect(captured).toContain('T-PACK-VOCAB');
-  });
-
-  it('VOCAB.1: prefers `<scope>/packs/` when BOTH dirs exist (no warn; legacy ignored)', async () => {
-    await writeValidPack('coexist-pack', 'workflow');
-    // Same name in legacy dir — should be ignored since packs/ takes precedence
-    await writeValidPackInLegacyDir('coexist-pack', 'universal');
-    await writeActive({ packs: ['coexist-pack'] });
-
-    const packs = await discoverActivePacks(scopeRoot);
-    expect(packs).toHaveLength(1);
-    expect(packs[0]?.scope).toBe('workflow'); // from packs/ dir, not legacy
-    expect(stderrCapture.join('')).not.toContain('deprecated');
+    await expect(discoverActivePacks(scopeRoot)).rejects.toThrow(/legacy-only/);
   });
 });
 

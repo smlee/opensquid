@@ -355,7 +355,7 @@ export const Pack = z.object({
   chatAgent: ChatAgentSchema.optional(),
   models: ModelsConfig.optional(),
   driftResponse: DriftResponseConfig.optional(),
-  // IDF.1 (2026-05-30) — v0.6 codex content-richness restored. camelCase
+  // IDF.1 (2026-05-30) — v0.6 pack content-richness restored. camelCase
   // runtime mapping for the snake_case manifest fields (foundation /
   // activation_scope / detected_by). See schemas/manifest.ts for the
   // YAML-side shapes. ALL optional on the runtime Pack type so test

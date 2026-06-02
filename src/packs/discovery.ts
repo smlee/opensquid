@@ -231,15 +231,13 @@ export async function discoverActivePacks(
     }
   }
 
-  // T-PACK-VOCAB L2 (2026-05-29) — backward-compat: prefer `<scope>/packs/`
-  // but fall back to the legacy `<scope>/codexes/` path with a deprecation
-  // warn. Users migrate at their own pace by `mv codexes/ packs/`.
-  const preferredDir = join(scopeRoot, 'packs');
-  const legacyDir = join(scopeRoot, 'codexes');
-  const dirs = await resolvePacksDir(preferredDir, legacyDir);
+  // Pack folders live under `<scope>/packs/`. (The legacy `<scope>/codexes/`
+  // fallback was removed in T-CHAT-AS-TERMINAL's codex→pack standardization —
+  // `packs/` is the sole, standard layout.)
+  const packsDir = join(scopeRoot, 'packs');
   const packs: Pack[] = [];
   for (const name of active.packs) {
-    const pack = await loadPackWithBuiltinFallback(name, dirs, builtinRoot);
+    const pack = await loadPackWithBuiltinFallback(name, packsDir, builtinRoot);
     if (ctx === null || matchesDetectedBy(pack.detectedBy ?? [], ctx)) {
       packs.push(pack);
     }
@@ -285,33 +283,5 @@ async function loadPackWithBuiltinFallback(
       }
       throw fallbackErr;
     }
-  }
-}
-
-/**
- * T-PACK-VOCAB L2 — resolve which root dir to use for pack folder lookup.
- * Returns the preferred `packs/` dir when it exists; otherwise falls back to
- * the legacy `codexes/` dir with a stderr deprecation warning. If neither
- * exists, returns the preferred dir (loadPack will surface the missing-folder
- * error with a sensible path).
- */
-async function resolvePacksDir(preferred: string, legacy: string): Promise<string> {
-  try {
-    await fs.stat(preferred);
-    return preferred;
-  } catch {
-    // preferred missing; check legacy
-  }
-  try {
-    await fs.stat(legacy);
-    process.stderr.write(
-      `opensquid: \`codexes/\` is deprecated as the pack-folder root; ` +
-        `please \`mv ${legacy} ${preferred}\` (T-PACK-VOCAB)\n`,
-    );
-    return legacy;
-  } catch {
-    // neither exists; return preferred — loadPack's per-name join will
-    // surface the missing-folder error with a useful path.
-    return preferred;
   }
 }

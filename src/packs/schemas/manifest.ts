@@ -195,7 +195,7 @@ export type SubagentCallPermission = z.infer<typeof SubagentCallPermission>;
 // ---------------------------------------------------------------------------
 // IDF.1 (2026-05-30) — Foundation taxonomy + ActivationScope + DetectedByCheck
 //
-// Per T-IDENTITY-FOUNDATION Phase 1. Restores three v0.6 codex content-richness
+// Per T-IDENTITY-FOUNDATION Phase 1. Restores three v0.6 pack content-richness
 // fields that the lean-iteration dropped but user 2026-05-29 locked back as
 // v1 targets. All additive: existing packs parse unchanged (every field
 // optional with sensible default).
@@ -446,7 +446,7 @@ export const Manifest = z
     // time; the built-in denylist (`src/runtime/builtin_denylist.ts`) is
     // applied first and ALWAYS wins unless `OPENSQUID_TRUST_BUILTIN_DENY=0`.
     permissions: Permissions.optional(),
-    // IDF.1 (2026-05-30) — v0.6 codex content-richness restored as
+    // IDF.1 (2026-05-30) — v0.6 pack content-richness restored as
     // additive optional fields. See Foundation / ActivationScope /
     // DetectedByCheck schemas above. Foundation undefined when absent;
     // activation_scope defaults to 'project' (matches current implicit
