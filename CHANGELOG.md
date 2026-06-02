@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.283] - 2026-06-02
+
+### Added (T-PACK-FSM-STANDARDIZATION slice A1 — generic total-transition FSM engine)
+
+A pure, pack-declarable FSM engine. `validateFsm` runs load-time totality checks
+(`initial` and every transition's `from`/`to` reference a declared state — no
+transition targets an undefined state). `step` is the TOTAL transition function:
+a defined outcome for every (state, event) — the first matching transition
+(exact `from` or `*` wildcard, matching `on`, satisfied `when` guard) else an
+explicit STAY (no implicit/undefined state). The 7-phase workflow is modeled as
+a preset that PARITY-reproduces `chain_state`'s stage order AND gains the
+loop-back edge `chain_state` structurally cannot express (`researched
+--guess_found--> scoping`) — the edge the scope guess-prevention gate (slice C)
+loops on. Standalone + proven (12 tests); slice A2 wires it in to replace the
+non-total `transitionChainStage` + its 5 scattered call-sites.
+
+- `src/runtime/fsm.ts` (NEW) — Fsm/Transition schema, validateFsm, step.
+- `src/runtime/workflow_fsm.ts` (NEW) — the 7-phase workflow as a declared FSM.
+
 ## [0.5.282] - 2026-06-02
 
 ### Added (T-PACK-FSM-STANDARDIZATION slice B — reusable gate template `guards:`)
