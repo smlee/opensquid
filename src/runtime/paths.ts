@@ -356,6 +356,14 @@ export const umbrellaLiveSessionLease = (umbrellaId: string): string =>
 export const umbrellaCurrentSessionPath = (umbrellaId: string): string =>
   join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, '.current-session');
 
+// CAT.3 — chat-driven-turn marker. Written (with the driving session id) when the
+// Stop hook DRIVES a turn from an inbound chat message (CAT.2); consumed (the
+// just-completed turn's output streams to the source topic, then the marker is
+// deleted) by the NEXT Stop. So a chat-IN turn streams its output OUT to chat,
+// while a terminal-driven turn does not (no flood).
+export const umbrellaChatDrivenMarker = (umbrellaId: string): string =>
+  join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, '.chat-driven');
+
 // Transport-level orphan inbox: a message that resolves to no umbrella
 // (`resolveInboundUmbrella` → null). Kept at the legacy top-level path so the
 // existing orphan-audit tooling keeps working.

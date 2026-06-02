@@ -22,6 +22,8 @@ import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routin
 import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
 import { resolveLiveSessionId } from '../chat/session_routing.js';
 
+import { markChatDriven } from './stop_stream.js';
+
 /** Extract the session cwd from a Stop payload (Claude Code provides `cwd`). */
 export function extractCwd(raw: string): string {
   try {
@@ -45,7 +47,11 @@ export async function maybeDriveInbound(sessionId: string, cwd: string): Promise
     const live = await resolveLiveSessionId(umbrellaId);
     if (live !== sessionId) return null;
     const envelope = await drainUmbrellaInbox(sessionId, cwd);
-    return envelope.length > 0 ? envelope : null;
+    if (envelope.length === 0) return null;
+    // CAT.3: mark this umbrella's turn chat-driven so the NEXT Stop streams the
+    // agent's answer back to the source topic.
+    await markChatDriven(umbrellaId, sessionId);
+    return envelope;
   } catch {
     return null;
   }
