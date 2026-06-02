@@ -144,3 +144,79 @@ describe('chat watch CLI', () => {
     await rm(tmp, { recursive: true, force: true });
   });
 });
+
+// CAT.1d — `opensquid chat migrate` verb wiring (smoke). The migration itself
+// is exercised in src/channels/migrate.test.ts; here we only assert the verb
+// dispatches to the injected runner with the right `--force` flag + prints a
+// summary derived from the result.
+describe('chat migrate CLI', () => {
+  let stdout: string[];
+
+  beforeEach(() => {
+    stdout = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((s: string | Uint8Array): boolean => {
+      stdout.push(String(s));
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function runMigrate(
+    argv: string[],
+    capture: (o: { force?: boolean }) => void,
+  ): Promise<void> {
+    const program = new Command();
+    program.exitOverride();
+    registerChatWatch(program, {
+      migrate: (o) => {
+        capture(o);
+        return Promise.resolve({
+          config: { umbrellas: [{ id: 'loop', members: ['/a', '/b'] }] },
+          configWritten: true,
+          configPath: '/home/.opensquid/channels.json',
+          copied: { loop: 7 },
+        });
+      },
+    });
+    await program.parseAsync(['chat', 'migrate', ...argv], { from: 'user' });
+  }
+
+  it('dispatches with force=false by default and prints a summary', async () => {
+    let opts: { force?: boolean } | undefined;
+    await runMigrate([], (o) => {
+      opts = o;
+    });
+    expect(opts?.force).toBe(false);
+    const out = stdout.join('');
+    expect(out).toContain('channels.json written');
+    expect(out).toContain('umbrellas: 1');
+    expect(out).toContain('loop: 2 member(s), 7 inbox row(s) copied');
+  });
+
+  it('passes --force through to the migration runner', async () => {
+    let opts: { force?: boolean } | undefined;
+    await runMigrate(['--force'], (o) => {
+      opts = o;
+    });
+    expect(opts?.force).toBe(true);
+  });
+
+  it('reports the no-op summary when channels.json was already present', async () => {
+    const program = new Command();
+    program.exitOverride();
+    registerChatWatch(program, {
+      migrate: () =>
+        Promise.resolve({
+          config: { umbrellas: [] },
+          configWritten: false,
+          configPath: '/home/.opensquid/channels.json',
+          copied: {},
+        }),
+    });
+    await program.parseAsync(['chat', 'migrate'], { from: 'user' });
+    expect(stdout.join('')).toContain('already present');
+  });
+});

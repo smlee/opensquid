@@ -17,6 +17,7 @@
 
 import { Command } from 'commander';
 
+import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
 import { registerEngineCli } from './engine/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
@@ -40,6 +41,18 @@ import { registerTraceCommand } from './setup/cli/trace.js';
 import { registerTriggers } from './setup/cli/triggers.js';
 import { registerWebhooks } from './setup/cli/webhooks.js';
 
+// CAT.1d — internal worker entrypoint short-circuit. `chat-daemon-worker` is
+// the argv token `src/channels/daemon/lifecycle.startDaemon` re-invokes this
+// binary (`dist/cli.js`) with to spawn the long-running daemon. It must be
+// handled BEFORE commander parses, because the worker never returns (it parks
+// the event loop), and commander would otherwise reject the unknown command.
+if (process.argv[2] === 'chat-daemon-worker') {
+  void runChatDaemonWorkerEntry();
+} else {
+  runCli();
+}
+
+function runCli(): void {
 const program = new Command()
   .name('opensquid')
   .description('Tracks for your AI agent — destination-first.')
@@ -231,6 +244,14 @@ registerAgentBridge(program);
 // live, no-cron delivery. Distinct from `setup chat` (the wizard).
 registerChatWatch(program);
 
+// CAT.1d — `opensquid chat-daemon {start|stop|status|restart}`. Lifecycle for
+// the NEW chat-transport daemon (`src/channels/daemon/`), a standalone process
+// with its own `chat-daemon.{sock,pid,log}` side-files (deliberately separate
+// from the SCHED.1 `daemon` group — the two daemons run in parallel). `start`
+// spawns `dist/cli.js chat-daemon-worker` detached (handled by the early
+// short-circuit above). Replaces the legacy `src.legacy` chat-daemon verbs.
+registerChatDaemon(program);
+
 // LP.4 — `opensquid pack install/list/export/remove`. CLI lifecycle for the
 // living-pack mechanic. v1 ships local-directory install + lessons-only/raw
 // export modes. Tarball/URL install + with-evidence export are v1.5.
@@ -247,3 +268,4 @@ program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });
+}

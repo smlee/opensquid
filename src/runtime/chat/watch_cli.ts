@@ -23,6 +23,7 @@
 
 import type { Command } from 'commander';
 
+import { runMigration } from '../../channels/migrate.js';
 import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
 import { umbrellaInboxFile, umbrellaLiveSessionLease } from '../paths.js';
 
@@ -50,12 +51,48 @@ interface ChatWatchOptions {
 export interface ChatWatchDeps {
   watch?: (opts: WatchInboxOpts) => Promise<void>;
   startInbound?: () => Promise<() => Promise<void>>;
+  /** Injection seam — tests stub the migration so the verb wiring can be
+   *  smoke-tested without touching the legacy keyspace. */
+  migrate?: (opts: { force?: boolean }) => Promise<{
+    config: { umbrellas: { id: string; members: string[] }[] };
+    configWritten: boolean;
+    configPath: string;
+    copied: Record<string, number>;
+  }>;
 }
 
 export function registerChatWatch(program: Command, deps: ChatWatchDeps = {}): Command {
   const watch = deps.watch ?? watchInbox;
   const startInbound = deps.startInbound ?? startInboundWatcher;
+  const migrate = deps.migrate ?? runMigration;
   const chat = program.command('chat').description('Live chat inbound/outbound helpers.');
+
+  // CAT.1d — `opensquid chat migrate [--force]`. One-shot legacy→umbrella
+  // cutover: synthesize `~/.opensquid/channels.json` from the per-project
+  // `chat-routing.json` + `projects.json`, then copy the per-uuid inbox rows
+  // into the umbrella keyspace (non-destructive, idempotent). READ-ONLY w.r.t.
+  // the legacy files. `--force` overwrites an existing channels.json.
+  chat
+    .command('migrate')
+    .description('Synthesize channels.json from legacy per-project routing + copy inbox data.')
+    .option('--force', 'overwrite an existing channels.json', false)
+    .action(async (opts: { force: boolean }) => {
+      const res = await migrate({ force: opts.force });
+      const out = process.stdout;
+      out.write(
+        res.configWritten
+          ? `channels.json written: ${res.configPath}\n`
+          : `channels.json already present (use --force to overwrite): ${res.configPath}\n`,
+      );
+      out.write(`umbrellas: ${String(res.config.umbrellas.length)}\n`);
+      for (const u of res.config.umbrellas) {
+        const rows = res.copied[u.id] ?? 0;
+        out.write(
+          `  ${u.id}: ${String(u.members.length)} member(s), ${String(rows)} inbox row(s) copied\n`,
+        );
+      }
+    });
+
   chat
     .command('watch')
     .description('Stream NEW inbound messages to stdout for the harness Monitor (no cron).')

@@ -53,6 +53,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
+import { ensureChatDaemonRunning } from '../channels/daemon/autospawn.js';
 import {
   GENERAL_UMBRELLA,
   loadChannelsConfig,
@@ -545,6 +546,23 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // CAT.1d — opportunistically ensure the NEW chat-transport daemon is running
+  // so `chat_send` has a socket to dial + inbound Telegram lands in the umbrella
+  // inboxes. Fire-and-forget (never block the stdio loop); no-op when no chat
+  // platform is configured or a daemon is already up. Replaces the legacy
+  // `src.legacy/index.ts` autospawn, which fired from the retired MCP server.
+  void (async () => {
+    const res = await ensureChatDaemonRunning();
+    if (res.status === 'spawned' || res.status === 'waited_for_peer') {
+      process.stderr.write(
+        `[opensquid] chat-daemon ${res.status === 'spawned' ? 'started' : 'found peer'} (pid ${String(res.pid)})\n`,
+      );
+    } else if (res.status === 'error') {
+      process.stderr.write(`[opensquid] chat-daemon autospawn error: ${String(res.error)}\n`);
+    }
+    // already_running / no_config → silent
+  })();
 }
 
 main().catch((e: unknown) => {
