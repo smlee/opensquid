@@ -7,6 +7,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.285] - 2026-06-02
+
+### Added (T-PACK-FSM-STANDARDIZATION slice A3 — per-session pack-FSM state store)
+
+`fsm_state.ts` — the generic, total-transition counterpart to `chain_state`:
+persists the current state of any pack's declared FSM (`Pack.fsm`, A2) per
+(session, pack), keyed `fsm-<pack>`, and advances it ONLY along a declared
+transition via the validated `step` (A1). `readFsmState` (no-throw; self-heals
+to `initial` when the persisted state is no longer declared), `advanceFsmState`
+(read → step → persist-if-moved; honors `when` guards via injected `evalWhen`),
+`clearFsmState` (SessionEnd cleanup). Multiple packs' machines coexist in one
+session. A3b will wire `read_fsm_state`/`advance_fsm` primitives so pack rules
+drive + gate on the FSM.
+
+### Fixed (release tooling — package.json truncation that failed 0.5.284 CI)
+
+The 0.5.284 version bump truncated `package.json` to empty: the one-liner
+`open('package.json','w').write(open('package.json').read()…)` evaluates the
+truncating write-open BEFORE the read. That empty file — not infra — is what
+failed 0.5.284's CI (`pnpm/action-setup` could not parse `package.json`).
+Restored from 0.5.283 and re-bumped to 0.5.285.
+
+- `src/runtime/fsm_state.ts` (NEW) — readFsmState / advanceFsmState / clearFsmState.
+- `package.json` — restored.
+
 ## [0.5.284] - 2026-06-02
 
 ### Added (T-PACK-FSM-STANDARDIZATION slice A2 — pack-declared `fsm.yaml`)
