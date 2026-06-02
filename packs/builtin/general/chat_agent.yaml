@@ -1,0 +1,16 @@
+# general — chat-agent binding (T-CHAT-AS-TERMINAL CAT.6).
+#
+# Model-aliased: resolves the `fast_chat` alias from the user's models.yaml
+# (NO hardcoded model id — portability per invariant #10). The same alias the
+# WAB.6 fallback + setup wizard use.
+#
+# PROJECT-LESS: the general session has NO project memory by design, so the two
+# project-memory built-ins are disabled here — `recall` (project RAG lookup) and
+# `store_lesson` (project lesson buffer) would both reach into project-scoped
+# state. Only `chat_send` (reply to the user) remains. This is the structural
+# guarantee that the general session can't leak/accumulate project context.
+default_model: fast_chat
+system_prompt: system_prompt.md
+disable_builtins:
+  - recall
+  - store_lesson

@@ -27,10 +27,15 @@ import { join, resolve } from 'node:path';
 
 import type { Command } from 'commander';
 
-import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
+import { GENERAL_UMBRELLA, loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
 import { OPENSQUID_HOME, resolveProjectUuid } from '../paths.js';
 
-import { AgentBridgeDaemon, agentBridgePidPath, resolvePackRootFromEnv } from './daemon.js';
+import {
+  AgentBridgeDaemon,
+  agentBridgePidPath,
+  resolveGeneralPackRoot,
+  resolvePackRootFromEnv,
+} from './daemon.js';
 
 export interface AgentBridgeCliDeps {
   /** Test injection — override the daemon class. Defaults to AgentBridgeDaemon. */
@@ -113,9 +118,10 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
       }
     });
 
-  const doSpawn = (label: 'spawned' | 'restarted'): void => {
+  const doSpawn = (label: 'spawned' | 'restarted', general = false): void => {
     const argv1 = process.argv[1] ?? 'opensquid';
-    const child = spawnFn(process.execPath, [resolve(argv1), 'agent-bridge', 'run-foreground'], {
+    const fgArgs = ['agent-bridge', 'run-foreground', ...(general ? ['--general'] : [])];
+    const child = spawnFn(process.execPath, [resolve(argv1), ...fgArgs], {
       detached: true,
     });
     child.unref();
@@ -130,7 +136,10 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
   group
     .command('start')
     .description('Spawn the agent-bridge daemon detached and return.')
-    .action(async () => {
+    // CAT.6: `--general` spawns the PROJECT-LESS general session (umbrella=general,
+    // the built-in `general` pack) instead of the cwd's project-scoped daemon.
+    .option('--general', 'run the project-less general session (DM + General + All)')
+    .action(async (opts: { general?: boolean }) => {
       const live = await readLivePid(env, killFn);
       if (live.alive) {
         err(`agent-bridge: already running (pid=${String(live.pid)})\n`);
@@ -140,7 +149,7 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
       if (live.stalePid !== undefined) {
         await rm(pidPathFor(env), { force: true }).catch(() => undefined);
       }
-      doSpawn('spawned');
+      doSpawn('spawned', opts.general === true);
     });
 
   group
@@ -184,7 +193,33 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
   group
     .command('run-foreground')
     .description('Run the daemon in the current process (foreground; used by `start` spawn).')
-    .action(async () => {
+    // CAT.6: project-less general session — umbrella=general, the built-in
+    // `general` pack, no project uuid (umbrella id is the scope identity).
+    .option('--general', 'run the project-less general session (DM + General + All)')
+    .action(async (opts: { general?: boolean }) => {
+      // CAT.6 — PROJECT-LESS general path. No cwd→project resolution: the
+      // umbrella id `general` is the scope identity, the daemon runs
+      // projectLess, and the built-in `general` pack is the responder.
+      if (opts.general === true) {
+        const generalPackRoot = resolveGeneralPackRoot(env);
+        const daemon = new Ctor({
+          projectUuid: '',
+          packRoot: generalPackRoot,
+          umbrellaId: GENERAL_UMBRELLA,
+          projectLess: true,
+        });
+        try {
+          await daemon.start();
+        } catch (e) {
+          err(`agent-bridge: start failed: ${e instanceof Error ? e.message : String(e)}\n`);
+          exit(1);
+          return;
+        }
+        out(`agent-bridge: running (general, umbrella=${GENERAL_UMBRELLA}, pack=${generalPackRoot})\n`);
+        await waitForever();
+        return;
+      }
+
       const projectUuid = await resolveProjectUuid({ cwd: cwd(), env });
       if (projectUuid === null) {
         err(

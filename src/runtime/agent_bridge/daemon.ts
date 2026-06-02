@@ -53,6 +53,7 @@ import { join } from 'node:path';
 
 import { lock as acquireLock } from 'proper-lockfile';
 
+import { GENERAL_UMBRELLA } from '../../channels/routing.js';
 import { loadModelsConfig } from '../../models/load_config.js';
 import type { ModelAliasConfig } from '../../models/types.js';
 import { loadPack } from '../../packs/loader.js';
@@ -60,7 +61,7 @@ import { libsqlQwen3WithLexicalFallback } from '../../rag/backend_factory.js';
 import type { RagBackend } from '../../rag/types.js';
 import { createResolver, dotenvBackend } from '../../secrets/index.js';
 import type { SecretResolver } from '../../secrets/types.js';
-import { OPENSQUID_HOME } from '../paths.js';
+import { OPENSQUID_HOME, resolveBuiltinScopeRoot } from '../paths.js';
 
 import type { AnthropicMessageClient } from './agent_loop.js';
 import { ChatDispatcher, type DispatcherAgentLoopOptions } from './dispatcher.js';
@@ -81,7 +82,12 @@ export const agentBridgePidPath = (): string => join(OPENSQUID_HOME(), 'agent-br
 export const agentBridgeLogPath = (): string => join(OPENSQUID_HOME(), 'agent-bridge.log');
 
 export interface AgentBridgeDaemonOptions {
-  /** Required — the project whose inbox + sessions this daemon serves. */
+  /**
+   * The project whose inbox + sessions this daemon serves. REQUIRED for the
+   * normal project-scoped path. EMPTY (`''`) is permitted ONLY in project-less
+   * mode (T-CHAT-AS-TERMINAL CAT.6 — `umbrellaId === 'general'` or
+   * `projectLess: true`), where the umbrella id is the scope identity instead.
+   */
   projectUuid: string;
   /**
    * Owning umbrella id (T-CHAT-AS-TERMINAL CAT.5). When set, the daemon runs
@@ -90,8 +96,21 @@ export interface AgentBridgeDaemonOptions {
    * id `headless-<umbrellaId>`), and a {@link HeadlessLeaseManager} holds the
    * lease while no human session is live (standing down when one appears).
    * Omitted ⇒ legacy per-project keying (no headless lease handoff).
+   *
+   * When `umbrellaId === 'general'` the daemon is automatically PROJECT-LESS
+   * (CAT.6): the umbrella id is the scope identity and `projectUuid` is not
+   * required (the general session has no project by design).
    */
   umbrellaId?: string;
+  /**
+   * Project-LESS mode (T-CHAT-AS-TERMINAL CAT.6). When true, the daemon runs
+   * with NO real project: session-state + tool scoping key off the umbrella id
+   * (the scope identity) instead of a project uuid, and the `projectUuid`
+   * field is not required (defaults to `''`). Implied when
+   * `umbrellaId === 'general'`. The normal project-scoped path is unchanged:
+   * omit this (or leave it false) and `projectUuid` stays required.
+   */
+  projectLess?: boolean;
   /** Required — absolute path to the pack folder (contains manifest.yaml + chat_agent.yaml). */
   packRoot: string;
   /**
@@ -156,11 +175,18 @@ export class AgentBridgeDaemon {
 
     // Validate required fields BEFORE acquiring the lock — a missing pack
     // root or project uuid should not leave a lockfile behind.
-    if (this.opts.projectUuid.length === 0) {
+    //
+    // CAT.6: project-less mode (umbrella='general' or explicit projectLess)
+    // keys session-state + tool scoping off the UMBRELLA id, so an empty
+    // projectUuid is legal there. The normal project-scoped path is unchanged
+    // — a project-keyed daemon (no umbrella, not project-less) still REQUIRES
+    // projectUuid.
+    if (this.opts.projectUuid.length === 0 && !this.isProjectLess()) {
       this.state = 'idle';
       throw new Error(
         'AgentBridgeDaemon: projectUuid is required. Set OPENSQUID_PROJECT_UUID ' +
-          'or create `.opensquid/project.json` via `opensquid setup chat`.',
+          'or create `.opensquid/project.json` via `opensquid setup chat`. ' +
+          "(Project-less mode requires umbrellaId='general' or projectLess: true.)",
       );
     }
     if (this.opts.packRoot.length === 0) {
@@ -332,6 +358,16 @@ export class AgentBridgeDaemon {
     return this.bindingResult;
   }
 
+  /**
+   * CAT.6 — true when the daemon runs project-less (no real project; the
+   * umbrella id is the scope identity). Project-less is signalled either by the
+   * reserved `general` umbrella or an explicit `projectLess: true` opt. Pure
+   * function of the options — used by `start()`'s guard + scope-key derivation.
+   */
+  private isProjectLess(): boolean {
+    return this.opts.projectLess === true || this.opts.umbrellaId === GENERAL_UMBRELLA;
+  }
+
   // --- private ---
 
   /** Shared teardown — used by both shutdown() and start()'s rollback path.
@@ -454,6 +490,18 @@ export function resolvePackRootFromEnv(env: NodeJS.ProcessEnv = process.env): st
   const fromEnv = env.OPENSQUID_PACK_ROOT;
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
   return join(env.OPENSQUID_HOME ?? join(homedir(), '.opensquid'), 'packs', 'default');
+}
+
+/**
+ * CAT.6 packRoot for the project-less general session: the built-in `general`
+ * pack (`packs/builtin/general/`). `OPENSQUID_GENERAL_PACK_ROOT` wins for test
+ * isolation / an operator override; otherwise it resolves under the built-in
+ * scope root (`resolveBuiltinScopeRoot()`).
+ */
+export function resolveGeneralPackRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env.OPENSQUID_GENERAL_PACK_ROOT;
+  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
+  return join(resolveBuiltinScopeRoot(), 'general');
 }
 
 /** Compile-time exhaustiveness helper for the mode discriminator switch. */

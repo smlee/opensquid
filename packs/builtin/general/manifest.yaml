@@ -1,0 +1,39 @@
+# general — the project-LESS general chat assistant (T-CHAT-AS-TERMINAL CAT.6).
+#
+# Per the opensquid thesis (agent = its pack), the general chat session runs as
+# this dedicated lightweight pack. It owns the Telegram DM + the supergroup
+# "General" thread + the "All" topic — all routed to the umbrella `general`
+# (channels.json: `general.telegram` with dm_user_ids + owns_general_thread).
+#
+# Project-LESS BY DESIGN: this pack declares NO project drift gates, NO
+# detected_by activation (it is launched explicitly for umbrella=general, never
+# auto-activated into a project session), and the chat agent is bound WITHOUT
+# the project-memory tools (recall / store_lesson are disabled in
+# chat_agent.yaml). The general session must never leak project context.
+#
+# Model-aliased (no hardcoded model id): the chat agent resolves the
+# `fast_chat` alias from the user's models.yaml — portability preserved per
+# [[project_opensquid_model_neutral_subagent_primitive]] + invariant #10.
+#
+# Launched via `opensquid agent-bridge run-foreground --general` (CLI) which
+# resolves umbrella=general, loads this pack, and runs the daemon project-less
+# (umbrella id is the scope identity; no project uuid).
+name: general
+version: 0.1.0
+scope: universal
+kind: focused
+goal: answer the general project-less chat — DM + General thread + All topic — with no project context
+description: |
+  The project-less general chat assistant. Owns the Telegram DM, the supergroup
+  General thread, and the "All" topic (umbrella=general). It is a plain helpful
+  assistant: it answers general questions and routes nothing to a project topic.
+
+  No project memory by design — the bound chat agent (chat_agent.yaml) disables
+  the recall + store_lesson tools, leaving only chat_send. No drift gates, no
+  skills: the general session is deliberately minimal so no project discipline
+  or project context bleeds into it.
+# Not auto-loaded into any project session — launched explicitly for the
+# general umbrella. Empty detected_by = no filesystem/conversation auto-activation
+# trigger fires this pack into a project agent.
+detected_by: []
+evolves: false

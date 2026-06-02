@@ -309,3 +309,76 @@ describe('agent-bridge run-foreground', () => {
     expect(exitCode).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// run-foreground --general (CAT.6 — project-less general session)
+// ---------------------------------------------------------------------------
+
+describe('agent-bridge run-foreground --general (CAT.6)', () => {
+  it('runs PROJECT-LESS: no project uuid required, umbrella=general, projectLess:true', async () => {
+    let received: {
+      projectUuid: string;
+      umbrellaId?: string;
+      projectLess?: boolean;
+      packRoot: string;
+    } | null = null;
+    class StubDaemon {
+      constructor(opts: {
+        projectUuid: string;
+        umbrellaId?: string;
+        projectLess?: boolean;
+        packRoot: string;
+      }) {
+        received = opts;
+      }
+      start = (): Promise<void> => Promise.resolve();
+      shutdown = (): Promise<void> => Promise.resolve();
+    }
+    // cwd has NO project.json + env has NO project uuid — the general path must
+    // not even try to resolve a project (it would otherwise exit 1).
+    const program = makeProgram({
+      cwd: () => tmpRoot,
+      daemonCtor: StubDaemon as unknown as typeof AgentBridgeDaemon,
+    });
+    await run(program, ['agent-bridge', 'run-foreground', '--general']);
+    expect(received).not.toBeNull();
+    expect(received?.projectUuid).toBe('');
+    expect(received?.umbrellaId).toBe('general');
+    expect(received?.projectLess).toBe(true);
+    expect(received?.packRoot).toMatch(/[/\\]general$/);
+    expect(stdout()).toMatch(/agent-bridge: running \(general/);
+  });
+
+  it('honors OPENSQUID_GENERAL_PACK_ROOT for the general packRoot', async () => {
+    env.OPENSQUID_GENERAL_PACK_ROOT = '/custom/general-pack';
+    let receivedPackRoot: string | null = null;
+    class StubDaemon {
+      constructor(opts: { packRoot: string }) {
+        receivedPackRoot = opts.packRoot;
+      }
+      start = (): Promise<void> => Promise.resolve();
+      shutdown = (): Promise<void> => Promise.resolve();
+    }
+    const program = makeProgram({
+      cwd: () => tmpRoot,
+      daemonCtor: StubDaemon as unknown as typeof AgentBridgeDaemon,
+    });
+    await run(program, ['agent-bridge', 'run-foreground', '--general']);
+    expect(receivedPackRoot).toBe('/custom/general-pack');
+  });
+
+  it('`start --general` spawns run-foreground WITH the --general flag', async () => {
+    const program = makeProgram();
+    await run(program, ['agent-bridge', 'start', '--general']);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toContain('run-foreground');
+    expect(spawnCalls[0]?.args).toContain('--general');
+  });
+
+  it('`start` WITHOUT --general does not forward the flag (project-scoped, unchanged)', async () => {
+    const program = makeProgram();
+    await run(program, ['agent-bridge', 'start']);
+    expect(spawnCalls[0]?.args).toContain('run-foreground');
+    expect(spawnCalls[0]?.args).not.toContain('--general');
+  });
+});
