@@ -1,0 +1,44 @@
+# scope-lifecycle — drives + gates the scope-fsm machine.
+#
+# Two rules on every tool_call:
+#   1. advance-on-research-doc — writing the pre-research artifact advances the
+#      lifecycle to `researched` (no verdict; pure side-effect).
+#   2. research-before-code — a src/ write while still pre-research BLOCKS.
+# State-driven (read_fsm_state), not file-existence-based.
+name: scope-lifecycle
+load: preload
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules:
+  - id: advance-on-research-doc
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/")'
+        args:
+          event: research_done
+  - id: research-before-code
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: read_fsm_state
+        as: st
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/") && st != "researched" && st != "building"'
+        args:
+          level: block
+          message: >-
+            BLOCKED: research before code. The scope FSM is still pre-research —
+            complete the pre-research artifact (docs/research/...) first. Override
+            only if the user explicitly scoped this work in THIS turn.
+prose: |
+  State-driven research-before-code gate. The scope FSM starts in `scoping`;
+  writing the pre-research artifact advances it to `researched`; only then are
+  src/ writes allowed. Unlike an existence-based gate, this is a checkable FSM
+  invariant and supports looping back to research on an unresolved guess.

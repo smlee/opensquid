@@ -1,0 +1,12 @@
+# scope-fsm lifecycle — the explicit total-transition machine the gate reads.
+#
+# scoping ──research_done──> researched ──build──> building
+# researching ──research_done──> researched
+# researching ──guess_found──> researching   (the loop-back chain_state can't express)
+initial: scoping
+states: [scoping, researching, researched, building]
+transitions:
+  - { from: scoping, on: research_done, to: researched }
+  - { from: researching, on: research_done, to: researched }
+  - { from: researching, on: guess_found, to: researching }
+  - { from: researched, on: build, to: building }

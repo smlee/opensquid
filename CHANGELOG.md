@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.287] - 2026-06-02
+
+### Added (T-PACK-FSM-STANDARDIZATION slice C — built-in `scope-fsm` pack: FSM-driven never-guess)
+
+A usable, opt-in built-in pack that enforces research-before-code via the
+pack-FSM stack — the payoff of slices A1–A3b. Its `fsm.yaml` declares the scope
+lifecycle (`scoping → researched → building`, plus the `researching` loop-back
+the old `chain_state` can't express); the `scope-lifecycle` skill BLOCKS a `src/`
+write while the FSM is pre-research (`read_fsm_state`) and advances the lifecycle
+when the pre-research artifact is written (`advance_fsm`). STATE-driven (a
+checkable FSM invariant), not file-existence-based; per-session. Activate via
+`active.json`. Proven loading-from-disk + enforcing through the real dispatcher.
+
+- `packs/builtin/scope-fsm/{manifest,fsm}.yaml` + `skills/scope-lifecycle/skill.yaml`.
+- `test/builtin/scope-fsm.test.ts`.
+
 ## [0.5.286] - 2026-06-02
 
 ### Added (T-PACK-FSM-STANDARDIZATION slice A3b — `read_fsm_state` / `advance_fsm` primitives)

@@ -1,0 +1,14 @@
+name: scope-fsm
+version: 0.1.0
+scope: workflow
+goal: enforce research-before-code via an explicit scope-lifecycle FSM (never-guess)
+description: >
+  Lifecycle-FSM-driven scope discipline (T-PACK-FSM-STANDARDIZATION slice C).
+  Code-writes are BLOCKED until the scope/research phase completes — STATE-driven
+  (a checkable FSM invariant), not file-existence-based — and the machine can
+  loop back to research when an unresolved guess is found. Opt-in via active.json.
+  Built on the pack-FSM stack: the lifecycle lives in fsm.yaml; the gate uses the
+  read_fsm_state / advance_fsm primitives.
+evolves: true
+detected_by:
+  - kind: user_pinned
