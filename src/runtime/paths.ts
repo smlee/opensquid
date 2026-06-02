@@ -305,3 +305,33 @@ export const liveSessionLease = (projectUuid: string): string =>
 // is last-writer-wins across all sessions; this is not).
 export const projectCurrentSessionPath = (projectUuid: string): string =>
   join(OPENSQUID_HOME(), 'projects', projectUuid, '.current-session');
+
+// ---------------------------------------------------------------------------
+// Umbrella chat inbox (T-CHAT-AS-TERMINAL CAT.1b/1c). The rebuilt chat-daemon
+// keys the inbox + lease by UMBRELLA id (`loop`, `raumpilates-fe`, the reserved
+// `general`) instead of per-cwd project_uuid — one umbrella ↔ one chat session
+// (invariants #2/#4), which also retires the da96≡0742 mirror. Same on-disk row
+// + lease shapes as the project-keyed helpers above; only the key changes.
+// Orphan (unrouted-at-transport) messages keep the legacy top-level location.
+// ---------------------------------------------------------------------------
+
+export const umbrellaInboxFile = (umbrellaId: string, platform: string): string =>
+  join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, 'inbox', `${platform}.jsonl`);
+
+export const umbrellaInboxDir = (umbrellaId: string): string =>
+  join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, 'inbox');
+
+export const umbrellaInboxAckedPath = (umbrellaId: string): string =>
+  join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, 'inbox', 'acked.jsonl');
+
+export const umbrellaLiveSessionLease = (umbrellaId: string): string =>
+  join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, 'live-session.lease');
+
+export const umbrellaCurrentSessionPath = (umbrellaId: string): string =>
+  join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, '.current-session');
+
+// Transport-level orphan inbox: a message that resolves to no umbrella
+// (`resolveInboundUmbrella` → null). Kept at the legacy top-level path so the
+// existing orphan-audit tooling keeps working.
+export const orphanInboxFile = (platform: string): string =>
+  join(OPENSQUID_HOME(), 'inbox', 'orphan', `${platform}.jsonl`);
