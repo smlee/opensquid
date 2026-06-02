@@ -121,7 +121,7 @@ describe('telegramAdapter — send()', () => {
   it('sends to an allowlisted chat without a topic', async () => {
     const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
     const r = await a.send('telegram://12345', { text: 'hi' });
-    expect(r).toEqual({ ok: true });
+    expect(r).toEqual({ ok: true, messageId: '1' }); // mock sendMessage echoes message_id:1
     expect(mockState.sendMessage).toHaveBeenCalledTimes(1);
     expect(mockState.sendMessage).toHaveBeenCalledWith(12345, 'hi', undefined);
   });
@@ -129,7 +129,7 @@ describe('telegramAdapter — send()', () => {
   it('passes message_thread_id when topic is present', async () => {
     const a = telegramAdapter({ token: 't', allowlistChatIds: [12345] });
     const r = await a.send('telegram://12345/777', { text: 'topic msg' });
-    expect(r).toEqual({ ok: true });
+    expect(r).toEqual({ ok: true, messageId: '1' });
     expect(mockState.sendMessage).toHaveBeenCalledWith(12345, 'topic msg', {
       message_thread_id: 777,
     });

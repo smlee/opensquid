@@ -19,6 +19,13 @@ export interface ChannelMessage {
 export interface SendResult {
   ok: boolean;
   error?: string;
+  /**
+   * Native delivered-message id, when the transport returns one (Telegram's
+   * Bot API echoes `message_id`). Notification routers ignore it; the
+   * chat-daemon's `send` RPC surfaces it as `message_id` for the live
+   * `chat_send` callers. Absent on transports that don't report an id.
+   */
+  messageId?: string;
 }
 
 /**

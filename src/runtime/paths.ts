@@ -273,6 +273,32 @@ export const daemonPidPath = (): string => join(OPENSQUID_HOME(), 'daemon.pid');
 export const daemonLogPath = (): string => join(OPENSQUID_HOME(), 'daemon.log');
 
 // ---------------------------------------------------------------------------
+// Chat-transport daemon side-files (T-CHAT-AS-TERMINAL CAT.1b).
+//
+// The rebuilt chat-transport daemon (src/channels/daemon/) owns three
+// side-files inside `OPENSQUID_HOME()`, mirroring the SCHED.1 daemon helpers
+// above but namespaced `chat-daemon.*` so the two daemons never collide on a
+// pidfile/socket:
+//
+//   - `chat-daemon.sock`  Unix-socket the outbound `send` JSON-RPC listens on.
+//                         Consumed live by src/mcp/chat-bridge-server.ts +
+//                         src/runtime/agent_bridge/tools/chat_send.ts — the
+//                         path must stay byte-identical to those callers'
+//                         `join(root, 'chat-daemon.sock')`. Windows uses a
+//                         named pipe instead (no filesystem residue); the
+//                         protocol module derives it.
+//   - `chat-daemon.pid`   worker pid, written on boot + removed on clean exit.
+//   - `chat-daemon.log`   detached-spawn stdout/stderr target.
+//
+// All three honor the `OPENSQUID_HOME` override so tests boot a daemon in an
+// `mkdtemp` without touching the developer's home dir.
+// ---------------------------------------------------------------------------
+
+export const chatDaemonSockPath = (): string => join(OPENSQUID_HOME(), 'chat-daemon.sock');
+export const chatDaemonPidPath = (): string => join(OPENSQUID_HOME(), 'chat-daemon.pid');
+export const chatDaemonLogPath = (): string => join(OPENSQUID_HOME(), 'chat-daemon.log');
+
+// ---------------------------------------------------------------------------
 // Per-project chat inbox. The chat-daemon appends one inbound message per line
 // to `<home>/projects/<uuid>/inbox/<platform>.jsonl` (the on-disk contract the
 // agent_bridge + `chat watch` both consume). Honors OPENSQUID_HOME so tests

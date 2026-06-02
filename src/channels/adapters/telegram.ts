@@ -268,8 +268,11 @@ export function telegramAdapter(opts: TelegramAdapterOpts): TelegramAdapter {
       try {
         const extra =
           parsed.topicId !== undefined ? { message_thread_id: parsed.topicId } : undefined;
-        await bot.api.sendMessage(parsed.chatId, message.text, extra);
-        return { ok: true };
+        const sent = (await bot.api.sendMessage(parsed.chatId, message.text, extra)) as
+          | { message_id?: number }
+          | undefined;
+        const sentId = sent?.message_id;
+        return sentId !== undefined ? { ok: true, messageId: String(sentId) } : { ok: true };
       } catch (e: unknown) {
         if (e instanceof GrammyError) {
           return { ok: false, error: `telegram api ${e.error_code}: ${e.description}` };
