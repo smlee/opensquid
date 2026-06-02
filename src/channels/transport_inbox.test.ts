@@ -30,8 +30,10 @@ const CFG = ChannelsConfig.parse({
   },
 });
 
-function tgMsg(over: Partial<InboundChatMessage> = {}): InboundChatMessage {
-  return {
+function tgMsg(
+  over: { [K in keyof InboundChatMessage]?: InboundChatMessage[K] | undefined } = {},
+): InboundChatMessage {
+  const base: InboundChatMessage = {
     platform: 'telegram',
     messageId: '510',
     chatId: '-1003923174632',
@@ -42,8 +44,16 @@ function tgMsg(over: Partial<InboundChatMessage> = {}): InboundChatMessage {
     receivedAt: '2026-06-02T04:55:11.000Z',
     mentionsBot: false,
     direct: false,
-    ...over,
   };
+  // Apply overrides; a key explicitly set to `undefined` means "omit it" —
+  // exactOptionalPropertyTypes treats an absent optional as distinct from one
+  // set to `undefined`, and a no-topic message has NO topicId key.
+  const result: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    if (v === undefined) delete result[k];
+    else result[k] = v;
+  }
+  return result as unknown as InboundChatMessage;
 }
 
 describe('buildInboxLine', () => {

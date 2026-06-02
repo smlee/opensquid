@@ -152,7 +152,7 @@ describe('migrate', () => {
         },
       ]);
       expect(config.umbrellas).toHaveLength(1);
-      const loop = config.umbrellas[0];
+      const loop = config.umbrellas[0]!;
       expect(loop.id).toBe('loop');
       expect(loop.members).toEqual(['/Users/x/projects/loop', '/Users/x/projects/opensquid']);
       expect(loop.telegram).toEqual({ chat_id: SUPERGROUP, topic_id: 15 });
@@ -192,7 +192,7 @@ describe('migrate', () => {
           routing: { telegram: { report_channel: `telegram:${SUPERGROUP}`, report_topic_id: 281 } },
         },
       ]);
-      expect(config.umbrellas[0].id).toBe('raumpilates-fe');
+      expect(config.umbrellas[0]!.id).toBe('raumpilates-fe');
     });
   });
 
@@ -228,7 +228,7 @@ describe('migrate', () => {
       const res = await writeChannelsConfig(cfg);
       expect(res.written).toBe(true);
       const onDisk = parseJson<ChannelsOnDisk>(await readFile(channelsConfigPath(), 'utf8'));
-      expect(onDisk.umbrellas[0].id).toBe('loop');
+      expect(onDisk.umbrellas[0]!.id).toBe('loop');
     });
 
     it('is a no-op when the file already exists (idempotent)', async () => {
@@ -236,7 +236,7 @@ describe('migrate', () => {
       const res = await writeChannelsConfig({ v: 1, umbrellas: [{ id: 'changed', members: [] }] });
       expect(res.written).toBe(false);
       const onDisk = parseJson<ChannelsOnDisk>(await readFile(channelsConfigPath(), 'utf8'));
-      expect(onDisk.umbrellas[0].id).toBe('loop'); // unchanged
+      expect(onDisk.umbrellas[0]!.id).toBe('loop'); // unchanged
     });
 
     it('overwrites with --force', async () => {
@@ -247,7 +247,7 @@ describe('migrate', () => {
       );
       expect(res.written).toBe(true);
       const onDisk = parseJson<ChannelsOnDisk>(await readFile(channelsConfigPath(), 'utf8'));
-      expect(onDisk.umbrellas[0].id).toBe('changed');
+      expect(onDisk.umbrellas[0]!.id).toBe('changed');
     });
   });
 

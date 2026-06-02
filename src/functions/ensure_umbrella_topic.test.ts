@@ -102,7 +102,7 @@ describe('ensure_umbrella_topic (CAT.7)', () => {
     expect(await call(r, LOOP_CWD)).toBeNull();
     expect(createTopic).not.toHaveBeenCalled();
     // config untouched
-    expect((await readChannels()).umbrellas[0].telegram?.topic_id).toBe(15);
+    expect((await readChannels()).umbrellas[0]!.telegram?.topic_id).toBe(15);
   });
 
   it('creates ONE topic + writes topic_id back when chat_id is present but topic_id is absent, daemon up; a second run is a no-op', async () => {
@@ -119,12 +119,12 @@ describe('ensure_umbrella_topic (CAT.7)', () => {
     expect(await call(r, LOOP_CWD)).toBeNull();
     expect(createTopic).toHaveBeenCalledTimes(1);
     expect(createTopic).toHaveBeenCalledWith({ chatId: '-100', name: 'opensquid: loop' });
-    expect((await readChannels()).umbrellas[0].telegram?.topic_id).toBe(42);
+    expect((await readChannels()).umbrellas[0]!.telegram?.topic_id).toBe(42);
 
     // Second run: topic_id now set → no-op, no further RPC, value unchanged.
     expect(await call(r, LOOP_CWD)).toBeNull();
     expect(createTopic).toHaveBeenCalledTimes(1);
-    expect((await readChannels()).umbrellas[0].telegram?.topic_id).toBe(42);
+    expect((await readChannels()).umbrellas[0]!.telegram?.topic_id).toBe(42);
   });
 
   it('two member cwds of ONE umbrella → only ONE topic ever created (opensquid-cwd never creates a 2nd)', async () => {
@@ -147,7 +147,7 @@ describe('ensure_umbrella_topic (CAT.7)', () => {
     expect(await call(r, OPENSQUID_CWD)).toBeNull();
 
     expect(createTopic).toHaveBeenCalledTimes(1);
-    expect((await readChannels()).umbrellas[0].telegram?.topic_id).toBe(15);
+    expect((await readChannels()).umbrellas[0]!.telegram?.topic_id).toBe(15);
   });
 
   it('no-ops (no RPC) when no daemon is running', async () => {
@@ -160,7 +160,7 @@ describe('ensure_umbrella_topic (CAT.7)', () => {
 
     expect(await call(r, LOOP_CWD)).toBeNull();
     expect(createTopic).not.toHaveBeenCalled();
-    expect((await readChannels()).umbrellas[0].telegram?.topic_id).toBeUndefined();
+    expect((await readChannels()).umbrellas[0]!.telegram?.topic_id).toBeUndefined();
   });
 
   it('no-ops (no RPC) when the cwd resolves to no umbrella', async () => {
@@ -206,6 +206,6 @@ describe('ensure_umbrella_topic (CAT.7)', () => {
     expect(await call(r, LOOP_CWD)).toBeNull();
     expect(createTopic).toHaveBeenCalledTimes(1);
     // write-back never happened.
-    expect((await readChannels()).umbrellas[0].telegram?.topic_id).toBeUndefined();
+    expect((await readChannels()).umbrellas[0]!.telegram?.topic_id).toBeUndefined();
   });
 });

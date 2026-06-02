@@ -341,11 +341,20 @@ describe('agent-bridge run-foreground --general (CAT.6)', () => {
       daemonCtor: StubDaemon as unknown as typeof AgentBridgeDaemon,
     });
     await run(program, ['agent-bridge', 'run-foreground', '--general']);
-    expect(received).not.toBeNull();
-    expect(received?.projectUuid).toBe('');
-    expect(received?.umbrellaId).toBe('general');
-    expect(received?.projectLess).toBe(true);
-    expect(received?.packRoot).toMatch(/[/\\]general$/);
+    // `received` is assigned only inside StubDaemon's constructor, which TS's
+    // control-flow analysis can't observe — it pins `received` to `null`. Cast
+    // back to the captured shape so the assertions type-check.
+    const got = received as {
+      projectUuid: string;
+      umbrellaId?: string;
+      projectLess?: boolean;
+      packRoot: string;
+    } | null;
+    expect(got).not.toBeNull();
+    expect(got?.projectUuid).toBe('');
+    expect(got?.umbrellaId).toBe('general');
+    expect(got?.projectLess).toBe(true);
+    expect(got?.packRoot).toMatch(/[/\\]general$/);
     expect(stdout()).toMatch(/agent-bridge: running \(general/);
   });
 
