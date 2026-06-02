@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.281] - 2026-06-01
+
+### Fixed (T-ATM ATM.3 — same-turn `log_phase` race: transcript-path defensive-keep)
+
+`log_phase` intermittently threw "no active task" when `TaskUpdate(in_progress)`
+and `log_phase` were issued in the same assistant turn — requiring an
+intervening-tool workaround. Root cause: the transcript-path branch of
+`mirrorActiveTask` CLEARED `active-task.json` whenever the transcript-derived
+active task was `null`, but the transcript LAGS the current turn — so
+`log_phase`'s own PreToolUse mirror re-derived from a transcript that didn't yet
+contain that turn's `TaskUpdate`, got `null`, and wiped the signal the
+`TaskUpdate` mirror had just written. The store path already guarded this
+(ACTRACE.1); the transcript path now has parity: it only CLEARS when the current
+tool explicitly completes/deletes the prior active task (caught at its own tick)
+— otherwise it KEEPS the task, and a later re-mirror corrects once the transcript
+catches up.
+
+- `src/runtime/hooks/active_task_mirror.ts` — defensive-keep on the transcript branch.
+
 ## [0.5.280] - 2026-06-01
 
 ### Fixed (T-RJ-FOLLOWUPS FU.10 — `notify_and_pause` surfaces its message; the rest stay principled stubs)

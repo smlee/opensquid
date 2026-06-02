@@ -143,8 +143,33 @@ export async function mirrorActiveTask(
           }
         : undefined;
     const active = await readActiveTaskFromTranscript(transcriptPath, pending);
-    if (active !== null) await writeActiveTask(sessionId, active);
-    else await clearActiveTask(sessionId);
+    if (active !== null) {
+      await writeActiveTask(sessionId, active);
+      return;
+    }
+    // T-ATM ATM.3 (2026-06-01): defensive-keep — parity with the store path's
+    // ACTRACE.1 guard below. The transcript LAGS the current assistant turn:
+    // when TaskUpdate(in_progress) and log_phase are issued in ONE turn,
+    // log_phase's own PreToolUse mirror re-derives from a transcript that does
+    // NOT yet contain that TaskUpdate → active===null → the pre-fix CLEARED the
+    // active-task.json that TaskUpdate's mirror just wrote → log_phase then threw
+    // "no active task" (the workaround-needing race). Only CLEAR when THIS tool
+    // explicitly completes/deletes the prior active task (the authoritative
+    // "done" signal, caught at its own tick); otherwise KEEP — a later re-mirror
+    // rewrites once the transcript catches up. Fail-open to clear on read error.
+    const completingId =
+      tool === 'TaskUpdate' &&
+      (args.status === 'completed' || args.status === 'deleted') &&
+      typeof args.taskId === 'string'
+        ? args.taskId
+        : null;
+    try {
+      const prior = await readActiveTask(sessionId);
+      if (prior !== null && prior.id !== completingId) return; // transcript lag — keep
+    } catch {
+      /* fail-open → clear */
+    }
+    await clearActiveTask(sessionId);
     return;
   }
 

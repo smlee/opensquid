@@ -326,3 +326,73 @@ describe('mirrorActiveTask — T-ACTRACE.1 defensive clear (cases a-f)', () => {
     expect(await readActiveTask(SID)).toBeNull();
   });
 });
+
+describe('mirrorActiveTask — transcript-path defensive-keep (ATM.3)', () => {
+  async function writeTranscript(lines: unknown[]): Promise<string> {
+    const p = join(tempHome, 'transcript.jsonl');
+    await writeFile(p, lines.map((l) => JSON.stringify(l)).join('\n'), 'utf8');
+    return p;
+  }
+  const tu = (taskId: string, status: string) => ({
+    message: {
+      content: [
+        {
+          type: 'tool_use',
+          id: `u-${taskId}-${status}`,
+          name: 'TaskUpdate',
+          input: { taskId, status },
+        },
+      ],
+    },
+  });
+
+  it('KEEPS a just-set active task when the transcript lags (null) + a non-completing tool', async () => {
+    // Simulates the same-turn race: TaskUpdate(in_progress) set active-task.json on
+    // its tick, but log_phase's mirror re-derives from a transcript that does not
+    // yet contain that TaskUpdate → null. Must NOT clear.
+    await writeActiveTask(SID, { id: '19', subject: 'ATM.3', started_at: 'z' });
+    const p = await writeTranscript([]); // yields null
+    await mirrorActiveTask(SID, 'Bash', { command: 'ls' }, undefined, p);
+    expect((await readActiveTask(SID))?.id).toBe('19');
+  });
+
+  it('CLEARS when THIS tool completes the prior active task (completion is authoritative)', async () => {
+    await writeActiveTask(SID, { id: '19', subject: 'ATM.3', started_at: 'z' });
+    const p = await writeTranscript([]);
+    await mirrorActiveTask(SID, 'TaskUpdate', { taskId: '19', status: 'completed' }, undefined, p);
+    expect(await readActiveTask(SID)).toBeNull();
+  });
+
+  it('no prior + transcript null → clear path no-ops (no throw)', async () => {
+    const p = await writeTranscript([]);
+    await mirrorActiveTask(SID, 'Bash', { command: 'ls' }, undefined, p);
+    expect(await readActiveTask(SID)).toBeNull();
+  });
+
+  it('writes the derived active task when the transcript DOES show in_progress (unchanged)', async () => {
+    const p = await writeTranscript([
+      {
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 't1',
+              name: 'TaskCreate',
+              input: { subject: 'A', metadata: { taskId: 'X' } },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          content: [
+            { type: 'tool_result', tool_use_id: 't1', content: 'Task #19 created successfully' },
+          ],
+        },
+      },
+      tu('19', 'in_progress'),
+    ]);
+    await mirrorActiveTask(SID, 'Bash', { command: 'ls' }, undefined, p);
+    expect((await readActiveTask(SID))?.id).toBe('19');
+  });
+});
