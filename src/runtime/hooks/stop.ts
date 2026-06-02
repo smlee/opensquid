@@ -22,7 +22,8 @@ import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
 import { extractSessionId } from './session_id.js';
-import { emitDriftStderrAndExit } from './hook_output.js';
+import { emitDriftStderrAndExit, squidPrefix } from './hook_output.js';
+import { maybeDriveInbound, extractCwd } from './stop_drive.js';
 import { readLastAssistantText } from './transcript.js';
 
 interface StopPayload {
@@ -53,6 +54,7 @@ function extractTranscriptPath(raw: string): string | null {
     return null;
   }
 }
+
 
 async function readStdin(): Promise<string> {
   let data = '';
@@ -101,7 +103,22 @@ async function main(): Promise<void> {
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
-  emitDriftStderrAndExit(exitCode, stderr);
+
+  // A drift BLOCK (exit≠0) takes precedence over an inbound drive — handle the
+  // agent's drift first; the chat backlog drives on a later, clean turn.
+  if (exitCode !== 0) emitDriftStderrAndExit(exitCode, stderr);
+
+  // CAT.2 — no drift: if this session holds the umbrella's chat lease and has
+  // unacked inbound, block the stop and feed the inbound as the next turn so a
+  // chat message DRIVES a turn without a keystroke (the remote-terminal "drive").
+  const driveReason = await maybeDriveInbound(sessionId, extractCwd(raw));
+  if (driveReason !== null) {
+    if (stderr.length > 0) process.stderr.write(squidPrefix(stderr) + '\n');
+    process.stdout.write(JSON.stringify({ decision: 'block', reason: driveReason }) + '\n');
+    process.exit(0);
+  }
+
+  emitDriftStderrAndExit(0, stderr);
 }
 
 main().catch((e: unknown) => {

@@ -18,15 +18,7 @@
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { readChainStage, transitionChainStage } from '../chain_state.js';
-import { type Platform, readAcked, readInbox } from '../chat/inbox.js';
-import {
-  buildAckRowsForInjected,
-  buildInjectionEnvelope,
-  computeUnackedRows,
-  purgeOldAcks,
-} from '../chat/inbox_inject.js';
-import { appendAckRows, rewriteAckedAfterPurge } from '../chat/inbox_writer.js';
-import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
+import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
 import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
 
@@ -41,51 +33,6 @@ import { readOpenTasksFromTranscript } from './transcript_tasks.js';
 /** FU.2: how many recent text-bearing turns lesson-capture classifies. Small to
  *  bound the classifier prompt size (the wedge gate runs every prompt_submit). */
 const RECENT_TURNS_N = 6;
-
-const INBOX_PLATFORMS: Platform[] = ['telegram', 'slack', 'discord'];
-
-/**
- * LL.4 (2026-05-30) — drain unacked inbox rows into an additionalContext
- * envelope. ACK-BEFORE-EMIT ordering: AckRows are persisted before the
- * caller emits the envelope to stdout. Fail-open: any error here returns
- * an empty string + lets the hook proceed (the user's prompt always rides
- * through; backlog drains on next fire).
- */
-async function drainInboxEnvelope(sessionId: string): Promise<string> {
-  try {
-    // CAT.1c: the inbox is keyed by UMBRELLA. Resolve cwd→umbrella via
-    // channels.json. Absent config / unresolved umbrella ⇒ no inbox (the
-    // file is synthesized at the CAT.1d cutover); drain nothing, fail-open.
-    const cfg = await loadChannelsConfig().catch(() => null);
-    const umbrellaId = cfg === null ? null : resolveUmbrellaForCwd(cfg, process.cwd());
-    if (umbrellaId === null || umbrellaId === '') return '';
-    const platformReads = await Promise.all(INBOX_PLATFORMS.map((p) => readInbox(umbrellaId, p)));
-    const allRows = platformReads.flat();
-    const acked = await readAcked(umbrellaId);
-    const unacked = computeUnackedRows(allRows, acked, sessionId);
-
-    let envelope = '';
-    if (unacked.length > 0) {
-      const built = buildInjectionEnvelope(unacked);
-      if (built.injectedRows.length > 0) {
-        envelope = built.envelope;
-        const ackRows = buildAckRowsForInjected(built.injectedRows, sessionId);
-        // ACK BEFORE EMIT — durability gate.
-        await appendAckRows(umbrellaId, ackRows);
-      }
-    }
-
-    // 7-day auto-purge — skip rewrite when nothing changes (no-op opt).
-    const kept = purgeOldAcks(acked);
-    if (kept.length !== acked.length) {
-      await rewriteAckedAfterPurge(umbrellaId, kept);
-    }
-    return envelope;
-  } catch (e) {
-    process.stderr.write(`opensquid: inbox-drain failed (fail-open) — ${String(e)}\n`);
-    return '';
-  }
-}
 
 interface PromptSubmitPayload {
   prompt?: string;
@@ -233,7 +180,7 @@ async function main(): Promise<void> {
   // runs under its own fail-open wrapper (drainInboxEnvelope returns '' on
   // any error). Inbox envelope appears FIRST in contextParts so it's the
   // most prominent surface in the agent's next-turn context.
-  const inboxEnvelope = await drainInboxEnvelope(sessionId);
+  const inboxEnvelope = await drainUmbrellaInbox(sessionId);
 
   const contextParts: string[] = [];
   if (inboxEnvelope.length > 0) contextParts.push(inboxEnvelope);
