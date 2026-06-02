@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.284] - 2026-06-02
+
+### Added (T-PACK-FSM-STANDARDIZATION slice A2 — pack-declared `fsm.yaml`)
+
+A pack may now declare its lifecycle FSM in an optional `fsm.yaml` side-file
+(matching the established `models.yaml`/`drift_response.yaml` side-file pattern).
+The loader parses it through the `Fsm` schema, runs `validateFsm` (TOTALITY:
+every transition lands on a declared state, initial is declared), and folds it
+onto `Pack.fsm`. ENOENT → no FSM (undefined); an invalid machine throws a
+path-bearing error at load (a transition to an undeclared state, a bad initial)
+— never silently ignored. This makes the generic FSM engine (A1) pack-
+consumable; slice A3 wires a runner that drives a pack's FSM on events.
+
+- `src/packs/loader.ts` — `loadOptionalFsm`; fold `fsm` onto Pack.
+- `src/runtime/types.ts` — `Pack.fsm`.
+
 ## [0.5.283] - 2026-06-02
 
 ### Added (T-PACK-FSM-STANDARDIZATION slice A1 — generic total-transition FSM engine)

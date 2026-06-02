@@ -64,6 +64,7 @@ import { getLivingPackVersion } from './living_pack.js';
 import { ingestSeedLessons } from './seed_lessons_ingest.js';
 import { compileVerifyGates } from './verify_gates_compiler.js';
 import { compileGuards } from './guards_compiler.js';
+import { Fsm, validateFsm } from '../runtime/fsm.js';
 import { parseYamlFile } from './yaml.js';
 
 // alias to keep the inline team-load block readable
@@ -189,6 +190,14 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
   // behavior for packs that don't ship the file. Same parse-error contract.
   const driftResponse = await loadOptionalDriftResponse(join(dir, 'drift_response.yaml'));
 
+  // fsm.yaml — T-PACK-FSM-STANDARDIZATION slice A2 pack-lifecycle FSM side-file.
+  // OPTIONAL: absence (ENOENT) → the pack declares no lifecycle FSM (undefined).
+  // When present it MUST be a valid total-transition FSM — validateFsm errors
+  // (a transition targeting an undeclared state, etc.) throw at load with the
+  // offending detail, so a malformed lifecycle is a loud config bug, not a
+  // silently-ignored file.
+  const fsm = await loadOptionalFsm(join(dir, 'fsm.yaml'));
+
   // MM.1 (2026-05-30) — team.yaml existence check for profession-mode packs.
   // `usage: profession | both` REQUIRES team.yaml declaring ≥1 SubagentRole.
   // MM.2 (2026-05-30) extends this: actually LOAD + parse the team.yaml so
@@ -253,6 +262,7 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
     ...(chatAgent !== undefined ? { chatAgent } : {}),
     ...(models !== undefined ? { models } : {}),
     ...(driftResponse !== undefined ? { driftResponse } : {}),
+    ...(fsm !== undefined ? { fsm } : {}),
   };
 }
 
@@ -322,6 +332,33 @@ async function loadOptionalDriftResponse(
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw e;
   }
+}
+
+// ---------------------------------------------------------------------------
+// loadOptionalFsm — read + validate `fsm.yaml` if present (slice A2).
+//
+// ENOENT → `undefined` (the pack declares no lifecycle FSM). The `Fsm` zod
+// schema validates shape; `validateFsm` then enforces TOTALITY (every
+// transition lands on a declared state, initial is declared). A validation
+// failure throws a path-bearing error so an invalid lifecycle is loud at load
+// — never a silently-ignored machine. parseYamlFile threads the file path into
+// shape/parse errors; we prefix totality errors with the path ourselves.
+// ---------------------------------------------------------------------------
+
+async function loadOptionalFsm(path: string): Promise<Fsm | undefined> {
+  let fsm: Fsm;
+  try {
+    const { data } = await parseYamlFile(path, Fsm);
+    fsm = data as Fsm;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
+  }
+  const errors = validateFsm(fsm);
+  if (errors.length > 0) {
+    throw new Error(`${path}: invalid FSM — ${errors.join('; ')}`);
+  }
+  return fsm;
 }
 
 // ---------------------------------------------------------------------------

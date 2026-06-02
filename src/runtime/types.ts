@@ -48,6 +48,7 @@ import {
 } from '../packs/schemas/manifest.js';
 import { Team } from '../packs/schemas/team.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
+import { Fsm } from './fsm.js';
 
 // ---------------------------------------------------------------------------
 // Verdict — rule output (T-ASC ASC.3 discriminated-union refactor)
@@ -410,6 +411,8 @@ export const Pack = z.object({
   seedLessons: z.array(SeedLesson).optional(),
   verifyGates: z.array(VerifyGate).optional(),
   guards: z.array(Guard).optional(),
+  /** Pack-declared lifecycle FSM (slice A2; from `fsm.yaml`). Validated total. */
+  fsm: Fsm.optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 
