@@ -44,6 +44,7 @@ import {
   PackUsage,
   SeedLesson,
   VerifyGate,
+  Guard,
 } from '../packs/schemas/manifest.js';
 import { Team } from '../packs/schemas/team.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
@@ -408,6 +409,7 @@ export const Pack = z.object({
   // loader (loader.ts) supplies the defaults explicitly.
   seedLessons: z.array(SeedLesson).optional(),
   verifyGates: z.array(VerifyGate).optional(),
+  guards: z.array(Guard).optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

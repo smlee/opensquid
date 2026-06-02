@@ -63,6 +63,7 @@ import { Team } from './schemas/team.js';
 import { getLivingPackVersion } from './living_pack.js';
 import { ingestSeedLessons } from './seed_lessons_ingest.js';
 import { compileVerifyGates } from './verify_gates_compiler.js';
+import { compileGuards } from './guards_compiler.js';
 import { parseYamlFile } from './yaml.js';
 
 // alias to keep the inline team-load block readable
@@ -118,6 +119,21 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
     }
     if (compileResult.skill.rules.length > 0) {
       skills.push(compileResult.skill);
+    }
+  }
+
+  // T-PACK-FSM-STANDARDIZATION slice B — compile guards -> synthetic skill
+  // `<pack>/guards` (the reusable detect→verdict gate template). Same fail-loud
+  // contract as verify_gates: a bad `when` expression throws with the guard
+  // name. Empty-rule skills are filtered to keep dispatcher noise low.
+  if (manifest.guards.length > 0) {
+    const guardsResult = compileGuards(manifest.name, manifest.guards);
+    if (!guardsResult.ok) {
+      const details = guardsResult.errors.map((e) => `${e.guardName}: ${e.message}`).join('; ');
+      throw new Error(`pack ${manifest.name}: guards compile errors: ${details}`);
+    }
+    if (guardsResult.skill.rules.length > 0) {
+      skills.push(guardsResult.skill);
     }
   }
 
@@ -228,6 +244,7 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
     // can read without re-parsing manifest YAML.
     seedLessons: manifest.seed_lessons,
     verifyGates: manifest.verify_gates,
+    guards: manifest.guards,
     // DOG.5 — living-pack version triple from LP.1's version.json (if
     // user-installed). Built-in packs without a personal_revision dir
     // get undefined here.

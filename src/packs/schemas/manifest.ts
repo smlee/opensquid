@@ -423,6 +423,62 @@ export const VerifyGate = z
 export type VerifyGate = z.infer<typeof VerifyGate>;
 
 // ---------------------------------------------------------------------------
+// T-PACK-FSM-STANDARDIZATION slice B — `guards:` (the reusable gate template).
+//
+// A guard is the GENERAL form of the detect→verdict skeleton that ~23/24 skills
+// hand-respell (see `default-discipline/skills/git/skill.yaml`). Instead of
+// writing the two-step process by hand, an author declares the SHAPE and the
+// `guards_compiler` expands it into the same `ProcessStep[]` (so the runtime
+// interpreter is unchanged). `verify_gates` is the detect-less special case of
+// a guard (`when` = the check expression, no detect step).
+//
+//   guards:
+//     - name: never-amend
+//       on: tool_call                       # event kind (default tool_call)
+//       detect:                             # OPTIONAL — omit for a check-only gate
+//         call: match_command
+//         args: { pattern: '…', target: tool_args.command }
+//       as: hit                             # binds detect's result (default 'hit')
+//       when: hit                           # the verdict condition (expr; parsed at load)
+//       level: block                        # warn | block
+//       message: 'BLOCKED: …'
+//
+// → compiles to a TrackCheckRule `guard:never-amend`:
+//     process:
+//       - { call: match_command, args: {…}, as: hit }   # detect (if present)
+//       - { call: verdict, if: hit, args: { level, message } }
+// ---------------------------------------------------------------------------
+
+export const GuardDetect = z
+  .object({
+    call: z.string().min(1),
+    args: z.record(z.unknown()).optional(),
+  })
+  .strict();
+export type GuardDetect = z.infer<typeof GuardDetect>;
+
+export const Guard = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[a-z0-9][a-z0-9-]*$/, 'guard name: lowercase alphanum + hyphens, no leading hyphen'),
+    on: z.enum(['tool_call', 'prompt_submit', 'stop', 'session_end']).default('tool_call'),
+    detect: GuardDetect.optional(),
+    as: z.string().min(1).default('hit'),
+    // The verdict condition — an `if:` expression validated by the compiler via
+    // parseExpression (loud failure with the guard name). When `detect` is
+    // present this is typically the bound var (e.g. `hit`); when absent it is a
+    // standalone check (the verify_gate case).
+    when: z.string().min(1),
+    level: z.enum(['warn', 'block']),
+    message: z.string().min(1),
+  })
+  .strict();
+export type Guard = z.infer<typeof Guard>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -485,6 +541,10 @@ export const Manifest = z
     // when the loader is invoked with an engine dep (bootstrap path).
     seed_lessons: z.array(SeedLesson).default([]),
     verify_gates: z.array(VerifyGate).default([]),
+    // T-PACK-FSM-STANDARDIZATION slice B — reusable gate templates. Each guard
+    // expands (via guards_compiler) into a detect→verdict TrackCheckRule under
+    // the synthetic `<pack>/guards` skill. Default [] → no synthetic skill.
+    guards: z.array(Guard).default([]),
   })
   .strict()
   .superRefine((m, ctx) => {

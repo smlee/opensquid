@@ -7,6 +7,44 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.282] - 2026-06-02
+
+### Added (T-PACK-FSM-STANDARDIZATION slice B — reusable gate template `guards:`)
+
+A manifest `guards:` block — the GENERAL form of the detect→verdict skeleton
+that ~23/24 skills hand-respell (e.g. `default-discipline/skills/git`). Each
+guard (optional `detect` + `as` + `when` + `level` + `message` + event kind)
+compiles via `guards_compiler` into a `[detect?, verdict]` `TrackCheckRule`
+under the synthetic `<pack>/guards` skill — the EXACT `ProcessStep[]` an author
+writes by hand today (proven byte-identical in `guards_compiler.test.ts`), so
+the runtime interpreter is unchanged. `verify_gates` is the detect-less special
+case. This is the reusable substrate the pack-FSM (slice A) is built from.
+Adoption (migrating the 23 hand-written skeletons) is a follow-up.
+
+- `src/packs/schemas/manifest.ts` — `Guard` + `GuardDetect` schemas + `guards:` field.
+- `src/packs/guards_compiler.ts` — `compileGuards` (NEW).
+- `src/packs/loader.ts` — compile guards → synthetic skill; hoist `guards` onto Pack.
+- `src/runtime/types.ts` — `Pack.guards`.
+
+### Added (slice D — `SeedLesson.body_path`: activate pack lessons from files)
+
+A pack may declare a lesson by file pointer (`body_path: lessons/<id>/lesson.md`)
+XOR inline `body`, keeping the manifest small (structure) with the prose in its
+own file (content) per the Simplicity Principle. The ingest resolves `body_path`
+pack-relative, path-traversal-confined; empty/escaping paths fail per-seed
+(isolated). Restores the activation the codex→pack migration had dropped — the 5
+user packs now declare 46 lessons via `body_path`.
+
+- `src/packs/schemas/manifest.ts`, `src/packs/seed_lessons_ingest.ts`, `src/packs/loader.ts`.
+
+### Changed (codex→pack standardization)
+
+The legacy `<scope>/codexes/` discovery fallback was removed — `packs/` is the
+sole pack-folder layout. Lingering `codex` vocabulary in src comments + docs
+standardized to `pack`.
+
+- `src/packs/discovery.ts`, `docs/pack-runtime.md`.
+
 ## [0.5.281] - 2026-06-01
 
 ### Fixed (T-ATM ATM.3 — same-turn `log_phase` race: transcript-path defensive-keep)
