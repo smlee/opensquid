@@ -251,7 +251,10 @@ describe('InboxTransportBridge', () => {
     );
     await waitFor(() => received.length >= 2);
     expect(received[1]?.text).toBe('partial');
-  });
+    // Two waitFor cycles (double the IO latency) — give it explicit headroom
+    // so it does not flake under full-suite parallel load (file-scope
+    // vi.setConfig timeout is captured at it() registration, not here).
+  }, 20_000);
 
   it('shutdown closes the watcher cleanly and stops further emits', async () => {
     bridge = new InboxTransportBridge({
