@@ -95,11 +95,25 @@ const GeneralRow = z
   .strict();
 export type GeneralRow = z.infer<typeof GeneralRow>;
 
+/**
+ * Who answers chat for the live umbrellas:
+ *   - `session` (default) — chat MIRRORS the live MCP session: when a Claude
+ *     Code session is open for the umbrella it claims the lease + its Stop-hook
+ *     drive answers (in whatever mode that session runs — e.g. subscription).
+ *   - `headless` — the live session does NOT claim the lease; the dedicated
+ *     headless agent-bridge answers instead (even with no terminal open).
+ * Changeable in `channels.json` per the "I should be able to change on
+ * configuration" requirement; absent ⇒ `session`.
+ */
+export const ResponderMode = z.enum(['session', 'headless']);
+export type ResponderMode = z.infer<typeof ResponderMode>;
+
 export const ChannelsConfig = z
   .object({
     v: z.literal(1),
     umbrellas: z.array(UmbrellaRow),
     general: GeneralRow.optional(),
+    responder: ResponderMode.optional(),
   })
   .strict();
 export type ChannelsConfig = z.infer<typeof ChannelsConfig>;

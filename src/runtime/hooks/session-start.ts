@@ -31,6 +31,7 @@
  * inject_context on `session_start`, this bin produces no stdout.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -92,6 +93,12 @@ async function main(): Promise<void> {
   }
 
   const sessionId = extractSessionId(raw);
+  // Interactive responder (chat mirrors the live session): the moment a session
+  // opens for an umbrella it claims that umbrella's chat lease (acquire-if-free)
+  // so a chat message drives THIS session + the headless stands down — even
+  // before the first keystroke. No-op in `responder: headless` mode / no umbrella.
+  const startCwd = parsed.data.kind === 'session_start' ? parsed.data.cwd : process.cwd();
+  await claimUmbrellaLeaseForSession(sessionId, startCwd);
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections } = await dispatchEvent(

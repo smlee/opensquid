@@ -97,6 +97,35 @@ export function isLeaseFreshAndOwnedBy(
   return lease !== null && lease.session_id === expectedSessionId;
 }
 
+/**
+ * Acquire the lease for `sessionId` IFF it is free for us — there is no FRESH
+ * lease owned by a DIFFERENT session. Returns true ⇒ we now hold it (it was
+ * absent / stale / already-ours and we (re)wrote it); false ⇒ a different
+ * session holds a fresh lease, so the caller stands down LOCAL-ONLY
+ * (invariant #6: a second same-umbrella session gets no chat connection).
+ *
+ * This is the ONE arbitration primitive shared by the live interactive session
+ * (claims the umbrella lease with its Claude Code session id — so its Stop-hook
+ * drive owns the turn and the headless stands down) and the headless daemon
+ * (claims with `headless-<umbrella>`). Fail-quiet: a write error ⇒ false.
+ */
+export async function acquireLeaseIfFree(
+  leasePath: string,
+  sessionId: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const lease = await readLease(leasePath);
+  if (lease !== null && isLeaseFresh(lease, now) && lease.session_id !== sessionId) {
+    return false; // a different live session holds it → stand down (local-only)
+  }
+  try {
+    await writeLease(leasePath, sessionId, now);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Best-effort removal on `chat watch` exit. Never throws. */
 export async function removeLease(leasePath: string): Promise<void> {
   await rm(leasePath, { force: true }).catch(() => undefined);

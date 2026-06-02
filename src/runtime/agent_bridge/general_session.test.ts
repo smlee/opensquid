@@ -159,7 +159,8 @@ describe('CAT.6 — project-less daemon', () => {
     await d.start();
     // It actually came up + bound the general pack.
     expect(d.bindingFor()).not.toBeNull();
-    const pidRaw = await readFile(join(daemonHome, 'agent-bridge.pid'), 'utf8');
+    // umbrella=general ⇒ scoped stem `agent-bridge-general` (per-instance keying).
+    const pidRaw = await readFile(join(daemonHome, 'agent-bridge-general.pid'), 'utf8');
     expect(parseInt(pidRaw.trim(), 10)).toBe(process.pid);
     await d.shutdown();
   });

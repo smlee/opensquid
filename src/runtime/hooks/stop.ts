@@ -23,6 +23,7 @@ import { Event } from '../types.js';
 import { dispatchEvent } from './dispatch.js';
 import { extractSessionId } from './session_id.js';
 import { emitDriftStderrAndExit, squidPrefix } from './hook_output.js';
+import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { maybeDriveInbound, extractCwd } from './stop_drive.js';
 import { maybeStreamOutput } from './stop_stream.js';
 import { readLastAssistantText } from './transcript.js';
@@ -110,6 +111,11 @@ async function main(): Promise<void> {
   if (exitCode !== 0) emitDriftStderrAndExit(exitCode, stderr);
 
   const cwd = extractCwd(raw);
+
+  // Interactive responder: this live session claims its umbrella's chat lease
+  // (acquire-if-free) so the drive below owns the turn + the headless stands
+  // down. No-op in `responder: headless` mode or when another session holds it.
+  await claimUmbrellaLeaseForSession(sessionId, cwd);
 
   // CAT.3 — "see": if THIS just-completed turn was chat-driven (CAT.2 left the
   // marker), stream the agent's answer back to the source topic automatically

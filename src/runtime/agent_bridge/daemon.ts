@@ -12,8 +12,10 @@
  *   - one Anthropic SDK client — LAZILY constructed only when the
  *     resolved pack binding is api-mode (WAB-SUB.2 cap on subscription
  *     daemons paying for an unused SDK client + unused ANTHROPIC_API_KEY)
- *   - one PID lock at `~/.opensquid/agent-bridge.lock`
- *   - one PID file at `~/.opensquid/agent-bridge.pid`
+ *   - one PID lock at `~/.opensquid/agent-bridge[-<scope>].lock`
+ *   - one PID file at `~/.opensquid/agent-bridge[-<scope>].pid`
+ *     (CAT.5.1 — scope = umbrellaId → projectUuid → legacy unscoped, so the
+ *      `loop` umbrella + the `general` session run concurrently)
  *   - one inbox watcher per project (the bridge is project-scoped)
  *   - one materialized MCP config at
  *     `~/.opensquid/agent-bridge/mcp-config.json` (subscription mode only)
@@ -77,9 +79,65 @@ import type { SessionKey } from './types.js';
 // Co-located with the runtime daemon's lock + pid at `~/.opensquid/`.
 // Distinct filenames so the agent-bridge daemon can run alongside the
 // scheduler daemon without lock contention.
-export const agentBridgeLockPath = (): string => join(OPENSQUID_HOME(), 'agent-bridge.lock');
-export const agentBridgePidPath = (): string => join(OPENSQUID_HOME(), 'agent-bridge.pid');
-export const agentBridgeLogPath = (): string => join(OPENSQUID_HOME(), 'agent-bridge.log');
+//
+// CAT.5.1 — PER-INSTANCE keying. The headless responder must run ALWAYS-ON
+// and CONCURRENTLY (the `loop` umbrella + the project-less `general` session
+// at the same time), so the daemon's side-files are keyed by a SCOPE string:
+//
+//   - umbrellaId when set (CAT.5/CAT.6)  → `agent-bridge-<umbrella>.{lock,pid,log}`
+//     e.g. `agent-bridge-loop.*`, `agent-bridge-general.*`
+//   - else projectUuid (legacy umbrella-less project daemon)
+//     → `agent-bridge-<uuid>.*`
+//   - neither (no scope derivable) → the LEGACY single-instance filenames
+//     `agent-bridge.{lock,pid,log}` (back-compat — the original WAB.7 path).
+//
+// The scope is filename-sanitized (non-`[A-Za-z0-9._-]` → `_`) so an umbrella
+// id or a path-shaped projectUuid can never escape `OPENSQUID_HOME()`.
+
+/** Inputs that select the per-instance scope (umbrella wins over project). */
+export interface AgentBridgeScopeKey {
+  umbrellaId?: string;
+  projectUuid?: string;
+}
+
+const sanitizeScope = (scope: string): string => scope.replace(/[^A-Za-z0-9._-]/g, '_');
+
+/**
+ * Derive the side-file scope suffix. `umbrellaId` (CAT.5/6) wins; else
+ * `projectUuid` (legacy per-project); else `''` (the legacy single-instance
+ * back-compat path). Pure + total.
+ */
+export function agentBridgeScope(key: AgentBridgeScopeKey = {}): string {
+  // Key the side-file stem on the UMBRELLA only. The multi-instance need is
+  // umbrella-level (`loop` + `general` headless daemons coexist as
+  // `agent-bridge-loop` / `agent-bridge-general`); a plain project-scoped
+  // daemon (no umbrella) keeps the legacy single `agent-bridge` stem — only
+  // one runs at a time, exactly as before CAT.5. (Suffixing on projectUuid was
+  // an over-generalization that diverged from the project-scoped tests.)
+  return key.umbrellaId !== undefined && key.umbrellaId.length > 0
+    ? sanitizeScope(key.umbrellaId)
+    : '';
+}
+
+/** `agent-bridge[-<scope>]` filename stem keyed by the scope. */
+const agentBridgeStem = (key: AgentBridgeScopeKey = {}): string => {
+  const scope = agentBridgeScope(key);
+  return scope.length > 0 ? `agent-bridge-${scope}` : 'agent-bridge';
+};
+
+export const agentBridgeLockPath = (key: AgentBridgeScopeKey = {}): string =>
+  join(OPENSQUID_HOME(), `${agentBridgeStem(key)}.lock`);
+export const agentBridgePidPath = (key: AgentBridgeScopeKey = {}): string =>
+  join(OPENSQUID_HOME(), `${agentBridgeStem(key)}.pid`);
+export const agentBridgeLogPath = (key: AgentBridgeScopeKey = {}): string =>
+  join(OPENSQUID_HOME(), `${agentBridgeStem(key)}.log`);
+
+/**
+ * Scope-keyed side-file basenames within a given home dir (the daemon resolves
+ * its `home` to `daemonHome ?? OPENSQUID_HOME()`, so it joins these itself
+ * rather than going through the OPENSQUID_HOME()-rooted helpers above).
+ */
+const agentBridgeStemIn = (key: AgentBridgeScopeKey): string => agentBridgeStem(key);
 
 export interface AgentBridgeDaemonOptions {
   /**
@@ -200,8 +258,11 @@ export class AgentBridgeDaemon {
     // `.lock/` atomically); `retries: 0` fails fast on contention.
     const home = this.opts.daemonHome ?? OPENSQUID_HOME();
     await mkdir(home, { recursive: true });
-    const lockPath = join(home, 'agent-bridge.lock');
-    const pidPath = join(home, 'agent-bridge.pid');
+    // CAT.5.1 — per-instance keying: lock/pid named by scope (umbrella → project
+    // → legacy) so `loop` + `general` coexist without colliding.
+    const stem = agentBridgeStemIn(this.scopeKey());
+    const lockPath = join(home, `${stem}.lock`);
+    const pidPath = join(home, `${stem}.pid`);
     try {
       this.release = await acquireLock(lockPath, { retries: 0, realpath: false });
     } catch (err) {
@@ -349,8 +410,16 @@ export class AgentBridgeDaemon {
     if (this.state === 'stopped' || this.state === 'idle') return;
     this.state = 'stopping';
     const home = this.opts.daemonHome ?? OPENSQUID_HOME();
-    await this.teardown(join(home, 'agent-bridge.pid'));
+    await this.teardown(join(home, `${agentBridgeStemIn(this.scopeKey())}.pid`));
     this.state = 'stopped';
+  }
+
+  /** This daemon's scope key (umbrella → project) for side-file naming. */
+  private scopeKey(): AgentBridgeScopeKey {
+    return {
+      ...(this.opts.umbrellaId !== undefined ? { umbrellaId: this.opts.umbrellaId } : {}),
+      projectUuid: this.opts.projectUuid,
+    };
   }
 
   /** Test/admin: expose the live binding result for assertions. */

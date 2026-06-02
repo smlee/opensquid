@@ -18,6 +18,7 @@
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { readChainStage, transitionChainStage } from '../chain_state.js';
+import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
 import { resetTurnLedger } from '../session_state.js';
 import { Event } from '../types.js';
@@ -113,6 +114,10 @@ async function main(): Promise<void> {
   // automation on|off` CLI, run from a terminal that never sees this stdin)
   // can target the session the hooks actually key on. Best-effort.
   await recordCurrentSession(sessionId, process.cwd());
+  // Interactive responder (chat mirrors the live session): claim/refresh this
+  // umbrella's chat lease with the session id so the Stop-hook drive owns the
+  // turn + the headless stands down. acquire-if-free; no-op in headless mode.
+  await claimUmbrellaLeaseForSession(sessionId, process.cwd());
   // G.5 — a new turn starts on every UserPromptSubmit. Reset the per-turn
   // slice of the tool-call ledger so the freshness rule (read on the next
   // Stop event) sees only tools called during THIS turn. Session-wide list
