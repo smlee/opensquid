@@ -356,3 +356,101 @@ describe('telegramAdapter — subscribeInbound (AUTO.6)', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('telegramAdapter — subscribeTransport (CAT.1b rich envelope)', () => {
+  it('emits the full InboundChatMessage with every field populated', async () => {
+    const msgs: unknown[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [12345], botUsername: 'squidbot' });
+    await a.subscribeTransport(async (m) => {
+      msgs.push(m);
+    });
+    await fireMessage({
+      chat: { id: -1003923174632, type: 'supergroup' },
+      from: { id: 8075471258, username: 'L0g1cProphet', first_name: 'S' },
+      message: { message_id: 510, date: 1764649200, text: 'hello @SquidBot', message_thread_id: 15 },
+    });
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toEqual({
+      platform: 'telegram',
+      messageId: '510',
+      chatId: '-1003923174632',
+      topicId: 15,
+      sender: 'L0g1cProphet',
+      senderId: '8075471258',
+      text: 'hello @SquidBot',
+      receivedAt: new Date(1764649200 * 1000).toISOString(),
+      mentionsBot: true, // @SquidBot matches botUsername 'squidbot' case-insensitively
+      direct: false,
+    });
+  });
+
+  it('marks direct=true for a private chat (chat.id === from.id)', async () => {
+    const msgs: { direct: boolean }[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [1] });
+    await a.subscribeTransport(async (m) => {
+      msgs.push(m);
+    });
+    await fireMessage({
+      chat: { id: 8075471258, type: 'private' },
+      from: { id: 8075471258, first_name: 'S' },
+      message: { message_id: 1, text: 'dm' },
+    });
+    expect(msgs[0]?.direct).toBe(true);
+  });
+
+  it('mentionsBot is false when botUsername is unset', async () => {
+    const msgs: { mentionsBot: boolean }[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [1] });
+    await a.subscribeTransport(async (m) => {
+      msgs.push(m);
+    });
+    await fireMessage({
+      chat: { id: -1, type: 'supergroup' },
+      from: { id: 2 },
+      message: { message_id: 1, text: '@anyone' },
+    });
+    expect(msgs[0]?.mentionsBot).toBe(false);
+  });
+
+  it('feeds BOTH transport + inbound from a single middleware (one bot.on)', async () => {
+    const transport: unknown[] = [];
+    const inbound: unknown[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [1] });
+    await a.subscribeTransport(async (m) => {
+      transport.push(m);
+    });
+    await a.subscribeInbound(async (e) => {
+      inbound.push(e);
+    });
+    // Only one grammy message listener is ever installed.
+    expect(mockState.messageListeners).toHaveLength(1);
+    await fireMessage({
+      chat: { id: -5, type: 'supergroup' },
+      from: { id: 9 },
+      message: { message_id: 3, text: 'both' },
+    });
+    expect(transport).toHaveLength(1);
+    expect(inbound).toHaveLength(1);
+  });
+
+  it('returns a stub (no listener, no start) when outboundOnly is true', async () => {
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [1], outboundOnly: true });
+    const sub = await a.subscribeTransport(async () => Promise.resolve());
+    expect(mockState.messageListeners).toHaveLength(0);
+    expect(mockState.startCallCount).toBe(0);
+    await sub.unsubscribe();
+  });
+
+  it('unsubscribe stops further transport dispatch', async () => {
+    const msgs: unknown[] = [];
+    const a = telegramAdapter({ token: 't', allowlistChatIds: [1] });
+    const sub = await a.subscribeTransport(async (m) => {
+      msgs.push(m);
+    });
+    await fireMessage({ chat: { id: -1, type: 'supergroup' }, from: { id: 1 }, message: { message_id: 1, text: 'a' } });
+    expect(msgs).toHaveLength(1);
+    await sub.unsubscribe();
+    await fireMessage({ chat: { id: -1, type: 'supergroup' }, from: { id: 1 }, message: { message_id: 2, text: 'b' } });
+    expect(msgs).toHaveLength(1);
+  });
+});

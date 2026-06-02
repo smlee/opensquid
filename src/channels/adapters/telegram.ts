@@ -31,7 +31,13 @@
 
 import { Bot, GrammyError, HttpError } from 'grammy';
 import type { InboundChannelEvent } from '../../runtime/event.js';
-import type { ChannelAdapter, ChannelMessage, InboundSubscription, SendResult } from '../types.js';
+import type {
+  ChannelAdapter,
+  ChannelMessage,
+  InboundChatMessage,
+  InboundSubscription,
+  SendResult,
+} from '../types.js';
 
 export interface TelegramAdapterOpts {
   /** Bot API token from @BotFather. */
@@ -40,6 +46,12 @@ export interface TelegramAdapterOpts {
   allowlistChatIds: number[];
   /** Skip `bot.start()` entirely; outbound `send()` continues to work. */
   outboundOnly?: boolean;
+  /**
+   * Bot's own @username (without `@`), used to compute `mentionsBot` on the
+   * rich transport envelope. The daemon resolves it once via `getMe` at
+   * startup and passes it here. Unset ⇒ `mentionsBot` is always false.
+   */
+  botUsername?: string;
 }
 
 export interface TelegramAdapter extends ChannelAdapter {
@@ -52,6 +64,15 @@ export interface TelegramAdapter extends ChannelAdapter {
    */
   subscribeInbound(
     handler: (event: InboundChannelEvent) => Promise<void>,
+  ): Promise<InboundSubscription>;
+  /**
+   * CAT.1b — attach a RICH transport handler that emits the full
+   * `InboundChatMessage` envelope (message id, sender id, DM flag, …) the
+   * chat-daemon needs. Same lifecycle/auto-start semantics as
+   * `subscribeInbound`; both are fed from one grammy middleware.
+   */
+  subscribeTransport(
+    handler: (msg: InboundChatMessage) => Promise<void>,
   ): Promise<InboundSubscription>;
 }
 
@@ -82,9 +103,11 @@ function parseUri(uri: string): { chatId: number; topicId?: number } | null {
  * at runtime.
  */
 interface InboundCtx {
-  chat?: { id: number };
-  from?: { id: number | string };
+  chat?: { id: number; type?: string };
+  from?: { id: number | string; username?: string; first_name?: string };
   message?: {
+    message_id?: number;
+    date?: number;
     text?: string;
     message_thread_id?: number;
   };
@@ -98,12 +121,108 @@ interface InboundHandlerSlot {
   fn: (event: InboundChannelEvent) => Promise<void>;
 }
 
+/** Rich-transport handler slot (CAT.1b) — fed the full envelope. */
+interface TransportHandlerSlot {
+  enabled: boolean;
+  fn: (msg: InboundChatMessage) => Promise<void>;
+}
+
+/**
+ * Build the rich `InboundChatMessage` from a grammy context. Pure. `direct`
+ * is a Telegram private chat (`chat.id === from.id`); `mentionsBot` is a
+ * case-insensitive `@<botUsername>` scan of the text (false when the bot
+ * username is unknown). `receivedAt` uses the platform `date` (unix seconds)
+ * when present, else the empty string is avoided by the caller.
+ */
+function buildTransportMessage(
+  ctx: InboundCtx,
+  botUsername: string | undefined,
+  nowIso: string,
+): InboundChatMessage | null {
+  if (ctx.chat === undefined) return null;
+  const fromId = ctx.from?.id;
+  const senderId = fromId !== undefined ? String(fromId) : '';
+  const text = ctx.message?.text ?? '';
+  const threadId = ctx.message?.message_thread_id;
+  const date = ctx.message?.date;
+  const mentionsBot =
+    botUsername !== undefined && botUsername !== ''
+      ? text.toLowerCase().includes(`@${botUsername.toLowerCase()}`)
+      : false;
+  return {
+    platform: 'telegram',
+    messageId: ctx.message?.message_id !== undefined ? String(ctx.message.message_id) : '',
+    chatId: String(ctx.chat.id),
+    ...(threadId !== undefined ? { topicId: threadId } : {}),
+    sender: ctx.from?.username ?? ctx.from?.first_name ?? senderId,
+    senderId,
+    text,
+    receivedAt: date !== undefined ? new Date(date * 1000).toISOString() : nowIso,
+    mentionsBot,
+    direct: ctx.chat.type === 'private' || String(ctx.chat.id) === senderId,
+  };
+}
+
 export function telegramAdapter(opts: TelegramAdapterOpts): TelegramAdapter {
   const bot = new Bot(opts.token);
   let started = false;
   let stopped = false;
   const inboundHandlers: InboundHandlerSlot[] = [];
+  const transportHandlers: TransportHandlerSlot[] = [];
   let inboundMiddlewareInstalled = false;
+
+  /**
+   * Install the single grammy `'message'` middleware (idempotent). Builds the
+   * rich `InboundChatMessage` once per update, feeds every enabled transport
+   * slot with it, and derives the lossy `InboundChannelEvent` for every
+   * enabled inbound slot. One bot, one middleware, two surfaces.
+   */
+  function ensureMiddleware(): void {
+    if (inboundMiddlewareInstalled) return;
+    inboundMiddlewareInstalled = true;
+    bot.on('message', async (ctx: InboundCtx) => {
+      const msg = buildTransportMessage(ctx, opts.botUsername, new Date().toISOString());
+      if (msg === null) return;
+      for (const slot of transportHandlers) {
+        if (!slot.enabled) continue;
+        try {
+          await slot.fn(msg);
+        } catch {
+          // Handler errors stay inside the adapter — never bubble to grammy.
+        }
+      }
+      if (inboundHandlers.length > 0) {
+        const channelUri =
+          msg.topicId !== undefined
+            ? `telegram://${msg.chatId}/${msg.topicId}`
+            : `telegram://${msg.chatId}`;
+        const event: InboundChannelEvent = {
+          kind: 'inbound_channel',
+          channelUri,
+          sender: msg.senderId !== '' ? msg.senderId : 'unknown',
+          text: msg.text,
+          ...(msg.topicId !== undefined ? { threadKey: String(msg.topicId) } : {}),
+          receivedAt: msg.receivedAt,
+        };
+        for (const slot of inboundHandlers) {
+          if (!slot.enabled) continue;
+          try {
+            await slot.fn(event);
+          } catch {
+            // Handler errors stay inside the adapter.
+          }
+        }
+      }
+    });
+  }
+
+  /** Auto-start long-polling if not already running (no-op in outbound-only). */
+  function ensureStarted(): void {
+    if (started || stopped) return;
+    started = true;
+    stopped = false;
+    void attemptStart(0);
+  }
 
   async function attemptStart(attempt: number): Promise<void> {
     if (stopped) return;
@@ -182,9 +301,10 @@ export function telegramAdapter(opts: TelegramAdapterOpts): TelegramAdapter {
       if (!started) return;
       stopped = true;
       started = false;
-      // Disable all inbound subscription slots so an in-flight grammy
-      // update can't fire a handler after stop() returns.
+      // Disable all subscription slots so an in-flight grammy update can't
+      // fire a handler after stop() returns.
       for (const slot of inboundHandlers) slot.enabled = false;
+      for (const slot of transportHandlers) slot.enabled = false;
       try {
         await bot.stop();
       } catch {
@@ -199,65 +319,37 @@ export function telegramAdapter(opts: TelegramAdapterOpts): TelegramAdapter {
       // immediately resolves on unsubscribe. (Skip + audit lives in the
       // router; the adapter itself stays silent.)
       if (opts.outboundOnly === true) {
-        return {
-          unsubscribe: async (): Promise<void> => {
-            /* no-op */
-          },
-        };
+        return { unsubscribe: (): Promise<void> => Promise.resolve() };
       }
-
-      // Install a single grammy middleware on first subscribeInbound;
-      // subsequent calls just push handlers into the slot list. grammy has
-      // no per-middleware removal API — we toggle `enabled` to detach.
-      if (!inboundMiddlewareInstalled) {
-        inboundMiddlewareInstalled = true;
-        bot.on('message', async (ctx: InboundCtx) => {
-          // Build the unified event once per inbound message; deliver
-          // to every still-enabled handler slot.
-          if (ctx.chat === undefined) return;
-          const threadId = ctx.message?.message_thread_id;
-          const channelUri =
-            threadId !== undefined
-              ? `telegram://${ctx.chat.id}/${threadId}`
-              : `telegram://${ctx.chat.id}`;
-          const event: InboundChannelEvent = {
-            kind: 'inbound_channel',
-            channelUri,
-            sender: ctx.from?.id !== undefined ? String(ctx.from.id) : 'unknown',
-            text: ctx.message?.text ?? '',
-            ...(threadId !== undefined ? { threadKey: String(threadId) } : {}),
-            receivedAt: new Date().toISOString(),
-          };
-          for (const slot of inboundHandlers) {
-            if (!slot.enabled) continue;
-            try {
-              await slot.fn(event);
-            } catch {
-              // Handler errors stay inside the adapter — never bubble to
-              // grammy's update loop. (Matches Slack's posture.)
-            }
-          }
-        });
-      }
-
+      ensureMiddleware();
       const slot: InboundHandlerSlot = { enabled: true, fn: handler };
       inboundHandlers.push(slot);
-
-      // Auto-start long-polling so the bot actually receives updates. The
-      // outboundOnly path is already handled above; reaching here implies
-      // inbound is permitted. `start()`-style idempotence keeps a double
-      // subscribeInbound cheap.
-      if (!started) {
-        started = true;
-        stopped = false;
-        void attemptStart(0);
-        await Promise.resolve();
-      }
-
+      ensureStarted();
+      await Promise.resolve();
       return {
-        // eslint-disable-next-line @typescript-eslint/require-await -- async to satisfy InboundSubscription contract
-        unsubscribe: async (): Promise<void> => {
+        unsubscribe: (): Promise<void> => {
           slot.enabled = false;
+          return Promise.resolve();
+        },
+      };
+    },
+
+    async subscribeTransport(
+      handler: (msg: InboundChatMessage) => Promise<void>,
+    ): Promise<InboundSubscription> {
+      // Outbound-only mode cannot accept inbound.
+      if (opts.outboundOnly === true) {
+        return { unsubscribe: (): Promise<void> => Promise.resolve() };
+      }
+      ensureMiddleware();
+      const slot: TransportHandlerSlot = { enabled: true, fn: handler };
+      transportHandlers.push(slot);
+      ensureStarted();
+      await Promise.resolve();
+      return {
+        unsubscribe: (): Promise<void> => {
+          slot.enabled = false;
+          return Promise.resolve();
         },
       };
     },

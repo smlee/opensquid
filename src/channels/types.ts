@@ -32,6 +32,37 @@ export interface InboundSubscription {
 }
 
 /**
+ * CAT.1b — the RICH inbound transport envelope. Where `InboundChannelEvent`
+ * (AUTO.6) is a lossy projection for pack-event dispatch, this carries every
+ * field the chat-daemon needs to (a) write a byte-compatible inbox JSONL row
+ * (`src/runtime/chat/inbox.ts InboxRow`) and (b) route by the umbrella FSM
+ * (`src/channels/routing.ts`): the message id, separate sender display vs id,
+ * the DM flag, and the raw chat/topic ids. The adapter builds this once per
+ * inbound message; the lossy `InboundChannelEvent` is derived from it.
+ */
+export interface InboundChatMessage {
+  platform: 'telegram' | 'discord' | 'slack';
+  /** Platform message id (→ InboxRow.id + ack dedup). */
+  messageId: string;
+  /** Native chat/supergroup id as a string (→ routing + InboxRow.channel). */
+  chatId: string;
+  /** Forum-topic / thread id, when present (→ routing + InboxRow.thread_id). */
+  topicId?: number;
+  /** Display name of the sender (best-effort, falls back to id). */
+  sender: string;
+  /** Native sender id (→ DM routing + InboxRow.sender_id). */
+  senderId: string;
+  /** Message text (empty string when the message carried no text). */
+  text: string;
+  /** ISO-8601 wall-clock the platform stamped (→ InboxRow.received_at). */
+  receivedAt: string;
+  /** True iff the message @-mentions / triggers the bot (→ InboxRow.mentions_bot). */
+  mentionsBot: boolean;
+  /** True iff a private chat (Telegram: chat.id === from.id) → DM routing. */
+  direct: boolean;
+}
+
+/**
  * AUTO.6 — inbound surface. Each platform-specific adapter that can
  * accept incoming messages (Telegram bot updates, Discord guild messages,
  * Slack Socket Mode events) implements this method. Adapters that are
@@ -63,6 +94,16 @@ export interface ChannelAdapter {
    */
   subscribeInbound?(
     handler: (event: InboundChannelEvent) => Promise<void>,
+  ): Promise<InboundSubscription>;
+  /**
+   * Optional RICH inbound surface (CAT.1b) for the chat-transport daemon.
+   * Emits the full `InboundChatMessage` envelope. Adapters that back a
+   * remote-terminal transport (telegram first) implement it; outbound-only
+   * adapters omit it. Same ack-before-handler + swallow-errors contract as
+   * `subscribeInbound`.
+   */
+  subscribeTransport?(
+    handler: (msg: InboundChatMessage) => Promise<void>,
   ): Promise<InboundSubscription>;
 }
 
