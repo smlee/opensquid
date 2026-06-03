@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.299] - 2026-06-03
+
+### Removed (T-FSM-UNIFY FU.5 final — retire scope-fsm + workflow-fsm)
+
+The cutover CI (0.5.297) was green, so the superseded packs are now deleted
+(ship→verify→delete): `packs/builtin/scope-fsm/`, `packs/builtin/workflow-fsm/`, and
+their dir-loading tests (`scope-fsm.test.ts`, `scope-fsm-audit.test.ts`,
+`workflow-fsm.test.ts`). `coding-flow` carries the whole lifecycle now. Build clean,
+no dangling functional refs (the few remaining `workflow-fsm` mentions in `src/` are
+non-functional comments). `scope_fsm_guess_prevention.test.ts` is kept — it exercises
+the engine via an INLINE pack, not the deleted dir.
+
+Note (pre-existing, local-only): `src/mcp/server.test.ts`'s "no packs loaded" stub
+tests isolate `OPENSQUID_HOME` (user scope) but not the project scope (cwd), so they
+fail locally when the repo's own `active.json` activates a pack (dogfooding); CI is
+unaffected (gitignored active.json). A separate test-isolation fix, out of this track.
+
+- Deleted `packs/builtin/{scope-fsm,workflow-fsm}/` + 3 test files.
+
 ## [0.5.298] - 2026-06-03
 
 ### Docs (T-FSM-UNIFY FU.6 — sync the FSM docs to the unified coding-flow pack)
