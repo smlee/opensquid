@@ -1,0 +1,99 @@
+# scope-lifecycle — the tool_call lifecycle guards for coding-flow. Advances the
+# unified FSM on milestone writes and enforces the region gates that read it.
+# Content audits (guess-audit, spec-audit) live in the audits skill (FU.4); this
+# skill is the structural backbone. Ports + merges scope-fsm/scope-lifecycle +
+# workflow-fsm/advance-on-writes. State-driven (read_fsm_state), not file-existence.
+name: scope-lifecycle
+load: preload
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules:
+  # SCOPE — a pre-research artifact write advances → researched (+ captures its
+  # path for the handoff). Merged: the stricter `-pre-research-` predicate from
+  # workflow-fsm with scope-fsm's advance. One rule, one state file.
+  - id: advance-on-research
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args:
+          event: research_done
+      - call: write_state
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args:
+          key: coding-flow-pre-research-path
+          value: '{{targs.file_path}}'
+  # SCOPE gate — block code while the SCOPE region is incomplete (D4: allow once
+  # state has passed `researched`, i.e. any AUTHOR/EXECUTE state). Coding profile:
+  # src/ ∪ packs/ ∪ test/. The artifacts (docs/research, docs/tasks) stay writable.
+  - id: scope-before-code
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: read_fsm_state
+        as: st
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/")) && st != "researched" && st != "spec_authored" && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"'
+        args:
+          level: block
+          message: >-
+            BLOCKED: research before code. The SCOPE region is incomplete (state is
+            still pre-research). Complete the pre-research artifact
+            (docs/research/...-pre-research-...) first. Override only if the user
+            explicitly scoped this work in THIS turn.
+  # AUTHOR — a track-spec write advances researched → spec_authored (UNVERIFIED;
+  # the spec-audit in the audits skill is what advances it on to spec_complete).
+  # Captures the spec path for the handoff.
+  - id: advance-on-spec
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        args:
+          event: spec_drafted
+      - call: write_state
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        args:
+          key: coding-flow-spec-path
+          value: '{{targs.file_path}}'
+  # AUTHOR gate — no TaskCreate until the spec passed the audit (state ==
+  # spec_complete). This is the UPGRADE over the old presence-only check: a thin /
+  # pseudocode spec stays at spec_authored and is blocked here. On a valid create
+  # (state has reached spec_complete), advance → tasks_loaded.
+  - id: taskcreate-spec-required
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: read_fsm_state
+        as: st
+      - call: verdict
+        if: '(tool == "TaskCreate") && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"'
+        args:
+          level: block
+          message: >-
+            BLOCKED: task authoring incomplete. The task spec must pass the 11-field
+            + real-code spec-audit (the AUTHOR content gate) before tasks are
+            created — a thin or pseudocode spec is not enough. Finish the spec (all
+            11 fields per task, real code, no pseudocode), then create tasks.
+      - call: advance_fsm
+        if: '(tool == "TaskCreate" || tool == "TaskUpdate") && len(targs.metadata.taskId) > 0'
+        args:
+          event: tasks_loaded
+prose: |
+  The structural lifecycle: advance the unified FSM on the pre-research / spec /
+  task milestones, and enforce the SCOPE (research-before-code) and AUTHOR
+  (spec-complete-before-tasks) gates by reading that state. The two CONTENT audits
+  that make those gates rigorous (guess-audit, spec-audit) live in the `audits`
+  skill. "Coding" is the gate profile here (src/∪packs/∪test/); the FSM itself is
+  domain-general.

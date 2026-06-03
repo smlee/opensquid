@@ -1,0 +1,93 @@
+# entry-and-handoffs — the prompt_submit guards: enter the lifecycle on
+# scope-authoring intent, and emit the stage→stage handoff directives (the
+# connective tissue between the three peer stages). Ports workflow-fsm/enter-scoping
+# + workflow-fsm/handoffs. The handoff targets are re-pointed to the new state
+# names (spec_complete, not spec_authored, for the AUTHOR→tasks handoff). FU.3 adds
+# the track-type classification to `enter-scoping`.
+name: entry-and-handoffs
+load: preload
+when_to_load: []
+triggers:
+  - kind: prompt_submit
+rules:
+  # Enter the lifecycle: a scope-authoring prompt advances idle → scoping.
+  - id: enter-scoping
+    process:
+      - call: text_pattern_match
+        args:
+          text_field: prompt
+          patterns:
+            - '\bspec(?:c?ing|ced)?\b'
+            - '\bscope\b'
+            - '\bnew\s+(?:task|track)\b'
+            - '\badd\s+(?:a\s+|another\s+)?(?:task|track)\b'
+            - '\bdesign\b'
+            - '\bplan\b'
+        as: intent
+      - call: advance_fsm
+        if: 'len(intent.matched) > 0'
+        args:
+          event: scope_start
+  # SCOPE done → hand off to the task-spec-author persona.
+  - id: handoff-research-to-spec
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: read_state
+        args:
+          key: coding-flow-pre-research-path
+        as: prp
+      - call: verdict
+        if: 'st == "researched"'
+        args:
+          level: directive
+          next_action:
+            profession: task-spec-author
+            args:
+              pre_research_path: '{{prp}}'
+            rationale: >-
+              SCOPE complete (state: researched). Hand off to the task-spec-author
+              persona to consume the pre-research artifact and author the track
+              spec — all 11 fields, real code. Do NOT hand-author the decomposition.
+  # AUTHOR done (spec passed the audit) → hand off to task creation.
+  - id: handoff-spec-to-tasks
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: read_state
+        args:
+          key: coding-flow-spec-path
+        as: sp
+      - call: verdict
+        if: 'st == "spec_complete"'
+        args:
+          level: directive
+          next_action:
+            tool: TaskCreate
+            args:
+              spec_path: '{{sp}}'
+            rationale: >-
+              TASK AUTHORING complete (state: spec_complete — the spec passed the
+              11-field + real-code audit). TaskCreate each "### Task" block with
+              metadata.taskId + metadata.spec = the spec's absolute path.
+  # EXECUTE in flight but incomplete → resume phase logging.
+  - id: handoff-resume-phases
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: workflow_phases_complete
+        as: phases
+      - call: verdict
+        if: 'st == "phases_in_flight" && phases.complete == false'
+        args:
+          level: directive
+          next_action:
+            tool: mcp__opensquid__log_phase
+            rationale: >-
+              CODE in flight (state: phases_in_flight) but the 7-phase workflow is
+              incomplete for the active task. Resume at the next unlogged phase;
+              log_phase as each completes.
+prose: |
+  Entry + the three forward handoffs, one per stage boundary. State-driven via
+  read_fsm_state — the directive at each milestone points the agent (and its
+  persona) at the next stage's action, carrying the captured artifact path.

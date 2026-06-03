@@ -1,0 +1,26 @@
+# phase-advance — the EXECUTE-region advance. A log_phase call (post_tool_call,
+# after the MCP handler appended the phase) advances the FSM into / through the
+# phase-running states. Ports workflow-fsm/advance-on-phase-log.
+name: phase-advance
+load: preload
+when_to_load: []
+triggers:
+  - kind: post_tool_call
+rules:
+  - id: advance-phases
+    process:
+      - call: tool_name
+        as: tool
+      - call: workflow_phases_complete
+        as: phases
+      - call: advance_fsm
+        if: 'tool == "mcp__opensquid__log_phase" && phases.complete == true'
+        args:
+          event: phases_done
+      - call: advance_fsm
+        if: 'tool == "mcp__opensquid__log_phase" && phases.complete == false'
+        args:
+          event: phase_started
+prose: |
+  The phase signal. A log_phase that leaves the 7-phase set incomplete advances →
+  phases_in_flight; the one that completes it advances → phases_complete.

@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.295] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.2 — the FSM-driven structural guards)
+
+`coding-flow`'s lifecycle guards (3 skills, grouped by harness event): `scope-lifecycle`
+(tool_call — advance-on-research [merged from both old packs], scope-before-code [D4
+region allow-set], advance-on-spec, taskcreate-spec-required [UPGRADED: blocks until
+`spec_complete`, not just spec-file-exists]), `entry-and-handoffs` (prompt_submit —
+enter-scoping + the 3 stage→stage handoff directives), `phase-advance` (post_tool_call).
+All read/advance the one unified FSM via `read_fsm_state`/`advance_fsm`. The two content
+audits (guess-audit, spec-audit) are twins and land together in FU.4. Dispatch tests
+prove the SCOPE gate blocks-then-allows and the AUTHOR gate blocks TaskCreate at
+`spec_authored` (the restored task-authoring gate). Still inert until FU.5. Spec:
+`docs/tasks/T-fsm-unify.md` FU.2.
+
+- `packs/builtin/coding-flow/skills/{scope-lifecycle,entry-and-handoffs,phase-advance}/skill.yaml`, `test/builtin/coding-flow.test.ts`.
+
 ## [0.5.294] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.1 — the unified coding-flow FSM backbone)

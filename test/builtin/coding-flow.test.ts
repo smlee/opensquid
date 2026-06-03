@@ -5,12 +5,51 @@
  * This proves the on-disk union machine loads + is total, with the three
  * region-defining edges intact (guess-audit loop-back, spec-audit advance).
  */
-import { resolve } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { registerEventFunctions } from '../../src/functions/event.js';
+import { registerFsmFunctions } from '../../src/functions/fsm.js';
+import { FunctionRegistry } from '../../src/functions/registry.js';
+import { registerStateFunctions } from '../../src/functions/state.js';
+import { registerVerdictFunctions } from '../../src/functions/verdict.js';
 import { loadPack } from '../../src/packs/loader.js';
 import { step, validateFsm } from '../../src/runtime/fsm.js';
+import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
+import type { ToolCallEvent } from '../../src/runtime/types.js';
+
+function registry(): FunctionRegistry {
+  const r = new FunctionRegistry();
+  registerEventFunctions(r);
+  registerFsmFunctions(r);
+  registerStateFunctions(r);
+  registerVerdictFunctions(r);
+  return r;
+}
+
+const writeCode: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'Write',
+  args: { file_path: 'src/feature.ts' },
+};
+const writeResearch: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'Write',
+  args: { file_path: 'docs/research/x-pre-research-2026-06-03.md' },
+};
+const writeSpec: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'Write',
+  args: { file_path: 'docs/tasks/T-x.md' },
+};
+const taskCreate: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'TaskCreate',
+  args: { metadata: { taskId: 'X.1', spec: '/abs/spec.md' } },
+};
 
 describe('builtin coding-flow pack — FSM backbone (FU.1)', () => {
   it('loads with the union FSM and is total (validateFsm clean)', async () => {
@@ -65,5 +104,42 @@ describe('builtin coding-flow pack — FSM backbone (FU.1)', () => {
       next: 'spec_authored',
       transitioned: false,
     });
+  });
+});
+
+describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('SCOPE gate: blocks src/ pre-research, then allows once the pre-research doc is written', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-scope';
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2); // idle → blocked
+    expect((await dispatchEvent(writeResearch, [pack], reg, sid)).exitCode).toBe(0); // → researched
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(0); // researched → allowed
+  });
+
+  it('AUTHOR gate: TaskCreate is blocked until the spec passes audit (stays at spec_authored)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-author';
+    await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
+    await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored (UNVERIFIED; spec-audit is FU.4)
+    // The AUTHOR content gate: no tasks until spec_complete, which is unreachable
+    // until FU.4's spec-audit fires spec_verified. This is the restored gate.
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2);
   });
 });
