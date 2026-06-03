@@ -1,0 +1,47 @@
+# task-start — the per-task flow-enforcement hook (FU.11). The coding-flow FSM is
+# session-level, so after one task reaches phases_complete the next task's code write
+# sees a post-researched state and scope-before-code waves it through. This re-arms
+# the flow at the work boundary: when a task is ACTIVATED (TaskUpdate in_progress)
+# with NO generated spec on disk, reset the FSM to scoping + nudge "scope first".
+# A scoped task is a no-op (the per-task phase ledger handles EXECUTE). The "start of
+# enforcement" the user asked for — keyed to the actual task, not always-on guesswork.
+# Spec: docs/tasks/T-fsm-unify.md FU.11; pre-research:
+# docs/research/T-task-start-enforcement-pre-research-2026-06-03.md.
+name: task-start
+load: preload
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules:
+  - id: unscoped-task-rescopes
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: has_generated_spec
+        if: '(tool == "TaskUpdate") && targs.status == "in_progress"'
+        as: spec
+      # Reset to scoping: an active task with no generated spec = unscoped work.
+      - call: advance_fsm
+        if: '(tool == "TaskUpdate") && targs.status == "in_progress" && spec.present == true && spec.generated == false'
+        args:
+          event: task_unscoped
+      # Nudge the agent (and persona) to scope before coding.
+      - call: verdict
+        if: '(tool == "TaskUpdate") && targs.status == "in_progress" && spec.present == true && spec.generated == false'
+        args:
+          level: directive
+          next_action:
+            profession: scope-architect
+            rationale: >-
+              New task activated with NO generated spec — the flow reset to scoping.
+              Research → 11-field spec (passing the spec-audit) → only then code. Do
+              NOT start coding this task yet; the scope gate is now armed for it.
+prose: |
+  The task-start hook. Enforcement is STARTED at the work boundary (TaskUpdate
+  in_progress), keyed to whether the task is actually scoped (has_generated_spec) —
+  not assumed from whatever state the prior task left the session FSM in. An unscoped
+  task resets to scoping and is nudged to scope; a scoped task proceeds (its 7-phase
+  ledger is fresh). This is the per-task reset that closes the "nothing stops you when
+  you start a task" hole.

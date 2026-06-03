@@ -34,3 +34,10 @@ transitions:
   # ── CODE region ──────────────────────────────────────────────
   - { from: tasks_loaded, on: phase_started, to: phases_in_flight }
   - { from: phases_in_flight, on: phases_done, to: phases_complete }
+  # ── Task-start reset (FU.11) ─────────────────────────────────
+  # Activating a new UNSCOPED task resets the machine to scoping (from ANY state)
+  # so the always-on scope gate re-arms per task — the FSM is session-level, so
+  # without this a new task rides the prior task's phases_complete. step() supports
+  # from: '*' (src/runtime/fsm.ts). Fired ONLY by the task-start guard, which gates
+  # it strictly on TaskUpdate(in_progress) + has_generated_spec == false.
+  - { from: '*', on: task_unscoped, to: scoping }

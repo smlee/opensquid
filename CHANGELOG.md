@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.304] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.11 — the task-start hook: per-task flow enforcement)
+
+The coding-flow FSM is session-level, so after one task reached `phases_complete` the
+next task's code rode that state and `scope-before-code` waved it through — nothing
+re-armed the scope discipline per task. Fix: a `task-start` guard bound to
+`TaskUpdate(in_progress)`. When the activated task has **no generated spec on disk**
+(`has_generated_spec` — the old scope-architect "Gate A" per-task signal), it fires a
+new wildcard transition `{from:'*', on:task_unscoped, to:scoping}` — resetting the FSM
+to `scoping` so the always-on scope gate re-arms — plus a directive nudging
+"scope this first." A scoped task is a no-op (its 7-phase ledger handles EXECUTE).
+Enforcement now **starts at the work boundary, keyed to the actual task**, not assumed
+from the prior task's leftover state. 14/14 coding-flow tests (incl. the wildcard reset
+
+- unscoped-resets/scoped-no-op dispatch cases); validateFsm clean; full suite 3049 pass.
+  Built through the full flow (scope artifact → 11-field spec → 7 logged phases → this
+  commit through the execute-gate).
+
+* `packs/builtin/coding-flow/fsm.yaml`, `packs/builtin/coding-flow/skills/task-start/skill.yaml`, `test/builtin/coding-flow.test.ts`, `docs/tasks/T-fsm-unify.md` (FU.11), `docs/research/T-task-start-enforcement-pre-research-2026-06-03.md`.
+
 ## [0.5.303] - 2026-06-03
 
 ### Added (T-FSM-UNIFY — FU.8 cross-pack regression test)

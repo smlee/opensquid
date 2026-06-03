@@ -22,7 +22,11 @@ import { step, validateFsm } from '../../src/runtime/fsm.js';
 import { readFsmState } from '../../src/runtime/fsm_state.js';
 import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
 import { ok } from '../../src/runtime/result.js';
-import { HasActiveTask, WorkflowPhasesComplete } from '../../src/functions/active_task.js';
+import {
+  HasActiveTask,
+  HasGeneratedSpec,
+  WorkflowPhasesComplete,
+} from '../../src/functions/active_task.js';
 import { writeActiveTask } from '../../src/runtime/session_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../../src/runtime/workflow_phases.js';
 import type { ToolCallEvent } from '../../src/runtime/types.js';
@@ -285,5 +289,76 @@ describe('builtin coding-flow pack — EXECUTE content gate (phase-logged-before
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const r = await dispatchEvent(gitCommit, [pack], registryExec(), sid);
     expect(r.exitCode).toBe(0);
+  });
+});
+
+const taskUpdateInProgress: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'TaskUpdate',
+  args: { status: 'in_progress', taskId: 'X.1' },
+};
+
+function registryTaskStart(): FunctionRegistry {
+  const r = new FunctionRegistry();
+  registerEventFunctions(r);
+  registerFsmFunctions(r);
+  registerVerdictFunctions(r);
+  r.register(HasGeneratedSpec);
+  return r;
+}
+
+describe('builtin coding-flow pack — task-start hook (FU.11)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-cf-tstart-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('task_unscoped resets to scoping from ANY state (the wildcard)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    expect(step(pack.fsm!, 'phases_complete', 'task_unscoped')).toMatchObject({
+      next: 'scoping',
+      transitioned: true,
+    });
+    expect(step(pack.fsm!, 'spec_complete', 'task_unscoped')).toMatchObject({ next: 'scoping' });
+  });
+
+  it('activating an UNSCOPED task resets the FSM to scoping + nudges', async () => {
+    const sid = 'cf-tstart-unscoped';
+    await writeActiveTask(sid, {
+      id: 't1',
+      subject: 'wip',
+      started_at: '2026-06-03T00:00:00.000Z',
+    });
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    await dispatchEvent(taskUpdateInProgress, [pack], registryTaskStart(), sid);
+    // The RESET is the enforcement — it re-arms scope-before-code for the new task.
+    // (The directive nudge, profession: scope-architect, surfaces live where that
+    // persona pack is loaded; in this isolated pack it is dropped by profession
+    // validation, so we assert the robust half: the reset.)
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('scoping');
+  });
+
+  it('activating a SCOPED task does NOT reset (no directive)', async () => {
+    const sid = 'cf-tstart-scoped';
+    await writeActiveTask(sid, {
+      id: 't1',
+      subject: 'wip',
+      started_at: '2026-06-03T00:00:00.000Z',
+      spec: resolve('package.json'),
+    });
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(taskUpdateInProgress, [pack], registryTaskStart(), sid);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('idle');
+    expect(r.directives.length).toBe(0);
   });
 });

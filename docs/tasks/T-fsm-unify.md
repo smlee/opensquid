@@ -740,6 +740,76 @@ expect((await dispatchEvent(ev, [pack], reg, sid)).exitCode).toBe(0); // complet
 
 **7-phase steps:** 1 pre-research: read the seed helpers (DONE — appendPhase(sid,taskId,phase), ActiveTask{id,started_at}); 2 learn: lock the 3 fixtures; 3 code: add the describe; 4 test: run; 5 audit: no over-block; 6 post-research: n/a; 7 fix.
 
+### Task FU.11: The task-start hook — per-task flow enforcement
+
+**Required skills:** opensquid skill.yaml author expert; opensquid FSM/dispatcher expert; Tool-sequence FSM design expert; Audit / code review expert
+**Deliverable:** activating a task (`TaskUpdate(<id>, in_progress)`) on an UNSCOPED task (no generated spec on disk) resets the coding-flow FSM to `scoping` and emits a directive nudging "scope this first", so the always-on `scope-before-code` gate re-arms for the new task — closing the hole where the session-level FSM stays at `phases_complete` and waves new-task code through.
+**Depends on:** [FU.8](#task-fu8-fix-the-dispatch-first-verdict-short-circuit-suppressing-fsm-advances) (advance must survive any earlier verdict)
+
+**Files affected:**
+
+- `packs/builtin/coding-flow/fsm.yaml` (modify) — add the wildcard reset transition.
+- `packs/builtin/coding-flow/skills/task-start/skill.yaml` (new) — the guard.
+- `test/builtin/coding-flow.test.ts` (modify) — FU.11 dispatch cases.
+
+**Key code shapes:**
+
+```yaml
+# coding-flow/fsm.yaml — one wildcard transition (step supports from: '*', fsm.ts:106)
+- { from: '*', on: task_unscoped, to: scoping }
+```
+
+```yaml
+# coding-flow/skills/task-start/skill.yaml
+triggers: [{ kind: tool_call }]
+rules:
+  - id: unscoped-task-rescopes
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: has_generated_spec
+        if: '(tool == "TaskUpdate") && targs.status == "in_progress"'
+        as: spec
+      - call: advance_fsm
+        if: '(tool == "TaskUpdate") && targs.status == "in_progress" && spec.present == true && spec.generated == false'
+        args: { event: task_unscoped }
+      - call: verdict
+        if: '(tool == "TaskUpdate") && targs.status == "in_progress" && spec.present == true && spec.generated == false'
+        args:
+          level: directive
+          next_action:
+            profession: scope-architect
+            rationale: >-
+              New task activated with no generated spec — the flow reset to scoping.
+              Research → 11-field spec → then code. Do not start coding this task yet.
+```
+
+**Test fixtures:** TaskUpdate(in_progress) on a task whose active-task mirror has a resolvable `spec` → no reset (FSM unchanged), no directive; TaskUpdate(in_progress) on a task whose mirror has no spec → FSM → `scoping` + a directive; a non-TaskUpdate event → no-op.
+
+**Acceptance criteria:**
+
+- [ ] activating an unscoped task resets the FSM to `scoping`
+- [ ] activating a scoped task does NOT reset (per-task ledger handles EXECUTE)
+- [ ] the reset emits a `directive` nudging scope-first
+- [ ] `validateFsm` still passes with the wildcard transition
+- [ ] full suite green
+
+**Risk callouts:** `has_generated_spec` reads the active-task mirror (`active_task.ts:120`) — the just-activated task must already be mirrored when the guard runs (verify the mirror write precedes the guard in the same event, else read the spec from `targs.metadata.spec`). The wildcard `from:'*'` must not accidentally fire on unrelated events — gate it strictly on `tool == "TaskUpdate" && status == in_progress`. Keep the per-WRITE has_generated_spec gate OUT of this task (separate follow-up).
+
+**References:** `docs/research/T-task-start-enforcement-pre-research-2026-06-03.md`; `src/functions/active_task.ts:120` (has_generated_spec); `src/runtime/fsm.ts:106` (`*` wildcard); `coding-flow/skills/entry-and-handoffs/skill.yaml` (directive pattern).
+
+**Verification commands:**
+
+```bash
+cd /Users/slee/projects/opensquid
+node -e "import('./dist/packs/loader.js').then(m=>m.loadPack('packs/builtin/coding-flow')).then(p=>import('./dist/runtime/fsm.js').then(f=>console.log(f.validateFsm(p.fsm))))"
+pnpm vitest run test/builtin/coding-flow.test.ts && pnpm vitest run && pnpm build
+```
+
+**7-phase steps:** 1 pre-research: read fsm.yaml + fsm.ts `*` + has_generated_spec + the directive pattern (DONE); 2 learn: lock the trigger (`TaskUpdate in_progress`) + the reset transition + the has_generated_spec keying; 3 code: add the transition + the task-start skill; 4 test: the 3 dispatch fixtures; 5 audit: wildcard fires only on the intended event, validateFsm clean; 6 post-research: compare against the old scope-architect Gate A (has_generated_spec); 7 fix.
+
 ---
 
 ## 5. Locked decisions
