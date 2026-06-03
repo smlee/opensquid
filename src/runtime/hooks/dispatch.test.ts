@@ -176,6 +176,20 @@ describe('dispatchEvent', () => {
     expect(result.stderr).toContain('auto_correct');
   });
 
+  it('FU.8: a non-blocking verdict does not short-circuit — a LATER pack still blocks', async () => {
+    // packA's verdict resolves to `warn` (non-blocking); packB's to `block_tool`.
+    // Pre-FU.8 the warn returned exit 0 and packB never ran. Now the warn buffers
+    // and continues, so packB's block fires (exit 2). This is the suppression bug
+    // that stalled coding-flow's FSM advance behind a higher-precedence warn.
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'gate msg' });
+    const packA = makePack('a-warns', [verdictRule]);
+    packA.driftResponse = { default: 'warn', per_rule: {}, corrective_skills: {} };
+    const packB = makePack('b-blocks', [verdictRule]);
+    packB.driftResponse = { default: 'block_tool', per_rule: {}, corrective_skills: {} };
+    const result = await dispatchEvent(event, [packA, packB], registry, 'sess-fu8');
+    expect(result.exitCode).toBe(2); // packA's warn no longer suppresses packB
+  });
+
   it('returns exit 0 + empty stderr when no rules produce a verdict', async () => {
     // A pack whose only rule has an empty process → evaluator returns no_verdict.
     const noVerdictRule: Rule = { id: 'empty', kind: 'track_check', requires: [], process: [] };

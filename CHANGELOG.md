@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.303] - 2026-06-03
+
+### Added (T-FSM-UNIFY — FU.8 cross-pack regression test)
+
+`dispatch.test.ts` gains the regression guard for the FU.8 fix: pack A resolves to a
+`warn` (non-blocking), pack B to `block_tool`; the dispatch now returns exit 2 (pack
+B's block fires) instead of exit 0 (pre-FU.8, pack A's warn short-circuited and pack B
+never ran). Locks in "non-blocking verdicts don't suppress a later pack." 72/72 in the
+file. FU.8 is now covered by the full suite + a live run + this unit test.
+
+- `src/runtime/hooks/dispatch.test.ts`.
+
 ## [0.5.302] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.9 — behavioral test for the EXECUTE gate)
