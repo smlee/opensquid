@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.288] - 2026-06-02
+
+### Changed (T-PACK-FSM-STANDARDIZATION slice A4 — chain_state is now forward-only/total)
+
+`transitionChainStage` previously accepted ANY target with no legality matrix —
+the exact gap the generic FSM engine (A1) closes. It now REJECTS a BACKWARD
+transition (no-op + stderr warn) so an illegal regress can't quietly rewind a
+workflow gate. Forward transitions + forward JUMPS stay allowed (the live flow
+lands `researched`/`spec_authored` directly without an intervening prompt, and
+~20 call-sites/tests rely on that), matching the pipeline's real forward-only
+invariant (CHAIN_STAGES order). The legitimate research loop-back lives in the
+`scope-fsm` pack's declared FSM, not this global one-shot chain. Full event-fired
+migration of the 5 transition sites onto WORKFLOW_FSM remains (A4b).
+
+- `src/runtime/chain_state.ts` — forward-only legality guard.
+
 ## [0.5.287] - 2026-06-02
 
 ### Added (T-PACK-FSM-STANDARDIZATION slice C — built-in `scope-fsm` pack: FSM-driven never-guess)

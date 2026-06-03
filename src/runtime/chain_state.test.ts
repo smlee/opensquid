@@ -160,6 +160,25 @@ describe('chain_state — multi-step transition chain (append-only history)', ()
   });
 });
 
+describe('chain_state — A4 forward-only legality', () => {
+  it('allows forward transitions + forward jumps (idle → researched, skipping scoping)', async () => {
+    await transitionChainStage('a4-fwd', 'researched', { pre_research_path: '/abs/p.md' });
+    expect((await readChainState('a4-fwd'))?.stage).toBe('researched');
+    await transitionChainStage('a4-fwd', 'spec_authored', { spec_path: '/abs/T.md' });
+    expect((await readChainState('a4-fwd'))?.stage).toBe('spec_authored');
+  });
+
+  it('REJECTS a backward transition (no-op; the gate cannot be quietly rewound)', async () => {
+    await transitionChainStage('a4-back', 'spec_authored', { spec_path: '/abs/T.md' });
+    // researched < spec_authored in CHAIN_STAGES → illegal backward → ignored
+    await transitionChainStage('a4-back', 'researched');
+    expect((await readChainState('a4-back'))?.stage).toBe('spec_authored');
+    // an attempt to regress to scoping from a later stage is also rejected
+    await transitionChainStage('a4-back', 'scoping');
+    expect((await readChainState('a4-back'))?.stage).toBe('spec_authored');
+  });
+});
+
 describe('chain_state — clearChainState', () => {
   it('removes the persisted file', async () => {
     await transitionChainStage('s', 'scoping');

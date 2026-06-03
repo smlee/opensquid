@@ -147,6 +147,23 @@ export async function transitionChainStage(
   const now = new Date().toISOString();
   const current = await readChainState(sessionId);
   if (current?.stage === next) return; // L4 idempotency: same stage = no-op
+
+  // T-PACK-FSM-STANDARDIZATION slice A4 — legality. The workflow pipeline is
+  // FORWARD-ONLY (CHAIN_STAGES order); forward JUMPS are allowed by design
+  // (e.g. a spec write lands `spec_authored` without an intervening prompt),
+  // but a BACKWARD transition was silently accepted before — the exact "accepts
+  // any target, no legality matrix" gap the generic FSM engine closes. Reject
+  // it: no-op + warn, so an illegal regress can't quietly rewind a gate. (The
+  // legitimate research loop-back lives in the `scope-fsm` pack's FSM, not this
+  // global one-shot chain.)
+  const curIdx = current ? CHAIN_STAGES.indexOf(current.stage) : -1;
+  const nextIdx = CHAIN_STAGES.indexOf(next);
+  if (nextIdx < curIdx) {
+    process.stderr.write(
+      `opensquid: illegal backward chain transition ${current?.stage ?? 'idle'} -> ${next} ignored (forward-only)\n`,
+    );
+    return;
+  }
   const merged: ChainState = {
     stage: next,
     started_at: now,
