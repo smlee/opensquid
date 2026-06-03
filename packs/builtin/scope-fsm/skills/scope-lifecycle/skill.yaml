@@ -48,6 +48,9 @@ rules:
             guess: the claim, why it is a guess, and the citation or question
             that would resolve it. Never say GUESS_FREE if any unresolved guess
             remains. ARTIFACT:\n\n{{targs.content}}
+          # Bounded — this runs synchronously in the PreToolUse hook on a
+          # pre-research write; a hung CLI must not hang the session.
+          timeout_ms: 120000
         as: audit
       # Deterministic loop-back: a non-GUESS_FREE verdict (or no clear verdict —
       # fail-closed) fires guess_found → researched loops back to researching, so
