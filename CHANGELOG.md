@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.301] - 2026-06-03
+
+### Fixed (T-FSM-UNIFY FU.8 — non-blocking verdicts no longer suppress FSM advances)
+
+The dispatcher returned on the FIRST verdict of any level (`dispatch.ts` verdict
+switch), so a non-blocking warn from a higher-precedence pack short-circuited the
+walk before a lower-precedence pack's side-effect `advance_fsm`/`write_state` rules
+ran. Live symptom: `scope-architect/pre-research-authoring`'s DPC.5 warn pre-empted
+`coding-flow`'s `advance-on-research`, leaving the FSM stuck at `idle` so the gate
+jammed (it twice forced manual session-state correction this session). Fix: the four
+non-blocking verdict actions (`warn`/`notify_pause`/`auto_correct`/`escalate`, all
+exit 0) now buffer their message and CONTINUE the walk; only exit-2 verdicts
+(`block_tool`/`halt`) return early (the tool aborts anyway). Which verdict sets the
+exit code is unchanged; buffered warns surface at the final return (or appended to a
+later block). Verified: full suite 3042 pass (no regression — only the 2 pre-existing
+local-only `server.test.ts` active.json failures), and a live pre-research write now
+advances the FSM to `researched` past the warn (the file is created; before, none was).
+
+Done through the full 7-phase flow (all phases logged via `log_phase`) so the new
+execute-gate let this very commit through — the unified flow dogfooded end-to-end.
+
+- `src/runtime/hooks/dispatch.ts`. Follow-ups: FU.9 (execute-gate unit test) + a dedicated 2-pack dispatch test for this fix.
+
 ## [0.5.300] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.7 — the EXECUTE content gate; the third stage's gate)

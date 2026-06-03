@@ -493,13 +493,16 @@ export async function dispatchEvent(
               directives,
             };
           case 'warn':
-            emitDispatchMarker(event.kind, rulesWalked, packs.length);
-            return {
-              exitCode: 0,
-              stderr: appendWarn(action.message, warnBuf),
-              contextInjections,
-              directives,
-            };
+            // FU.8: a non-blocking verdict (exit 0) MUST NOT short-circuit the
+            // walk. Buffer its message and CONTINUE, so a LATER pack's
+            // side-effect advance (advance_fsm / write_state) still runs. Only
+            // the exit-2 verdicts (block_tool / halt) return early — the tool
+            // aborts anyway. Buffered warns surface at the final return (or get
+            // appended to a later block's message). Fixes the bug where a
+            // higher-precedence warn (e.g. scope-architect's pre-research-authoring
+            // DPC.5 warn) stalled coding-flow's FSM advance at `idle`.
+            warnBuf += `${action.message}\n`;
+            break;
           case 'halt':
             // T-RJ-FOLLOWUPS FU.9: `full_stop_and_redo` → `halt` now ENFORCES
             // as a hard block (exit 2) instead of the old exit-0 stub that made
@@ -530,13 +533,9 @@ export async function dispatchEvent(
             // `versioning-pre1-patch-only` (halt → exit 2, FU.9). Exit-2 here
             // would wrongly block the user's prompt. Also surfaces the
             // auto_correct-degrade + unknown-policy fail-safe reasons.
-            emitDispatchMarker(event.kind, rulesWalked, packs.length);
-            return {
-              exitCode: 0,
-              stderr: appendWarn(action.reason, warnBuf),
-              contextInjections,
-              directives,
-            };
+            // FU.8: non-blocking → buffer + continue (see the `warn` case).
+            warnBuf += `${action.reason}\n`;
+            break;
           case 'auto_correct':
           case 'escalate':
             // No pack rule maps to these policies yet — safe exit-0 + empty stub
@@ -545,13 +544,8 @@ export async function dispatchEvent(
             // (their side-effect layers) from here; building now is speculative
             // (FU.10's "build when a rule opts in" gate). The destructive
             // `restart` action stays unbuilt for the same reason.
-            emitDispatchMarker(event.kind, rulesWalked, packs.length);
-            return {
-              exitCode: 0,
-              stderr: appendWarn('', warnBuf),
-              contextInjections,
-              directives,
-            };
+            // FU.8: non-blocking → continue (see the `warn` case).
+            break;
         }
       }
     }
