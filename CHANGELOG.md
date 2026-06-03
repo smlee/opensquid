@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.308] - 2026-06-03
+
+### Fixed (T-SERVER-TEST-ISOLATION FC.4 — isolate the server test's project scope)
+
+The 2 `server.test.ts` "no packs loaded" / "no skills loaded" stub tests failed LOCALLY
+(passed in CI) because the spawned MCP server inherited the test process's cwd = the repo
+root, whose `.opensquid/active.json` carries `coding-flow`. The harness isolated user
+scope (`OPENSQUID_HOME`, per-test temp) but not project scope (cwd), so the child's
+`resolveProjectScopeRoot` walked up and found the repo's active pack. Set the child's
+`cwd` to the per-test temp home (no `.opensquid` above it), matching CI's clean checkout.
+Local suite is now fully green (3057 passed, 0 failed). Built through the full flow
+(scoped task → 7 logged phases → commit).
+
+- `src/mcp/server.test.ts`, `docs/tasks/T-server-test-isolation.md` (spec).
+
 ## [0.5.307] - 2026-06-03
 
 ### Fixed (T-FSM-COMPLETION FC.3 — de-flake transport_bridge)

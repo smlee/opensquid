@@ -79,6 +79,11 @@ class MCPClient {
     this.proc = spawn(TSX_BIN, [SERVER_FILE], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
+      // Isolate project scope too, not just user scope (OPENSQUID_HOME): the child's
+      // resolveProjectScopeRoot walks up from cwd, so an inherited repo-root cwd would
+      // pick up this repo's .opensquid/active.json. The per-test temp home has none —
+      // matching CI's clean checkout, where these "no packs loaded" stubs pass.
+      cwd: env.OPENSQUID_HOME,
     });
     this.proc.stdout.setEncoding('utf8');
     this.proc.stdout.on('data', (chunk: string) => this.onStdout(chunk));
