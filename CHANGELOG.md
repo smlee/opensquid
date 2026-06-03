@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.291] - 2026-06-03
+
+### Changed (T-ENFORCE-WORKFLOW-GATES EWG.1 — research-before-code gate broadened to all implementation trees)
+
+The `scope-fsm` research-before-code gate blocked only `src/` writes
+pre-research; it now blocks `src/` + `packs/` + `test/` — code is code regardless
+of tree. The workflow artifacts (`docs/research`, `docs/tasks`) stay writable.
+Closes the gap that let pack + test work skip the workflow (exactly how the
+agent skipped the 7-phase flow). Live activation of the mode-independent FSM
+gates at PROJECT scope + the `reasoning`-alias mapping are config, not code (see
+docs/tasks/T-enforce-workflow-gates.md).
+
+- `packs/builtin/scope-fsm/skills/scope-lifecycle/skill.yaml` (broadened gate).
+
 ## [0.5.290] - 2026-06-03
 
 ### Added (scope-fsm guess-audit — capable-model adversarial audit + deterministic loop-back, C2/C3)

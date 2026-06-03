@@ -76,7 +76,7 @@ rules:
       - call: read_fsm_state
         as: st
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "src/") && st != "researched" && st != "building"'
+        if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/")) && st != "researched" && st != "building"'
         args:
           level: block
           message: >-

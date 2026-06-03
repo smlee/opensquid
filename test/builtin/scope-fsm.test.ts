@@ -74,4 +74,21 @@ describe('builtin scope-fsm pack', () => {
     expect((await dispatchEvent(writeResearch, [pack], reg, sid)).exitCode).toBe(0); // advance
     expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(0); // researched → allowed
   });
+
+  it('blocks packs/ and test/ writes pre-research too (broadened coverage)', async () => {
+    const pack = await loadPack(resolve('packs/builtin/scope-fsm'));
+    const reg = registry();
+    const writePack = {
+      kind: 'tool_call' as const,
+      tool: 'Write',
+      args: { file_path: 'packs/builtin/x/skill.yaml' },
+    };
+    const writeTest = {
+      kind: 'tool_call' as const,
+      tool: 'Write',
+      args: { file_path: 'test/builtin/x.test.ts' },
+    };
+    expect((await dispatchEvent(writePack, [pack], reg, 'sess-pack')).exitCode).toBe(2);
+    expect((await dispatchEvent(writeTest, [pack], reg, 'sess-test')).exitCode).toBe(2);
+  });
 });
