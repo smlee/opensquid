@@ -644,6 +644,102 @@ spec_complete, tasks_loaded, phases_in_flight, phases_complete]
 
 **7-phase steps:** 1 pre-research: list every doc hit (§6); 2 learn: lock the new worked-example; 3 code: rewrite the example + region section; 4 test: prettier; 5 audit: no stale two-machine language; 6 post-research: n/a; 7 fix.
 
+### Task FU.7: The EXECUTE content gate — phase-logged-before-commit (DONE, 0.5.300)
+
+**Required skills:** opensquid skill.yaml author expert; Claude Code hooks expert; Audit / code review expert
+**Deliverable:** a `coding-flow/skills/execute-gate` skill blocks `git commit` while the active task's 7 phases are unlogged — the EXECUTE content gate, symmetric with SCOPE's guess-audit + AUTHOR's spec-audit; mode-independent (no `automation_mode_on`). SHIPPED 0.5.300 (`5b9d4d3`).
+**Depends on:** [FU.2](#task-fu2-author-the-fsm-driven-guards--merge-the-per-pack-duplicates)
+
+**Files affected:** `packs/builtin/coding-flow/skills/execute-gate/skill.yaml` (new); `docs/research/T-execute-gate-pre-research-2026-06-03.md` (pre-research).
+
+**Key code shapes:**
+
+```yaml
+- call: match_command
+  args: { pattern: '^git\s+(?:-[cC]\s+\S+\s+)*commit\b', target: tool_args.command }
+  as: committing
+- call: has_active_task
+  if: 'committing'
+  as: active
+- call: workflow_phases_complete
+  if: 'committing && active.present == true'
+  as: phases
+- call: verdict
+  if: 'committing && active.present == true && phases.complete == false'
+  args: { level: block, message: 'log the 7 phases via log_phase before commit' }
+```
+
+**Test fixtures:** no active task → commit passes; active task + <7 phases → block; active task + all 7 phases → pass.
+
+**Acceptance criteria:** [x] gate blocks commit on incomplete phases; [x] ad-hoc commits pass; [x] mode-independent; [ ] behavioral dispatch test (FU.9).
+
+**Risk callouts:** ad-hoc commits (no active task) pass by design — practicality; the SCOPE gate already forces code into the flow.
+
+**References:** `sangmin-personal-rules/skills/workflow/skill.yaml:34-70` (the port source); `src/functions/active_task.ts`.
+
+**Verification commands:** `node -e "loadPack('packs/builtin/coding-flow')"`; `pnpm build`.
+
+**7-phase steps:** 1 pre-research: read the personal gate + primitives (DONE); 2 learn: lock mode-independent design; 3 code: author execute-gate; 4 test: FU.9; 5 audit: parity with the personal gate; 6 post-research: n/a; 7 fix.
+
+### Task FU.8: Fix the dispatch first-verdict short-circuit suppressing FSM advances
+
+**Required skills:** opensquid dispatcher expert; TypeScript expert; Architectural design expert; Audit / code review expert
+**Deliverable:** a side-effect FSM advance (`advance_fsm`) is no longer suppressed when a HIGHER-precedence pack emits a verdict earlier in the same dispatch — so coding-flow's `advance-on-research`/`advance-on-spec` run even when a user-scope pack (e.g. `pre-research-authoring`) verdicts first. Today the first verdict short-circuits the whole walk (`dispatch.ts:14`), so the FSM stalls at `idle` and the gate jams.
+**Depends on:** None (dispatcher fix).
+
+**Files affected:** `src/runtime/hooks/dispatch.ts` (the pack/skill walk + verdict short-circuit, ~:331-481); `src/runtime/hooks/dispatch.test.ts` (new case).
+
+**Key code shapes:**
+
+```ts
+// Decouple side-effect rules (advance_fsm/write_state → no_verdict) from the
+// verdict short-circuit: walk ALL rules for their side effects, but stop
+// adopting NEW verdicts after the first. (Or: run a side-effect pre-pass per
+// event before the verdict walk.) The first verdict still wins exitCode.
+```
+
+**Test fixtures:** pack A (user scope) warns on a docs/research write; pack B (project scope) has an `advance_fsm` rule on the same write → after dispatch, B's FSM advanced (state persisted) AND A's warn still set the verdict.
+
+**Acceptance criteria:** [ ] a higher-precedence verdict no longer suppresses a lower pack's `advance_fsm`; [ ] the first verdict still determines exitCode (no regression to existing short-circuit tests); [ ] full suite green.
+
+**Risk callouts:** must NOT change which verdict wins (existing first-match contract); only side-effect advances should survive. Verify against `dispatch.ts` existing short-circuit tests.
+
+**References:** `docs/research/T-execute-gate-pre-research-2026-06-03.md` §3 (the live observation); `dispatch.ts:14,331,347,462`.
+
+**Verification commands:** `pnpm vitest run src/runtime/hooks/dispatch.test.ts && pnpm vitest run && pnpm build`.
+
+**7-phase steps:** 1 pre-research: read the full walk + every short-circuit test; 2 learn: lock side-effect-survives-verdict vs pre-pass; 3 code: implement; 4 test: the cross-pack advance fixture + no verdict-order regression; 5 audit: first-verdict-wins preserved; 6 post-research: compare against other rule engines' side-effect ordering; 7 fix.
+
+### Task FU.9: Behavioral dispatch test for execute-gate
+
+**Required skills:** opensquid skill.yaml author expert; System integration test / CI fixtures expert; Audit / code review expert
+**Deliverable:** `test/builtin/coding-flow.test.ts` gains an EXECUTE-gate describe: git commit with no active task passes; active task + incomplete phases blocks (exit 2); active task + all 7 phases passes.
+**Depends on:** [FU.7](#task-fu7-the-execute-content-gate--phase-logged-before-commit-done-05300)
+
+**Files affected:** `test/builtin/coding-flow.test.ts` (add a describe block).
+
+**Key code shapes:**
+
+```ts
+await writeActiveTask(sid, { id: 't1', started_at: TS });
+for (const p of REQUIRED_PHASES) await appendPhase(sid, 't1', p); // complete case
+const reg = registry(); // + r.register(HasActiveTask); r.register(WorkflowPhasesComplete);
+const ev = { kind: 'tool_call', tool: 'Bash', args: { command: 'git commit -m x' } };
+expect((await dispatchEvent(ev, [pack], reg, sid)).exitCode).toBe(0); // complete → pass
+```
+
+**Test fixtures:** the 3 cases above (no-task pass, incomplete block, complete pass).
+
+**Acceptance criteria:** [ ] all 3 cases assert the right exitCode; [ ] uses `writeActiveTask` + `appendPhase` + `REQUIRED_PHASES` to seed; [ ] green in the full suite.
+
+**Risk callouts:** the registry must register `HasActiveTask` + `WorkflowPhasesComplete` (`src/functions/active_task.ts`) + `match_command` (verify it's in `registerEventFunctions`); set `OPENSQUID_HOME` to a temp dir per-test.
+
+**References:** `src/functions/active_task.ts`, `src/runtime/workflow_phases.ts` (`appendPhase`, `REQUIRED_PHASES`, `isComplete`), `src/runtime/session_state.ts` (`writeActiveTask`).
+
+**Verification commands:** `pnpm vitest run test/builtin/coding-flow.test.ts`.
+
+**7-phase steps:** 1 pre-research: read the seed helpers (DONE — appendPhase(sid,taskId,phase), ActiveTask{id,started_at}); 2 learn: lock the 3 fixtures; 3 code: add the describe; 4 test: run; 5 audit: no over-block; 6 post-research: n/a; 7 fix.
+
 ---
 
 ## 5. Locked decisions
