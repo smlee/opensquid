@@ -202,8 +202,7 @@ export async function transcriptTaskStatus(
  * (`pending`/`in_progress`) both KEEP, so the ATM.3 lag-keep is preserved; only an
  * explicit `completed`/`deleted` clears (FC.6).
  */
-export const isClosedStatus = (s: string | null): boolean =>
-  s === 'completed' || s === 'deleted';
+export const isClosedStatus = (s: string | null): boolean => s === 'completed' || s === 'deleted';
 
 /** An OPEN task (latest status `pending`|`in_progress`) + its generator provenance. */
 export interface OpenTask {
