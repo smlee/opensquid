@@ -21,6 +21,52 @@ rules:
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/")'
         args:
           event: research_done
+  - id: guess-audit
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      # Capable-model (reasoning alias) adversarial audit of the just-written
+      # pre-research artifact. Only runs ON a pre-research write (it is a model
+      # call — gated tightly). The author maintains an unknowns-ledger IN the
+      # artifact; this challenges it.
+      - call: subagent_call
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args:
+          model: reasoning
+          prompt: >-
+            You are an adversarial reviewer enforcing a strict NEVER-GUESS rule
+            on a pre-research artifact. A claim is acceptable ONLY if it is
+            DERIVED from cited evidence (a file:line reference, a memory, or the
+            user's own words) OR explicitly flagged as an OPEN QUESTION to ask
+            the user. Any assertion stated as fact without such a citation, and
+            not flagged as open, is an UNRESOLVED GUESS. Begin your response with
+            EXACTLY one line — `VERDICT: GUESS_FREE` if every claim is
+            derived-with-citation or flagged-as-open, otherwise `VERDICT:
+            UNRESOLVED`. If UNRESOLVED, follow with one bullet per unresolved
+            guess: the claim, why it is a guess, and the citation or question
+            that would resolve it. Never say GUESS_FREE if any unresolved guess
+            remains. ARTIFACT:\n\n{{targs.content}}
+        as: audit
+      # Deterministic loop-back: a non-GUESS_FREE verdict (or no clear verdict —
+      # fail-closed) fires guess_found → researched loops back to researching, so
+      # the research-before-code gate keeps blocking until the artifact passes.
+      # The research-doc condition is repeated FIRST so it short-circuits before
+      # `audit` is touched on non-pre-research writes (where audit is unbound).
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(audit, "VERDICT: GUESS_FREE")'
+        args:
+          event: guess_found
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(audit, "VERDICT: GUESS_FREE")'
+        args:
+          level: warn
+          message: >-
+            Unresolved guesses in the pre-research artifact — the scope FSM looped
+            back to research. Resolve each (derive it from a cited file:line /
+            memory / the user's words, or flag it as an open question to ask),
+            then re-write the artifact. Audit:\n\n{{audit}}
   - id: research-before-code
     process:
       - call: tool_name

@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.290] - 2026-06-03
+
+### Added (scope-fsm guess-audit — capable-model adversarial audit + deterministic loop-back, C2/C3)
+
+The `scope-fsm` pack's research-before-code gate now has teeth against GUESSING,
+not just stage-skipping. When a pre-research artifact is written, a capable
+(`reasoning` alias) adversarial audit reviews it: every claim must be derived
+from cited evidence or flagged as an open question; any unsupported assertion is
+an UNRESOLVED GUESS. A non-`GUESS_FREE` verdict deterministically fires
+`guess_found`, looping the FSM back from `researched` to `researching` (so the
+code gate keeps blocking until the artifact passes) and surfaces the specific
+guesses. The capable model does the judgment; the gate stays deterministic. The
+audit is expense-gated to pre-research writes only.
+
+- `packs/builtin/scope-fsm/fsm.yaml` (researched -> guess_found -> researching) +
+  `skills/scope-lifecycle/skill.yaml` (the guess-audit rule).
+
 ## [0.5.289] - 2026-06-03
 
 ### Changed (T-WORKFLOW-AS-PACK-FSM — the 7-phase workflow IS a pack FSM; chain_state retired)

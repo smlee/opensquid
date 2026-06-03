@@ -61,6 +61,7 @@ describe('builtin scope-fsm pack', () => {
     const skill = pack.skills.find((s) => s.name === 'scope-lifecycle');
     expect(skill?.rules.map((r) => r.id)).toEqual([
       'advance-on-research-doc',
+      'guess-audit',
       'research-before-code',
     ]);
   });
