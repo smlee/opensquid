@@ -12,5 +12,8 @@ description: >
   spec / task writes) via advance_fsm, and any gate reads the stage via
   read_fsm_state. Opt-in via active.json. T-PACK-FSM-STANDARDIZATION slice A4b.
 evolves: true
-detected_by:
-  - kind: user_pinned
+# No detected_by gate: this pack loads purely on active.json opt-in. (A
+# `detected_by: [user_pinned]` clause here would gate it OFF, because the
+# user_pinned DetectionContext signal is not yet populated — see bootstrap.ts
+# realPacksPromise — so every detected_by check would fail and the pack would
+# never load despite being opted in. Opt-in IS the pin.)

@@ -79,3 +79,35 @@ which is the gap that let the C2/C3 fix proceed.)
 - `~/.opensquid/active.json`, `~/.opensquid/models.yaml` (live config).
 - `packs/builtin/scope-fsm/skills/scope-lifecycle/skill.yaml` (the research-before-code gate to broaden).
 - `src/functions/is_automation_mode.ts`, `src/models/types.ts` (the mode + model facts).
+
+## 5. Deeper root cause found during verification (the activation no-op)
+
+D1's `active.json` opt-in was necessary but NOT sufficient — after adding
+`scope-fsm`/`workflow-fsm`, the hook still loaded only the 4 user-scope packs
+(`[opensquid-dispatch] … packs=4`, EXIT=0; the gate never fired). Verified chain:
+
+1. **Project scope resolves from `process.cwd()`, not the edited file's path.**
+   `bootstrap.ts:289,302` — `loadActivePacks` does `resolveProjectScopeRoot(process.cwd())`.
+   The session's cwd is the umbrella root `~/projects/loop` (the user starts Claude
+   at the parent root, never a sub-repo), so an `active.json` placed only under
+   `~/projects/opensquid/.opensquid` was off the resolution path. **Fix:** activate
+   at the loop umbrella scope `~/projects/loop/.opensquid/active.json` (covers
+   loop + opensquid + loop-engine work done from the umbrella session; RaumPilates
+   is a separate cwd, untouched). Keep the opensquid-scope copy for direct sessions.
+2. **`detected_by: [user_pinned]` gated the packs OFF even when opted in.**
+   Both manifests carried `detected_by: [{kind: user_pinned}]`. But the
+   `user_pinned` DetectionContext signal is never populated (`bootstrap.ts`
+   `realPacksPromise` / `buildDetectionContext` leave `userPinned` false — its own
+   comment says so). At `discovery.ts:241` the real loader passes a non-null `ctx`,
+   so each pack must satisfy `matchesDetectedBy(detectedBy, ctx)`; with the only
+   clause being an always-false `user_pinned`, the match fails and the pack is
+   excluded. (`discovery.ts:194` — an EMPTY `detectedBy[]` always matches.) The
+   `ctx === null` debug path masked this (null ctx skips the gate, returned 2 packs).
+   **Fix:** remove the `detected_by` block from both manifests — opt-in via
+   `active.json` IS the pin; no synthetic gate on an unimplemented signal.
+
+**Net (verified live):** with the loop-scope `active.json` + the `detected_by`
+removal, the next hook invocation loaded `scope-fsm` and its `research-before-code`
+gate BLOCKED an attempted `packs/` edit (`🦑 BLOCKED: research before code`) — the
+enforcement now bites interactively. No unresolved guess: every step above is a
+cited file:line.

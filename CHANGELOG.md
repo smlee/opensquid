@@ -7,6 +7,36 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.292] - 2026-06-03
+
+### Fixed (T-ENFORCE-WORKFLOW-GATES EWG.3.1 — the activation no-op: FSM packs silently disabled by a dead `detected_by`)
+
+Activating the workflow gates via `active.json` alone did nothing — the hook kept
+loading only the 4 user-scope packs (`packs=4`, gate never fired). Two causes,
+both verified live and fixed:
+
+1. **Project scope resolves from `process.cwd()`** (`bootstrap.ts:289,302`), which
+   is the umbrella root `~/projects/loop` the session runs from — so an
+   `active.json` under the opensquid sub-repo was off the resolution path.
+   Activation now lives at the loop umbrella scope (covers loop + opensquid +
+   loop-engine work; RaumPilates is a separate cwd, untouched).
+2. **`detected_by: [user_pinned]` gated the packs OFF even when opted in.** The
+   `user_pinned` DetectionContext signal is never populated, so the real non-null
+   `ctx` path (`discovery.ts:241`) excluded both packs despite the opt-in (the
+   `ctx === null` debug path masked it). Removed the `detected_by` block from both
+   manifests — opt-in via `active.json` IS the pin; an empty `detectedBy[]` always
+   matches (`discovery.ts:194`).
+
+Verified end-to-end: a fresh session now loads `packs=6` and DENIES a
+`src/`/`packs/` write pre-research (`🦑 BLOCKED: research before code`); writing
+the pre-research artifact advances the FSM to `researched` (the `claude`-CLI
+guess-audit passing GUESS_FREE), after which the same write is allowed. The
+enforcement bites interactively — the gate blocked this very change until its
+pre-research artifact was written.
+
+- `packs/builtin/scope-fsm/manifest.yaml`, `packs/builtin/workflow-fsm/manifest.yaml` (removed dead `detected_by`).
+- `docs/research/T-enforce-workflow-gates-pre-research-2026-06-03.md` §5 (root cause), `docs/tasks/T-enforce-workflow-gates.md` (EWG.3.1).
+
 ## [0.5.291] - 2026-06-03
 
 ### Changed (T-ENFORCE-WORKFLOW-GATES EWG.1 — research-before-code gate broadened to all implementation trees)

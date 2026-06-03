@@ -18,10 +18,20 @@ pre-research artifact exists — enforced in interactive mode, not just automati
   `~/.opensquid/models.yaml` mapping `reasoning` + `fast_classifier` →
   `{mode: subscription, impl: cli, cli: claude}` (the user's CLI; no API key).
 - **EWG.3 — Activate the mode-independent FSM gates at PROJECT scope** _(live
-  config)_. Add `scope-fsm` + `workflow-fsm` to `<opensquid>/.opensquid/active.json`
-  and `<loop>/.opensquid/active.json` — **NOT** user scope (user scope would gate
-  RaumPilates; "don't touch RaumPilates"). The existing user-scope discipline
-  packs stay as-is.
+  config + manifest fix)_. Add `scope-fsm` + `workflow-fsm` to
+  `<loop>/.opensquid/active.json` (the umbrella root the session runs from —
+  project scope resolves from `process.cwd()`, `bootstrap.ts:289,302`, so the loop
+  scope is what an umbrella session sees; the opensquid-scope copy stays for direct
+  opensquid sessions) — **NOT** user scope (user scope would gate RaumPilates;
+  "don't touch RaumPilates"). The existing user-scope discipline packs stay as-is.
+- **EWG.3.1 — Remove the dead `detected_by: [user_pinned]` gate** _(code; the
+  activation no-op fix)_. Opt-in alone was insufficient: both FSM manifests gated
+  load on `user_pinned`, a DetectionContext signal that is never populated
+  (`bootstrap.ts` `buildDetectionContext` leaves it false), so the real non-null
+  `ctx` path (`discovery.ts:241`) excluded them despite the opt-in. Remove the
+  `detected_by` block from both manifests — opt-in via `active.json` IS the pin; an
+  empty `detectedBy[]` always matches (`discovery.ts:194`). Verified live: the gate
+  then loaded (`packs=6`) and DENIED a fresh-session `src/`/`packs/` write.
 
 ### Locked decisions
 
@@ -29,8 +39,11 @@ pre-research artifact exists — enforced in interactive mode, not just automati
    automation-only (they're legitimately interactive-OK).
 2. Coverage = `src/ ∪ packs/ ∪ test/`.
 3. `reasoning` → subscription/cli/`claude`.
-4. PROJECT-scope activation (opensquid + loop), not user scope — RaumPilates
-   untouched.
+4. PROJECT-scope activation at the LOOP umbrella root (where the session's
+   `process.cwd()` resolves) + an opensquid-scope copy, not user scope —
+   RaumPilates untouched.
+5. The FSM packs carry NO `detected_by` (opt-in via active.json is the pin);
+   `user_pinned` is unimplemented and would silently disable them.
 
 ### Consequence (intended)
 
