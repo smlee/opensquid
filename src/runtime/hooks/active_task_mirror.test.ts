@@ -325,6 +325,15 @@ describe('mirrorActiveTask — T-ACTRACE.1 defensive clear (cases a-f)', () => {
     // completingId=15 + prior.id=15 → defensive-keep must NOT fire → clear.
     expect(await readActiveTask(SID)).toBeNull();
   });
+
+  it('FC.6: prior present at status=completed (not THIS tick) → clear, not keep', async () => {
+    // Pre-FC.6 the store keep fired on "present at ANY status", so a completed task
+    // lingered. Now keep requires present AND open.
+    await writeActiveTask(SID, { id: '108', subject: 'done', started_at: 'z' });
+    await putTask({ id: '108', subject: 'done', status: 'completed' });
+    await mirrorActiveTask(SID, 'Bash', { command: 'ls' }, tasksBase);
+    expect(await readActiveTask(SID)).toBeNull();
+  });
 });
 
 describe('mirrorActiveTask — transcript-path defensive-keep (ATM.3)', () => {
@@ -360,6 +369,38 @@ describe('mirrorActiveTask — transcript-path defensive-keep (ATM.3)', () => {
     await writeActiveTask(SID, { id: '19', subject: 'ATM.3', started_at: 'z' });
     const p = await writeTranscript([]);
     await mirrorActiveTask(SID, 'TaskUpdate', { taskId: '19', status: 'completed' }, undefined, p);
+    expect(await readActiveTask(SID)).toBeNull();
+  });
+
+  it('FC.6: CLEARS a prior completed EARLIER in the transcript, on a later non-TaskUpdate tool', async () => {
+    // The lingering bug: completion already landed in the transcript; a later Bash
+    // re-mirror must clear, not preserve. Pre-FC.6 the prior.id !== completingId keep
+    // fired on every non-TaskUpdate tool → a finished task's signal lingered forever.
+    await writeActiveTask(SID, { id: '19', subject: 'done', started_at: 'z' });
+    const p = await writeTranscript([
+      {
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              id: 't1',
+              name: 'TaskCreate',
+              input: { subject: 'A', metadata: { taskId: 'X' } },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          content: [
+            { type: 'tool_result', tool_use_id: 't1', content: 'Task #19 created successfully' },
+          ],
+        },
+      },
+      tu('19', 'in_progress'),
+      tu('19', 'completed'),
+    ]);
+    await mirrorActiveTask(SID, 'Bash', { command: 'ls' }, undefined, p);
     expect(await readActiveTask(SID)).toBeNull();
   });
 

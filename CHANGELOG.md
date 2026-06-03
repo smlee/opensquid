@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.309] - 2026-06-03
+
+### Fixed (T-ACTIVE-TASK-CLEAR FC.6 — completed task's active-task signal no longer lingers)
+
+A completed task's `active-task.json` persisted indefinitely (empirically: FC.4 stayed
+"active" after completion), so `has_generated_spec` kept returning `generated:true` off a
+done task — a stray code write could ride a completed task's spec, weakening the per-write
+scope gate. The ATM.3 defensive-keep (`prior.id !== completingId`) protected a just-
+activated task during transcript lag but, as a side effect, preserved a finished task's
+signal on every later non-`TaskUpdate` tool — with no recovery path. Now the keep/clear
+decision reads the prior task's actual transcript status (`transcriptTaskStatus` over the
+existing ATM.1 walk): a genuine lag (`null`) or still-open task is KEPT; an explicit
+`completed`/`deleted` clears. The store-path keep is narrowed the same way (present AND
+not closed). The ATM.3 lag-keep is preserved (the `null`-lag still keeps). Built through
+the full flow (pre-research → 11-field spec → 7 logged phases → commit).
+
+- `src/runtime/hooks/transcript_tasks.ts` (add `transcriptTaskStatus` + `isClosedStatus`),
+  `src/runtime/hooks/active_task_mirror.ts` (both keep-branches),
+  `docs/tasks/T-active-task-clear.md` (spec), pre-research artifact.
+
 ## [0.5.308] - 2026-06-03
 
 ### Fixed (T-SERVER-TEST-ISOLATION FC.4 — isolate the server test's project scope)

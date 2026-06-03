@@ -36,7 +36,11 @@ import {
   readActiveTask,
   writeActiveTask,
 } from '../session_state.js';
-import { readActiveTaskFromTranscript } from './transcript_tasks.js';
+import {
+  isClosedStatus,
+  readActiveTaskFromTranscript,
+  transcriptTaskStatus,
+} from './transcript_tasks.js';
 
 /**
  * T-ATSC L1 (2026-05-29) — mirror re-derives `active-task.json` on EVERY
@@ -155,17 +159,18 @@ export async function mirrorActiveTask(
     // active-task.json that TaskUpdate's mirror just wrote → log_phase then threw
     // "no active task" (the workaround-needing race). Only CLEAR when THIS tool
     // explicitly completes/deletes the prior active task (the authoritative
-    // "done" signal, caught at its own tick); otherwise KEEP — a later re-mirror
-    // rewrites once the transcript catches up. Fail-open to clear on read error.
-    const completingId =
-      tool === 'TaskUpdate' &&
-      (args.status === 'completed' || args.status === 'deleted') &&
-      typeof args.taskId === 'string'
-        ? args.taskId
-        : null;
+    // "done" signal. FC.6: decide keep-vs-clear by the prior's ACTUAL transcript
+    // status (with the in-flight TaskUpdate overlaid via `pending`). A genuinely
+    // lagging task is absent (null) or still open → KEEP; an explicit
+    // completed/deleted clears, so a finished task's signal cannot linger past its
+    // completing tick (the pre-FC.6 `prior.id !== completingId` kept it forever on
+    // every later non-TaskUpdate tool). Fail-open to clear on read error.
     try {
       const prior = await readActiveTask(sessionId);
-      if (prior !== null && prior.id !== completingId) return; // transcript lag — keep
+      if (prior !== null) {
+        const priorStatus = await transcriptTaskStatus(transcriptPath, prior.id, pending);
+        if (!isClosedStatus(priorStatus)) return; // lag (null) or still open → keep
+      }
     } catch {
       /* fail-open → clear */
     }
@@ -225,8 +230,12 @@ export async function mirrorActiveTask(
       // pre-execution state. Test "H4a completion: excludes a task
       // being completed even though disk still says in_progress" asserts
       // this — we MUST clear.
-      if (prior !== null && prior.id !== completingId && tasks.some((t) => t.id === prior.id)) {
-        return; // transient mid-write — keep prior active-task.json
+      if (
+        prior !== null &&
+        prior.id !== completingId &&
+        tasks.some((t) => t.id === prior.id && !isClosedStatus(t.status))
+      ) {
+        return; // transient mid-write of an OPEN task — keep prior active-task.json
       }
     } catch {
       // L4 fail-open: readActiveTask error → fall through to clear.

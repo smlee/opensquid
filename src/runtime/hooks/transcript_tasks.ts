@@ -181,6 +181,30 @@ export async function readActiveTaskFromTranscript(
   };
 }
 
+/**
+ * Latest transcript status for one harness task id (with the in-flight TaskUpdate
+ * overlaid, H4a), or `null` if the id is absent/unreadable. Reuses the ATM.1 walk —
+ * no forked semantics. FC.6 uses this to tell genuine transcript lag (prior still
+ * `pending`/`in_progress`) from a real completion (clear).
+ */
+export async function transcriptTaskStatus(
+  transcriptPath: string,
+  id: string,
+  pending?: PendingUpdate,
+): Promise<string | null> {
+  const { taskById } = await parseTranscriptTasks(transcriptPath, pending);
+  return taskById.get(id)?.status ?? null;
+}
+
+/**
+ * A CLOSED status is the only case where a stale prior active-task signal must be
+ * cleared. `null` (transcript hasn't caught up — genuine lag) and the open statuses
+ * (`pending`/`in_progress`) both KEEP, so the ATM.3 lag-keep is preserved; only an
+ * explicit `completed`/`deleted` clears (FC.6).
+ */
+export const isClosedStatus = (s: string | null): boolean =>
+  s === 'completed' || s === 'deleted';
+
 /** An OPEN task (latest status `pending`|`in_progress`) + its generator provenance. */
 export interface OpenTask {
   id: string;
