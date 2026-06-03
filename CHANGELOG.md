@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.293] - 2026-06-03
+
+### Docs (T-PACK-RUNTIME-DOC-DRIFT — sync the authoritative pack-runtime reference)
+
+`docs/pack-runtime.md` (header still at 0.5.226) predated this session's
+chain_state→pack-FSM unification, the `guards:` template, and the FSM engine, so
+it documented deleted modules as live. Synced against current source (every
+correction file:line-verified):
+
+- Removed all chain_state-era claims now that `src/runtime/chain_state.ts` +
+  `read_chain_state` + `transition_chain_stage` are deleted: §5.2 primitive,
+  §6.1 file, §6.3 section, §7.4 pattern, Appendix A/B. Replaced with the
+  `workflow-fsm` pack + `read_fsm_state`/`advance_fsm`.
+- Documented the new surfaces: `fsm.yaml` side-file (auto-loaded by name, §1.5),
+  the `guards:` manifest block (new §1.13), the `read_fsm_state`/`advance_fsm`
+  primitives (§5.2), and the `docs/pack-fsm-architecture.md` companion (cross-refs).
+- Fixed §2.3's `requires:` example (removed the deleted `chain_stage:`
+  precondition; corrected the entry shape to `{kind: automation_mode_on}`).
+- Added a `user_pinned` caveat in §1.4: the signal is never populated, so a pack
+  gated solely on it is silently disabled even when opted in (the EWG.3.1 trap).
+
+- `docs/pack-runtime.md`, `docs/research/T-pack-runtime-doc-drift-pre-research-2026-06-03.md`.
+
 ## [0.5.292] - 2026-06-03
 
 ### Fixed (T-ENFORCE-WORKFLOW-GATES EWG.3.1 — the activation no-op: FSM packs silently disabled by a dead `detected_by`)

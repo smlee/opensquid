@@ -1,6 +1,6 @@
 # Pack runtime — authoritative reference
 
-Version: 0.5.226 · Last updated: 2026-05-30 · Spec: T-IDENTITY-FOUNDATION (IDF.1–IDF.5)
+Version: 0.5.293 · Last updated: 2026-06-03 · Spec: T-IDENTITY-FOUNDATION (IDF.1–IDF.5) + T-PACK-FSM-STANDARDIZATION (FSM engine, `fsm.yaml`, `guards:`, `read_fsm_state`/`advance_fsm`)
 
 This document is the authoritative reference for the opensquid pack
 runtime: how a pack is identified on disk, what it can declare, how
@@ -24,6 +24,11 @@ Cross-references:
   `process:` steps).
 - `docs/load-budget.md` — companion doc for the load-side cost
   budget pack authors should respect.
+- `docs/pack-fsm-architecture.md` — companion doc for the pack-FSM
+  stack (`fsm.yaml` lifecycle, the generic total-transition engine, the
+  `read_fsm_state`/`advance_fsm` primitives, and the `guards:` gate
+  template). This doc documents the schema/loader/primitive surface;
+  pack-fsm-architecture.md is the all-levels conceptual walkthrough.
 
 ---
 
@@ -37,6 +42,7 @@ packs/<name>/
   skills/                 # required — one folder per skill
     <skill-name>/
       skill.yaml          # required — skill rules
+  fsm.yaml                # optional — pack-lifecycle FSM (auto-loaded by name; see 1.13)
   chat_agent.yaml         # optional — chat-bridge agent identity
   models.yaml             # optional — model aliases for LLM primitives
   channels.yaml           # optional — chat channel registry
@@ -52,28 +58,35 @@ Schema: `src/packs/schemas/manifest.ts:1-360` · Loader fold:
 time, so every field below has a deterministic value at runtime even
 when omitted from disk.
 
-| Field                | Type     | Default     | Purpose                                                    |
-| -------------------- | -------- | ----------- | ---------------------------------------------------------- |
-| `name`               | string   | required    | Pack name, must match folder name                          |
-| `version`            | semver   | required    | Pack version (independent of opensquid version)            |
-| `scope`              | enum     | required    | Layering precedence (see 1.6)                              |
-| `goal`               | string   | required    | One-line statement of what the pack does                   |
-| `description`        | string   | `''`        | Longer description                                         |
-| `requires`           | string[] | `[]`        | Other packs this depends on (by name)                      |
-| `conflicts`          | string[] | `[]`        | Other packs this conflicts with (by name)                  |
-| `evolves`            | bool     | `true`      | Whether lessons can mutate this pack's skills              |
-| `activation_scope`   | enum     | `'project'` | WHO the pack applies to (see 1.3)                          |
-| `detected_by`        | array    | `[]`        | WHEN the pack auto-activates (see 1.4)                     |
-| `foundation`         | object   | absent      | Taxonomy block — tools/domains/methodologies (see 1.2)     |
-| `chat_agent_ref`     | string   | absent      | Reference to chat_agent.yaml (see 1.5)                     |
-| `models_ref`         | string   | absent      | Reference to models.yaml (see 1.5)                         |
-| `channels_ref`       | string   | absent      | Reference to channels.yaml (see 1.5)                       |
-| `notifications_ref`  | string   | absent      | Reference to notifications.yaml (see 1.5)                  |
-| `drift_response_ref` | string   | absent      | Reference to drift_response.yaml (see 1.5)                 |
-| `team_ref`           | string   | absent      | Reference to team.yaml (profession marker)                 |
-| `kind`               | enum     | `'focused'` | Pack type (see 1.7) — `'focused' \| 'composite'`           |
-| `usage`              | enum     | `'active'`  | Load mode (see 1.7) — `'active' \| 'profession' \| 'both'` |
-| `includes`           | array    | `[]`        | Composite-only — `{pack_id, semver}` entries (see 1.7)     |
+| Field                | Type     | Default     | Purpose                                                        |
+| -------------------- | -------- | ----------- | -------------------------------------------------------------- |
+| `name`               | string   | required    | Pack name, must match folder name                              |
+| `version`            | semver   | required    | Pack version (independent of opensquid version)                |
+| `scope`              | enum     | required    | Layering precedence (see 1.6)                                  |
+| `goal`               | string   | required    | One-line statement of what the pack does                       |
+| `description`        | string   | `''`        | Longer description                                             |
+| `requires`           | string[] | `[]`        | Other packs this depends on (by name)                          |
+| `conflicts`          | string[] | `[]`        | Other packs this conflicts with (by name)                      |
+| `evolves`            | bool     | `true`      | Whether lessons can mutate this pack's skills                  |
+| `activation_scope`   | enum     | `'project'` | WHO the pack applies to (see 1.3)                              |
+| `detected_by`        | array    | `[]`        | WHEN the pack auto-activates (see 1.4)                         |
+| `foundation`         | object   | absent      | Taxonomy block — tools/domains/methodologies (see 1.2)         |
+| `chat_agent_ref`     | string   | absent      | Reference to chat_agent.yaml (see 1.5)                         |
+| `models_ref`         | string   | absent      | Reference to models.yaml (see 1.5)                             |
+| `channels_ref`       | string   | absent      | Reference to channels.yaml (see 1.5)                           |
+| `notifications_ref`  | string   | absent      | Reference to notifications.yaml (see 1.5)                      |
+| `drift_response_ref` | string   | absent      | Reference to drift_response.yaml (see 1.5)                     |
+| `team_ref`           | string   | absent      | Reference to team.yaml (profession marker)                     |
+| `kind`               | enum     | `'focused'` | Pack type (see 1.7) — `'focused' \| 'composite'`               |
+| `usage`              | enum     | `'active'`  | Load mode (see 1.7) — `'active' \| 'profession' \| 'both'`     |
+| `includes`           | array    | `[]`        | Composite-only — `{pack_id, semver}` entries (see 1.7)         |
+| `seed_lessons`       | array    | `[]`        | Pack-author knowledge ingest (see 1.10)                        |
+| `verify_gates`       | array    | `[]`        | Declarative author gates → synthetic `<pack>/verify` (1.11)    |
+| `guards`             | array    | `[]`        | Reusable detect→verdict gate template → `<pack>/guards` (1.13) |
+
+(The `fsm.yaml` lifecycle is NOT a `manifest.yaml` field — it is a side file
+auto-loaded by filename and folded onto the runtime `Pack` as `pack.fsm`; see
+§1.5 + §1.13.)
 
 The schema is `.strict()` — unknown keys at the top level are
 rejected at load time so typos surface loudly rather than silently
@@ -208,7 +221,7 @@ The 7 kinds:
 | `file_glob`           | `pattern`, `min_count` (default 1)    | Count files in `ctx.files` matching the minimatch pattern; true iff ≥ `min_count`                                  |
 | `memory_match`        | `pattern`                             | RegExp test against `ctx.memoryBodies`                                                                             |
 | `conversation_signal` | `pattern`                             | RegExp test against `ctx.recentPrompts`                                                                            |
-| `user_pinned`         | (none)                                | True iff `ctx.userPinned` (active.json `pin: true` flag)                                                           |
+| `user_pinned`         | (none)                                | True iff `ctx.userPinned`. **⚠ CURRENTLY INERT** — see caveat below                                                |
 
 ```yaml
 detected_by:
@@ -225,6 +238,15 @@ detected_by:
     min_count: 3
 ```
 
+**⚠ `user_pinned` is currently inert — never gate a pack solely on it.**
+`ctx.userPinned` is not yet populated (`bootstrap.ts` `buildDetectionContext`
+leaves it `false`, deferred to a later phase). Because the real loader passes a
+non-`null` `ctx`, a pack whose ONLY `detected_by` clause is `user_pinned` fails
+its detection gate and is **silently excluded even when listed in `active.json`**
+(this is exactly the EWG.3.1 bug that disabled `scope-fsm`/`workflow-fsm`). For a
+pack that should load purely on opt-in, declare NO `detected_by` block — an empty
+array always matches (`discovery.ts:194`). Opt-in via `active.json` IS the pin.
+
 **No LLM in detection.** All 7 kinds are pure regex / filesystem /
 prompt-substring matches. Per `feedback_stop_haiku_drift` L4 — LLM
 calls in the hot path break determinism + cost predictability.
@@ -235,7 +257,7 @@ validation is a deferred follow-up.
 
 ### 1.5 Side files
 
-Each side file is referenced from `manifest.yaml` via a `*_ref:`
+Most side files are referenced from `manifest.yaml` via a `*_ref:`
 field naming a file in the same pack directory. The loader reads +
 validates each via its own Zod schema; failures throw with a
 path-bearing error so authors can fix the config.
@@ -248,6 +270,13 @@ path-bearing error so authors can fix the config.
 | `notifications.yaml`  | `src/packs/schemas/notifications.ts`  | Notification routing rules                                                      |
 | `drift_response.yaml` | `src/packs/schemas/drift_response.ts` | Per-rule drift policy + corrective_skills (see §4.3)                            |
 | `team.yaml`           | `src/packs/schemas/team.ts`           | Profession-pack marker (`role:` + `skills_catalog:`)                            |
+| `fsm.yaml`            | `Fsm` in `src/runtime/fsm.ts`         | Pack-lifecycle FSM (see §1.13). **Auto-loaded by filename — NO `*_ref`.**       |
+
+**`fsm.yaml` is the exception to the `*_ref:` rule.** It is read by
+fixed filename (`loader.ts:199` `loadOptionalFsm`), validated for totality
+(`validateFsm`), and folded onto the runtime `Pack` as `pack.fsm`
+(`types.ts:415`). Absent file → `pack.fsm` is `undefined`; the FSM primitives
+then return `null` (no machine to walk).
 
 ### 1.6 `scope:` (layering precedence)
 
@@ -411,6 +440,49 @@ Read API: `getLivingPackVersion(packId): Promise<LivingPackVersion |
 null>` in `src/packs/living_pack.ts`. Honors `OPENSQUID_HOME` env
 override (test seam wired through LP.3's `resolvePackStateDir`).
 
+### 1.13 `guards:[]` — reusable detect→verdict gate template (T-PACK-FSM-STANDARDIZATION slice B)
+
+Optional array on `manifest.yaml`. A guard is the compressed form of the
+recurring "inspect the event, then emit a verdict if a condition holds" pattern —
+the generalization of §1.11's `verify_gates`. Each guard compiles at load time
+into a `TrackCheckRule` (a `detect` step when present, then a gated `verdict`
+step) under a synthetic skill named `<pack>/guards`, triggered on the guard's
+`on:` event kind.
+
+```yaml
+guards:
+  - name: no-rm-rf
+    on: tool_call # tool_call | prompt_submit | stop | session_end (default tool_call)
+    detect: # optional — a primitive call whose result binds to `as`
+      call: tool_args
+    as: targs # binding name for the detect result (default `hit`)
+    when: 'contains(targs.command, "rm -rf")' # if-expression; the verdict condition
+    level: block # warn | block
+    message: |
+      BLOCKED: `rm -rf` is too destructive.
+```
+
+Schema: `Guard` + `GuardDetect` in `src/packs/schemas/manifest.ts:452-479`.
+Compiler: `src/packs/guards_compiler.ts` (`compileGuards`). Loader fold:
+`src/packs/loader.ts:130`.
+
+Contract:
+
+- **`detect` is optional.** With `detect`, the named primitive runs first and its
+  result binds to `as` (default `hit`); `when` typically references that binding.
+  Without `detect`, `when` is a standalone check (the `verify_gates` case) — the
+  two features share the same compile target.
+- **Pre-parse validation** — every `when` expression runs through the compiler's
+  `parseExpression` at load time; a malformed expression throws at `loadPack` with
+  the offending guard name (fail-loud, same as `verify_gates`).
+- **`guards:` vs `verify_gates:`** — `verify_gates` is the `when`-only special
+  case (no `detect` step, `event_kind` nested under `when:`); `guards` adds the
+  optional `detect` step + a flat `on:` field. New packs should prefer `guards:`;
+  `verify_gates:` stays for back-compat.
+- **`guards:` vs hand-written skills** — a guard is for the common
+  single-detect-then-verdict shape. A rule needing multiple primitive calls,
+  branching, or state reads still warrants a hand-written `skill.yaml`.
+
 ---
 
 ## 2. Skill format
@@ -456,10 +528,16 @@ evaluate, no `inject_context` fires).
 
 ```yaml
 requires:
-  - automation_mode: true
-  - has_active_task: true
-  - chain_stage: tasks_loaded
+  - kind: automation_mode_on
+  - kind: active_task_present
 ```
+
+Schema: each entry is `{kind: <variant>}`. Two variants ship today
+(`skill_requires.ts:48-49`): `automation_mode_on` (stat the session
+`automation.flag`) and `active_task_present` (stat the session
+`active-task.json`). The former `chain_stage:` precondition was REMOVED with
+chain_state (`skill_requires.ts:11`) — gate on FSM state via the `read_fsm_state`
+primitive inside a rule's `process:` instead (see §2.6 + §5.2).
 
 Preconditions are AND-composed. An empty `requires:[]` trivially
 holds (back-compat).
@@ -840,15 +918,22 @@ shipped primitive by category.
 | `last_assistant_message` | `{value: string}`             | Most recent assistant output                    |
 | `match_command`          | `{matched: bool, groups?: …}` | Regex-match against bash command (args.pattern) |
 
-### 5.2 State (`src/functions/state.ts` + `chain_state.ts`)
+### 5.2 State + FSM (`src/functions/state.ts`, `fsm.ts`, `session_tool_history.ts`)
 
-| Primitive              | Returns                      | Use                                 |
-| ---------------------- | ---------------------------- | ----------------------------------- |
-| `read_state`           | bound value                  | Read a session-scoped state key     |
-| `write_state`          | `{ok: true}`                 | Write a session-scoped state key    |
-| `append_log`           | `{ok: true}`                 | Append to a session-scoped log file |
-| `read_chain_state`     | `{stage, history?, enrich?}` | Read the 7-stage chain machine      |
-| `session_tool_history` | `{tools: string[]}`          | Last N tool names this session      |
+| Primitive              | Returns              | Use                                                                        |
+| ---------------------- | -------------------- | -------------------------------------------------------------------------- |
+| `read_state`           | bound value          | Read a session-scoped state key                                            |
+| `write_state`          | `{ok: true}`         | Write a session-scoped state key                                           |
+| `append_log`           | `{ok: true}`         | Append to a session-scoped log file                                        |
+| `read_fsm_state`       | state string\|`null` | Read a pack-FSM's current state (own pack, or another via `pack:` arg)     |
+| `advance_fsm`          | next-state string    | Fire an `event:` against the own pack's FSM; persists + returns next state |
+| `session_tool_history` | `{tools: string[]}`  | Last N tool names this session                                             |
+
+`read_chain_state` was REMOVED with chain_state. The 7-phase workflow is now the
+`workflow-fsm` pack's lifecycle; gate on it via `read_fsm_state` (`pack:
+workflow-fsm` for a cross-pack read) — see §6.3. Both FSM primitives live in
+`src/functions/fsm.ts:37,52`; `read_fsm_state` returns `null` when the pack has no
+`fsm.yaml` or the machine is unstarted (`advance_fsm` then defaults to `initial`).
 
 ### 5.3 Active-task (`src/functions/active_task.ts`)
 
@@ -925,14 +1010,14 @@ curl|sh, etc.).
 
 ### 6.1 Files written
 
-| File                           | Writer                 | Purpose                                       |
-| ------------------------------ | ---------------------- | --------------------------------------------- |
-| `<sess>/violations.log`        | `applyDriftResponse`   | Append-only log of every fired drift policy   |
-| `<sess>/drift-catalog.jsonl`   | drift_response writer  | One JSONL row per violation with full context |
-| `<sess>/chain-state.json`      | `transitionChainStage` | Current 7-stage machine state + history       |
-| `<sess>/active-task.json`      | `writeActiveTask`      | Current active task + metadata.spec           |
-| `<sess>/workflow-phases.jsonl` | `log_phase` MCP tool   | Per-task phase log (7-phase machine)          |
-| `<sess>/skill-ticks.json`      | `advanceSkillTicks`    | Dynamic-skill unload tick counters            |
+| File                           | Writer                | Purpose                                       |
+| ------------------------------ | --------------------- | --------------------------------------------- |
+| `<sess>/violations.log`        | `applyDriftResponse`  | Append-only log of every fired drift policy   |
+| `<sess>/drift-catalog.jsonl`   | drift_response writer | One JSONL row per violation with full context |
+| `<sess>/state/fsm-<pack>.json` | `advanceFsmState`     | A pack-FSM's `{state, history[]}` (per pack)  |
+| `<sess>/active-task.json`      | `writeActiveTask`     | Current active task + metadata.spec           |
+| `<sess>/workflow-phases.jsonl` | `log_phase` MCP tool  | Per-task phase log (7-phase machine)          |
+| `<sess>/skill-ticks.json`      | `advanceSkillTicks`   | Dynamic-skill unload tick counters            |
 
 ### 6.2 Audit-trail provenance
 
@@ -950,20 +1035,27 @@ This provenance lets the user trace any drift back to the pack + rule
 that fired, and (when enabled) to the subagent + profession that
 caused the input.
 
-### 6.3 Chain state stages
+### 6.3 The workflow as a pack FSM (replaces chain_state)
 
-Module: `src/runtime/chain_state.ts:60-200`. The 7-stage machine:
+The 7-phase workflow used to live in a bespoke `src/runtime/chain_state.ts`
+machine driven by 5 scattered hook-bin transition sites. It is now the
+**`workflow-fsm` pack's lifecycle** (`packs/builtin/workflow-fsm/fsm.yaml`),
+driven by the generic total-transition engine (`src/runtime/fsm.ts`) — the unified
+replacement. The lifecycle:
 
 ```
 idle → scoping → researched → spec_authored → tasks_loaded
      → phases_in_flight → phases_complete
 ```
 
-Transitions are append-only + idempotent. Each stage carries
-`ChainHistoryEntry` rows with timestamp + stage transition. The
-`read_chain_state` primitive lets rules gate on the current stage
-(e.g. SDTC.1 blocks `TaskCreate` without `metadata.spec` until the
-chain reaches `tasks_loaded`).
+State persists per session per pack at `<sess>/state/fsm-workflow-fsm.json` as
+`{state, history[]}` (`advanceFsmState`, `src/runtime/fsm_state.ts`); the FSM is
+TOTAL — a non-matching event is an explicit stay, not a crash. The
+`workflow-lifecycle` skills advance it on the canonical signals (the prompt, and
+the pre-research / spec / task writes) via `advance_fsm`; any gate reads the stage
+via `read_fsm_state` (e.g. `scope-fsm`'s research-before-code gate reads its own
+machine to block code before `researched`). Cross-pack reads pass `pack:
+workflow-fsm`. Full conceptual walkthrough: `docs/pack-fsm-architecture.md`.
 
 ---
 
@@ -1000,13 +1092,16 @@ skill-level when 2+ rules share them. Saves dispatcher walks (the
 skill is skipped entirely when any precondition fails) and the
 `RequiresCache` amortizes the precondition reads across rules.
 
-### 7.4 Chain-handoff directives + chain_state transitions
+### 7.4 Lifecycle-handoff directives + FSM transitions
 
-When a rule's purpose is "the chain has moved to the next stage,
+When a rule's purpose is "the lifecycle has moved to the next stage,
 load the appropriate profession", emit a `directive` verdict with
-`next_action.profession:` set. Couple with a
-`transition_chain_stage` write so subsequent rules see the new
-stage via `read_chain_state`.
+`next_action.profession:` set. Couple with an `advance_fsm` call (event →
+next state) so subsequent rules — in this pack or another, via
+`read_fsm_state` with `pack:` — see the new state. Declare the legal
+transitions in the pack's `fsm.yaml`; the engine keeps the machine total, so an
+unexpected event is a no-op stay rather than a crash. (This replaces the old
+`transition_chain_stage` + `read_chain_state` pair.)
 
 ### 7.5 Anti-patterns to avoid
 
@@ -1064,40 +1159,43 @@ time_until_chat_watch_resume)`. Designs that depend on real-time
 The doc above cites these source files; this list is a quick-jump
 index for editors:
 
-| Topic                                | File                                                                                                                                                                                                                                    |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Manifest schema                      | `src/packs/schemas/manifest.ts`                                                                                                                                                                                                         |
-| Skill schema                         | `src/packs/schemas/skill.ts`                                                                                                                                                                                                            |
-| Side-file schemas                    | `src/packs/schemas/{chat_agent,models,channels,notifications,drift_response,team}.ts`                                                                                                                                                   |
-| Pack runtime type                    | `src/runtime/types.ts`                                                                                                                                                                                                                  |
-| Detection evaluator                  | `src/runtime/detection.ts`                                                                                                                                                                                                              |
-| Discovery + opt-in                   | `src/packs/discovery.ts`                                                                                                                                                                                                                |
-| Pack loader                          | `src/packs/loader.ts`                                                                                                                                                                                                                   |
-| Bootstrap + DetectionContext staging | `src/runtime/bootstrap.ts`                                                                                                                                                                                                              |
-| Dispatcher                           | `src/runtime/hooks/dispatch.ts`                                                                                                                                                                                                         |
-| Evaluator                            | `src/runtime/evaluator.ts`                                                                                                                                                                                                              |
-| Drift response                       | `src/runtime/drift_response.ts`                                                                                                                                                                                                         |
-| Skill requires                       | `src/runtime/skill_requires.ts`                                                                                                                                                                                                         |
-| Chain state                          | `src/runtime/chain_state.ts`                                                                                                                                                                                                            |
-| Capability gate                      | `src/runtime/capability_gate.ts`                                                                                                                                                                                                        |
-| Built-in denylist                    | `src/runtime/builtin_denylist.ts`                                                                                                                                                                                                       |
-| Primitive registry                   | `src/functions/registry.ts`                                                                                                                                                                                                             |
-| Primitives                           | `src/functions/{event,state,active_task,chain_state,rag,lessons,llm,verdict,path_exists,text_pattern_match,session_tool_history,destination_check,file_write,shell_exec,http_request,recall_pre_inject,subagent,is_automation_mode}.ts` |
+| Topic                                | File                                                                                                                                                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manifest schema                      | `src/packs/schemas/manifest.ts`                                                                                                                                                                                                 |
+| Skill schema                         | `src/packs/schemas/skill.ts`                                                                                                                                                                                                    |
+| Side-file schemas                    | `src/packs/schemas/{chat_agent,models,channels,notifications,drift_response,team}.ts`                                                                                                                                           |
+| Pack runtime type                    | `src/runtime/types.ts`                                                                                                                                                                                                          |
+| Detection evaluator                  | `src/runtime/detection.ts`                                                                                                                                                                                                      |
+| Discovery + opt-in                   | `src/packs/discovery.ts`                                                                                                                                                                                                        |
+| Pack loader                          | `src/packs/loader.ts`                                                                                                                                                                                                           |
+| Bootstrap + DetectionContext staging | `src/runtime/bootstrap.ts`                                                                                                                                                                                                      |
+| Dispatcher                           | `src/runtime/hooks/dispatch.ts`                                                                                                                                                                                                 |
+| Evaluator                            | `src/runtime/evaluator.ts`                                                                                                                                                                                                      |
+| Drift response                       | `src/runtime/drift_response.ts`                                                                                                                                                                                                 |
+| Skill requires                       | `src/runtime/skill_requires.ts`                                                                                                                                                                                                 |
+| FSM engine + state                   | `src/runtime/fsm.ts` (total-transition engine), `src/runtime/fsm_state.ts` (per-session state)                                                                                                                                  |
+| Guards template                      | `src/packs/guards_compiler.ts`                                                                                                                                                                                                  |
+| Capability gate                      | `src/runtime/capability_gate.ts`                                                                                                                                                                                                |
+| Built-in denylist                    | `src/runtime/builtin_denylist.ts`                                                                                                                                                                                               |
+| Primitive registry                   | `src/functions/registry.ts`                                                                                                                                                                                                     |
+| Primitives                           | `src/functions/{event,state,fsm,active_task,rag,lessons,llm,verdict,path_exists,text_pattern_match,session_tool_history,destination_check,file_write,shell_exec,http_request,recall_pre_inject,subagent,is_automation_mode}.ts` |
 
 ---
 
 ## Appendix B — Glossary
 
-| Term             | Meaning                                                                                     |
-| ---------------- | ------------------------------------------------------------------------------------------- |
-| Pack             | A directory under `<scope-root>/packs/<name>/` containing a manifest + skills + side files  |
-| Skill            | A YAML file declaring `rules:` + `triggers:` + lifecycle metadata                           |
-| Rule             | A `process:` chain of primitive calls producing a verdict / inject_context / no_verdict     |
-| Primitive        | A registered function (`src/functions/*.ts`) callable from rule `process:` steps            |
-| Verdict          | A typed runtime result: `pass` / `block` / `warn` / `surface` / `directive`                 |
-| Drift policy     | What the dispatcher does with a verdict (6 enum values)                                     |
-| Activation scope | WHO the pack applies to (`project`/`user`/`hybrid`/`team`/`global`)                         |
-| Scope            | Layering precedence for pack ordering (`universal` → `project`)                             |
-| Detection        | The 7-kind clause set the runtime evaluates to decide WHEN among opted-in packs             |
-| Chain stage      | One of 7 pipeline states the discipline chain advances through                              |
-| Profession pack  | A pack whose `team.yaml` marker declares a `role:` for next-action `profession:` directives |
+| Term             | Meaning                                                                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pack             | A directory under `<scope-root>/packs/<name>/` containing a manifest + skills + side files                                                            |
+| Skill            | A YAML file declaring `rules:` + `triggers:` + lifecycle metadata                                                                                     |
+| Rule             | A `process:` chain of primitive calls producing a verdict / inject_context / no_verdict                                                               |
+| Primitive        | A registered function (`src/functions/*.ts`) callable from rule `process:` steps                                                                      |
+| Verdict          | A typed runtime result: `pass` / `block` / `warn` / `surface` / `directive`                                                                           |
+| Drift policy     | What the dispatcher does with a verdict (6 enum values)                                                                                               |
+| Activation scope | WHO the pack applies to (`project`/`user`/`hybrid`/`team`/`global`)                                                                                   |
+| Scope            | Layering precedence for pack ordering (`universal` → `project`)                                                                                       |
+| Detection        | The 7-kind clause set the runtime evaluates to decide WHEN among opted-in packs                                                                       |
+| Pack FSM         | A pack's lifecycle declared in `fsm.yaml` (states + total transitions), walked by the generic engine; state persists per session as `fsm-<pack>.json` |
+| FSM state        | The current state string of a pack FSM; read via `read_fsm_state`, advanced via `advance_fsm`                                                         |
+| Guard            | A `manifest.guards[]` entry compiled to a synthetic `<pack>/guards` detect→verdict rule                                                               |
+| Profession pack  | A pack whose `team.yaml` marker declares a `role:` for next-action `profession:` directives                                                           |
