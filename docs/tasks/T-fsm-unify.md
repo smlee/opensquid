@@ -564,6 +564,26 @@ process:
 
 **Files affected:** the §3.1 re-points (pack-architect skill, 2× active.json, session-end.ts); §3.3 tests; §3.4 docs; remove `packs/builtin/{scope-fsm,workflow-fsm}/` after equivalence.
 
+**Key code shapes:**
+
+```jsonc
+// ~/projects/loop/.opensquid/active.json  AND  ~/projects/opensquid/.opensquid/active.json
+{ "packs": ["coding-flow"] } // was ["scope-fsm", "workflow-fsm"]
+```
+
+```yaml
+# packs/builtin/pack-architect/skills/pack-scope-elicit/skill.yaml:33 — re-point the cross-pack read
+- call: read_fsm_state
+  args: { pack: coding-flow } # was: workflow-fsm
+  as: st
+```
+
+```ts
+// src/runtime/hooks/session-end.ts:132 — re-point the state clear (also fixes the
+// latent scope-fsm-never-cleared leak, since there is now one pack)
+clearFsmState(sessionId, 'coding-flow'); // was 'workflow-fsm'
+```
+
 **Test fixtures:** fresh session loads `coding-flow` (not the old pair); `read_fsm_state{pack:'coding-flow'}` from pack-architect returns a real state; a `src/` write pre-research is DENIED by the unified gate; `git commit` pre-phase-log blocked.
 
 **Acceptance criteria:** [ ] zero live refs to `scope-fsm`/`workflow-fsm` (grep clean in src/packs/active.json); [ ] both active.json → `coding-flow`; [ ] session-end clears `coding-flow`; [ ] live smoke: scope-intent → block-on-incomplete → research → code-allowed → task-gate → commit-gate all fire from `coding-flow`; [ ] old packs removed only after equivalence green; [ ] CI green.
@@ -589,9 +609,32 @@ pnpm vitest run && pnpm build
 **Deliverable:** `docs/pack-fsm-architecture.md` + `docs/pack-runtime.md` describe the unified `coding-flow` FSM as the canonical worked example (union states, `guess_found→researching`, the region mechanism); planning docs get "superseded by T-fsm-unify" notes.
 **Depends on:** [FU.5](#task-fu5-cut-over--activejson--cross-refs--retire-scope-fsmworkflow-fsm-behavioral-equivalence)
 
-**Files affected:** §3.4 docs.
+**Files affected:** §3.4 docs — `docs/pack-fsm-architecture.md` (the worked example + the inline machine at :113-119), `docs/pack-runtime.md` (:246, :933-934, :1042, :1051, :1056-1058); planning docs get one-line superseded notes.
 
-**Acceptance criteria:** [ ] no doc shows the old two-machine split as current; [ ] the region concept documented; [ ] `prettier --check` green (CI gates `.md`).
+**Key code shapes:**
+
+```markdown
+<!-- docs/pack-fsm-architecture.md — the worked example becomes coding-flow -->
+
+initial: idle
+states: [idle, scoping, researching, researched, spec_authored,
+spec_complete, tasks_loaded, phases_in_flight, phases_complete]
+
+# researched --guess_found--> researching (SCOPE content gate — guess-audit)
+
+# spec_authored --spec_verified--> spec_complete (AUTHOR content gate — spec-audit)
+```
+
+```diff
+- State persists … at `<sess>/state/fsm-workflow-fsm.json`   # docs/pack-runtime.md:1051
++ State persists … at `<sess>/state/fsm-coding-flow.json`
+- Cross-pack reads pass `pack: workflow-fsm`.                # docs/pack-runtime.md:1057
++ Cross-pack reads pass `pack: coding-flow`.
+```
+
+**Test fixtures:** `grep -rn "scope-fsm\|workflow-fsm" docs/` returns only historical / superseded-note hits (no text presenting them as current); `npx prettier --check docs/pack-fsm-architecture.md docs/pack-runtime.md` → clean; a reader-check: `pack-fsm-architecture.md`'s worked example shows the 9-state machine with BOTH content-gate edges (`guess_found`, `spec_verified`).
+
+**Acceptance criteria:** [ ] no doc shows the old two-machine split as current; [ ] the region + three-stage concept documented; [ ] both content-gate edges shown in the worked example; [ ] `prettier --check` green (CI gates `.md`).
 
 **Risk callouts:** CI gates `prettier --check` on `.md` — run `format:check` LAST after authoring (the pre-push lesson).
 
