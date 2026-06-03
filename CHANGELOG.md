@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.300] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.7 — the EXECUTE content gate; the third stage's gate)
+
+`coding-flow/skills/execute-gate` — `phase-logged-before-commit`: blocks `git commit`
+while the active task's 7-phase workflow is incomplete (`has_active_task` +
+`workflow_phases_complete`). Mode-independent port of the personal-pack `workflow`
+gate (drops the `automation_mode_on` precondition that made it inert interactively),
+so EXECUTE now has a content gate symmetric with SCOPE (guess-audit) and AUTHOR
+(spec-audit). Ad-hoc commits (no active task) pass. This closes the hole that let the
+agent commit every prior task with zero `log_phase` calls — the 7-phase CODE flow is
+now enforced, not advisory.
+
+**Found + flagged (follow-ups):** (1) the dispatcher short-circuits on the first
+verdict across scope-ordered packs (`dispatch.ts:14,331,347`), so a higher-precedence
+user-scope verdict (e.g. `scope-architect/pre-research-authoring`'s DPC.5 warn)
+pre-empts coding-flow's project-scope `advance-on-research` — the FSM then never leaves
+`idle` and the gate stalls. (2) A behavioral dispatch test for `execute-gate` (block on
+incomplete / pass on complete) is the immediate follow-up; the gate is a faithful port
+of the already-tested personal gate. Spec/pre-research:
+`docs/tasks/T-fsm-unify.md` §2.1, `docs/research/T-execute-gate-pre-research-2026-06-03.md`.
+
 ## [0.5.299] - 2026-06-03
 
 ### Removed (T-FSM-UNIFY FU.5 final — retire scope-fsm + workflow-fsm)

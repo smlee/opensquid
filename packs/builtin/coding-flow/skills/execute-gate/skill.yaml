@@ -1,0 +1,44 @@
+# execute-gate — the EXECUTE-region CONTENT gate (the symmetric third). SCOPE has
+# guess-audit, AUTHOR has spec-audit; CODE/EXECUTE now has this: no `git commit` while
+# the active task's 7-phase workflow is incomplete. Mode-independent port of
+# sangmin-personal-rules/skills/workflow:34-70 — drops the `automation_mode_on`
+# precondition (:31-32) that made it inert interactively, matching the
+# mode-independent SCOPE/AUTHOR gates. Ad-hoc commits (no active task) PASS — the
+# SCOPE gate already forces code work into the flow, so a tracked task is the in-flow
+# case this guards. Spec: docs/tasks/T-fsm-unify.md §2.1; pre-research:
+# docs/research/T-execute-gate-pre-research-2026-06-03.md.
+name: execute-gate
+load: preload
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules:
+  - id: phase-logged-before-commit
+    process:
+      - call: match_command
+        args:
+          pattern: '^git\s+(?:-[cC]\s+\S+\s+)*commit\b'
+          target: tool_args.command
+        as: committing
+      - call: has_active_task
+        if: 'committing'
+        as: active
+      - call: workflow_phases_complete
+        if: 'committing && active.present == true'
+        as: phases
+      - call: verdict
+        if: 'committing && active.present == true && phases.complete == false'
+        args:
+          level: block
+          message: >-
+            BLOCKED: the 7-phase CODE flow is incomplete for the active task. Log each
+            phase via `mcp__opensquid__log_phase` (pre_research → learn → code → test →
+            audit → post_research → fix) before `git commit`. (Ad-hoc commits with no
+            active task pass; this gate guards in-flow work — the EXECUTE stage's
+            content gate, symmetric with SCOPE's guess-audit + AUTHOR's spec-audit.)
+prose: |
+  The EXECUTE content gate — the third, making the three stages symmetric. A stage
+  marker without a content gate is a checkbox (no-implicit-state); EXECUTE had only
+  the FSM advance (phase-advance) and no blocking gate, so the 7-phase CODE flow was
+  unenforced interactively. Blocks `git commit` until `workflow_phases_complete` is
+  true for the active task.
