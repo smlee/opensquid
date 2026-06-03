@@ -1,17 +1,19 @@
-# scope-lifecycle — the tool_call lifecycle guards for coding-flow. Advances the
-# unified FSM on milestone writes and enforces the region gates that read it.
-# Content audits (guess-audit, spec-audit) live in the audits skill (FU.4); this
-# skill is the structural backbone. Ports + merges scope-fsm/scope-lifecycle +
-# workflow-fsm/advance-on-writes. State-driven (read_fsm_state), not file-existence.
+# scope-lifecycle — the tool_call lifecycle: advances the unified FSM on milestone
+# writes, runs each region's CONTENT audit immediately AFTER its advance (same skill,
+# ordered — so the audit sees the just-advanced state, mirroring scope-fsm), and
+# enforces the region gates that read the state. Rule order is load-bearing:
+#   advance-on-research → guess-audit → advance-on-spec → spec-audit → scope-before-code → taskcreate-spec-required
+# Ports + merges scope-fsm/scope-lifecycle + workflow-fsm/advance-on-writes, and folds
+# in the two content audits (guess-audit, spec-audit). State-driven, never
+# file-existence. Both audits run synchronously, are timeout-bounded (EWG.1.1), and
+# fail CLOSED (no clear pass verdict ⇒ no advance).
 name: scope-lifecycle
 load: preload
 when_to_load: []
 triggers:
   - kind: tool_call
 rules:
-  # SCOPE — a pre-research artifact write advances → researched (+ captures its
-  # path for the handoff). Merged: the stricter `-pre-research-` predicate from
-  # workflow-fsm with scope-fsm's advance. One rule, one state file.
+  # ── SCOPE: advance on the pre-research write (+ capture its path) ────────────
   - id: advance-on-research
     process:
       - call: tool_name
@@ -27,9 +29,95 @@ rules:
         args:
           key: coding-flow-pre-research-path
           value: '{{targs.file_path}}'
-  # SCOPE gate — block code while the SCOPE region is incomplete (D4: allow once
-  # state has passed `researched`, i.e. any AUTHOR/EXECUTE state). Coding profile:
-  # src/ ∪ packs/ ∪ test/. The artifacts (docs/research, docs/tasks) stay writable.
+  # ── SCOPE content gate: guess-audit (immediately after the advance) ──────────
+  - id: guess-audit
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: subagent_call
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args:
+          model: reasoning
+          timeout_ms: 120000
+          prompt: >-
+            You are an adversarial reviewer enforcing a strict NEVER-GUESS rule on a
+            pre-research artifact. A claim is acceptable ONLY if it is DERIVED from
+            cited evidence (a file:line reference, a memory, or the user's own words)
+            OR explicitly flagged as an OPEN QUESTION to ask the user. Any assertion
+            stated as fact without such a citation, and not flagged as open, is an
+            UNRESOLVED GUESS. Begin your response with EXACTLY one line —
+            `VERDICT: GUESS_FREE` if every claim is derived-with-citation or
+            flagged-as-open, otherwise `VERDICT: UNRESOLVED`. If UNRESOLVED, follow
+            with one bullet per unresolved guess. Never say GUESS_FREE if any
+            unresolved guess remains. ARTIFACT:\n\n{{targs.content}}
+        as: audit
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(audit, "VERDICT: GUESS_FREE")'
+        args:
+          event: guess_found
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(audit, "VERDICT: GUESS_FREE")'
+        args:
+          level: warn
+          message: >-
+            Unresolved guesses in the pre-research artifact — the SCOPE region looped
+            back to research. Resolve each (cite a file:line / memory / the user's
+            words, or flag it as an open question), then re-write. Audit:\n\n{{audit}}
+  # ── AUTHOR: advance on the track-spec write (+ capture its path) ─────────────
+  - id: advance-on-spec
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        args:
+          event: spec_drafted
+      - call: write_state
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        args:
+          key: coding-flow-spec-path
+          value: '{{targs.file_path}}'
+  # ── AUTHOR content gate: spec-audit (the restored twin of guess-audit) ───────
+  - id: spec-audit
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: subagent_call
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        args:
+          model: reasoning
+          timeout_ms: 120000
+          prompt: >-
+            You are an adversarial reviewer enforcing the 11-field task-spec contract.
+            Begin your response with EXACTLY one line — `VERDICT: SPEC_COMPLETE` ONLY
+            if EVERY "### Task" block has all 11 fields (Required skills, Deliverable,
+            Depends on, Files affected, Key code shapes, Test fixtures, Acceptance
+            criteria, Risk callouts, References, Verification commands, 7-phase steps)
+            AND every Key-code-shapes block is REAL code (not pseudocode) AND every
+            7-phase step names concrete files / decisions. Otherwise
+            `VERDICT: INCOMPLETE` + one bullet per offending block. Never say
+            SPEC_COMPLETE if any task block falls short. SPEC:\n\n{{targs.content}}
+        as: spec_audit
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && contains(spec_audit, "VERDICT: SPEC_COMPLETE")'
+        args:
+          event: spec_verified
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && !contains(spec_audit, "VERDICT: SPEC_COMPLETE")'
+        args:
+          level: warn
+          message: >-
+            Task spec incomplete — it stays at spec_authored (TaskCreate stays
+            BLOCKED) until every task block carries all 11 fields with real code (no
+            pseudocode). The AUTHOR content gate: finish task authoring before coding.
+            Audit:\n\n{{spec_audit}}
+  # ── SCOPE gate: block code while the SCOPE region is incomplete (D4) ─────────
   - id: scope-before-code
     process:
       - call: tool_name
@@ -47,28 +135,7 @@ rules:
             still pre-research). Complete the pre-research artifact
             (docs/research/...-pre-research-...) first. Override only if the user
             explicitly scoped this work in THIS turn.
-  # AUTHOR — a track-spec write advances researched → spec_authored (UNVERIFIED;
-  # the spec-audit in the audits skill is what advances it on to spec_complete).
-  # Captures the spec path for the handoff.
-  - id: advance-on-spec
-    process:
-      - call: tool_name
-        as: tool
-      - call: tool_args
-        as: targs
-      - call: advance_fsm
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
-        args:
-          event: spec_drafted
-      - call: write_state
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
-        args:
-          key: coding-flow-spec-path
-          value: '{{targs.file_path}}'
-  # AUTHOR gate — no TaskCreate until the spec passed the audit (state ==
-  # spec_complete). This is the UPGRADE over the old presence-only check: a thin /
-  # pseudocode spec stays at spec_authored and is blocked here. On a valid create
-  # (state has reached spec_complete), advance → tasks_loaded.
+  # ── AUTHOR gate: no TaskCreate until the spec passed the audit (spec_complete) ─
   - id: taskcreate-spec-required
     process:
       - call: tool_name
@@ -82,18 +149,17 @@ rules:
         args:
           level: block
           message: >-
-            BLOCKED: task authoring incomplete. The task spec must pass the 11-field
-            + real-code spec-audit (the AUTHOR content gate) before tasks are
-            created — a thin or pseudocode spec is not enough. Finish the spec (all
-            11 fields per task, real code, no pseudocode), then create tasks.
+            BLOCKED: task authoring incomplete. The task spec must pass the 11-field +
+            real-code spec-audit (the AUTHOR content gate) before tasks are created —
+            a thin or pseudocode spec is not enough. Finish the spec, then create tasks.
       - call: advance_fsm
         if: '(tool == "TaskCreate" || tool == "TaskUpdate") && len(targs.metadata.taskId) > 0'
         args:
           event: tasks_loaded
 prose: |
-  The structural lifecycle: advance the unified FSM on the pre-research / spec /
-  task milestones, and enforce the SCOPE (research-before-code) and AUTHOR
-  (spec-complete-before-tasks) gates by reading that state. The two CONTENT audits
-  that make those gates rigorous (guess-audit, spec-audit) live in the `audits`
-  skill. "Coding" is the gate profile here (src/∪packs/∪test/); the FSM itself is
-  domain-general.
+  The full tool_call lifecycle in one ordered skill: each region's advance is
+  immediately followed by its content audit (guess-audit after the research advance,
+  spec-audit after the spec advance) so the audit sees the just-advanced state — the
+  ordering scope-fsm relied on. Then the two region GATES (scope-before-code,
+  taskcreate-spec-required) read the resulting state. "Coding" is the gate profile
+  (src/∪packs/∪test/); the FSM is domain-general.

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { registerEventFunctions } from '../../src/functions/event.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
@@ -18,7 +19,9 @@ import { registerStateFunctions } from '../../src/functions/state.js';
 import { registerVerdictFunctions } from '../../src/functions/verdict.js';
 import { loadPack } from '../../src/packs/loader.js';
 import { step, validateFsm } from '../../src/runtime/fsm.js';
+import { readFsmState } from '../../src/runtime/fsm_state.js';
 import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
+import { ok } from '../../src/runtime/result.js';
 import type { ToolCallEvent } from '../../src/runtime/types.js';
 
 function registry(): FunctionRegistry {
@@ -137,9 +140,84 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
     const reg = registry();
     const sid = 'cf-author';
     await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
-    await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored (UNVERIFIED; spec-audit is FU.4)
-    // The AUTHOR content gate: no tasks until spec_complete, which is unreachable
-    // until FU.4's spec-audit fires spec_verified. This is the restored gate.
+    await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored (no audit stub → never spec_verified)
+    // The AUTHOR content gate: no tasks until spec_complete.
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2);
+  });
+});
+
+/** Prompt-aware subagent_call stub: the guess-audit prompt (NEVER-GUESS) always
+ *  passes GUESS_FREE so research reaches `researched`; the spec-audit prompt gets
+ *  the configurable `specVerdict` — so the AUTHOR gate's determinism is under test. */
+function registryWithAudit(specVerdict: string): FunctionRegistry {
+  const r = new FunctionRegistry();
+  registerEventFunctions(r);
+  registerFsmFunctions(r);
+  registerStateFunctions(r);
+  registerVerdictFunctions(r);
+  r.register({
+    name: 'subagent_call',
+    argSchema: z.object({
+      model: z.string(),
+      prompt: z.string(),
+      timeout_ms: z.number().optional(),
+    }),
+    durable: false,
+    execute: (args: { prompt: string }) =>
+      Promise.resolve(
+        ok(args.prompt.includes('NEVER-GUESS') ? 'VERDICT: GUESS_FREE' : specVerdict),
+      ),
+  });
+  return r;
+}
+
+const researchWithContent: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'Write',
+  args: {
+    file_path: 'docs/research/x-pre-research-2026-06-03.md',
+    content: '# Pre-research\n\nDerived from src/foo.ts:1.',
+  },
+};
+const specWithContent: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'Write',
+  args: { file_path: 'docs/tasks/T-x.md', content: '### Task X.1\n\n(real 11-field spec)' },
+};
+
+describe('builtin coding-flow pack — the AUTHOR content gate end-to-end (spec-audit, FU.4)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-audit-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('SPEC_COMPLETE audit → spec_complete → TaskCreate allowed', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-audit-pass';
+    await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
+    await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored → spec_verified → spec_complete
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_complete');
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(0); // AUTHOR complete → allowed
+  });
+
+  it('INCOMPLETE audit → stays spec_authored → TaskCreate blocked', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: INCOMPLETE\n- Task X.1 missing Test fixtures');
+    const sid = 'cf-audit-fail';
+    await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
+    await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored (audit failed: stays)
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
   });
 });

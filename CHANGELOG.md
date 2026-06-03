@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.296] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.4 — the two content audits; the restored task-authoring gate)
+
+The twin reasoning-model adversarial audits, folded into `scope-lifecycle` (each
+immediately after its region's advance, ordered, mirroring scope-fsm — a separate
+skill would sort alphabetically BEFORE the advance and the audit would fire from the
+wrong state): **guess-audit** (SCOPE — claims cited/flagged, else `guess_found` loops
+researched→researching) and **spec-audit** (AUTHOR — every task block carries all 11
+fields + real code, else stay at `spec_authored`; on pass `spec_verified` →
+`spec_complete`). Both fail-closed, timeout-bounded (120s). The spec-audit is the gate
+that was missing — task authoring had only a presence check; now a thin/pseudocode
+spec cannot reach `tasks_loaded`. Tests (8/8) prove end-to-end: SPEC_COMPLETE →
+TaskCreate allowed, INCOMPLETE → blocked. Remaining FU.4 sub-items (the 3-section
+scope-complete gate, retiring recall-consumed) ride with the FU.5 CF skill re-homing.
+Spec: `docs/tasks/T-fsm-unify.md` FU.4.
+
+- `packs/builtin/coding-flow/skills/scope-lifecycle/skill.yaml` (now 6 ordered rules), `test/builtin/coding-flow.test.ts`.
+
 ## [0.5.295] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.2 — the FSM-driven structural guards)
