@@ -810,6 +810,39 @@ pnpm vitest run test/builtin/coding-flow.test.ts && pnpm vitest run && pnpm buil
 
 **7-phase steps:** 1 pre-research: read fsm.yaml + fsm.ts `*` + has_generated_spec + the directive pattern (DONE); 2 learn: lock the trigger (`TaskUpdate in_progress`) + the reset transition + the has_generated_spec keying; 3 code: add the transition + the task-start skill; 4 test: the 3 dispatch fixtures; 5 audit: wildcard fires only on the intended event, validateFsm clean; 6 post-research: compare against the old scope-architect Gate A (has_generated_spec); 7 fix.
 
+### Task FU.10: The phase-audit — gate `log_phase` on tool-ledger evidence
+
+**Required skills:** opensquid skill.yaml author expert; Tool-sequence FSM design expert; opensquid dispatcher/evaluator expert; Audit / code review expert
+**Deliverable:** a `phase-audit` guard blocks `log_phase` for a mechanically-verifiable phase that lacks this-turn evidence — `code`/`fix` need a Write/Edit, `test` needs a Bash. `learn`/`audit`/`post_research` are accepted (no proxy). Closes the "log a phase without doing it" gap the user surfaced ("does that need to be a gate itself?").
+**Depends on:** [FU.7](#task-fu7-the-execute-content-gate--phase-logged-before-commit-done-05300) (the execute-gate this hardens)
+
+**Files affected:** `packs/builtin/coding-flow/skills/phase-audit/skill.yaml` (new); `test/builtin/coding-flow.test.ts` (modify).
+
+**Key code shapes:**
+
+```yaml
+- call: session_tool_history
+  if: '(tool == "mcp__opensquid__log_phase") && (targs.phase == "code" || targs.phase == "fix")'
+  args: { scope: current_turn, filter_names: [Write, Edit, NotebookEdit] }
+  as: writes
+- call: verdict
+  if: '(tool == "mcp__opensquid__log_phase") && (targs.phase == "code" || targs.phase == "fix") && writes.count == 0'
+  args: { level: block, message: 'no Write/Edit this turn — do the work before logging' }
+# test → require a Bash this turn (a run); learn/audit/post_research accepted.
+```
+
+**Test fixtures:** log_phase(code) with no Write this turn → block; log_phase(code) after a Write → pass; log_phase(test) with no Bash → block; log_phase(learn) always → pass.
+
+**Acceptance criteria:** [ ] code/fix without writes → block; [ ] test without a run → block; [ ] learn/audit/post_research → pass; [ ] full suite green.
+
+**Risk callouts:** `test = any Bash this turn` is a heuristic (a Bash ≠ provably a test) — the limit of name-only ledger evidence; documented. `current_turn` resets on UserPromptSubmit (`session_state.ts:138`) — a phase done in a prior turn then logged later would false-block; acceptable (log phases in the turn you do them).
+
+**References:** `docs/research/T-phase-audit-pre-research-2026-06-03.md`; `src/functions/session_tool_history.ts:36-64`; `src/mcp/tools/log_phase.ts`.
+
+**Verification commands:** `pnpm vitest run test/builtin/coding-flow.test.ts && pnpm vitest run && pnpm build`.
+
+**7-phase steps:** 1 pre-research: read session_tool_history + log_phase + the turn-ledger reset (DONE); 2 learn: lock which phases are gateable; 3 code: the phase-audit skill; 4 test: the 4 fixtures (seed the turn ledger); 5 audit: judgment phases accepted, no over-block; 6 post-research: the DPC.5 precedent (pre_research already gated); 7 fix.
+
 ---
 
 ## 5. Locked decisions

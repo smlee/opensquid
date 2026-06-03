@@ -1,0 +1,68 @@
+# phase-audit — the EXECUTE-region's content gate ON THE PHASE LOG ITSELF (FU.10).
+# log_phase is otherwise a bare marker: the execute-gate checks the 7 phases are
+# LOGGED, not DONE, so an agent could log them without doing the work. This guards
+# the mechanically-verifiable phases against tool-ledger evidence (this turn):
+#   - code / fix → require a Write/Edit/NotebookEdit this turn
+#   - test       → require a Bash this turn (the test run)
+# The judgment phases (learn / audit / post_research) have no mechanical proxy and
+# are accepted as agent-attested — the recursion bottoms out there (you cannot gate
+# intuition). pre_research already has its own evidence gate (scope-architect's
+# DPC.5 research-activity check). Fires on the log_phase tool_call, BEFORE the phase
+# is recorded. Spec: docs/tasks/T-fsm-unify.md FU.10.
+name: phase-audit
+load: preload
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules:
+  # code / fix → must have written code this turn.
+  - id: code-phase-needs-writes
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: session_tool_history
+        if: 'tool == "mcp__opensquid__log_phase" && (targs.phase == "code" || targs.phase == "fix")'
+        args:
+          scope: current_turn
+          filter_names:
+            - Write
+            - Edit
+            - NotebookEdit
+        as: writes
+      - call: verdict
+        if: 'tool == "mcp__opensquid__log_phase" && (targs.phase == "code" || targs.phase == "fix") && writes.count == 0'
+        args:
+          level: block
+          message: >-
+            BLOCKED: cannot log the "{{targs.phase}}" phase — no Write/Edit this turn.
+            The phase log is a record of work DONE, not a checkbox. Actually write the
+            code (or apply the fix), then log the phase.
+  # test → must have run something this turn.
+  - id: test-phase-needs-a-run
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: session_tool_history
+        if: 'tool == "mcp__opensquid__log_phase" && targs.phase == "test"'
+        args:
+          scope: current_turn
+          filter_names:
+            - Bash
+        as: runs
+      - call: verdict
+        if: 'tool == "mcp__opensquid__log_phase" && targs.phase == "test" && runs.count == 0'
+        args:
+          level: block
+          message: >-
+            BLOCKED: cannot log the "test" phase — no Bash (test run) this turn. Run the
+            tests and observe the result before logging the phase.
+prose: |
+  The phase-audit closes the gap the user surfaced ("does that need to be a gate
+  itself?"): the execute-gate verifies phases are logged, not done. This verifies the
+  mechanically-checkable phases (code/fix → file writes; test → a run) against the
+  per-turn tool ledger, and honestly accepts the judgment phases (learn/audit/
+  post_research) as agent-attested — where evidence-gating bottoms out.

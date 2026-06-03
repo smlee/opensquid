@@ -27,7 +27,8 @@ import {
   HasGeneratedSpec,
   WorkflowPhasesComplete,
 } from '../../src/functions/active_task.js';
-import { writeActiveTask } from '../../src/runtime/session_state.js';
+import { appendTool, writeActiveTask } from '../../src/runtime/session_state.js';
+import { SessionToolHistory } from '../../src/functions/session_tool_history.js';
 import { appendPhase, REQUIRED_PHASES } from '../../src/runtime/workflow_phases.js';
 import type { ToolCallEvent } from '../../src/runtime/types.js';
 
@@ -360,5 +361,62 @@ describe('builtin coding-flow pack — task-start hook (FU.11)', () => {
     const r = await dispatchEvent(taskUpdateInProgress, [pack], registryTaskStart(), sid);
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('idle');
     expect(r.directives.length).toBe(0);
+  });
+});
+
+const logPhase = (phase: string): ToolCallEvent => ({
+  kind: 'tool_call',
+  tool: 'mcp__opensquid__log_phase',
+  args: { phase },
+});
+
+function registryPhaseAudit(): FunctionRegistry {
+  const r = new FunctionRegistry();
+  registerEventFunctions(r);
+  registerVerdictFunctions(r);
+  r.register(SessionToolHistory);
+  return r;
+}
+
+describe('builtin coding-flow pack — phase-audit (FU.10)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-cf-pa-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('blocks log_phase(code) with no Write/Edit this turn', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(logPhase('code'), [pack], registryPhaseAudit(), 'cf-pa-noev');
+    expect(r.exitCode).toBe(2);
+  });
+
+  it('allows log_phase(code) after a Write this turn', async () => {
+    const sid = 'cf-pa-ev';
+    await appendTool(sid, 'Write');
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(logPhase('code'), [pack], registryPhaseAudit(), sid);
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('blocks log_phase(test) with no Bash this turn', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(logPhase('test'), [pack], registryPhaseAudit(), 'cf-pa-test');
+    expect(r.exitCode).toBe(2);
+  });
+
+  it('always allows a judgment phase (learn — no mechanical proxy)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(logPhase('learn'), [pack], registryPhaseAudit(), 'cf-pa-learn');
+    expect(r.exitCode).toBe(0);
   });
 });

@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.305] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.10 — the phase-audit: gate log_phase on evidence)
+
+`log_phase` was a bare marker — the execute-gate verified phases were LOGGED, not DONE
+(the user's "does that need to be a gate itself?"). A `phase-audit` guard now blocks
+`log_phase` for a mechanically-verifiable phase that lacks this-turn tool-ledger
+evidence (`session_tool_history(current_turn)`): `code`/`fix` need a Write/Edit, `test`
+needs a Bash. The judgment phases (`learn`/`audit`/`post_research`) are accepted — no
+mechanical proxy exists, so the recursion honestly bottoms out there; `pre_research` is
+already gated by DPC.5. 4 behavioral tests (block-without-evidence / pass-with /
+accept-judgment), 18/18 coding-flow, full suite green (the only fails are 2 pre-existing
+local server.test.ts + a known transport_bridge flake). The `test`=any-Bash check is a
+documented heuristic (the limit of name-only ledger evidence).
+
+- `packs/builtin/coding-flow/skills/phase-audit/skill.yaml`, `test/builtin/coding-flow.test.ts`, `docs/tasks/T-fsm-unify.md` (FU.10), `docs/research/T-phase-audit-pre-research-2026-06-03.md`.
+
 ## [0.5.304] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.11 — the task-start hook: per-task flow enforcement)
