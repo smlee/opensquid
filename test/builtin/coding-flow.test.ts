@@ -22,6 +22,9 @@ import { step, validateFsm } from '../../src/runtime/fsm.js';
 import { readFsmState } from '../../src/runtime/fsm_state.js';
 import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
 import { ok } from '../../src/runtime/result.js';
+import { HasActiveTask, WorkflowPhasesComplete } from '../../src/functions/active_task.js';
+import { writeActiveTask } from '../../src/runtime/session_state.js';
+import { appendPhase, REQUIRED_PHASES } from '../../src/runtime/workflow_phases.js';
 import type { ToolCallEvent } from '../../src/runtime/types.js';
 
 function registry(): FunctionRegistry {
@@ -219,5 +222,68 @@ describe('builtin coding-flow pack — the AUTHOR content gate end-to-end (spec-
     await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored (audit failed: stays)
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
+  });
+});
+
+const gitCommit: ToolCallEvent = {
+  kind: 'tool_call',
+  tool: 'Bash',
+  args: { command: 'git commit -m "x"' },
+};
+
+function registryExec(): FunctionRegistry {
+  const r = new FunctionRegistry();
+  registerEventFunctions(r);
+  registerVerdictFunctions(r);
+  r.register(HasActiveTask);
+  r.register(WorkflowPhasesComplete);
+  return r;
+}
+
+describe('builtin coding-flow pack — EXECUTE content gate (phase-logged-before-commit, FU.9)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-cf-exec-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('ad-hoc commit (no active task) passes', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(gitCommit, [pack], registryExec(), 'cf-exec-noactive');
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('blocks commit when the active task has incomplete phases', async () => {
+    const sid = 'cf-exec-incomplete';
+    await writeActiveTask(sid, {
+      id: 't1',
+      subject: 'wip',
+      started_at: '2026-06-03T00:00:00.000Z',
+    });
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(gitCommit, [pack], registryExec(), sid);
+    expect(r.exitCode).toBe(2);
+  });
+
+  it('allows commit once all 7 phases are logged', async () => {
+    const sid = 'cf-exec-complete';
+    await writeActiveTask(sid, {
+      id: 't1',
+      subject: 'wip',
+      started_at: '2026-06-03T00:00:00.000Z',
+    });
+    for (const p of REQUIRED_PHASES) await appendPhase(sid, 't1', p);
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const r = await dispatchEvent(gitCommit, [pack], registryExec(), sid);
+    expect(r.exitCode).toBe(0);
   });
 });

@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.302] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.9 — behavioral test for the EXECUTE gate)
+
+`test/builtin/coding-flow.test.ts` gains the EXECUTE-gate describe: ad-hoc commit (no
+active task) → pass; active task + <7 phases → block (exit 2); active task + all 7
+phases logged → pass. Seeds via `writeActiveTask` + `appendPhase` + `REQUIRED_PHASES`.
+The block case initially failed on a fixture bug (a missing `subject` field made
+`readActiveTask` return null) — proving the test discriminates rather than tautologically
+passing; after the fix, 11/11 green. This gives the FU.7 execute-gate real behavioral
+coverage (it was only structurally verified at ship). Done through the full 7-phase flow.
+
+- `test/builtin/coding-flow.test.ts`.
+
 ## [0.5.301] - 2026-06-03
 
 ### Fixed (T-FSM-UNIFY FU.8 — non-blocking verdicts no longer suppress FSM advances)
