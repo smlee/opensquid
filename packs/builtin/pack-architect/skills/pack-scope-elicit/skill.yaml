@@ -5,7 +5,7 @@
 # scope-architect; it surfaces the directive on the next UserPromptSubmit
 # envelope and the AGENT spawns the subagent.
 #
-# Reads the workflow-fsm pack's lifecycle state CROSS-PACK (read_fsm_state with
+# Reads the coding-flow pack's lifecycle state CROSS-PACK (read_fsm_state with
 # `pack:`) — null/idle means no scope decomposition has happened yet.
 name: pack-scope-elicit
 load: preload
@@ -30,7 +30,7 @@ rules:
       - call: read_fsm_state
         if: 'len(intent.matched) > 0'
         args:
-          pack: workflow-fsm
+          pack: coding-flow
         as: stage
       - call: verdict
         if: 'len(intent.matched) > 0 && (stage == null || stage == "idle")'

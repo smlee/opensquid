@@ -125,13 +125,15 @@ async function main(): Promise<void> {
   // close, so an abandoned in-progress task leaves a trace. Best-effort.
   await archiveActiveTask(sessionId);
 
-  // Clear the workflow-fsm lifecycle state on session close — a session-scoped
+  // Clear the coding-flow lifecycle state on session close — a session-scoped
   // machine that starts fresh each session (cross-session resume is a separate
-  // product question, deferred). ENOENT swallowed by the helper.
+  // product question, deferred). ENOENT swallowed by the helper. (T-FSM-UNIFY:
+  // one unified pack now, so this single clear covers the whole lifecycle —
+  // incidentally fixing the old scope-fsm-never-cleared leak.)
   try {
-    await clearFsmState(sessionId, 'workflow-fsm');
+    await clearFsmState(sessionId, 'coding-flow');
   } catch (e) {
-    process.stderr.write(`opensquid: workflow-fsm clear failed — ${String(e)}\n`);
+    process.stderr.write(`opensquid: coding-flow clear failed — ${String(e)}\n`);
   }
 
   process.exit(exitCode);

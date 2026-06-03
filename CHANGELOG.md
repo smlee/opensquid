@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.297] - 2026-06-03
+
+### Changed (T-FSM-UNIFY FU.5 — cutover: coding-flow is now the live gate)
+
+`coding-flow` is now the active workflow pack, replacing `scope-fsm` + `workflow-fsm`.
+Re-pointed the two cross-references — `pack-architect/pack-scope-elicit` reads
+`pack: coding-flow` (was `workflow-fsm`); `session-end.ts` clears `coding-flow` state
+(was `workflow-fsm`, which also fixes the old scope-fsm-never-cleared leak). `active.json`
+(loop umbrella + opensquid scope) now lists `["coding-flow"]`. Verified live: a fresh
+session loads `coding-flow` and DENIES a `src/` write pre-research with the unified
+message; the full suite + the affected hook/pack-architect tests are green. The old
+`scope-fsm`/`workflow-fsm` pack dirs are kept as inert backup (not in any active.json)
+until CI confirms green, then removed (ship→verify→delete). Spec: `docs/tasks/T-fsm-unify.md` FU.5.
+
+- `src/runtime/hooks/session-end.ts`, `packs/builtin/pack-architect/skills/pack-scope-elicit/skill.yaml`; `<scope>/.opensquid/active.json` (local config).
+
 ## [0.5.296] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.4 — the two content audits; the restored task-authoring gate)
