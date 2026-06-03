@@ -1,0 +1,21 @@
+name: coding-flow
+version: 0.1.0
+scope: workflow
+goal: >-
+  Ship the simplest correct solution, found by understanding before building:
+  SCOPE (research to teach-back depth, proven against alternatives + failure modes
+  + empirical spikes) → TASK AUTHORING (11-field decomposition, audited) → CODE
+  (the 7 phases). The general problem-solving lifecycle as one total-transition FSM
+  with three gated stages. Governing principles: docs/lexicon.md (Simplicity,
+  no-implicit-state).
+description: >-
+  The unified, FSM-driven problem-solving discipline. One behavior-pattern lifecycle
+  (fsm.yaml) with three gated stages — SCOPE, TASK AUTHORING, CODE — each enforced by
+  a content gate (guess-audit, spec-audit, phase-log), not just a presence marker.
+  "Coding" is the active gate profile, NOT the FSM's identity — the lifecycle is
+  domain-general. Supersedes scope-fsm + workflow-fsm. Spec: docs/tasks/T-fsm-unify.md.
+evolves: true
+# No detected_by gate: opt-in via active.json IS the pin. A `detected_by:
+# [user_pinned]` clause would silently DISABLE an opted-in pack (the user_pinned
+# DetectionContext signal is never populated — the EWG.3.1 lesson, see
+# docs/pack-runtime.md §1.4).

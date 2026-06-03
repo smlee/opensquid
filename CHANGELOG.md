@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.294] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.1 — the unified coding-flow FSM backbone)
+
+`packs/builtin/coding-flow/{manifest.yaml,fsm.yaml}` — one behavior-pattern lifecycle
+FSM that supersedes `scope-fsm` + `workflow-fsm`. Three gated stages (SCOPE → TASK
+AUTHORING → CODE), 9 states, total (validateFsm clean), `guess_found→researching`
+loop-back preserved, and the restored AUTHOR content gate edge
+(`spec_authored→spec_verified→spec_complete`) that was missing from both old machines.
+"Coding" is the active gate profile, not the FSM's identity — the lifecycle is
+domain-general. Inert until FU.5 activates it (no guards yet — FU.2). Spec:
+`docs/tasks/T-fsm-unify.md`. New pack is opt-in only (no `detected_by`, per EWG.3.1).
+
+- `packs/builtin/coding-flow/manifest.yaml`, `packs/builtin/coding-flow/fsm.yaml`, `test/builtin/coding-flow.test.ts`.
+
 ## [0.5.293] - 2026-06-03
 
 ### Docs (T-PACK-RUNTIME-DOC-DRIFT — sync the authoritative pack-runtime reference)

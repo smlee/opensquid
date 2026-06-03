@@ -1,0 +1,36 @@
+# coding-flow lifecycle — the general problem-solving behavior pattern as ONE total
+# FSM. Three gated stages (each handed off to the next, each with a CONTENT gate):
+#
+#   SCOPE          scoping → researching → researched      gate: guess-audit (+ 3 sections)
+#   TASK AUTHORING spec_authored → spec_complete → tasks_loaded   gate: spec-audit (11-field + real code)
+#   CODE           phases_in_flight → phases_complete      gate: phase-log (7 phases before commit)
+#
+# "Coding" is the active gate profile, not the FSM's identity — this lifecycle is
+# domain-general. The machine is total (a non-matching event is an explicit stay,
+# validated by validateFsm). Supersedes scope-fsm + workflow-fsm.
+# Spec: docs/tasks/T-fsm-unify.md (§1 union design, decisions D1–D7).
+initial: idle
+states:
+  - idle
+  - scoping
+  - researching
+  - researched
+  - spec_authored
+  - spec_complete
+  - tasks_loaded
+  - phases_in_flight
+  - phases_complete
+transitions:
+  # ── SCOPE region ─────────────────────────────────────────────
+  - { from: idle, on: scope_start, to: scoping }
+  - { from: idle, on: research_done, to: researched } # robustness: pre-research write with no scope prompt
+  - { from: scoping, on: research_done, to: researched }
+  - { from: researching, on: research_done, to: researched }
+  - { from: researched, on: guess_found, to: researching } # guess-audit loop-back (D3)
+  # ── TASK AUTHORING region ────────────────────────────────────
+  - { from: researched, on: spec_drafted, to: spec_authored } # a docs/tasks/T-*.md written (unverified)
+  - { from: spec_authored, on: spec_verified, to: spec_complete } # spec-audit passed: 11 fields + real code (D7)
+  - { from: spec_complete, on: tasks_loaded, to: tasks_loaded } # TaskCreate w/ provenance, only when AUTHOR-complete
+  # ── CODE region ──────────────────────────────────────────────
+  - { from: tasks_loaded, on: phase_started, to: phases_in_flight }
+  - { from: phases_in_flight, on: phases_done, to: phases_complete }
