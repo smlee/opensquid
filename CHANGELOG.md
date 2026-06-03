@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.298] - 2026-06-03
+
+### Docs (T-FSM-UNIFY FU.6 — sync the FSM docs to the unified coding-flow pack)
+
+`docs/pack-runtime.md` §5.2 + §6.3 now describe `coding-flow` as the live lifecycle
+(the now-correct state path `<sess>/state/fsm-coding-flow.json`, the cross-pack
+`pack: coding-flow`, and the three-stage gated machine) instead of the retired
+`workflow-fsm`. `docs/pack-fsm-architecture.md`'s worked example carries a prominent
+note that `workflow-fsm` + `scope-fsm` are merged into the live `coding-flow` pack
+(mechanics identical), redirecting to §6.3 + `T-fsm-unify.md` for the current 9-state
+machine. (The deeper full rewrite of that doc's worked example to coding-flow's
+states is a follow-up; the redirect keeps it accurate meanwhile.)
+
+- `docs/pack-runtime.md`, `docs/pack-fsm-architecture.md`.
+
 ## [0.5.297] - 2026-06-03
 
 ### Changed (T-FSM-UNIFY FU.5 — cutover: coding-flow is now the live gate)

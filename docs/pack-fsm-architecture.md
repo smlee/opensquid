@@ -73,8 +73,13 @@ makes "don't guess" a checkable rule, not a hope.
 
 ## 4. What's inside a pack (the files)
 
-A pack is a folder. Here's the engineering workflow pack, `workflow-fsm`, which
-ships built-in:
+A pack is a folder. The example below uses `workflow-fsm` to illustrate the FSM
+mechanism. **As of T-FSM-UNIFY, `workflow-fsm` + `scope-fsm` have been merged into
+the single live `coding-flow` pack** — one behavior-pattern FSM with three gated
+stages (SCOPE → TASK AUTHORING → CODE, 9 states, with the restored spec-audit
+task-authoring gate). The mechanics shown here are identical; for the current
+machine see `docs/pack-runtime.md` §6.3 and `docs/tasks/T-fsm-unify.md`. Here is the
+(illustrative) pack folder:
 
 ```
 workflow-fsm/
@@ -195,7 +200,8 @@ within a working session and resets cleanly when the session ends.
 
 ## 6. A complete walkthrough: the engineering workflow
 
-This is the real `workflow-fsm` pack, end to end. Activate it and the agent's
+This is the real `workflow-fsm` pack, end to end (now merged into the live
+`coding-flow` pack — see the note in §4; the mechanics are identical). Activate it and the agent's
 7-phase discipline is enforced by the machine:
 
 | The agent does this…                       | which fires this event…         | moving the workflow to…         |

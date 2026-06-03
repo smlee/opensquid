@@ -930,8 +930,8 @@ shipped primitive by category.
 | `session_tool_history` | `{tools: string[]}`  | Last N tool names this session                                             |
 
 `read_chain_state` was REMOVED with chain_state. The 7-phase workflow is now the
-`workflow-fsm` pack's lifecycle; gate on it via `read_fsm_state` (`pack:
-workflow-fsm` for a cross-pack read) — see §6.3. Both FSM primitives live in
+`coding-flow` pack's lifecycle; gate on it via `read_fsm_state` (`pack:
+coding-flow` for a cross-pack read) — see §6.3. Both FSM primitives live in
 `src/functions/fsm.ts:37,52`; `read_fsm_state` returns `null` when the pack has no
 `fsm.yaml` or the machine is unstarted (`advance_fsm` then defaults to `initial`).
 
@@ -1039,23 +1039,27 @@ caused the input.
 
 The 7-phase workflow used to live in a bespoke `src/runtime/chain_state.ts`
 machine driven by 5 scattered hook-bin transition sites. It is now the
-**`workflow-fsm` pack's lifecycle** (`packs/builtin/workflow-fsm/fsm.yaml`),
-driven by the generic total-transition engine (`src/runtime/fsm.ts`) — the unified
-replacement. The lifecycle:
+**`coding-flow` pack's lifecycle** (`packs/builtin/coding-flow/fsm.yaml`), driven by
+the generic total-transition engine (`src/runtime/fsm.ts`) — the unified replacement
+that absorbed the earlier `scope-fsm` + `workflow-fsm` split (T-FSM-UNIFY). ONE
+behavior-pattern FSM with three gated stages, each enforced by a CONTENT gate (not a
+presence marker):
 
 ```
-idle → scoping → researched → spec_authored → tasks_loaded
-     → phases_in_flight → phases_complete
+idle → scoping ⇄ researching → researched            SCOPE   (gate: guess-audit loop-back)
+     → spec_authored → spec_complete → tasks_loaded   AUTHOR  (gate: spec-audit, 11-field + real code)
+     → phases_in_flight → phases_complete             CODE    (gate: phase-log before commit)
 ```
 
-State persists per session per pack at `<sess>/state/fsm-workflow-fsm.json` as
+State persists per session per pack at `<sess>/state/fsm-coding-flow.json` as
 `{state, history[]}` (`advanceFsmState`, `src/runtime/fsm_state.ts`); the FSM is
-TOTAL — a non-matching event is an explicit stay, not a crash. The
-`workflow-lifecycle` skills advance it on the canonical signals (the prompt, and
-the pre-research / spec / task writes) via `advance_fsm`; any gate reads the stage
-via `read_fsm_state` (e.g. `scope-fsm`'s research-before-code gate reads its own
-machine to block code before `researched`). Cross-pack reads pass `pack:
-workflow-fsm`. Full conceptual walkthrough: `docs/pack-fsm-architecture.md`.
+TOTAL — a non-matching event is an explicit stay, not a crash. The `scope-lifecycle`
+skill advances it on the canonical signals (the prompt, and the pre-research / spec /
+task writes) via `advance_fsm` and runs each stage's content audit; any gate reads
+the stage via `read_fsm_state` (the research-before-code gate blocks code before
+`researched`; the task-authoring gate blocks TaskCreate before `spec_complete`).
+Cross-pack reads pass `pack: coding-flow`. "Coding" is the gate profile — the FSM
+lifecycle itself is domain-general. Full walkthrough: `docs/pack-fsm-architecture.md`.
 
 ---
 
