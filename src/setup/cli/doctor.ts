@@ -27,6 +27,7 @@ import type { Command } from 'commander';
 import { EngineClient } from '../../engine/client.js';
 import { computeMemoryDrift, renderMemoryDrift } from '../migrate/memory_drift.js';
 import { readSettingsHooks, type ParsedHookEntry } from '../wizard/settings-reader.js';
+import { OPENSQUID_BIN_FOR_EVENT } from '../wizard/settings-writer.js';
 
 /** `/`→`-`, matching Claude Code's auto-memory dir naming. Mirrors the inline
  * copies in `memory.ts` / `memory_reconcile.ts` (stable one-liner; no shared
@@ -118,6 +119,30 @@ export async function runDoctorHooks(opts: DoctorOptions): Promise<DoctorResult[
       continue;
     }
     for (const entry of entries) results.push(await probeEntry(scope, entry, probe));
+
+    // FC.5 coverage: a scope that manages opensquid hooks must register the FULL
+    // canonical set — flag any OPENSQUID_BIN_FOR_EVENT event ENTIRELY ABSENT (a
+    // present-but-broken event is already RED via probeEntry, so no double-count).
+    // A scope with zero opensquid hooks is exempt (project scope is optional).
+    const managed = entries.filter(
+      (e) => e.type === 'command' && OPENSQUID_HOOK_REGEX.test(e.command),
+    );
+    if (managed.length > 0) {
+      const present = new Set(managed.map((e) => e.event));
+      for (const [event, command] of Object.entries(OPENSQUID_BIN_FOR_EVENT)) {
+        if (!present.has(event)) {
+          results.push(
+            mk(
+              scope,
+              event,
+              command,
+              'red',
+              'not registered in settings.json — run `opensquid setup wizard hooks`',
+            ),
+          );
+        }
+      }
+    }
   }
   return results;
 }

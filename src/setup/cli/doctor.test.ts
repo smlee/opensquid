@@ -112,13 +112,15 @@ describe('runDoctorHooks — green path', () => {
       projectSettingsPath: join(dir, 'no-project.json'),
       spawnProbe: fakeProbeGreen({ 'opensquid-hook-pretooluse': 'tool_call' }),
     });
-    const real = results.filter((r) => r.event !== '-');
-    expect(real).toHaveLength(1);
-    expect(real[0]?.status).toBe('green');
-    expect(real[0]?.reason).toBe('marker present');
+    const green = results.filter((r) => r.status === 'green');
+    expect(green).toHaveLength(1);
+    expect(green[0]?.event).toBe('PreToolUse');
+    expect(green[0]?.reason).toBe('marker present');
+    // FC.5: a managing scope missing the other 5 canonical events → 5 coverage reds.
+    expect(results.filter((r) => r.status === 'red')).toHaveLength(5);
   });
 
-  it('reports GREEN for all 4 events when correctly wired', async () => {
+  it('reports GREEN for all 6 canonical events when fully wired (no coverage reds)', async () => {
     await writeFile(
       userPath,
       JSON.stringify({
@@ -129,6 +131,8 @@ describe('runDoctorHooks — green path', () => {
           ],
           Stop: [{ hooks: [{ type: 'command', command: 'opensquid-hook-stop' }] }],
           SessionEnd: [{ hooks: [{ type: 'command', command: 'opensquid-hook-sessionend' }] }],
+          PostToolUse: [{ hooks: [{ type: 'command', command: 'opensquid-hook-posttooluse' }] }],
+          SessionStart: [{ hooks: [{ type: 'command', command: 'opensquid-hook-sessionstart' }] }],
         },
       }),
     );
@@ -140,11 +144,63 @@ describe('runDoctorHooks — green path', () => {
         'opensquid-hook-userpromptsubmit': 'prompt_submit',
         'opensquid-hook-stop': 'stop',
         'opensquid-hook-sessionend': 'session_end',
+        'opensquid-hook-posttooluse': 'post_tool_call',
+        'opensquid-hook-sessionstart': 'session_start',
       }),
     });
     const real = results.filter((r) => r.event !== '-');
-    expect(real).toHaveLength(4);
+    expect(real).toHaveLength(6);
     expect(real.every((r) => r.status === 'green')).toBe(true);
+  });
+});
+
+describe('runDoctorHooks — FC.5 canonical coverage', () => {
+  it('RED-flags canonical events missing from a scope that manages opensquid hooks', async () => {
+    await writeFile(
+      userPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{ hooks: [{ type: 'command', command: 'opensquid-hook-pretooluse' }] }],
+          UserPromptSubmit: [
+            { hooks: [{ type: 'command', command: 'opensquid-hook-userpromptsubmit' }] },
+          ],
+        },
+      }),
+    );
+    const results = await runDoctorHooks({
+      userSettingsPath: userPath,
+      projectSettingsPath: join(dir, 'no-project.json'),
+      spawnProbe: fakeProbeGreen({
+        'opensquid-hook-pretooluse': 'tool_call',
+        'opensquid-hook-userpromptsubmit': 'prompt_submit',
+      }),
+    });
+    const missing = results.filter(
+      (r) => r.status === 'red' && r.reason.includes('not registered'),
+    );
+    expect(missing.map((r) => r.event).sort()).toEqual([
+      'PostToolUse',
+      'SessionEnd',
+      'SessionStart',
+      'Stop',
+    ]);
+    expect(missing.every((r) => r.reason.includes('opensquid setup wizard hooks'))).toBe(true);
+    expect(printReport(results)).toBeGreaterThan(0); // coverage red → non-zero exit
+  });
+
+  it('a scope with NO opensquid-managed hooks gets no coverage reds (project scope optional)', async () => {
+    await writeFile(
+      userPath,
+      JSON.stringify({
+        hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: 'echo not-opensquid' }] }] },
+      }),
+    );
+    const results = await runDoctorHooks({
+      userSettingsPath: userPath,
+      projectSettingsPath: join(dir, 'no-project.json'),
+      spawnProbe: fakeProbeGreen({}),
+    });
+    expect(results.filter((r) => r.reason.includes('not registered'))).toHaveLength(0);
   });
 });
 
@@ -172,11 +228,11 @@ describe('runDoctorHooks — red path', () => {
       projectSettingsPath: join(dir, 'no-project.json'),
       spawnProbe: fakeProbeSilent,
     });
-    const real = results.filter((r) => r.event !== '-');
-    expect(real).toHaveLength(1);
-    expect(real[0]?.status).toBe('red');
-    expect(real[0]?.reason).toMatch(/marker absent/);
-    expect(real[0]?.reason).toMatch(/silent no-op/);
+    const probed = results.filter((r) => r.reason.includes('marker absent'));
+    expect(probed).toHaveLength(1);
+    expect(probed[0]?.status).toBe('red');
+    expect(probed[0]?.event).toBe('PreToolUse');
+    expect(probed[0]?.reason).toMatch(/silent no-op/);
   });
 
   it('reports RED when spawn throws (timeout, ENOENT, etc.)', async () => {

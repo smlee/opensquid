@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.310] - 2026-06-03
+
+### Added (T-DOCTOR-HOOK-COVERAGE FC.5 — `doctor hooks` flags MISSING registrations)
+
+`opensquid doctor hooks` previously probed only hooks already in `settings.json`, so a
+canonical event ABSENT from settings (e.g. PostToolUse, SessionStart) produced no result —
+doctor reported all-green while whole enforcement classes were silently uninstalled (the
+exact gap that froze the FSM on this machine). Added a coverage pass: a scope that manages
+opensquid hooks (≥1 `opensquid-hook` entry) must register the full
+`OPENSQUID_BIN_FOR_EVENT` set; any absent event is RED with the remediation
+`run \`opensquid setup wizard hooks\``, and RED → non-zero exit (CI/`doctor`-detectable). A
+scope with no opensquid hooks stays exempt. Built through the full flow (pre-research →
+11-field spec → 7 logged phases → live `doctor hooks` shows 6 green, 0 red).
+
+- `src/setup/cli/doctor.ts` (coverage pass), `src/setup/cli/doctor.test.ts` (coverage
+  cases + 3 partial-set tests reconciled to canonical-completeness), spec + pre-research.
+
 ## [0.5.309] - 2026-06-03
 
 ### Fixed (T-ACTIVE-TASK-CLEAR FC.6 — completed task's active-task signal no longer lingers)
