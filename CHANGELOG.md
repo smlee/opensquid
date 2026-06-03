@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.306] - 2026-06-03
+
+### Added (T-FSM-UNIFY FU.12 — the per-write scope gate; close the flow's last door)
+
+Re-evaluation finding: "the flow is complete" was an over-claim. `scope-before-code`
+keyed only on the session FSM, so code written with NO declared task rode a leftover
+`phases_complete` state (and the FU.11 task-start hook only fires on
+`TaskUpdate(in_progress)`). Fix: `scope-before-code` now also blocks when the active
+task has no generated spec (`has_generated_spec.generated == false`, which covers BOTH
+"no active task" and "task with no resolvable spec"). **Code now requires a scoped
+active task, regardless of FSM state** — the door is closed. The FU.2 scope-gate test
+now seeds a scoped task for its allowed case; two FU.12 cases assert a code write is
+blocked with no task / an unscoped task even past research. 20/20 coding-flow, full
+suite green. Built through the full flow (scope → 11-field spec → 7 logged phases →
+this commit through the execute-gate).
+
+- `packs/builtin/coding-flow/skills/scope-lifecycle/skill.yaml`, `test/builtin/coding-flow.test.ts`, `docs/tasks/T-fsm-unify.md` (FU.12), `docs/research/T-per-write-scope-gate-pre-research-2026-06-03.md`.
+
 ## [0.5.305] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.10 — the phase-audit: gate log_phase on evidence)

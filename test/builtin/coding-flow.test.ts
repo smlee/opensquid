@@ -38,6 +38,7 @@ function registry(): FunctionRegistry {
   registerFsmFunctions(r);
   registerStateFunctions(r);
   registerVerdictFunctions(r);
+  r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   return r;
 }
 
@@ -138,9 +139,16 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
     const sid = 'cf-scope';
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2); // idle → blocked
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2); // idle + no task → blocked
     expect((await dispatchEvent(writeResearch, [pack], reg, sid)).exitCode).toBe(0); // → researched
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(0); // researched → allowed
+    // FU.12: code also requires a scoped active task — seed one with a resolvable spec.
+    await writeActiveTask(sid, {
+      id: 't1',
+      subject: 'wip',
+      started_at: '2026-06-03T00:00:00.000Z',
+      spec: resolve('package.json'),
+    });
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(0); // researched + scoped → allowed
   });
 
   it('AUTHOR gate: TaskCreate is blocked until the spec passes audit (stays at spec_authored)', async () => {
@@ -418,5 +426,44 @@ describe('builtin coding-flow pack — phase-audit (FU.10)', () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const r = await dispatchEvent(logPhase('learn'), [pack], registryPhaseAudit(), 'cf-pa-learn');
     expect(r.exitCode).toBe(0);
+  });
+});
+
+describe('builtin coding-flow pack — per-write scope gate (FU.12)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-cf-pw-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('blocks a code write with NO active task even when the FSM is past research', async () => {
+    const sid = 'cf-pw-notask';
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    await dispatchEvent(writeResearch, [pack], reg, sid); // FSM → researched
+    // No active task → has_generated_spec.generated === false → still blocked.
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2);
+  });
+
+  it('blocks a code write whose active task has no spec', async () => {
+    const sid = 'cf-pw-nospec';
+    await writeActiveTask(sid, {
+      id: 't1',
+      subject: 'wip',
+      started_at: '2026-06-03T00:00:00.000Z',
+    });
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    await dispatchEvent(writeResearch, [pack], reg, sid); // FSM → researched, but task unscoped
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2);
   });
 });

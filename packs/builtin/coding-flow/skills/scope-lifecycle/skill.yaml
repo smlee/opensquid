@@ -126,15 +126,22 @@ rules:
         as: targs
       - call: read_fsm_state
         as: st
+      # FU.12 — per-task: code requires a scoped active task. has_generated_spec is
+      # false for BOTH "no active task" and "active task with no resolvable spec",
+      # so this closes the door where code with no declared task rode the session FSM.
+      - call: has_generated_spec
+        if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/"))'
+        as: spec
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/")) && st != "researched" && st != "spec_authored" && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"'
+        if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/")) && (spec.generated == false || (st != "researched" && st != "spec_authored" && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"))'
         args:
           level: block
           message: >-
-            BLOCKED: research before code. The SCOPE region is incomplete (state is
-            still pre-research). Complete the pre-research artifact
-            (docs/research/...-pre-research-...) first. Override only if the user
-            explicitly scoped this work in THIS turn.
+            BLOCKED: scope before code. Either the SCOPE region is still pre-research,
+            OR the active task is unscoped (no spec-audited spec on disk). Complete the
+            pre-research artifact (docs/research/...-pre-research-...) AND activate a
+            spec-audited task (TaskUpdate(<id>, in_progress)) before coding. Override
+            only if the user explicitly scoped this work in THIS turn.
   # ── AUTHOR gate: no TaskCreate until the spec passed the audit (spec_complete) ─
   - id: taskcreate-spec-required
     process:

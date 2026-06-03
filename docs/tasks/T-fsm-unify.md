@@ -843,6 +843,45 @@ pnpm vitest run test/builtin/coding-flow.test.ts && pnpm vitest run && pnpm buil
 
 **7-phase steps:** 1 pre-research: read session_tool_history + log_phase + the turn-ledger reset (DONE); 2 learn: lock which phases are gateable; 3 code: the phase-audit skill; 4 test: the 4 fixtures (seed the turn ledger); 5 audit: judgment phases accepted, no over-block; 6 post-research: the DPC.5 precedent (pre_research already gated); 7 fix.
 
+### Task FU.12: The per-write scope gate — code requires a scoped active task
+
+**Required skills:** opensquid skill.yaml author expert; opensquid dispatcher/evaluator expert; Audit / code review expert
+**Deliverable:** `scope-before-code` ALSO blocks a code write whose active task has no generated spec (`has_generated_spec.generated == false`), closing the hole where code with no declared task rode the session FSM. Code now requires a scoped active task, regardless of FSM state.
+**Depends on:** [FU.11](#task-fu11-the-task-start-hook--per-task-flow-enforcement)
+
+**Files affected:**
+
+- `packs/builtin/coding-flow/skills/scope-lifecycle/skill.yaml` (modify) — extend the `scope-before-code` rule.
+- `test/builtin/coding-flow.test.ts` (modify) — the FU.2 scope-gate test seeds a scoped task; add the no-scoped-task case.
+
+**Key code shapes:**
+
+```yaml
+# scope-before-code — add has_generated_spec; block on FSM-pre-research OR unscoped task
+- call: has_generated_spec
+  if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/"))'
+  as: spec
+- call: verdict
+  if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/")) && (spec.generated == false || (st != "researched" && st != "spec_authored" && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"))'
+  args:
+    {
+      level: block,
+      message: 'no scoped active task (or pre-research) — TaskUpdate(<id>,in_progress) on a spec-audited task first',
+    }
+```
+
+**Test fixtures:** code write + no active task → block; code write + active task with no spec → block; code write + active task with a resolvable spec + FSM past-researched → allowed; the FU.2 block-then-allow updated to seed a scoped task.
+
+**Acceptance criteria:** [ ] code with no active task → block; [ ] code with an unscoped task → block; [ ] code with a scoped task + scoped FSM → allowed; [ ] FU.2 test updated; [ ] full suite green.
+
+**Risk callouts:** STRICT — every code write now needs a scoped active task (intended for the coding-flow discipline). The FU.2 test will fail until it seeds a scoped task — update it in the same change. `has_generated_spec` resolves the spec path against the event cwd (`active_task.ts:132`) — an absolute spec is checked directly.
+
+**References:** `docs/research/T-per-write-scope-gate-pre-research-2026-06-03.md`; `src/functions/active_task.ts:120-143`; `coding-flow/skills/scope-lifecycle/skill.yaml:121-137`.
+
+**Verification commands:** `pnpm vitest run test/builtin/coding-flow.test.ts && pnpm vitest run && pnpm build`.
+
+**7-phase steps:** 1 pre-research: read scope-before-code + has_generated_spec (DONE); 2 learn: lock the combined OR-condition + the test updates; 3 code: extend the rule; 4 test: the 3 cases + update FU.2; 5 audit: no over-block on legit scoped work; 6 post-research: compare against the old scope-architect Gate A; 7 fix.
+
 ---
 
 ## 5. Locked decisions
