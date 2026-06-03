@@ -43,7 +43,7 @@ afterEach(async () => {
  *  (was 2s) — Node 20 GitHub Actions runners + chokidar polling backend
  *  occasionally exceed 2s under shared-runner contention. Locally the
  *  predicate fires well under 500ms; the extra budget only matters in CI. */
-async function waitFor(pred: () => boolean, timeoutMs = 5000): Promise<void> {
+async function waitFor(pred: () => boolean, timeoutMs = 15000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (pred()) return;

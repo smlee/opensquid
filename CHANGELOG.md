@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.307] - 2026-06-03
+
+### Fixed (T-FSM-COMPLETION FC.3 — de-flake transport_bridge)
+
+`transport_bridge.test.ts`'s `waitFor` polled a real condition (correct strategy) but
+its inner 5s ceiling was the binding constraint — it threw before the 20s `setConfig`
+testTimeout could matter, and under CI fork-contention the polling-backend (chokidar
+`usePolling`) latency exceeded 5s. Raised the ceiling to 15s (the predicate fires
+<500ms locally; the budget only matters under load). Full suite is now down to ONLY
+the 2 pre-existing local `server.test.ts` failures. `l3_inbound_e2e` was inspected and
+left unchanged — it's `it.skipIf`-guarded and its 500ms wait doesn't gate its assertion,
+so it wasn't the observed flake; its per-`it` ceiling is a defensive follow-up only if
+it ever flakes in CI. Built through the full flow (scope → 7 logged phases → commit).
+
+- `src/runtime/agent_bridge/transport_bridge.test.ts`.
+
 ## [0.5.306] - 2026-06-03
 
 ### Added (T-FSM-UNIFY FU.12 — the per-write scope gate; close the flow's last door)
