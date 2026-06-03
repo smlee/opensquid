@@ -29,11 +29,10 @@ describe('builtin scope-architect pack', () => {
     expect(pack.evolves).toBe(true);
   });
 
-  it('ships eight skills (recall-consumed removed in SG.3)', async () => {
+  it('ships seven skills (chain-handoffs consolidated into workflow-fsm; recall-consumed removed in SG.3)', async () => {
     const pack = await loadPack(resolve('packs/builtin/scope-architect'));
     const skillNames = pack.skills.map((s) => s.name).sort();
     expect(skillNames).toEqual([
-      'chain-handoffs',
       'inline-spec-block',
       'pack-skill-authoring',
       'pre-research-authoring',
@@ -73,18 +72,6 @@ describe('builtin scope-architect pack', () => {
     const skill = pack.skills.find((s) => s.name === 'scope-detect');
     expect(skill).toBeDefined();
     expect(skill?.triggers.map((t) => t.kind)).toContain('prompt_submit');
-  });
-
-  it('chain-handoffs skill declares chain_stage requires per rule', async () => {
-    const pack = await loadPack(resolve('packs/builtin/scope-architect'));
-    const skill = pack.skills.find((s) => s.name === 'chain-handoffs');
-    expect(skill).toBeDefined();
-    const ruleIds = skill?.rules.map((r) => r.id).sort();
-    expect(ruleIds).toEqual([
-      'chain-handoff-research-to-spec',
-      'chain-handoff-resume-phases',
-      'chain-handoff-spec-to-tasks',
-    ]);
   });
 
   // ----- DPC.2 (2026-05-30) — behavioral test for widened regex coverage -----

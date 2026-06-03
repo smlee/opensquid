@@ -27,7 +27,6 @@
 import { z } from 'zod';
 
 import type { EngineClient } from '../../engine/client.js';
-import { transitionChainStage } from '../../runtime/chain_state.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { REQUIRED_PHASES, appendPhase, isComplete } from '../../runtime/workflow_phases.js';
@@ -78,19 +77,10 @@ export async function handleLogPhase(
   // (b) gate-readable session state
   const state = await appendPhase(sessionId, active.id, args.phase);
   const complete = isComplete(state, active.id);
-  // ASC.1 — chain-state transition. log_phase is the canonical signal for
-  // 7-phase progress: at least one phase logged ⇒ 'phases_in_flight'; all 7
-  // REQUIRED phases logged ⇒ 'phases_complete'. Silent fail-open: this MCP
-  // tool's return shape is the gate's contract, and a chain-state-write
-  // failure must NOT propagate into the tool response. The transition is
-  // idempotent on same-stage, so re-logging an already-counted phase is a
-  // no-op for the chain (the phase-state still appends to the engine ledger
-  // and the session phase-state via appendPhase above).
-  try {
-    await transitionChainStage(sessionId, complete ? 'phases_complete' : 'phases_in_flight');
-  } catch {
-    /* silent: chain-state plumbing must never disturb log_phase's return */
-  }
+  // The 7-phase progress signal is now consumed by the opt-in `workflow-fsm`
+  // pack: its `advance-on-phase-log` skill fires on the PostToolUse hook for
+  // this MCP call and advances the lifecycle FSM (re-deriving completeness via
+  // workflow_phases_complete). log_phase no longer writes a global chain stage.
   return {
     ok: true,
     task_id: active.id,

@@ -497,24 +497,57 @@ async function loadCheckpointMap(
 // `args:` is the right place to gate on whether a binding actually exists.
 // ---------------------------------------------------------------------------
 
-const TEMPLATE_DETECT = /\{\{\s*\w+\s*\}\}/;
-const TEMPLATE_REPLACE = /\{\{\s*(\w+)\s*\}\}/g;
+// `{{name}}` or `{{name.field.sub}}` — a binding name optionally followed by a
+// dotted path into the bound value. The dotted form lets a rule pass a nested
+// field (e.g. `{{targs.file_path}}`) into a primitive arg; the single-segment
+// form is unchanged (resolves to the binding itself).
+const TEMPLATE_DETECT = /\{\{\s*[\w.]+\s*\}\}/;
+const TEMPLATE_REPLACE = /\{\{\s*([\w.]+)\s*\}\}/g;
+
+/**
+ * Resolve a `head.field.sub` path against the bindings: the first segment is
+ * the binding key; each subsequent segment indexes into the (object) value.
+ * Returns undefined if any segment is missing or a non-object is traversed —
+ * so an unresolved path stringifies to '' exactly like an unbound `{{name}}`.
+ */
+function resolveBindingPath(path: string, bindings: Map<string, unknown>): unknown {
+  const segments = path.split('.');
+  let cur: unknown = bindings.get(segments[0]!);
+  for (let i = 1; i < segments.length; i++) {
+    if (cur === null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[segments[i]!];
+  }
+  return cur;
+}
+
+/**
+ * Interpolate `{{name}}` / `{{name.field}}` templates in a value, RECURSING
+ * into nested objects + arrays so a template inside a structured arg (e.g. a
+ * verdict's `next_action.args.pre_research_path`) resolves too. String leaves
+ * are substituted; non-strings pass through unchanged.
+ */
+function interpolateValue(v: unknown, bindings: Map<string, unknown>): unknown {
+  if (typeof v === 'string') {
+    return TEMPLATE_DETECT.test(v)
+      ? v.replace(TEMPLATE_REPLACE, (_match, name: string) =>
+          stringifyBinding(resolveBindingPath(name, bindings)),
+        )
+      : v;
+  }
+  if (Array.isArray(v)) return v.map((x) => interpolateValue(x, bindings));
+  if (v !== null && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = interpolateValue(val, bindings);
+    return out;
+  }
+  return v;
+}
 
 function interpolateArgs(
   args: Record<string, unknown>,
   bindings: Map<string, unknown>,
 ): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args)) {
-    if (typeof v === 'string' && TEMPLATE_DETECT.test(v)) {
-      out[k] = v.replace(TEMPLATE_REPLACE, (_match, name: string) =>
-        stringifyBinding(bindings.get(name)),
-      );
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
+  return interpolateValue(args, bindings) as Record<string, unknown>;
 }
 
 /**

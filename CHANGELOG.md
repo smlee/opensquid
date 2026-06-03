@@ -7,6 +7,37 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.289] - 2026-06-03
+
+### Changed (T-WORKFLOW-AS-PACK-FSM — the 7-phase workflow IS a pack FSM; chain_state retired)
+
+The bespoke global `chain_state` machine + its scattered orchestration are
+REPLACED by the built-in `workflow-fsm` pack running on the generic FSM stack —
+no special-case workflow code remains. DELETED: `src/runtime/chain_state.ts`,
+`src/functions/chain_state.ts` (the `read_chain_state` primitive),
+`src/runtime/workflow_map.ts`, `src/runtime/workflow_fsm.ts`; the 5 hardcoded
+`transitionChainStage` writers (user-prompt-submit, pre-tool-use x3, log_phase);
+the `chain_stage` Skill.requires precondition; the `ReadChainState` registration.
+The `scope-architect` chain-handoffs are consolidated INTO `workflow-fsm`;
+`pack-architect/pack-scope-elicit` reads the workflow stage cross-pack. Supersedes
+the A4a forward-only patch (chain_state is gone, so its legality is moot).
+
+The workflow lives entirely in `packs/builtin/workflow-fsm/` (fsm.yaml + 4
+skills): scope-intent prompts, the pre-research/spec/task writes, and the
+log_phase signal advance the lifecycle FSM via `advance_fsm`; the handoff
+directives gate on `read_fsm_state` and carry the captured artifact path
+(enrichment is session state, not FSM state). Proven end-to-end through the real
+dispatcher.
+
+Enabling changes: interpolation resolves dotted paths + recurses into nested
+args; `tool_name` works on post_tool_call; `read_fsm_state` takes an optional
+`pack` for cross-pack reads; session-end clears the workflow FSM state.
+
+- src/runtime/evaluator.ts, src/functions/{fsm,event}.ts, src/runtime/fsm_state.ts,
+  skill_requires.ts, bootstrap.ts, src/mcp/tools/log_phase.ts,
+  src/runtime/hooks/{pre-tool-use,user-prompt-submit,session-end}.ts.
+- packs/builtin/workflow-fsm/\*\* (NEW); packs/builtin/{scope-architect,pack-architect}.
+
 ## [0.5.288] - 2026-06-02
 
 ### Changed (T-PACK-FSM-STANDARDIZATION slice A4 — chain_state is now forward-only/total)

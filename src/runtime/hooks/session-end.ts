@@ -18,7 +18,7 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
-import { clearChainState } from '../chain_state.js';
+import { clearFsmState } from '../fsm_state.js';
 import { runCompression } from '../compression_orchestrator.js';
 import { EngineClient } from '../../engine/client.js';
 import { emitProbe, groupFromTask } from '../satisfaction_probe.js';
@@ -125,15 +125,13 @@ async function main(): Promise<void> {
   // close, so an abandoned in-progress task leaves a trace. Best-effort.
   await archiveActiveTask(sessionId);
 
-  // ASC.1 — clear the chain-state file on session close. Unlike the active
-  // task (archived, not deleted, so an abandoned in-progress task leaves a
-  // trace), the chain-state object is a session-scoped state machine per
-  // T-ASC L3 and starts fresh each session; cross-session resume is a
-  // separate product question (deferred). ENOENT swallowed by the helper.
+  // Clear the workflow-fsm lifecycle state on session close — a session-scoped
+  // machine that starts fresh each session (cross-session resume is a separate
+  // product question, deferred). ENOENT swallowed by the helper.
   try {
-    await clearChainState(sessionId);
+    await clearFsmState(sessionId, 'workflow-fsm');
   } catch (e) {
-    process.stderr.write(`opensquid: chain-state clear failed — ${String(e)}\n`);
+    process.stderr.write(`opensquid: workflow-fsm clear failed — ${String(e)}\n`);
   }
 
   process.exit(exitCode);

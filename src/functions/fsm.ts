@@ -22,12 +22,14 @@
 import { z } from 'zod';
 
 import { evalCondition } from '../runtime/evaluator/expression/index.js';
-import { advanceFsmState, readFsmState } from '../runtime/fsm_state.js';
+import { advanceFsmState, readFsmState, readFsmStateRaw } from '../runtime/fsm_state.js';
 import { ok } from '../runtime/result.js';
 
 import type { FunctionRegistry } from './registry.js';
 
-const ReadFsmStateArgs = z.object({}).strict();
+// Optional `pack`: read ANOTHER pack's lifecycle state (cross-pack gating).
+// Omitted → the calling pack's own FSM (via ctx.packFsm).
+const ReadFsmStateArgs = z.object({ pack: z.string().min(1).optional() }).strict();
 const AdvanceFsmArgs = z.object({ event: z.string().min(1) }).strict();
 
 export function registerFsmFunctions(registry: FunctionRegistry): void {
@@ -37,7 +39,10 @@ export function registerFsmFunctions(registry: FunctionRegistry): void {
     durable: false,
     memoizable: false,
     costEstimateMs: 1,
-    execute: async (_args, ctx) => {
+    execute: async ({ pack }, ctx) => {
+      // Cross-pack read: another pack's persisted state string (null if unstarted).
+      if (pack !== undefined) return ok(await readFsmStateRaw(ctx.sessionId, pack));
+      // Own pack: full read with the threaded FSM (defaults to initial).
       if (ctx.packFsm === undefined) return ok(null);
       return ok(await readFsmState(ctx.sessionId, ctx.packId, ctx.packFsm));
     },

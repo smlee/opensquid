@@ -1,15 +1,14 @@
 /**
  * T-PACK-FSM-STANDARDIZATION slice A — FSM engine tests.
  *
- * Covers the engine (validation + the total `step` function) and a PARITY proof
- * that the workflow FSM reproduces `chain_state`'s forward pipeline AND gains
- * the loop-back edge `chain_state` structurally cannot express.
+ * Covers the generic engine: load-time validation (totality) and the total
+ * `step` transition function (matching transition / `*` wildcard / `when`
+ * guard / self-loop / explicit stay). The concrete 7-phase workflow FSM is
+ * exercised end-to-end by the `workflow-fsm` pack test.
  */
 import { describe, expect, it } from 'vitest';
 
 import { Fsm, validateFsm, step, ANY_STATE } from './fsm.js';
-import { WORKFLOW_FSM } from './workflow_fsm.js';
-import { CHAIN_STAGES } from './chain_state.js';
 
 const TRAFFIC: Fsm = {
   initial: 'red',
@@ -99,37 +98,5 @@ describe('step (total transition function)', () => {
       transitions: [{ from: 'r', on: 'again', to: 'r' }],
     };
     expect(step(fsm, 'r', 'again')).toEqual({ next: 'r', transitioned: false, via: 0 });
-  });
-});
-
-describe('WORKFLOW_FSM — parity with chain_state + the loop-back it lacks', () => {
-  it('is valid + its states are exactly CHAIN_STAGES in order', () => {
-    expect(validateFsm(WORKFLOW_FSM)).toEqual([]);
-    expect(WORKFLOW_FSM.states).toEqual([...CHAIN_STAGES]);
-    expect(WORKFLOW_FSM.initial).toBe('idle');
-  });
-
-  it('drives the forward pipeline idle → … → phases_complete', () => {
-    const path: [string, string][] = [
-      ['idle', 'scope_start'],
-      ['scoping', 'research_done'],
-      ['researched', 'spec_authored'],
-      ['spec_authored', 'tasks_loaded'],
-      ['tasks_loaded', 'phase_started'],
-      ['phases_in_flight', 'phases_done'],
-    ];
-    let state = WORKFLOW_FSM.initial;
-    for (const [expectedState, event] of path) {
-      expect(state).toBe(expectedState);
-      state = step(WORKFLOW_FSM, state, event).next;
-    }
-    expect(state).toBe('phases_complete');
-  });
-
-  it('LOOP-BACK: researched --guess_found--> scoping (the edge chain_state cannot express)', () => {
-    expect(step(WORKFLOW_FSM, 'researched', 'guess_found')).toMatchObject({
-      next: 'scoping',
-      transitioned: true,
-    });
   });
 });

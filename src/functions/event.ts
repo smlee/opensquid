@@ -82,8 +82,12 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
     memoizable: false,
     costEstimateMs: 0.1,
     execute: async (_args, ctx) => {
-      if (ctx.event.kind !== 'tool_call') return ok(null);
-      return ok(ctx.event.tool);
+      // Both tool_call (PreToolUse) and post_tool_call (PostToolUse) carry the
+      // tool name; a rule on either event can read it. Any other event → null.
+      if (ctx.event.kind === 'tool_call' || ctx.event.kind === 'post_tool_call') {
+        return ok(ctx.event.tool);
+      }
+      return ok(null);
     },
   });
 

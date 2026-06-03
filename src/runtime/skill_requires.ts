@@ -5,10 +5,12 @@
  * filter) and the rule walk. AND-semantics: every entry must hold; empty
  * array trivially holds (back-compat with every existing skill).
  *
- * Three precondition kinds (discriminated-union by `kind`):
+ * Precondition kinds (discriminated-union by `kind`):
  *   automation_mode_on  — stat `<home>/sessions/<id>/automation.flag`
  *   active_task_present — stat `<home>/sessions/<id>/active-task.json`
- *   chain_stage:<stage> — readChainStage(sessionId) === <stage>
+ * (The former `chain_stage` precondition was removed with chain_state — a pack
+ *  now gates on lifecycle state directly via the `read_fsm_state` primitive in
+ *  a rule `if:`. See T-WORKFLOW-AS-PACK-FSM.)
  *
  * Fail-open in the engaged direction (T-ASC L5 / L6 lock): any stat error
  * OTHER than ENOENT (EACCES, EPERM, EIO, EROFS, …) ⇒ assume engaged, return
@@ -23,8 +25,7 @@
  * are short-lived processes; long-lived state would cross process boundaries
  * meaninglessly.
  *
- * Imports from: node:fs/promises, zod, ./automation_state.js, ./chain_state.js,
- *   ./paths.js.
+ * Imports from: node:fs/promises, zod, ./automation_state.js, ./paths.js.
  * Imported by: src/packs/schemas/skill.ts (the Skill schema's `requires:`
  *   field type), src/runtime/types.ts (the runtime type mirror),
  *   src/runtime/hooks/dispatch.ts (the dispatcher integration point).
@@ -35,7 +36,6 @@ import { stat } from 'node:fs/promises';
 import { z } from 'zod';
 
 import { automationFlagPath } from './automation_state.js';
-import { CHAIN_STAGES, readChainStage, type ChainStage } from './chain_state.js';
 import { activeTaskFile } from './paths.js';
 
 /**
@@ -47,21 +47,13 @@ import { activeTaskFile } from './paths.js';
 export const SkillRequires = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('automation_mode_on') }).strict(),
   z.object({ kind: z.literal('active_task_present') }).strict(),
-  z
-    .object({
-      kind: z.literal('chain_stage'),
-      stage: z.enum(CHAIN_STAGES),
-    })
-    .strict(),
 ]);
 export type SkillRequires = z.infer<typeof SkillRequires>;
 
 /**
  * Per-fire cache. The dispatcher constructs ONE instance per `dispatchEvent`
- * call. Three maps keyed by sessionId because each precondition has a single
- * relevant input (the session). `chain_stage` stores the RESOLVED stage once;
- * subsequent `chain_stage` preconditions for different stages compare against
- * the cached stage rather than re-reading the file.
+ * call. One map per precondition kind, keyed by sessionId (each precondition's
+ * single relevant input), so N skills sharing a kind probe disk ONCE per fire.
  *
  * Strictly avoid making this a module-level cache: hook bins are short-lived
  * processes (one per host event) and per-call caching is the right scope.
@@ -69,7 +61,6 @@ export type SkillRequires = z.infer<typeof SkillRequires>;
 export class RequiresCache {
   private readonly automation = new Map<string, boolean>();
   private readonly activeTask = new Map<string, boolean>();
-  private readonly chainStage = new Map<string, ChainStage>();
 
   async automationModeOn(sessionId: string): Promise<boolean> {
     const cached = this.automation.get(sessionId);
@@ -85,14 +76,6 @@ export class RequiresCache {
     const present = await probePresent(activeTaskFile(sessionId));
     this.activeTask.set(sessionId, present);
     return present;
-  }
-
-  async chainStageOf(sessionId: string): Promise<ChainStage> {
-    const cached = this.chainStage.get(sessionId);
-    if (cached !== undefined) return cached;
-    const stage = await readChainStage(sessionId);
-    this.chainStage.set(sessionId, stage);
-    return stage;
   }
 }
 
@@ -116,9 +99,6 @@ export async function skillRequiresHold(
         break;
       case 'active_task_present':
         if (!(await cache.activeTaskPresent(sessionId))) return false;
-        break;
-      case 'chain_stage':
-        if ((await cache.chainStageOf(sessionId)) !== p.stage) return false;
         break;
       default: {
         // Exhaustiveness check — TS narrows `p` to `never` here when every

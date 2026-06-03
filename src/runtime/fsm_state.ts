@@ -108,6 +108,24 @@ export async function advanceFsmState(
   return result;
 }
 
+/**
+ * Read the persisted state string for `(session, pack)` WITHOUT needing the
+ * pack's FSM definition — for CROSS-PACK reads where one pack's rule queries
+ * another pack's lifecycle state (e.g. a pack gating on the workflow stage).
+ * Returns null when the machine hasn't started (file absent) or is unreadable,
+ * so the caller distinguishes "no state yet" from any concrete state.
+ */
+export async function readFsmStateRaw(sessionId: string, packName: string): Promise<string | null> {
+  try {
+    const raw = await readFile(sessionStateFile(sessionId, fsmKey(packName)), 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (isFsmStateFile(parsed)) return parsed.state;
+  } catch {
+    // absent / parse error → null
+  }
+  return null;
+}
+
 /** Remove a pack's FSM-state file (SessionEnd cleanup). ENOENT swallowed. */
 export async function clearFsmState(sessionId: string, packName: string): Promise<void> {
   try {

@@ -26,7 +26,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -144,125 +144,6 @@ describe('hook subprocess integration', () => {
     const r = await runHook('pre-tool-use.ts', stdin);
     expect(r.exitCode).toBe(0);
     expect(r.stderr).toBe('');
-  }, 15000);
-});
-
-/**
- * ASC.1 — chain-state writer integration. Each test seeds a synthetic event
- * to the appropriate hook bin against the isolated tempHome and asserts the
- * persisted chain-state file picked up the transition.
- *
- * Path: `<tempHome>/sessions/<session-id>/state/chain-state.json` per
- * `sessionStateFile(<id>, 'chain-state')`.
- */
-describe('hook subprocess integration — ASC.1 chain-state writers', () => {
-  it('PreToolUse Write to docs/research/*-pre-research-*.md → chain.stage = "researched"', async () => {
-    const sessionId = `asc1-research-${Date.now()}`;
-    const stdin = JSON.stringify({
-      tool: 'Write',
-      args: {
-        file_path: '/abs/repo/docs/research/T-foo-pre-research-2026-05-28.md',
-        content: '# pre-research',
-      },
-      session_id: sessionId,
-    });
-    const r = await runHook('pre-tool-use.ts', stdin);
-    expect(r.exitCode).toBe(0);
-    const statePath = join(tempHome, 'sessions', sessionId, 'state', 'chain-state.json');
-    const raw = await readFile(statePath, 'utf8');
-    const state = JSON.parse(raw) as { stage: string; pre_research_path?: string };
-    expect(state.stage).toBe('researched');
-    expect(state.pre_research_path).toBe(
-      '/abs/repo/docs/research/T-foo-pre-research-2026-05-28.md',
-    );
-  }, 15000);
-
-  it('PreToolUse Write to docs/tasks/T-*.md → chain.stage = "spec_authored"', async () => {
-    const sessionId = `asc1-spec-${Date.now()}`;
-    const stdin = JSON.stringify({
-      tool: 'Write',
-      args: { file_path: '/abs/repo/docs/tasks/T-foo.md', content: '# spec' },
-      session_id: sessionId,
-    });
-    const r = await runHook('pre-tool-use.ts', stdin);
-    expect(r.exitCode).toBe(0);
-    const statePath = join(tempHome, 'sessions', sessionId, 'state', 'chain-state.json');
-    const state = JSON.parse(await readFile(statePath, 'utf8')) as {
-      stage: string;
-      spec_path?: string;
-    };
-    expect(state.stage).toBe('spec_authored');
-    expect(state.spec_path).toBe('/abs/repo/docs/tasks/T-foo.md');
-  }, 15000);
-
-  it('PreToolUse TaskCreate with metadata.taskId → chain.stage = "tasks_loaded"', async () => {
-    const sessionId = `asc1-tasks-${Date.now()}`;
-    const stdin = JSON.stringify({
-      tool: 'TaskCreate',
-      args: { subject: 'do thing', metadata: { taskId: 'ASC.X' } },
-      session_id: sessionId,
-    });
-    const r = await runHook('pre-tool-use.ts', stdin);
-    expect(r.exitCode).toBe(0);
-    const statePath = join(tempHome, 'sessions', sessionId, 'state', 'chain-state.json');
-    const state = JSON.parse(await readFile(statePath, 'utf8')) as {
-      stage: string;
-      task_ids?: string[];
-    };
-    expect(state.stage).toBe('tasks_loaded');
-    expect(state.task_ids).toEqual(['ASC.X']);
-  }, 15000);
-
-  it('PreToolUse TaskCreate WITHOUT metadata.taskId → no chain-state file (no transition)', async () => {
-    const sessionId = `asc1-no-tasks-${Date.now()}`;
-    const stdin = JSON.stringify({
-      tool: 'TaskCreate',
-      args: { subject: 'do thing' },
-      session_id: sessionId,
-    });
-    await runHook('pre-tool-use.ts', stdin);
-    const statePath = join(tempHome, 'sessions', sessionId, 'state', 'chain-state.json');
-    const present = await stat(statePath).catch(() => null);
-    expect(present).toBeNull();
-  }, 15000);
-
-  it('UserPromptSubmit with scope-intent on idle chain → chain.stage = "scoping"', async () => {
-    const sessionId = `asc1-scoping-${Date.now()}`;
-    const stdin = JSON.stringify({
-      prompt: 'scope out a new track',
-      session_id: sessionId,
-    });
-    const r = await runHook('user-prompt-submit.ts', stdin);
-    expect(r.exitCode).toBe(0);
-    const statePath = join(tempHome, 'sessions', sessionId, 'state', 'chain-state.json');
-    const state = JSON.parse(await readFile(statePath, 'utf8')) as { stage: string };
-    expect(state.stage).toBe('scoping');
-  }, 15000);
-
-  it('UserPromptSubmit without scope-intent on idle chain → no chain-state file', async () => {
-    const sessionId = `asc1-no-scoping-${Date.now()}`;
-    const stdin = JSON.stringify({
-      prompt: 'hello world, just chatting',
-      session_id: sessionId,
-    });
-    await runHook('user-prompt-submit.ts', stdin);
-    const statePath = join(tempHome, 'sessions', sessionId, 'state', 'chain-state.json');
-    const present = await stat(statePath).catch(() => null);
-    expect(present).toBeNull();
-  }, 15000);
-
-  it('SessionEnd clears the chain-state file', async () => {
-    const sessionId = `asc1-clear-${Date.now()}`;
-    // Pre-seed: write a scoping transition via UserPromptSubmit.
-    await runHook(
-      'user-prompt-submit.ts',
-      JSON.stringify({ prompt: 'plan out the next track', session_id: sessionId }),
-    );
-    const statePath = join(tempHome, 'sessions', sessionId, 'state', 'chain-state.json');
-    expect(await stat(statePath).catch(() => null)).not.toBeNull();
-    // SessionEnd should clear it.
-    await runHook('session-end.ts', JSON.stringify({ sessionId, session_id: sessionId }));
-    expect(await stat(statePath).catch(() => null)).toBeNull();
   }, 15000);
 });
 

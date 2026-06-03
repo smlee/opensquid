@@ -1,0 +1,28 @@
+# advance-on-phase-log — a log_phase call advances the workflow into / through
+# the phase-running states. Triggered on post_tool_call (after the MCP handler
+# has appended the phase to the ledger), so workflow_phases_complete reflects
+# the just-logged phase. Replaces the MCP-side transitionChainStage call in
+# log_phase.ts — the completeness is re-derived pack-side.
+name: advance-on-phase-log
+load: preload
+when_to_load: []
+triggers:
+  - kind: post_tool_call
+rules:
+  - id: advance-phases
+    process:
+      - call: tool_name
+        as: tool
+      - call: workflow_phases_complete
+        as: phases
+      - call: advance_fsm
+        if: 'tool == "mcp__opensquid__log_phase" && phases.complete == true'
+        args:
+          event: phases_done
+      - call: advance_fsm
+        if: 'tool == "mcp__opensquid__log_phase" && phases.complete == false'
+        args:
+          event: phase_started
+prose: |
+  The phase signal. A log_phase that leaves the 7-phase set incomplete advances
+  → phases_in_flight; the one that completes it advances → phases_complete.

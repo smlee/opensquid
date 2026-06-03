@@ -86,4 +86,17 @@ describe('read_fsm_state / advance_fsm', () => {
     await callValue(r, 'advance_fsm', { event: 'start' }, c);
     expect(await callValue(r, 'advance_fsm', { event: 'nonsense' }, c)).toBe('researching');
   });
+
+  it('read_fsm_state({pack}) reads ANOTHER pack lifecycle state cross-pack (null if unstarted)', async () => {
+    const r = reg();
+    const event = { kind: 'stop', assistantText: '' } as const;
+    const sid = 'cross-pack-read';
+    // pack 'p' advances to researching
+    const cP: EvalCtx = { event, bindings: new Map(), sessionId: sid, packId: 'p', packFsm: FSM };
+    await callValue(r, 'advance_fsm', { event: 'start' }, cP);
+    // a DIFFERENT pack (no own fsm) reads p's state by name + an unstarted one → null
+    const cOther: EvalCtx = { event, bindings: new Map(), sessionId: sid, packId: 'other' };
+    expect(await callValue(r, 'read_fsm_state', { pack: 'p' }, cOther)).toBe('researching');
+    expect(await callValue(r, 'read_fsm_state', { pack: 'unstarted' }, cOther)).toBeNull();
+  });
 });

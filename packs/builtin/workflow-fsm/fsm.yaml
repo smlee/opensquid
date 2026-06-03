@@ -1,0 +1,20 @@
+# The 7-phase engineering workflow as an explicit total-transition FSM.
+# Mostly sequential (you cannot skip research → spec → tasks → phases — that IS
+# the discipline), plus the research loop-back and one robustness edge so a
+# pre-research write advances even without a preceding scope-intent prompt.
+#
+# idle ─scope_start→ scoping ─research_done→ researched ─spec_authored→
+#   spec_authored ─tasks_loaded→ tasks_loaded ─phase_started→ phases_in_flight
+#   ─phases_done→ phases_complete
+# researched ─guess_found→ scoping   (loop back when an unresolved guess is found)
+initial: idle
+states: [idle, scoping, researched, spec_authored, tasks_loaded, phases_in_flight, phases_complete]
+transitions:
+  - { from: idle, on: scope_start, to: scoping }
+  - { from: idle, on: research_done, to: researched } # research without a scope-intent prompt
+  - { from: scoping, on: research_done, to: researched }
+  - { from: researched, on: guess_found, to: scoping } # loop-back: unresolved guess → re-research
+  - { from: researched, on: spec_authored, to: spec_authored }
+  - { from: spec_authored, on: tasks_loaded, to: tasks_loaded }
+  - { from: tasks_loaded, on: phase_started, to: phases_in_flight }
+  - { from: phases_in_flight, on: phases_done, to: phases_complete }

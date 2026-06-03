@@ -20,19 +20,13 @@
  * bottom is the last line of defense.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
-import { transitionChainStage } from '../chain_state.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
 import { buildPreToolUseDeny, emitDriftStderrAndExit } from './hook_output.js';
-import { forwardMap } from '../workflow_map.js';
 import { extractSessionId } from './session_id.js';
-
-/** ASC.1 PreToolUse chain-state writers — file-path / metadata patterns. */
-const RESEARCH_ARTIFACT_RE = /docs\/research\/.*-pre-research-.*\.md$/;
-const TRACK_SPEC_RE = /docs\/tasks\/T-.*\.md$/;
 
 interface PreToolUsePayload {
   tool?: string;
@@ -128,34 +122,11 @@ async function main(): Promise<void> {
     } catch (e) {
       process.stderr.write(`opensquid: active-task mirror failed — ${String(e)}\n`);
     }
-    // ASC.1 — chain-state PreToolUse writers. Detect research-artifact /
-    // track-spec writes by file_path regex and TaskCreate/TaskUpdate by
-    // metadata.taskId. transitionChainStage is idempotent on same-stage so
-    // re-entering a stage doesn't double-write history. Ordered AFTER the
-    // active-task mirror so ASC.2's `Skill.requires: chain_stage` (read by
-    // the dispatcher below) sees the post-transition value.
-    try {
-      const tool = parsed.data.tool;
-      const args = parsed.data.args ?? {};
-      if (tool === 'Write' || tool === 'Edit') {
-        const filePath =
-          typeof (args as { file_path?: unknown }).file_path === 'string'
-            ? (args as { file_path: string }).file_path
-            : '';
-        if (RESEARCH_ARTIFACT_RE.test(filePath)) {
-          await transitionChainStage(sessionId, 'researched', { pre_research_path: filePath });
-        } else if (TRACK_SPEC_RE.test(filePath)) {
-          await transitionChainStage(sessionId, 'spec_authored', { spec_path: filePath });
-        }
-      } else if (tool === 'TaskCreate' || tool === 'TaskUpdate') {
-        const meta = (args as { metadata?: { taskId?: unknown } }).metadata;
-        if (meta !== undefined && typeof meta.taskId === 'string' && meta.taskId.length > 0) {
-          await transitionChainStage(sessionId, 'tasks_loaded', { task_ids: [meta.taskId] });
-        }
-      }
-    } catch (e) {
-      process.stderr.write(`opensquid: chain-state write failed — ${String(e)}\n`);
-    }
+    // Workflow stage advancement is no longer hardcoded here — the opt-in
+    // `workflow-fsm` pack's `advance-on-writes` skill catches these same
+    // milestone writes (research artifact / track spec / TaskCreate provenance)
+    // through the dispatcher and advances its lifecycle FSM. See
+    // T-WORKFLOW-AS-PACK-FSM.
   }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
@@ -168,9 +139,9 @@ async function main(): Promise<void> {
   // gates enforce in BOTH normal and bypass modes. Gated strictly on
   // `exitCode === 2` so a non-block never accidentally denies the tool.
   if (exitCode === 2) {
-    // FC.2: fold the stage-aware forward map into the block so the agent is
-    // pointed FORWARD (where you are → next step), not just walled.
-    const guidance = await forwardMap(sessionId);
+    // Forward guidance now comes from the blocking gate's own message + the
+    // workflow-fsm pack's handoff directives (no global chain forward-map).
+    const guidance = '';
     process.stdout.write(JSON.stringify(buildPreToolUseDeny(stderr, guidance)));
     process.exit(0);
   }

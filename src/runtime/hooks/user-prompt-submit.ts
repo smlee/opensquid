@@ -17,7 +17,6 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
-import { readChainStage, transitionChainStage } from '../chain_state.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
 import { resetTurnLedger } from '../session_state.js';
@@ -25,7 +24,6 @@ import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
 import { detectNewProject } from './new_project_detect.js';
-import { SCOPE_INTENT_REGEX } from './scope_intent.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
 import { emitDriftStderrAndExit } from './hook_output.js';
 import { readLastAssistantText, readLastNTurns } from './transcript.js';
@@ -127,24 +125,11 @@ async function main(): Promise<void> {
   } catch (e) {
     process.stderr.write(`opensquid: tool-ledger turn-reset failed — ${String(e)}\n`);
   }
-  // ASC.1 — chain-state 'scoping' writer. Transition idle → scoping ONLY when
-  // the prompt looks like scope-authoring intent AND the chain is currently
-  // idle. The `currentStage === 'idle'` guard is load-bearing: many in-flight
-  // prompts contain 'plan' / 'design' / 'spec' even when no new scope work is
-  // starting; without the guard, every such prompt would reset the chain
-  // mid-flight ('researched' or 'spec_authored' would silently regress to
-  // 'scoping'). Best-effort — a chain-state failure must never block the
-  // turn from starting.
-  if (parsed.data.kind === 'prompt_submit') {
-    try {
-      const currentStage = await readChainStage(sessionId);
-      if (currentStage === 'idle' && SCOPE_INTENT_REGEX.test(parsed.data.prompt)) {
-        await transitionChainStage(sessionId, 'scoping');
-      }
-    } catch (e) {
-      process.stderr.write(`opensquid: chain-state scoping-transition failed — ${String(e)}\n`);
-    }
-  }
+  // The idle → scoping transition is no longer hardcoded here — the opt-in
+  // `workflow-fsm` pack's `enter-scoping` skill matches scope-authoring intent
+  // through the dispatcher and advances its lifecycle FSM (the FSM's totality
+  // makes scope_start a no-op once the workflow has already started). See
+  // T-WORKFLOW-AS-PACK-FSM.
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections, directives } = await dispatchEvent(

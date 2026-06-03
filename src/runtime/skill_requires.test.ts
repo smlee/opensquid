@@ -3,9 +3,8 @@
  *
  * Coverage:
  *   - empty preconds → trivially holds (back-compat)
- *   - each kind in isolation: automation_mode_on / active_task_present / chain_stage
+ *   - each kind in isolation: automation_mode_on / active_task_present
  *   - AND-semantics: 2-precond skill fails when EITHER fails
- *   - chain_stage: matches when stage equals; doesn't match otherwise
  *   - RequiresCache: shares results across calls within one cache instance
  *   - fail-open: a stat error other than ENOENT → true (engaged direction)
  *   - schema validation: SkillRequires Zod rejects unknown discriminator
@@ -20,7 +19,6 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { automationFlagPath, setAutomationFlag } from './automation_state.js';
-import { transitionChainStage } from './chain_state.js';
 import { activeTaskFile } from './paths.js';
 import { writeActiveTask } from './session_state.js';
 import { RequiresCache, SkillRequires, skillRequiresHold } from './skill_requires.js';
@@ -48,18 +46,10 @@ describe('SkillRequires — schema validation', () => {
     expect(SkillRequires.parse({ kind: 'active_task_present' })).toEqual({
       kind: 'active_task_present',
     });
-    expect(SkillRequires.parse({ kind: 'chain_stage', stage: 'researched' })).toEqual({
-      kind: 'chain_stage',
-      stage: 'researched',
-    });
   });
 
   it('rejects an unknown kind (no silent fall-through)', () => {
     expect(() => SkillRequires.parse({ kind: 'unknown_kind' })).toThrow();
-  });
-
-  it('rejects chain_stage with an unknown stage', () => {
-    expect(() => SkillRequires.parse({ kind: 'chain_stage', stage: 'unmapped' })).toThrow();
   });
 
   it('rejects unknown fields on variants (.strict)', () => {
@@ -103,26 +93,6 @@ describe('skillRequiresHold — active_task_present', () => {
   });
 });
 
-describe('skillRequiresHold — chain_stage', () => {
-  it('false when chain is idle but precondition expects researched', async () => {
-    const preconds = SkillRequires.array().parse([{ kind: 'chain_stage', stage: 'researched' }]);
-    expect(await skillRequiresHold(preconds, 's', new RequiresCache())).toBe(false);
-  });
-
-  it('true when chain stage equals the precondition stage', async () => {
-    await transitionChainStage('s', 'researched');
-    const preconds = SkillRequires.array().parse([{ kind: 'chain_stage', stage: 'researched' }]);
-    expect(await skillRequiresHold(preconds, 's', new RequiresCache())).toBe(true);
-  });
-
-  it('false when chain stage is past the precondition stage', async () => {
-    await transitionChainStage('s', 'researched');
-    await transitionChainStage('s', 'spec_authored');
-    const preconds = SkillRequires.array().parse([{ kind: 'chain_stage', stage: 'researched' }]);
-    expect(await skillRequiresHold(preconds, 's', new RequiresCache())).toBe(false);
-  });
-});
-
 describe('skillRequiresHold — AND-semantics', () => {
   it('returns false when ANY precondition fails (short-circuit)', async () => {
     await setAutomationFlag('s');
@@ -141,11 +111,9 @@ describe('skillRequiresHold — AND-semantics', () => {
       subject: 'x',
       started_at: new Date().toISOString(),
     });
-    await transitionChainStage('s', 'researched');
     const preconds = SkillRequires.array().parse([
       { kind: 'automation_mode_on' },
       { kind: 'active_task_present' },
-      { kind: 'chain_stage', stage: 'researched' },
     ]);
     expect(await skillRequiresHold(preconds, 's', new RequiresCache())).toBe(true);
   });
@@ -165,36 +133,6 @@ describe('RequiresCache — within-call reuse', () => {
     expect(await cache.automationModeOn('s')).toBe(true);
     // A fresh cache reads disk again → now false.
     expect(await new RequiresCache().automationModeOn('s')).toBe(false);
-  });
-
-  it('chain_stage cached value used for subsequent comparisons against any stage', async () => {
-    await transitionChainStage('s', 'researched');
-    const cache = new RequiresCache();
-    // First hold call resolves the cache.
-    expect(
-      await skillRequiresHold(
-        SkillRequires.array().parse([{ kind: 'chain_stage', stage: 'researched' }]),
-        's',
-        cache,
-      ),
-    ).toBe(true);
-    // Mutate disk underneath — should NOT change the cached stage.
-    await transitionChainStage('s', 'spec_authored');
-    // Second hold against same cache still sees 'researched'.
-    expect(
-      await skillRequiresHold(
-        SkillRequires.array().parse([{ kind: 'chain_stage', stage: 'researched' }]),
-        's',
-        cache,
-      ),
-    ).toBe(true);
-    expect(
-      await skillRequiresHold(
-        SkillRequires.array().parse([{ kind: 'chain_stage', stage: 'spec_authored' }]),
-        's',
-        cache,
-      ),
-    ).toBe(false);
   });
 });
 

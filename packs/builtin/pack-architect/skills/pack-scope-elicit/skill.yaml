@@ -1,9 +1,12 @@
-# pack-scope-elicit — directive to scope-architect when user mentions
-# pack authoring AND the chain hasn't done scope decomposition yet.
+# pack-scope-elicit — directive to scope-architect when the user mentions
+# pack authoring AND the workflow hasn't started scope work yet.
 #
 # Per [[project_opensquid_no_agent_loop]] opensquid does NOT invoke
-# scope-architect; it surfaces the directive on the next
-# UserPromptSubmit envelope and the AGENT spawns the subagent.
+# scope-architect; it surfaces the directive on the next UserPromptSubmit
+# envelope and the AGENT spawns the subagent.
+#
+# Reads the workflow-fsm pack's lifecycle state CROSS-PACK (read_fsm_state with
+# `pack:`) — null/idle means no scope decomposition has happened yet.
 name: pack-scope-elicit
 load: preload
 when_to_load:
@@ -24,11 +27,13 @@ rules:
             - 'build\s+a\s+(?:new\s+)?pack'
             - 'new\s+opensquid\s+pack'
         as: intent
-      - call: read_chain_state
-        if: 'intent.matched == true'
-        as: chain
+      - call: read_fsm_state
+        if: 'len(intent.matched) > 0'
+        args:
+          pack: workflow-fsm
+        as: stage
       - call: verdict
-        if: 'intent.matched == true && (chain.stage == "idle" || chain.stage == null)'
+        if: 'len(intent.matched) > 0 && (stage == null || stage == "idle")'
         args:
           level: directive
           next_action:

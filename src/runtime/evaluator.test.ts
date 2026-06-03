@@ -217,6 +217,78 @@ describe('evaluateProcess — `{{var}}` interpolation', () => {
       missing: 'pre--post',
     });
   });
+
+  it('resolves a dotted path into a bound object ({{obj.field}}) + empty-strings a missing path', async () => {
+    const captured: Record<string, unknown>[] = [];
+    const captureDef: FunctionDef<{ path: string; deep: string; nope: string }, string> = {
+      name: 'capture2',
+      argSchema: z.object({ path: z.string(), deep: z.string(), nope: z.string() }),
+      execute: (args) => {
+        captured.push({ ...args });
+        return Promise.resolve(ok(''));
+      },
+    };
+    const bindObj: FunctionDef<
+      Record<string, never>,
+      { file_path: string; meta: { id: string } }
+    > = {
+      name: 'bind_obj',
+      argSchema: z.object({}),
+      execute: () => Promise.resolve(ok({ file_path: 'src/x.ts', meta: { id: 'T-1' } })),
+    };
+    const reg = new FunctionRegistry();
+    reg.register(captureDef);
+    reg.register(bindObj);
+
+    const steps: ProcessStep[] = [
+      { call: 'bind_obj', as: 'targs' },
+      {
+        call: 'capture2',
+        args: {
+          path: '{{targs.file_path}}',
+          deep: 'id={{targs.meta.id}}',
+          nope: 'x-{{targs.missing.deeper}}-y',
+        },
+      },
+    ];
+    await evaluateProcess(steps, createTestCtx(), reg);
+    expect(captured[0]).toEqual({ path: 'src/x.ts', deep: 'id=T-1', nope: 'x--y' });
+  });
+
+  it('interpolates templates NESTED inside object/array args', async () => {
+    const captured: Record<string, unknown>[] = [];
+    const captureDef: FunctionDef<Record<string, unknown>, string> = {
+      name: 'capture3',
+      argSchema: z.record(z.unknown()),
+      execute: (args) => {
+        captured.push({ ...args });
+        return Promise.resolve(ok(''));
+      },
+    };
+    const bindStr: FunctionDef<Record<string, never>, string> = {
+      name: 'bind_path',
+      argSchema: z.object({}),
+      execute: () => Promise.resolve(ok('docs/research/x-pre-research.md')),
+    };
+    const reg = new FunctionRegistry();
+    reg.register(captureDef);
+    reg.register(bindStr);
+
+    const steps: ProcessStep[] = [
+      { call: 'bind_path', as: 'prp' },
+      {
+        call: 'capture3',
+        args: { next_action: { profession: 'task-spec-author', args: { path: '{{prp}}' } } },
+      },
+    ];
+    await evaluateProcess(steps, createTestCtx(), reg);
+    expect(captured[0]).toEqual({
+      next_action: {
+        profession: 'task-spec-author',
+        args: { path: 'docs/research/x-pre-research.md' },
+      },
+    });
+  });
 });
 
 describe('evaluateProcess — simple equality in `if`', () => {

@@ -1,0 +1,71 @@
+# handoffs — the 3 chain-handoff directives, consolidated from scope-architect.
+# Each gates on the workflow FSM's OWN state (read_fsm_state) and emits a
+# structured `directive` verdict pointing at the next stage's action, carrying
+# the enrichment path captured by advance-on-writes (read_state). Replaces the
+# chain_stage-gated chain-handoffs skill + its read_chain_state reads.
+name: handoffs
+load: preload
+when_to_load: []
+triggers:
+  - kind: prompt_submit
+rules:
+  - id: handoff-research-to-spec
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: read_state
+        args:
+          key: workflow-pre-research-path
+        as: prp
+      - call: verdict
+        if: 'st == "researched"'
+        args:
+          level: directive
+          next_action:
+            profession: task-spec-author
+            args:
+              pre_research_path: '{{prp}}'
+            rationale: >-
+              Pre-research artifact landed (workflow stage: researched). Spawn the
+              task-spec-author profession to consume it and produce the track
+              spec — do NOT hand-author the decomposition.
+  - id: handoff-spec-to-tasks
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: read_state
+        args:
+          key: workflow-spec-path
+        as: sp
+      - call: verdict
+        if: 'st == "spec_authored"'
+        args:
+          level: directive
+          next_action:
+            tool: TaskCreate
+            args:
+              spec_path: '{{sp}}'
+            rationale: >-
+              Track spec on disk (workflow stage: spec_authored). TaskCreate each
+              "### Task" block with metadata.taskId + metadata.spec = the spec's
+              absolute path.
+  - id: handoff-resume-phases
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: workflow_phases_complete
+        as: phases
+      - call: verdict
+        if: 'st == "phases_in_flight" && phases.complete == false'
+        args:
+          level: directive
+          next_action:
+            tool: mcp__opensquid__log_phase
+            rationale: >-
+              Phase logging in flight (workflow stage: phases_in_flight) but the
+              7-phase workflow is incomplete for the active task. Resume at the
+              next unlogged phase; log_phase as each completes.
+prose: |
+  Forward handoffs: at each milestone state the directive points the agent at
+  the next stage's action, carrying the captured artifact path. State-driven via
+  read_fsm_state — no chain_stage precondition, no global chain.

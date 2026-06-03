@@ -1,0 +1,16 @@
+name: workflow-fsm
+version: 0.1.0
+scope: workflow
+goal: run the 7-phase workflow as a pack-declared FSM (the proper home replacing chain_state)
+description: >
+  The 7-phase workflow (idle → scoping → researched → spec_authored →
+  tasks_loaded → phases_in_flight → phases_complete) expressed as a pack FSM
+  driven by the generic engine — the unified replacement for the bespoke
+  chain_state.ts + workflow_map.ts + the 5 scattered hook-bin transition sites.
+  fsm.yaml is the lifecycle (total + validated at load); the workflow-lifecycle
+  skills advance it on the canonical signals (the prompt, and the pre-research /
+  spec / task writes) via advance_fsm, and any gate reads the stage via
+  read_fsm_state. Opt-in via active.json. T-PACK-FSM-STANDARDIZATION slice A4b.
+evolves: true
+detected_by:
+  - kind: user_pinned

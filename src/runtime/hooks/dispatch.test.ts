@@ -26,7 +26,6 @@ import { FunctionRegistry } from '../../functions/registry.js';
 import { ok } from '../result.js';
 import type { TickState } from '../unload_conditions.js';
 import { setAutomationFlag } from '../automation_state.js';
-import { transitionChainStage } from '../chain_state.js';
 import { writeActiveTask } from '../session_state.js';
 import type { SkillRequires } from '../skill_requires.js';
 import type {
@@ -264,7 +263,7 @@ describe('dispatchEvent', () => {
   // T-ASC ASC.2 — Skill.requires AND-precondition gate
   //
   // Slots between the trigger filter and the rule walk. AND-semantics across
-  // 3 kinds (automation_mode_on, active_task_present, chain_stage). Empty
+  // the precondition kinds (automation_mode_on, active_task_present). Empty
   // requires:[] is back-compat: every existing test above relies on the
   // default empty array and still passes.
   // -------------------------------------------------------------------------
@@ -312,32 +311,6 @@ describe('dispatchEvent', () => {
     expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
   });
 
-  it('ASC.2: skill with requires=[chain_stage:researched] fires only when chain is researched', async () => {
-    const registry = buildRegistryWithVerdict({ level: 'block', message: 'researched fired' });
-    const pack = makePack(
-      'p1',
-      [verdictRule],
-      [{ kind: 'tool_call' }],
-      [{ kind: 'chain_stage', stage: 'researched' }],
-    );
-    // Initial: chain is idle → no fire.
-    const idleResult = await dispatchEvent(event, [pack], registry, 'sess-asc2-4');
-    expect(idleResult.exitCode).toBe(0);
-    // Transition chain to researched → fires.
-    await transitionChainStage('sess-asc2-4', 'researched');
-    const researchedResult = await dispatchEvent(event, [pack], registry, 'sess-asc2-4');
-    expect(researchedResult).toEqual({
-      exitCode: 2,
-      stderr: 'researched fired',
-      contextInjections: [],
-      directives: [],
-    });
-    // Transition past → no longer fires.
-    await transitionChainStage('sess-asc2-4', 'spec_authored');
-    const pastResult = await dispatchEvent(event, [pack], registry, 'sess-asc2-4');
-    expect(pastResult.exitCode).toBe(0);
-  });
-
   it('ASC.2: skill with empty requires:[] retains back-compat (rules walk)', async () => {
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'no-req fired' });
     const pack = makePack('p1', [verdictRule]);
@@ -378,20 +351,17 @@ describe('dispatchEvent', () => {
   });
 
   it('ASC.2: requires gate runs AFTER trigger filter (wrong-kind event short-circuits before stat)', async () => {
-    // The skill has a chain_stage precondition and only subscribes to
-    // schedule events. A tool_call event should be filtered out by the
-    // trigger check FIRST, before the precondition's chain-state read runs.
-    // We assert by passing an active task + automation flag + chain stage
-    // and noting that the OK-no-fire outcome means the trigger filter
-    // intercepted (no verdict surfaced on the wrong-kind path).
+    // The skill has a precondition and only subscribes to schedule events. A
+    // tool_call event should be filtered out by the trigger check FIRST, before
+    // the precondition's probe runs. The OK-no-fire outcome means the trigger
+    // filter intercepted on the wrong-kind path.
     await setAutomationFlag('sess-asc2-7');
-    await transitionChainStage('sess-asc2-7', 'researched');
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'should-not-fire' });
     const pack = makePack(
       'p1',
       [verdictRule],
       [{ kind: 'schedule', cron: '0 9 * * 1' }],
-      [{ kind: 'chain_stage', stage: 'researched' }],
+      [{ kind: 'automation_mode_on' }],
     );
     const result = await dispatchEvent(event, [pack], registry, 'sess-asc2-7');
     expect(result).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [] });
@@ -498,7 +468,7 @@ describe('dispatchEvent', () => {
     expect(result.directives[0]?.ruleId).toBe('dir-rule');
   });
 
-  it('ASC.2: requires:[] all-hold AND-chain — 3 preconds met → fires', async () => {
+  it('ASC.2: requires:[] all-hold AND-chain — both preconds met → fires', async () => {
     const sid = 'sess-asc2-8';
     await setAutomationFlag(sid);
     await writeActiveTask(sid, {
@@ -506,22 +476,17 @@ describe('dispatchEvent', () => {
       subject: 'x',
       started_at: new Date().toISOString(),
     });
-    await transitionChainStage(sid, 'tasks_loaded');
-    const registry = buildRegistryWithVerdict({ level: 'block', message: '3-AND fired' });
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'AND fired' });
     const pack = makePack(
       'p1',
       [verdictRule],
       [{ kind: 'tool_call' }],
-      [
-        { kind: 'automation_mode_on' },
-        { kind: 'active_task_present' },
-        { kind: 'chain_stage', stage: 'tasks_loaded' },
-      ],
+      [{ kind: 'automation_mode_on' }, { kind: 'active_task_present' }],
     );
     const result = await dispatchEvent(event, [pack], registry, sid);
     expect(result).toEqual({
       exitCode: 2,
-      stderr: '3-AND fired',
+      stderr: 'AND fired',
       contextInjections: [],
       directives: [],
     });
