@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.318] - 2026-06-04
+
+### Added (T-CODING-FLOW-COMPLETENESS AF.4 — the lexicon as an applied gate criterion)
+
+The lexicon's Simplicity Principle was documented but only the SCOPE guess-audit
+enforced it (BEST-SOLUTION / simplest-correct). The AUTHOR spec-audit now does too: its
+prompt goes from TWO rules to THREE, adding (3) SIMPLICITY per `docs/lexicon.md` — the
+design must be the simplest correct solution (no proliferating special-cases, every
+lifecycle an explicit total-transition FSM, every transform a pure function, no implicit
+state). `VERDICT: SPEC_COMPLETE` now requires ALL THREE (11-field contract + 100% design
+coverage + Simplicity); it fails closed on any one. Kept as ONE audit — adding a separate
+Simplicity skill would itself violate Simplicity (don't multiply gates).
+
 ## [0.5.317] - 2026-06-04
 
 ### Added (T-CODING-FLOW-COMPLETENESS AF.3 — the EXECUTE loop driver: report each task, then next)

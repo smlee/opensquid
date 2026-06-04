@@ -302,6 +302,22 @@ describe('builtin coding-flow pack — the AUTHOR content gate end-to-end (spec-
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
   });
+
+  // AF.4: the Simplicity criterion is fail-closed too — an over-complected design
+  // (the 11-field contract + coverage may pass, but the lexicon Simplicity rule fails)
+  // keeps the spec at spec_authored, so TaskCreate stays blocked.
+  it('AF.4: over-complected design → INCOMPLETE → stays spec_authored → TaskCreate blocked', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit(
+      'VERDICT: INCOMPLETE\n- Over-complected: 6 special-cased branches signal a missed decomposition (Simplicity, docs/lexicon.md)',
+    );
+    const sid = 'cf-audit-simplicity';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t); // AF.1 depth
+    await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
+    await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored (Simplicity failed: stays)
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
+  });
 });
 
 describe('builtin coding-flow pack — SCOPE gating: advance coupled to content (AF.1)', () => {

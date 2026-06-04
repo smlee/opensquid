@@ -135,18 +135,23 @@ rules:
           model: reasoning
           timeout_ms: 120000
           prompt: >-
-            You are an adversarial reviewer enforcing TWO author-completeness rules.
+            You are an adversarial reviewer enforcing THREE author-completeness rules.
             (1) 11-FIELD CONTRACT: EVERY "### Task" block has all 11 fields (Required
             skills, Deliverable, Depends on, Files affected, Key code shapes, Test
             fixtures, Acceptance criteria, Risk callouts, References, Verification
             commands, 7-phase steps), every Key-code-shapes block is REAL code (not
             pseudocode), every 7-phase step names concrete files/decisions. (2) 100%
             DESIGN COVERAGE: the task set covers EVERY element of the SCOPE design below —
-            no design item is left without a task. Begin your response with EXACTLY one
-            line — `VERDICT: SPEC_COMPLETE` ONLY if BOTH hold; otherwise
-            `VERDICT: INCOMPLETE` + one bullet per offending block OR uncovered design
-            element. Never say SPEC_COMPLETE if any task block falls short OR any design
-            element is uncovered. DESIGN:\n\n{{design}}\n\nSPEC:\n\n{{targs.content}}
+            no design item is left without a task. (3) SIMPLICITY (per docs/lexicon.md):
+            the design is the SIMPLEST correct solution — no proliferating special-cases
+            (that signals a missed decomposition), every lifecycle an explicit
+            total-transition FSM, every transform a pure function, no implicit state.
+            Begin your response with EXACTLY one line — `VERDICT: SPEC_COMPLETE` ONLY if
+            ALL THREE hold; otherwise `VERDICT: INCOMPLETE` + one bullet per offending
+            block, uncovered design element, OR over-complected smell. Never say
+            SPEC_COMPLETE if any task block falls short, any design element is uncovered,
+            OR the design smells over-complected.
+            DESIGN:\n\n{{design}}\n\nSPEC:\n\n{{targs.content}}
         as: spec_audit
       - call: advance_fsm
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && contains(spec_audit, "VERDICT: SPEC_COMPLETE")'
