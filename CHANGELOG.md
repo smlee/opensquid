@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.326] - 2026-06-04
+
+### Changed (T-CODING-FLOW-GAP-FIXES GF.3 — demote the in-session code gate to a nudge + --no-verify detector [F4-nudge + F3])
+
+With GF.2's git pre-commit/pre-push hook as the hard guarantee, the in-session
+`scope-before-code` Write/Edit check is demoted from a `block` to a best-effort `warn`
+NUDGE (same condition, including GF.4's `spec_complete` allow-set) — fast early feedback
+before a write, with no completeness claim. Its path predicate stays best-effort by design:
+git-tracked-ness precision is unnecessary for a nudge whose correctness GF.2 guarantees
+(and Bash-mediated writes [F3] are an accepted limitation here — caught at the commit
+boundary, not by this nudge). Added the one SOUND matcher: a hard `block` on `git
+commit/push --no-verify` (and `git commit -n`) — a single closed opt-out token (the only
+way past the git gate), anchored to git commit/push (`git push -n` is `--dry-run`, so `-n`
+is matched for `commit` only). This completes T-CODING-FLOW-GAP-FIXES (all 10 findings
+F1–F10).
+
 ## [0.5.325] - 2026-06-04
 
 ### Added (T-CODING-FLOW-GAP-FIXES GF.2 — the owned-boundary EXECUTE gate: git pre-commit + pre-push [F2 + F3 + F4])

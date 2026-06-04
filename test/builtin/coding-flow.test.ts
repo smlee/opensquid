@@ -141,27 +141,52 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
     await rm(tempHome, { recursive: true, force: true });
   });
 
-  it('SCOPE gate: blocks src/ until a spec_complete-audited task (GF.4 F7)', async () => {
+  it('GF.3: scope-before-code is a NUDGE (warn) — fires pre-scope/pre-audit, silent at spec_complete', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registryWithAudit('VERDICT: SPEC_COMPLETE'); // AF.1: research advance now needs a GUESS_FREE audit
     const sid = 'cf-scope';
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2); // idle + no task → blocked
+    // idle + no task → nudge (warn, exit 0 — GF.3 demoted the block; the git gate is the guarantee).
+    let r = await dispatchEvent(writeCode, [pack], reg, sid);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/scope before code/i);
     // AF.1: the research advance is gated on depth (recall+Read+Grep >= 3 this turn).
     for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
     expect((await dispatchEvent(writeResearch, [pack], reg, sid)).exitCode).toBe(0); // → researched
-    // FU.12: code also requires a scoped active task — seed one with a resolvable spec.
     await writeActiveTask(sid, {
       id: 't1',
       subject: 'wip',
       started_at: '2026-06-03T00:00:00.000Z',
       spec: resolve('package.json'),
     });
-    // GF.4 (F7): a spec file on disk at `researched` is NOT enough — code is still BLOCKED
-    // until the spec passes the audit (spec_complete).
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2);
-    // Drive AUTHOR to spec_complete (the audit stub returns SPEC_COMPLETE), then code is allowed.
+    // GF.4 (F7) condition still holds: a stub spec at `researched` is not spec_complete → still nudged.
+    r = await dispatchEvent(writeCode, [pack], reg, sid);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/scope before code/i);
+    // Drive AUTHOR to spec_complete → the nudge goes silent.
     await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored → spec_verified → spec_complete
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(0); // spec_complete + scoped → allowed
+    r = await dispatchEvent(writeCode, [pack], reg, sid);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).not.toMatch(/scope before code/i);
+  });
+
+  it('GF.3: a --no-verify commit is BLOCKED (the one sound matcher)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-noverify';
+    const noVerify: ToolCallEvent = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'git commit -m wip --no-verify' },
+    };
+    expect((await dispatchEvent(noVerify, [pack], reg, sid)).exitCode).toBe(2);
+    // a plain commit is NOT matched by this rule (GF.2's git hook governs it).
+    const plain: ToolCallEvent = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'git commit -m wip' },
+    };
+    const r = await dispatchEvent(plain, [pack], reg, sid);
+    expect(r.stderr).not.toMatch(/--no-verify bypasses/);
   });
 
   it('AUTHOR gate: TaskCreate is blocked until the spec passes audit (stays at spec_authored)', async () => {
@@ -835,7 +860,7 @@ describe('builtin coding-flow pack — phase-audit (FU.10)', () => {
   });
 });
 
-describe('builtin coding-flow pack — per-write scope gate (FU.12)', () => {
+describe('builtin coding-flow pack — per-write scope NUDGE (FU.12 / GF.3)', () => {
   let tempHome: string;
   let priorHome: string | undefined;
 
@@ -851,16 +876,20 @@ describe('builtin coding-flow pack — per-write scope gate (FU.12)', () => {
     await rm(tempHome, { recursive: true, force: true });
   });
 
-  it('blocks a code write with NO active task even when the FSM is past research', async () => {
+  // GF.3 (F4): the per-write check is now a best-effort WARN nudge (not a block) — the
+  // hard guarantee is GF.2's git pre-commit/pre-push gate. These assert the nudge fires
+  // (exit 0 + surfaced), not a block.
+  it('nudges (warn) a code write with NO active task even when the FSM is past research', async () => {
     const sid = 'cf-pw-notask';
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
     await dispatchEvent(writeResearch, [pack], reg, sid); // FSM → researched
-    // No active task → has_generated_spec.generated === false → still blocked.
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2);
+    const r = await dispatchEvent(writeCode, [pack], reg, sid); // no active task → nudge
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/scope before code/i);
   });
 
-  it('blocks a code write whose active task has no spec', async () => {
+  it('nudges (warn) a code write whose active task has no spec', async () => {
     const sid = 'cf-pw-nospec';
     await writeActiveTask(sid, {
       id: 't1',
@@ -869,8 +898,10 @@ describe('builtin coding-flow pack — per-write scope gate (FU.12)', () => {
     });
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
-    await dispatchEvent(writeResearch, [pack], reg, sid); // FSM → researched, but task unscoped
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2);
+    await dispatchEvent(writeResearch, [pack], reg, sid); // FSM → researched, task unscoped
+    const r = await dispatchEvent(writeCode, [pack], reg, sid);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/scope before code/i);
   });
 });
 
