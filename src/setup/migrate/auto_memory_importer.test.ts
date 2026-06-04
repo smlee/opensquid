@@ -130,7 +130,10 @@ describe('importAutoMemoryDir', () => {
     await write('a.md', fixture('a', 'feedback'));
     await write('b.md', fixture('b', 'user'));
     // MF.2: stored description matches the disk ('desc-a') so neither surface changed → skip.
-    const { client, create, get, update } = mkEngine({ 'id-a': fixtureBody('a') }, { 'id-a': 'desc-a' });
+    const { client, create, get, update } = mkEngine(
+      { 'id-a': fixtureBody('a') },
+      { 'id-a': 'desc-a' },
+    );
     const result = await importAutoMemoryDir(dir, client, {
       dryRun: false,
       existingIndex: idx({ a: 'id-a' }),
@@ -146,7 +149,10 @@ describe('importAutoMemoryDir', () => {
   // load-bearing for retrieval (ADR-0005), so a stale engine description = wrong recall.
   it('refreshes an existing entry whose DESCRIPTION changed but body did not', async () => {
     await write('a.md', fixture('a', 'feedback')); // disk description = 'desc-a'
-    const { client, get, update } = mkEngine({ 'id-a': fixtureBody('a') }, { 'id-a': 'STALE desc' });
+    const { client, get, update } = mkEngine(
+      { 'id-a': fixtureBody('a') },
+      { 'id-a': 'STALE desc' },
+    );
     const result = await importAutoMemoryDir(dir, client, {
       dryRun: false,
       existingIndex: idx({ a: 'id-a' }),

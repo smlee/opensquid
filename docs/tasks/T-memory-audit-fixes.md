@@ -14,23 +14,29 @@ Execution order: **MF.3 → MF.2 → MF.1** (test seam first, then the two behav
 **Depends on:** None.
 
 **Files affected:**
+
 - `src/runtime/hooks/memory_reconcile.ts` (modify) — add the post-sync drift check.
 - `src/runtime/hooks/memory_reconcile.test.ts` (modify) — assert the loud surface on drift.
 
 **Key code shapes:**
+
 ```ts
 // memory_reconcile.ts — inside the existing inner try, after snapshotAuto (line 71):
 import { computeMemoryDrift, renderMemoryDrift } from '../../setup/migrate/memory_drift.js';
 const r = await snapshotAuto(autoMemDir, home(), engine);
-err(`opensquid: memory reconcile — imported ${r.imported}, refreshed ${r.refreshed}, skipped ${r.skipped}, errors ${r.errors.length}\n`);
+err(
+  `opensquid: memory reconcile — imported ${r.imported}, refreshed ${r.refreshed}, skipped ${r.skipped}, errors ${r.errors.length}\n`,
+);
 // MF.1 (H1): the design's loud self-audit — a NON-empty drift AFTER reconcile is a real bug.
 const drift = await computeMemoryDrift(autoMemDir, engine);
-if (!drift.inSync) err(`opensquid: ${renderMemoryDrift(drift)} — post-reconcile drift (expected in-sync)\n`);
+if (!drift.inSync)
+  err(`opensquid: ${renderMemoryDrift(drift)} — post-reconcile drift (expected in-sync)\n`);
 ```
 
 **Test fixtures:** inject a stub engine whose post-`snapshotAuto` state is OUT of sync (e.g. an orphaned import-marked entry, or a stale one) and assert `stderr` carries a `DRIFT`/`post-reconcile drift` line; the in-sync case emits NO drift line; an engine that throws during the drift check is caught by the outer catch → the `FAILED` stderr line, session end not blocked.
 
 **Acceptance criteria:**
+
 - [ ] reconcile calls `computeMemoryDrift` after `snapshotAuto`; `!inSync` → loud stderr
 - [ ] in-sync → no drift line; a thrown drift check → caught, loud `FAILED`, no throw
 - [ ] engine not double-closed (check runs before the `finally` close)
@@ -50,17 +56,24 @@ if (!drift.inSync) err(`opensquid: ${renderMemoryDrift(drift)} — post-reconcil
 **Depends on:** None.
 
 **Files affected:**
+
 - `src/setup/migrate/auto_memory_importer.ts` (modify) — compare description too + document.
 - `src/setup/migrate/auto_memory_importer.test.ts` (modify) — description-only-change refreshes.
 
 **Key code shapes:**
+
 ```ts
 // auto_memory_importer.ts:112-113 — refresh on body OR description change.
 const current = await engine.memoryGet({ id: existing.id });
 // MF.2 (H3): description is part of the identity/retrieval surface (ADR-0005: description
 // is load-bearing for recall), so a description-only edit MUST refresh — not body-only.
 if (current.content !== parsed.body || current.description !== parsed.frontmatter.description) {
-  await engine.memoryUpdate({ id: existing.id, description: parsed.frontmatter.description, content: parsed.body, scope });
+  await engine.memoryUpdate({
+    id: existing.id,
+    description: parsed.frontmatter.description,
+    content: parsed.body,
+    scope,
+  });
   result.refreshed += 1;
 } else {
   result.skipped += 1;
@@ -70,6 +83,7 @@ if (current.content !== parsed.body || current.description !== parsed.frontmatte
 **Test fixtures:** an entry whose body matches but description differs → `refreshed` (was `skipped` pre-fix); body+description both match → still `skipped`; body differs → `refreshed` (unchanged).
 
 **Acceptance criteria:**
+
 - [ ] a description-only change refreshes (not skips)
 - [ ] identical body+description still skips; a body change still refreshes
 - [ ] the body-only→identity decision is documented at the comparison site
@@ -89,9 +103,11 @@ if (current.content !== parsed.body || current.description !== parsed.frontmatte
 **Depends on:** None.
 
 **Files affected:**
+
 - `src/setup/migrate/memory_drift.test.ts` (modify) — add `getThrows` to `mkEngine` + the test.
 
 **Key code shapes:**
+
 ```ts
 // mkEngine opts + memoryGet — honor getThrows (the comment at line 41 already promises it).
 opts: { listThrows?: boolean; getThrows?: string } = {},
@@ -101,9 +117,11 @@ const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
     ? Promise.reject(new Error('engine down'))
     : Promise.resolve({ id, description: id, content: engineEntries[id] ?? '', created_at: 't', scope: 'user' }));
 ```
+
 ```ts
 it('PROPAGATES a mid-loop memoryGet rejection (never a falsely-clean inSync)', async () => {
-  await write('a.md', fixture('a')); await write('b.md', fixture('b'));
+  await write('a.md', fixture('a'));
+  await write('b.md', fixture('b'));
   const engine = mkEngine({ a: bodyOf('a'), b: bodyOf('b') }, { getThrows: 'b' });
   await expect(computeMemoryDrift(dir, engine)).rejects.toThrow(/engine down/);
 });
@@ -112,6 +130,7 @@ it('PROPAGATES a mid-loop memoryGet rejection (never a falsely-clean inSync)', a
 **Test fixtures:** as above — 2 disk files, engine throws on the 2nd id's `memoryGet`; assert reject.
 
 **Acceptance criteria:**
+
 - [ ] `mkEngine` honors `getThrows`; the memoryGet-rejection test passes
 - [ ] the existing `listThrows` test stays green
 - [ ] full gate chain green
