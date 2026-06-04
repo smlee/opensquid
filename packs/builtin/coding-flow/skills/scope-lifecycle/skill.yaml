@@ -13,46 +13,73 @@ when_to_load: []
 triggers:
   - kind: tool_call
 rules:
-  # ── SCOPE: advance on the pre-research write (+ capture its path) ────────────
-  - id: advance-on-research
+  # ── SCOPE: the GATING advance (AF.1). The content audit + depth + open-question
+  #    checks run BEFORE the advance, and research_done is COUPLED to them — no
+  #    advisory pass. The advance fires ONLY when SCOPE content is complete:
+  #    GUESS_FREE (every claim cited-or-flagged + the BEST/simplest solution justified)
+  #    AND zero unresolved OPEN QUESTION markers AND research depth >= 3 this turn.
+  - id: scope-advance
     process:
       - call: tool_name
         as: tool
       - call: tool_args
         as: targs
-      - call: advance_fsm
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
-        args:
-          event: research_done
+      # Capture the pre-research path (the AUTHOR coverage gate reads it as the design).
       - call: write_state
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         args:
           key: coding-flow-pre-research-path
           value: '{{targs.file_path}}'
-  # ── SCOPE content gate: guess-audit (immediately after the advance) ──────────
-  - id: guess-audit
-    process:
-      - call: tool_name
-        as: tool
-      - call: tool_args
-        as: targs
+      # Research DEPTH (folded DPC.5): recall + Read + Grep this turn.
+      - call: session_tool_history
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args:
+          scope: current_turn
+          filter_names: [mcp__opensquid__recall, Read, Grep]
+        as: depth
+      # The content audit: NEVER-GUESS + BEST-SOLUTION, one combined verdict.
       - call: subagent_call
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         args:
           model: reasoning
           timeout_ms: 120000
           prompt: >-
-            You are an adversarial reviewer enforcing a strict NEVER-GUESS rule on a
-            pre-research artifact. A claim is acceptable ONLY if it is DERIVED from
-            cited evidence (a file:line reference, a memory, or the user's own words)
-            OR explicitly flagged as an OPEN QUESTION to ask the user. Any assertion
-            stated as fact without such a citation, and not flagged as open, is an
-            UNRESOLVED GUESS. Begin your response with EXACTLY one line —
-            `VERDICT: GUESS_FREE` if every claim is derived-with-citation or
-            flagged-as-open, otherwise `VERDICT: UNRESOLVED`. If UNRESOLVED, follow
-            with one bullet per unresolved guess. Never say GUESS_FREE if any
-            unresolved guess remains. ARTIFACT:\n\n{{targs.content}}
+            You are an adversarial reviewer enforcing TWO rules on a pre-research / scope
+            artifact. (1) NEVER-GUESS: a claim is acceptable ONLY if DERIVED from cited
+            evidence (a file:line, a memory, or the user's own words) OR explicitly flagged
+            as an OPEN QUESTION to ask the user. (2) BEST-SOLUTION: the artifact must show
+            the best solution was found — alternatives weighed against the criteria and the
+            SIMPLEST correct one chosen per docs/lexicon.md (no proliferating special-cases).
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every
+            claim is cited-or-flagged-open AND the simplest-correct solution is justified
+            against alternatives; otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved
+            guess OR un-weighed alternative. ARTIFACT:\n\n{{targs.content}}
         as: audit
+      # ADVANCE only when content-complete (coupled to the verdict + depth + no open Qs).
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(audit, "VERDICT: GUESS_FREE") && !contains(targs.content, "OPEN QUESTION") && depth.count >= 3'
+        args:
+          event: research_done
+      # BLOCK: unresolved open questions — answer them in SCOPE (this is the interactive phase).
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(targs.content, "OPEN QUESTION")'
+        args:
+          level: block
+          message: >-
+            SCOPE incomplete: the pre-research still has unresolved OPEN QUESTION(s).
+            SCOPE is the interactive phase — ASK the user (AskUserQuestion), record + cite
+            the answer, and remove the marker BEFORE authoring. Everything after scope is
+            automated; a question must not survive into it.
+      # BLOCK: shallow research (folded DPC.5 depth, now gating not warn).
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count < 3'
+        args:
+          level: block
+          message: >-
+            SCOPE shallow: do real research (recall + Read + Grep, >=3 this turn) before the
+            pre-research write — map the decision surface to teach-back depth.
+      # LOOP-BACK + WARN: guesses / no-best-solution. The advance above did NOT fire;
+      # if already at researched (a re-write), loop back to researching.
       - call: advance_fsm
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(audit, "VERDICT: GUESS_FREE")'
         args:
@@ -62,9 +89,10 @@ rules:
         args:
           level: warn
           message: >-
-            Unresolved guesses in the pre-research artifact — the SCOPE region looped
-            back to research. Resolve each (cite a file:line / memory / the user's
-            words, or flag it as an open question), then re-write. Audit:\n\n{{audit}}
+            SCOPE not complete — unresolved guesses OR the best/simplest solution is not
+            justified against alternatives. Resolve each (cite evidence or flag as an open
+            question; weigh the alternatives + choose the simplest correct per the lexicon),
+            then re-write. Audit:\n\n{{audit}}
   # ── AUTHOR: advance on the track-spec write (+ capture its path) ─────────────
   - id: advance-on-spec
     process:

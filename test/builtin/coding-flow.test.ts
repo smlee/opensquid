@@ -42,6 +42,7 @@ function registry(): FunctionRegistry {
   registerVerdictFunctions(r);
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
+  r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
   return r;
 }
 
@@ -140,9 +141,11 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
 
   it('SCOPE gate: blocks src/ pre-research, then allows once the pre-research doc is written', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
-    const reg = registry();
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE'); // AF.1: research advance now needs a GUESS_FREE audit
     const sid = 'cf-scope';
     expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2); // idle + no task → blocked
+    // AF.1: the research advance is gated on depth (recall+Read+Grep >= 3 this turn).
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
     expect((await dispatchEvent(writeResearch, [pack], reg, sid)).exitCode).toBe(0); // → researched
     // FU.12: code also requires a scoped active task — seed one with a resolvable spec.
     await writeActiveTask(sid, {
@@ -240,6 +243,8 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
         ok(args.prompt.includes('NEVER-GUESS') ? 'VERDICT: GUESS_FREE' : specVerdict),
       ),
   });
+  r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
+  r.register(HasGeneratedSpec); // scope-before-code consults the active task's spec
   return r;
 }
 
@@ -277,6 +282,7 @@ describe('builtin coding-flow pack — the AUTHOR content gate end-to-end (spec-
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
     const sid = 'cf-audit-pass';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t); // AF.1 depth
     await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
     await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored → spec_verified → spec_complete
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_complete');
@@ -287,10 +293,76 @@ describe('builtin coding-flow pack — the AUTHOR content gate end-to-end (spec-
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registryWithAudit('VERDICT: INCOMPLETE\n- Task X.1 missing Test fixtures');
     const sid = 'cf-audit-fail';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t); // AF.1 depth
     await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
     await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored (audit failed: stays)
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
+  });
+});
+
+describe('builtin coding-flow pack — SCOPE gating: advance coupled to content (AF.1)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-af1-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  const research = (content: string): ToolCallEvent => ({
+    kind: 'tool_call',
+    tool: 'Write',
+    args: { file_path: 'docs/research/x-pre-research-2026-06-04.md', content },
+  });
+
+  it('BLOCKS the advance while an OPEN QUESTION is unresolved (answer it in scope)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE'); // research audit → GUESS_FREE
+    const sid = 'cf-af1-openq';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    const r = await dispatchEvent(
+      research('# Pre-research\n\nOPEN QUESTION: which approach?'),
+      [pack],
+      reg,
+      sid,
+    );
+    expect(r.exitCode).toBe(2);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).not.toBe('researched');
+  });
+
+  it('BLOCKS the advance on shallow research (depth < 3)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-af1-shallow'; // no depth seeded → count 0
+    const r = await dispatchEvent(
+      research('# Pre-research\n\nDerived from src/foo.ts:1.'),
+      [pack],
+      reg,
+      sid,
+    );
+    expect(r.exitCode).toBe(2);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).not.toBe('researched');
+  });
+
+  it('ADVANCES only when GUESS_FREE + no open question + depth >= 3', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-af1-ok';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    const r = await dispatchEvent(
+      research('# Pre-research\n\nDerived from src/foo.ts:1.'),
+      [pack],
+      reg,
+      sid,
+    );
+    expect(r.exitCode).toBe(0);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('researched');
   });
 });
 

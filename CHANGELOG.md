@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.314] - 2026-06-04
+
+### Changed (T-CODING-FLOW-COMPLETENESS AF.1 — the SCOPE boundary is now genuinely gating)
+
+The `coding-flow` SCOPE advance was advisory: `advance-on-research` fired unconditionally and
+ran BEFORE the warn-only guess-audit, and the DPC.5 depth gate lived in the inactive
+`scope-architect` pack — so a pre-research with unresolved guesses/open-questions/shallow
+research still advanced to authoring. AF.1 merges advance + audit into one `scope-advance`
+rule where `research_done` fires ONLY when the audit is `GUESS_FREE`, the artifact has no
+unresolved `OPEN QUESTION` marker (all questions answered in SCOPE), and research depth
+(recall+Read+Grep ≥3 this turn) is met — with open-question and shallow-depth each a hard
+BLOCK, and the audit prompt extended to require the BEST/simplest solution be justified
+against alternatives. SCOPE is the interactive phase; this makes its completion real.
+First task of the T-CODING-FLOW-COMPLETENESS track (audit-driven; pre-research + the full
+6-task list are committed).
+
+- `packs/builtin/coding-flow/skills/scope-lifecycle/skill.yaml`,
+  `test/builtin/coding-flow.test.ts`; track spec + pre-research (the audit).
+
 ## [0.5.313] - 2026-06-04
 
 ### Added (T-FC2-FLOW-TEMPLATES FC.2 — reusable FSM flow templates, the B2 half)
