@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.326",
+  "version": "0.5.327",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -41,6 +41,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "prepush": "bash scripts/pre-push.sh",
+    "prepare": "bash scripts/install-git-hooks.sh",
     "schemas": "tsx scripts/emit-schemas.ts",
     "sync-fixtures": "tsx scripts/sync-fixtures-from-live.ts",
     "prepublishOnly": "pnpm schemas && pnpm build"

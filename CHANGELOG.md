@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.327] - 2026-06-04
+
+### Added (PP.1 — a pre-push quality gate)
+
+`scripts/pre-push.sh` runs the full CI chain locally before a push reaches the remote —
+`lint → typecheck → test → build → format:check`, fail-fast (`format:check` last, per the
+project rule). A `prepush` script runs it; `scripts/install-git-hooks.sh` (wired via the
+`prepare` script, so `pnpm install` installs it) writes `.git/hooks/pre-push` to invoke it
+— idempotent, and a PLAIN hook so opensquid's own `gate install` (GF.2) CHAINS its
+flow-gate onto it rather than clobbering. This closes the discipline gap behind the red
+`3831fdf`: a commit pushed after running only `format:check`. `git push --no-verify`
+bypasses (an explicit opt-out, consistent with GF.3).
+
+### Fixed (FX.1 — de-flake `transport_bridge` CAT.5)
+
+The file's `vi.setConfig({ testTimeout: 20_000 })` lived inside a `beforeAll`, but Vitest
+captures a test's timeout at `it()` REGISTRATION (collection); `beforeAll` runs at
+execution, too late — so every test silently kept the default 5s, and the chokidar-polling
+CAT.5 test flaked at ~5011ms under CI load (the 5s cap, not the 15s `waitFor` ceiling FC.3
+added). Moved `setConfig` to module top-level so the 20s is captured at registration.
+
 ## [0.5.326] - 2026-06-04
 
 ### Changed (T-CODING-FLOW-GAP-FIXES GF.3 — demote the in-session code gate to a nudge + --no-verify detector [F4-nudge + F3])
