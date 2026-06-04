@@ -131,7 +131,29 @@ rules:
               CODE in flight (state: phases_in_flight) but the 7-phase workflow is
               incomplete for the active task. Resume at the next unlogged phase;
               log_phase as each completes.
+  # AF.3 — the EXECUTE loop driver. A task's 7-layer is complete (phases_complete):
+  # report it, then straight to the next task. (Directives only surface at prompt_submit,
+  # so the loop driver lives here, not in phase-advance.)
+  - id: handoff-task-complete
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: workflow_phases_complete
+        as: phases
+      - call: verdict
+        if: 'st == "phases_complete" && phases.complete == true'
+        args:
+          level: directive
+          next_action:
+            tool: mcp__opensquid-chat__chat_send
+            args:
+              channel: 'project:telegram'
+            rationale: >-
+              Task 7-layer COMPLETE (state: phases_complete). Send the plain-header per-task
+              completion report to the main chat (topic 15), THEN immediately
+              TaskUpdate(<next pending task>, in_progress) and continue — NO pause. Loop
+              until the backlog is depleted.
 prose: |
-  Entry + the three forward handoffs, one per stage boundary. State-driven via
-  read_fsm_state — the directive at each milestone points the agent (and its
-  persona) at the next stage's action, carrying the captured artifact path.
+  Entry + the four forward handoffs, one per stage boundary (incl. the EXECUTE→report→
+  next-task loop driver, AF.3). State-driven via read_fsm_state — the directive at each
+  milestone points the agent (and its persona) at the next stage's action.

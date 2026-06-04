@@ -19,7 +19,7 @@ import { registerStateFunctions } from '../../src/functions/state.js';
 import { registerVerdictFunctions } from '../../src/functions/verdict.js';
 import { loadPack } from '../../src/packs/loader.js';
 import { step, validateFsm } from '../../src/runtime/fsm.js';
-import { readFsmState } from '../../src/runtime/fsm_state.js';
+import { advanceFsmState, readFsmState } from '../../src/runtime/fsm_state.js';
 import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
 import { ok } from '../../src/runtime/result.js';
 import {
@@ -541,6 +541,34 @@ describe('builtin coding-flow pack — EXECUTE content gate (phase-logged-before
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const r = await dispatchEvent(gitCommit, [pack], registryExec(), sid);
     expect(r.exitCode).toBe(0);
+  });
+
+  it('AF.3: at phases_complete, the prompt_submit handoff DIRECTS the report + next task', async () => {
+    const sid = 'cf-af3';
+    await writeActiveTask(sid, {
+      id: 't1',
+      subject: 'wip',
+      started_at: '2026-06-04T00:00:00.000Z',
+    });
+    for (const p of REQUIRED_PHASES) await appendPhase(sid, 't1', p); // phases.complete == true
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const now = '2026-06-04T00:00:00.000Z';
+    for (const ev of [
+      'scope_start',
+      'research_done',
+      'spec_drafted',
+      'spec_verified',
+      'tasks_loaded',
+      'phase_started',
+      'phases_done',
+    ]) {
+      await advanceFsmState(sid, 'coding-flow', pack.fsm!, ev, now); // → phases_complete
+    }
+    const reg = registry();
+    reg.register(WorkflowPhasesComplete);
+    const r = await dispatchEvent({ kind: 'prompt_submit', prompt: 'next' }, [pack], reg, sid);
+    expect(r.directives.length).toBeGreaterThan(0);
+    expect(JSON.stringify(r.directives)).toMatch(/report|TaskUpdate|topic 15|chat_send/i);
   });
 });
 

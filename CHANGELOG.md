@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.317] - 2026-06-04
+
+### Added (T-CODING-FLOW-COMPLETENESS AF.3 — the EXECUTE loop driver: report each task, then next)
+
+The "report each completed task → straight to the next task → loop until the backlog is
+depleted, no pause" rule was agent memory; now it's a pack directive. `entry-and-handoffs`
+gains a `handoff-task-complete` rule: when the FSM is `phases_complete` and
+`workflow_phases_complete` is true, it emits a directive to send the plain-header per-task
+report to the main chat, then immediately `TaskUpdate(<next pending>, in_progress)` and
+continue. The driver lives in `entry-and-handoffs` (prompt_submit), NOT `phase-advance`
+(post_tool_call), because the dispatcher only surfaces directives on prompt_submit — a
+directive emitted on post_tool_call is dropped with a WARN. Paired with the AF.6
+`pause-stop-guard`, the loop now runs to depletion structurally.
+
 ## [0.5.316] - 2026-06-04
 
 ### Added (T-CODING-FLOW-COMPLETENESS AF.6 — the pause-gate set: no-pause is now a GATE)

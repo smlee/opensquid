@@ -23,4 +23,6 @@ rules:
           event: phase_started
 prose: |
   The phase signal. A log_phase that leaves the 7-phase set incomplete advances →
-  phases_in_flight; the one that completes it advances → phases_complete.
+  phases_in_flight; the one that completes it advances → phases_complete. (The EXECUTE
+  loop driver — report + next task — is the prompt_submit handoff in entry-and-handoffs,
+  since directives only surface at prompt_submit.)
