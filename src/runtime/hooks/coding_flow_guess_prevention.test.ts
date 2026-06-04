@@ -77,7 +77,7 @@ const gateRule: Rule = {
 
 function scopePack(): Pack {
   return {
-    name: 'scope-fsm',
+    name: 'coding-flow',
     version: '0.0.0',
     scope: 'workflow',
     goal: 'enforce research-before-code via a lifecycle FSM',
@@ -87,7 +87,7 @@ function scopePack(): Pack {
     evolves: true,
     skills: [
       {
-        name: 'scope-fsm-skill',
+        name: 'coding-flow-skill',
         load: 'preload',
         when_to_load: [],
         requires: [],
@@ -127,7 +127,7 @@ describe('scope guess-FSM — end-to-end through the dispatcher', () => {
 
   beforeEach(async () => {
     priorHome = process.env.OPENSQUID_HOME;
-    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-scope-fsm-'));
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-'));
     process.env.OPENSQUID_HOME = tempHome;
   });
 

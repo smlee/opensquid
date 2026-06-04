@@ -77,8 +77,8 @@ export async function handleLogPhase(
   // (b) gate-readable session state
   const state = await appendPhase(sessionId, active.id, args.phase);
   const complete = isComplete(state, active.id);
-  // The 7-phase progress signal is now consumed by the opt-in `workflow-fsm`
-  // pack: its `advance-on-phase-log` skill fires on the PostToolUse hook for
+  // The 7-phase progress signal is now consumed by the opt-in `coding-flow`
+  // pack: its `phase-advance` skill fires on the PostToolUse hook for
   // this MCP call and advances the lifecycle FSM (re-deriving completeness via
   // workflow_phases_complete). log_phase no longer writes a global chain stage.
   return {

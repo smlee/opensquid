@@ -1,6 +1,6 @@
 # phase-advance — the EXECUTE-region advance. A log_phase call (post_tool_call,
 # after the MCP handler appended the phase) advances the FSM into / through the
-# phase-running states. Ports workflow-fsm/advance-on-phase-log.
+# phase-running states. The EXECUTE-region advance-on-phase-log.
 name: phase-advance
 load: preload
 when_to_load: []

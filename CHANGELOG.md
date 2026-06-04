@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.319] - 2026-06-04
+
+### Changed (T-CODING-FLOW-COMPLETENESS AF.5 — retire dormancy + cleanup: no gates left behind)
+
+The `scope-fsm` / `workflow-fsm` packs were merged into `coding-flow` (T-FSM-UNIFY) and
+deleted, but their names lingered in live provenance comments — confusing a reader who
+greps for them and finds nothing. Re-worded every such comment in `packs/` + `src/` to
+name `coding-flow` (the FSM/manifest headers, the three lifecycle skills, and the
+`user-prompt-submit` / `pre-tool-use` / `session-end` / `log_phase` hook comments).
+Renamed `scope_fsm_guess_prevention.test.ts` → `coding_flow_guess_prevention.test.ts` and
+updated its in-test pack names. `grep -rn 'scope-fsm|workflow-fsm' packs/ src/` is now
+clean (CHANGELOG + historical research/task docs are left intact — rewriting them would
+rewrite history). No behavior change. `scope-architect` is accounted for: it is a
+not-auto-loaded profession/team persona (not in `active.json`), and its gate skills are
+either folded into the live `coding-flow` (`scope-before-code`, `taskcreate-spec-required`)
+or structurally covered by the unified FSM (`inline-spec-block`, `task-list-generated`).
+
 ## [0.5.318] - 2026-06-04
 
 ### Added (T-CODING-FLOW-COMPLETENESS AF.4 — the lexicon as an applied gate criterion)

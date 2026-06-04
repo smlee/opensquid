@@ -4,7 +4,7 @@
  * Covers the generic engine: load-time validation (totality) and the total
  * `step` transition function (matching transition / `*` wildcard / `when`
  * guard / self-loop / explicit stay). The concrete 7-phase workflow FSM is
- * exercised end-to-end by the `workflow-fsm` pack test.
+ * exercised end-to-end by the `coding-flow` pack test.
  */
 import { describe, expect, it } from 'vitest';
 

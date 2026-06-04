@@ -13,7 +13,7 @@ description: >-
   (fsm.yaml) with three gated stages — SCOPE, TASK AUTHORING, CODE — each enforced by
   a content gate (guess-audit, spec-audit, phase-log), not just a presence marker.
   "Coding" is the active gate profile, NOT the FSM's identity — the lifecycle is
-  domain-general. Supersedes scope-fsm + workflow-fsm. Spec: docs/tasks/T-fsm-unify.md.
+  domain-general. The unified workflow gate. Spec: docs/tasks/T-fsm-unify.md.
 evolves: true
 # No detected_by gate: opt-in via active.json IS the pin. A `detected_by:
 # [user_pinned]` clause would silently DISABLE an opted-in pack (the user_pinned

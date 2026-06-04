@@ -129,7 +129,7 @@ async function main(): Promise<void> {
   // machine that starts fresh each session (cross-session resume is a separate
   // product question, deferred). ENOENT swallowed by the helper. (T-FSM-UNIFY:
   // one unified pack now, so this single clear covers the whole lifecycle —
-  // incidentally fixing the old scope-fsm-never-cleared leak.)
+  // incidentally fixing the old never-cleared FSM-state leak.)
   try {
     await clearFsmState(sessionId, 'coding-flow');
   } catch (e) {

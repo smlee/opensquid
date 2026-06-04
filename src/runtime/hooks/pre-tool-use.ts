@@ -123,10 +123,10 @@ async function main(): Promise<void> {
       process.stderr.write(`opensquid: active-task mirror failed — ${String(e)}\n`);
     }
     // Workflow stage advancement is no longer hardcoded here — the opt-in
-    // `workflow-fsm` pack's `advance-on-writes` skill catches these same
+    // `coding-flow` pack's scope-lifecycle skill catches these same
     // milestone writes (research artifact / track spec / TaskCreate provenance)
     // through the dispatcher and advances its lifecycle FSM. See
-    // T-WORKFLOW-AS-PACK-FSM.
+    // T-FSM-UNIFY.
   }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
   // `exitCode === 2` so a non-block never accidentally denies the tool.
   if (exitCode === 2) {
     // Forward guidance now comes from the blocking gate's own message + the
-    // workflow-fsm pack's handoff directives (no global chain forward-map).
+    // coding-flow pack's handoff directives (no global chain forward-map).
     const guidance = '';
     process.stdout.write(JSON.stringify(buildPreToolUseDeny(stderr, guidance)));
     process.exit(0);

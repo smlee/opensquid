@@ -7,7 +7,7 @@
 #
 # "Coding" is the active gate profile, not the FSM's identity — this lifecycle is
 # domain-general. The machine is total (a non-matching event is an explicit stay,
-# validated by validateFsm). Supersedes scope-fsm + workflow-fsm.
+# validated by validateFsm). The unified SCOPE→AUTHOR→EXECUTE lifecycle.
 # Spec: docs/tasks/T-fsm-unify.md (§1 union design, decisions D1–D7).
 initial: idle
 states:

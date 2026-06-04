@@ -126,10 +126,11 @@ async function main(): Promise<void> {
     process.stderr.write(`opensquid: tool-ledger turn-reset failed — ${String(e)}\n`);
   }
   // The idle → scoping transition is no longer hardcoded here — the opt-in
-  // `workflow-fsm` pack's `enter-scoping` skill matches scope-authoring intent
+  // `coding-flow` pack's `enter-scoping` rule (entry-and-handoffs) matches
+  // scope-authoring intent
   // through the dispatcher and advances its lifecycle FSM (the FSM's totality
   // makes scope_start a no-op once the workflow has already started). See
-  // T-WORKFLOW-AS-PACK-FSM.
+  // T-FSM-UNIFY.
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections, directives } = await dispatchEvent(

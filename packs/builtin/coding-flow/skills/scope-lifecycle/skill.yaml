@@ -1,9 +1,9 @@
 # scope-lifecycle — the tool_call lifecycle: advances the unified FSM on milestone
 # writes, runs each region's CONTENT audit immediately AFTER its advance (same skill,
-# ordered — so the audit sees the just-advanced state, mirroring scope-fsm), and
+# ordered — so the audit sees the just-advanced state), and
 # enforces the region gates that read the state. Rule order is load-bearing:
 #   advance-on-research → guess-audit → advance-on-spec → spec-audit → scope-before-code → taskcreate-spec-required
-# Ports + merges scope-fsm/scope-lifecycle + workflow-fsm/advance-on-writes, and folds
+# Merges the SCOPE lifecycle + the AUTHOR/EXECUTE advance-on-writes, and folds
 # in the two content audits (guess-audit, spec-audit). State-driven, never
 # file-existence. Both audits run synchronously, are timeout-bounded (EWG.1.1), and
 # fail CLOSED (no clear pass verdict ⇒ no advance).
@@ -224,6 +224,6 @@ prose: |
   The full tool_call lifecycle in one ordered skill: each region's advance is
   immediately followed by its content audit (guess-audit after the research advance,
   spec-audit after the spec advance) so the audit sees the just-advanced state — the
-  ordering scope-fsm relied on. Then the two region GATES (scope-before-code,
+  ordering the lifecycle relied on. Then the two region GATES (scope-before-code,
   taskcreate-spec-required) read the resulting state. "Coding" is the gate profile
   (src/∪packs/∪test/); the FSM is domain-general.

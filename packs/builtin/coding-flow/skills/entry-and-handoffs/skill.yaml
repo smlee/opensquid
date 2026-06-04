@@ -1,7 +1,7 @@
 # entry-and-handoffs — the prompt_submit guards: enter the lifecycle on
 # scope-authoring intent, and emit the stage→stage handoff directives (the
-# connective tissue between the three peer stages). Ports workflow-fsm/enter-scoping
-# + workflow-fsm/handoffs. The handoff targets are re-pointed to the new state
+# connective tissue between the three peer stages): enter-scoping + the stage→stage
+# handoffs. The handoff targets point at the unified state
 # names (spec_complete, not spec_authored, for the AUTHOR→tasks handoff). FU.3 adds
 # the track-type classification to `enter-scoping`.
 name: entry-and-handoffs
