@@ -39,18 +39,16 @@ describe('builtin default-discipline pack', () => {
     expect(pack.evolves).toBe(true);
   });
 
-  it('ships nine skill folders (HH6.2 added session-connection-check)', async () => {
+  it('ships d9-guard + workflow + the synthetic guards skill (FC.1b migrated 5 folders)', async () => {
     const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     const skillNames = pack.skills.map((s) => s.name).sort();
+    // FC.1b: git/engine-vocab/versioning/honesty-ledger/phase-logging folders were
+    // deleted; their rules are now the compiled `default-discipline/guards` skill.
     expect(skillNames).toEqual([
       'd9-guard',
-      'engine-vocab',
-      'git',
-      'honesty-ledger',
+      'default-discipline/guards',
       'inbound-greeter',
-      'phase-logging',
       'session-connection-check',
-      'versioning',
       'workflow',
     ]);
   });
@@ -80,15 +78,17 @@ describe('builtin default-discipline pack', () => {
     expect(issues).toEqual([]);
   });
 
-  it('declares git skill with the two locked block-tool rules (no-implicit-push removed — not the user rule)', async () => {
+  it('compiles all 21 cluster rules into the synthetic default-discipline/guards skill', async () => {
     const pack = await loadPack(resolve('packs/builtin/default-discipline'));
-    const git = pack.skills.find((s) => s.name === 'git');
-    expect(git).toBeDefined();
-    const ruleIds = git?.rules.map((r) => r.id).sort();
-    // no-implicit-push removed 2026-06-01: the user's standing rule is "push is
-    // pre-authorized" (force-push still gated by no-force-push-main).
-    expect(ruleIds).toEqual(['never-amend', 'no-force-push-main']);
-    expect(git?.load).toBe('lazy');
+    const guards = pack.skills.find((s) => s.name === 'default-discipline/guards');
+    expect(guards).toBeDefined();
+    const ids = guards?.rules.map((r) => r.id) ?? [];
+    expect(ids.filter((i) => i.startsWith('guard:'))).toHaveLength(21);
+    // git block rules (no-implicit-push stays removed — push is pre-authorized).
+    expect(ids).toContain('guard:never-amend');
+    expect(ids).toContain('guard:no-force-push-main');
+    expect(ids).toContain('guard:substrate-purity');
+    expect(ids).toContain('guard:versioning-pre1-patch-only');
   });
 
   it('declares workflow skill with a destination_check + track_check pair', async () => {
@@ -100,17 +100,45 @@ describe('builtin default-discipline pack', () => {
     expect(kinds).toEqual(['destination_check', 'track_check']);
   });
 
-  it('declares honesty-ledger with fourteen claim rules', async () => {
+  it('carries the 14 honesty-ledger + 3 phase-logging claim gates as guards', async () => {
     const pack = await loadPack(resolve('packs/builtin/default-discipline'));
-    const ledger = pack.skills.find((s) => s.name === 'honesty-ledger');
-    expect(ledger?.rules).toHaveLength(14);
-    expect(ledger?.load).toBe('preload');
+    const guards = pack.skills.find((s) => s.name === 'default-discipline/guards');
+    const ids = new Set(guards?.rules.map((r) => r.id));
+    for (const n of [
+      'research-start',
+      'committed',
+      'pushed',
+      'ci-verify-after-push', // honesty-ledger sample (14 total)
+      'version-slot-assignment',
+      'phase-claim-forward',
+      'session-no-task', // phase-logging (3)
+    ]) {
+      expect(ids.has(`guard:${n}`), `missing guard:${n}`).toBe(true);
+    }
   });
 
-  it('declares phase-logging with three claim rules', async () => {
+  it('each migrated guard resolves to its intended drift policy (no silent default fallthrough)', async () => {
     const pack = await loadPack(resolve('packs/builtin/default-discipline'));
-    const phaseLogging = pack.skills.find((s) => s.name === 'phase-logging');
-    expect(phaseLogging?.rules).toHaveLength(3);
-    expect(phaseLogging?.load).toBe('preload');
+    const pr = pack.driftResponse?.per_rule ?? {};
+    // blocks/stops preserved
+    expect(pr['guard:never-amend']).toBe('block_tool');
+    expect(pr['guard:no-force-push-main']).toBe('block_tool');
+    expect(pr['guard:versioning-pre1-patch-only']).toBe('full_stop_and_redo');
+    expect(pr['guard:version-slot-assignment']).toBe('notify_and_pause');
+    // warns preserved
+    expect(pr['guard:substrate-purity']).toBe('warn');
+    expect(pr['guard:committed']).toBe('warn');
+    expect(pr['guard:session-no-task']).toBe('warn');
+    // the NON-migrated workflow keys keep their bare ids
+    expect(pr['workflow-phases-required']).toBe('full_stop_and_redo');
+    expect(pr['phase-logged-before-commit']).toBe('full_stop_and_redo');
+    // every migrated guard id is present (no bare leftover that would hit the default)
+    const guards = pack.skills.find((s) => s.name === 'default-discipline/guards');
+    for (const r of guards?.rules ?? []) {
+      expect(
+        pr[r.id],
+        `${r.id} has no per_rule policy → would hit full_stop default`,
+      ).toBeDefined();
+    }
   });
 });

@@ -5,39 +5,47 @@
 # defined workflow. Per-rule overrides downshift to softer policies where
 # the legacy rule was a `severity: warn` (honesty-ledger) or where a
 # softer response is appropriate (substrate-purity).
+#
+# FC.1b (2026-06-03): the git / engine-vocab / versioning / honesty-ledger /
+# phase-logging rules are now compiled guards, so their rule ids are
+# `guard:<name>` (the `default-discipline/guards` synthetic skill). Keys are
+# quoted because of the embedded colon. The two `workflow` keys below are
+# UNCHANGED — that skill was not migrated.
 default: full_stop_and_redo
 per_rule:
   # Git hygiene — block the one tool call, don't halt the whole task.
-  never-amend: block_tool
-  no-force-push-main: block_tool
+  'guard:never-amend': block_tool
+  'guard:no-force-push-main': block_tool
 
   # Substrate-purity is a soft warn (engine-side smell, not a stop signal).
-  substrate-purity: warn
+  'guard:substrate-purity': warn
 
   # Version slot assignment is loud — pause for user input.
-  version-slot-assignment: notify_and_pause
+  'guard:version-slot-assignment': notify_and_pause
 
   # Honesty-ledger claim rules — all warn, never block.
-  research-start: warn
-  research-spawning: warn
-  starting-now: warn
-  running-tests: warn
-  running-build: warn
-  committed: warn
-  telegram-sent: warn
-  pushed: warn
-  tagged: warn
-  fmt-clippy: warn
-  phase-logged: warn
-  audit-done: warn
-  pre-push-checklist: warn
-  ci-verify-after-push: warn
+  'guard:research-start': warn
+  'guard:research-spawning': warn
+  'guard:starting-now': warn
+  'guard:running-tests': warn
+  'guard:running-build': warn
+  'guard:committed': warn
+  'guard:telegram-sent': warn
+  'guard:pushed': warn
+  'guard:tagged': warn
+  'guard:fmt-clippy': warn
+  'guard:phase-logged': warn
+  'guard:audit-done': warn
+  'guard:pre-push-checklist': warn
+  'guard:ci-verify-after-push': warn
 
   # Phase-logging claim gates — warn.
-  phase-claim-forward: warn
-  session-no-task: warn
+  'guard:phase-claim-forward': warn
+  'guard:session-no-task': warn
 
-  # Workflow + versioning hard-stops — explicit for visibility.
+  # Versioning hard-stop (migrated guard).
+  'guard:versioning-pre1-patch-only': full_stop_and_redo
+
+  # Workflow hard-stops — NOT migrated (workflow skill keeps bare rule ids).
   workflow-phases-required: full_stop_and_redo
   phase-logged-before-commit: full_stop_and_redo
-  versioning-pre1-patch-only: full_stop_and_redo

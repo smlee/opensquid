@@ -52,15 +52,16 @@ const CASES: Case[] = [
     quoted: 'echo "git commit -m x"',
   },
   {
-    skill: 'git',
-    rule: 'never-amend',
+    // FC.1b: git/versioning are now compiled guards under default-discipline/guards.
+    skill: 'default-discipline/guards',
+    rule: 'guard:never-amend',
     bare: 'git commit --amend -m "x"',
     compound: 'cd /repo && git commit --amend -m "x"',
     quoted: 'echo "git commit --amend"',
   },
   {
-    skill: 'versioning',
-    rule: 'versioning-pre1-patch-only',
+    skill: 'default-discipline/guards',
+    rule: 'guard:versioning-pre1-patch-only',
     bare: 'npm version minor',
     compound: 'cd /repo && npm version minor',
     quoted: 'echo "npm version minor"',
@@ -80,7 +81,7 @@ describe('FU.14: command gates match compound `cd … && …` commands', () => {
 
   it('no-force-push-main matches a compound force-push to main', async () => {
     const pack = await loadPack(PACK);
-    const re = new RegExp(patternOf('git', 'no-force-push-main', pack));
+    const re = new RegExp(patternOf('default-discipline/guards', 'guard:no-force-push-main', pack));
     expect(re.test('cd /repo && git push --force origin main')).toBe(true);
     expect(re.test('git push origin feature')).toBe(false);
   });

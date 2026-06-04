@@ -45,26 +45,31 @@ function run(steps: ProcessStep[], event: Event): Promise<RuleResult> {
   );
 }
 
+// FC.1b: the 3 phase-logging gates moved into default-discipline/guards (guard:<name>).
+const GUARDS = 'default-discipline/guards';
 const FIRING: Record<string, string> = {
-  'version-slot-assignment': 'this ships as v0.6.0',
-  'phase-claim-forward': 'Phase 5 — audit',
-  'session-no-task': "now I'll implement the fix",
+  'guard:version-slot-assignment': 'this ships as v0.6.0',
+  'guard:phase-claim-forward': 'Phase 5 — audit',
+  'guard:session-no-task': "now I'll implement the fix",
 };
+const phaseRules = (rs: { id: string; kind: string; process: ProcessStep[] }[]) =>
+  rs.filter((r) => r.id in FIRING);
 
 describe('phase-logging (RJ.2 — fires at prompt_submit on priorAssistantText)', () => {
-  it('loads with 3 rules and a prompt_submit trigger', async () => {
+  it('compiles the 3 phase-logging guards under default-discipline/guards (prompt_submit)', async () => {
     const pack = await loadPack(PACK);
-    const skill = pack.skills.find((s) => s.name === 'phase-logging');
+    const skill = pack.skills.find((s) => s.name === GUARDS);
     expect(skill).toBeDefined();
-    expect(skill?.triggers.map((t) => t.kind)).toEqual(['prompt_submit']);
-    expect(skill?.rules).toHaveLength(3);
-    expect(skill?.rules.map((r) => r.id).sort()).toEqual(Object.keys(FIRING).sort());
+    expect(skill?.triggers.map((t) => t.kind)).toContain('prompt_submit');
+    const rules = phaseRules(skill?.rules ?? []);
+    expect(rules).toHaveLength(3);
+    expect(rules.map((r) => r.id).sort()).toEqual(Object.keys(FIRING).sort());
   });
 
-  it('every rule WARNS on a matching prior-assistant claim', async () => {
+  it('every phase-logging guard WARNS on a matching prior-assistant claim', async () => {
     const pack = await loadPack(PACK);
-    const skill = pack.skills.find((s) => s.name === 'phase-logging');
-    for (const rule of skill?.rules ?? []) {
+    const skill = pack.skills.find((s) => s.name === GUARDS);
+    for (const rule of phaseRules(skill?.rules ?? [])) {
       if (rule.kind !== 'track_check') throw new Error(`${rule.id} not track_check`);
       const text = FIRING[rule.id];
       if (text === undefined) throw new Error(`no fixture for ${rule.id}`);
@@ -74,10 +79,10 @@ describe('phase-logging (RJ.2 — fires at prompt_submit on priorAssistantText)'
     }
   });
 
-  it('every rule is SILENT on unrelated prose', async () => {
+  it('every phase-logging guard is SILENT on unrelated prose', async () => {
     const pack = await loadPack(PACK);
-    const skill = pack.skills.find((s) => s.name === 'phase-logging');
-    for (const rule of skill?.rules ?? []) {
+    const skill = pack.skills.find((s) => s.name === GUARDS);
+    for (const rule of phaseRules(skill?.rules ?? [])) {
       if (rule.kind !== 'track_check') continue;
       const r = await run(rule.process, promptSubmit('just chatting about the weather'));
       expect(r.kind, `${rule.id} should be silent`).toBe('no_verdict');

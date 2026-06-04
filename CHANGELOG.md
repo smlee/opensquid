@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.311] - 2026-06-03
+
+### Changed (T-FSM-COMPLETION FC.1b — default-discipline cluster → manifest `guards:`)
+
+Migrated the 5 hand-written detect→verdict skills (`git`, `engine-vocab`, `versioning`,
+`honesty-ledger`, `phase-logging` — 21 rules) into a single `guards:` manifest block,
+compiled to the synthetic `default-discipline/guards` skill. The 5 skill folders are
+deleted; every migrated `per_rule` key in `drift_response.yaml` is re-prefixed
+`guard:<name>` (the 2 non-migrated `workflow` keys kept their bare ids). First real
+adopter of the slice-B `guards:` template. Behavior is byte-preserved — verdict level,
+message, and drift policy are identical; only audit attribution changes
+(`<skill>/<rule>` → `default-discipline/guards/guard:<name>`). A new resolution test
+asserts every guard keeps its intended policy (no silent `full_stop_and_redo`
+fallthrough). Built through the full flow (pre-research → 11-field spec → 7 logged phases).
+
+- `packs/builtin/default-discipline/manifest.yaml` (+21 guards), `drift_response.yaml`
+  (re-prefixed), 5 deleted skill folders; 5 test files updated (`default-discipline`,
+  `command_boundary`, `honesty_ledger`, `phase_logging`).
+
 ## [0.5.310] - 2026-06-03
 
 ### Added (T-DOCTOR-HOOK-COVERAGE FC.5 — `doctor hooks` flags MISSING registrations)

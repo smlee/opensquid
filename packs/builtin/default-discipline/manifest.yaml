@@ -6,8 +6,11 @@
 # honesty-ledger / phase-logging / engine-vocab). Authoritative source:
 # docs/tasks/T-builtin-retire.md.
 #
-# Seven skill folders: d9-guard/, engine-vocab/, git/, honesty-ledger/,
-# phase-logging/, versioning/, workflow/.
+# Two skill folders remain (d9-guard/, workflow/) — the rest of the cluster
+# (git / engine-vocab / versioning / honesty-ledger / phase-logging) is now
+# the `guards:` block below (FC.1b, 2026-06-03): 21 shape-perfect detect→verdict
+# gates compiled into the synthetic `default-discipline/guards` skill. Drift
+# policy per rule is keyed `guard:<name>` in drift_response.yaml.
 #
 # Ships with the npm package (see package.json `files` field) as a dormant
 # opt-in template — NOT auto-loaded. Users who want this baseline add
@@ -23,3 +26,272 @@ description: |
   PATCH-only pre-1.0 versioning, honesty-ledger claim catalog, and
   phase-logging discipline. Opt-in via your scope's active.json.
 evolves: true
+# --- guards (FC.1b) -------------------------------------------------------
+# Command gates (on: tool_call) — match_command, default `as: hit`, `when: hit`.
+# Claim gates (on: prompt_submit) — text_pattern_match on priorAssistantText,
+# `as: claimed`, `when: len(claimed.matched) > 0`. Patterns are byte-identical
+# to the retired skills (single-quoted so regex backslashes + the FU.14
+# command-boundary prefixes survive).
+guards:
+  # git hygiene (block_tool)
+  - name: never-amend
+    on: tool_call
+    detect:
+      call: match_command
+      args:
+        pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*commit\b[^\n]*\s--amend\b'
+        target: tool_args.command
+    when: hit
+    level: block
+    message: >-
+      BLOCKED: `git commit --amend` violates the never-amend rule.
+      Even on unpushed commits — make a follow-up commit instead.
+      Override only if the user explicitly requested an amend in
+      THIS turn.
+  - name: no-force-push-main
+    on: tool_call
+    detect:
+      call: match_command
+      args:
+        pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*push\b[^\n]*(--force|-f)\b[^\n]*\b(main|master)\b'
+        target: tool_args.command
+    when: hit
+    level: block
+    message: >-
+      BLOCKED: force-push to main/master is destructive. Requires
+      explicit user request — and even then, prefer a regular push
+      or a new branch.
+
+  # engine substrate-purity (warn)
+  - name: substrate-purity
+    on: tool_call
+    detect:
+      call: match_command
+      args:
+        pattern: 'loop/engine.*git\s+commit[^\n]*-m[^\n]*(pack|opensquid|MindCraftor)'
+        target: tool_args.command
+    when: hit
+    level: warn
+    message: >-
+      WARN: engine commit message references a consumer-product
+      concept (pack / opensquid / MindCraftor). Engine speaks in
+      engine types only — re-word using substrate vocabulary.
+
+  # versioning patch-only (full_stop_and_redo per drift_response)
+  - name: versioning-pre1-patch-only
+    on: tool_call
+    detect:
+      call: match_command
+      args:
+        pattern: '(?:^|[;&|\n(])\s*npm\s+version\s+(minor|major)\b'
+        target: tool_args.command
+    when: hit
+    level: block
+    message: >-
+      BLOCKED: pre-1.0 is PATCH-ONLY. The agent may only bump
+      patch. Minor/major slot allocation is exclusively the
+      user's call (feedback_pre1_versioning v4).
+
+  # honesty-ledger claim catalog (warn) — on: prompt_submit
+  - name: research-start
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\b(?:pre-?research|research)\s+(starting|begins?)\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: spawn a research agent or do explicit reading
+  - name: research-spawning
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\bspawn(?:ing)?\s+(?:a\s+)?(?:research\s+)?agent\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: spawn a research agent
+  - name: starting-now
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\b(?:starting|kicking off)\s+(?:#?\w+\s+)?now\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: actually start the work (any tool call counts)
+  - name: running-tests
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\brunning\s+(?:the\s+)?tests?\b|\btests?\s+pass(?:ing|ed|es)?\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: run npm test / cargo test
+  - name: running-build
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\brunning\s+(?:the\s+)?build\b|\bbuild\s+(?:pass(?:ing|es|ed)?|clean|green)\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: run the build
+  - name: committed
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\b(?:committed|just committed|committing)\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: git commit
+  - name: audit-done
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\b(?:audit\s+(?:done|complete)|Phase\s+\d+\s*[—-]\s*Audit)\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: do the audit (any inspection tool call)
+  - name: telegram-sent
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns:
+          - '\b(?:telegram(?:\s+(?:report|message))?\s+(?:sent|delivered)|sent\s+(?:to|via)\s+telegram|pinged\s+(?:you|telegram))\b'
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: call the telegram reply tool or chat_send
+  - name: pushed
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns:
+          - '\b(?:pushed|pushing)\s+(?:to\s+(?:origin|main|remote|github)|it|up|the\s+(?:commit|tag|fix|changes?|branch|release|PR|update))\b'
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: git push origin <branch>
+  - name: tagged
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns:
+          - '\b(?:just\s+)?tagged\s+v?\d+\.\d+(?:\.\d+)?\b|\bcreated\s+(?:the\s+|a\s+)?tag\s+v?\d+\.\d+\b'
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: git tag <name>
+  - name: fmt-clippy
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\b(?:fmt|clippy|prettier|formatting)\s+(?:clean|passes?|passing|green|ok)\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: run cargo fmt / cargo clippy / prettier / npm run format
+  - name: phase-logged
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns:
+          - '\b(?:logged|logging)\s+(?:the\s+)?(?:audit|post[_-]?research|fix|test|code|learn|pre[_-]?research)\s+phase\b'
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: call mcp__opensquid__log_phase
+  - name: pre-push-checklist
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\b(?:ready\s+to\s+push|gates\s+green|pre-push\s+(?:clean|done))\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: run typecheck + prettier + test + build before pushing
+  - name: ci-verify-after-push
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns: ['\b(?:CI\s+green|CI\s+passing|workflow\s+passed)\b']
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: 'verify CI via `gh run view <id> --json conclusion` (NOT `gh run watch`) before claiming CI green'
+
+  # phase-logging claim gates — on: prompt_submit
+  - name: version-slot-assignment
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns:
+          - '\b(?:next\s+minor|next\s+major|bump(?:ing)?\s+(?:to\s+)?(?:minor|major)|ships?\s+as\s+v?[0-9]+\.[0-9]+\.[0-9]+)\b'
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: >-
+      ASK the user before naming a non-patch version slot
+      (call AskUserQuestion); never pick v0.8/v0.9/v1.0
+      unilaterally.
+  - name: phase-claim-forward
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns:
+          - '\bPhase\s+[1-7](?:\s*\/\s*7)?\s*[—\-:]\s*(?:pre[_-]?research|learn|code|test|audit|post[_-]?research|fix)\b'
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: >-
+      call mcp__opensquid__log_phase for the phase you announced
+  - name: session-no-task
+    on: prompt_submit
+    detect:
+      call: text_pattern_match
+      args:
+        text_field: priorAssistantText
+        patterns:
+          - "\\b(?:let\\s+me\\s+(?:run|execute|implement|fix|build|wire)|now\\s+i'?ll\\s+(?:run|implement|fix|build|wire))\\b"
+    as: claimed
+    when: 'len(claimed.matched) > 0'
+    level: warn
+    message: >-
+      create or update a task (TaskCreate/TaskUpdate) before doing
+      substantive work — keeps the workflow-gate enforceable
