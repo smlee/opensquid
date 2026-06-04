@@ -42,3 +42,11 @@ transitions:
   # from: '*' (src/runtime/fsm.ts). Fired ONLY by the task-start guard, which gates
   # it strictly on TaskUpdate(in_progress) + has_generated_spec == false.
   - { from: '*', on: task_unscoped, to: scoping }
+  # ── New-track re-arm (GF.7, F10) ─────────────────────────────
+  # A run that reached phases_complete is DONE; a fresh scope-authoring prompt then
+  # starts a NEW track. Without this, scope_start (valid only from idle) is a silent
+  # no-op from the terminal state, so the SCOPE gate never re-engages for new work in
+  # a live session. ONLY phases_complete re-arms — scope_start stays a no-op from
+  # mid-run states (scoping/researching/spec_*/tasks_loaded/phases_in_flight), so a
+  # stray scope keyword cannot reset an in-flight authoring run.
+  - { from: phases_complete, on: scope_start, to: scoping }

@@ -628,6 +628,27 @@ describe('builtin coding-flow pack — task-start hook (FU.11)', () => {
     expect(step(pack.fsm!, 'spec_complete', 'task_unscoped')).toMatchObject({ next: 'scoping' });
   });
 
+  // GF.7 (F10): a completed run re-arms the SCOPE gate on a fresh scope_start, but ONLY
+  // from the terminal state — a mid-run scope_start stays put (no accidental reset).
+  it('GF.7: phases_complete re-arms to scoping on scope_start; mid-run scope_start is a no-op', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    expect(step(pack.fsm!, 'phases_complete', 'scope_start')).toMatchObject({
+      next: 'scoping',
+      transitioned: true,
+    });
+    // existing entry path unchanged
+    expect(step(pack.fsm!, 'idle', 'scope_start')).toMatchObject({ next: 'scoping' });
+    // mid-run states do NOT reset on a stray scope keyword
+    expect(step(pack.fsm!, 'spec_authored', 'scope_start')).toMatchObject({
+      next: 'spec_authored',
+      transitioned: false,
+    });
+    expect(step(pack.fsm!, 'researching', 'scope_start')).toMatchObject({
+      next: 'researching',
+      transitioned: false,
+    });
+  });
+
   it('activating an UNSCOPED task resets the FSM to scoping + nudges', async () => {
     const sid = 'cf-tstart-unscoped';
     await writeActiveTask(sid, {

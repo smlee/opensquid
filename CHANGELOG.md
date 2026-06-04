@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.320] - 2026-06-04
+
+### Fixed (T-CODING-FLOW-GAP-FIXES GF.7 — re-arm the flow for a new track [F10])
+
+A 4-agent adversarial audit + dogfooding surfaced 10 gaps in the live `coding-flow` pack;
+this is the first fix. **F10:** the session-level FSM had no re-arm path — `scope_start`
+was valid only from `idle`, so once a run reached `phases_complete` a new scope-authoring
+prompt in the same session was a silent no-op and the SCOPE gate never re-engaged (a new
+track silently rode the prior run's terminal state, ungated). Added one transition,
+`phases_complete --scope_start--> scoping`: a completed run re-arms on a fresh scope
+intent. Only the terminal state re-arms — `scope_start` stays a no-op from every mid-run
+state, so a stray scope keyword cannot reset an in-flight authoring run. Totality
+preserved (`validateFsm` passes on the merged machine). Ships with the track's SCOPE
+pre-research + the 7-task AUTHOR spec (`docs/research/T-coding-flow-gap-fixes-pre-research-2026-06-04.md`,
+`docs/tasks/T-coding-flow-gap-fixes.md`).
+
 ## [0.5.319] - 2026-06-04
 
 ### Changed (T-CODING-FLOW-COMPLETENESS AF.5 — retire dormancy + cleanup: no gates left behind)
