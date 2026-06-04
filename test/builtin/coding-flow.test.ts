@@ -210,7 +210,7 @@ describe('builtin coding-flow pack — track-type region profiles (FU.3)', () =>
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
     const sid = 'cf-fu3-fix';
-    await dispatchEvent(prompt('add a task to fix the bug'), [pack], reg, sid); // track=fix
+    await dispatchEvent(prompt('new task to fix the bug'), [pack], reg, sid); // track=fix (no feature intent)
     await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
     await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(0); // fix → AUTHOR skipped
@@ -220,11 +220,30 @@ describe('builtin coding-flow pack — track-type region profiles (FU.3)', () =>
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
     const sid = 'cf-fu3-reset';
-    await dispatchEvent(prompt('add a task to fix the bug'), [pack], reg, sid); // track=fix
+    await dispatchEvent(prompt('new task to fix the bug'), [pack], reg, sid); // track=fix (no feature intent)
     await dispatchEvent(prompt('new task to design the feature'), [pack], reg, sid); // reset → feature
     await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
     await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // reset → AUTHOR fires
+  });
+
+  // GF.5 (F5): a MIXED-intent prompt (feature + fix) stays `feature` — one stray fix
+  // keyword can no longer disable the AUTHOR gate for the whole session.
+  it('GF.5: mixed feature+fix prompt stays feature → AUTHOR gate FIRES', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-gf5-mixed';
+    // "plan" = scope intent; "build"/"feature" = feature intent; "fix" = fix keyword.
+    await dispatchEvent(
+      prompt('plan to build the export feature and fix the header spacing'),
+      [pack],
+      reg,
+      sid,
+    );
+    await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
+    await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored
+    // feature intent present → NOT downgraded → AUTHOR fires (TaskCreate blocked).
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2);
   });
 });
 

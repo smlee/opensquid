@@ -39,6 +39,17 @@ rules:
         args:
           key: coding-flow-track
           value: feature
+      # GF.5 (F5): a feature-intent probe. A downgrade to fix/doc/trivial applies ONLY
+      # when NO feature-intent keyword is present — a mixed-intent prompt ("build X and
+      # fix Y") stays `feature` (strictest), so one stray keyword can't disable the
+      # AUTHOR gate for the whole session. The list is deliberately narrow (no
+      # change/update/edit) so a pure fix/doc track still downgrades.
+      - call: text_pattern_match
+        args:
+          text_field: prompt
+          patterns:
+            - '\b(?:build|add|feature|implement|refactor|new\s+(?:feature|module|endpoint))\b'
+        as: featm
       - call: text_pattern_match
         args:
           text_field: prompt
@@ -46,7 +57,7 @@ rules:
             - '\b(?:fix|bug|patch|de-?flake|hotfix|regression|broken)\b'
         as: fixm
       - call: write_state
-        if: 'len(intent.matched) > 0 && len(fixm.matched) > 0'
+        if: 'len(intent.matched) > 0 && len(fixm.matched) > 0 && len(featm.matched) == 0'
         args:
           key: coding-flow-track
           value: fix
@@ -57,7 +68,7 @@ rules:
             - '\b(?:doc|docs|documentation|readme|changelog|comment)\b'
         as: docm
       - call: write_state
-        if: 'len(intent.matched) > 0 && len(docm.matched) > 0'
+        if: 'len(intent.matched) > 0 && len(docm.matched) > 0 && len(featm.matched) == 0'
         args:
           key: coding-flow-track
           value: doc
@@ -68,7 +79,7 @@ rules:
             - '\b(?:trivial|typo|rename|whitespace|mechanical)\b'
         as: trivm
       - call: write_state
-        if: 'len(intent.matched) > 0 && len(trivm.matched) > 0'
+        if: 'len(intent.matched) > 0 && len(trivm.matched) > 0 && len(featm.matched) == 0'
         args:
           key: coding-flow-track
           value: trivial

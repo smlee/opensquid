@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.323] - 2026-06-04
+
+### Fixed (T-CODING-FLOW-GAP-FIXES GF.5 — scope the track downgrade per-intent [F5])
+
+**F5 (HIGH):** `coding-flow-track` was set by a keyword match on the whole prompt, so one
+stray `fix`/`bug`/`doc`/… token anywhere set the session-level key and
+`taskcreate-spec-required` then skipped the AUTHOR spec-audit for EVERY TaskCreate that
+session — "build the export module and fix the header" silently disabled task authoring.
+`enter-scoping` now probes for feature intent (`build|add|feature|implement|refactor|new
+(feature|module|endpoint)`) and downgrades to `fix`/`doc`/`trivial` ONLY when no
+feature-intent keyword is present; a mixed-intent prompt stays `feature` (strictest). The
+feature list is deliberately narrow (no `change`/`update`/`edit`) so a pure fix/doc track
+still downgrades, and the per-scope-entry reset-to-`feature` still runs first.
+
 ## [0.5.322] - 2026-06-04
 
 ### Fixed (T-CODING-FLOW-GAP-FIXES GF.4 — fail CLOSED + require an audited spec [F6 + F7])
