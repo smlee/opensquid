@@ -30,6 +30,13 @@ rules:
         args:
           key: coding-flow-pre-research-path
           value: '{{targs.file_path}}'
+      # AF.2: persist the design CONTENT so the AUTHOR coverage audit can check the
+      # task spec covers 100% of it (the subagent can't read files; state carries it).
+      - call: write_state
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args:
+          key: coding-flow-design
+          value: '{{targs.content}}'
       # Research DEPTH (folded DPC.5): recall + Read + Grep this turn.
       - call: session_tool_history
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
@@ -116,21 +123,30 @@ rules:
         as: tool
       - call: tool_args
         as: targs
+      # AF.2: the SCOPE design content (persisted at the research write). The spec must
+      # cover 100% of it — the audit compares spec-vs-design (no tool_call enumeration).
+      - call: read_state
+        args:
+          key: coding-flow-design
+        as: design
       - call: subagent_call
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
         args:
           model: reasoning
           timeout_ms: 120000
           prompt: >-
-            You are an adversarial reviewer enforcing the 11-field task-spec contract.
-            Begin your response with EXACTLY one line — `VERDICT: SPEC_COMPLETE` ONLY
-            if EVERY "### Task" block has all 11 fields (Required skills, Deliverable,
-            Depends on, Files affected, Key code shapes, Test fixtures, Acceptance
-            criteria, Risk callouts, References, Verification commands, 7-phase steps)
-            AND every Key-code-shapes block is REAL code (not pseudocode) AND every
-            7-phase step names concrete files / decisions. Otherwise
-            `VERDICT: INCOMPLETE` + one bullet per offending block. Never say
-            SPEC_COMPLETE if any task block falls short. SPEC:\n\n{{targs.content}}
+            You are an adversarial reviewer enforcing TWO author-completeness rules.
+            (1) 11-FIELD CONTRACT: EVERY "### Task" block has all 11 fields (Required
+            skills, Deliverable, Depends on, Files affected, Key code shapes, Test
+            fixtures, Acceptance criteria, Risk callouts, References, Verification
+            commands, 7-phase steps), every Key-code-shapes block is REAL code (not
+            pseudocode), every 7-phase step names concrete files/decisions. (2) 100%
+            DESIGN COVERAGE: the task set covers EVERY element of the SCOPE design below —
+            no design item is left without a task. Begin your response with EXACTLY one
+            line — `VERDICT: SPEC_COMPLETE` ONLY if BOTH hold; otherwise
+            `VERDICT: INCOMPLETE` + one bullet per offending block OR uncovered design
+            element. Never say SPEC_COMPLETE if any task block falls short OR any design
+            element is uncovered. DESIGN:\n\n{{design}}\n\nSPEC:\n\n{{targs.content}}
         as: spec_audit
       - call: advance_fsm
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && contains(spec_audit, "VERDICT: SPEC_COMPLETE")'

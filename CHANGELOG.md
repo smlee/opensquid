@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.315] - 2026-06-04
+
+### Changed (T-CODING-FLOW-COMPLETENESS AF.2 — AUTHOR completeness = 100% design coverage)
+
+`spec_complete` (and thus the move to executing tasks) is now unreachable unless the task
+spec covers 100% of the SCOPE design. `scope-advance` persists the pre-research CONTENT to
+session state (`coding-flow-design`); the AUTHOR `spec-audit` became one combined audit —
+the 11-field contract AND a 100%-DESIGN-COVERAGE check that compares the spec against the
+persisted design, verdicting `SPEC_COMPLETE` only if every design element maps to a task.
+Pre-research found that tool_call open-task enumeration isn't buildable (the function ctx
+has no transcript path; `event.openTasks` is prompt_submit-only), so the design coverage is
+verified as CONTENT at the spec write — simpler, no new primitive, no enumeration.
+
+- `packs/builtin/coding-flow/skills/scope-lifecycle/skill.yaml`, `test/builtin/coding-flow.test.ts`.
+
 ## [0.5.314] - 2026-06-04
 
 ### Changed (T-CODING-FLOW-COMPLETENESS AF.1 — the SCOPE boundary is now genuinely gating)

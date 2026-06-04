@@ -364,6 +364,52 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
     expect(r.exitCode).toBe(0);
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('researched');
   });
+
+  it('AF.2: the persisted SCOPE design reaches the AUTHOR coverage audit (spec-vs-design)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    // Stub passes the AUTHOR audit ONLY if the spec-audit prompt carries the persisted
+    // design marker — proving the 100%-coverage check actually sees the SCOPE design.
+    const r = new FunctionRegistry();
+    registerEventFunctions(r);
+    registerFsmFunctions(r);
+    registerStateFunctions(r);
+    registerVerdictFunctions(r);
+    r.register(HasGeneratedSpec);
+    r.register(SessionToolHistory);
+    r.register({
+      name: 'subagent_call',
+      argSchema: z.object({
+        model: z.string(),
+        prompt: z.string(),
+        timeout_ms: z.number().optional(),
+      }),
+      durable: false,
+      execute: (a: { prompt: string }) =>
+        Promise.resolve(
+          ok(
+            a.prompt.includes('NEVER-GUESS')
+              ? 'VERDICT: GUESS_FREE'
+              : a.prompt.includes('DESIGN-MARKER-XYZ')
+                ? 'VERDICT: SPEC_COMPLETE'
+                : 'VERDICT: INCOMPLETE',
+          ),
+        ),
+    });
+    const sid = 'cf-af2-coverage';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    await dispatchEvent(research('# Pre-research with DESIGN-MARKER-XYZ'), [pack], r, sid); // → researched + persist design
+    await dispatchEvent(
+      {
+        kind: 'tool_call',
+        tool: 'Write',
+        args: { file_path: 'docs/tasks/T-x.md', content: '### Task X.1' },
+      },
+      [pack],
+      r,
+      sid,
+    ); // spec write → coverage audit must SEE the design marker → SPEC_COMPLETE
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_complete');
+  });
 });
 
 const gitCommit: ToolCallEvent = {
