@@ -1,5 +1,10 @@
 # FC follow-ups — backlog (un-specced)
 
+> **RESOLVED 2026-06-04** — both items graduated to specs and SHIPPED:
+> FC.5 → `T-doctor-hook-coverage.md`, landed `00f0b9d` (0.5.310);
+> FC.6 → `T-active-task-clear.md`, landed `67c610f` (0.5.309). Both CI-green.
+> This backlog is empty; kept for provenance.
+
 These were surfaced 2026-06-03 while proving the coding-flow gates enforce (the
 PostToolUse/SessionStart stale-settings investigation). They are NOT yet on the formal
 task list: `taskcreate-spec-required` (correctly) blocks un-specced TaskCreate. Each

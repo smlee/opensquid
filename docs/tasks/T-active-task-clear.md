@@ -1,5 +1,9 @@
 # Track T-ACTIVE-TASK-CLEAR — clear a completed task's active-task signal
 
+> **SHIPPED** — FC.6 landed in `67c610f` (0.5.309). `isClosedStatus` +
+> `transcriptTaskStatus` drive the keep/clear decision (`transcript_tasks.ts:190,205`,
+> `active_task_mirror.ts:171-172,236`); CI-green. Track complete.
+
 **Pre-research:** `docs/research/T-active-task-clear-pre-research-2026-06-03.md`
 (empirically confirmed: FC.4's `active-task.json` persisted after completion; the ATM.3
 defensive-keep preserves a finished task's signal forever — no recovery path).
@@ -65,10 +69,10 @@ if (
 
 **Acceptance criteria:**
 
-- [ ] completed prior + non-TaskUpdate tool → `active-task.json` is CLEARED (currently fails: it persists)
-- [ ] `active_task_mirror.test.ts:349` lag-keep stays GREEN (prior still in_progress in transcript → kept)
-- [ ] store-path: prior present at `completed` → cleared; prior present at `in_progress` → kept
-- [ ] full suite + tsc clean
+- [x] completed prior + non-TaskUpdate tool → `active-task.json` is CLEARED (currently fails: it persists)
+- [x] `active_task_mirror.test.ts:349` lag-keep stays GREEN (prior still in_progress in transcript → kept)
+- [x] store-path: prior present at `completed` → cleared; prior present at `in_progress` → kept
+- [x] full suite + tsc clean
 
 **Risk callouts:** must NOT regress the ATM.3 lag-keep (that race re-introduces the "log_phase: no active task" failure). The discriminator is precisely the prior's transcript status WITH the `pending` overlay — at the completing tick the overlay marks it completed (clear), on a true lag the transcript shows the prior absent (null) or still open (keep) — only an explicit completed/deleted clears. Reuse `parseTranscriptTasks` — do not fork the walk.
 

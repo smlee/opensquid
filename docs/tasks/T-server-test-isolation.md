@@ -1,5 +1,8 @@
 # Track T-SERVER-TEST-ISOLATION — isolate the MCP server test from the repo's active.json
 
+> **SHIPPED** — FC.4 landed in `1ec2d21` (0.5.308). `cwd: env.OPENSQUID_HOME` is on the
+> spawn (`server.test.ts:86`); CI-green. Track complete.
+
 **Pre-research:** the 2 `server.test.ts` "no packs loaded" stub tests fail LOCALLY (pass
 in CI) because the spawned server inherits the test process's cwd = the repo root, which
 carries `.opensquid/active.json: [coding-flow]`. The test isolates user scope
@@ -33,9 +36,9 @@ this.proc = spawn(TSX_BIN, [SERVER_FILE], {
 
 **Acceptance criteria:**
 
-- [ ] the 2 "no packs loaded" / "no skills loaded" tests pass locally
-- [ ] no other `server.test.ts` test regresses
-- [ ] full suite green locally (down to zero failures)
+- [x] the 2 "no packs loaded" / "no skills loaded" tests pass locally
+- [x] no other `server.test.ts` test regresses
+- [x] full suite green locally (down to zero failures)
 
 **Risk callouts:** `env.OPENSQUID_HOME` is set per test (the suite's `beforeEach`); if ever absent the cwd would fall back to the repo root again — every test in this file sets it, so it is always defined here. Do not set a global cwd that other suites share.
 
