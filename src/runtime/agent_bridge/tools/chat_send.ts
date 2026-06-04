@@ -32,31 +32,10 @@
  * Imported by: ./index.ts (tools barrel).
  */
 
-import { connect, type Socket } from 'node:net';
-import { homedir, platform as osPlatform } from 'node:os';
-import { join } from 'node:path';
-
 import { z } from 'zod';
 
+import { sendChat } from '../../../chat_daemon/client.js';
 import type { ToolContext, ToolHandler, ToolSpec } from '../types.js';
-
-// ---------------------------------------------------------------------------
-// Daemon socket address — mirrors `src.legacy/chat/daemon/protocol.ts`
-// `daemonSockAddress` so production wiring lands on the same socket the
-// chat-daemon listens on. OPENSQUID_HOME override honored for tests.
-// ---------------------------------------------------------------------------
-
-function daemonSocketPath(): string {
-  const root = process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
-  if (osPlatform() === 'win32') {
-    // Windows named pipe — last path segment of the data root drives the
-    // pipe name to keep multiple installs isolated (same convention as
-    // the legacy `daemonSockAddress`).
-    const fingerprint = root.split(/[\\/]/).pop() ?? 'default';
-    return `\\\\.\\pipe\\opensquid-chat-daemon-${fingerprint}`;
-  }
-  return join(root, 'chat-daemon.sock');
-}
 
 // ---------------------------------------------------------------------------
 // JSON-RPC envelope types — narrow slice of what `send` returns.
@@ -68,13 +47,6 @@ interface DaemonSendResult {
   message_id: string;
   delivered_at: string;
 }
-
-interface JsonRpcResponse {
-  result?: DaemonSendResult;
-  error?: { code: number; message: string };
-}
-
-let rpcCounter = 0;
 
 // ---------------------------------------------------------------------------
 // Public seam — the daemon socket call. Exposed so the sibling test can
@@ -93,77 +65,10 @@ export interface DaemonSendParams {
 
 export type DaemonSendFn = (params: DaemonSendParams) => Promise<DaemonSendResult>;
 
-/** Default daemon-send implementation — one-shot UDS RPC. */
-export const defaultDaemonSend: DaemonSendFn = (params) => {
-  return new Promise<DaemonSendResult>((resolveCall, rejectCall) => {
-    const id = `agent-bridge-${++rpcCounter}-${Date.now()}`;
-    const req =
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id,
-        method: 'send',
-        params: {
-          channel: params.channel,
-          text: params.text,
-          ...(params.replyTo !== undefined ? { replyTo: params.replyTo } : {}),
-          ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-          // CAT.4 — the daemon `send` RPC's media field is `mediaPath`.
-          ...(params.imagePath !== undefined ? { mediaPath: params.imagePath } : {}),
-        },
-      }) + '\n';
-
-    let sock: Socket | null = null;
-    let buffer = '';
-    const cleanup = (): void => {
-      if (sock !== null) {
-        try {
-          sock.end();
-        } catch {
-          /* socket already closed */
-        }
-        sock = null;
-      }
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      rejectCall(new Error('chat-daemon RPC timeout after 5s'));
-    }, 5000);
-
-    sock = connect(daemonSocketPath());
-    sock.once('error', (err: Error) => {
-      clearTimeout(timer);
-      cleanup();
-      rejectCall(new Error(`chat-daemon connection error: ${err.message}`));
-    });
-    sock.once('connect', () => sock?.write(req));
-    sock.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      const nl = buffer.indexOf('\n');
-      if (nl < 0) return;
-      const line = buffer.slice(0, nl);
-      clearTimeout(timer);
-      cleanup();
-      try {
-        const parsed = JSON.parse(line) as JsonRpcResponse;
-        if (parsed.error) {
-          rejectCall(
-            new Error(`chat-daemon RPC error ${parsed.error.code}: ${parsed.error.message}`),
-          );
-        } else if (parsed.result) {
-          resolveCall(parsed.result);
-        } else {
-          rejectCall(new Error('chat-daemon RPC: malformed response (no result or error)'));
-        }
-      } catch (e) {
-        rejectCall(
-          new Error(
-            `chat-daemon RPC: invalid JSON response: ${e instanceof Error ? e.message : String(e)}`,
-          ),
-        );
-      }
-    });
-  });
-};
+/** Default daemon-send — the shared client's one-shot UDS RPC (CL.3: was a local copy
+ *  of the socket dance; now delegates to the one owner src/chat_daemon/client.ts). The
+ *  local `DaemonSendParams`/`DaemonSendResult` are structurally identical to the client's. */
+export const defaultDaemonSend: DaemonSendFn = (params) => sendChat(params);
 
 // ---------------------------------------------------------------------------
 // Tool input schema + spec

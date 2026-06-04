@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.332] - 2026-06-04
+
+### Changed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.3b — `chat_send` onto the shared client)
+
+`agent_bridge/tools/chat_send.ts` (the warm-agent reply tool) carried its own
+`daemonSocketPath` + one-shot RPC; `defaultDaemonSend` now delegates to the CL.1 client's
+`sendChat`. Behavior-preserving (the local `DaemonSendParams`/`DaemonSendResult` are
+structurally identical; the test's daemon-send seam is unchanged). `mcp/chat-bridge-server.ts`
+is deliberately NOT repointed yet: its `resolveDataRoot()` honors `LOOP_HOME` (the client's
+`OPENSQUID_HOME` does not) and its Win32 pipe lacks the fingerprint — a real divergence on
+the live MCP bridge that needs deliberate reconciliation (deferred to the focused CAT.8 run,
+with a daemon smoke-check).
+
 ## [0.5.331] - 2026-06-04
 
 ### Changed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.3a — `ensure_umbrella_topic` onto the shared client)
