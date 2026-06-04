@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.333] - 2026-06-04
+
+### Fixed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.3c — `chat-bridge-server` socket path matches the daemon)
+
+`mcp/chat-bridge-server.ts` derived the daemon socket via a local `daemonSocketPath` that
+honored `LOOP_HOME` and used a **fingerprint-less** Win32 pipe — both DIVERGED from where
+the daemon actually binds (`channels/daemon/protocol.ts` → `chatDaemonSockPath()` =
+`OPENSQUID_HOME` + the `basename(OPENSQUID_HOME)` fingerprint). Latent bugs: with
+`LOOP_HOME` set (not `OPENSQUID_HOME`) the bridge would miss the socket, and on Windows
+multi-install the pipe name wouldn't match. Repointed at the CL.1 client's
+`daemonSocketPath`, which matches the daemon exactly — fixing both the send (`:261`) and the
+inbound subscriber (`:539`). Behavior-identical in the common case (both unset / same root);
+a fix in the edge cases. The inbox-dir `LOOP_HOME` handling (`resolveDataRoot`) is left as a
+separate concern.
+
 ## [0.5.332] - 2026-06-04
 
 ### Changed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.3b — `chat_send` onto the shared client)

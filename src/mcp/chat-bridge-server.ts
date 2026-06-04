@@ -43,7 +43,7 @@
  */
 
 import { promises as fs, readFileSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { connect, type Socket } from 'node:net';
 
@@ -62,23 +62,20 @@ import {
 } from '../channels/routing.js';
 import { type InboxRow } from '../runtime/chat/inbox.js';
 
+import { daemonSocketPath } from '../chat_daemon/client.js';
+
 import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscriber.js';
 
 // ---------------------------------------------------------------------------
-// Data-root + daemon-socket resolution. Mirrors legacy paths exactly so
-// this bridge connects to the same daemon the rest of opensquid spawned.
-// OPENSQUID_HOME + LOOP_HOME overrides honored.
+// Data-root (inbox dir). `daemonSocketPath` is now the shared client's (CL.3):
+// the local copy honored LOOP_HOME + used a fingerprint-less Win32 pipe, both of
+// which DIVERGED from where the daemon actually listens (OPENSQUID_HOME + the
+// `basename(OPENSQUID_HOME)` fingerprint, per channels/daemon/protocol.ts) — i.e.
+// latent bugs. The client matches the daemon exactly.
 // ---------------------------------------------------------------------------
 
 function resolveDataRoot(): string {
   return process.env.OPENSQUID_HOME ?? process.env.LOOP_HOME ?? join(homedir(), '.opensquid');
-}
-
-function daemonSocketPath(): string {
-  if (platform() === 'win32') {
-    return `\\\\.\\pipe\\opensquid-chat-daemon`;
-  }
-  return join(resolveDataRoot(), 'chat-daemon.sock');
 }
 
 function umbrellaInboxDir(umbrellaId: string): string {
