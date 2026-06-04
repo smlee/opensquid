@@ -5,7 +5,7 @@
  * This proves the on-disk union machine loads + is total, with the three
  * region-defining edges intact (guess-audit loop-back, spec-audit advance).
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -456,23 +456,41 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
   });
 });
 
-describe('builtin coding-flow pack — pause-gates (AF.6)', () => {
+describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', () => {
   let tempHome: string;
+  let tempTasks: string;
   let priorHome: string | undefined;
+  let priorTasks: string | undefined;
   beforeEach(async () => {
     priorHome = process.env.OPENSQUID_HOME;
+    priorTasks = process.env.OPENSQUID_HARNESS_TASKS_DIR;
     tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-af6-'));
+    tempTasks = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-af6-tasks-'));
     process.env.OPENSQUID_HOME = tempHome;
+    process.env.OPENSQUID_HARNESS_TASKS_DIR = tempTasks; // isolate open_task_count from ~/.claude/tasks
   });
   afterEach(async () => {
     if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
     else process.env.OPENSQUID_HOME = priorHome;
+    if (priorTasks === undefined) delete process.env.OPENSQUID_HARNESS_TASKS_DIR;
+    else process.env.OPENSQUID_HARNESS_TASKS_DIR = priorTasks;
     await rm(tempHome, { recursive: true, force: true });
+    await rm(tempTasks, { recursive: true, force: true });
   });
 
   const askQuestion: ToolCallEvent = { kind: 'tool_call', tool: 'AskUserQuestion', args: {} };
   const scopePrompt: PromptSubmitEvent = { kind: 'prompt_submit', prompt: 'scope a new task' };
+  const stop = { kind: 'stop', assistantText: '' } as const;
 
+  async function putPendingTask(sid: string, id: string): Promise<void> {
+    const dir = join(tempTasks, sid);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, `${id}.json`),
+      JSON.stringify({ id, subject: 'wip', status: 'pending' }),
+      'utf8',
+    );
+  }
   // research (depth + GUESS_FREE) → researched; spec write (audit INCOMPLETE) → spec_authored.
   async function toSpecAuthored(pack: Awaited<ReturnType<typeof loadPack>>, sid: string) {
     const reg = registryWithAudit('VERDICT: INCOMPLETE');
@@ -481,12 +499,32 @@ describe('builtin coding-flow pack — pause-gates (AF.6)', () => {
     await dispatchEvent(writeSpec, [pack], reg, sid);
     return reg;
   }
+  async function toResearched(pack: Awaited<ReturnType<typeof loadPack>>, sid: string) {
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
+    return reg;
+  }
+  async function drivePhasesComplete(pack: Awaited<ReturnType<typeof loadPack>>, sid: string) {
+    const now = '2026-06-04T00:00:00.000Z';
+    for (const ev of [
+      'scope_start',
+      'research_done',
+      'spec_drafted',
+      'spec_verified',
+      'tasks_loaded',
+      'phase_started',
+      'phases_done',
+    ])
+      await advanceFsmState(sid, 'coding-flow', pack.fsm!, ev, now); // → phases_complete
+  }
 
-  it('AskUserQuestion past SCOPE → DRIFT', async () => {
+  it('GF.6: AskUserQuestion past SCOPE → BLOCK (exit 2)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const sid = 'cf-af6-q';
     const reg = await toSpecAuthored(pack, sid); // → spec_authored (past SCOPE)
     const r = await dispatchEvent(askQuestion, [pack], reg, sid);
+    expect(r.exitCode).toBe(2); // GF.6: hard-block, not warn
     expect(r.stderr).toMatch(/DRIFT/);
   });
 
@@ -496,10 +534,11 @@ describe('builtin coding-flow pack — pause-gates (AF.6)', () => {
     const sid = 'cf-af6-qok';
     await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping
     const r = await dispatchEvent(askQuestion, [pack], reg, sid);
+    expect(r.exitCode).toBe(0);
     expect(r.stderr).not.toMatch(/DRIFT/);
   });
 
-  it('pause/permission language during an active run → DRIFT', async () => {
+  it('GF.6: pause/permission language stays WARN (exit 0, surfaced) — a retrospective detector', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
     const sid = 'cf-af6-lang';
@@ -510,15 +549,49 @@ describe('builtin coding-flow pack — pause-gates (AF.6)', () => {
       reg,
       sid,
     );
+    expect(r.exitCode).toBe(0); // not block — blocking the next tool wouldn't undo the pause
     expect(r.stderr).toMatch(/DRIFT/);
   });
 
-  it('Stop mid-run (AUTHOR/EXECUTE) → DRIFT', async () => {
+  it('GF.6: Stop mid-run (spec_authored) → BLOCK (exit 2)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const sid = 'cf-af6-stop';
     const reg = await toSpecAuthored(pack, sid); // → spec_authored
-    const r = await dispatchEvent({ kind: 'stop', assistantText: '' }, [pack], reg, sid);
+    const r = await dispatchEvent(stop, [pack], reg, sid);
+    expect(r.exitCode).toBe(2);
     expect(r.stderr).toMatch(/DRIFT/);
+  });
+
+  it('GF.6: Stop at researched (SCOPE done, AUTHOR owed) → BLOCK (exit 2)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-stop-res';
+    const reg = await toResearched(pack, sid); // → researched
+    const r = await dispatchEvent(stop, [pack], reg, sid);
+    expect(r.exitCode).toBe(2);
+  });
+
+  it('GF.6: Stop at idle → allowed (run not started)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-stop-idle';
+    const r = await dispatchEvent(stop, [pack], registry(), sid);
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('GF.6: Stop at phases_complete with 0 open tasks → allowed (depletion auto-OFF)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-stop-depleted';
+    await drivePhasesComplete(pack, sid); // → phases_complete, no harness tasks → 0 open
+    const r = await dispatchEvent(stop, [pack], registry(), sid);
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('GF.6: Stop at phases_complete with open tasks → BLOCK (backlog not depleted)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-stop-open';
+    await drivePhasesComplete(pack, sid); // → phases_complete
+    await putPendingTask(sid, 'next-1'); // open.count > 0
+    const r = await dispatchEvent(stop, [pack], registry(), sid);
+    expect(r.exitCode).toBe(2);
   });
 });
 

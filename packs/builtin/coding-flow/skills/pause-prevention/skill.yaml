@@ -18,10 +18,12 @@ rules:
         as: tool
       - call: read_fsm_state
         as: st
+      # GF.6 (F8): HARD-BLOCK the question — it's a real-time pause ACTION, so exit-2 deny
+      # actually prevents it (the agent must answer from the principles, not stall).
       - call: verdict
         if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
         args:
-          level: warn
+          level: block
           message: >-
             DRIFT: AskUserQuestion past SCOPE. Questions belong to the interactive SCOPE
             phase — fill every gap there. Past scope the run is automated; do not pause for a
@@ -29,6 +31,10 @@ rules:
             SCOPE was incomplete — re-scope it, do not stall the run).
   # Pause / permission LANGUAGE in the just-settled prior turn during an active run → drift.
   # text_pattern_match on priorAssistantText (like honesty-ledger), gated on run-active.
+  # GF.6: stays WARN (not block) — it's a RETROSPECTIVE detector of an already-emitted
+  # pause, not the pause action itself; blocking the next (possibly unrelated) tool would
+  # not undo the pause and risks locking the session. The real-time action gates
+  # (no-stop-mid-run, no-question-after-scope) are the hard blocks.
   - id: no-pause-language
     process:
       - call: text_pattern_match
@@ -54,5 +60,6 @@ rules:
             valid interrupt is a genuine user-question during SCOPE — and you are past it.
 prose: |
   Two pause-gates that fire ONLY during an active run (FSM != idle AND backlog not depleted):
-  an AskUserQuestion past SCOPE, and pause/permission LANGUAGE in the settled prior turn
-  (priorAssistantText). Both warn — the automated phases take no pauses; questions live in SCOPE.
+  an AskUserQuestion past SCOPE (GF.6: HARD-BLOCK — the real-time pause action), and
+  pause/permission LANGUAGE in the settled prior turn (priorAssistantText, kept WARN — a
+  retrospective detector). The automated phases take no pauses; questions live in SCOPE.

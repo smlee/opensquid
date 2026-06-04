@@ -13,15 +13,26 @@ rules:
     process:
       - call: read_fsm_state
         as: st
+      - call: open_task_count
+        as: open
+      # GF.6 (F8): HARD-BLOCK the stop, and WIDEN coverage — also fire at `researched`
+      # (SCOPE done, AUTHOR owed) and at `phases_complete` WHILE the backlog is non-empty
+      # (open tasks remain). The depletion auto-OFF is preserved: `idle` and
+      # `phases_complete` with ZERO open tasks are NOT flagged, so a finished run stops
+      # freely. (open_task_count on the `stop` event has no event.openTasks → it reads the
+      # harness store, returning the real count.)
       - call: verdict
-        if: 'st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight"'
+        if: 'st == "researched" || st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight" || (st == "phases_complete" && open.count > 0)'
         args:
-          level: warn
+          level: block
           message: >-
-            DRIFT: you stopped mid-run (AUTHOR/EXECUTE). The run is NOT complete — everything
-            after SCOPE is automated. Do not pause: continue to the next phase/task and keep
-            going until the whole backlog is depleted. (A SCOPE stop to await a genuine user
-            answer is the only allowed pause, and you are past SCOPE.)
+            DRIFT: you stopped mid-run (AUTHOR/EXECUTE, or with the backlog non-empty). The
+            run is NOT complete — everything after SCOPE is automated. Do not pause: continue
+            to the next phase/task and keep going until the whole backlog is depleted. (A
+            SCOPE stop to await a genuine user answer is the only allowed pause, and you are
+            past SCOPE.)
 prose: |
-  Stopping during AUTHOR or EXECUTE is drift. The only legitimate pause is a genuine
+  Stopping during AUTHOR or EXECUTE — or at phases_complete with open tasks remaining — is
+  drift, and is now HARD-BLOCKED (GF.6). The only legitimate pause is a genuine
   user-question during the interactive SCOPE phase; everything downstream runs to depletion.
+  A depleted run (idle, or phases_complete with zero open tasks) stops freely.

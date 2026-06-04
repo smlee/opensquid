@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.324] - 2026-06-04
+
+### Changed (T-CODING-FLOW-GAP-FIXES GF.6 — pause-gates hard-block + widen coverage [F8])
+
+**F8 (MED):** the pause-gates were `warn`-only (advisory, exit 0) and could not actually
+stop a mid-run pause. The two real-time pause-ACTION gates are now hard `block` (exit 2):
+`no-stop-mid-run` (the `stop` event) and `no-question-after-scope` (`AskUserQuestion`).
+`no-stop-mid-run` is also widened to fire at `researched` (SCOPE done, AUTHOR owed) and at
+`phases_complete` while open tasks remain — closing the turn-end-pause vector — while
+preserving the depletion auto-OFF: `idle` and `phases_complete` with **zero** open tasks
+stop freely (the `open_task_count > 0` condition is the load-bearing safety so a finished
+run is never locked from stopping). `no-pause-language` stays `warn` by design — it's a
+retrospective detector of an already-emitted pause, so blocking the next (possibly
+unrelated) tool would neither undo the pause nor help, and risks lockups.
+
 ## [0.5.323] - 2026-06-04
 
 ### Fixed (T-CODING-FLOW-GAP-FIXES GF.5 — scope the track downgrade per-intent [F5])
