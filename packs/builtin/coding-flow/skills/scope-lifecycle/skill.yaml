@@ -51,8 +51,9 @@ rules:
           model: reasoning
           timeout_ms: 120000
           prompt: >-
-            You are an adversarial reviewer enforcing TWO rules on a pre-research / scope
-            artifact. (1) NEVER-GUESS: a claim is acceptable ONLY if DERIVED from cited
+            You are an adversarial reviewer enforcing the lexicon's Research/Audit flow
+            principles (docs/lexicon.md — never-guess, best-solution, teach-back depth) on a
+            pre-research / scope artifact. (1) NEVER-GUESS: a claim is acceptable ONLY if DERIVED from cited
             evidence (a file:line, a memory, or the user's own words) OR explicitly flagged
             as an OPEN QUESTION to ask the user. (2) BEST-SOLUTION: the artifact must show
             the best solution was found — alternatives weighed against the criteria and the

@@ -30,6 +30,33 @@ other (the failure this file exists to prevent). Grow it as we label things.
   spikes). FSMs make the model's unreliability _harmless_, not absent. →
   [[project-opensquid-architecture-thesis]]
 
+## Research / Audit flow
+
+The principles governing the SCOPE/research stage and the `/research-audit` flow. These were
+previously enforced (the coding-flow guess-audit hardcodes never-guess + best-solution +
+teach-back depth) but unlabeled; this is their canonical home — the guess-audit and the
+`research-audit` skill both reference it. One labeled principle per line.
+
+- **No-skim / breadth** — read the decision surface end-to-end before judging; excerpts may
+  LOCATE, never CONCLUDE.
+- **Never-guess (cite-or-flag)** — every claim is DERIVED from cited evidence (a `file:line`,
+  a memory, or the user's words) OR explicitly flagged as an OPEN QUESTION; an uncited
+  assertion is drift.
+- **Best-solution** — the chosen solution is weighed against the alternatives and the
+  criteria, and is the simplest correct one (per the Simplicity Principle).
+- **Synthesis-step** — after reading, a deliberate pass that integrates findings into a
+  whole (severity-ranked, de-duplicated) before proposing; a list dump is not a synthesis.
+- **Adversarial-verify** — a finding/claim is CONFIRMED only after independent skeptics, each
+  prompted to REFUTE it, fail to (majority survives); confirmed ≠ self-graded.
+- **Empirical-spike** — when a premise is uncertain, settle it with a minimal real probe (a
+  spike), not reasoning alone — the empirical layer (tests, audit, spikes) is what makes the
+  model's _content_ correct within a step (the FSM only contains the _process_).
+- **Teach-back depth** — research is complete when you could teach the decision surface back:
+  alternatives + failure modes + the chosen mechanism, all grounded in evidence.
+- **Questions-in-scope-only** — clarifying questions belong to the interactive SCOPE phase;
+  once scope is complete, decide via the principles and proceed — a gap surfacing later means
+  scope was incomplete (re-scope it), not a reason to stall the run.
+
 ## Chat
 
 - **Inbox** — a project's store of inbound messages (the daemon routes each

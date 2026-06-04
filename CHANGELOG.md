@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.328] - 2026-06-04
+
+### Added (RA.1 — the research/audit flow: lexicon principles + `/research-audit`)
+
+The research-flow principles were enforced (the coding-flow guess-audit hardcodes
+never-guess + best-solution + teach-back) but had no canonical home — they lived in the
+gate prompt + scattered feedback memories, while the lexicon only labeled the _coding_
+principles. `docs/lexicon.md` gains a labeled **"Research / Audit flow"** section (no-skim,
+never-guess, best-solution, synthesis-step, adversarial-verify, empirical-spike, teach-back
+depth, questions-in-scope-only), and the guess-audit prompt now _references_ it instead of
+being the only home. Auditing is also formalized as a distinct behavior pattern (gather →
+verify → refute → synthesize, no building — the VERIFY faculty) via a new `/research-audit`
+slash command (`~/.claude/skills/research-audit/`) that triggers a fan-out adversarial-audit
+workflow against a target across three criteria (design-coverage + principle-adherence +
+test/correctness), with `file:line`-cited findings that must survive independent refutation
+before they're reported confirmed. The opensquid pack-FSM governance layer (gating the audit
+the way coding-flow gates building) is deferred — the slash-command + workflow is usable now.
+
 ## [0.5.327] - 2026-06-04
 
 ### Added (PP.1 — a pre-push quality gate)
