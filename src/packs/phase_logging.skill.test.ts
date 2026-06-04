@@ -17,7 +17,7 @@ import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import type { Event } from '../runtime/event.js';
 import { evaluateProcess } from '../runtime/evaluator.js';
-import type { ProcessStep, RuleResult } from '../runtime/types.js';
+import type { ProcessStep, Rule, RuleResult } from '../runtime/types.js';
 
 import { loadPack } from './loader.js';
 
@@ -52,8 +52,7 @@ const FIRING: Record<string, string> = {
   'guard:phase-claim-forward': 'Phase 5 — audit',
   'guard:session-no-task': "now I'll implement the fix",
 };
-const phaseRules = (rs: { id: string; kind: string; process: ProcessStep[] }[]) =>
-  rs.filter((r) => r.id in FIRING);
+const phaseRules = (rs: Rule[]): Rule[] => rs.filter((r) => r.id in FIRING);
 
 describe('phase-logging (RJ.2 — fires at prompt_submit on priorAssistantText)', () => {
   it('compiles the 3 phase-logging guards under default-discipline/guards (prompt_submit)', async () => {
