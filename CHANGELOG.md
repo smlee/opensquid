@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.325] - 2026-06-04
+
+### Added (T-CODING-FLOW-GAP-FIXES GF.2 — the owned-boundary EXECUTE gate: git pre-commit + pre-push [F2 + F3 + F4])
+
+The EXECUTE gate stopped pattern-matching tool calls — a denylist over an unbounded input
+(every way to spell a commit / write a file), which can never be proven complete (F2 the
+`^git…commit` regex, F3 Bash-mediated writes, F4 the `src/`∪`packs/`∪`test/` substring
+set). Enforcement moves to the boundary **git owns**: `opensquid gate install` writes
+managed `pre-commit` + `pre-push` hooks (carrying the `@opensquid managed hook` marker;
+foreign hooks are CHAINED, not clobbered) that `exec opensquid gate <boundary>`. The gate
+reads the **real** staged/pushed diff (ground truth — no path-guessing) plus the live
+session FSM/phase/active-task state (resolved out-of-band via `resolveMcpSessionId`) and is
+**total**: a non-gated repo (no `.opensquid/active.json` opting into `coding-flow`) is
+never blocked; a docs-only change (flow artifacts) is allowed; a gated repo with code
+changes FAILS CLOSED unless the active task reached `phases_complete` with a complete
+7-phase ledger (which is unreachable without SCOPE + AUTHOR having passed, so one check
+enforces all three stages). `opensquid doctor git-hooks` verifies installation. Also fixes
+the `.current-session` clobber: `recordCurrentSession` now ignores the `doctor-probe`
+sentinel that `doctor hooks` spawns its probe events with. The F2 regex and F4 path list
+are retired in GF.3.
+
 ## [0.5.324] - 2026-06-04
 
 ### Changed (T-CODING-FLOW-GAP-FIXES GF.6 — pause-gates hard-block + widen coverage [F8])

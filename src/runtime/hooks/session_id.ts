@@ -61,7 +61,10 @@ export const currentSessionPath = (): string => join(OPENSQUID_HOME(), '.current
  * never records the `'unknown'` sentinel (that would mislead the CLI).
  */
 export async function recordCurrentSession(sessionId: string, cwd?: string): Promise<void> {
-  if (sessionId === 'unknown' || sessionId === '') return;
+  // GF.2 — never record the synthetic sentinels: `unknown`/`''` (no real session) and
+  // `doctor-probe` (the id `opensquid doctor hooks` spawns its probe events with — it would
+  // otherwise CLOBBER the live `.current-session` pointer the git gate resolves against).
+  if (sessionId === 'unknown' || sessionId === '' || sessionId === 'doctor-probe') return;
   try {
     await mkdir(OPENSQUID_HOME(), { recursive: true });
     // Global pointer — back-compat for the automation CLI + lessons.ts (which

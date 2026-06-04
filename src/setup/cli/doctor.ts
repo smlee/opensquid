@@ -313,4 +313,25 @@ export function registerDoctor(program: Command): void {
         await engine.close();
       }
     });
+
+  doc
+    .command('git-hooks')
+    .description('Check the opensquid git pre-commit/pre-push hooks are installed (GF.2)')
+    .action(async () => {
+      const { gitRoot } = await import('./gate.js');
+      const { checkGitHooks } = await import('../wizard/git-hooks.js');
+      const root = await gitRoot(process.cwd());
+      if (root === null) {
+        process.stdout.write('[SKIPPED] git-hooks: not inside a git work tree\n');
+        process.exit(0);
+      }
+      const res = await checkGitHooks(root);
+      for (const h of res) {
+        const tag = h.state === 'installed' ? 'GREEN' : h.state === 'foreign' ? 'WARN' : 'RED';
+        process.stdout.write(`[${tag}]\t${h.name}: ${h.state}\n`);
+      }
+      const incomplete = res.some((h) => h.state !== 'installed');
+      if (incomplete) process.stdout.write('remediation: opensquid gate install\n');
+      process.exit(res.some((h) => h.state === 'missing') ? 1 : 0);
+    });
 }

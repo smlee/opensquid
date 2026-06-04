@@ -30,6 +30,7 @@ import { registerCache } from './setup/cli/cache.js';
 import { registerSetup } from './setup/cli/chat.js';
 import { registerCheckpoints } from './setup/cli/checkpoints.js';
 import { registerDoctor } from './setup/cli/doctor.js';
+import { registerGate } from './setup/cli/gate.js';
 import { registerSetupWizard } from './setup/cli/hooks.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
@@ -225,6 +226,13 @@ function runCli(): void {
   // 1 = any red. NEVER spawns commands that don't match the opensquid regex
   // (security gate against running arbitrary user-configured commands).
   registerDoctor(program);
+
+  // GF.2 — `opensquid gate commit|push|install`. The owned-boundary EXECUTE gate: the
+  // installed git pre-commit/pre-push hooks `exec opensquid gate <boundary>`, which reads
+  // the real staged/pushed diff + the live session FSM/phase state and blocks a code
+  // commit/push that has not completed the SCOPE→AUTHOR→7-phase flow. Total: a non-gated
+  // repo (no .opensquid/active.json opting into coding-flow) is never blocked.
+  registerGate(program);
 
   // T.2 — `opensquid engine doctor|set-path|forget|kill`. Engine binary
   // discovery + persisted-path management. Revived from the pre-reset
