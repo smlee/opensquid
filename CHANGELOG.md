@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.322] - 2026-06-04
+
+### Fixed (T-CODING-FLOW-GAP-FIXES GF.4 — fail CLOSED + require an audited spec [F6 + F7])
+
+**F6 (MED):** the read-side gate primitives `has_active_task`,
+`workflow_phases_complete`, `has_generated_spec` (and `task_list_generated`, the same
+bug) returned `err` on a caught exception. The dispatcher silently skips an errored rule
+result (`dispatch.ts:462`) and falls through to its default ALLOW (`exit 0`) — so a
+blocking gate whose primitive threw **failed OPEN**, contradicting the header's
+"never fail-open" claim. Each now returns the CONSERVATIVE `ok` verdict (no active task /
+not complete / not generated / not all-generated), making the gate fail CLOSED and the
+header true. **F7 (MED):** `scope-before-code` allowed code at `researched` with a mere
+spec file on disk (`has_generated_spec` only checks the path resolves, not that it passed
+the audit). Dropped `researched` + `spec_authored` from the code-allow set — code now
+requires a `spec_complete`-audited spec (allow set: `spec_complete`, `tasks_loaded`,
+`phases_in_flight`, `phases_complete`). New unit tests force the catch in all four
+primitives (a throwing-`sessionId` ctx) and assert the conservative `ok`; the SCOPE-gate
+e2e test now blocks code at `researched` and allows it only at `spec_complete`.
+
 ## [0.5.321] - 2026-06-04
 
 ### Fixed (T-CODING-FLOW-GAP-FIXES GF.1 — restore the cross-pack profession handoffs [F1 + F9])

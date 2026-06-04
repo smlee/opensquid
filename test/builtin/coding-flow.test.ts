@@ -141,7 +141,7 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
     await rm(tempHome, { recursive: true, force: true });
   });
 
-  it('SCOPE gate: blocks src/ pre-research, then allows once the pre-research doc is written', async () => {
+  it('SCOPE gate: blocks src/ until a spec_complete-audited task (GF.4 F7)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registryWithAudit('VERDICT: SPEC_COMPLETE'); // AF.1: research advance now needs a GUESS_FREE audit
     const sid = 'cf-scope';
@@ -156,7 +156,12 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
       started_at: '2026-06-03T00:00:00.000Z',
       spec: resolve('package.json'),
     });
-    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(0); // researched + scoped → allowed
+    // GF.4 (F7): a spec file on disk at `researched` is NOT enough — code is still BLOCKED
+    // until the spec passes the audit (spec_complete).
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2);
+    // Drive AUTHOR to spec_complete (the audit stub returns SPEC_COMPLETE), then code is allowed.
+    await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored → spec_verified → spec_complete
+    expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(0); // spec_complete + scoped → allowed
   });
 
   it('AUTHOR gate: TaskCreate is blocked until the spec passes audit (stays at spec_authored)', async () => {

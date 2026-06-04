@@ -259,3 +259,37 @@ describe('task_list_generated (Gate B)', () => {
     });
   });
 });
+
+// GF.4 (F6): every read-side gate primitive fails CLOSED — a thrown internal read
+// returns the CONSERVATIVE `ok` verdict (so a blocking gate fires), NEVER an `err`
+// (an err rule result is silently skipped by the dispatcher → the gate falls through
+// to ALLOW). A ctx whose `sessionId` getter throws forces the outer catch uniformly.
+describe('GF.4 (F6): gate primitives fail CLOSED on a thrown read', () => {
+  function throwingCtx(): EvalCtx {
+    return {
+      event: { kind: 'session_end', sessionId: SID },
+      bindings: new Map(),
+      get sessionId(): string {
+        throw new Error('forced read failure');
+      },
+      packId: 'test',
+    } as unknown as EvalCtx;
+  }
+
+  it('has_active_task → ok(present:false), not err', async () => {
+    const r = await HasActiveTask.execute({}, throwingCtx());
+    expect(r).toEqual({ ok: true, value: { present: false, id: '', task_id: '' } });
+  });
+  it('workflow_phases_complete → ok(complete:false), not err', async () => {
+    const r = await WorkflowPhasesComplete.execute({}, throwingCtx());
+    expect(r).toEqual({ ok: true, value: { active: false, complete: false } });
+  });
+  it('has_generated_spec → ok(generated:false), not err', async () => {
+    const r = await HasGeneratedSpec.execute({}, throwingCtx());
+    expect(r).toEqual({ ok: true, value: { present: false, generated: false } });
+  });
+  it('task_list_generated → ok(all_generated:false), not err', async () => {
+    const r = await TaskListGenerated.execute({}, throwingCtx());
+    expect(r).toEqual({ ok: true, value: { all_generated: false, ungenerated: [] } });
+  });
+});

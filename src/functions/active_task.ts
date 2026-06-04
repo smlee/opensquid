@@ -8,10 +8,13 @@
  *     (so a new task never inherits a prior task's completion — see
  *     workflow_phases.ts).
  *
- * Both are read-only, no args, never throw (a read failure surfaces as
- * "no active task" / "not complete" — the conservative verdict, NOT fail-open
- * past the gate). `memoizable: false` is load-bearing: the active task +
- * phase ledger change within a session, so a memoized result would be stale.
+ * Both are read-only, no args, never throw. GF.4 (F6): a read failure returns the
+ * conservative `ok` verdict ("no active task" / "not complete" / "not generated"),
+ * NEVER an `err` — an `err` rule result is silently skipped by the dispatcher
+ * (dispatch.ts:462), which would let a blocking gate fall through to ALLOW (fail-open).
+ * Returning a conservative `ok` makes the gate fail CLOSED. `memoizable: false` is
+ * load-bearing: the active task + phase ledger change within a session, so a memoized
+ * result would be stale.
  *
  * Imports from: zod, ../runtime/result.js, ../runtime/session_state.js,
  *   ../runtime/workflow_phases.js.
@@ -24,7 +27,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { z } from 'zod';
 
 import { readHarnessTasks } from '../runtime/hooks/active_task_mirror.js';
-import { err, ok } from '../runtime/result.js';
+import { ok } from '../runtime/result.js';
 import { readActiveTask } from '../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../runtime/workflow_phases.js';
 
@@ -51,8 +54,11 @@ export const HasActiveTask: FunctionDef<z.input<typeof NoArgs>, HasActiveTaskRes
       const active = await readActiveTask(ctx.sessionId);
       if (active === null) return ok({ present: false, id: '', task_id: '' });
       return ok({ present: true, id: active.id, task_id: active.taskId ?? '' });
-    } catch (e) {
-      return err({ kind: 'runtime' as const, message: `has_active_task: ${String(e)}`, cause: e });
+    } catch {
+      // GF.4 (F6): fail CLOSED — a thrown read becomes the conservative verdict (no
+      // active task), NEVER an `err` the dispatcher silently skips (dispatch.ts:462),
+      // which would let a blocking gate fall through to ALLOW.
+      return ok({ present: false, id: '', task_id: '' });
     }
   },
 };
@@ -79,12 +85,9 @@ export const WorkflowPhasesComplete: FunctionDef<
       if (active === null) return ok({ active: false, complete: false });
       const state = await readPhaseState(ctx.sessionId);
       return ok({ active: true, complete: isComplete(state, active.id) });
-    } catch (e) {
-      return err({
-        kind: 'runtime' as const,
-        message: `workflow_phases_complete: ${String(e)}`,
-        cause: e,
-      });
+    } catch {
+      // GF.4 (F6): fail CLOSED — not complete on any read failure.
+      return ok({ active: false, complete: false });
     }
   },
 };
@@ -132,12 +135,9 @@ export const HasGeneratedSpec: FunctionDef<z.input<typeof NoArgs>, HasGeneratedS
       const cwd = ctx.event.kind === 'tool_call' ? (ctx.event.cwd ?? process.cwd()) : process.cwd();
       const specPath = isAbsolute(spec) ? spec : resolve(cwd, spec);
       return ok({ present: true, generated: await pathExistsAbs(specPath) });
-    } catch (e) {
-      return err({
-        kind: 'runtime' as const,
-        message: `has_generated_spec: ${String(e)}`,
-        cause: e,
-      });
+    } catch {
+      // GF.4 (F6): fail CLOSED — not generated on any read failure.
+      return ok({ present: false, generated: false });
     }
   },
 };
@@ -184,12 +184,10 @@ export const TaskListGenerated: FunctionDef<z.input<typeof NoArgs>, TaskListGene
         .filter((t) => t.taskId === undefined || t.taskId === '')
         .map((t) => t.id);
       return ok({ all_generated: ungenerated.length === 0, ungenerated });
-    } catch (e) {
-      return err({
-        kind: 'runtime' as const,
-        message: `task_list_generated: ${String(e)}`,
-        cause: e,
-      });
+    } catch {
+      // GF.4 (F6): fail CLOSED — treat an unreadable task store as "not all generated"
+      // (Gate B blocks), never an `err` the dispatcher skips.
+      return ok({ all_generated: false, ungenerated: [] });
     }
   },
 };

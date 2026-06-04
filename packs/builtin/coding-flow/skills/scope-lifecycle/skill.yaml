@@ -181,8 +181,12 @@ rules:
       - call: has_generated_spec
         if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/"))'
         as: spec
+      # GF.4 (F7): code requires an AUTHOR-AUDITED spec, not just a spec file on disk.
+      # `researched` + `spec_authored` are DROPPED from the allow set — a spec exists at
+      # those states but has not passed the spec-audit (spec_complete). The allow set is
+      # now {spec_complete, tasks_loaded, phases_in_flight, phases_complete}.
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/")) && (spec.generated == false || (st != "researched" && st != "spec_authored" && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"))'
+        if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/")) && (spec.generated == false || (st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"))'
         args:
           level: block
           message: >-
