@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentEventBus } from './event_bus.js';
 import { InboxTransportBridge } from './transport_bridge.js';
@@ -75,14 +75,15 @@ function legacyRow(opts: {
   return JSON.stringify(row) + '\n';
 }
 
-// LP5F.1 follow-up: chokidar polling-backend tests occasionally exceed the
-// vitest default 5s on shared GitHub Actions Node-20 runners under contention.
-// Locally every test passes in <1s; the extra budget only matters in CI.
-// Per-file setConfig applies to every it() in the file without bumping each
-// one inline.
-beforeAll(() => {
-  vi.setConfig({ testTimeout: 20_000 });
-});
+// LP5F.1 follow-up / FX.1: chokidar polling-backend tests occasionally exceed the
+// vitest default 5s on shared GitHub Actions runners under contention. Locally every
+// test passes in <1s; the extra budget only matters in CI.
+// MUST be at MODULE TOP-LEVEL, not in a beforeAll: vitest captures a test's timeout at
+// it() REGISTRATION (collection time). A beforeAll runs at EXECUTION (after collection),
+// so the bump lands too late and every it() keeps the 5s default — which is exactly why
+// the CAT.5 polling test flaked at ~5011ms in CI (the 5s cap, not the 15s waitFor
+// ceiling). At top level this runs during collection, before any it() registers.
+vi.setConfig({ testTimeout: 20_000 });
 
 describe('InboxTransportBridge', () => {
   it('emits one event per legacy JSONL row appended', async () => {
