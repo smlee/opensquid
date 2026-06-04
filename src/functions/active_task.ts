@@ -193,3 +193,35 @@ export const TaskListGenerated: FunctionDef<z.input<typeof NoArgs>, TaskListGene
     }
   },
 };
+
+interface OpenTaskCountResult {
+  count: number;
+}
+
+/**
+ * AF.6 — the number of OPEN (pending|in_progress) tasks. The pause-gates derive whether a
+ * workflow RUN is still active from this + the FSM state (run-active = FSM≠idle AND
+ * (count>0 OR FSM≠phases_complete)); the run auto-OFFs when the backlog is depleted.
+ * Prefers `event.openTasks` (prompt_submit, transcript-derived by the UPS hook); falls
+ * back to the harness store for older CC / non-UPS events. Never throws → count 0.
+ */
+export const OpenTaskCount: FunctionDef<z.input<typeof NoArgs>, OpenTaskCountResult> = {
+  name: 'open_task_count',
+  argSchema: NoArgs,
+  durable: false,
+  memoizable: false,
+  costEstimateMs: 2,
+  execute: async (_args, ctx) => {
+    try {
+      const ev = ctx.event;
+      const open =
+        ev.kind === 'prompt_submit' && ev.openTasks !== undefined
+          ? ev.openTasks
+          : (await readHarnessTasks(ctx.sessionId)).map((t) => ({ id: t.id, status: t.status }));
+      const count = open.filter((t) => t.status === 'pending' || t.status === 'in_progress').length;
+      return ok({ count });
+    } catch {
+      return ok({ count: 0 });
+    }
+  },
+};

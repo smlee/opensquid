@@ -1,0 +1,27 @@
+# pause-stop-guard (AF.6) — the Stop-region pause-gate. Stopping DURING a run's AUTHOR or
+# EXECUTE region (FSM past `researched`, before idle/phases_complete) is drift: the
+# automated phases take no pauses until the backlog is depleted. A SCOPE stop (to await a
+# genuine user answer) is fine and is NOT flagged here (FSM in idle/scoping/researching/
+# researched). Own trigger so the FSM-only condition can't cross-fire on tool/prompt events.
+name: pause-stop-guard
+load: preload
+when_to_load: []
+triggers:
+  - kind: stop
+rules:
+  - id: no-stop-mid-run
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: verdict
+        if: 'st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight"'
+        args:
+          level: warn
+          message: >-
+            DRIFT: you stopped mid-run (AUTHOR/EXECUTE). The run is NOT complete — everything
+            after SCOPE is automated. Do not pause: continue to the next phase/task and keep
+            going until the whole backlog is depleted. (A SCOPE stop to await a genuine user
+            answer is the only allowed pause, and you are past SCOPE.)
+prose: |
+  Stopping during AUTHOR or EXECUTE is drift. The only legitimate pause is a genuine
+  user-question during the interactive SCOPE phase; everything downstream runs to depletion.

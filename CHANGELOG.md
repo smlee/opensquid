@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.316] - 2026-06-04
+
+### Added (T-CODING-FLOW-COMPLETENESS AF.6 — the pause-gate set: no-pause is now a GATE)
+
+The no-pause discipline can't live in agent memory (it kept lapsing), so it's now enforced.
+Three phase-aware pause-gates fire only during an ACTIVE run — derived run-active =
+`FSM != idle AND (open tasks remain OR FSM != phases_complete)`, which auto-ONs at scope
+entry and auto-OFFs when the backlog is depleted:
+
+- `pause-stop-guard` (Stop event): stopping during AUTHOR/EXECUTE is drift.
+- `pause-prevention` (tool_call + prompt_submit): `AskUserQuestion` past SCOPE is drift
+  (questions belong to the interactive SCOPE phase); pause/permission language in the
+  settled prior turn (`should i continue` / `at a context limit` / `let me pause`, matched
+  on `priorAssistantText` like honesty-ledger) during a run is drift.
+
+A new `open_task_count` primitive (prefers prompt_submit `event.openTasks`) backs the
+run-active derivation. A genuine user-question during SCOPE remains the only allowed pause.
+
+- `src/functions/active_task.ts` (`open_task_count`) + `src/runtime/bootstrap.ts`,
+  `packs/builtin/coding-flow/skills/{pause-stop-guard,pause-prevention}/skill.yaml` (new),
+  `test/builtin/coding-flow.test.ts`, pre-research §3.5.
+
 ## [0.5.315] - 2026-06-04
 
 ### Changed (T-CODING-FLOW-COMPLETENESS AF.2 — AUTHOR completeness = 100% design coverage)

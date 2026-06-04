@@ -81,6 +81,27 @@ The unifying rule: **gate each boundary on the region's audited content-complete
   (so none is dormant under the coding-flow-only pin); purge stale `scope-fsm`/`workflow-fsm`
   names from live comments + rename `scope_fsm_guess_prevention.test.ts`.
 
+## 3.5 Pause-gate set (user ruling — auto-on at scope-start, auto-off at backlog-depletion)
+
+The no-pause discipline must be a GATE, not agent memory (it keeps lapsing). A `run-active`
+master switch turns the pause-gates ON at scope-start (FSM `idle→scoping` → `write_state(coding-flow-run-active, true)`)
+and OFF when the final EXECUTE task completes — at a `prompt_submit`, if open-task count == 0
+AND FSM == `phases_complete`, clear it. (Open-task presence needs `event.openTasks`, available
+only at prompt_submit — a small `open_task_count` primitive over it; the same constraint AF.3's
+next-task driver has.) The gates fire ONLY while `run-active`, phase-aware:
+
+- **Stop event** (turn ends): drift while run-active, UNLESS in SCOPE waiting on a genuine
+  AskUserQuestion (idle/scoping/researching/researched + a pending question). In AUTHOR/EXECUTE:
+  always drift ("the run is not complete — continue to the next task").
+- **AskUserQuestion**: allowed in SCOPE; drift in AUTHOR/EXECUTE (questions belong to scope).
+- **Permission-language**: `text_pattern_match` on `priorAssistantText` (prompt_submit, like
+  honesty-ledger) for "should I (continue|proceed)", "want me to", "ready to", "at a (context )?limit",
+  "let me (check|pause)", "I'll pause" → drift while run-active.
+
+Re-scopes the original AF.6 (AskUserQuestion-only) into: **AF.6 = the run-active lifecycle +
+open_task_count**, **AF.7 = the three phase-aware pause-gates**. Both gate on `run-active` so
+they are off outside a run (normal stopping allowed before scope-start / after depletion).
+
 ## 4. Open questions — none blocking (the boundary-mechanism fork was the only one; the
 
 user resolved it: auto content-completeness, uniform across boundaries). AF.1–AF.5 are

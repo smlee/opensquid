@@ -66,6 +66,7 @@ import { registerLlmFunctions } from '../functions/llm.js';
 import {
   HasActiveTask,
   HasGeneratedSpec,
+  OpenTaskCount,
   TaskListGenerated,
   WorkflowPhasesComplete,
 } from '../functions/active_task.js';
@@ -180,6 +181,9 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // provenance (every pending/in_progress task carries metadata.taskId)? Closes
   // Gate A's smuggled-task loophole.
   r.register(TaskListGenerated);
+  // AF.6 — open-task count; the pause-gates derive run-active (auto-off when the
+  // backlog is depleted) from this + the FSM state.
+  r.register(OpenTaskCount);
   // T-ASC ASC.5 — chain-state read primitive. Exposes the persisted T-ASC
   // chain (stage + enrichment fields) to skill YAML `process:` chains so
   // ASC.5's reframed scope-decomposer handoff rules can shape their

@@ -25,6 +25,7 @@ import { ok } from '../../src/runtime/result.js';
 import {
   HasActiveTask,
   HasGeneratedSpec,
+  OpenTaskCount,
   WorkflowPhasesComplete,
 } from '../../src/functions/active_task.js';
 import { appendTool, writeActiveTask } from '../../src/runtime/session_state.js';
@@ -43,6 +44,7 @@ function registry(): FunctionRegistry {
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
+  r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
   return r;
 }
 
@@ -245,6 +247,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
   });
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
   r.register(HasGeneratedSpec); // scope-before-code consults the active task's spec
+  r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
   return r;
 }
 
@@ -409,6 +412,72 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
       sid,
     ); // spec write → coverage audit must SEE the design marker → SPEC_COMPLETE
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_complete');
+  });
+});
+
+describe('builtin coding-flow pack — pause-gates (AF.6)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-af6-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  const askQuestion: ToolCallEvent = { kind: 'tool_call', tool: 'AskUserQuestion', args: {} };
+  const scopePrompt: PromptSubmitEvent = { kind: 'prompt_submit', prompt: 'scope a new task' };
+
+  // research (depth + GUESS_FREE) → researched; spec write (audit INCOMPLETE) → spec_authored.
+  async function toSpecAuthored(pack: Awaited<ReturnType<typeof loadPack>>, sid: string) {
+    const reg = registryWithAudit('VERDICT: INCOMPLETE');
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    await dispatchEvent(researchWithContent, [pack], reg, sid);
+    await dispatchEvent(writeSpec, [pack], reg, sid);
+    return reg;
+  }
+
+  it('AskUserQuestion past SCOPE → DRIFT', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-q';
+    const reg = await toSpecAuthored(pack, sid); // → spec_authored (past SCOPE)
+    const r = await dispatchEvent(askQuestion, [pack], reg, sid);
+    expect(r.stderr).toMatch(/DRIFT/);
+  });
+
+  it('AskUserQuestion DURING SCOPE → allowed (no drift)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-af6-qok';
+    await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping
+    const r = await dispatchEvent(askQuestion, [pack], reg, sid);
+    expect(r.stderr).not.toMatch(/DRIFT/);
+  });
+
+  it('pause/permission language during an active run → DRIFT', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-af6-lang';
+    await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping (run active)
+    const r = await dispatchEvent(
+      { kind: 'prompt_submit', prompt: 'next', priorAssistantText: 'should i continue?' },
+      [pack],
+      reg,
+      sid,
+    );
+    expect(r.stderr).toMatch(/DRIFT/);
+  });
+
+  it('Stop mid-run (AUTHOR/EXECUTE) → DRIFT', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-stop';
+    const reg = await toSpecAuthored(pack, sid); // → spec_authored
+    const r = await dispatchEvent({ kind: 'stop', assistantText: '' }, [pack], reg, sid);
+    expect(r.stderr).toMatch(/DRIFT/);
   });
 });
 
