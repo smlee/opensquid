@@ -1,5 +1,13 @@
 # Track T-CODING-FLOW-GAP-FIXES — close the 10 audit gaps in coding-flow
 
+> **SHIPPED 2026-06-04 — all 7 tasks complete, every commit CI-green (opensquid 0.5.320→0.5.326):**
+> GF.7 `fd118ef` (0.5.320) · GF.1 `d33438b` (0.5.321) · GF.4 `b3c0e59` (0.5.322) ·
+> GF.5 `82e337b` (0.5.323) · GF.6 `4e60ae0` (0.5.324) · GF.2 `ebfae70` (0.5.325) ·
+> GF.3 `7fb810e` (0.5.326, +`5f7878a` doc follow-up). All 10 findings F1–F10 closed. The
+> EXECUTE gate moved from evadable matchers to git-owned pre-commit/pre-push hooks
+> (`opensquid gate install`). The pack enforced on the author live (GF.6 stop-block + GF.3
+> verify-skip block). Track complete.
+
 **Pre-research:** `docs/research/T-coding-flow-gap-fixes-pre-research-2026-06-04.md`
 (4-agent adversarial audit + dogfooding; 10 verified findings F1–F10; the EXECUTE
 boundary moves from a leaky matcher to git-owned pre-commit/pre-push hooks).
