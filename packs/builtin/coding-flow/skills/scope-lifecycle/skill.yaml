@@ -196,11 +196,16 @@ rules:
             AND activate a spec-audited task before coding. (This is a best-effort early
             warning — the hard guarantee is the git pre-commit/pre-push gate, which blocks a
             code commit/push that has not completed the flow.)
-  # ── --no-verify detector: the ONE sound matcher (a closed opt-out token) (GF.3) ──
-  # The git gate (GF.2) is bypassable only by `git commit/push --no-verify` (and `git
-  # commit -n`) — a single explicit opt-out. Matching that one token is SOUND (not a
-  # denylist over an open set), so it is a hard BLOCK. `git push -n` is --dry-run, NOT
-  # --no-verify, so -n is matched for `commit` only.
+  # ── verify-skip detector: the ONE closed opt-out token (GF.3) ────────────────
+  # The git gate (GF.2) is bypassable only by passing the verify-skipping flag to `git
+  # commit/push` (or `git commit -n`) — a single explicit opt-out (not a denylist over an
+  # open set), so it is a hard BLOCK. `git push -n` is --dry-run, NOT a verify-skip, so -n
+  # is matched for `commit` only. KNOWN LIMITATION (matching a shell string is imperfect):
+  # the flag literal appearing inside a `-m "…"` commit MESSAGE also matches → over-block.
+  # That direction is INTENTIONAL and safe for a bypass-detector: a false positive (an
+  # annoying block on a message that mentions the flag) beats a false negative (letting a
+  # real bypass through). Do NOT "fix" this by anchoring to flag position — that
+  # reintroduces a false negative on `git commit -m msg <flag>`.
   - id: no-verify-block
     process:
       - call: tool_name
