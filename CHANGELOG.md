@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.321] - 2026-06-04
+
+### Fixed (T-CODING-FLOW-GAP-FIXES GF.1 — restore the cross-pack profession handoffs [F1 + F9])
+
+**F1 (HIGH):** the SCOPE→AUTHOR handoff was dead. `task-spec-author`'s manifest had no
+`usage:` field, so it defaulted to `usage: active` — `loadPack` skipped its `team.yaml`
+and the profession resolver rejected coding-flow's `handoff-research-to-spec` directive
+`wrong-usage` and dropped it. The spine of the 3-stage flow never fired. Added `usage:
+profession` (mirroring `scope-architect`'s `usage: both`). **F9 (LOW):** the `task-start`
+re-scope nudge was a `level: directive` emitted on a `tool_call` event, which the
+dispatcher drops (directives surface only on `prompt_submit`). Moved the nudge to a new
+`handoff-rescope-nudge` rule in `entry-and-handoffs` keyed on the `scoping` state (where
+`task-start`'s reset and GF.7's re-arm both land); removed the dead directive from
+`task-start`, keeping its FSM reset. New cross-pack tests (`packs=2`) exercise the
+profession resolver — the path the isolation tests never crossed, which is exactly what
+masked F1.
+
 ## [0.5.320] - 2026-06-04
 
 ### Fixed (T-CODING-FLOW-GAP-FIXES GF.7 — re-arm the flow for a new track [F10])

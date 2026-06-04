@@ -72,6 +72,25 @@ rules:
         args:
           key: coding-flow-track
           value: trivial
+  # GF.1 (F9) — the re-scope NUDGE, surfaced on prompt_submit (where directives are
+  # delivered) for the `scoping` state. Fires after `enter-scoping` advanced idle→scoping
+  # (or after task-start's task_unscoped reset, or GF.7's phases_complete re-arm landed
+  # the FSM in scoping). Replaces the directive task-start tried to emit on tool_call
+  # (dropped). Points the agent at the scope-architect persona to author the pre-research.
+  - id: handoff-rescope-nudge
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: verdict
+        if: 'st == "scoping"'
+        args:
+          level: directive
+          next_action:
+            profession: scope-architect
+            rationale: >-
+              SCOPE armed (state: scoping). Author the pre-research artifact to
+              teach-back depth (alternatives + failure modes + spikes), resolving every
+              open question, BEFORE any code. Hand off to the scope-architect persona.
   # SCOPE done → hand off to the task-spec-author persona.
   - id: handoff-research-to-spec
     process:

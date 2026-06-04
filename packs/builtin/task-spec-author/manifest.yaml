@@ -23,6 +23,12 @@
 name: task-spec-author
 version: 0.1.0
 scope: universal
+# GF.1 (F1) — a PROFESSION pack. Without this the manifest defaults to `usage: active`,
+# so `loadPack` skips its team.yaml and `resolveProfessionDirective` rejects the
+# coding-flow `handoff-research-to-spec` directive `wrong-usage` and drops it — the
+# SCOPE→AUTHOR handoff, the spine of the 3-stage flow, never fires. Mirrors
+# scope-architect/manifest.yaml `usage: both`.
+usage: profession
 goal: produce verified 11-field task specs from intent + pre-research
 description: |
   Profession pack wrapping the task-spec-author format authority. Has no

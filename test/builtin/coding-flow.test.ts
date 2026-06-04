@@ -248,6 +248,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
   r.register(HasGeneratedSpec); // scope-before-code consults the active task's spec
   r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
+  r.register(TextPatternMatch); // GF.1: enter-scoping classifies the track / advances scope_start
   return r;
 }
 
@@ -773,5 +774,64 @@ describe('builtin coding-flow pack — per-write scope gate (FU.12)', () => {
     const reg = registry();
     await dispatchEvent(writeResearch, [pack], reg, sid); // FSM → researched, but task unscoped
     expect((await dispatchEvent(writeCode, [pack], reg, sid)).exitCode).toBe(2);
+  });
+});
+
+// GF.1 (F1 + F9): the cross-pack profession handoffs. These exercise the profession
+// RESOLVER (dispatch.ts) across TWO loaded packs — the path the isolation tests
+// (packs=1) never crossed, which is exactly what masked F1.
+describe('builtin coding-flow pack — GF.1 cross-pack profession handoffs (F1 + F9)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-gf1-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('GF.1 (F1): task-spec-author loads as a profession pack with a team', async () => {
+    const tsa = await loadPack(resolve('packs/builtin', 'task-spec-author'));
+    expect(tsa.usage).toBe('profession');
+    expect(tsa.team).toBeDefined();
+  });
+
+  it('GF.1 (F1): the SCOPE→AUTHOR handoff RESOLVES across packs (not dropped wrong-usage)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const tsa = await loadPack(resolve('packs/builtin', 'task-spec-author'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-gf1-handoff';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    await dispatchEvent(researchWithContent, [pack, tsa], reg, sid); // → researched
+    const r = await dispatchEvent(
+      { kind: 'prompt_submit', prompt: 'continue' },
+      [pack, tsa],
+      reg,
+      sid,
+    );
+    // The handoff-research-to-spec directive (profession: task-spec-author) survived the
+    // resolver — pre-GF.1 it was dropped `wrong-usage` (task-spec-author defaulted to active).
+    expect(JSON.stringify(r.directives)).toMatch(/task-spec-author/);
+  });
+
+  it('GF.1 (F9): the re-scope nudge surfaces on a scoping-state prompt_submit', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const arch = await loadPack(resolve('packs/builtin', 'scope-architect'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-gf1-nudge';
+    const r = await dispatchEvent(
+      { kind: 'prompt_submit', prompt: 'scope and plan this work' },
+      [pack, arch],
+      reg,
+      sid,
+    );
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('scoping');
+    // The nudge (profession: scope-architect) surfaces on prompt_submit — F9's directive
+    // was previously emitted on tool_call (task-start) and dropped.
+    expect(JSON.stringify(r.directives)).toMatch(/scope-architect/);
   });
 });
