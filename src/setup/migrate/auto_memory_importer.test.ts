@@ -71,7 +71,12 @@ interface Engine {
  * returns (models what's already persisted, for refresh-vs-skip tests).
  * `memoryCreate` mints deterministic ids `mem-new-0`, `mem-new-1`, …
  */
-function mkEngine(storedContent: Record<string, string> = {}): Engine {
+function mkEngine(
+  storedContent: Record<string, string> = {},
+  // MF.2 (H3): the engine-side description per id, so refresh-vs-skip can be exercised on
+  // the DESCRIPTION surface (not just content). Defaults to 'd' (the prior fixed value).
+  storedDesc: Record<string, string> = {},
+): Engine {
   let n = 0;
   const create = vi.fn().mockImplementation(() =>
     Promise.resolve({
@@ -84,7 +89,7 @@ function mkEngine(storedContent: Record<string, string> = {}): Engine {
   const get = vi.fn().mockImplementation(({ id }: { id: string }) =>
     Promise.resolve({
       id,
-      description: 'd',
+      description: storedDesc[id] ?? 'd',
       content: storedContent[id] ?? '',
       created_at: 't',
       scope: 'user',
@@ -121,10 +126,11 @@ describe('importAutoMemoryDir', () => {
     expect(create).toHaveBeenCalledTimes(3);
   });
 
-  it('skips an existing entry whose content is unchanged', async () => {
+  it('skips an existing entry whose content AND description are unchanged', async () => {
     await write('a.md', fixture('a', 'feedback'));
     await write('b.md', fixture('b', 'user'));
-    const { client, create, get, update } = mkEngine({ 'id-a': fixtureBody('a') });
+    // MF.2: stored description matches the disk ('desc-a') so neither surface changed → skip.
+    const { client, create, get, update } = mkEngine({ 'id-a': fixtureBody('a') }, { 'id-a': 'desc-a' });
     const result = await importAutoMemoryDir(dir, client, {
       dryRun: false,
       existingIndex: idx({ a: 'id-a' }),
@@ -134,6 +140,20 @@ describe('importAutoMemoryDir', () => {
     expect(get).toHaveBeenCalledTimes(1); // a content check
     expect(update).not.toHaveBeenCalled();
     expect((create.mock.calls[0]?.[0] as { description: string }).description).toBe('desc-b');
+  });
+
+  // MF.2 (H3): a description-only edit (body unchanged) MUST refresh — description is
+  // load-bearing for retrieval (ADR-0005), so a stale engine description = wrong recall.
+  it('refreshes an existing entry whose DESCRIPTION changed but body did not', async () => {
+    await write('a.md', fixture('a', 'feedback')); // disk description = 'desc-a'
+    const { client, get, update } = mkEngine({ 'id-a': fixtureBody('a') }, { 'id-a': 'STALE desc' });
+    const result = await importAutoMemoryDir(dir, client, {
+      dryRun: false,
+      existingIndex: idx({ a: 'id-a' }),
+    });
+    expect(result).toEqual({ imported: 0, refreshed: 1, skipped: 0, errors: [] });
+    expect(get).toHaveBeenCalledTimes(1);
+    expect((update.mock.calls[0]?.[0] as { description: string }).description).toBe('desc-a');
   });
 
   it('refreshes an existing entry whose content changed (memoryUpdate, not create)', async () => {
@@ -259,9 +279,13 @@ describe('importAutoMemoryDir', () => {
   it('reconciles a duplicate name appearing twice in one batch (create once, then skip)', async () => {
     await write('a.md', fixture('a', 'feedback'));
     await write('a-copy.md', fixture('a', 'feedback')); // same `name: a` slug + body
-    // The just-created entry is mem-new-0; its stored content == fixtureBody('a'),
-    // so the 2nd occurrence's content-check is equal → skipped (not refreshed).
-    const { client, create, update } = mkEngine({ 'mem-new-0': fixtureBody('a') });
+    // The just-created entry is mem-new-0; its stored content == fixtureBody('a') AND its
+    // description == the disk's 'desc-a' (what create wrote), so the 2nd occurrence's
+    // content+description check is equal → skipped (not refreshed). (MF.2: model both.)
+    const { client, create, update } = mkEngine(
+      { 'mem-new-0': fixtureBody('a') },
+      { 'mem-new-0': 'desc-a' },
+    );
     const result = await importAutoMemoryDir(dir, client, {
       dryRun: false,
       existingIndex: idx({}),

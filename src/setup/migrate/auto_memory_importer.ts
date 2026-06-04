@@ -110,7 +110,16 @@ export async function importAutoMemoryDir(
         continue;
       }
       const current = await engine.memoryGet({ id: existing.id });
-      if (current.content !== parsed.body) {
+      // MF.2 (H3): refresh on a body OR a DESCRIPTION change — not body-only. The
+      // `description` is part of the identity/retrieval surface: ADR-0005 makes it
+      // "load-bearing" for recall (the manifest + similarity ranking key on it), so a
+      // description-only edit that left the body untouched MUST still re-index, or recall
+      // keeps using a stale description. (The decision the MAU spec left open: description
+      // IS identity, not body-only.) `memoryUpdate` already writes both fields below.
+      if (
+        current.content !== parsed.body ||
+        current.description !== parsed.frontmatter.description
+      ) {
         await engine.memoryUpdate({
           id: existing.id,
           description: parsed.frontmatter.description,

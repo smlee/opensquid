@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.329] - 2026-06-04
+
+### Fixed (T-MEMORY-AUDIT-FIXES — the 3 actionable findings from the `/research-audit` memory run)
+
+The first real `/research-audit` (the memory subsystem, run `wf_a99b6c01-cf6`) surfaced 10
+refutation-survived findings; 3 were actionable, fixed here through the 3-phase flow.
+**MF.1 [H1]:** `reconcileMemoryOnSessionEnd` ran `snapshotAuto` but never re-checked drift,
+so the design's "loudly self-auditing" promise held only on-command (`doctor memory`) and
+not at the session boundary where the original silent-drift failure occurred — it now calls
+`computeMemoryDrift` after the sync and surfaces a non-empty post-reconcile drift loudly on
+stderr (still fail-open). **MF.2 [H3]:** the importer detected changes body-only, so a
+description-only edit was never re-indexed — but `description` is load-bearing for retrieval
+(ADR-0005), so a stale engine description = wrong recall; detection now refreshes on a body
+OR description change, and the (previously implicit) "description is identity" decision is
+documented. **MF.3 [M1]:** added the `getThrows` test seam `mkEngine` already promised and a
+test proving `computeMemoryDrift` propagates a mid-loop `memoryGet` rejection (never a
+falsely-clean `inSync`). Found by the audit tool built earlier today, fixed under the gates.
+
 ## [0.5.328] - 2026-06-04
 
 ### Added (RA.1 — the research/audit flow: lexicon principles + `/research-audit`)

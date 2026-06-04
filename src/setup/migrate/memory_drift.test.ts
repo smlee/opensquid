@@ -42,7 +42,7 @@ async function write(file: string, contents: string): Promise<void> {
  */
 function mkEngine(
   engineEntries: Record<string, string>,
-  opts: { listThrows?: boolean } = {},
+  opts: { listThrows?: boolean; getThrows?: string } = {},
 ): EngineClient {
   const results = Object.keys(engineEntries).map((name) => ({
     id: name,
@@ -63,13 +63,15 @@ function mkEngine(
         results,
       });
   const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
-    Promise.resolve({
-      id,
-      description: id,
-      content: engineEntries[id] ?? '',
-      created_at: 't',
-      scope: 'user',
-    }),
+    opts.getThrows === id
+      ? Promise.reject(new Error('engine down'))
+      : Promise.resolve({
+          id,
+          description: id,
+          content: engineEntries[id] ?? '',
+          created_at: 't',
+          scope: 'user',
+        }),
   );
   return { memoryList, memoryGet } as unknown as EngineClient;
 }
@@ -116,6 +118,16 @@ describe('computeMemoryDrift', () => {
   it('PROPAGATES an engine error (never reports a falsely-clean inSync)', async () => {
     await write('a.md', fixture('a'));
     const engine = mkEngine({}, { listThrows: true });
+    await expect(computeMemoryDrift(dir, engine)).rejects.toThrow(/engine down/);
+  });
+
+  // MF.3 (M1): the OTHER engine call — per-entry memoryGet (memory_drift.ts:74) — must also
+  // propagate, not be swallowed into a falsely-clean inSync. listThrows only exercises the
+  // memoryList path; this exercises a mid-loop memoryGet rejection.
+  it('PROPAGATES a mid-loop memoryGet rejection (never a falsely-clean inSync)', async () => {
+    await write('a.md', fixture('a'));
+    await write('b.md', fixture('b'));
+    const engine = mkEngine({ a: bodyOf('a'), b: bodyOf('b') }, { getThrows: 'b' });
     await expect(computeMemoryDrift(dir, engine)).rejects.toThrow(/engine down/);
   });
 });

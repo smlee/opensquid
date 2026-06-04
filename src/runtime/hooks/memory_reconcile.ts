@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { EngineClient } from '../../engine/client.js';
+import { computeMemoryDrift, renderMemoryDrift } from '../../setup/migrate/memory_drift.js';
 import { snapshotAuto } from '../../setup/migrate/auto_memory_snapshot.js';
 import { OPENSQUID_HOME } from '../paths.js';
 import { readSessionCwd } from '../session_state.js';
@@ -72,6 +73,15 @@ export async function reconcileMemoryOnSessionEnd(
       err(
         `opensquid: memory reconcile — imported ${String(r.imported)}, refreshed ${String(r.refreshed)}, skipped ${String(r.skipped)}, errors ${String(r.errors.length)}\n`,
       );
+      // MF.1 (H1): the design's "loudly self-auditing" promise — a NON-empty drift AFTER
+      // reconcile means the sync did not converge (a real bug), so surface it LOUDLY. This
+      // is the automatic surface the original silent-drift failure lacked (the on-command
+      // `doctor memory` check was the only one). Runs before the `finally` close (engine
+      // still open); a throw here is caught by the outer catch → loud FAILED, never blocks.
+      const drift = await computeMemoryDrift(autoMemDir, engine);
+      if (!drift.inSync) {
+        err(`opensquid: ${renderMemoryDrift(drift)} — post-reconcile drift (expected in-sync)\n`);
+      }
     } finally {
       await engine.close();
     }

@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EngineClient } from '../../engine/client.js';
 
+import { IMPORT_HOST_PREFIX } from '../../setup/migrate/auto_memory_importer.js';
+
 import { encodeProjectPath, reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
 
 let root: string; // stands in for ~/.claude/projects
@@ -115,5 +117,44 @@ describe('reconcileMemoryOnSessionEnd', () => {
       }),
     ).resolves.toBeUndefined();
     expect(errs.text()).toMatch(/memory reconcile FAILED/);
+  });
+
+  // MF.1 (H1): the loud self-audit AFTER reconcile. With an empty disk dir but an
+  // import-marked engine entry whose source .md is gone, the post-reconcile drift check
+  // (computeMemoryDrift) sees an ORPHAN and must surface it loudly on stderr.
+  it('surfaces a NON-empty post-reconcile drift LOUDLY (orphaned import entry)', async () => {
+    const cwd = '/Users/x/projects/loop';
+    await mkdir(join(root, encodeProjectPath(cwd), 'memory'), { recursive: true }); // empty dir
+    const close = vi.fn().mockResolvedValue(undefined);
+    const memoryList = vi.fn().mockResolvedValue({
+      total: 1,
+      limit: 200,
+      offset: 0,
+      returned: 1,
+      results: [
+        {
+          id: 'id-gone',
+          description: 'd',
+          scope: 'user',
+          origin: { host: `${IMPORT_HOST_PREFIX}gone` }, // import-marked, no source on disk
+          created_at: 't',
+          updated_at: null,
+          consumed_by_user_lessons: 0,
+        },
+      ],
+    });
+    const memoryGet = vi.fn(); // orphaned → name not on disk → never fetched
+    const client = { memoryList, memoryGet, close } as unknown as EngineClient;
+    const errs = collectStderr();
+    await reconcileMemoryOnSessionEnd('s', {
+      readCwd: () => Promise.resolve(cwd),
+      autoMemoryRoot: root,
+      engineFactory: () => client,
+      opensquidHome: () => home,
+      stderr: errs.write,
+    });
+    expect(errs.text()).toMatch(/post-reconcile drift/);
+    expect(errs.text()).toMatch(/orphaned/);
+    expect(close).toHaveBeenCalledTimes(1); // engine still closed once (finally)
   });
 });
