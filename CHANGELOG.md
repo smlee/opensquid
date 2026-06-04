@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.330] - 2026-06-04
+
+### Added (T-CHAT-FINALIZE-REMOVE-LEGACY CL.1 — the single daemon-client owner)
+
+From the `/research-audit` of the chat system: the one-shot JSON-RPC-over-UNIX-socket
+client was copy-pasted into ~5 call sites (~225 LOC) — duplication that existed only
+because `src.legacy` is tsconfig-excluded so `src/` could not import the legacy
+`DaemonClient`. New `src/chat_daemon/client.ts` is the single owner the
+`chat_send.ts:15-22` comment already named: `daemonSocketPath()` (Unix via the canonical
+`chatDaemonSockPath`, the Win32 named-pipe branch folded in once), a generalized one-shot
+`daemonRpc<T>(method, params, { timeoutMs })`, and a typed `sendChat()`. A strict
+extraction (behavior matches the prior `defaultDaemonSend`, so the CL.3 call-site repoints
+are behavioral no-ops) with no speculative surface. Next slices port `resolveOrCreateTopic`
+onto it (CL.2 — removes the last legacy coupling), repoint the call sites (CL.3), and
+delete `src.legacy/chat` (CL.4).
+
 ## [0.5.329] - 2026-06-04
 
 ### Fixed (T-MEMORY-AUDIT-FIXES — the 3 actionable findings from the `/research-audit` memory run)
