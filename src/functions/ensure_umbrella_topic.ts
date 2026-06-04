@@ -48,10 +48,7 @@
  * Imported by: src/runtime/bootstrap.ts (registry wiring).
  */
 
-import { connect, type Socket } from 'node:net';
-import { homedir, platform as osPlatform } from 'node:os';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import { z } from 'zod';
 
@@ -61,6 +58,7 @@ import {
   resolveUmbrellaForCwd,
   type ChannelsConfig,
 } from '../channels/routing.js';
+import { createTopic as clientCreateTopic, pingDaemon } from '../chat_daemon/client.js';
 import { atomicWriteFile } from '../runtime/atomic_write.js';
 import { ok } from '../runtime/result.js';
 
@@ -85,101 +83,17 @@ export interface EnsureUmbrellaTopicDeps {
 }
 
 // ---------------------------------------------------------------------------
-// Daemon socket address — mirrors `chat_send.ts daemonSocketPath` so the
-// default seams land on the same socket the chat-daemon listens on.
-// OPENSQUID_HOME override honored for tests.
+// Default seams — the shared chat-daemon client (src/chat_daemon/client.ts).
+// CL.3 (T-CHAT-FINALIZE-REMOVE-LEGACY): this module previously carried its OWN
+// copy of the socket dance (daemonSocketPath + daemonRpc) — the 5th copy the
+// audit found. Both now delegate to the one owner.
 // ---------------------------------------------------------------------------
 
-function daemonSocketPath(): string {
-  const root = process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
-  if (osPlatform() === 'win32') {
-    const fingerprint = root.split(/[\\/]/).pop() ?? 'default';
-    return `\\\\.\\pipe\\opensquid-chat-daemon-${fingerprint}`;
-  }
-  return join(root, 'chat-daemon.sock');
-}
+/** Default `create_topic` dial — the shared client's one-shot RPC. */
+const defaultCreateTopic: CreateTopicFn = (args) => clientCreateTopic(args.chatId, args.name);
 
-let rpcCounter = 0;
-
-/** One-shot JSON-RPC call to the daemon socket; resolves the `result` field. */
-function daemonRpc<R>(method: string, params: unknown, timeoutMs: number): Promise<R> {
-  return new Promise<R>((resolveCall, rejectCall) => {
-    const id = `ensure-topic-${++rpcCounter}-${Date.now()}`;
-    const req = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n';
-
-    let sock: Socket | null = null;
-    let buffer = '';
-    const cleanup = (): void => {
-      if (sock !== null) {
-        try {
-          sock.end();
-        } catch {
-          /* already closed */
-        }
-        sock = null;
-      }
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      rejectCall(new Error(`chat-daemon RPC timeout after ${String(timeoutMs)}ms`));
-    }, timeoutMs);
-
-    sock = connect(daemonSocketPath());
-    sock.once('error', (e: Error) => {
-      clearTimeout(timer);
-      cleanup();
-      rejectCall(new Error(`chat-daemon connection error: ${e.message}`));
-    });
-    sock.once('connect', () => sock?.write(req));
-    sock.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      const nl = buffer.indexOf('\n');
-      if (nl < 0) return;
-      const line = buffer.slice(0, nl);
-      clearTimeout(timer);
-      cleanup();
-      try {
-        const parsed = JSON.parse(line) as {
-          result?: R;
-          error?: { code: number; message: string };
-        };
-        if (parsed.error) {
-          rejectCall(
-            new Error(
-              `chat-daemon RPC error ${String(parsed.error.code)}: ${parsed.error.message}`,
-            ),
-          );
-        } else if (parsed.result !== undefined) {
-          resolveCall(parsed.result);
-        } else {
-          rejectCall(new Error('chat-daemon RPC: malformed response'));
-        }
-      } catch (e) {
-        rejectCall(
-          new Error(`chat-daemon RPC: invalid JSON: ${e instanceof Error ? e.message : String(e)}`),
-        );
-      }
-    });
-  });
-}
-
-/** Default `create_topic` dial — one-shot UDS RPC. */
-const defaultCreateTopic: CreateTopicFn = (args) =>
-  daemonRpc<{ message_thread_id: number; name: string }>(
-    'create_topic',
-    { platform: 'telegram', chat_id: args.chatId, name: args.name },
-    5000,
-  );
-
-/** Default daemon-running gate — `ping` the socket; any failure ⇒ not running. */
-const defaultDaemonRunning: DaemonRunningFn = async () => {
-  try {
-    const res = await daemonRpc<{ pong?: boolean }>('ping', undefined, 1500);
-    return res.pong === true;
-  } catch {
-    return false;
-  }
-};
+/** Default daemon-running gate — the shared client's `ping`. */
+const defaultDaemonRunning: DaemonRunningFn = () => pingDaemon();
 
 // ---------------------------------------------------------------------------
 // Umbrella-derived topic name. Keep it short + stable + human-scannable.

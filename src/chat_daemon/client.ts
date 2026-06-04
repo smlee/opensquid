@@ -140,3 +140,24 @@ export const sendChat = (params: DaemonSendParams): Promise<DaemonSendResult> =>
     ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     ...(params.imagePath !== undefined ? { mediaPath: params.imagePath } : {}),
   });
+
+/** Typed `create_topic` RPC — creates one Telegram forum topic, returns its thread id. */
+export const createTopic = (
+  chatId: string,
+  name: string,
+): Promise<{ message_thread_id: number; name: string }> =>
+  daemonRpc<{ message_thread_id: number; name: string }>('create_topic', {
+    platform: 'telegram',
+    chat_id: chatId,
+    name,
+  });
+
+/** Liveness gate — true iff a chat-daemon answers `ping` on its socket. Any failure ⇒ false. */
+export const pingDaemon = async (timeoutMs = 1500): Promise<boolean> => {
+  try {
+    const r = await daemonRpc<{ pong?: boolean }>('ping', {}, { timeoutMs });
+    return r.pong === true;
+  } catch {
+    return false;
+  }
+};

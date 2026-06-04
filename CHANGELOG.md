@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.331] - 2026-06-04
+
+### Changed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.3a — `ensure_umbrella_topic` onto the shared client)
+
+`functions/ensure_umbrella_topic.ts` carried a 5th copy of the socket dance (its own
+`daemonSocketPath` + `daemonRpc`, ~80 LOC). Repointed at the CL.1 client: added
+`createTopic()` + `pingDaemon()` to `src/chat_daemon/client.ts`, and the function's default
+seams now delegate to them. Behavior-preserving (the `createTopic`/`daemonRunning` test
+seams are unchanged), no live-routing change — purely deletes the duplicate. The remaining
+send-path repoints (`chat_send.ts`, `chat-bridge-server.ts`) and the legacy-wizard migration
+(CAT.8) are the focused follow-on per `docs/research/T-chat-legacy-removal-real-scope-2026-06-04.md`.
+
 ## [0.5.330] - 2026-06-04
 
 ### Added (T-CHAT-FINALIZE-REMOVE-LEGACY CL.1 — the single daemon-client owner)
