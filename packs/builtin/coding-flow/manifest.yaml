@@ -19,3 +19,11 @@ evolves: true
 # [user_pinned]` clause would silently DISABLE an opted-in pack (the user_pinned
 # DetectionContext signal is never populated — the EWG.3.1 lesson, see
 # docs/pack-runtime.md §1.4).
+
+# T-FC2 — the SCOPE guess-audit loop-back (researched --guess_found--> researching,
+# D3) is a reusable quality-gate re-do pattern, so it is declared as a `loopback_gate`
+# FLOW template here instead of a hand-written transition in fsm.yaml. flows_compiler
+# expands it and merges it into the fsm.yaml machine BEFORE validateFsm.
+flows:
+  - template: loopback_gate
+    params: { state: researched, trigger: guess_found, back_to: researching }

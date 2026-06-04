@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.313] - 2026-06-04
+
+### Added (T-FC2-FLOW-TEMPLATES FC.2 — reusable FSM flow templates, the B2 half)
+
+The FLOW half of the reusable-template thesis (the gate half is `guards:`). A `flows:[]`
+manifest block + `flows_compiler.ts` (mirroring `guards_compiler`) expand a
+`{template, params}` invocation into an FSM `{states, transitions}` fragment, which the
+loader merges into the pack's `fsm.yaml` machine **before** `validateFsm` — so totality is
+checked on the EXPANDED machine (a flow edge to a typo'd endpoint fails load; a `flows:`
+block with no `fsm.yaml` throws loud). First template: `loopback_gate` — a quality-gate
+re-do edge connecting two existing spine states (endpoints must pre-exist, which is what
+makes the typo-catch real). `coding-flow` ADOPTS it for the D3 guess-audit loop
+(`researched --guess_found--> researching`), which moved out of `fsm.yaml` into a `flows:`
+entry — proving the mechanism in real use, not dead code. `FLOW_TEMPLATES` is a flat
+registry so a 2nd/3rd template is purely additive. Built through the full flow (the user
+chose BUILD — full + complete, no half-measure).
+
+- `src/packs/flows_compiler.ts` (new) + `.test.ts` (new),
+  `src/packs/schemas/manifest.ts` (Flow + flows), `src/packs/loader.ts` (merge),
+  `packs/builtin/coding-flow/{manifest.yaml,fsm.yaml}` (adopt), spec + pre-research.
+
 ## [0.5.312] - 2026-06-04
 
 ### Added (T-FU3-REGION-PROFILES FU.3 — track-type profiles: fix/doc/trivial skip AUTHOR)

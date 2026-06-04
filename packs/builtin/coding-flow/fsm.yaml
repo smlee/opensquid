@@ -26,7 +26,8 @@ transitions:
   - { from: idle, on: research_done, to: researched } # robustness: pre-research write with no scope prompt
   - { from: scoping, on: research_done, to: researched }
   - { from: researching, on: research_done, to: researched }
-  - { from: researched, on: guess_found, to: researching } # guess-audit loop-back (D3)
+  # researched --guess_found--> researching (the D3 loop-back) is now a `loopback_gate`
+  # FLOW template in manifest.yaml (T-FC2); flows_compiler merges it in before validateFsm.
   # ── TASK AUTHORING region ────────────────────────────────────
   - { from: researched, on: spec_drafted, to: spec_authored } # a docs/tasks/T-*.md written (unverified)
   - { from: spec_authored, on: spec_verified, to: spec_complete } # spec-audit passed: 11 fields + real code (D7)

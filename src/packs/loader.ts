@@ -64,6 +64,7 @@ import { getLivingPackVersion } from './living_pack.js';
 import { ingestSeedLessons } from './seed_lessons_ingest.js';
 import { compileVerifyGates } from './verify_gates_compiler.js';
 import { compileGuards } from './guards_compiler.js';
+import { compileFlows, type FlowExpansion } from './flows_compiler.js';
 import { Fsm, validateFsm } from '../runtime/fsm.js';
 import { parseYamlFile } from './yaml.js';
 
@@ -196,7 +197,14 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
   // (a transition targeting an undeclared state, etc.) throw at load with the
   // offending detail, so a malformed lifecycle is a loud config bug, not a
   // silently-ignored file.
-  const fsm = await loadOptionalFsm(join(dir, 'fsm.yaml'));
+  // T-FC2 — compile `flows:` templates into an FSM fragment, merged into the
+  // fsm.yaml machine BEFORE validateFsm so totality holds on the expanded FSM.
+  // Fail loud on an unknown template / bad params (mirrors guards compile above).
+  const flowsResult = compileFlows(manifest.name, manifest.flows);
+  if (!flowsResult.ok) {
+    throw new Error(flowsResult.errors.join('; '));
+  }
+  const fsm = await loadOptionalFsm(join(dir, 'fsm.yaml'), flowsResult.expansion);
 
   // MM.1 (2026-05-30) — team.yaml existence check for profession-mode packs.
   // `usage: profession | both` REQUIRES team.yaml declaring ≥1 SubagentRole.
@@ -345,14 +353,35 @@ async function loadOptionalDriftResponse(
 // shape/parse errors; we prefix totality errors with the path ourselves.
 // ---------------------------------------------------------------------------
 
-async function loadOptionalFsm(path: string): Promise<Fsm | undefined> {
-  let fsm: Fsm;
+async function loadOptionalFsm(
+  path: string,
+  flowExpansion?: FlowExpansion,
+): Promise<Fsm | undefined> {
+  let fsm: Fsm | undefined;
   try {
     const { data } = await parseYamlFile(path, Fsm);
     fsm = data as Fsm;
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw e;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') fsm = undefined;
+    else throw e;
+  }
+  if (fsm === undefined) {
+    // FC.2: flows AUGMENT a base FSM — a `flows:` block with no fsm.yaml has
+    // nothing to merge into, which is a loud config bug, not a silent no-op.
+    if (
+      flowExpansion !== undefined &&
+      (flowExpansion.states.length > 0 || flowExpansion.transitions.length > 0)
+    ) {
+      throw new Error(`${path}: flows: declared but no fsm.yaml to merge into`);
+    }
+    return undefined;
+  }
+  // FC.2: merge the compiled flow fragment (dedup states, append transitions)
+  // BEFORE validateFsm so totality is checked on the EXPANDED machine.
+  if (flowExpansion !== undefined) {
+    const states = [...fsm.states];
+    for (const s of flowExpansion.states) if (!states.includes(s)) states.push(s);
+    fsm = { ...fsm, states, transitions: [...fsm.transitions, ...flowExpansion.transitions] };
   }
   const errors = validateFsm(fsm);
   if (errors.length > 0) {

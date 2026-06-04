@@ -479,6 +479,24 @@ export const Guard = z
 export type Guard = z.infer<typeof Guard>;
 
 // ---------------------------------------------------------------------------
+// T-FC2-FLOW-TEMPLATES — `flows:` (the reusable FSM FLOW template; the gate
+// template is `guards:`). A flow is a `{template, params}` invocation expanded by
+// `flows_compiler` into an FSM `{states, transitions}` fragment, merged into the
+// pack's `fsm.yaml` machine BEFORE `validateFsm`. Default [] → no expansion.
+//
+//   flows:
+//     - template: loopback_gate                 # a quality-gate re-do edge
+//       params: { state: researched, trigger: guess_found, back_to: researching }
+// ---------------------------------------------------------------------------
+export const Flow = z
+  .object({
+    template: z.string().min(1),
+    params: z.record(z.unknown()).default({}),
+  })
+  .strict();
+export type Flow = z.infer<typeof Flow>;
+
+// ---------------------------------------------------------------------------
 // Manifest — the document shape.
 //
 // `extends` is genuinely optional (no sensible default — most packs don't
@@ -545,6 +563,10 @@ export const Manifest = z
     // expands (via guards_compiler) into a detect→verdict TrackCheckRule under
     // the synthetic `<pack>/guards` skill. Default [] → no synthetic skill.
     guards: z.array(Guard).default([]),
+    // T-FC2-FLOW-TEMPLATES — reusable FSM flow templates. Each flow expands (via
+    // flows_compiler) into an FSM {states, transitions} fragment merged into the
+    // pack's fsm.yaml before validateFsm. Default [] → no expansion.
+    flows: z.array(Flow).default([]),
   })
   .strict()
   .superRefine((m, ctx) => {
