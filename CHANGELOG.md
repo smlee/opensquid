@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.334] - 2026-06-04
+
+### Removed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.2+CL.4 / CAT.8 — `src.legacy/chat` is gone)
+
+The chat system's last legacy-code coupling — `topic_create_step.ts`'s runtime dynamic
+import of the legacy `resolveOrCreateTopic` (from `dist/chat/daemon/workspace-topic.js`) —
+is removed by RETIRING the wizard step, not porting it. Verified facts drove the choice:
+`ensure_umbrella_topic` is wired live (bootstrap `:148` + default-discipline's
+session-connection-check SessionStart skill) and already creates the umbrella's one topic on
+`channels.json`, so the wizard step was redundant; `report_channel` is never written by any
+`src/` step; nothing imports `topic_create_step`'s types. Removed the `runTopicCreateStep`
+call + import from `chat_actions.ts`, deleted `topic_create_step.ts` (+ test), and
+`git rm -r src.legacy/chat`. Per Simplicity this is the clean removal (one fewer
+legacy-model code path; no slop relocated), with no topic-creation gap (the SessionStart
+assurance owns it). UX delta: no "✓ created topic" message at setup — it happens silently on
+the first session. The `tsconfig` `src.legacy` exclude stays (non-chat `src.legacy/` files
+remain). Full suite green. Caps the chat-cleanup arc: CL.1 shared client → CL.3a/b/c socket
+de-dup + the LOOP_HOME/Win32 fix → CL.2/CL.4 legacy-chat deletion.
+
 ## [0.5.333] - 2026-06-04
 
 ### Fixed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.3c — `chat-bridge-server` socket path matches the daemon)
