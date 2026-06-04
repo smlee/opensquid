@@ -73,13 +73,13 @@ function makeStubs(
     results,
   });
   // MAU.1 refresh path: existing rows are content-checked via memoryGet. The
-  // row id == name and the reader-trimmed fixture body is `body of <name>` (no
-  // trailing newline), so returning that makes an unchanged existing entry
-  // compare equal → skipped (not refreshed).
+  // row id == name; the reader-trimmed fixture body is `body of <name>` and its
+  // description is `<name>-desc` (MF.2: the importer now compares BOTH), so
+  // returning both makes an unchanged existing entry compare equal → skipped.
   const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
     Promise.resolve({
       id,
-      description: id,
+      description: `${id}-desc`,
       content: `body of ${id}`,
       created_at: 't',
       scope: 'user',
