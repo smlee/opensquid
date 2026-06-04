@@ -151,8 +151,16 @@ rules:
         as: targs
       - call: read_fsm_state
         as: st
+      # FU.3: the AUTHOR gate is profile-dependent. Read the track-type; a fix/doc/
+      # trivial track skips task-authoring it doesn't need. read_state(absent)→null,
+      # and null != "fix" is true (strict !==), so feature/unset/stale still FIRES —
+      # strictest default. SCOPE (scope-before-code) + EXECUTE (commit) stay universal.
+      - call: read_state
+        args:
+          key: coding-flow-track
+        as: track
       - call: verdict
-        if: '(tool == "TaskCreate") && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"'
+        if: '(tool == "TaskCreate") && track != "fix" && track != "doc" && track != "trivial" && st != "spec_complete" && st != "tasks_loaded" && st != "phases_in_flight" && st != "phases_complete"'
         args:
           level: block
           message: >-

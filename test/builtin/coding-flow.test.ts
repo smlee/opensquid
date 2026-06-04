@@ -29,8 +29,10 @@ import {
 } from '../../src/functions/active_task.js';
 import { appendTool, writeActiveTask } from '../../src/runtime/session_state.js';
 import { SessionToolHistory } from '../../src/functions/session_tool_history.js';
+import { TextPatternMatch } from '../../src/functions/text_pattern_match.js';
 import { appendPhase, REQUIRED_PHASES } from '../../src/runtime/workflow_phases.js';
 import type { ToolCallEvent } from '../../src/runtime/types.js';
+import type { PromptSubmitEvent } from '../../src/runtime/event.js';
 
 function registry(): FunctionRegistry {
   const r = new FunctionRegistry();
@@ -39,6 +41,7 @@ function registry(): FunctionRegistry {
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
+  r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   return r;
 }
 
@@ -159,6 +162,59 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
     await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored (no audit stub → never spec_verified)
     // The AUTHOR content gate: no tasks until spec_complete.
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2);
+  });
+});
+
+describe('builtin coding-flow pack — track-type region profiles (FU.3)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-fu3-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  // A scope-authoring prompt — `enter-scoping` classifies + records coding-flow-track.
+  // The fix/doc/trivial downgrade only fires when the prompt ALSO matches a scope-intent
+  // keyword (the classification is gated on scope-entry), so each fixture carries both.
+  const prompt = (text: string): PromptSubmitEvent => ({ kind: 'prompt_submit', prompt: text });
+
+  it('feature track → AUTHOR gate FIRES (TaskCreate blocked before spec_complete)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-fu3-feature';
+    await dispatchEvent(prompt('add a new task for the feature'), [pack], reg, sid); // track=feature
+    await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
+    await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // feature → AUTHOR fires
+  });
+
+  it('fix track → AUTHOR gate SKIPS (TaskCreate allowed at spec_authored)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-fu3-fix';
+    await dispatchEvent(prompt('add a task to fix the bug'), [pack], reg, sid); // track=fix
+    await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
+    await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(0); // fix → AUTHOR skipped
+  });
+
+  it('stale fix-track RESET to feature on a later feature scope entry (fail-safe strictest)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-fu3-reset';
+    await dispatchEvent(prompt('add a task to fix the bug'), [pack], reg, sid); // track=fix
+    await dispatchEvent(prompt('new task to design the feature'), [pack], reg, sid); // reset → feature
+    await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
+    await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // reset → AUTHOR fires
   });
 });
 

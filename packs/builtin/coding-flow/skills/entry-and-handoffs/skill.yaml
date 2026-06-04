@@ -28,6 +28,50 @@ rules:
         if: 'len(intent.matched) > 0'
         args:
           event: scope_start
+      # FU.3: record the track-type so the AUTHOR gate can consult it. RESET to the
+      # strict default (feature) on every scope entry FIRST — so a stale fix/doc/
+      # trivial value from a prior track can never under-gate a later feature task —
+      # then downgrade on a keyword match (later writes win; fix/doc/trivial all skip
+      # AUTHOR equally, so ambiguity among them is harmless). Unset/feature/stale =
+      # feature = strictest (read_state(absent)→null, null != "fix" → gate fires).
+      - call: write_state
+        if: 'len(intent.matched) > 0'
+        args:
+          key: coding-flow-track
+          value: feature
+      - call: text_pattern_match
+        args:
+          text_field: prompt
+          patterns:
+            - '\b(?:fix|bug|patch|de-?flake|hotfix|regression|broken)\b'
+        as: fixm
+      - call: write_state
+        if: 'len(intent.matched) > 0 && len(fixm.matched) > 0'
+        args:
+          key: coding-flow-track
+          value: fix
+      - call: text_pattern_match
+        args:
+          text_field: prompt
+          patterns:
+            - '\b(?:doc|docs|documentation|readme|changelog|comment)\b'
+        as: docm
+      - call: write_state
+        if: 'len(intent.matched) > 0 && len(docm.matched) > 0'
+        args:
+          key: coding-flow-track
+          value: doc
+      - call: text_pattern_match
+        args:
+          text_field: prompt
+          patterns:
+            - '\b(?:trivial|typo|rename|whitespace|mechanical)\b'
+        as: trivm
+      - call: write_state
+        if: 'len(intent.matched) > 0 && len(trivm.matched) > 0'
+        args:
+          key: coding-flow-track
+          value: trivial
   # SCOPE done → hand off to the task-spec-author persona.
   - id: handoff-research-to-spec
     process:

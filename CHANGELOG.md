@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.312] - 2026-06-04
+
+### Added (T-FU3-REGION-PROFILES FU.3 — track-type profiles: fix/doc/trivial skip AUTHOR)
+
+`enter-scoping` now classifies the scope-authoring prompt and records a
+`coding-flow-track` (session state): it RESETS to `feature` on every scope entry, then
+downgrades to `fix`/`doc`/`trivial` on a keyword match. The AUTHOR gate
+(`taskcreate-spec-required`) consults it — firing only when the track is NOT
+fix/doc/trivial. SCOPE (`scope-before-code`) and EXECUTE (commit gate) stay universal.
+Fail-safe is STRICTEST: an unset/stale track reads `null`, and `null != "fix"` is true
+(strict `!==`, interpreter.ts:161), so feature/unset still enforces AUTHOR — a prior
+fix-track can never leak into a later feature task (reset-on-entry). String equality only,
+no `if:`-allow-list growth. New `PROFILES.md` is the single-source profile table. Built
+through the full flow (pre-research → 11-field spec → 7 logged phases); the test phase
+caught a test-registry gap (TextPatternMatch unregistered) — product code was correct.
+
+- `packs/builtin/coding-flow/skills/{entry-and-handoffs,scope-lifecycle}/skill.yaml`,
+  `packs/builtin/coding-flow/PROFILES.md` (new), `test/builtin/coding-flow.test.ts`, spec
+  - pre-research.
+
 ## [0.5.311] - 2026-06-03
 
 ### Changed (T-FSM-COMPLETION FC.1b — default-discipline cluster → manifest `guards:`)
