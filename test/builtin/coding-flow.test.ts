@@ -689,6 +689,7 @@ const gitCommit: ToolCallEvent = {
 function registryExec(): FunctionRegistry {
   const r = new FunctionRegistry();
   registerEventFunctions(r);
+  registerFsmFunctions(r); // FU.1: the commit gate consults read_fsm_state (mid-flow → not ad-hoc)
   registerVerdictFunctions(r);
   r.register(HasActiveTask);
   r.register(WorkflowPhasesComplete);
@@ -740,6 +741,36 @@ describe('builtin coding-flow pack — EXECUTE content gate (phase-logged-before
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const r = await dispatchEvent(gitCommit, [pack], registryExec(), sid);
     expect(r.exitCode).toBe(0);
+  });
+
+  // FU.1 (T-FLOW-UNSKIPPABLE / D1): the gate seam — a commit while the FSM is MID-FLOW
+  // (a track is open but not authored) must BLOCK, even with NO active task. This is the
+  // hole that let a blocked TaskCreate leak code out as an "ad-hoc" commit.
+  it('FU.1: a code commit while the FSM is MID-FLOW (scoping) is BLOCKED (not ad-hoc)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-exec-midflow';
+    await advanceFsmState(sid, 'coding-flow', pack.fsm!, 'scope_start', '2026-06-05T00:00:00.000Z'); // → scoping
+    const r = await dispatchEvent(gitCommit, [pack], registryExec(), sid);
+    expect(r.exitCode).toBe(2); // mid-flow ⇒ not ad-hoc ⇒ blocked
+    expect(r.stderr).toMatch(/MID-FLOW/);
+  });
+
+  it('FU.1: a genuine ad-hoc commit at phases_complete (no open track) still passes', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-exec-adhoc-complete';
+    const now = '2026-06-05T00:00:00.000Z';
+    for (const ev of [
+      'scope_start',
+      'research_done',
+      'spec_drafted',
+      'spec_verified',
+      'tasks_loaded',
+      'phase_started',
+      'phases_done',
+    ])
+      await advanceFsmState(sid, 'coding-flow', pack.fsm!, ev, now); // → phases_complete
+    const r = await dispatchEvent(gitCommit, [pack], registryExec(), sid);
+    expect(r.exitCode).toBe(0); // phases_complete + no active task = real ad-hoc, allowed
   });
 
   it('AF.3: at phases_complete, the prompt_submit handoff DIRECTS the report + next task', async () => {

@@ -20,6 +20,26 @@ rules:
           pattern: '^git\s+(?:-[cC]\s+\S+\s+)*commit\b'
           target: tool_args.command
         as: committing
+      # T-FLOW-UNSKIPPABLE FU.1 (D1): the gates must COMPOSE. The "no active task ⇒
+      # ad-hoc ⇒ allow" branch below was a SEAM — a blocked TaskCreate (AUTHOR gate)
+      # leaves NO active task, so its code leaked out as an "ad-hoc" commit. Close it:
+      # a commit while the FSM is MID-FLOW (a track is open but NOT yet authored —
+      # scoping/researching/researched/spec_authored) is NOT ad-hoc; it is
+      # authoring-incomplete work and BLOCKS. A genuine ad-hoc commit is from idle /
+      # phases_complete (no open track) — still allowed. (tasks_loaded / phases_in_flight
+      # are PAST author — code is expected there, guarded by the phase check below.)
+      - call: read_fsm_state
+        if: 'committing'
+        as: st
+      - call: verdict
+        if: 'committing && (st == "scoping" || st == "researching" || st == "researched" || st == "spec_authored")'
+        args:
+          level: block
+          message: >-
+            BLOCKED: a `git commit` while the flow is MID-FLOW (state: {{st}}) is NOT
+            "ad-hoc" — it is authoring-incomplete work. Complete SCOPE→AUTHOR (pass the
+            spec-audit + TaskCreate) before committing code. Do NOT route around a blocked
+            TaskCreate via an ad-hoc commit — that seam is now closed.
       - call: has_active_task
         if: 'committing'
         as: active
@@ -33,8 +53,8 @@ rules:
           message: >-
             BLOCKED: the 7-phase CODE flow is incomplete for the active task. Log each
             phase via `mcp__opensquid__log_phase` (pre_research → learn → code → test →
-            audit → post_research → fix) before `git commit`. (Ad-hoc commits with no
-            active task pass; this gate guards in-flow work — the EXECUTE stage's
+            audit → post_research → fix) before `git commit`. (Ad-hoc commits from idle /
+            phases_complete pass; this gate guards in-flow work — the EXECUTE stage's
             content gate, symmetric with SCOPE's guess-audit + AUTHOR's spec-audit.)
 prose: |
   The EXECUTE content gate — the third, making the three stages symmetric. A stage
