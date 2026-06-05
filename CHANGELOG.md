@@ -7,6 +7,32 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.335] - 2026-06-04
+
+### Fixed (T-FLOW-REARM-GATE-HOLES — close the two coding-flow gate holes G-a, G-b)
+
+Both findings were the same smell — a regex denylist over open-ended natural language on
+the _enforcement_ path — and they compounded: G-a parked the FSM where the pause-gates read
+"depleted" and switched OFF, which is precisely why G-b's WARN never fired.
+
+- **G-a (RH.1) — structural SCOPE re-arm.** New work described in _plain language_ (no
+  scope keyword) used to leave the FSM parked at `phases_complete`, where
+  run-active = `FSM≠idle ∧ (open>0 ∨ FSM≠phases_complete)` reads **false** — so every
+  pause-gate switched off and the agent could permission-fish un-gated. A new rule
+  `entry-and-handoffs/rearm-on-depletion` re-arms to `scoping` on a **structural predicate**
+  (`phases_complete ∧ open_task_count == 0`), not a keyword guess. Placed _after_ the
+  completion-report handoff so the report still fires first on the post-completion prompt;
+  gated on `open==0` so the backlog loop is untouched. Scoped to `phases_complete` (not
+  `idle`) for minimal blast radius.
+- **G-b (RH.2) — decision-deferral pause detection.** `no-pause-language` now catches the
+  decision-deferral class ("your call", "unless you redirect", "let me know which",
+  "none of these") as one coherent alternation. Stays a retrospective **WARN** — the hard
+  guarantee remains the Stop/Question blocks, which RH.1 re-arms for new tracks.
+
+Spec: `docs/tasks/T-flow-rearm-gate-holes.md`. +3 dispatcher-integration tests
+(`test/builtin/coding-flow.test.ts`): plain-language re-arm, loop-safety (open>0 → no
+re-arm), and the deferral-class WARN.
+
 ## [0.5.334] - 2026-06-04
 
 ### Removed (T-CHAT-FINALIZE-REMOVE-LEGACY CL.2+CL.4 / CAT.8 — `src.legacy/chat` is gone)

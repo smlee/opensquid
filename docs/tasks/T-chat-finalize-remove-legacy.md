@@ -7,11 +7,18 @@
 over-abstracted framework); the genuinely-hard parts (live-session `UserPromptSubmit`
 injection, the routing FSM) are NOT touched. Order: CL.1 → CL.2 → CL.3 → CL.4.
 
-> **Gate-hole findings (recorded, separate fix-candidate, NOT this track):** (G-a) the
-> GF.7 re-arm only fires on a scope-keyword prompt, so a new track described in plain
-> language leaves the FSM parked at `phases_complete` → all GF.6 pause-gates stay OFF;
-> (G-b) the `no-pause-language` pattern set misses "your call / unless you redirect /
+> **Gate-hole findings (RESOLVED 2026-06-04 by `T-FLOW-REARM-GATE-HOLES`):** (G-a) the
+> GF.7 re-arm only fired on a scope-keyword prompt, so a new track described in plain
+> language left the FSM parked at `phases_complete` → all GF.6 pause-gates stayed OFF;
+> (G-b) the `no-pause-language` pattern set missed "your call / unless you redirect /
 > unless you'd rather". Both let the author pause ungated mid-run on 2026-06-04.
+> **Fix:** RH.1 — a structural SCOPE re-arm (`entry-and-handoffs/rearm-on-depletion`):
+> a depleted `phases_complete` (`open_task_count == 0`) re-arms to `scoping` on the next
+> prompt via a state+backlog predicate, NOT a keyword (placed after the completion-report
+> handoff so the report still fires first; gated on `open==0` so the backlog loop is
+> untouched). RH.2 — the decision-deferral class added to `no-pause-language` (stays WARN;
+> the hard Stop/Question blocks, re-armed by RH.1, are the guarantee). Spec:
+> `docs/tasks/T-flow-rearm-gate-holes.md`.
 
 ---
 
