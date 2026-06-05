@@ -1,0 +1,34 @@
+# flow-health-check — T-FLOW-UNSKIPPABLE FU.3 (D3). SessionStart health assurance.
+#
+# On a genuine session begin (startup/resume — the SessionStart hook bin already
+# filters clear/compact), surface a LOUD inject_context when flow enforcement is
+# NOT active: the opensquid hooks aren't wired in ~/.claude/settings.json, or no
+# gate pack (one with an FSM) is active for this umbrella. This closes the F3
+# silent-un-gated case — a session that started before the hooks were installed
+# runs with zero gates and, until now, zero warning.
+#
+# REPORT-ONLY by necessity: a hook cannot retro-fit a session that never loaded
+# it, and Claude Code reads hook config only at session start — so the only honest
+# remedy is to INFORM + prompt a restart. The primitive returns a
+# RuleResult.inject_context directly (terminal, like session-connection-check); a
+# null return (healthy) is the no-verdict branch. unloads_when session_ends keeps
+# it off the long-running dynamic-skill set (the event only fires once anyway).
+name: flow-health-check
+load: lazy
+when_to_load:
+  - kind: event_type
+    type: session_start
+unloads_when:
+  - kind: session_ends
+triggers:
+  - kind: session_start
+rules:
+  - id: surface-flow-health
+    kind: track_check
+    process:
+      - call: check_flow_health
+prose: |
+  The SessionStart health assurance for the coding-flow gates: if the opensquid
+  hooks aren't wired or no gate pack is active, the SCOPE→AUTHOR→7-phase gates
+  silently don't run. This surfaces that as a loud directive at session begin
+  (the F3 fix), rather than letting work proceed un-gated with no signal.

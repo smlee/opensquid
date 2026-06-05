@@ -70,6 +70,7 @@ import {
   TaskListGenerated,
   WorkflowPhasesComplete,
 } from '../functions/active_task.js';
+import { CheckFlowHealth } from '../functions/check_flow_health.js';
 import { PathExists } from '../functions/path_exists.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
@@ -184,6 +185,11 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // AF.6 — open-task count; the pause-gates derive run-active (auto-off when the
   // backlog is depleted) from this + the FSM state.
   r.register(OpenTaskCount);
+  // T-FLOW-UNSKIPPABLE FU.3 (D3) — SessionStart health assurance: a loud
+  // inject_context when the opensquid hooks aren't wired or no gate pack is active
+  // (the F3 silent-un-gated case). Dispatched on session_start by coding-flow's
+  // flow-health-check skill.
+  r.register(CheckFlowHealth);
   // T-ASC ASC.5 — chain-state read primitive. Exposes the persisted T-ASC
   // chain (stage + enrichment fields) to skill YAML `process:` chains so
   // ASC.5's reframed scope-decomposer handoff rules can shape their
