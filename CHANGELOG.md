@@ -7,6 +7,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.336] - 2026-06-05
+
+### Fixed (T-CHAT-INBOUND-SURFACE-MIDRUN — a mid-run user chat message is no longer invisible)
+
+The Stop hook resolved a drift block before the inbound chat drive and exited there
+(`stop.ts:108`), so during an automated run — where the coding-flow `pause-stop-guard`
+hard-blocks every mid-run stop — inbound user messages were structurally starved until the
+backlog depleted. (GF.6's hard-block escalation made this worse.) Now a drift-blocked stop
+**surfaces** any pending inbound in the drift stderr so the message is seen mid-run, while
+the run still continues (the no-pause discipline is preserved — it is NOT driven).
+
+- `peekUmbrellaInbox` (`src/runtime/chat/inbox_drain.ts`) — a READ-ONLY twin of the drain:
+  returns the unacked envelope but does NOT ack/purge, so the message still DRIVES a proper
+  response turn at the next clean stop. Kept separate from `drainUmbrellaInbox` so its
+  exactly-once ACK contract stays pristine.
+- `maybePeekInbound` (`src/runtime/hooks/stop_drive.ts`) — the lease-gated wrapper (only the
+  umbrella's live session surfaces; no `markChatDriven`).
+- `stop.ts` drift branch appends the peek envelope to the drift stderr.
+
++7 unit tests (read-only/no-ack idempotence, lease gate, non-consumption — a later drive
+still delivers). The stop-bin integration of the 3-line wiring is covered by the existing
+`hooks.bin.integration.test.ts` (no-silent-no-op) plus the unit-tested `maybePeekInbound`;
+a dedicated compiled-subprocess fixture was judged disproportionate and intentionally not
+added. Spec: `docs/tasks/T-chat-inbound-surface-midrun.md`.
+
 ## [0.5.335] - 2026-06-04
 
 ### Fixed (T-FLOW-REARM-GATE-HOLES — close the two coding-flow gate holes G-a, G-b)
