@@ -183,6 +183,39 @@ rules:
               completion report to the main chat (topic 15), THEN immediately
               TaskUpdate(<next pending task>, in_progress) and continue — NO pause. Loop
               until the backlog is depleted.
+  # G-a (T-FLOW-REARM-GATE-HOLES / RH.1) — the STRUCTURAL SCOPE re-arm. Closes the hole
+  # where new work described in PLAIN LANGUAGE (no scope keyword) never re-armed the flow:
+  # the FSM stayed parked at phases_complete, where run-active =
+  # `FSM!=idle && (open>0 || FSM!=phases_complete)` reads FALSE, so the pause-gates
+  # switched OFF and the agent could permission-fish un-gated (the 2026-06-04 leak). A
+  # depleted terminal state (phases_complete + empty backlog) means the prior track is DONE,
+  # so the NEXT prompt begins a new interaction → re-arm SCOPE on a STRUCTURAL fact (state +
+  # backlog count), NOT a keyword guess. Two design points make this safe:
+  #   • Placed LAST (after handoff-task-complete) so the completion-report directive fires
+  #     FIRST on the post-completion prompt — the report is owed before re-arming (AF.3).
+  #   • Gated on open.count == 0, so the backlog LOOP (open>0) is untouched —
+  #     handoff-task-complete still drives report→next-task at phases_complete.
+  # Scoped to phases_complete (NOT idle) for minimal blast radius. scope_start is a no-op
+  # from every mid-run state (only idle/phases_complete have the transition — fsm.yaml), so
+  # this can never reset an in-flight run. Landing in scoping is safe: it is the interactive
+  # phase (Stop + AskUserQuestion allowed; scope-before-code only bites a real code Write).
+  - id: rearm-on-depletion
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: open_task_count
+        as: open
+      - call: advance_fsm
+        if: 'st == "phases_complete" && open.count == 0'
+        args:
+          event: scope_start
+      # Strict default for the re-armed track: a plain-language track can't be classified,
+      # so gate it at the strictest profile (feature). Mirrors enter-scoping's reset.
+      - call: write_state
+        if: 'st == "phases_complete" && open.count == 0'
+        args:
+          key: coding-flow-track
+          value: feature
 prose: |
   Entry + the four forward handoffs, one per stage boundary (incl. the EXECUTE→report→
   next-task loop driver, AF.3). State-driven via read_fsm_state — the directive at each

@@ -44,6 +44,14 @@ rules:
             - "\\b(?:should\\s+i\\s+(?:continue|proceed)|want\\s+me\\s+to|ready\\s+to\\s+(?:continue|proceed)|shall\\s+i|is\\s+(?:this|the\\s+plan)\\s+(?:ok|good|right))\\b"
             - "\\b(?:i'?ll\\s+pause|let\\s+me\\s+(?:check|pause|confirm)\\s+(?:with\\s+you|before)|pausing\\s+(?:here|now)|checkpoint\\s+here)\\b"
             - '\b(?:context\s+(?:window\s+)?limit|at\s+(?:the\s+)?(?:practical\s+)?limit|running\s+(?:low|out)\s+of\s+context)\b'
+            # G-b (T-FLOW-REARM-GATE-HOLES / RH.2): the decision-DEFERRAL class — handing the
+            # proceed/choice decision back to the user ("your call", "unless you redirect",
+            # "let me know which", "none of these"). The 2026-06-04-flagged leak. ONE coherent
+            # class, not ad-hoc phrases. This stays a retrospective best-effort WARN — the HARD
+            # guarantee is the Stop/Question blocks (re-armed by RH.1's structural re-arm). A
+            # false positive is a harmless non-blocking nudge, so recall is favoured over
+            # precision (same asymmetry as the no-verify over-block).
+            - "\\b(?:your\\s+call|up\\s+to\\s+you|your\\s+(?:decision|choice)|unless\\s+you(?:'?d|\\s+would)?\\s+(?:rather|prefer|redirect|want|like)|if\\s+you'?d\\s+(?:rather|prefer|like)|whichever\\s+you\\s+(?:prefer|want|'?d\\s+like)|let\\s+me\\s+know\\s+(?:if|which|whether|what)|say\\s+the\\s+word|would\\s+you\\s+like\\s+me\\s+to|do\\s+you\\s+want\\s+me\\s+to|which\\s+(?:one|of\\s+these)|(?:any|none)\\s+of\\s+these)\\b"
         as: paused
       - call: read_fsm_state
         as: st

@@ -578,6 +578,29 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     expect(r.stderr).toMatch(/DRIFT/);
   });
 
+  // G-b (T-FLOW-REARM-GATE-HOLES / RH.2): the decision-deferral class is now caught.
+  it('G-b: decision-deferral language ("your call" / "unless you redirect") → WARN (not block)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    for (const prior of [
+      'Take any of these into a track? your call.',
+      'I can do it, unless you redirect.',
+      'Let me know which of these you want.',
+      'Done — which one of these next, or none of these?',
+    ]) {
+      const reg = registry();
+      const sid = `cf-gb-${prior.length}`;
+      await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping (run active)
+      const r = await dispatchEvent(
+        { kind: 'prompt_submit', prompt: 'next', priorAssistantText: prior },
+        [pack],
+        reg,
+        sid,
+      );
+      expect(r.exitCode).toBe(0); // WARN, never block (retrospective detector)
+      expect(r.stderr).toMatch(/DRIFT/);
+    }
+  });
+
   it('GF.6: Stop mid-run (spec_authored) → BLOCK (exit 2)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const sid = 'cf-af6-stop';
@@ -617,6 +640,43 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     await putPendingTask(sid, 'next-1'); // open.count > 0
     const r = await dispatchEvent(stop, [pack], registry(), sid);
     expect(r.exitCode).toBe(2);
+  });
+
+  // G-a (T-FLOW-REARM-GATE-HOLES / RH.1): a PLAIN-LANGUAGE prompt at a depleted
+  // phases_complete must re-arm SCOPE without any keyword — otherwise the FSM stays
+  // parked at phases_complete, run-active reads FALSE, and the pause-gates stay OFF.
+  // Observable proof of the re-arm: AskUserQuestion is hard-blocked past SCOPE but
+  // ALLOWED in scoping, so it flips exit 2 → 0 once the new track re-arms.
+  it('G-a: a PLAIN-LANGUAGE prompt at depleted phases_complete re-arms SCOPE (no keyword)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-ga-rearm';
+    const reg = registry();
+    await drivePhasesComplete(pack, sid); // → phases_complete, 0 open
+    // baseline: past SCOPE → a question is hard-blocked.
+    expect((await dispatchEvent(askQuestion, [pack], reg, sid)).exitCode).toBe(2);
+    // a plain-language new-work prompt — matches NONE of spec/scope/new task/add/design/plan.
+    await dispatchEvent(
+      { kind: 'prompt_submit', prompt: 'the null handling is broken — make it robust' },
+      [pack],
+      reg,
+      sid,
+    );
+    // re-armed to scoping (interactive) → the same question is now allowed.
+    expect((await dispatchEvent(askQuestion, [pack], reg, sid)).exitCode).toBe(0);
+  });
+
+  // G-a loop-safety: the structural re-arm is gated on open==0, so a plain prompt while
+  // the backlog is NON-empty must NOT re-arm — handoff-task-complete still owns the loop
+  // (it fires only at st == phases_complete).
+  it('G-a: a plain prompt at phases_complete WITH open tasks does NOT re-arm (loop intact)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-ga-loop';
+    const reg = registry();
+    await drivePhasesComplete(pack, sid); // → phases_complete
+    await putPendingTask(sid, 'next-1'); // open.count > 0
+    await dispatchEvent({ kind: 'prompt_submit', prompt: 'continue' }, [pack], reg, sid);
+    // still phases_complete (NOT re-armed) → AskUserQuestion stays blocked.
+    expect((await dispatchEvent(askQuestion, [pack], reg, sid)).exitCode).toBe(2);
   });
 });
 
