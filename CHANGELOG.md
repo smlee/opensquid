@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.338] - 2026-06-05
+
+### Added (T-FLOW-UNSKIPPABLE FU.3 — SessionStart health assurance, D3)
+
+A `check_flow_health` primitive + a `coding-flow/flow-health-check` skill (on `session_start`)
+surface a **loud** `inject_context` directive when flow enforcement is NOT active — the opensquid
+hooks aren't wired in `settings.json`, or no gate pack (one with an FSM) is active for the umbrella.
+Closes the **F3 silent-un-gated case**: a session that started before the hooks were installed ran
+with zero gates and zero warning (observed live: the RaumPilates session started Jun 2; hooks
+installed Jun 3). Report-only by necessity — a hook can't retro-fit a session that never loaded it,
+so the directive prompts a restart after `opensquid setup`. Honours `CLAUDE_CONFIG_DIR`. +3 tests.
+
 ## [0.5.337] - 2026-06-05
 
 ### Fixed (T-FLOW-UNSKIPPABLE FU.0/FU.1 — the coding-flow enforcement was broken at three layers)
