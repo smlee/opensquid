@@ -19,7 +19,7 @@
  */
 
 import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
-import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
+import { drainUmbrellaInbox, peekUmbrellaInbox } from '../chat/inbox_drain.js';
 import { resolveLiveSessionId } from '../chat/session_routing.js';
 
 import { markChatDriven } from './stop_stream.js';
@@ -52,6 +52,30 @@ export async function maybeDriveInbound(sessionId: string, cwd: string): Promise
     // agent's answer back to the source topic.
     await markChatDriven(umbrellaId, sessionId);
     return envelope;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * READ-ONLY twin of {@link maybeDriveInbound} (T-CHAT-INBOUND-SURFACE-MIDRUN SF.2).
+ * Returns the umbrella inbox envelope for the lease-holding session WITHOUT acking and
+ * WITHOUT marking the turn chat-driven — for the Stop hook's drift branch to SURFACE a
+ * mid-run user message in the drift stderr while the run continues. Because it does not ack,
+ * the message still DRIVES a proper response turn at the next clean stop (via
+ * `maybeDriveInbound`). Lease-gated like the drive (only the live session surfaces, so a
+ * second same-umbrella session never double-surfaces). Fail-open: null on any error.
+ */
+export async function maybePeekInbound(sessionId: string, cwd: string): Promise<string | null> {
+  try {
+    const cfg = await loadChannelsConfig().catch(() => null);
+    const umbrellaId = cfg === null ? null : resolveUmbrellaForCwd(cfg, cwd);
+    if (umbrellaId === null || umbrellaId === '') return null;
+    // Lease holder = delivery target. Only the umbrella's live session surfaces.
+    const live = await resolveLiveSessionId(umbrellaId);
+    if (live !== sessionId) return null;
+    const envelope = await peekUmbrellaInbox(sessionId, cwd);
+    return envelope.length === 0 ? null : envelope;
   } catch {
     return null;
   }

@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { channelsConfigPath } from '../../channels/routing.js';
 import { umbrellaInboxDir, umbrellaInboxFile } from '../paths.js';
 
-import { drainUmbrellaInbox } from './inbox_drain.js';
+import { drainUmbrellaInbox, peekUmbrellaInbox } from './inbox_drain.js';
 
 const SESSION = 'sess-cat2';
 const CWD = '/x/loop';
@@ -92,5 +92,50 @@ describe('drainUmbrellaInbox', () => {
   it('returns empty when channels.json is absent (fail-open)', async () => {
     await rm(channelsConfigPath(), { force: true });
     expect(await drainUmbrellaInbox(SESSION, CWD)).toBe('');
+  });
+});
+
+describe('peekUmbrellaInbox (read-only, SF.1)', () => {
+  let home: string;
+  const prev = process.env.OPENSQUID_HOME;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'sf1-peek-'));
+    process.env.OPENSQUID_HOME = home;
+    await writeFile(
+      channelsConfigPath(),
+      JSON.stringify({
+        v: 1,
+        umbrellas: [{ id: 'loop', members: [CWD], telegram: { chat_id: '-100', topic_id: 15 } }],
+      }),
+      'utf8',
+    );
+    await mkdir(umbrellaInboxDir('loop'), { recursive: true });
+  });
+  afterEach(async () => {
+    if (prev === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = prev;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('returns the unacked envelope WITHOUT acking (idempotent — second call identical)', async () => {
+    await writeFile(umbrellaInboxFile('loop', 'telegram'), inboxRow('1', 'hello'), 'utf8');
+    const first = await peekUmbrellaInbox(SESSION, CWD);
+    expect(first).toContain('hello');
+    // Read-only: NOT acked ⇒ the same message is returned again (still drivable later).
+    const second = await peekUmbrellaInbox(SESSION, CWD);
+    expect(second).toContain('hello');
+  });
+
+  it('does not consume what it surfaces — a later drain still delivers the message', async () => {
+    await writeFile(umbrellaInboxFile('loop', 'telegram'), inboxRow('1', 'drive me'), 'utf8');
+    expect(await peekUmbrellaInbox(SESSION, CWD)).toContain('drive me');
+    // The drain (ack-before-return) still finds it — peek did not ack.
+    expect(await drainUmbrellaInbox(SESSION, CWD)).toContain('drive me');
+  });
+
+  it('returns empty when cwd resolves to no umbrella (fail-open)', async () => {
+    await writeFile(umbrellaInboxFile('loop', 'telegram'), inboxRow('1', 'x'), 'utf8');
+    expect(await peekUmbrellaInbox(SESSION, '/somewhere/else')).toBe('');
   });
 });

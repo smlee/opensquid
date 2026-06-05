@@ -24,7 +24,7 @@ import { dispatchEvent } from './dispatch.js';
 import { extractSessionId } from './session_id.js';
 import { emitDriftStderrAndExit, squidPrefix } from './hook_output.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
-import { maybeDriveInbound, extractCwd } from './stop_drive.js';
+import { maybeDriveInbound, maybePeekInbound, extractCwd } from './stop_drive.js';
 import { maybeStreamOutput } from './stop_stream.js';
 import { readLastAssistantText } from './transcript.js';
 
@@ -105,11 +105,17 @@ async function main(): Promise<void> {
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
 
-  // A drift BLOCK (exit≠0) takes precedence over an inbound drive — handle the
-  // agent's drift first; the chat backlog drives on a later, clean turn.
-  if (exitCode !== 0) emitDriftStderrAndExit(exitCode, stderr);
-
   const cwd = extractCwd(raw);
+
+  // A drift BLOCK (exit≠0) still takes precedence — the run is NOT driven mid-run, so the
+  // no-pause discipline holds. But SURFACE any pending inbound in the drift stderr so a
+  // mid-run user message is never invisible (T-CHAT-INBOUND-SURFACE-MIDRUN). The peek is
+  // READ-ONLY (unacked), so the same message still DRIVES a proper response turn at the next
+  // clean stop (maybeDriveInbound below) — surfacing loses nothing.
+  if (exitCode !== 0) {
+    const peek = await maybePeekInbound(sessionId, cwd);
+    emitDriftStderrAndExit(exitCode, peek === null ? stderr : `${stderr}\n\n${peek}`);
+  }
 
   // Interactive responder: this live session claims its umbrella's chat lease
   // (acquire-if-free) so the drive below owns the turn + the headless stands

@@ -78,3 +78,35 @@ export async function drainUmbrellaInbox(
     return '';
   }
 }
+
+/**
+ * READ-ONLY twin of {@link drainUmbrellaInbox} (T-CHAT-INBOUND-SURFACE-MIDRUN SF.1).
+ * Returns the same unacked-inbound envelope, but does NOT ack and does NOT purge — so the
+ * message is SURFACED without being consumed and still DRIVES a proper response turn at the
+ * next clean stop (via `maybeDriveInbound`). Used by the Stop hook's drift branch to make a
+ * mid-run user message visible without breaking the no-pause discipline (the run continues).
+ *
+ * Deliberately a SEPARATE function rather than an `{ack:false}` flag on the drain: the
+ * drain's "ACK-BEFORE-RETURN exactly-once" contract is its durability invariant and stays
+ * pristine. Fail-open '' on any error / unresolved umbrella (mirrors the drain).
+ */
+export async function peekUmbrellaInbox(
+  sessionId: string,
+  cwd: string = process.cwd(),
+): Promise<string> {
+  try {
+    const cfg = await loadChannelsConfig().catch(() => null);
+    const umbrellaId = cfg === null ? null : resolveUmbrellaForCwd(cfg, cwd);
+    if (umbrellaId === null || umbrellaId === '') return '';
+
+    const platformReads = await Promise.all(INBOX_PLATFORMS.map((p) => readInbox(umbrellaId, p)));
+    const acked = await readAcked(umbrellaId);
+    const unacked = computeUnackedRows(platformReads.flat(), acked, sessionId);
+    if (unacked.length === 0) return '';
+
+    const built = buildInjectionEnvelope(unacked);
+    return built.injectedRows.length > 0 ? built.envelope : '';
+  } catch {
+    return '';
+  }
+}

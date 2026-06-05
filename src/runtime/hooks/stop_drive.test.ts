@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { channelsConfigPath } from '../../channels/routing.js';
 import { umbrellaInboxDir, umbrellaInboxFile, umbrellaLiveSessionLease } from '../paths.js';
 
-import { extractCwd, maybeDriveInbound } from './stop_drive.js';
+import { extractCwd, maybeDriveInbound, maybePeekInbound } from './stop_drive.js';
 
 const SESSION = 'sess-holder';
 const CWD = '/x/loop';
@@ -96,6 +96,50 @@ describe('maybeDriveInbound', () => {
   it('does not drive when cwd resolves to no umbrella', async () => {
     await writeLease('loop', SESSION);
     expect(await maybeDriveInbound(SESSION, '/elsewhere')).toBeNull();
+  });
+});
+
+describe('maybePeekInbound (read-only surface, SF.2)', () => {
+  let home: string;
+  const prev = process.env.OPENSQUID_HOME;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'sf2-peek-'));
+    process.env.OPENSQUID_HOME = home;
+    await writeFile(
+      channelsConfigPath(),
+      JSON.stringify({
+        v: 1,
+        umbrellas: [{ id: 'loop', members: [CWD], telegram: { chat_id: '-100', topic_id: 15 } }],
+      }),
+      'utf8',
+    );
+    await mkdir(umbrellaInboxDir('loop'), { recursive: true });
+    await writeFile(umbrellaInboxFile('loop', 'telegram'), row('1', 'see me'), 'utf8');
+  });
+  afterEach(async () => {
+    if (prev === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = prev;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('surfaces inbound for the lease holder WITHOUT acking (re-surfaces on a second call)', async () => {
+    await writeLease('loop', SESSION);
+    expect(await maybePeekInbound(SESSION, CWD)).toContain('see me');
+    // Read-only: NOT acked ⇒ still surfaced again (and still drivable later).
+    expect(await maybePeekInbound(SESSION, CWD)).toContain('see me');
+  });
+
+  it('does NOT surface for a non-lease session (invariant #6)', async () => {
+    await writeLease('loop', SESSION);
+    expect(await maybePeekInbound('a-different-session', CWD)).toBeNull();
+  });
+
+  it('peek does not consume — a later drive still delivers + acks the message', async () => {
+    await writeLease('loop', SESSION);
+    expect(await maybePeekInbound(SESSION, CWD)).toContain('see me');
+    expect(await maybeDriveInbound(SESSION, CWD)).toContain('see me'); // drive still finds it
+    expect(await maybeDriveInbound(SESSION, CWD)).toBeNull(); // now acked
   });
 });
 
