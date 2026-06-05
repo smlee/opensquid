@@ -7,6 +7,32 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.337] - 2026-06-05
+
+### Fixed (T-FLOW-UNSKIPPABLE FU.0/FU.1 — the coding-flow enforcement was broken at three layers)
+
+Root-caused (all verified live) why the flow could be silently skipped:
+
+- **F0 — the EXECUTE commit matcher was `^`-anchored** (`execute-gate/skill.yaml`), so every real
+  `cd <dir> && git commit …` (the Bash tool resets cwd) started with `cd` and **evaded the gate
+  entirely** — it never fired on a real commit. Fixed → `\bgit…commit` (match anywhere, like the
+  sibling no-verify matcher) + a compound-command test.
+- **F0c — the user-level `~/.opensquid/models.yaml` was never read** (`src/models/load_config.ts`
+  layer 2 was documented "NOT YET WIRED"). So a user-defined alias like `reasoning` was
+  unresolvable → `subagent_call` failed `arg_invalid` → the guess/spec audits **never ran** → the
+  FSM was stuck at `scoping` and the flow was **un-completable**. Fixed → wire + schema-validate the
+  user-level read (layer 2, merged over pack, under the env override). +4 tests.
+- **F0b** — the `reasoning` alias needs `args: ['-p']` (print mode) so the audit's piped prompt
+  doesn't hang bare interactive `claude` (user config, not in-repo).
+- **D1 (FU.1) — the EXECUTE gate now composes:** a code commit while the FSM is MID-FLOW
+  (`scoping`/`researching`/`researched`/`spec_authored`) is **not** "ad-hoc" → it blocks; a genuine
+  ad-hoc commit (from `idle`/`phases_complete`, no open track) still passes. Closes the seam where a
+  blocked `TaskCreate` leaked code out via the ad-hoc-commit path.
+
+After all three root-cause fixes the audit demonstrably runs (a `claude -p` returning a real
+verdict). Full suite 3109 green. Known remaining (FU.2-4 + F0d audit-vs-hook-timeout): see
+`docs/tasks/T-flow-unskippable-session-start.md`.
+
 ## [0.5.336] - 2026-06-05
 
 ### Fixed (T-CHAT-INBOUND-SURFACE-MIDRUN — a mid-run user chat message is no longer invisible)
