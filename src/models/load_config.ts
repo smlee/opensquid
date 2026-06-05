@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/require-await */
 /**
  * Models config loader — three-source precedence resolver (PR-followup).
  *
@@ -7,9 +6,11 @@
  *   1. `OPENSQUID_MODELS_CONFIG_INLINE` env var (JSON object) — test seam +
  *      Phase 1 power-user override. Same shape as the Phase-1 stub.
  *   2. User-level `~/.opensquid/models.yaml` — the user's persistent override
- *      file (NOT YET WIRED; reserved for a Phase 2.4 follow-up that ships
- *      the file path + schema reuse). When wired, this layer lets a user
- *      pin a vendor binding without editing every pack they install.
+ *      file. WIRED (T-FLOW-UNSKIPPABLE F0c): read + schema-validated here, merged
+ *      over the pack layer. Lets a user pin a vendor binding without editing every
+ *      pack. (Previously reserved/unwired — which silently broke every pack alias
+ *      the user defined only at this layer, e.g. `reasoning`, so the audit subagents
+ *      failed `arg_invalid` and the coding-flow FSM could never advance.)
  *   3. Pack-shipped `models.yaml` — folded into `Pack.models` by the loader
  *      (PR-followup). Acts as the out-of-the-box default for any alias a
  *      pack references; the user can override per-alias via layer 2 (or
@@ -37,7 +38,13 @@
  *   setup/schedule_nl.ts.
  */
 
-import type { ModelsConfig } from '../packs/schemas/models.js';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { parse as parseYaml } from 'yaml';
+
+import { ModelsConfig } from '../packs/schemas/models.js';
+import { OPENSQUID_HOME } from '../runtime/paths.js';
 
 import type { ModelAliasConfig } from './types.js';
 
@@ -60,10 +67,24 @@ export async function loadModelsConfig(
       ? { ...(packModels as unknown as Record<string, ModelAliasConfig>) }
       : {};
 
-  // Layer 2 (user-level YAML) — RESERVED. The user-level loader lands in a
-  // future PR-followup-2; until then `~/.opensquid/models.yaml` is read by
-  // the setup wizard but not consulted by the runtime resolver. Documented
-  // here so the precedence chain is visible at the resolve site.
+  // Layer 2 (user-level YAML) — WIRED (T-FLOW-UNSKIPPABLE F0c). Read
+  // `~/.opensquid/models.yaml` and merge OVER the pack layer. Without this the
+  // runtime never consulted the user's file, so a pack alias like `reasoning`
+  // resolved to undefined → `subagent_call` failed `arg_invalid` → the
+  // guess/spec audits never ran → the coding-flow FSM was stuck at `scoping`
+  // forever (the flow was un-completable). Fail-SOFT: absent / unreadable /
+  // schema-invalid YAML is skipped (the resolver must NEVER throw — a model
+  // misconfig must not crash a hook). Validated via the same `ModelsConfig`
+  // schema the pack/wizard use.
+  try {
+    const raw = await readFile(join(OPENSQUID_HOME(), 'models.yaml'), 'utf8');
+    const parsed = ModelsConfig.safeParse(parseYaml(raw));
+    if (parsed.success) {
+      Object.assign(merged, parsed.data as Record<string, ModelAliasConfig>);
+    }
+  } catch {
+    // absent / unreadable / invalid YAML → no user-level overrides
+  }
 
   // Layer 1 (highest precedence) — env-var inline override. Always overrides
   // pack-shipped + user-level entries for matching aliases; new aliases at

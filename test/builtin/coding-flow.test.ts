@@ -755,6 +755,23 @@ describe('builtin coding-flow pack — EXECUTE content gate (phase-logged-before
     expect(r.stderr).toMatch(/MID-FLOW/);
   });
 
+  // FU.1 (the real root cause): a COMPOUND command `cd <dir> && git commit` is how every
+  // commit is actually made (the Bash tool resets cwd). The old `^git…commit` anchor let it
+  // EVADE the gate. The matcher must catch `git commit` anywhere in the command.
+  it('FU.1: a COMPOUND `cd && git commit` while mid-flow is BLOCKED (anchor evasion closed)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-exec-compound';
+    await advanceFsmState(sid, 'coding-flow', pack.fsm!, 'scope_start', '2026-06-05T00:00:00.000Z'); // → scoping
+    const compound: ToolCallEvent = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'cd /Users/slee/projects/opensquid && git commit -m "x"' },
+    };
+    const r = await dispatchEvent(compound, [pack], registryExec(), sid);
+    expect(r.exitCode).toBe(2); // would have been 0 (evaded) under the ^-anchor
+    expect(r.stderr).toMatch(/MID-FLOW/);
+  });
+
   it('FU.1: a genuine ad-hoc commit at phases_complete (no open track) still passes', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const sid = 'cf-exec-adhoc-complete';

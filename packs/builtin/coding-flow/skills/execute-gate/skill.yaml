@@ -17,7 +17,14 @@ rules:
     process:
       - call: match_command
         args:
-          pattern: '^git\s+(?:-[cC]\s+\S+\s+)*commit\b'
+          # T-FLOW-UNSKIPPABLE FU.1 (the real root cause): this was `^git…commit`, anchored
+          # at START — so a COMPOUND command `cd <dir> && git commit …` (how every commit is
+          # actually made, since the Bash tool resets cwd) starts with `cd` and EVADED the
+          # gate entirely. The gate was dead for real commits. Match `git … commit` ANYWHERE
+          # (`\b`, like the sibling no-verify matcher) so compounds can't slip past. A false
+          # match on a string that merely mentions `git commit` is the safe direction (recall
+          # over precision, same as no-verify-block).
+          pattern: '\bgit\s+(?:-[cC]\s+\S+\s+)*commit\b'
           target: tool_args.command
         as: committing
       # T-FLOW-UNSKIPPABLE FU.1 (D1): the gates must COMPOSE. The "no active task ⇒

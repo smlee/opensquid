@@ -13,6 +13,10 @@
  * save + restore around each case to avoid cross-test leakage.
  */
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ModelsConfig } from '../packs/schemas/models.js';
@@ -23,18 +27,25 @@ const ENV_KEY = 'OPENSQUID_MODELS_CONFIG_INLINE';
 
 describe('loadModelsConfig — three-source precedence (PR-followup)', () => {
   let savedEnv: string | undefined;
+  let savedHome: string | undefined;
+  let home: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     savedEnv = process.env[ENV_KEY];
     delete process.env[ENV_KEY];
+    // Layer 2 (F0c) reads ~/.opensquid/models.yaml — isolate OPENSQUID_HOME to a
+    // fresh temp dir (no models.yaml) so these cases don't read the real user file.
+    savedHome = process.env.OPENSQUID_HOME;
+    home = await mkdtemp(join(tmpdir(), 'models-cfg-'));
+    process.env.OPENSQUID_HOME = home;
   });
 
-  afterEach(() => {
-    if (savedEnv === undefined) {
-      delete process.env[ENV_KEY];
-    } else {
-      process.env[ENV_KEY] = savedEnv;
-    }
+  afterEach(async () => {
+    if (savedEnv === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = savedEnv;
+    if (savedHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = savedHome;
+    await rm(home, { recursive: true, force: true });
   });
 
   it('returns {} when no env var and no pack models', async () => {
@@ -120,6 +131,76 @@ describe('loadModelsConfig — three-source precedence (PR-followup)', () => {
     };
     const cfg = await loadModelsConfig(pack);
     expect(cfg.fast_classifier?.cli).toBe('pack-cli');
+  });
+
+  // Layer 2 (T-FLOW-UNSKIPPABLE F0c) — the user-level ~/.opensquid/models.yaml is now WIRED.
+  it('reads user-level ~/.opensquid/models.yaml (layer 2) and exposes its aliases', async () => {
+    await writeFile(
+      join(home, 'models.yaml'),
+      'reasoning:\n  mode: subscription\n  impl: cli\n  cli: claude\n  args: ["-p"]\n',
+      'utf8',
+    );
+    const cfg = await loadModelsConfig();
+    expect(cfg.reasoning?.cli).toBe('claude');
+    expect(cfg.reasoning?.args).toEqual(['-p']);
+  });
+
+  it('user-level YAML overrides pack for matching keys; env still wins over user', async () => {
+    const pack: ModelsConfig = {
+      reasoning: {
+        mode: 'subscription',
+        impl: 'cli',
+        cli: 'pack-reasoning',
+        description: '',
+        args: [],
+      },
+      docgen: { mode: 'subscription', impl: 'cli', cli: 'pack-docgen', description: '', args: [] },
+    };
+    await writeFile(
+      join(home, 'models.yaml'),
+      'reasoning:\n  mode: subscription\n  impl: cli\n  cli: user-reasoning\n',
+      'utf8',
+    );
+    process.env[ENV_KEY] = JSON.stringify({
+      reasoning: { mode: 'subscription', impl: 'cli', cli: 'env-reasoning' },
+    });
+    const cfg = await loadModelsConfig(pack);
+    expect(cfg.reasoning?.cli).toBe('env-reasoning'); // env (layer 1) wins overall
+    expect(cfg.docgen?.cli).toBe('pack-docgen'); // pack key user/env didn't touch
+  });
+
+  it('user-level YAML override beats pack when no env override', async () => {
+    const pack: ModelsConfig = {
+      reasoning: {
+        mode: 'subscription',
+        impl: 'cli',
+        cli: 'pack-reasoning',
+        description: '',
+        args: [],
+      },
+    };
+    await writeFile(
+      join(home, 'models.yaml'),
+      'reasoning:\n  mode: subscription\n  impl: cli\n  cli: user-reasoning\n',
+      'utf8',
+    );
+    const cfg = await loadModelsConfig(pack);
+    expect(cfg.reasoning?.cli).toBe('user-reasoning'); // user (layer 2) > pack (layer 3)
+  });
+
+  it('malformed user-level YAML is skipped (fail-soft, does not throw)', async () => {
+    await writeFile(join(home, 'models.yaml'), ':\n  not: [valid yaml', 'utf8');
+    const pack: ModelsConfig = {
+      reasoning: {
+        mode: 'subscription',
+        impl: 'cli',
+        cli: 'pack-reasoning',
+        description: '',
+        args: [],
+      },
+    };
+    const cfg = await loadModelsConfig(pack);
+    expect(cfg.reasoning?.cli).toBe('pack-reasoning'); // falls back to pack, no throw
   });
 
   it('does not mutate the input packModels map', async () => {
