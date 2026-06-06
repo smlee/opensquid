@@ -10,5 +10,5 @@
     "tsBuildInfoFile": ".tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts", "src.legacy/**", "test/**"]
+  "exclude": ["src/**/*.test.ts", "test/**"]
 }

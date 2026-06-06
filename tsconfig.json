@@ -1,4 +1,4 @@
-// opensquid root tsconfig — strict ESM, type-check everything (incl. legacy).
+// opensquid root tsconfig — strict ESM, type-check the whole src/ + test/ surface.
 // Build emit happens via tsconfig.build.json (rootDir=src, emits to dist/).
 //
 // Non-default flag rationale (one line each):
@@ -35,5 +35,5 @@
     "noEmit": true
   },
   "include": ["src/**/*", "test/**/*"],
-  "exclude": ["node_modules", "dist", "src.legacy"]
+  "exclude": ["node_modules", "dist"]
 }

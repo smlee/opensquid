@@ -1,5 +1,4 @@
-// Flat config (ESLint v9 + typescript-eslint v8). New code only — src.legacy/ is ignored
-// here AND in tsconfig.build.json, so type-checked rules don't pull legacy into the program.
+// Flat config (ESLint v9 + typescript-eslint v8). Lints src/ + test/.
 import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 
@@ -10,8 +9,8 @@ export default tseslint.config(
     plugins: { import: importPlugin },
     languageOptions: {
       parserOptions: {
-        // Root tsconfig includes src/ + test/ and excludes src.legacy/ — exactly the
-        // surface eslint should type-check. Build tsconfig is too narrow (no test/).
+        // Root tsconfig includes src/ + test/ — exactly the surface eslint should
+        // type-check. Build tsconfig is too narrow (no test/).
         project: './tsconfig.json',
         tsconfigRootDir: import.meta.dirname,
       },
@@ -50,13 +49,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: [
-      'dist/**',
-      'node_modules/**',
-      'src.legacy/**',
-      '.tsbuildinfo',
-      'npm/**',
-      'test/fixtures/**',
-    ],
+    ignores: ['dist/**', 'node_modules/**', '.tsbuildinfo', 'npm/**', 'test/fixtures/**'],
   },
 );
