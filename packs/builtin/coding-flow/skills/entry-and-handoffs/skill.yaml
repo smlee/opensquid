@@ -216,6 +216,27 @@ rules:
         args:
           key: coding-flow-track
           value: feature
+  # FU.2 (T-FLOW-UNSKIPPABLE / D2) — scope-sprawl escalation. The SCOPE phase is
+  # otherwise ungated, so a sprawling, oscillating scope (many prompts, no converging
+  # pre-research) is invisible. scope_dwell_tick increments a per-session counter while
+  # the FSM is in scoping/researching (resets when it leaves), and at the threshold (3)
+  # returns nudge=true → surface a "converge: write ONE pre-research" directive. SOFT
+  # (surface, never block) — research legitimately takes multiple turns; this nudges
+  # convergence, it does not forbid investigation.
+  - id: scope-sprawl-nudge
+    process:
+      - call: scope_dwell_tick
+        as: dwell
+      - call: verdict
+        if: 'dwell.nudge == true'
+        args:
+          level: directive
+          message: >-
+            CONVERGE THE SCOPE: you have spent several turns in the SCOPE phase without a
+            converging pre-research artifact. Stop open-ended investigation now — write ONE
+            `docs/research/T-*-pre-research-*.md` capturing the findings + the chosen design,
+            and advance to AUTHOR. (Questions belong in scope, but the scope must CONVERGE,
+            not sprawl.)
 prose: |
   Entry + the four forward handoffs, one per stage boundary (incl. the EXECUTE→report→
   next-task loop driver, AF.3). State-driven via read_fsm_state — the directive at each

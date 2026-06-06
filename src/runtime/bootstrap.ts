@@ -72,6 +72,7 @@ import {
 } from '../functions/active_task.js';
 import { CheckFlowHealth } from '../functions/check_flow_health.js';
 import { ChatWatcherAutostart } from '../functions/chat_watcher_autostart.js';
+import { ScopeDwellTick } from '../functions/scope_dwell.js';
 import { PathExists } from '../functions/path_exists.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
@@ -195,6 +196,10 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // inject_context directing the agent to start the inbound watcher (Monitor +
   // `chat watch`) so messages arrive in real time (no turn-boundary wait, no flag).
   r.register(ChatWatcherAutostart);
+  // T-FLOW-UNSKIPPABLE FU.2 (D2) — scope-sprawl escalation: ticks a per-session
+  // dwell counter while the FSM is in scoping/researching; the entry-and-handoffs
+  // prompt_submit rule surfaces a "converge the scope" directive at the threshold.
+  r.register(ScopeDwellTick);
   // T-ASC ASC.5 — chain-state read primitive. Exposes the persisted T-ASC
   // chain (stage + enrichment fields) to skill YAML `process:` chains so
   // ASC.5's reframed scope-decomposer handoff rules can shape their
