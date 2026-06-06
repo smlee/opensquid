@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.339] - 2026-06-05
+
+### Fixed (T-CHAT-REALTIME — chat now follows the session, and SessionStart sets it up)
+
+The project (umbrella) is stable but the **session changes** — every fresh start/resume is a
+different live session, and the chat lease (keyed to the project) must follow the _current_ one.
+
+- **SessionStart now auto-starts the inbound watcher** (`chat_watcher_autostart` + a
+  `flow-health-check` session_start rule): a directive telling the agent to run
+  `Monitor(opensquid chat watch)`, so messages stream in **real time** (push, no turn-boundary
+  wait, no `--channels` flag). SessionStart previously only claimed the lease and did nothing
+  else for chat, so a fresh/restarted session received messages only at a turn boundary.
+- **SessionStart now TAKES OVER the umbrella lease** (newest-session-wins, via a `forceTakeover`
+  option). `acquire-if-free` deferred to any fresh holder, so a just-ended session's lease (or a
+  leftover heartbeat) pinned chat to a session that was **gone** — the stale-lease-to-dead-session
+  bug (RaumPilates inbound routed to dead session `885ec0ad`). The mid-session UPS/Stop heartbeat
+  keeps `acquire-if-free` so it never steals from a genuinely concurrent live session.
+
++5 tests. Full suite 3117 green.
+
 ## [0.5.338] - 2026-06-05
 
 ### Added (T-FLOW-UNSKIPPABLE FU.3 — SessionStart health assurance, D3)
