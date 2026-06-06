@@ -67,6 +67,19 @@ describe('claimUmbrellaLeaseForSession', () => {
     expect((await readLease(umbrellaLiveSessionLease('loop')))?.session_id).toBe(SESSION);
   });
 
+  // T-CHAT-REALTIME: a SESSION START takes over even a FRESH lease held by a different
+  // session — the session changed (new live session for the same project), so chat
+  // routes to the newest. (The mid-session heartbeat without forceTakeover still defers.)
+  it('forceTakeover steals a FRESH lease held by a different session (session changed)', async () => {
+    await seedChannels();
+    await writeLease(umbrellaLiveSessionLease('loop'), 'prior-session'); // fresh, different
+    // default heartbeat defers (invariant #6)…
+    expect(await claimUmbrellaLeaseForSession(SESSION, CWD)).toBe(false);
+    // …but a session start force-takes-over.
+    expect(await claimUmbrellaLeaseForSession(SESSION, CWD, { forceTakeover: true })).toBe(true);
+    expect((await readLease(umbrellaLiveSessionLease('loop')))?.session_id).toBe(SESSION);
+  });
+
   it('yields (no claim) in responder: headless mode', async () => {
     await seedChannels('headless');
     expect(await claimUmbrellaLeaseForSession(SESSION, CWD)).toBe(false);

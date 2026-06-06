@@ -98,7 +98,11 @@ async function main(): Promise<void> {
   // so a chat message drives THIS session + the headless stands down — even
   // before the first keystroke. No-op in `responder: headless` mode / no umbrella.
   const startCwd = parsed.data.kind === 'session_start' ? parsed.data.cwd : process.cwd();
-  await claimUmbrellaLeaseForSession(sessionId, startCwd);
+  // T-CHAT-REALTIME: a session START is the user's deliberate "route chat HERE" signal —
+  // the session changes even when the project doesn't, so TAKE OVER the umbrella lease
+  // (newest-session-wins) rather than defer to a possibly-dead prior holder. The
+  // mid-session UPS/Stop heartbeat keeps the default acquire-if-free.
+  await claimUmbrellaLeaseForSession(sessionId, startCwd, { forceTakeover: true });
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections } = await dispatchEvent(
