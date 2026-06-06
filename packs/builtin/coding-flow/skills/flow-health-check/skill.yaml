@@ -27,6 +27,13 @@ rules:
     kind: track_check
     process:
       - call: check_flow_health
+  # T-CHAT-REALTIME — make SessionStart actually SET UP chat: direct the agent to
+  # start the inbound watcher so messages arrive in real time (push, no
+  # turn-boundary wait, no --channels flag). Silent for umbrellas with no chat.
+  - id: start-chat-watcher
+    kind: track_check
+    process:
+      - call: chat_watcher_autostart
 prose: |
   The SessionStart health assurance for the coding-flow gates: if the opensquid
   hooks aren't wired or no gate pack is active, the SCOPE→AUTHOR→7-phase gates

@@ -71,6 +71,7 @@ import {
   WorkflowPhasesComplete,
 } from '../functions/active_task.js';
 import { CheckFlowHealth } from '../functions/check_flow_health.js';
+import { ChatWatcherAutostart } from '../functions/chat_watcher_autostart.js';
 import { PathExists } from '../functions/path_exists.js';
 import { registerRagFunctions } from '../functions/rag.js';
 import { registerRecallPreInjectFunction } from '../functions/recall_pre_inject.js';
@@ -190,6 +191,10 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // (the F3 silent-un-gated case). Dispatched on session_start by coding-flow's
   // flow-health-check skill.
   r.register(CheckFlowHealth);
+  // T-CHAT-REALTIME — make SessionStart actually set up chat: a session_start
+  // inject_context directing the agent to start the inbound watcher (Monitor +
+  // `chat watch`) so messages arrive in real time (no turn-boundary wait, no flag).
+  r.register(ChatWatcherAutostart);
   // T-ASC ASC.5 — chain-state read primitive. Exposes the persisted T-ASC
   // chain (stage + enrichment fields) to skill YAML `process:` chains so
   // ASC.5's reframed scope-decomposer handoff rules can shape their
