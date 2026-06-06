@@ -3,8 +3,8 @@
  *
  * Authoritative source: `docs/tasks/WAB.1-architecture.md` decision (a) —
  * in-process `EventEmitter` wrapper for v1; UDS deferred indefinitely.
- * The legacy chat-daemon already owns the inter-process boundary (its
- * RPC server at `src.legacy/chat/daemon/rpc-server.ts`); the warm-agent
+ * The chat-daemon already owns the inter-process boundary (its RPC
+ * server at `src/channels/daemon/rpc_server.ts`); the warm-agent
  * needs only an INTRA-process bus to wire transport_bridge →
  * batch_coordinator → session_manager → agent_loop.
  *

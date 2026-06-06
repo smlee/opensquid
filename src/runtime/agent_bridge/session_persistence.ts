@@ -21,9 +21,9 @@
  *     atomic per POSIX. Most history entries (text content) are well under
  *     this. Long entries split JSONL `\n` cleanly so the reader's
  *     line-by-line tolerance handles interleaved partial writes too.
- *   - Same shape as the legacy chat-daemon inbox (`src.legacy/chat/daemon/
- *     inbox.ts`) and the drift catalog (`src/runtime/drift_catalog.ts`) —
- *     consistent file format makes ops + grepability easier.
+ *   - Same shape as the chat-daemon inbox and the drift catalog
+ *     (`src/runtime/drift_catalog.ts`) — consistent file format makes ops
+ *     + grepability easier.
  *
  * Slug encoding (filesystem safety):
  *   - SessionKey slug form is `<platform>:<chatId>[:<threadId>]` — colons

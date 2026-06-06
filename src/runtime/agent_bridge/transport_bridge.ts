@@ -14,8 +14,8 @@
  * inbox, that's a routing bug — fix it in Part A, not here.
  *
  * Boundary discipline:
- *   1. Legacy JSONL rows are written by `src.legacy/chat/daemon/inbox.ts`
- *      (`InboxMessage` shape, snake_case). The bridge adapts that shape
+ *   1. Inbox JSONL rows are written by the chat daemon (`src/channels`)
+ *      in the on-disk row shape (snake_case). The bridge adapts that shape
  *      to the modern `InboundChatEvent` (camelCase, zod-validated).
  *   2. Validation happens at the boundary (every parsed line goes
  *      through `inboundChatEventSchema.parse` — malformed rows surface
@@ -55,11 +55,11 @@ import type { AgentEventBus } from './event_bus.js';
 import { type InboundChatEvent, inboundChatEventSchema, type SessionKey } from './types.js';
 
 // ---------------------------------------------------------------------------
-// Legacy JSONL row shape (mirrors src.legacy/chat/daemon/inbox.ts
-// `InboxMessage`). We do NOT import that type because src.legacy/ is
-// quarantined from src/; one of the WAB.1 contracts is "agent_bridge sees
-// the inbox via its on-disk contract, not via TS imports." Keeping the
-// shape inlined here documents the contract at the bridge boundary.
+// Inbox JSONL row shape (the on-disk contract written by the chat daemon).
+// We re-declare it here rather than import a TS type because one of the
+// WAB.1 contracts is "agent_bridge sees the inbox via its on-disk contract,
+// not via TS imports." Keeping the shape inlined documents that contract at
+// the bridge boundary.
 // ---------------------------------------------------------------------------
 
 interface LegacyInboxRow {

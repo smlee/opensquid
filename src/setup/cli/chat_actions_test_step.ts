@@ -14,18 +14,16 @@
  *     MCP uses (env override → cwd .opensquid/project.json walk).
  *   - Detects the chat-daemon liveness from the WIZ.2 snapshot; if not
  *     running, prints the start-hint and returns without dialing.
- *   - Resolves `project:telegram` → real channel via the same on-disk
- *     `~/.opensquid/projects/<uuid>/chat-routing.json` shape the legacy
- *     `loadProjectChatRouting()` helper reads. We inline the read (not
- *     import) because the legacy routing module transitively pulls in
- *     `src.legacy/pack/parse.ts` which has known strict-flag type
- *     errors — same workaround `test/e2e/telegram-multi-project-
- *     routing.test.ts` uses. Threads `report_topic_id` through as
- *     `threadId` so the test lands in the right forum topic.
+ *   - Resolves `project:telegram` → real channel via the on-disk
+ *     `~/.opensquid/projects/<uuid>/chat-routing.json` shape. We inline
+ *     the read (not import a shared helper) because it is a trivial
+ *     read-and-parse and keeps WIZ.4 self-contained — same approach
+ *     `test/e2e/telegram-multi-project-routing.test.ts` uses. Threads
+ *     `report_topic_id` through as `threadId` so the test lands in the
+ *     right forum topic.
  *   - Dials the chat-daemon over its Unix socket with a one-shot
  *     JSON-RPC call (same pattern `src/mcp/chat-bridge-server.ts`
- *     uses for chat_send — keeps WIZ.4 self-contained and avoids the
- *     src.legacy/pack/parse.ts type-poison referenced above).
+ *     uses for chat_send — keeps WIZ.4 self-contained).
  *   - On success: pretty-prints message_id in green.
  *   - On failure: classifies the error (daemon unreachable / routing
  *     missing / bot token invalid / generic) and prints a specific
@@ -184,9 +182,8 @@ async function resolveChannel(
 
 /**
  * Default routing reader — `~/.opensquid/projects/<uuid>/chat-routing.json`.
- * Byte-equivalent to `src.legacy/chat/daemon/routing.ts loadProjectChatRouting`
- * but inlined here to avoid the src.legacy type-poison documented in the
- * file header. Returns null on missing-file or malformed JSON; never throws.
+ * Inlined here (a trivial read-and-parse) to keep WIZ.4 self-contained, per
+ * the file header. Returns null on missing-file or malformed JSON; never throws.
  */
 async function loadProjectChatRouting(uuid: string): Promise<ProjectChatRouting | null> {
   const p = join(OPENSQUID_HOME(), 'projects', uuid, 'chat-routing.json');
@@ -201,9 +198,8 @@ async function loadProjectChatRouting(uuid: string): Promise<ProjectChatRouting 
 
 // ---------------------------------------------------------------------------
 // chat-daemon RPC — one-shot Unix-socket JSON-RPC call. Mirrors the
-// `src/mcp/chat-bridge-server.ts` pattern (which we follow rather than
-// reach into src.legacy/chat/daemon/rpc-client.js — same type-poison
-// avoidance as the routing inlining above).
+// `src/mcp/chat-bridge-server.ts` pattern, kept self-contained (same
+// inline approach as the routing reader above).
 // ---------------------------------------------------------------------------
 
 export interface SendTestParams {

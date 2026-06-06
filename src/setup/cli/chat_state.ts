@@ -19,9 +19,8 @@
  *     "what's missing?".
  *   - PID LIVENESS. `process.kill(pid, 0)` is the canonical POSIX `kill -0`
  *     check — throws ESRCH if the pid is dead, EPERM if alive-but-foreign
- *     (still counts as running). Matches the lifecycle.ts pattern in
- *     src.legacy/chat/daemon/lifecycle.ts which is the load-bearing
- *     production check we mirror.
+ *     (still counts as running). Matches the daemon lifecycle pattern in
+ *     `src/channels/daemon/lifecycle.ts`, the load-bearing production check.
  *   - NO `any` TYPES. Strict typed surface; opaque parse-error messages
  *     surfaced as `parseError: string` so the wizard can render them.
  *
@@ -220,7 +219,7 @@ export async function detectPacksDir(path?: string): Promise<PacksState> {
 // ---------------------------------------------------------------------------
 // detectChatDaemonRunning — pidfile + kill(0) liveness
 //
-// Mirrors src.legacy/chat/daemon/lifecycle.ts `status()` semantics:
+// Mirrors `src/channels/daemon/lifecycle.ts` `status()` semantics:
 //   - Pidfile missing                  → not running
 //   - Pidfile garbled                  → not running
 //   - Pidfile points at dead pid       → not running (stale_pid omitted —
@@ -362,7 +361,7 @@ async function readPidfile(path: string): Promise<number | null> {
 }
 
 /** Portable `kill -0`: ESRCH = dead, EPERM = alive-but-foreign (still
- *  counts as running). Mirrors src.legacy/chat/daemon/lifecycle.ts. */
+ *  counts as running). Mirrors `src/channels/daemon/lifecycle.ts`. */
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);

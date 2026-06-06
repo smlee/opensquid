@@ -8,7 +8,7 @@
  * remains the durable record + the cold-start catch-up path; the
  * buffer is the hot-path cache that avoids per-poll fs reads.
  *
- * Wire shape (per `src.legacy/chat/daemon/protocol.ts`):
+ * Wire shape (per `src/channels/daemon/protocol.ts`):
  *   → {"jsonrpc":"2.0","id":1,"method":"subscribe","params":{...}}
  *   ← {"jsonrpc":"2.0","id":1,"result":{"ok":true}}
  *   ← {"jsonrpc":"2.0","method":"inbound_message","params":{...}}  (push, no id)
@@ -41,9 +41,9 @@ import { connect, type Socket } from 'node:net';
 import { LRUCache } from 'lru-cache';
 
 // ---------------------------------------------------------------------------
-// Public types — mirror src.legacy/chat/daemon/protocol.ts shapes. We
-// re-declare locally rather than import because src.legacy is excluded
-// from tsconfig (same type-poison avoidance as the rest of src/mcp/).
+// Public types — mirror `src/channels/daemon/protocol.ts` shapes. We
+// re-declare locally rather than import to keep the subscriber decoupled
+// from the daemon's internal modules (same pattern as the rest of src/mcp/).
 // ---------------------------------------------------------------------------
 
 export interface InboundMessage {

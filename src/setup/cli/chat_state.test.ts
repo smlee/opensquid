@@ -207,8 +207,8 @@ describe('detectChatDaemonRunning', () => {
 
   it('returns running:true when pidfile holds the current process pid (kill(0) succeeds)', async () => {
     // The current vitest process is, by definition, alive. Using
-    // process.pid as the "live pid" is the canonical pattern from
-    // src.legacy/chat/daemon/lifecycle.test.ts equivalents.
+    // process.pid as the "live pid" is the canonical pattern for
+    // daemon-liveness tests.
     await writeFile(join(stateRoot, 'chat-daemon.pid'), `${String(process.pid)}\n`, 'utf8');
     const state = await detectChatDaemonRunning();
     expect(state.running).toBe(true);

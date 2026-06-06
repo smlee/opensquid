@@ -11,10 +11,8 @@
  *      path is "reply on the same Telegram topic that delivered me".
  *   2. Forward the request to the chat-daemon over its UNIX socket via the
  *      same one-shot JSON-RPC pattern used by `src/mcp/chat-bridge-server.ts`
- *      and the legacy `DaemonClient`. We re-implement the socket dance here
+ *      and `src/chat_daemon/client.ts`. We re-implement the socket dance here
  *      (rather than importing) because:
- *        - `src.legacy/` is excluded from `tsconfig.build.json` — production
- *          builds can't depend on it.
  *        - `chat-bridge-server.ts` is an MCP-shaped binary, not a reusable
  *          library. Pulling its handlers into the agent-bridge would couple
  *          tool wiring to MCP transport boundaries.

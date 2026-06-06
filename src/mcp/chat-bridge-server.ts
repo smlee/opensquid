@@ -547,8 +547,8 @@ async function main(): Promise<void> {
   // CAT.1d — opportunistically ensure the NEW chat-transport daemon is running
   // so `chat_send` has a socket to dial + inbound Telegram lands in the umbrella
   // inboxes. Fire-and-forget (never block the stdio loop); no-op when no chat
-  // platform is configured or a daemon is already up. Replaces the legacy
-  // `src.legacy/index.ts` autospawn, which fired from the retired MCP server.
+  // platform is configured or a daemon is already up. Replaces the autospawn
+  // that fired from the retired legacy MCP server.
   void (async () => {
     const res = await ensureChatDaemonRunning();
     if (res.status === 'spawned' || res.status === 'waited_for_peer') {

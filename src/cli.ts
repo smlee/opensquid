@@ -257,7 +257,7 @@ function runCli(): void {
   // with its own `chat-daemon.{sock,pid,log}` side-files (deliberately separate
   // from the SCHED.1 `daemon` group — the two daemons run in parallel). `start`
   // spawns `dist/cli.js chat-daemon-worker` detached (handled by the early
-  // short-circuit above). Replaces the legacy `src.legacy` chat-daemon verbs.
+  // short-circuit above). Replaces the retired legacy chat-daemon verbs.
   registerChatDaemon(program);
 
   // LP.4 — `opensquid pack install/list/export/remove`. CLI lifecycle for the

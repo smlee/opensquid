@@ -15,7 +15,7 @@
  *     target to exist.
  *
  * Error model: ENOENT on read returns `ok(null)` (canonical "no state"
- * signal — see `src.legacy/anti-drift/state.ts` for the original pattern).
+ * signal — the original anti-drift `read_state` pattern).
  * Every other failure travels as `err({ kind: 'runtime', ... })`. Throws
  * never escape an `execute` — the evaluator's stray-throw wrapper is for
  * bugs, not for normal failure modes.

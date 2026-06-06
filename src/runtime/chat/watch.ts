@@ -10,7 +10,7 @@
  *     yet (created on the first message) — chokidar fires `add` on creation.
  *   - The inbox is read via its ON-DISK CONTRACT, not a shared TS type — the
  *     same WAB.1 design that has `agent_bridge/transport_bridge.ts` re-inline
- *     the row shape rather than import the quarantined `src.legacy` type. So
+ *     the row shape rather than import a shared TS type. So
  *     `chat watch` is an independent consumer of the file format, by design.
  *   - READS ARE SERIALIZED: chokidar can fire `change` twice for one write
  *     burst; without serialization two concurrent reads would advance the

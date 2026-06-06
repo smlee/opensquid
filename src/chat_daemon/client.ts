@@ -4,9 +4,9 @@
  * Before this module the one-shot JSON-RPC-over-UNIX-socket dance was copy-pasted into
  * ~5 call sites (agent_bridge/tools/chat_send, mcp/chat-bridge-server, setup/cli/
  * chat_actions_test_step, functions/ensure_umbrella_topic) plus the socket-path
- * derivation in ~5 places — duplication that existed only because `src.legacy/` is
- * tsconfig-excluded so `src/` couldn't import the legacy `DaemonClient`. This is that
- * shared client (the home the chat_send.ts:15-22 comment named). STRICT extraction: the
+ * derivation in ~5 places — duplication left over from when the chat-daemon client
+ * lived in the now-removed `src.legacy/` tree. This is that shared client (the home the
+ * chat_send.ts comment named). STRICT extraction: the
  * socket/timeout/decode behavior matches the prior `defaultDaemonSend` byte-for-byte;
  * `daemonRpc` just generalizes it over the RPC `method` + result type.
  *

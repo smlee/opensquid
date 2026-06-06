@@ -28,7 +28,7 @@ import { z } from 'zod';
 // SessionKey — `(platform, chatId, threadId?)` triple.
 //
 // Mirrors Hermes `build_session_key` (`gateway/platforms/base.py:2762`) and
-// the legacy `InboxMessage.thread_id` field (`src.legacy/chat/daemon/inbox.ts`).
+// the inbox row's `thread_id` field (written by the chat daemon).
 // Telegram supergroup ids are negative integers; DM user ids are positive;
 // both stringify safely. Discord + Slack reserved for future adapters.
 // ---------------------------------------------------------------------------
@@ -59,9 +59,9 @@ export function sessionKeyString(k: SessionKey): string {
 // ---------------------------------------------------------------------------
 // InboundChatEvent — emitted by transport_bridge when a JSONL row lands.
 //
-// Field mapping from legacy `InboxMessage` (snake_case, written by the
-// chat-daemon's `appendToInbox` at `src.legacy/chat/daemon/inbox.ts`) →
-// modern camelCase. The mapping happens at the bridge boundary so the rest
+// Field mapping from the inbox row (snake_case, written by the chat
+// daemon's inbox append) → modern camelCase. The mapping happens at the
+// bridge boundary so the rest
 // of the warm-agent code sees a clean Phase-1 shape.
 //
 // `projectUuid` is carried explicitly because the transport_bridge is
