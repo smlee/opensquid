@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.340] - 2026-06-06
+
+### Added (T-FLOW-UNSKIPPABLE FU.2 — scope-sprawl escalation, the last flow-gate gap)
+
+The SCOPE phase was the one un-gated region: a sprawling/oscillating scope (many prompts of
+investigation, no converging pre-research) was invisible. New `scope_dwell_tick` primitive ticks a
+per-session dwell counter while the FSM is in `scoping`/`researching` (resets when it leaves), and
+at threshold 3 the `entry-and-handoffs` prompt_submit rule surfaces a "converge: write ONE
+pre-research" **directive**. SOFT (surface, never block) — research legitimately takes multiple
+turns; this nudges convergence, it does not forbid investigation. +3 tests, 3120 green.
+
+With this the T-FLOW-UNSKIPPABLE list is complete: F0 (matcher), F0b/F0c (audit can resolve+run),
+F0d (audit fits the hook timeout), D1 (gates compose), FU.2 (scope-sprawl), FU.3 (SessionStart
+health). The flow now fires, runs its audit, composes, completes, and surfaces both un-gated
+sessions and sprawling scopes.
+
 ## [0.5.339] - 2026-06-05
 
 ### Fixed (T-CHAT-REALTIME — chat now follows the session, and SessionStart sets it up)
