@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.341] - 2026-06-06
+
+### Removed (T-REMOVE-SRC-LEGACY — delete the frozen 0.7.x reference tree)
+
+`src.legacy/` was the Phase-0 reset archive — frozen 0.7.x code kept "until src/ catches up"
+(`tsconfig.legacy.json`'s own header). src/ has caught up: the old MCP server is `src/mcp/server.ts`,
+the codex impl is `src/packs/`, the CLI/runtime is `src/cli.ts` + `src/runtime/*`, and the chat
+daemon runs from `src/channels`. The 380K / 31-file tree was verified dead — no imports from `src/`
+or `test/`, not a `bin` entry, excluded from the build, no `package.json` script — so it was deleted
+along with its scaffolding: the vestigial `tsconfig.legacy.json` and the now-dead `src.legacy`
+excludes in `tsconfig.build.json`, `tsconfig.json`, `eslint.config.js`, `vitest.config.ts`.
+
+Also scrubbed the stale `src/` comment-pointers whose premise was gone — the
+import-avoidance / "type-poison" / "excluded from tsconfig so we can't import" rationales that
+cited already-deleted `src.legacy/chat/daemon/*` files — repointing them at the live shape
+(`src/channels/daemon/*`) or the on-disk contract. Accurate past-tense "Ported from …" provenance
+lineage kept (git preserves the source). Verified: typecheck + build + lint + 3120 tests + CLI
+smoke all green; the removal broke nothing, confirming the tree was fully dead.
+
 ## [0.5.340] - 2026-06-06
 
 ### Added (T-FLOW-UNSKIPPABLE FU.2 — scope-sprawl escalation, the last flow-gate gap)
