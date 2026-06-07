@@ -170,6 +170,16 @@ OPENSQUID_SKIP_VERSION_GATE=1 git commit -m "docs only"
 
 Each bypass prints a loud `🦑 [opensquid <gate>] BYPASSED` line to stderr so it stays visible in your scrollback and in CI. Use it for emergencies. The gates are there because skipping them usually drops you straight into the mess they were stopping.
 
+### The coding flow
+
+The hooks above catch mistakes one at a time. The `coding-flow` pack is the bigger idea: it makes the agent _earn_ its way to a commit through three gated stages — SCOPE, then AUTHOR, then CODE — and won't let it skip ahead to the part it likes (writing code).
+
+SCOPE means it writes a pre-research doc _before_ it touches code, and an adversarial reviewer — a separate model — reads that doc and returns `GUESS_FREE` only when every load-bearing claim is cited to a file, a memory, or your own words, and the simplest correct approach is justified against the alternatives it actually weighed. AUTHOR means a task spec complete enough to build from — real code in the spec, not hand-waving — checked the same way for `SPEC_COMPLETE`. Only then does CODE open, and the commit gate stays shut until all seven workflow phases are logged for the task.
+
+It's the same bet as the wedge, one layer up: the agent doesn't get to decide its research was deep enough or its plan was sound. It proposes; the gate decides whether the work is real. In practice the reviewer is blunt — it'll reject a pre-research doc for an un-weighed alternative or a single uncited number, and it's usually right.
+
+When a session starts (or resumes), a one-line-per-section manifest reports what the agent is actually connected to — chat, the flow gates, which packs are loaded, the daemon, the engine — so you're never guessing whether the safety net is on.
+
 ## Chat
 
 Open Squid can wire a chat platform (Telegram, Discord, Slack) to your agent. There are three layers, and you only opt into as much as you want.
@@ -329,7 +339,7 @@ Raw storage is under `~/.opensquid/memories/` (YAML frontmatter plus embedding s
 
 Pre-1.0, shipping on `main` (0.5.x). Patches land often, and the agent-facing tool surface stays unfrozen until 1.0.
 
-What works today: the loop-engine bridge over a shared per-machine daemon, hybrid recall, the eleven MCP tools, the drift-protection hooks, the 7-phase workflow ledger and commit gate, the YAML pack/skill grammar with an RE2-backed `if:` language, the multi-project chat-daemon with both live `chat watch` and an always-on daemon arbitrated by a lease, multi-host MCP registration, identity that survives folder moves, and auto-memory import.
+What works today: the loop-engine bridge over a shared per-machine daemon, hybrid recall, the eleven MCP tools, the drift-protection hooks, the three-stage `coding-flow` (SCOPE → AUTHOR → CODE) with adversarial content audits and the 7-phase workflow ledger behind the commit gate, the session-start connection manifest, the YAML pack/skill grammar with an RE2-backed `if:` language, the multi-project chat-daemon with both live `chat watch` and an always-on daemon arbitrated by a lease, multi-host MCP registration, identity that survives folder moves, and auto-memory import.
 
 Still ahead of 1.0: npm distribution with pre-built engine binaries, a SemVer freeze on the tool surface, more automated Stage-2 promotion with a layer that learns when to ask versus proceed, and a public Claude Skill presence.
 
