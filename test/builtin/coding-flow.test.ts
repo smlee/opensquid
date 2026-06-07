@@ -5,7 +5,7 @@
  * This proves the on-disk union machine loads + is total, with the three
  * region-defining edges intact (guess-audit loop-back, spec-audit advance).
  */
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -49,6 +49,27 @@ function registry(): FunctionRegistry {
   r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
   return r;
 }
+
+describe('scope-audit ↔ lexicon consistency (Full-fix-over-patch drift guard)', () => {
+  it('the audit prompt enforces every lexicon design principle it claims, and the lexicon defines them', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const skill = pack.skills.find((s) => s.name === 'scope-lifecycle');
+    expect(skill).toBeDefined();
+    const auditPrompt = skill!.rules
+      .flatMap((r) => (r.kind === 'track_check' ? r.process : []))
+      .filter((p) => p.call === 'subagent_call')
+      .map((p) => String((p.args as { prompt?: unknown }).prompt ?? ''))
+      .find((p) => p.includes('adversarial reviewer'));
+    expect(auditPrompt).toBeDefined();
+    // Each lexicon-enforced principle must have a clause in the self-contained prompt.
+    expect(auditPrompt).toMatch(/NEVER-GUESS/);
+    expect(auditPrompt).toMatch(/BEST-SOLUTION/);
+    expect(auditPrompt).toMatch(/FULL-FIX/);
+    // …and the lexicon must define the guideline the prompt enforces (no lexicon↔prompt drift).
+    const lexicon = await readFile(resolve('docs/lexicon.md'), 'utf8');
+    expect(lexicon).toMatch(/\*\*Full-fix over patch\*\*/);
+  });
+});
 
 const writeCode: ToolCallEvent = {
   kind: 'tool_call',

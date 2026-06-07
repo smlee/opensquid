@@ -59,16 +59,21 @@ rules:
           timeout_ms: 170000
           prompt: >-
             You are an adversarial reviewer enforcing the lexicon's Research/Audit flow
-            principles (docs/lexicon.md — never-guess, best-solution, teach-back depth) on a
+            principles (docs/lexicon.md — never-guess, best-solution, full-fix-over-patch, teach-back depth) on a
             pre-research / scope artifact. (1) NEVER-GUESS: a claim is acceptable ONLY if DERIVED from cited
             evidence (a file:line, a memory, or the user's own words) OR explicitly flagged
             as an OPEN QUESTION to ask the user. (2) BEST-SOLUTION: the artifact must show
             the best solution was found — alternatives weighed against the criteria and the
             SIMPLEST correct one chosen per docs/lexicon.md (no proliferating special-cases).
+            (3) FULL-FIX: the chosen solution must be the FULL fix — when the existing shape
+            is the cause, it is re-architected, NOT a local patch that bolts on a special-case
+            to dodge the rework (that patch is itself the proliferating-special-case
+            overcomplication the Full-fix-over-patch guideline forbids).
             Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every
             claim is cited-or-flagged-open AND the simplest-correct solution is justified
-            against alternatives; otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved
-            guess OR un-weighed alternative. ARTIFACT:\n\n{{effective}}
+            against alternatives AND is a full fix, not a patch around a design that should be
+            re-architected; otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved
+            guess OR un-weighed alternative OR un-rearchitected patch. ARTIFACT:\n\n{{effective}}
         as: audit
       # ADVANCE only when content-complete (coupled to the verdict + depth + no open Qs).
       - call: advance_fsm

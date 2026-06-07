@@ -10,6 +10,10 @@ other (the failure this file exists to prevent). Grow it as we label things.
 - **Simplicity Principle** — prefer the simple logical solution; proliferating
   exceptions/special-cases mean either the problem wasn't decomposed or the
   solution is overcomplicated.
+- **Full-fix over patch** — fix the problem at its root; when the existing _shape_ is the
+  cause, re-architect it instead of bolting on a local patch — a patch that adds a
+  special-case to dodge the rework is itself the proliferating-special-case
+  overcomplication the Simplicity Principle forbids.
 - **No implicit state** — every lifecycle is an explicit _total-transition_
   state machine; every transform is a pure function.
 - **Coding stack behind it** — _make illegal states unrepresentable_ (types),

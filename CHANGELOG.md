@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.344] - 2026-06-07
+
+### Added (T-FULL-FIX-GUIDELINE — "Full-fix over patch" design guideline + scope enforcement)
+
+A new labeled design guideline sits beside the Simplicity Principle in `docs/lexicon.md`:
+
+> **Full-fix over patch** — fix the problem at its root; when the existing _shape_ is the
+> cause, re-architect it instead of bolting on a local patch — a patch that adds a
+> special-case to dodge the rework is itself the proliferating-special-case
+> overcomplication the Simplicity Principle forbids.
+
+It is now enforced at SCOPE: the scope-audit's self-contained prompt gains a `(3) FULL-FIX`
+criterion, and the `GUESS_FREE` gate now also requires the chosen solution be a full fix,
+not a patch around a design that should be re-architected. A consistency test
+(`coding-flow.test.ts`, via `loadPack` + the lexicon) asserts the audit prompt carries a
+clause for every lexicon-enforced principle AND that the lexicon defines the guideline — so
+the prompt and the lexicon can't silently drift apart. (Single-source-by-build, alternative
+(c)/(c-lite), is the documented escalation if the enforced-principle set ever grows.)
+
 ## [0.5.343] - 2026-06-07
 
 ### Added (T-DEPTH-READONLY-BASH — count read-only Bash toward the SCOPE depth floor)
