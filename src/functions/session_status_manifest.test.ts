@@ -12,20 +12,15 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { flowEnforcementProblems } from './check_flow_health.js';
 import { SessionStatusManifest } from './session_status_manifest.js';
 
-// Hermetic flow/packs state: the Flow section runs flowEnforcementProblems → loadActivePacks
-// (is a gate pack with an FSM active?), which reads the ambient umbrella active.json —
-// machine-dependent (active locally, absent in CI). Mock it to a coding-flow pack with an FSM so
-// "flow gates active" is deterministic; the hooks-wired check stays isolated via CLAUDE_CONFIG_DIR
-// (the INACTIVE tests assert via that hooks check, not via packs).
-vi.mock('../runtime/bootstrap.js', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    loadActivePacks: () => Promise.resolve([{ name: 'coding-flow', fsm: {} }] as never),
-  };
-});
+// The manifest's Flow section delegates to flowEnforcementProblems (hooks-wired AND an active
+// FSM-pack check). The pack check reads ambient umbrella state — coding-flow is active locally
+// but absent in CI's clean env — so assert the manifest's COMPOSITION here against a controllable
+// flow-problem set; the detection itself is covered by check_flow_health's own tests.
+vi.mock('./check_flow_health.js', () => ({ flowEnforcementProblems: vi.fn() }));
+const mockFlow = vi.mocked(flowEnforcementProblems);
 
 const ctx = {
   sessionId: 'ssm-test',
@@ -51,6 +46,8 @@ describe('session_status_manifest', () => {
     prior = process.env.CLAUDE_CONFIG_DIR;
     configDir = await mkdtemp(join(tmpdir(), 'ssm-'));
     process.env.CLAUDE_CONFIG_DIR = configDir;
+    mockFlow.mockReset();
+    mockFlow.mockResolvedValue([]); // default: no problems → gates active
   });
   afterEach(async () => {
     if (prior === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -85,11 +82,9 @@ describe('session_status_manifest', () => {
   });
 
   it('flow gates INACTIVE → folds the F3 loud restart signal into the manifest', async () => {
-    await writeFile(
-      join(configDir, 'settings.json'),
-      JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ command: 'some-other-hook' }] }] } }),
-      'utf8',
-    );
+    mockFlow.mockResolvedValue([
+      'opensquid hooks are NOT wired in ~/.claude/settings.json for: PreToolUse',
+    ]);
     const r = await SessionStatusManifest.execute({}, ctx);
     if (!r.ok || r.value === null) throw new Error('no manifest');
     expect(r.value.content).toMatch(/Flow gates: INACTIVE ⛔/);
@@ -98,10 +93,9 @@ describe('session_status_manifest', () => {
   });
 
   it('flow gates active → concise ✅ line, no restart noise', async () => {
-    await writeFile(join(configDir, 'settings.json'), JSON.stringify(WIRED), 'utf8');
+    mockFlow.mockResolvedValue([]); // no problems → gates active
     const r = await SessionStatusManifest.execute({}, ctx);
     if (!r.ok || r.value === null) throw new Error('no manifest');
-    // coding-flow (a gate pack) loads in-process, so gates resolve active.
     expect(r.value.content).toMatch(/Flow gates: active ✅/);
     expect(r.value.content).not.toMatch(/RESTART this session/);
   });
