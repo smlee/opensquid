@@ -49,7 +49,7 @@ export const EffectiveContent: FunctionDef<z.input<typeof EmptyArgs>, string> = 
   execute: async (_args, ctx) => {
     if (ctx.event.kind !== 'tool_call') return ok('');
     const tool = ctx.event.tool;
-    const a = (ctx.event.args ?? {}) as Record<string, unknown>;
+    const a = ctx.event.args ?? {};
     try {
       if (tool === 'Write') return ok(typeof a.content === 'string' ? a.content : '');
       const filePath = typeof a.file_path === 'string' ? a.file_path : '';
@@ -62,7 +62,7 @@ export const EffectiveContent: FunctionDef<z.input<typeof EmptyArgs>, string> = 
       }
       if (tool === 'MultiEdit' && Array.isArray(a.edits)) {
         let content = current;
-        for (const e of a.edits as Array<Record<string, unknown>>) {
+        for (const e of a.edits as Record<string, unknown>[]) {
           const oldS = typeof e.old_string === 'string' ? e.old_string : '';
           const newS = typeof e.new_string === 'string' ? e.new_string : '';
           content = applyReplace(content, oldS, newS);

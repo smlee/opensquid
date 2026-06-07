@@ -58,7 +58,7 @@ describe('scope-audit ↔ lexicon consistency (Full-fix-over-patch drift guard)'
     const auditPrompt = skill!.rules
       .flatMap((r) => (r.kind === 'track_check' ? r.process : []))
       .filter((p) => p.call === 'subagent_call')
-      .map((p) => String((p.args as { prompt?: unknown }).prompt ?? ''))
+      .map((p) => (p.args as { prompt?: string }).prompt ?? '')
       .find((p) => p.includes('adversarial reviewer'));
     expect(auditPrompt).toBeDefined();
     // Each lexicon-enforced principle must have a clause in the self-contained prompt.
