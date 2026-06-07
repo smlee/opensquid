@@ -1,0 +1,45 @@
+# fsm-author-walkthrough — surface an FSM-authoring checklist when the user edits any
+# pack's fsm.yaml (the pack-lifecycle side-file, auto-loaded by filename → pack.fsm).
+# Mirrors manifest-author-walkthrough / skill-yaml-author-walkthrough (one walkthrough per
+# pack file-type). The FSM layer is what makes a pack a BEHAVIOR pack — coding-flow is the
+# canonical example. Cites docs/pack-fsm-architecture.md (the all-levels FSM walkthrough).
+name: fsm-author-walkthrough
+load: preload
+when_to_load:
+  - kind: event_type
+    type: tool_call
+triggers:
+  - kind: tool_call
+rules:
+  - id: surface-fsm-authoring-checklist
+    process:
+      - call: tool_name
+        as: tool
+      # SG.2-fixed pattern: event path 'args.file_path' (not the binding 'tool_args...'),
+      # and len(matched) > 0 (matched is a string[]).
+      - call: text_pattern_match
+        if: 'tool == "Write" || tool == "Edit"'
+        args:
+          text_field: 'args.file_path'
+          patterns:
+            - 'packs/.+/fsm\.yaml$'
+        as: is_fsm
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && len(is_fsm.matched) > 0'
+        args:
+          level: surface
+          message: |
+            🔄 Authoring a pack FSM (fsm.yaml — the behavior lifecycle). Quick checklist
+            (cite docs/pack-fsm-architecture.md; canonical example: coding-flow/fsm.yaml):
+              [ ] initial (the start state)
+              [ ] states (every lifecycle state, explicitly listed)
+              [ ] transitions (each `{ from, on, to }`); the machine must be TOTAL —
+                  a non-matching event is an explicit stay (validateFsm enforces this)
+              [ ] gates: `guards:` in manifest.yaml (reusable detect→verdict templates)
+                  wire enforcement onto the transitions
+              [ ] skills drive the FSM via read_fsm_state / advance_fsm
+                  (cross-pack with `pack:`)
+              [ ] fsm.yaml is auto-loaded by filename → pack.fsm (it is NOT a
+                  manifest.yaml field)
+              [ ] FLOW templates expand into the machine before validateFsm (advanced;
+                  see docs/pack-fsm-architecture.md)

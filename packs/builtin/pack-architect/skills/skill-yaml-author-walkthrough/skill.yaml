@@ -39,6 +39,8 @@ rules:
               [ ] requires (optional AND-preconditions)
               [ ] rules (≥ 1 rule; each track_check or destination_check)
               [ ] Each rule's process: call / args / as / if / on_empty
+              [ ] FSM-gated skills: read_fsm_state / advance_fsm + guards: (see
+                  docs/pack-fsm-architecture.md)
               [ ] if: grammar uses the documented operator set + helper
                   functions per skill-grammar-guide.md
               [ ] Final step emits a verdict

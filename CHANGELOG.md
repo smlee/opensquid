@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.345] - 2026-06-07
+
+### Added (T-PACK-ARCHITECT-FSM — pack-architect now teaches FSM/behavior-pack authoring)
+
+`pack-architect` (the pack that teaches pack authoring) taught the pre-FSM model
+(manifest + skills + side-files) with zero coverage of `fsm.yaml`/`guards:` — the layer
+that now defines a pack's behavior. It does now:
+
+- a new `fsm-author-walkthrough` skill fires on any `packs/*/fsm.yaml` write and surfaces an
+  FSM checklist (`initial` + `states` + TOTAL `transitions` + `guards:` +
+  `read_fsm_state`/`advance_fsm`), citing `docs/pack-fsm-architecture.md` with
+  `coding-flow/fsm.yaml` as the canonical example;
+- the manifest checklist gains `guards`, `verify_gates`, and the `fsm.yaml` side-file; the
+  skill checklist gains FSM-gating; the profession walkthrough (`team.yaml`) gains an FSM
+  step; `SKILL.md`/`manifest.yaml` are refreshed (stale "chain stage" prose → the live
+  `read_fsm_state` framing) and now cite `pack-fsm-architecture.md`.
+
+FSM authoring is OPTIONAL — the new skill fires only on a real `fsm.yaml` edit and the
+manifest marks it "if the pack has a stateful lifecycle", so simple-pack authors aren't
+burdened. A content drift-guard test asserts the FSM coverage stays present, so the teaching
+can't silently fall behind the architecture again (the firing-only test is why it had).
+
 ## [0.5.344] - 2026-06-07
 
 ### Added (T-FULL-FIX-GUIDELINE — "Full-fix over patch" design guideline + scope enforcement)

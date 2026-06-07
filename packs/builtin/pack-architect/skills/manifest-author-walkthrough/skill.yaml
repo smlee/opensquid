@@ -43,4 +43,8 @@ rules:
                   focused packs)
               [ ] includes (only for composite packs; pack_id + semver
                   range per entry)
-            If usage is profession or both, you ALSO need team.yaml.
+              [ ] guards (reusable detect→verdict gate templates — for FSM-gated packs)
+              [ ] verify_gates (declarative author gates)
+            If usage is profession or both, you ALSO need team.yaml. If the pack has a
+            stateful lifecycle, ALSO author fsm.yaml (a side-file, auto-loaded by name) —
+            see the fsm-author-walkthrough checklist.

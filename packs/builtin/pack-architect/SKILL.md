@@ -3,7 +3,7 @@
 opensquid's meta-discipline pack: **teaches users how to author well-formed
 opensquid packs**. Ships in dual-mode (`usage: both`):
 
-- **Active**: the 3 skills fire inline while you're editing pack-config
+- **Active**: the 4 skills fire inline while you're editing pack-config
   files (manifest.yaml / skill.yaml) and surface authoring checklists.
 - **Profession**: when another pack emits
   `next_action.profession: pack-architect`, the agent spawns a
@@ -26,13 +26,14 @@ for prework. Without scope-architect loaded, the MM.2 profession resolver
 will drop those directives + log them; the user's prompt is unaffected
 but the chain-handoff stalls.
 
-## The 3 skills
+## The 4 skills
 
-| Skill                           | When it fires                                                          | What it does                                                                                   |
-| ------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `pack-scope-elicit`             | UserPromptSubmit matches pack-authoring intent + chain stage is `idle` | Emits directive `next_action.profession: scope-architect` for prework                          |
-| `manifest-author-walkthrough`   | PreToolUse Edit/Write of `packs/*/manifest.yaml`                       | Surface verdict with manifest-field checklist (cites pack-runtime.md §1)                       |
-| `skill-yaml-author-walkthrough` | PreToolUse Edit/Write of `packs/*/skills/*/skill.yaml`                 | Surface verdict with skill-field checklist (cites pack-runtime.md §2 + skill-grammar-guide.md) |
+| Skill                           | When it fires                                                                       | What it does                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `pack-scope-elicit`             | UserPromptSubmit matches pack-authoring intent + the coding-flow FSM is null/`idle` | Emits directive `next_action.profession: scope-architect` for prework                           |
+| `manifest-author-walkthrough`   | PreToolUse Edit/Write of `packs/*/manifest.yaml`                                    | Surface verdict with manifest-field checklist (cites pack-runtime.md §1; incl. guards/fsm.yaml) |
+| `skill-yaml-author-walkthrough` | PreToolUse Edit/Write of `packs/*/skills/*/skill.yaml`                              | Surface verdict with skill-field checklist (cites pack-runtime.md §2 + skill-grammar-guide.md)  |
+| `fsm-author-walkthrough`        | PreToolUse Edit/Write of `packs/*/fsm.yaml`                                         | Surface verdict with FSM checklist (cites pack-fsm-architecture.md; coding-flow example)        |
 
 ## The 4-phase pack-authoring workflow (when spawned as profession)
 
@@ -41,13 +42,17 @@ but the chain-handoff stalls.
 2. **Write manifest.yaml** — required + recommended fields per pack-runtime.md §1.
 3. **Author skills** — one skill per rule kind; when_to_load + triggers
    - rules + process steps; verdict choice; if: grammar discipline.
-4. **Side-files** — team.yaml only if profession-mode; other side files
-   only as needed.
+4. **Side-files** — `fsm.yaml` if the pack has a stateful lifecycle (initial +
+   states + TOTAL transitions; auto-loaded by name → `pack.fsm`; pair with
+   `guards:`); team.yaml only if profession-mode; other side files as needed.
 
 ## References
 
 - `docs/pack-runtime.md` — the authoritative reference pack-architect
   cites throughout.
+- `docs/pack-fsm-architecture.md` — the all-levels FSM walkthrough (the
+  `fsm.yaml` lifecycle, the total-transition engine, `read_fsm_state`/`advance_fsm`,
+  and `guards:`); the companion for stateful/behavior packs.
 - `docs/skill-grammar-guide.md` — companion doc for the `if:` grammar.
 - `packs/builtin/default-discipline/` — canonical built-in with rich
   foundation/detected_by populated.
@@ -57,7 +62,7 @@ but the chain-handoff stalls.
 
 ## Customizing
 
-The 3 surface-verdict checklists can be too noisy for active pack
+The surface-verdict checklists can be too noisy for active pack
 authoring (every Edit fires). If that becomes an issue:
 
 - Move the skill to `load: lazy` + add a more specific

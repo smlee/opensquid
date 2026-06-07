@@ -46,10 +46,11 @@ describe('builtin pack-architect pack (T-MULTIMODE MM.4)', () => {
     expect(role?.instructions).toMatch(/4-phase workflow/);
   });
 
-  it('ships 3 skills (pack-scope-elicit + manifest-walkthrough + skill-yaml-walkthrough)', async () => {
+  it('ships 4 skills (incl. fsm-author-walkthrough for FSM/behavior packs)', async () => {
     const pack = await loadPack(resolve('packs/builtin/pack-architect'));
     const names = pack.skills.map((s) => s.name).sort();
     expect(names).toEqual([
+      'fsm-author-walkthrough',
       'manifest-author-walkthrough',
       'pack-scope-elicit',
       'skill-yaml-author-walkthrough',

@@ -49,6 +49,12 @@ roles:
           profession). Most common is profession for chain-handoffs.
 
       Phase 4 — Side-files (only as needed).
+        - fsm.yaml: the pack's behavior lifecycle (initial + states + TOTAL
+          transitions {from,on,to}), if the pack is stateful — auto-loaded by
+          filename → pack.fsm (NOT a manifest field). Pair with `guards:` in
+          manifest.yaml (detect→verdict gate templates) + read_fsm_state/advance_fsm
+          in skills. Cite docs/pack-fsm-architecture.md; coding-flow/fsm.yaml is the
+          canonical example.
         - team.yaml: required if usage: profession | both.
         - chat_agent.yaml: only if pack defines a custom chat agent.
         - models.yaml: only if pack ships model aliases.
