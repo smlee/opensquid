@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.347] - 2026-06-07
+
+### Added — per-file git source-of-truth for the libSQL store (T-STORE-PERFILE-SOURCE; rewrite Phase 1 slice 1b)
+
+The libSQL store now has a per-file source-of-truth. Each lesson is a `---`-fenced
+YAML-frontmatter + markdown-body file `<sourceDir>/<id>.md` (same shape as the engine's
+`mem-*.md`), written ATOMICALLY (temp file + `rename`). Via a new `sourceDir` opt on
+`libsqlStoreBackend`, `storeLesson` writes the per-file record — the git-versionable, mergeable
+truth (spike E3: per-file + atomic-claim = 0% git-merge conflict) — before upserting the DB,
+which becomes a derived, rebuildable index. New `rebuildLibsqlIndex` reconstructs the index from
+the source files (drops + re-indexes; idempotent maintenance op).
+
+The `libsql-fastembed` backend resolves a default `sourceDir` (`~/.opensquid/store/lessons`);
+`libsql-qwen3` stays sourceDir-less. With `sourceDir` unset the backend is DB-only — zero
+regression (all 52 rag tests green). New module `src/rag/backends/perfile_source.ts`
+(`writeRecord` atomic / `readRecords`, reusing the existing `yaml` dep).
+
 ## [0.5.346] - 2026-06-07
 
 ### Added — in-process embedder; libSQL backend made embedder-agnostic (T-STORE-FOUNDATION-LIBSQL; rewrite Phase 1 slice 1a)

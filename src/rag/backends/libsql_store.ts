@@ -15,12 +15,21 @@ import { type Client, type Row, createClient } from '@libsql/client';
 
 import { rrfFuse } from '../rrf.js';
 
+import { readRecords, writeRecord } from './perfile_source.js';
+
 import type { Embedder } from '../embedders/types.js';
 import type { Lesson, RagBackend, RecallHit } from '../types.js';
 
 export interface LibsqlStoreOpts {
   dbUrl: string;
   embedder: Embedder;
+  /**
+   * Optional per-file source-of-truth dir (T-STORE-PERFILE-SOURCE). When set, `storeLesson`
+   * writes `<sourceDir>/<id>.md` (the git-versionable truth) before upserting the DB index, and
+   * `rebuildLibsqlIndex` can reconstruct the index from it. When unset, the backend is DB-only
+   * (unchanged behavior — e.g. `:memory:` + the `libsql-qwen3` path).
+   */
+  sourceDir?: string;
 }
 
 export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
@@ -104,6 +113,9 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
 
     async storeLesson(lesson) {
       if (!client) throw new Error('libsql-store: not initialized');
+      // File-first: write the per-file source-of-truth (atomic) before the derived DB index, so a
+      // crash leaves the durable git-versionable truth intact and the DB is reconstructable.
+      if (opts.sourceDir !== undefined) await writeRecord(opts.sourceDir, lesson);
       const vec = await embedder.embed(lesson.content);
       const tagsJson = JSON.stringify(lesson.tags);
       await client.execute({
@@ -127,6 +139,31 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       });
     },
   };
+}
+
+/**
+ * Rebuild the libSQL index from the per-file source-of-truth (the files are authoritative; the
+ * DB is disposable). Drops + recreates the index tables first so records deleted from the source
+ * don't linger, then re-indexes every record. Idempotent — a crash mid-rebuild is recovered by
+ * re-running it (the source is never touched). Cold-path maintenance op (e.g. after a git
+ * pull/merge of the source); for file-backed `dbUrl`s, not `:memory:`.
+ */
+export async function rebuildLibsqlIndex(opts: {
+  dbUrl: string;
+  embedder: Embedder;
+  sourceDir: string;
+}): Promise<number> {
+  const client = createClient({ url: opts.dbUrl });
+  await client.execute('DROP TABLE IF EXISTS lessons');
+  await client.execute('DROP TABLE IF EXISTS lessons_fts');
+  client.close();
+  // No sourceDir on the rebuild backend → storeLesson re-indexes the DB only (it must NOT
+  // rewrite the files it is reading from).
+  const backend = libsqlStoreBackend({ dbUrl: opts.dbUrl, embedder: opts.embedder });
+  await backend.init();
+  const records = await readRecords(opts.sourceDir);
+  for (const r of records) await backend.storeLesson(r);
+  return records.length;
 }
 
 // FTS5 escape: tokenize on whitespace, strip non-`[\p{L}\p{N}_]`, OR the survivors. `''` means

@@ -69,6 +69,8 @@ export type BackendConfig =
       // via OPENSQUID_RAG_BACKEND=libsql-fastembed; the default backend is unchanged.
       kind: 'libsql-fastembed';
       dbUrl: string;
+      // Per-file git source-of-truth dir (T-STORE-PERFILE-SOURCE); the DB is the derived index.
+      sourceDir?: string;
     };
 
 export function createBackend(config: BackendConfig): RagBackend {
@@ -89,7 +91,11 @@ export function createBackend(config: BackendConfig): RagBackend {
         ...(config.ollamaUrl === undefined ? {} : { ollamaUrl: config.ollamaUrl }),
       });
     case 'libsql-fastembed':
-      return libsqlStoreBackend({ dbUrl: config.dbUrl, embedder: fastembedEmbedder() });
+      return libsqlStoreBackend({
+        dbUrl: config.dbUrl,
+        embedder: fastembedEmbedder(),
+        ...(config.sourceDir === undefined ? {} : { sourceDir: config.sourceDir }),
+      });
     default: {
       // Exhaustive check: if `BackendConfig` gains a variant and this arm
       // isn't updated, TS flags `_exhaustive` as not-`never`.
