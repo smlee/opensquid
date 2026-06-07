@@ -24,3 +24,6 @@ test/e2e/e2e-drift-prevention-report.md
 # internal research/planning is PRIVATE — never publish (lives in loop/docs)
 docs/research/
 docs/tasks/
+
+# fastembed model cache (downloaded artifacts)
+local_cache/

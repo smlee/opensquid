@@ -27,7 +27,9 @@
 import { claudeAutoMemoryBackend } from './backends/claude_auto_memory.js';
 import { libsqlLexicalBackend } from './backends/libsql_lexical.js';
 import { libsqlQwen3Backend } from './backends/libsql_qwen3.js';
+import { libsqlStoreBackend } from './backends/libsql_store.js';
 import { loopEngineBackend } from './backends/loop_engine.js';
+import { fastembedEmbedder } from './embedders/fastembed.js';
 
 import type { RagBackend } from './types.js';
 
@@ -60,6 +62,13 @@ export type BackendConfig =
       kind: 'loop-engine';
       mode?: 'semantic' | 'text' | 'hybrid';
       ollamaUrl?: string;
+    }
+  | {
+      // libsql-fastembed (T-STORE-FOUNDATION-LIBSQL): the generalized libSQL store wired with
+      // the in-process fastembed embedder (bge-small 384d) — self-contained, no Ollama. Opt-in
+      // via OPENSQUID_RAG_BACKEND=libsql-fastembed; the default backend is unchanged.
+      kind: 'libsql-fastembed';
+      dbUrl: string;
     };
 
 export function createBackend(config: BackendConfig): RagBackend {
@@ -79,6 +88,8 @@ export function createBackend(config: BackendConfig): RagBackend {
         ...(config.mode === undefined ? {} : { mode: config.mode }),
         ...(config.ollamaUrl === undefined ? {} : { ollamaUrl: config.ollamaUrl }),
       });
+    case 'libsql-fastembed':
+      return libsqlStoreBackend({ dbUrl: config.dbUrl, embedder: fastembedEmbedder() });
     default: {
       // Exhaustive check: if `BackendConfig` gains a variant and this arm
       // isn't updated, TS flags `_exhaustive` as not-`never`.

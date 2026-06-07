@@ -90,12 +90,14 @@ export async function resolveBackendConfig(): Promise<BackendConfig> {
       };
     case 'libsql-lexical':
       return { kind: 'libsql-lexical', dbUrl: persisted.dbUrl ?? defaultLibsqlUrl() };
+    case 'libsql-fastembed':
+      return { kind: 'libsql-fastembed', dbUrl: persisted.dbUrl ?? defaultLibsqlUrl() };
     case 'claude-auto-memory':
       return { kind: 'claude-auto-memory' };
     default:
       throw new Error(
         `Unknown RAG backend kind: ${kind}. ` +
-          `Expected one of: loop-engine, libsql-qwen3, libsql-lexical, claude-auto-memory.`,
+          `Expected one of: loop-engine, libsql-qwen3, libsql-fastembed, libsql-lexical, claude-auto-memory.`,
       );
   }
 }

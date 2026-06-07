@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.346] - 2026-06-07
+
+### Added — in-process embedder; libSQL backend made embedder-agnostic (T-STORE-FOUNDATION-LIBSQL; rewrite Phase 1 slice 1a)
+
+The shipped libSQL RAG backend is now embedder-agnostic. An injectable `Embedder { embed, dim }`
+(`src/rag/embedders/types.ts`) was extracted from `libsql_qwen3` — whose only Ollama coupling
+was the embedder (bounded by its single `{ QWEN3_DIM, ollamaEmbed }` import). The backend body
+moved to a generalized `libsqlStoreBackend` (`backends/libsql_store.ts`); `libsql-qwen3` is now
+a thin wrapper wiring `ollamaQwen3Embedder` — behavior-identical (all 44 rag tests green).
+
+A new in-process embedder (`fastembedEmbedder` — fastembed-js `bge-small-en-v1.5`, 384d, no
+Ollama/Python/daemon; model cached under `~/.opensquid/models`) plus a `libsql-fastembed`
+backend (opt-in via `OPENSQUID_RAG_BACKEND=libsql-fastembed`; default unchanged) give a fully
+self-contained, no-daemon recall path — the OSS-local goal.
+
+Validated by `scripts/e2-recall-parity.ts` on the real 159-memory corpus: fastembed-bge reaches
+recall PARITY with Ollama-Qwen3 (self-retrieval@5 100% = 100%; both surface a documented
+proper-noun recall case in top-5) — no escalation to a larger model needed.
+
 ## [0.5.345] - 2026-06-07
 
 ### Added (T-PACK-ARCHITECT-FSM — pack-architect now teaches FSM/behavior-pack authoring)

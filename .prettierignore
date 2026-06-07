@@ -11,3 +11,4 @@ npm/
 
 # test fixtures are sample inputs — keep as-authored
 test/fixtures/
+local_cache/

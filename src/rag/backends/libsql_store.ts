@@ -1,0 +1,155 @@
+/**
+ * Generalized libSQL RAG backend: libsql storage + an INJECTED `Embedder` (hybrid semantic +
+ * lexical via RRF). The body is the former `libsql_qwen3` backend with the embedder extracted
+ * (T-STORE-FOUNDATION-LIBSQL): `libsql-qwen3` now wires the Ollama-Qwen3 embedder into this,
+ * `libsql-fastembed` wires the in-process fastembed embedder. One backend body, any embedder.
+ *
+ * Schema (libsql vector ext, @libsql/client 0.14): `F32_BLOB(dim)` stores 32-bit float vectors
+ * (`dim` from `embedder.dim`); `vector32('[...]')` parses a JSON array; `vector_distance_cos`
+ * returns `1 - cosine_similarity`; `libsql_vector_idx(col)` builds the DiskANN ANN index.
+ *
+ * Imports from: @libsql/client, ../rrf.js, ../embedders/types.js, ../types.js.
+ * Imported by: src/rag/backend_factory.ts.
+ */
+import { type Client, type Row, createClient } from '@libsql/client';
+
+import { rrfFuse } from '../rrf.js';
+
+import type { Embedder } from '../embedders/types.js';
+import type { Lesson, RagBackend, RecallHit } from '../types.js';
+
+export interface LibsqlStoreOpts {
+  dbUrl: string;
+  embedder: Embedder;
+}
+
+export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
+  let client: Client | null = null;
+  const { embedder } = opts;
+
+  return {
+    async init() {
+      client = createClient({ url: opts.dbUrl });
+      await client.execute(`
+        CREATE TABLE IF NOT EXISTS lessons (
+          id TEXT PRIMARY KEY,
+          content TEXT NOT NULL,
+          tags TEXT NOT NULL,
+          source TEXT NOT NULL,
+          author TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          embedding F32_BLOB(${embedder.dim})
+        );
+      `);
+      await client.execute(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts
+        USING fts5(id UNINDEXED, content, tags, source);
+      `);
+      try {
+        await client.execute(`
+          CREATE INDEX IF NOT EXISTS idx_lessons_vec
+          ON lessons (libsql_vector_idx(embedding));
+        `);
+      } catch {
+        // index is optional; ordering by vector_distance_cos still works.
+      }
+    },
+
+    embed: (text) => embedder.embed(text),
+
+    async recall(query, k) {
+      if (!client) throw new Error('libsql-store: not initialized');
+      const safeMatch = ftsEscape(query);
+      const vec = await embedder.embed(query);
+      const semantic: RecallHit[] = [];
+      const lexical: RecallHit[] = [];
+
+      if (vec) {
+        try {
+          const rs = await client.execute({
+            sql: `SELECT id, content, tags, source, author, created_at
+                  FROM lessons
+                  WHERE embedding IS NOT NULL
+                  ORDER BY vector_distance_cos(embedding, vector32(?)) ASC
+                  LIMIT ?`,
+            args: [JSON.stringify(vec), k],
+          });
+          rs.rows.forEach((r, i) =>
+            semantic.push({ lesson: rowToLesson(r), score: 1 / (i + 1), source: 'semantic' }),
+          );
+        } catch {
+          // Vector path unavailable on this libsql build — proceed lexical-only.
+        }
+      }
+      // Empty / all-stripped query → skip lexical leg.
+      if (safeMatch) {
+        try {
+          const lex = await client.execute({
+            sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at
+                  FROM lessons_fts f JOIN lessons l ON l.id = f.id
+                  WHERE lessons_fts MATCH ?
+                  LIMIT ?`,
+            args: [safeMatch, k],
+          });
+          lex.rows.forEach((r, i) =>
+            lexical.push({ lesson: rowToLesson(r), score: 1 / (i + 1), source: 'lexical' }),
+          );
+        } catch {
+          // Malformed FTS5 expression slipped through — return semantic only.
+        }
+      }
+
+      return rrfFuse([semantic, lexical], k);
+    },
+
+    async storeLesson(lesson) {
+      if (!client) throw new Error('libsql-store: not initialized');
+      const vec = await embedder.embed(lesson.content);
+      const tagsJson = JSON.stringify(lesson.tags);
+      await client.execute({
+        sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, embedding)
+              VALUES (?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
+        args: vec
+          ? [
+              lesson.id,
+              lesson.content,
+              tagsJson,
+              lesson.source,
+              lesson.author,
+              lesson.createdAt,
+              JSON.stringify(vec),
+            ]
+          : [lesson.id, lesson.content, tagsJson, lesson.source, lesson.author, lesson.createdAt],
+      });
+      await client.execute({
+        sql: `INSERT INTO lessons_fts (id, content, tags, source) VALUES (?, ?, ?, ?)`,
+        args: [lesson.id, lesson.content, tagsJson, lesson.source],
+      });
+    },
+  };
+}
+
+// FTS5 escape: tokenize on whitespace, strip non-`[\p{L}\p{N}_]`, OR the survivors. `''` means
+// the caller skips the lexical leg.
+function ftsEscape(query: string): string {
+  const tokens = query
+    .split(/\s+/)
+    .map((t) => t.replace(/[^\p{L}\p{N}_]/gu, ''))
+    .filter((t) => t.length > 0);
+  return tokens.length === 0 ? '' : tokens.join(' OR ');
+}
+
+function s(r: Row, key: string): string {
+  const v = r[key];
+  return typeof v === 'string' ? v : '';
+}
+function rowToLesson(r: Row): Lesson {
+  return {
+    id: s(r, 'id'),
+    content: s(r, 'content'),
+    tags: JSON.parse(s(r, 'tags') || '[]') as string[],
+    source: s(r, 'source'),
+    author: s(r, 'author') === 'user' ? 'user' : 'agent',
+    createdAt: s(r, 'created_at'),
+  };
+}
