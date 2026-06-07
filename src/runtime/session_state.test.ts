@@ -24,6 +24,7 @@ import {
   archiveActiveTask,
   clearActiveTask,
   clearSkillTicks,
+  isReadOnlyBash,
   readActiveTask,
   readSessionCwd,
   readSessionToolLedger,
@@ -104,6 +105,54 @@ describe('session_state tool ledger', () => {
 
     const turn = await readSessionToolLedger(sid, 'current_turn');
     expect(turn).toEqual({ tools: [] });
+  });
+
+  it('appendTool records an additive Bash:read-only token for read-only Bash only', async () => {
+    const sid = 'sess-ro';
+    await appendTool(sid, 'Bash', 'grep foo file.ts');
+    await appendTool(sid, 'Bash', 'pnpm build');
+    await appendTool(sid, 'Read');
+    await appendTool(sid, 'Bash'); // no command → just Bash
+
+    const turn = (await readSessionToolLedger(sid, 'current_turn')).tools;
+    // read-only Bash → BOTH tokens, in order; mutating/no-command Bash → just Bash
+    expect(turn).toEqual(['Bash', 'Bash:read-only', 'Bash', 'Read', 'Bash']);
+  });
+});
+
+describe('isReadOnlyBash classifier', () => {
+  it('accepts allowlisted read-only commands (incl. pipelines)', () => {
+    for (const cmd of [
+      'grep foo f',
+      'rg -n foo',
+      'cat a | grep b',
+      "find . -name '*.ts'",
+      'head -5 f',
+      'ls -la',
+      "sed -n '1,5p' f",
+      'cat f | jq .x | head',
+    ]) {
+      expect(isReadOnlyBash(cmd), cmd).toBe(true);
+    }
+  });
+
+  it('rejects mutating / build / redirect / unknown commands (fail-closed)', () => {
+    for (const cmd of [
+      'pnpm build',
+      'git commit -m x',
+      'npm install',
+      'rm f',
+      'mv a b',
+      'sed -i s/a/b/ f',
+      'find . -delete',
+      'find . -exec rm {} \\;',
+      'echo x > f',
+      'cat a > b',
+      'grep foo f && rm f',
+      '',
+    ]) {
+      expect(isReadOnlyBash(cmd), cmd).toBe(false);
+    }
   });
 });
 

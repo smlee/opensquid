@@ -29,6 +29,7 @@ import {
   WorkflowPhasesComplete,
 } from '../../src/functions/active_task.js';
 import { appendTool, writeActiveTask } from '../../src/runtime/session_state.js';
+import { EffectiveContent } from '../../src/functions/effective_content.js';
 import { SessionToolHistory } from '../../src/functions/session_tool_history.js';
 import { TextPatternMatch } from '../../src/functions/text_pattern_match.js';
 import { appendPhase, REQUIRED_PHASES } from '../../src/runtime/workflow_phases.js';
@@ -44,6 +45,7 @@ function registry(): FunctionRegistry {
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
+  r.register(EffectiveContent); // AF.1/FU.4: scope-advance + spec-audit read the post-write artifact
   r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
   return r;
 }
@@ -295,6 +297,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
       ),
   });
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
+  r.register(EffectiveContent); // AF.1/FU.4: scope-advance + spec-audit read the post-write artifact
   r.register(HasGeneratedSpec); // scope-before-code consults the active task's spec
   r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
   r.register(TextPatternMatch); // GF.1: enter-scoping classifies the track / advances scope_start
@@ -445,6 +448,7 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
     registerVerdictFunctions(r);
     r.register(HasGeneratedSpec);
     r.register(SessionToolHistory);
+    r.register(EffectiveContent);
     r.register({
       name: 'subagent_call',
       argSchema: z.object({
@@ -765,7 +769,7 @@ describe('builtin coding-flow pack — EXECUTE content gate (phase-logged-before
     const compound: ToolCallEvent = {
       kind: 'tool_call',
       tool: 'Bash',
-      args: { command: 'cd /Users/slee/projects/opensquid && git commit -m "x"' },
+      args: { command: 'cd /repo && git commit -m "x"' },
     };
     const r = await dispatchEvent(compound, [pack], registryExec(), sid);
     expect(r.exitCode).toBe(2); // would have been 0 (evaded) under the ^-anchor
@@ -922,6 +926,7 @@ function registryPhaseAudit(): FunctionRegistry {
   registerEventFunctions(r);
   registerVerdictFunctions(r);
   r.register(SessionToolHistory);
+  r.register(EffectiveContent);
   return r;
 }
 

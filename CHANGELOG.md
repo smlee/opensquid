@@ -7,6 +7,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.343] - 2026-06-07
+
+### Added (T-DEPTH-READONLY-BASH — count read-only Bash toward the SCOPE depth floor)
+
+The SCOPE research-depth floor (`depth.count >= 3`) counted only `recall`/`Read`/`Grep`
+and was blind to research done via Bash (`grep`/`rg`/`cat`/`find`/…) — so an agent that
+investigated in the shell scored 0 and was forced into throwaway Read-tool calls to clear
+the gate. Now a READ-ONLY Bash command also counts.
+
+The mechanism is a SECOND, additive ledger token. `appendTool` records `Bash` as before
+AND, when the command is read-only, an extra `Bash:read-only` token; the SCOPE depth
+filter gains `Bash:read-only`. Because the `Bash` token is always still emitted, every
+existing `Bash`-filtering consumer (`verify-before-citing`, `phase-audit`, the example
+packs) is unaffected. Read-only-ness is classified by a fail-closed, flag-aware
+`isReadOnlyBash` helper: every pipeline/sequence segment must be an allowlisted read-only
+verb with no mutating flag (`sed -i`, `find -delete`/`-exec`) and no output redirection;
+anything unrecognized → not counted. Mutating/build Bash (`pnpm build`, `git commit`,
+`npm install`) is deliberately excluded — a build is work, not research.
+
+### Fixed
+
+- The `coding-flow` test harness did not register the `effective_content` primitive that
+  `[0.5.342]` wired into `scope-lifecycle`, so 12 `coding-flow.test.ts` cases failed on a
+  clean tree. Registered it in the affected setups (test-only; no runtime change).
+
 ## [0.5.342] - 2026-06-06
 
 ### Added (T-SESSION-STATUS-MANIFEST — one consolidated session-start connection report)

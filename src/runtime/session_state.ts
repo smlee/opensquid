@@ -91,15 +91,89 @@ async function writeLedger(sessionId: string, ledger: ToolLedger): Promise<void>
   await atomicWriteFile(path, JSON.stringify(ledger, null, 2));
 }
 
+// Verbs whose every invocation only READS — the basis for crediting Bash research
+// toward the SCOPE depth floor. Conservative allowlist; anything not here → not counted.
+const READ_ONLY_VERBS = new Set<string>([
+  'grep',
+  'rg',
+  'cat',
+  'sed',
+  'awk',
+  'find',
+  'head',
+  'tail',
+  'ls',
+  'wc',
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+  'jq',
+  'stat',
+  'file',
+  'echo',
+  'pwd',
+]);
+
+// An allowlisted verb can still mutate via a flag (`sed -i`, `find -delete/-exec`); reject those.
+function segmentMutates(argv: string[]): boolean {
+  const verb = argv[0];
+  if (verb === 'sed' && argv.some((a) => a === '-i' || a.startsWith('-i'))) return true;
+  if (
+    verb === 'find' &&
+    argv.some(
+      (a) => a === '-delete' || a === '-exec' || a === '-execdir' || a.startsWith('-fprint'),
+    )
+  )
+    return true;
+  return false;
+}
+
 /**
- * Append a tool name to both the current-turn list and the session-wide
- * list. Session list is trimmed to the most-recent `SESSION_LEDGER_CAP`
- * entries on every write so it never grows unbounded.
+ * Conservative, fail-closed: true only if EVERY pipeline/sequence segment is an allowlisted
+ * read-only verb with no mutating flag AND the command has no output redirection. Anything
+ * unrecognized → false (it simply doesn't count toward the SCOPE depth floor).
  */
-export async function appendTool(sessionId: string, toolName: string): Promise<void> {
+export function isReadOnlyBash(command: string): boolean {
+  if (typeof command !== 'string') return false;
+  const trimmed = command.trim();
+  if (trimmed === '') return false;
+  if (/>>?/.test(trimmed)) return false; // any output redirection (incl. awk/tee writes)
+  const segments = trimmed
+    .split(/\|\||&&|;|\|/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (segments.length === 0) return false;
+  for (const seg of segments) {
+    const argv = seg.split(/\s+/);
+    const verb = argv[0];
+    if (verb === undefined || !READ_ONLY_VERBS.has(verb)) return false;
+    if (segmentMutates(argv)) return false;
+  }
+  return true;
+}
+
+/**
+ * Append a tool name to both the current-turn list and the session-wide list. For a
+ * read-only Bash command, an ADDITIVE `Bash:read-only` token is recorded alongside the
+ * `Bash` token — the SCOPE depth filter counts it while every `Bash`-filtering consumer is
+ * unaffected (the `Bash` token is still emitted). Session list is trimmed to the most-recent
+ * `SESSION_LEDGER_CAP` entries on every write so it never grows unbounded.
+ */
+export async function appendTool(
+  sessionId: string,
+  toolName: string,
+  command?: string,
+): Promise<void> {
   const ledger = await readLedger(sessionId);
-  ledger.turn.push(toolName);
-  ledger.session.push(toolName);
+  const push = (name: string): void => {
+    ledger.turn.push(name);
+    ledger.session.push(name);
+  };
+  push(toolName);
+  if (toolName === 'Bash' && typeof command === 'string' && isReadOnlyBash(command)) {
+    push('Bash:read-only');
+  }
   if (ledger.session.length > SESSION_LEDGER_CAP) {
     ledger.session = ledger.session.slice(-SESSION_LEDGER_CAP);
   }

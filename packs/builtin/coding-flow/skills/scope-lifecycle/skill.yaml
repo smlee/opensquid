@@ -44,12 +44,12 @@ rules:
         args:
           key: coding-flow-design
           value: '{{effective}}'
-      # Research DEPTH (folded DPC.5): recall + Read + Grep this turn.
+      # Research DEPTH (folded DPC.5): recall + Read + Grep + read-only Bash this turn.
       - call: session_tool_history
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         args:
           scope: current_turn
-          filter_names: [mcp__opensquid__recall, Read, Grep]
+          filter_names: [mcp__opensquid__recall, Read, Grep, 'Bash:read-only']
         as: depth
       # The content audit: NEVER-GUESS + BEST-SOLUTION, one combined verdict.
       - call: subagent_call

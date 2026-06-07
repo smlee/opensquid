@@ -95,7 +95,8 @@ async function main(): Promise<void> {
   // freshness rule reads this ledger via `session_tool_history`.
   if (parsed.data.kind === 'tool_call') {
     try {
-      await appendTool(sessionId, parsed.data.tool);
+      const cmd = (parsed.data.args as { command?: unknown }).command;
+      await appendTool(sessionId, parsed.data.tool, typeof cmd === 'string' ? cmd : undefined);
     } catch (e) {
       process.stderr.write(`opensquid: tool-ledger append failed — ${String(e)}\n`);
     }
