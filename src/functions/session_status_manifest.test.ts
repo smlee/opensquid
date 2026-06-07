@@ -10,9 +10,22 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionStatusManifest } from './session_status_manifest.js';
+
+// Hermetic flow/packs state: the Flow section runs flowEnforcementProblems → loadActivePacks
+// (is a gate pack with an FSM active?), which reads the ambient umbrella active.json —
+// machine-dependent (active locally, absent in CI). Mock it to a coding-flow pack with an FSM so
+// "flow gates active" is deterministic; the hooks-wired check stays isolated via CLAUDE_CONFIG_DIR
+// (the INACTIVE tests assert via that hooks check, not via packs).
+vi.mock('../runtime/bootstrap.js', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    loadActivePacks: () => Promise.resolve([{ name: 'coding-flow', fsm: {} }] as never),
+  };
+});
 
 const ctx = {
   sessionId: 'ssm-test',
