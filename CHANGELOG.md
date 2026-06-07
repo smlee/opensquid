@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.348] - 2026-06-07
+
+### Added — libSQL work-graph: a queryable dependency graph + ready-query (T-WORKGRAPH-CORE; rewrite Phase 1 slice 1c)
+
+A new libSQL-backed work-graph (the beads model) in the store DB: `wg_issues` + `wg_edges`
+(blocks / parent-child / discovered-from / related) + `wg_events` (append-only log). New
+`src/workgraph/store.ts` — `workGraphStore({ dbUrl })` with `createIssue` (hash id `wg-…`),
+`getIssue`, `listIssues`, `updateIssue`, `addEdge` (guards self-edge / missing endpoint / bad
+type; idempotent), `listEvents`, and the headline `listReady` — open issues with no un-closed
+`blocks` blocker, oldest-first.
+
+Blocked-ness is DERIVED from edges, never stored — one source of truth, no drift (status is
+`open|in_progress|closed`). This is the structured, queryable dependency graph that — paired with
+semantic recall (slices 1a/1b) + the FSM/wedge governance — is the superset no competitor ships.
+Additive (D1 strangler); the 7-phase ledger is untouched (D5 cutover is a later slice). Per-file
+source for issues, TaskCreate integration, and MCP tools are later slices.
+
 ## [0.5.347] - 2026-06-07
 
 ### Added — per-file git source-of-truth for the libSQL store (T-STORE-PERFILE-SOURCE; rewrite Phase 1 slice 1b)
