@@ -26,13 +26,14 @@ unloads_when:
 triggers:
   - kind: session_start
 rules:
-  # The primitive returns a RuleResult.inject_context directly (terminal),
-  # exactly like recall_pre_inject — no verdict/if step needed. A null return
-  # (opt-out, or nothing worth surfacing) is the no-verdict branch.
+  # T-SESSION-STATUS-MANIFEST — ONE consolidated "what opensquid is connected to"
+  # report (chat + flow + packs + daemon + engine), always shown on session begin.
+  # Supersedes the old single-section check_chat_connection call (which stays a
+  # registered primitive, now unwired). Returns inject_context directly (terminal).
   - id: surface-connection-state
     kind: track_check
     process:
-      - call: check_chat_connection
+      - call: session_status_manifest
   # CAT.7 — SessionStart topic assurance (umbrella-level ≤1 topic). Unlike the
   # report-only rule above, this one takes an ACTION (sanctioned by the
   # remote-terminal override): if a chat daemon is live and the session's

@@ -23,10 +23,11 @@ unloads_when:
 triggers:
   - kind: session_start
 rules:
-  - id: surface-flow-health
-    kind: track_check
-    process:
-      - call: check_flow_health
+  # T-SESSION-STATUS-MANIFEST — the flow-enforcement status (incl. the F3 loud
+  # "enforcement INACTIVE — restart" signal) is now folded into the consolidated
+  # session_status_manifest (default-discipline/session-connection-check), so the
+  # standalone check_flow_health call is removed here to avoid double-reporting.
+  # check_flow_health stays a registered primitive (reused via flowEnforcementProblems).
   # T-CHAT-REALTIME — make SessionStart actually SET UP chat: direct the agent to
   # start the inbound watcher so messages arrive in real time (push, no
   # turn-boundary wait, no --channels flag). Silent for umbrellas with no chat.

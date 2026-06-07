@@ -71,6 +71,8 @@ import {
   WorkflowPhasesComplete,
 } from '../functions/active_task.js';
 import { CheckFlowHealth } from '../functions/check_flow_health.js';
+import { SessionStatusManifest } from '../functions/session_status_manifest.js';
+import { EffectiveContent } from '../functions/effective_content.js';
 import { ChatWatcherAutostart } from '../functions/chat_watcher_autostart.js';
 import { ScopeDwellTick } from '../functions/scope_dwell.js';
 import { PathExists } from '../functions/path_exists.js';
@@ -192,6 +194,16 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // (the F3 silent-un-gated case). Dispatched on session_start by coding-flow's
   // flow-health-check skill.
   r.register(CheckFlowHealth);
+  // T-SESSION-STATUS-MANIFEST — ONE consolidated "what opensquid is connected to"
+  // report on every session begin (chat + flow + packs + daemon + engine).
+  // Dispatched on session_start by default-discipline's session-connection-check
+  // skill; supersedes the fragmented chat/flow injects (DRY: reuses
+  // flowEnforcementProblems).
+  r.register(SessionStatusManifest);
+  // T-FLOW-AUDIT-ARTIFACT — effective post-write content so the SCOPE/AUTHOR
+  // content audits evaluate the real resulting file (Edit-safe), not the
+  // Edit-empty `tool_args.content` that broke iterative refinement.
+  r.register(EffectiveContent);
   // T-CHAT-REALTIME — make SessionStart actually set up chat: a session_start
   // inject_context directing the agent to start the inbound watcher (Monitor +
   // `chat watch`) so messages arrive in real time (no turn-boundary wait, no flag).

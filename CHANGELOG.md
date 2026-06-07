@@ -7,6 +7,46 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.342] - 2026-06-06
+
+### Added (T-SESSION-STATUS-MANIFEST — one consolidated session-start connection report)
+
+Every session begin (startup **and** resume) now surfaces ONE consolidated "what is
+opensquid connected to" manifest instead of fragmented per-subsystem injects. The new
+`session_status_manifest` primitive (dispatched on `session_start` by
+`default-discipline/session-connection-check`) emits a single, always-shown block:
+
+```
+📋 opensquid — session connections
+• Chat: telegram topic N (umbrella X) — live receiver attached ✅ / NO live receiver 🔌
+• Flow gates: active ✅ / INACTIVE ⛔ — <problems> (run setup + RESTART)
+• Packs (N): <names>
+• Daemon: chat-daemon reachable ✅ / down 🔌
+• Engine/memory: loop-engine up ✅ / down 🔌
+```
+
+`• Packs (N): …` answers "which packs are loaded" directly. The Flow section reuses
+the exact `check_flow_health` detection (extracted to `flowEnforcementProblems`, no
+duplication) and preserves the F3 loud "enforcement INACTIVE — restart" signal. Each
+section is independently fail-quiet (a probe failure degrades to `<section>: unknown`,
+never blanks the others, primitive never throws — a SessionStart hook must exit 0).
+Daemon/engine probes never spawn (daemon = ping an existing UDS; engine = sock-exists
+
+- pid-alive), so a status read can't start a subsystem.
+
+Wiring: the manifest supersedes the standalone `check_chat_connection` (default-discipline)
+and `check_flow_health` (coding-flow/flow-health-check) session-start calls to avoid
+double-reporting; both stay registered primitives (now unwired). `ensure_umbrella_topic`
+(action) and `chat_watcher_autostart` (watcher directive) are unchanged. Track 1 of 2 —
+Track 2 (session attaches to the always-on daemon as the live receiver; lease becomes
+takeover-only) is a separate spec.
+
+This release also lands the flow-gate fix the manifest required to ship through the
+SCOPE→AUTHOR flow: the content audits now evaluate the EFFECTIVE post-write artifact
+(new `effective_content` primitive — Write→content, Edit→file with the change applied)
+so an Edit is reviewable, not only a full Write; and the audit `timeout_ms` is raised
+to 170s so real-sized artifacts finish within the hook budget.
+
 ## [0.5.341] - 2026-06-06
 
 ### Removed (T-REMOVE-SRC-LEGACY — delete the frozen 0.7.x reference tree)
@@ -2126,7 +2166,7 @@ against this user's actual `active.json` (which lists
 `sangmin-personal-rules` + 3 built-ins); reports
 `event=stop rules=3 packs=4` and exits 0. Pre-fix output was:
 `[opensquid] active pack load failed: ENOENT: no such file or directory,
-open '/Users/slee/.opensquid/packs/default-discipline/manifest.yaml'`.
+open '~/.opensquid/packs/default-discipline/manifest.yaml'`.
 
 **Deferred follow-up (BPDISC.2):** add a dedicated test fixture
 covering the 5 cases (built-in load, scope-precedence, neither-has-it
@@ -4857,7 +4897,7 @@ Per PATCH-ONLY pre-1.0 rule: src change → patch bump. 0.7.5 → 0.7.6.
 **Operator observability:** chat-daemon logs which source each platform's token came from at startup:
 
 ```
-[chat-daemon] token sources: telegram=env-file (env-file: /Users/slee/.loop/.env)
+[chat-daemon] token sources: telegram=env-file (env-file: ~/.loop/.env)
 ```
 
 Token VALUE is never logged. Just the source. So you can debug "which bot is this daemon actually using" without leaking the secret.

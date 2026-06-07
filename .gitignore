@@ -20,3 +20,7 @@ coverage/
 
 # G.13 e2e drift-prevention report — regenerated per run via `pnpm test:e2e`
 test/e2e/e2e-drift-prevention-report.md
+
+# internal research/planning is PRIVATE — never publish (lives in loop/docs)
+docs/research/
+docs/tasks/

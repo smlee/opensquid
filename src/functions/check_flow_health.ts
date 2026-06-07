@@ -43,6 +43,48 @@ interface CheckFlowHealthResult {
 }
 
 /**
+ * The flow-enforcement problem set for a session: empty ⇒ gates are active.
+ * Extracted (T-SESSION-STATUS-MANIFEST) so the consolidated session-start
+ * manifest can report the same flow status without duplicating the detection.
+ * Never throws — each probe degrades to a descriptive problem string.
+ */
+export async function flowEnforcementProblems(sessionId: string): Promise<string[]> {
+  const problems: string[] = [];
+
+  // (a) opensquid hooks wired in settings.json — the F3 case. Honour
+  // CLAUDE_CONFIG_DIR (Claude Code's config-dir override) so the path is
+  // correct for non-default installs AND testable.
+  try {
+    const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+    const raw = await readFile(join(configDir, 'settings.json'), 'utf8');
+    const settings = JSON.parse(raw) as { hooks?: Record<string, unknown> };
+    const hooks = settings.hooks ?? {};
+    const missing = REQUIRED_HOOK_EVENTS.filter(
+      (ev) => !JSON.stringify(hooks[ev] ?? []).includes('opensquid-hook'),
+    );
+    if (missing.length > 0) {
+      problems.push(
+        `opensquid hooks are NOT wired in ~/.claude/settings.json for: ${missing.join(', ')}`,
+      );
+    }
+  } catch {
+    problems.push('could not read ~/.claude/settings.json to verify the opensquid hooks');
+  }
+
+  // (b) a gate pack (one with an FSM) is active for this umbrella.
+  try {
+    const packs = await loadActivePacks(sessionId);
+    if (!packs.some((p) => p.fsm !== undefined)) {
+      problems.push('no flow-gate pack (e.g. `coding-flow`) is active for this umbrella');
+    }
+  } catch {
+    problems.push('could not resolve the active packs for this umbrella');
+  }
+
+  return problems;
+}
+
+/**
  * Returns a LOUD inject_context directive when flow enforcement is NOT active for
  * this session, else null (silent when healthy). Never throws.
  */
@@ -53,37 +95,7 @@ export const CheckFlowHealth: FunctionDef<z.input<typeof NoArgs>, CheckFlowHealt
   memoizable: false,
   costEstimateMs: 4,
   execute: async (_args, ctx) => {
-    const problems: string[] = [];
-
-    // (a) opensquid hooks wired in settings.json — the F3 case. Honour
-    // CLAUDE_CONFIG_DIR (Claude Code's config-dir override) so the path is
-    // correct for non-default installs AND testable.
-    try {
-      const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-      const raw = await readFile(join(configDir, 'settings.json'), 'utf8');
-      const settings = JSON.parse(raw) as { hooks?: Record<string, unknown> };
-      const hooks = settings.hooks ?? {};
-      const missing = REQUIRED_HOOK_EVENTS.filter(
-        (ev) => !JSON.stringify(hooks[ev] ?? []).includes('opensquid-hook'),
-      );
-      if (missing.length > 0) {
-        problems.push(
-          `opensquid hooks are NOT wired in ~/.claude/settings.json for: ${missing.join(', ')}`,
-        );
-      }
-    } catch {
-      problems.push('could not read ~/.claude/settings.json to verify the opensquid hooks');
-    }
-
-    // (b) a gate pack (one with an FSM) is active for this umbrella.
-    try {
-      const packs = await loadActivePacks(ctx.sessionId);
-      if (!packs.some((p) => p.fsm !== undefined)) {
-        problems.push('no flow-gate pack (e.g. `coding-flow`) is active for this umbrella');
-      }
-    } catch {
-      problems.push('could not resolve the active packs for this umbrella');
-    }
+    const problems = await flowEnforcementProblems(ctx.sessionId);
 
     if (problems.length === 0) return ok(null); // healthy → silent
 

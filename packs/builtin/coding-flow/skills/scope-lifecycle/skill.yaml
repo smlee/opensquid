@@ -24,6 +24,13 @@ rules:
         as: tool
       - call: tool_args
         as: targs
+      # T-FLOW-AUDIT-ARTIFACT: the EFFECTIVE post-write content (Write→content,
+      # Edit→current file with old_string→new_string applied) so the audit +
+      # design-capture see the REAL resulting artifact, not the Edit-empty
+      # `targs.content` (which broke iterative refinement via Edit).
+      - call: effective_content
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        as: effective
       # Capture the pre-research path (the AUTHOR coverage gate reads it as the design).
       - call: write_state
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
@@ -36,7 +43,7 @@ rules:
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         args:
           key: coding-flow-design
-          value: '{{targs.content}}'
+          value: '{{effective}}'
       # Research DEPTH (folded DPC.5): recall + Read + Grep this turn.
       - call: session_tool_history
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
@@ -49,7 +56,7 @@ rules:
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         args:
           model: reasoning
-          timeout_ms: 120000
+          timeout_ms: 170000
           prompt: >-
             You are an adversarial reviewer enforcing the lexicon's Research/Audit flow
             principles (docs/lexicon.md — never-guess, best-solution, teach-back depth) on a
@@ -61,16 +68,16 @@ rules:
             Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every
             claim is cited-or-flagged-open AND the simplest-correct solution is justified
             against alternatives; otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved
-            guess OR un-weighed alternative. ARTIFACT:\n\n{{targs.content}}
+            guess OR un-weighed alternative. ARTIFACT:\n\n{{effective}}
         as: audit
       # ADVANCE only when content-complete (coupled to the verdict + depth + no open Qs).
       - call: advance_fsm
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(audit, "VERDICT: GUESS_FREE") && !contains(targs.content, "OPEN QUESTION") && depth.count >= 3'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(audit, "VERDICT: GUESS_FREE") && !contains(effective, "OPEN QUESTION") && depth.count >= 3'
         args:
           event: research_done
       # BLOCK: unresolved open questions — answer them in SCOPE (this is the interactive phase).
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(targs.content, "OPEN QUESTION")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(effective, "OPEN QUESTION")'
         args:
           level: block
           message: >-
@@ -130,11 +137,15 @@ rules:
         args:
           key: coding-flow-design
         as: design
+      # T-FLOW-AUDIT-ARTIFACT: effective post-write spec content (Edit-safe).
+      - call: effective_content
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        as: effective
       - call: subagent_call
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
         args:
           model: reasoning
-          timeout_ms: 120000
+          timeout_ms: 170000
           prompt: >-
             You are an adversarial reviewer enforcing THREE author-completeness rules.
             (1) 11-FIELD CONTRACT: EVERY "### Task" block has all 11 fields (Required
@@ -152,7 +163,7 @@ rules:
             block, uncovered design element, OR over-complected smell. Never say
             SPEC_COMPLETE if any task block falls short, any design element is uncovered,
             OR the design smells over-complected.
-            DESIGN:\n\n{{design}}\n\nSPEC:\n\n{{targs.content}}
+            DESIGN:\n\n{{design}}\n\nSPEC:\n\n{{effective}}
         as: spec_audit
       - call: advance_fsm
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && contains(spec_audit, "VERDICT: SPEC_COMPLETE")'
