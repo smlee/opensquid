@@ -27,6 +27,8 @@ import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { resolveBackendConfig } from './rag/config.js';
 import { fastembedEmbedder } from './rag/embedders/fastembed.js';
 import { migrateMemories } from './rag/migrate_memories.js';
+import { migrateWedgeLessons } from './rag/wedge/migrate.js';
+import { wedgeLessonsDbUrl, wedgeLessonsDir } from './rag/wedge/paths.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath, OPENSQUID_HOME } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
@@ -301,6 +303,22 @@ function runCli(): void {
         embedder: fastembedEmbedder(),
       });
       process.stdout.write(`migrated ${migrated} memories into ${cfg.sourceDir}\n`);
+    });
+
+  // RES-3d — `opensquid migrate-lessons`. Indexes the on-disk wedge lessons
+  // (~/.opensquid/lessons/<status>/les-*.md, the per-file source) into the wg_lessons libSQL index.
+  // No backend-kind gate: the wedge store resolves via pure path helpers + FTS (no embedder/vector).
+  program
+    .command('migrate-lessons')
+    .description(
+      'Index the on-disk wedge lessons (~/.opensquid/lessons/<status>/les-*.md) into wg_lessons.',
+    )
+    .action(async () => {
+      const { migrated } = await migrateWedgeLessons({
+        dbUrl: wedgeLessonsDbUrl(),
+        sourceDir: wedgeLessonsDir(),
+      });
+      process.stdout.write(`migrated ${migrated} lessons into the wg_lessons index\n`);
     });
 
   program.parseAsync(process.argv).catch((err: unknown) => {

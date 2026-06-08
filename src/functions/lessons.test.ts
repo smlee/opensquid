@@ -66,6 +66,7 @@ function stubStore(methods: StubMethods): WedgeLessonStore {
       methods.recallLesson ?? ((query) => Promise.resolve({ query, returned: 0, results: [] })),
     captureFeedback: methods.captureFeedback ?? (() => Promise.resolve()),
     recordApplied: methods.recordApplied ?? (() => Promise.resolve()),
+    rebuild: (records) => Promise.resolve({ indexed: records.length }),
   };
 }
 

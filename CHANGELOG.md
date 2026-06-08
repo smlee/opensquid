@@ -7,7 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
-## [0.5.359] - 2026-06-08
+## [0.5.360] - 2026-06-08
+
+### Added — wedge lesson migration into the libSQL index (retire-Rust RES-3d; RES-3 complete)
+
+`src/rag/wedge/migrate.ts` (`migrateWedgeLessons`) + a `migrate-lessons` CLI + `store.rebuild()`
+index the 49 on-disk engine lessons (`~/.opensquid/lessons/<status>/les-*.md`, already the wedge
+per-file source) into the `wg_lessons` libSQL index. It is a pure DB-index rebuild — no file copy —
+since the files are already in place: `readWedgeRecords` reads them (tolerating the engine frontmatter
+shape) and `store.rebuild` DELETEs all + re-inserts (table + FTS, DB-only). Idempotent (re-run → same
+count, no dupes). `upsert`'s table+FTS insert is factored into a shared `dbInsert` so there is ONE
+column definition. **Ran live on the real 49** (5 pending + 44 promoted) → `migrated 49`; recall
+verified against the live index. This completes RES-3 — the wedge-gate lessons subsystem is fully on
+libSQL (gate → store → live wiring → migration), engine-free.
 
 ### Changed — lesson surface cut over to the wedge store (retire-Rust RES-3c; the cutover)
 

@@ -80,6 +80,8 @@ export interface WedgeLessonStore {
   ): Promise<{ query: string; returned: number; results: WedgeRecallHit[] }>;
   captureFeedback(id: string, polarity: 'up' | 'down', signalId: string): Promise<void>;
   recordApplied(id: string, sessionId?: string): Promise<void>;
+  /** Clean DB-index rebuild from already-on-disk records (migration; no file rewrite). */
+  rebuild(records: WedgeLesson[]): Promise<{ indexed: number }>;
 }
 
 export function wedgeLessonStore(opts: {
@@ -148,13 +150,9 @@ export function wedgeLessonStore(opts: {
     return rowToWedge(rs.rows[0] as unknown as Record<string, unknown>);
   };
 
-  // Idempotent upsert: FILE-FIRST (writeWedgeRecord derives the status-dir from row.status, so the
-  // new-status file lands before the DB), then delete-then-insert across table + FTS.
-  const upsert = async (r: WedgeLesson): Promise<void> => {
-    await writeWedgeRecord(opts.sourceDir, r);
-    const c = db();
-    await c.execute({ sql: `DELETE FROM wg_lessons WHERE id = ?`, args: [r.id] });
-    await c.execute({ sql: `DELETE FROM wg_lessons_fts WHERE id = ?`, args: [r.id] });
+  // The table + FTS insert for one row — shared by upsert (file-first write path) and rebuild
+  // (DB-only migration path). One INSERT definition so the moat-shaped column list can't drift.
+  const dbInsert = async (c: Client, r: WedgeLesson): Promise<void> => {
     await c.execute({
       sql: `INSERT INTO wg_lessons (id, description, body, status, authored_by, pack_id, external_id,
         created_at, updated_at, promoted_at, superseded_at, last_applied_at, applied_count,
@@ -185,6 +183,16 @@ export function wedgeLessonStore(opts: {
       sql: `INSERT INTO wg_lessons_fts (id, description, body) VALUES (?,?,?)`,
       args: [r.id, r.description, r.body],
     });
+  };
+
+  // Idempotent upsert: FILE-FIRST (writeWedgeRecord derives the status-dir from row.status, so the
+  // new-status file lands before the DB), then delete-then-insert across table + FTS.
+  const upsert = async (r: WedgeLesson): Promise<void> => {
+    await writeWedgeRecord(opts.sourceDir, r);
+    const c = db();
+    await c.execute({ sql: `DELETE FROM wg_lessons WHERE id = ?`, args: [r.id] });
+    await c.execute({ sql: `DELETE FROM wg_lessons_fts WHERE id = ?`, args: [r.id] });
+    await dbInsert(c, r);
   };
 
   return {
@@ -299,6 +307,14 @@ export function wedgeLessonStore(opts: {
         appliedSessionIds: sessions,
         updatedAt: now(),
       });
+    },
+
+    async rebuild(records) {
+      const c = db();
+      await c.execute(`DELETE FROM wg_lessons`);
+      await c.execute(`DELETE FROM wg_lessons_fts`);
+      for (const r of records) await dbInsert(c, r);
+      return { indexed: records.length };
     },
   };
 }
