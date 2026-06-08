@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.362] - 2026-06-08
+
+### Added — pure memory compression port (retire-Rust RES-4a; compress = gist-mint)
+
+`src/rag/memory/cycle.ts` + `compress.ts` + `store.ts` — the TS port of the engine's pure
+`compress()` (engine compress.rs). A window of memories → one summary memory `Mc` carrying
+`derived_from` + the saturating-summed `consumed_by_user_lessons` counter. `cycle.ts` is the
+faithful current-path DFS (depth cap 16) that passes diamond DAGs but throws on a true cycle/
+over-depth. `compress.ts` mirrors compress.rs: dedupe → cycle → scope-consistency (via the `scope:`
+tag) → LLM summarize through the host's RAW-TEXT `subagent_call` (the host has no structured-output
+path) → `JSON.parse` + the ported `discriminate`(an `error` key → InsufficientInput)/`validate`
+guards → mint `mem-c-*` + embed + insert. It only INSERTS `Mc` — predecessors are never deleted or
+mutated (that is RES-4b's verified, immunity-gated step). `store.ts` adds the two compression columns
+ADDITIVELY (idempotent `ALTER TABLE`, existing rows default — RES-1/3 paths unaffected) + a
+`getMemoryById`/`insertMemory` over the `lessons` memory table. Not wired to any consumer yet
+(RES-4b/4c). 16 tests (cycle diamond/cycle/depth; compress mint/dedupe/saturate/empty/scope/refusal/
+parse/validate/untouched-predecessors; store additive-migration/round-trip).
+
 ## [0.5.361] - 2026-06-08
 
 ### Fixed — native SCOPE re-arm for autonomous back-to-back runs (T-FLOW-AUTONOMOUS-REARM)
