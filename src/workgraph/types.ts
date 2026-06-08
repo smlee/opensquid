@@ -19,13 +19,15 @@ export interface Issue {
   updatedAt: string; // ISO 8601
 }
 
-/** An append-only work-graph event (the audit/versioning log). */
-export interface WgEvent {
-  id: number;
-  issueId: string;
-  ts: string; // ISO 8601
-  kind: string; // created | status_changed | updated | …
-  data: Record<string, unknown>;
+/** Event-sourced op-log types (slice 1d). Ops are the source of truth; issues/edges are folded. */
+export type WgOpType = 'issue_created' | 'issue_set' | 'dep_added' | 'dep_removed';
+
+export interface WgOp {
+  id: string;
+  issueId: string; // subject issue (for dep ops: the `from` issue; full edge in payload)
+  lamport: number;
+  type: WgOpType;
+  payload: Record<string, unknown>;
 }
 
 export interface WorkGraphStore {
@@ -40,6 +42,6 @@ export interface WorkGraphStore {
   addEdge(fromId: string, toId: string, type: EdgeType): Promise<void>;
   /** Open issues with no un-closed `blocks` blocker, oldest-first (a deterministic queue). */
   listReady(): Promise<Issue[]>;
-  /** The append-only event log for an issue, oldest-first. */
-  listEvents(issueId: string): Promise<WgEvent[]>;
+  /** The append-only op-log for an issue, in (lamport, id) order. */
+  listEvents(issueId: string): Promise<WgOp[]>;
 }

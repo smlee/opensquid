@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.349] - 2026-06-07
+
+### Changed — work-graph re-architected to EVENT-SOURCED (op-log → projection) + per-file git source (T-WORKGRAPH-EVENTSOURCED; rewrite Phase 1 slice 1d)
+
+After a prior-art comparison (git-bug, Fossil, beads, and CRDT libraries), the work-graph is now
+event-sourced. An append-only op-log `wg_ops` (Lamport-ordered — never wall-clock; content-hashed
+op ids) is the source of truth, git-versionable as ONE FILE PER OP via a new `sourceDir` opt;
+`wg_issues`/`wg_edges` become DERIVED projections folded by `applyOp` (rebuildable from the op
+files via `rebuildWorkGraph`, never authoritative). Edges are operations with deterministic
+content-derived keys → conflict-free union merge across agents; single-valued issue fields use
+last-writer-wins by Lamport. This supersedes the 1c state-primary store (clean cutover — drops the
+old `wg_events`; pre-release, no data). Chose an op-log + libSQL projection over Dolt (not
+local-first) and over a CRDT library (opaque-in-git, no query layer, over-engineered for the
+common case).
+
+Also extracted `src/storage/atomic_file.ts` (atomic temp+rename write) shared by the work-graph
+op files and the lessons per-file source. The issue read/write API is unchanged; `listEvents`
+returns the op shape.
+
 ## [0.5.348] - 2026-06-07
 
 ### Added — libSQL work-graph: a queryable dependency graph + ready-query (T-WORKGRAPH-CORE; rewrite Phase 1 slice 1c)

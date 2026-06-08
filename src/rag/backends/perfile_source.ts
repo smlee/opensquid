@@ -13,24 +13,17 @@
  * Imports from: node:fs/promises, node:path, yaml, ../types.js.
  * Imported by: src/rag/backends/libsql_store.ts.
  */
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
-import type { Lesson } from '../types.js';
+import { atomicWriteFile, safeRecordId } from '../../storage/atomic_file.js';
 
-/** Reject ids that could escape `dir` — record ids are content hashes, never paths. */
-function safeId(id: string): string {
-  if (id.length === 0 || id.includes('/') || id.includes('\\') || id.includes('..')) {
-    throw new Error(`perfile_source: unsafe record id: ${JSON.stringify(id)}`);
-  }
-  return id;
-}
+import type { Lesson } from '../types.js';
 
 /** Write `<dir>/<id>.md` atomically as `---`-fenced frontmatter + body. */
 export async function writeRecord(dir: string, lesson: Lesson): Promise<void> {
-  await mkdir(dir, { recursive: true });
   const frontmatter = stringifyYaml({
     id: lesson.id,
     tags: lesson.tags,
@@ -38,10 +31,10 @@ export async function writeRecord(dir: string, lesson: Lesson): Promise<void> {
     author: lesson.author,
     created_at: lesson.createdAt,
   });
-  const path = join(dir, `${safeId(lesson.id)}.md`);
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, `---\n${frontmatter}---\n${lesson.content}`, 'utf8');
-  await rename(tmp, path); // atomic on POSIX → readers never see a partial file
+  await atomicWriteFile(
+    join(dir, `${safeRecordId(lesson.id)}.md`),
+    `---\n${frontmatter}---\n${lesson.content}`,
+  );
 }
 
 /** Read every `<dir>/*.md` record back into `Lesson[]`. Missing dir → `[]`. */
