@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.357] - 2026-06-08
+
+### Added — pure TS promotion gate (retire-Rust RES-3a; wedge-gate port, sub-slice a)
+
+`src/rag/wedge/gate.ts` — a faithful pure-TS port of the Rust promotion gate
+(`engine/src/engine/lessons/gate.rs` `check_promotion_gate`): all 8 checks in the stable order,
+accumulate-ALL-violations (no first-fail), the 24h-dwell / applied≥3 / origin-diversity-disabled
+defaults, and the kebab-PREFIX block contract (the stable wire key `promote_lesson` surfaces as
+opaque strings; embedded data is informational, not byte-matched to Rust's chrono Display/Debug).
+`promote` carries no reasons (the consumer never surfaces pass-reasons). The Rust `TamperedAge`
+anti-backdate check is DROPPED (no per-row birthtime in libSQL); the wedge invariant migrates to the
+store (RES-3b) as a HARD requirement — `createdAt` MUST be store-owned (DB insert time, never
+caller-supplied) or the 24h floor is backdate-bypassable. Pure + isolated: nothing imports it yet
+(RES-3b/RES-3c wire it). 13-case test matrix mirroring the Rust s01–s09 + ladder + accumulation.
+
 ## [0.5.356] - 2026-06-08
 
 ### Changed — dropped the loop_engine RAG backend; libSQL/fastembed is the unconditional default (retire-Rust RES-1)
