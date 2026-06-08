@@ -37,6 +37,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -45,6 +46,8 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 import { EngineClient } from '../engine/client.js';
+import { OPENSQUID_HOME } from '../runtime/paths.js';
+import { workGraphStore } from '../workgraph/store.js';
 
 import { handleForget, ForgetSchema, type ForgetArgs } from './tools/forget.js';
 import { handleInspectSkill } from './tools/inspect-skill.js';
@@ -61,6 +64,23 @@ import {
   StoreLessonSchema,
   type StoreLessonArgs,
 } from './tools/store-lesson.js';
+import {
+  WgAddEdgeSchema,
+  WgCreateSchema,
+  WgIdSchema,
+  WgListSchema,
+  WgReadySchema,
+  WgUpdateSchema,
+  handleWgAddEdge,
+  handleWgCreate,
+  handleWgEvents,
+  handleWgGet,
+  handleWgList,
+  handleWgReady,
+  handleWgUpdate,
+} from './tools/workgraph.js';
+
+import type { WorkGraphStore } from '../workgraph/types.js';
 
 /**
  * Lazy engine-client singleton. Construction is cheap (no socket I/O until
@@ -72,6 +92,24 @@ let engineClient: EngineClient | null = null;
 function getEngine(): EngineClient {
   engineClient ??= new EngineClient();
   return engineClient;
+}
+
+/**
+ * Lazy work-graph store singleton (T-WORKGRAPH-MCP). Promise-memoized so concurrent first-calls
+ * await a single `init()` (one schema creation). Dedicated `~/.opensquid/workgraph.db` + per-op
+ * git source under `store/issues`.
+ */
+let workGraphPromise: Promise<WorkGraphStore> | null = null;
+function getWorkGraph(): Promise<WorkGraphStore> {
+  workGraphPromise ??= (async () => {
+    const store = workGraphStore({
+      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
+      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+    });
+    await store.init();
+    return store;
+  })();
+  return workGraphPromise;
 }
 
 // Each entry binds an args Zod schema to a handler that already accepts the
@@ -129,6 +167,34 @@ const ToolHandlers = {
     handle: (args: LogPhaseArgs) =>
       handleLogPhase(args, getEngine()).then((r) => JSON.stringify(r)),
   },
+  workgraph_create_issue: {
+    schema: WgCreateSchema,
+    handle: async (a: z.infer<typeof WgCreateSchema>) => handleWgCreate(a, await getWorkGraph()),
+  },
+  workgraph_update_issue: {
+    schema: WgUpdateSchema,
+    handle: async (a: z.infer<typeof WgUpdateSchema>) => handleWgUpdate(a, await getWorkGraph()),
+  },
+  workgraph_add_edge: {
+    schema: WgAddEdgeSchema,
+    handle: async (a: z.infer<typeof WgAddEdgeSchema>) => handleWgAddEdge(a, await getWorkGraph()),
+  },
+  workgraph_ready: {
+    schema: WgReadySchema,
+    handle: async (a: z.infer<typeof WgReadySchema>) => handleWgReady(a, await getWorkGraph()),
+  },
+  workgraph_get: {
+    schema: WgIdSchema,
+    handle: async (a: z.infer<typeof WgIdSchema>) => handleWgGet(a, await getWorkGraph()),
+  },
+  workgraph_list: {
+    schema: WgListSchema,
+    handle: async (a: z.infer<typeof WgListSchema>) => handleWgList(a, await getWorkGraph()),
+  },
+  workgraph_events: {
+    schema: WgIdSchema,
+    handle: async (a: z.infer<typeof WgIdSchema>) => handleWgEvents(a, await getWorkGraph()),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -152,6 +218,17 @@ const descriptions: Record<ToolName, string> = {
   log_phase:
     'Log a completed workflow phase (pre_research|learn|code|test|audit|post_research|fix) ' +
     'for the active task. Writes the engine ledger + the gate state; the commit gate unblocks once all 7 are logged.',
+  workgraph_create_issue:
+    'Create a work-graph issue {title, body?}. Returns the issue (with its hash id). The work-graph is the agent’s structured, dependency-aware task store.',
+  workgraph_update_issue:
+    'Update a work-graph issue {id, status?(open|in_progress|closed), title?, body?}. Returns the updated issue.',
+  workgraph_add_edge:
+    'Add a dependency edge {from, to, type(blocks|parent-child|discovered-from|related)} between two issues (re-typing the same pair updates the type).',
+  workgraph_ready:
+    'List READY issues: open issues with no un-closed `blocks` blocker, oldest-first — the work to do next.',
+  workgraph_get: 'Get one work-graph issue by id (or null).',
+  workgraph_list: 'List work-graph issues, optionally filtered by status {status?}.',
+  workgraph_events: 'List the append-only op-log (history) for an issue by id.',
 };
 
 /**

@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.350] - 2026-06-07
+
+### Added — work-graph MCP tools: the agent can now USE the work-graph (T-WORKGRAPH-MCP; rewrite Phase 1 slice 1e)
+
+Seven MCP tools expose the event-sourced work-graph: `workgraph_create_issue`,
+`workgraph_update_issue`, `workgraph_add_edge`, `workgraph_ready`, `workgraph_get`,
+`workgraph_list`, `workgraph_events` — over a lazy, promise-memoized `workGraphStore` singleton
+(dedicated `~/.opensquid/workgraph.db` + per-op git source under `store/issues`).
+`workgraph_ready` is the headline "what's ready" query (open issues with no un-closed blocker).
+The work-graph is operational state — outside the lesson-promotion wedge — so these join the
+server's existing write tools (`memorize`/`store_lesson`/`forget`/`log_phase`); no read-only
+invariant is violated. New `src/mcp/tools/workgraph.ts`.
+
 ## [0.5.349] - 2026-06-07
 
 ### Changed — work-graph re-architected to EVENT-SOURCED (op-log → projection) + per-file git source (T-WORKGRAPH-EVENTSOURCED; rewrite Phase 1 slice 1d)

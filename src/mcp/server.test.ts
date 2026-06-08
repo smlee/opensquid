@@ -197,7 +197,7 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 11 tools (7 read-only + 4 write) with JSON Schema', async () => {
+  it('tools/list returns the 18 tools (11 base + 7 work-graph) with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
@@ -214,6 +214,13 @@ describe('opensquid-mcp subprocess', () => {
       'read_violations',
       'recall',
       'store_lesson',
+      'workgraph_add_edge',
+      'workgraph_create_issue',
+      'workgraph_events',
+      'workgraph_get',
+      'workgraph_list',
+      'workgraph_ready',
+      'workgraph_update_issue',
     ]);
     for (const t of result.tools) {
       expect(t.description.length).toBeGreaterThan(0);
