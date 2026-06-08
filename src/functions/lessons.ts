@@ -59,14 +59,8 @@
 
 import { z } from 'zod';
 
-import { ENGINE_ERROR, RpcError } from '../engine/client.js';
-import type { EngineClient } from '../engine/client.js';
-import type { LessonCreateParams, LessonPromoteResult } from '../engine/types.js';
 import { err, ok } from '../runtime/result.js';
-import { resolveMcpSessionId } from '../runtime/hooks/session_id.js';
-import { groupFromTask } from '../runtime/satisfaction_probe.js';
-import { readActiveTask } from '../runtime/session_state.js';
-import { collectCandidates } from '../runtime/wedge/compress_candidates.js';
+import { PromotionBlockedError, type WedgeLessonStore } from '../rag/wedge/store.js';
 
 import type { FunctionRegistry } from './registry.js';
 
@@ -105,7 +99,7 @@ const RecallLessonArgs = z.object({
   limit: z.number().int().min(1).max(50).optional(),
 });
 
-export function registerLessonFunctions(registry: FunctionRegistry, client: EngineClient): void {
+export function registerLessonFunctions(registry: FunctionRegistry, store: WedgeLessonStore): void {
   // DURABLE.2 — all three primitives touch the loop-engine UDS. `propose` and
   // `promote` are durable side-effecting writes (re-running on resume creates
   // a duplicate lesson or re-fires the gate). They are NOT memoizable —
@@ -122,18 +116,15 @@ export function registerLessonFunctions(registry: FunctionRegistry, client: Engi
     costEstimateMs: 30,
     execute: async (args) => {
       try {
-        // T.1.G: 'agent' silently maps to engine's Llm default. Only 'user'
-        // propagates verbatim; user-authored lessons are eviction-immune.
-        // `exactOptionalPropertyTypes: true` in tsconfig means we OMIT the
-        // field (rather than set undefined) when authored_by is not 'user'.
-        const params: LessonCreateParams = {
+        // Only 'user' propagates (user-authored lessons are eviction-immune);
+        // 'agent' is the store default. `exactOptionalPropertyTypes` → OMIT.
+        const r = await store.createLesson({
           description: args.description,
           body: args.body,
-          evidence: args.evidence ?? [],
-          ...(args.authored_by === 'user' ? { authored_by: 'user' as const } : {}),
-        };
-        const result = await client.lessonCreate(params);
-        return ok({ id: result.id, status: result.status });
+          ...(args.evidence && args.evidence.length > 0 ? { evidenceRefs: args.evidence } : {}),
+          ...(args.authored_by === 'user' ? { authoredBy: 'user' as const } : {}),
+        });
+        return ok({ id: r.id, status: r.status });
       } catch (e) {
         return err({
           kind: 'runtime',
@@ -171,40 +162,18 @@ export function registerLessonFunctions(registry: FunctionRegistry, client: Engi
     costEstimateMs: 50,
     execute: async (args) => {
       try {
-        const result = await client.lessonPromote({ id: args.id });
-        // CMP.3 — compression rides the wedge cadence. After a SUCCESSFUL
-        // promotion, nominate the lesson's cited memories as compression
-        // candidates for the orchestrator (CMP.4). STRICTLY off the
-        // critical path: any failure here is swallowed so it can never
-        // fail or delay the promotion the caller just earned.
-        try {
-          const citedMemoryIds = result.cited_memory_ids ?? [];
-          if (citedMemoryIds.length > 0) {
-            const sessionId = await resolveMcpSessionId();
-            if (sessionId) {
-              const group = groupFromTask(await readActiveTask(sessionId));
-              if (group) {
-                await collectCandidates(sessionId, { id: result.id, citedMemoryIds, group });
-              }
-            }
-          }
-        } catch {
-          // off-critical-path: never affect the promotion result
-        }
-        return ok({ status: 'promoted' as const, detail: result });
+        const r = await store.promoteLesson(args.id);
+        return ok({ status: 'promoted' as const, detail: r });
       } catch (e) {
-        // T.1.E + T.1.F: gate block surfaces as RpcError code -32000 with
-        // kebab-case reasons in `data.reasons`. This is the wedge moat
-        // firing — NOT a runtime error. Surface it as a successful Result
-        // with `status: 'blocked'` so skills can branch deterministically
-        // on the field rather than try/catching error subclasses.
-        if (e instanceof RpcError && e.code === ENGINE_ERROR.PROMOTION_BLOCKED) {
-          const reasons = (e.data as { reasons?: string[] } | undefined)?.reasons ?? [];
-          return ok({ status: 'blocked' as const, reasons });
+        // A gate block surfaces as PromotionBlockedError with kebab-prefix
+        // reasons. This is the wedge moat firing — NOT a runtime error —
+        // so surface it as a successful Result with `status: 'blocked'`
+        // (skills branch on the field). (The engine-era compression hook
+        // that nominated cited memories on promotion is dropped here; that
+        // coupling moves to the compression port, RES-4.)
+        if (e instanceof PromotionBlockedError) {
+          return ok({ status: 'blocked' as const, reasons: e.reasons });
         }
-        // All other RpcError codes (and any non-RpcError throw) travel as
-        // `kind: 'runtime'` errors — they're genuine bugs or infra failures,
-        // not the gate firing.
         return err({
           kind: 'runtime',
           message: `promote_lesson: ${String(e)}`,
@@ -222,23 +191,57 @@ export function registerLessonFunctions(registry: FunctionRegistry, client: Engi
     costEstimateMs: 50,
     execute: async (args) => {
       try {
-        // T.1.B: engine `lesson.recall` is text-match across
-        // pending/active/promoted/superseded status dirs (NOT vector). It
-        // does NOT take a `statuses` parameter — the engine walks all four
-        // dirs unconditionally. Don't confuse with `memory.search` (which
-        // IS vector). `exactOptionalPropertyTypes: true` — omit `limit`
-        // when caller didn't pass one so the engine applies its default
-        // (5 per serve.rs:627).
-        const params: { query: string; limit?: number } = { query: args.query };
-        if (args.limit !== undefined) params.limit = args.limit;
-        const result = await client.lessonRecall(params);
-        return ok(result);
+        // Text-match (FTS) across non-discarded statuses. `limit` defaults to
+        // 5 in the store when omitted.
+        return ok(await store.recallLesson(args.query, args.limit));
       } catch (e) {
         return err({
           kind: 'runtime',
           message: `recall_lesson: ${String(e)}`,
           cause: e,
         });
+      }
+    },
+  });
+
+  // capture_feedback + record_applied — the two in-process surfaces the wedge
+  // gate needs to ever PROMOTE: the DEFAULT gate requires a non-empty
+  // external_signal_sources (fed by capture_feedback) AND applied_count >= 3
+  // (fed by record_applied). The engine fed these via its feedback RPC +
+  // manifest.assemble; in-process both must be reachable or promotion is
+  // unsatisfiable.
+  registry.register({
+    name: 'capture_feedback',
+    argSchema: z.object({
+      id: z.string().min(1),
+      polarity: z.enum(['up', 'down']),
+      signal_id: z.string().min(1),
+    }),
+    durable: true,
+    memoizable: false,
+    costEstimateMs: 20,
+    execute: async (args) => {
+      try {
+        await store.captureFeedback(args.id, args.polarity, args.signal_id);
+        return ok({ id: args.id });
+      } catch (e) {
+        return err({ kind: 'runtime', message: `capture_feedback: ${String(e)}`, cause: e });
+      }
+    },
+  });
+
+  registry.register({
+    name: 'record_applied',
+    argSchema: z.object({ id: z.string().min(1), session_id: z.string().optional() }),
+    durable: true,
+    memoizable: false,
+    costEstimateMs: 20,
+    execute: async (args) => {
+      try {
+        await store.recordApplied(args.id, args.session_id);
+        return ok({ id: args.id });
+      } catch (e) {
+        return err({ kind: 'runtime', message: `record_applied: ${String(e)}`, cause: e });
       }
     },
   });
@@ -262,5 +265,5 @@ export function registerLessonFunctions(registry: FunctionRegistry, client: Engi
  * evidence and retry.
  */
 export type PromoteLessonResult =
-  | { status: 'promoted'; detail: LessonPromoteResult }
+  | { status: 'promoted'; detail: { id: string; status: 'promoted' } }
   | { status: 'blocked'; reasons: string[] };

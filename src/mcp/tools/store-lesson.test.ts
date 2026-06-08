@@ -1,42 +1,39 @@
 /**
- * Unit tests for `handleStoreLesson` — Zod validation + engine delegation
- * + next_steps anti-misuse guidance.
+ * Unit tests for `handleStoreLesson` — Zod validation + wedge-store delegation
+ * + next_steps anti-misuse guidance (retire-Rust RES-3c: store-backed, engine-free).
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { EngineClient } from '../../engine/client.js';
-import type { LessonCreateResult } from '../../engine/types.js';
+import type { WedgeLessonStore } from '../../rag/wedge/store.js';
 
 import { NEXT_STEPS_GUIDANCE, StoreLessonSchema, handleStoreLesson } from './store-lesson.js';
 
-function mkEngine(result: LessonCreateResult): {
-  client: EngineClient;
+const SAMPLE_RESULT = {
+  id: 'les-xyz789',
+  status: 'pending' as const,
+  createdAt: '2026-05-24T00:00:00Z',
+};
+
+function mkStore(result: typeof SAMPLE_RESULT): {
+  store: WedgeLessonStore;
   spy: ReturnType<typeof vi.fn>;
 } {
   const spy = vi.fn().mockResolvedValue(result);
-  const client = { lessonCreate: spy } as unknown as EngineClient;
-  return { client, spy };
+  const store = { createLesson: spy } as unknown as WedgeLessonStore;
+  return { store, spy };
 }
-
-const SAMPLE_RESULT: LessonCreateResult = {
-  id: 'les-xyz789',
-  status: 'pending',
-  authored_by: 'agent',
-  created_at: '2026-05-24T00:00:00Z',
-  updated: false,
-};
 
 describe('handleStoreLesson', () => {
   it('returns id + status + next_steps guidance for valid args', async () => {
-    const { client, spy } = mkEngine(SAMPLE_RESULT);
+    const { store, spy } = mkStore(SAMPLE_RESULT);
     const out = await handleStoreLesson(
       StoreLessonSchema.parse({
         description: 'agent slipped to Haiku-classifier',
         content: 'caught the drift; correct framing is model-aliased',
         classification: 'workflow',
       }),
-      client,
+      store,
     );
     expect(out).toEqual({
       id: 'les-xyz789',
@@ -67,8 +64,8 @@ describe('handleStoreLesson', () => {
     }
   });
 
-  it('round-trips source_signal + source_session_id via evidence array', async () => {
-    const { client, spy } = mkEngine(SAMPLE_RESULT);
+  it('round-trips source_signal + source_session_id via evidenceRefs', async () => {
+    const { store, spy } = mkStore(SAMPLE_RESULT);
     await handleStoreLesson(
       StoreLessonSchema.parse({
         description: 'd',
@@ -77,29 +74,25 @@ describe('handleStoreLesson', () => {
         source_signal: 'user_correction',
         source_session_id: 'sess-deadbeef',
       }),
-      client,
+      store,
     );
     const call = spy.mock.calls[0]?.[0] as {
-      evidence: string[];
+      evidenceRefs: string[];
       description: string;
       body: string;
     };
     expect(call.body).toBe('c');
     expect(call.description).toBe('d');
-    expect(call.evidence).toContain('classification:preference');
-    expect(call.evidence).toContain('source_signal:user_correction');
-    expect(call.evidence).toContain('source_session_id:sess-deadbeef');
+    expect(call.evidenceRefs).toContain('classification:preference');
+    expect(call.evidenceRefs).toContain('source_signal:user_correction');
+    expect(call.evidenceRefs).toContain('source_session_id:sess-deadbeef');
   });
 
-  it('does NOT request promotion (status omitted from output if engine returns pending)', async () => {
-    const { client } = mkEngine(SAMPLE_RESULT);
+  it('returns pending status from a create', async () => {
+    const { store } = mkStore(SAMPLE_RESULT);
     const out = await handleStoreLesson(
-      StoreLessonSchema.parse({
-        description: 'd',
-        content: 'c',
-        classification: 'workflow',
-      }),
-      client,
+      StoreLessonSchema.parse({ description: 'd', content: 'c', classification: 'workflow' }),
+      store,
     );
     expect(out.status).toBe('pending');
   });

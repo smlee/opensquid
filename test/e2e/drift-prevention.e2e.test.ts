@@ -39,6 +39,8 @@ import { handleMemorize } from '../../src/mcp/tools/memorize.js';
 import { createBackend } from '../../src/rag/backend_factory.js';
 import { resolveBackendConfig } from '../../src/rag/config.js';
 import { handleStoreLesson } from '../../src/mcp/tools/store-lesson.js';
+import { wedgeLessonStore } from '../../src/rag/wedge/store.js';
+import { wedgeLessonsDbUrl, wedgeLessonsDir } from '../../src/rag/wedge/paths.js';
 import {
   fetchExistingImportIndex,
   importAutoMemoryDir,
@@ -228,6 +230,9 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
         createBackend(await resolveBackendConfig()),
       );
       expect(mem.id).toMatch(/.+/);
+      // RES-3c: store_lesson is now backed by the wedge store (engine-free).
+      const wStore = wedgeLessonStore({ dbUrl: wedgeLessonsDbUrl(), sourceDir: wedgeLessonsDir() });
+      await wStore.init();
       const lesson = await handleStoreLesson(
         {
           description: 'g13 round-trip lesson',
@@ -235,7 +240,7 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
           classification: 'workflow',
           source_signal: 'g13_e2e',
         },
-        engineClient,
+        wStore,
       );
       expect(lesson.id).toMatch(/.+/);
       expect(lesson.status).toBe('pending');

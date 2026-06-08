@@ -7,6 +7,33 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.359] - 2026-06-08
+
+### Changed — lesson surface cut over to the wedge store (retire-Rust RES-3c; the cutover)
+
+`propose_lesson`/`promote_lesson`/`recall_lesson` (`src/functions/lessons.ts`), the `store_lesson` MCP
+tool (`src/mcp/tools/store-lesson.ts`), the registry bootstrap (`src/runtime/bootstrap.ts`), and the
+MCP server (`src/mcp/server.ts`) now call the RES-3b `WedgeLessonStore` instead of the Rust
+`EngineClient` — the opensquid lesson path is engine-free. Contracts preserved exactly: propose →
+`{id, status}`, promote → `{status:'promoted', detail}` or `{status:'blocked', reasons}` (now via
+`instanceof PromotionBlockedError`, same kebab-prefix reasons), recall → the same shape, store_lesson
+→ `{id, status, next_steps}`. `bootstrap` constructs + `init()`s the store (new `lessonStore` test
+seam, replacing `engineClient`); `server.ts` holds a lazy store singleton (replacing `getEngine()`).
+
+### Added — `capture_feedback` + `record_applied` primitives
+
+Two new lesson primitives wire the wedge store's `captureFeedback`/`recordApplied` to skills. Both are
+REQUIRED for in-process promotion: the default gate needs a non-empty `external_signal_sources` (fed
+by `capture_feedback`) AND `applied_count ≥ 3` (fed by `record_applied`). Previously neither was
+reachable in-process, so the moat could never promote without the engine.
+
+### Removed (lesson path only)
+
+The engine-era compression hook (`collectCandidates` off `cited_memory_ids` on promotion) is dropped
+from `promote_lesson` — that coupling moves to the compression port (RES-4). `getEngine()` removed
+from `server.ts`. (`EngineClient` + the `lesson.*` RPC remain in the tree for the still-engine memory/
+auto-memory paths + the two engine-bound e2e suites, until RES-5/RES-6.)
+
 ## [0.5.358] - 2026-06-08
 
 ### Added — wedge lesson lifecycle store on libSQL (retire-Rust RES-3b; wedge-gate port, sub-slice b)

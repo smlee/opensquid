@@ -72,7 +72,7 @@ export interface WedgeLessonStore {
   init(): Promise<void>;
   createLesson(
     input: CreateLessonInput,
-  ): Promise<{ id: string; status: LessonStatus; createdAt: string }>;
+  ): Promise<{ id: string; status: 'pending'; createdAt: string }>;
   promoteLesson(id: string): Promise<{ id: string; status: 'promoted' }>;
   recallLesson(
     query: string,

@@ -14,14 +14,13 @@
  * round-tripped via the `evidence` array (prefixed entries) so the
  * data survives without requiring an engine schema bump.
  *
- * Imports from: ../../engine/client.js, ../../engine/types.js, zod.
+ * Imports from: ../../rag/wedge/store.js, zod.
  * Imported by: mcp/server.ts (handler map).
  */
 
 import { z } from 'zod';
 
-import type { EngineClient } from '../../engine/client.js';
-import type { LessonCreateParams, LessonCreateResult } from '../../engine/types.js';
+import type { WedgeLessonStore } from '../../rag/wedge/store.js';
 
 export const StoreLessonSchema = z.object({
   description: z.string().min(1).max(280),
@@ -51,18 +50,17 @@ export const NEXT_STEPS_GUIDANCE =
 
 export async function handleStoreLesson(
   args: StoreLessonArgs,
-  engine: EngineClient,
+  store: WedgeLessonStore,
 ): Promise<StoreLessonOutput> {
   const evidence: string[] = [`classification:${args.classification}`];
   if (args.source_signal) evidence.push(`source_signal:${args.source_signal}`);
   if (args.source_session_id) evidence.push(`source_session_id:${args.source_session_id}`);
 
-  const params: LessonCreateParams = {
+  const result = await store.createLesson({
     description: args.description,
     body: args.content,
-    evidence,
-  };
-  const result: LessonCreateResult = await engine.lessonCreate(params);
+    evidenceRefs: evidence,
+  });
   return {
     id: result.id,
     status: result.status,

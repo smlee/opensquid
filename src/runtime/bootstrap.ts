@@ -57,7 +57,8 @@
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 
-import { EngineClient } from '../engine/client.js';
+import { wedgeLessonStore, type WedgeLessonStore } from '../rag/wedge/store.js';
+import { wedgeLessonsDbUrl, wedgeLessonsDir } from '../rag/wedge/paths.js';
 import { registerDestinationCheckFunction } from '../functions/destination_check.js';
 import { registerEventFunctions } from '../functions/event.js';
 import { IsAutomationMode } from '../functions/is_automation_mode.js';
@@ -103,17 +104,16 @@ export interface BuildRegistryOpts {
   /** Inject a pre-built backend (tests). Skips config resolution + init. */
   backend?: RagBackend;
   /**
-   * Inject a pre-built EngineClient for the lesson primitives (T.6 tests).
-   * Production builds construct a fresh `EngineClient` that lazily connects
-   * to the shared UDS daemon via the T.4 singleton — multiple clients across
-   * RAG + lessons safely share the same daemon process.
+   * Inject a pre-built wedge lesson store for the lesson primitives (tests).
+   * Production builds construct a fresh `wedgeLessonStore` over libSQL + the
+   * status-dir per-file source (retire-Rust RES-3c — the lesson surface no
+   * longer touches the Rust engine).
    *
    * Pass an explicit stub (or `null`) in tests that exercise pure runtime
-   * paths and don't want to spawn / connect to a real engine. `null`
-   * disables lesson registration entirely; `undefined` constructs a fresh
-   * client (production default).
+   * paths and don't want a real store. `null` disables lesson registration
+   * entirely; `undefined` constructs a fresh store (production default).
    */
-  engineClient?: EngineClient | null;
+  lessonStore?: WedgeLessonStore | null;
 }
 
 export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<FunctionRegistry> {
@@ -236,13 +236,15 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // (`propose_lesson`, `promote_lesson`, `recall_lesson`). Lessons need a
   // direct EngineClient handle (the RAG backend handles memory.* calls; the
   // lesson.* wedge gate still routes through the engine — RES-3 will port it).
-  // Lazy connect: the client doesn't touch the socket until the first
-  // primitive call, so registering here adds zero startup cost when no
-  // pack actually invokes a lesson primitive. Tests pass `engineClient: null`
-  // to skip registration; `engineClient: <stub>` to inject a stub.
-  if (opts.engineClient !== null) {
-    const client = opts.engineClient ?? new EngineClient();
-    registerLessonFunctions(r, client);
+  // Construct + init the wedge lesson store (libSQL + per-file source), then
+  // register the lesson primitives against it. Tests pass `lessonStore: null`
+  // to skip registration; `lessonStore: <stub>` to inject a store.
+  if (opts.lessonStore !== null) {
+    const store =
+      opts.lessonStore ??
+      wedgeLessonStore({ dbUrl: wedgeLessonsDbUrl(), sourceDir: wedgeLessonsDir() });
+    await store.init();
+    registerLessonFunctions(r, store);
   }
   return r;
 }

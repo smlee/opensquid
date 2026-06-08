@@ -45,7 +45,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
-import { EngineClient } from '../engine/client.js';
+import { wedgeLessonStore, type WedgeLessonStore } from '../rag/wedge/store.js';
+import { wedgeLessonsDbUrl, wedgeLessonsDir } from '../rag/wedge/paths.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
 import { OPENSQUID_HOME } from '../runtime/paths.js';
@@ -87,15 +88,17 @@ import {
 import type { WorkGraphStore } from '../workgraph/types.js';
 
 /**
- * Lazy engine-client singleton. Construction is cheap (no socket I/O until
- * the first `call`); `EngineClient.ensureConnected` re-uses the daemon via
- * `acquireOrSpawnEngine()`, so multiple MCP write tools share one connection.
- * Held at module scope so a single MCP-server process amortizes the handshake.
+ * Lazy wedge lesson-store singleton (retire-Rust RES-3c — store_lesson no longer
+ * touches the Rust engine). Constructed + `init()`ed once per MCP-server process;
+ * the cached promise amortizes the schema setup across calls.
  */
-let engineClient: EngineClient | null = null;
-function getEngine(): EngineClient {
-  engineClient ??= new EngineClient();
-  return engineClient;
+let wedgeStoreReady: Promise<WedgeLessonStore> | null = null;
+function wedgeStore(): Promise<WedgeLessonStore> {
+  if (!wedgeStoreReady) {
+    const s = wedgeLessonStore({ dbUrl: wedgeLessonsDbUrl(), sourceDir: wedgeLessonsDir() });
+    wedgeStoreReady = s.init().then(() => s);
+  }
+  return wedgeStoreReady;
 }
 
 /**
@@ -171,8 +174,8 @@ const ToolHandlers = {
   },
   store_lesson: {
     schema: StoreLessonSchema,
-    handle: (args: StoreLessonArgs) =>
-      handleStoreLesson(args, getEngine()).then((r) => JSON.stringify(r)),
+    handle: async (args: StoreLessonArgs) =>
+      JSON.stringify(await handleStoreLesson(args, await wedgeStore())),
   },
   forget: {
     schema: ForgetSchema,
