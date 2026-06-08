@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.356] - 2026-06-08
+
+### Changed — dropped the loop_engine RAG backend; libSQL/fastembed is the unconditional default (retire-Rust RES-1)
+
+First slice of the engine-severance track (work-graph wg-6c14ab2bf0c0; removal = replacement, the
+feature-bearing engine consumers follow in RES-3/4/5). Pure deletion + a default-flip, no feature
+loss: removed `src/rag/backends/loop_engine.ts` (superseded by `libsql_store`), the
+`kind:'loop-engine'` `BackendConfig` member + factory arm, and the verified-dead pack seed-lesson
+ingest (`seed_lessons_ingest.ts` + the `LoadPackDeps`/ingest path in `loader.ts` — no live caller
+ever passed an engine). `rag/config.ts` `pickDefaultKind()` now returns `libsql-fastembed`
+unconditionally (engine-binary presence no longer changes RAG selection); a stale `loop-engine`
+env/persisted override warns + falls back to `libsql-fastembed` instead of failing. Recall/memorize/
+forget were already on libSQL, so no behavior change there. Tests: rewrote `config.test.ts`, deleted
+the loop-engine backend/live/seed-ingest tests, removed the seed-ingest cases from
+`focused-packs-content.test.ts`, and repointed the `drift-prevention` e2e at the libSQL backend.
+
 ## [0.5.355] - 2026-06-08
 
 ### Changed — durable phase ledger ported off the Rust engine (retire-Rust; T-LOGPHASE-LEDGER-TS)

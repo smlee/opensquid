@@ -32,8 +32,6 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveEngineBin } from '../engine/config.js';
-
 import type { BackendConfig } from './backend_factory.js';
 
 const RAG_CONFIG_FILENAME = 'rag-config.json';
@@ -70,14 +68,20 @@ export async function resolveBackendConfig(): Promise<BackendConfig> {
 
   // Order: env > persisted > default. Each layer can supply opts the
   // others don't (env picks kind; persisted supplies dbUrl/ollamaUrl).
-  const kind = fromEnv ?? persisted.kind ?? (await pickDefaultKind());
+  const kind = fromEnv ?? persisted.kind ?? pickDefaultKind();
 
   switch (kind) {
     case 'loop-engine':
+      // retire-Rust (RES-1): the loop-engine backend is removed. A stale env/persisted
+      // `loop-engine` pin degrades gracefully to libsql-fastembed instead of failing.
+      process.stderr.write(
+        '[opensquid] loop-engine backend has been removed (retire-Rust); ' +
+          'falling back to libsql-fastembed.\n',
+      );
       return {
-        kind: 'loop-engine',
-        ...(persisted.mode === undefined ? {} : { mode: persisted.mode }),
-        ...(persisted.ollamaUrl === undefined ? {} : { ollamaUrl: persisted.ollamaUrl }),
+        kind: 'libsql-fastembed',
+        dbUrl: persisted.dbUrl ?? defaultLibsqlUrl(),
+        sourceDir: join(opensquidHome(), 'store', 'lessons'),
       };
     case 'libsql-qwen3':
       return {
@@ -103,7 +107,7 @@ export async function resolveBackendConfig(): Promise<BackendConfig> {
     default:
       throw new Error(
         `Unknown RAG backend kind: ${kind}. ` +
-          `Expected one of: loop-engine, libsql-qwen3, libsql-fastembed, libsql-lexical, claude-auto-memory.`,
+          `Expected one of: libsql-qwen3, libsql-fastembed, libsql-lexical, claude-auto-memory.`,
       );
   }
 }
@@ -139,21 +143,10 @@ async function loadPersisted(): Promise<PersistedConfig> {
   }
 }
 
-async function pickDefaultKind(): Promise<'loop-engine' | 'libsql-fastembed'> {
-  try {
-    const bin = await resolveEngineBin();
-    if (bin) return 'loop-engine';
-  } catch (e) {
-    // Engine resolver failed unexpectedly — surface to stderr so users
-    // can correlate "why is libsql active instead of the engine?" with
-    // the underlying cause (corrupted engine-config.json, broken
-    // executable, etc.) rather than guessing at the silent downgrade.
-    process.stderr.write(
-      `[opensquid] engine binary lookup failed (${String(e)}); ` +
-        `falling back to libsql-fastembed.\n`,
-    );
-  }
-  // Self-contained fallback: in-process fastembed (no Ollama), E2-validated recall parity.
+// retire-Rust (RES-1): libSQL/fastembed (in-process, no Ollama) is the UNCONDITIONAL
+// default backend. Engine-binary presence no longer changes RAG selection — the
+// loop-engine backend has been removed.
+function pickDefaultKind(): 'libsql-fastembed' {
   return 'libsql-fastembed';
 }
 

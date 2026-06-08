@@ -52,8 +52,6 @@ import type { z } from 'zod';
 
 import type { Pack } from '../runtime/types.js';
 
-import type { EngineClient } from '../engine/client.js';
-
 import { ChatAgentSchema, type ChatAgentConfig } from './schemas/chat_agent.js';
 import { DriftResponseConfig } from './schemas/drift_response.js';
 import { Manifest } from './schemas/manifest.js';
@@ -61,7 +59,6 @@ import { ModelsConfig } from './schemas/models.js';
 import { Skill } from './schemas/skill.js';
 import { Team } from './schemas/team.js';
 import { getLivingPackVersion } from './living_pack.js';
-import { ingestSeedLessons } from './seed_lessons_ingest.js';
 import { compileVerifyGates } from './verify_gates_compiler.js';
 import { compileGuards } from './guards_compiler.js';
 import { compileFlows, type FlowExpansion } from './flows_compiler.js';
@@ -92,17 +89,7 @@ type DriftResponseConfigOutput = z.infer<typeof DriftResponseConfig>;
 // so we conditionally spread to avoid that mismatch.
 // ---------------------------------------------------------------------------
 
-export interface LoadPackDeps {
-  /**
-   * Optional engine client. When present, DOG.3 seed_lessons are ingested
-   * fire-and-forget via `engine.lessonCreate`. Absent (test path, engine
-   * not yet handshaked) → seeds are stored on `Pack.seedLessons` but not
-   * ingested; next loadPack with `deps.engine` will UPSERT them.
-   */
-  engine?: EngineClient;
-}
-
-export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> {
+export async function loadPack(dir: string): Promise<Pack> {
   const manifestPath = join(dir, 'manifest.yaml');
   const { data } = await parseYamlFile(manifestPath, Manifest);
   // Re-cast to the schema's output type (see ManifestOutput comment above).
@@ -143,34 +130,9 @@ export async function loadPack(dir: string, deps?: LoadPackDeps): Promise<Pack> 
   // file read; null when pack isn't user-installed.
   const livingVersion = await getLivingPackVersion(manifest.name);
 
-  // DOG.3 — ingest seed_lessons (fire-and-forget; engine may be absent in
-  // tests). Per-seed failures are LOGGED, never thrown; loadPack never
-  // fails for engine-availability reasons.
-  if (deps?.engine !== undefined && manifest.seed_lessons.length > 0) {
-    const engine = deps.engine;
-    void ingestSeedLessons(
-      manifest.name,
-      manifest.version,
-      manifest.seed_lessons,
-      engine,
-      dir,
-    ).then(
-      (r) => {
-        if (r.failed.length > 0) {
-          console.warn(
-            `opensquid pack ${manifest.name}: seed-ingest had ${String(r.failed.length)} failures (engine reachable?):`,
-            r.failed,
-          );
-        }
-      },
-      (e: unknown) => {
-        console.warn(
-          `opensquid pack ${manifest.name}: seed-ingest pipeline blew up:`,
-          e instanceof Error ? e.message : String(e),
-        );
-      },
-    );
-  }
+  // (retire-Rust RES-1) seed_lessons engine-ingest removed — it was dead code
+  // (no live caller ever passed an engine to loadPack). `Pack.seedLessons` data
+  // still rides on the manifest below.
 
   // chat_agent.yaml — WAB.6 chat-agent binding side-file. OPTIONAL: absence
   // (ENOENT) is the bind-time signal for "fall back to built-in defaults in

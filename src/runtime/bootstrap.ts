@@ -234,8 +234,8 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
 
   // T-loop-engine-reintegration T.6 — wire the wedge gate lesson surface
   // (`propose_lesson`, `promote_lesson`, `recall_lesson`). Lessons need a
-  // direct EngineClient handle (the RAG backend wraps memory.* calls, not
-  // lesson.* calls — see src/rag/backends/loop_engine.ts header §1).
+  // direct EngineClient handle (the RAG backend handles memory.* calls; the
+  // lesson.* wedge gate still routes through the engine — RES-3 will port it).
   // Lazy connect: the client doesn't touch the socket until the first
   // primitive call, so registering here adds zero startup cost when no
   // pack actually invokes a lesson primitive. Tests pass `engineClient: null`

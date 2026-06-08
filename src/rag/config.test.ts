@@ -1,8 +1,8 @@
 /**
- * Tests for the default-backend selection (T-LIBSQL-DEFAULT). The no-engine fallback is now the
- * self-contained `libsql-fastembed` (no Ollama); `loop-engine` stays default when its binary is
- * present; an explicit env/persisted kind still overrides. `resolveEngineBin` is mocked (the
- * presence of a real engine binary on the test host must not decide the outcome).
+ * Tests for the default-backend selection. retire-Rust (RES-1): `libsql-fastembed` is the
+ * UNCONDITIONAL default — engine-binary presence no longer changes selection (the loop-engine
+ * backend is removed). An explicit env/persisted kind still overrides; a stale `loop-engine`
+ * override degrades to `libsql-fastembed` with a stderr warning.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,16 +10,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../engine/config.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  resolveEngineBin: vi.fn(),
-}));
-
-import { resolveEngineBin } from '../engine/config.js';
-
 import { resolveBackendConfig } from './config.js';
-
-const mockEngine = vi.mocked(resolveEngineBin);
 
 describe('resolveBackendConfig — default selection', () => {
   let home: string;
@@ -32,7 +23,6 @@ describe('resolveBackendConfig — default selection', () => {
     priorEnv = process.env.OPENSQUID_RAG_BACKEND;
     process.env.OPENSQUID_HOME = home;
     delete process.env.OPENSQUID_RAG_BACKEND;
-    mockEngine.mockReset();
   });
   afterEach(async () => {
     if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
@@ -42,18 +32,22 @@ describe('resolveBackendConfig — default selection', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('no engine + no env/persisted → self-contained libsql-fastembed', async () => {
-    mockEngine.mockResolvedValue(null);
+  it('no env/persisted → libsql-fastembed (unconditional default; engine presence is irrelevant)', async () => {
     expect((await resolveBackendConfig()).kind).toBe('libsql-fastembed');
   });
 
-  it('engine present → loop-engine (unchanged)', async () => {
-    mockEngine.mockResolvedValue('/path/to/opensquid-engine');
-    expect((await resolveBackendConfig()).kind).toBe('loop-engine');
+  it('a stale loop-engine override → warns + falls back to libsql-fastembed', async () => {
+    process.env.OPENSQUID_RAG_BACKEND = 'loop-engine';
+    const warn = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const cfg = await resolveBackendConfig();
+    expect(cfg.kind).toBe('libsql-fastembed');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('loop-engine backend has been removed'),
+    );
+    warn.mockRestore();
   });
 
-  it('explicit env override beats the fallback', async () => {
-    mockEngine.mockResolvedValue(null);
+  it('explicit env override beats the default', async () => {
     process.env.OPENSQUID_RAG_BACKEND = 'libsql-qwen3';
     expect((await resolveBackendConfig()).kind).toBe('libsql-qwen3');
   });

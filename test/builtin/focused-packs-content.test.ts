@@ -16,34 +16,18 @@
  */
 import { resolve } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { loadPack } from '../../src/packs/loader.js';
 import { compileVerifyGates } from '../../src/packs/verify_gates_compiler.js';
 import { parseExpression } from '../../src/runtime/evaluator/expression/index.js';
-import type { EngineClient } from '../../src/engine/client.js';
-import type { LessonCreateParams, LessonCreateResult } from '../../src/engine/types.js';
 
 const FOCUSED = ['focused-react-19', 'focused-typescript-strict', 'focused-atomic-design'] as const;
 const COMPOSITE = 'frontend-react-19-atomic';
 
-function fakeEngine(): {
-  engine: EngineClient;
-  spy: ReturnType<typeof vi.fn<(p: LessonCreateParams) => Promise<LessonCreateResult>>>;
-} {
-  const spy = vi.fn(
-    (p: LessonCreateParams): Promise<LessonCreateResult> =>
-      Promise.resolve({
-        id: `lesson-${p.external_id ?? p.description}`,
-        status: 'promoted',
-        authored_by: 'pack',
-        created_at: '2026-05-30T00:00:00Z',
-        updated: false,
-      }),
-  );
-  const engine = { lessonCreate: spy } as unknown as EngineClient;
-  return { engine, spy };
-}
+// (retire-Rust RES-1) seed-ingest tests removed — pack seed_lessons are no longer
+// engine-ingested at load (that path was dead). The seed_lessons DATA is still
+// validated below (counts, gates, non-empty title/body).
 
 describe('DOG.4 — focused + composite pack content (seed_lessons + verify_gates)', () => {
   for (const name of FOCUSED) {
@@ -89,36 +73,6 @@ describe('DOG.4 — focused + composite pack content (seed_lessons + verify_gate
     const pack = await loadPack(resolve('packs/builtin', COMPOSITE));
     const synthetic = pack.skills.find((s) => s.name === `${COMPOSITE}/verify`);
     expect(synthetic).toBeUndefined();
-  });
-
-  it('loadPack with engine ingests every seed via lessonCreate (per-pack count matches)', async () => {
-    // Test each pack separately so we can assert the call count without
-    // relying on cross-call ordering. Use waitFor pattern: ingest is
-    // fire-and-forget, so we yield to the microtask queue + check the spy.
-    for (const name of [...FOCUSED, COMPOSITE]) {
-      const { engine, spy } = fakeEngine();
-      const pack = await loadPack(resolve('packs/builtin', name), { engine });
-      const seedCount = (pack.seedLessons ?? []).length;
-      // Drain microtasks so the fire-and-forget ingest promise can resolve.
-      // Loop a few times because ingest awaits per-seed (chain of awaits).
-      for (let i = 0; i < seedCount + 2; i++) {
-        await Promise.resolve();
-      }
-      expect(spy, `${name} ingest call count`).toHaveBeenCalledTimes(seedCount);
-    }
-  });
-
-  it('every ingest call carries authored_by:pack + pack_id matching pack name + external_id pattern', async () => {
-    const { engine, spy } = fakeEngine();
-    await loadPack(resolve('packs/builtin/focused-react-19'), { engine });
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-    expect(spy.mock.calls.length).toBeGreaterThan(0);
-    for (const [arg] of spy.mock.calls) {
-      expect(arg.authored_by).toBe('pack');
-      expect(arg.pack_id).toBe('focused-react-19');
-      expect(arg.seed_as_promoted).toBe(true);
-      expect(arg.external_id).toMatch(/^pack-seed:[a-f0-9]{24}$/);
-    }
   });
 
   it('total seed_lessons across 3 focused + composite is >= 21 (acceptance count)', async () => {
