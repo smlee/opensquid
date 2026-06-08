@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.363] - 2026-06-08
+
+### Added — memory consolidate() port: the D2 verified, immunity-gated, fail-closed compaction (retire-Rust RES-4b)
+
+`src/rag/memory/consolidate.ts` — the TS port of the engine's `consolidate()` (compress.rs:316-454),
+on top of RES-4a's `compress()`. Compress a window → `Mc`; VERIFY via recall-replay that `Mc`
+surfaces in the top-k for each predecessor's representative query; ONLY THEN force-delete the
+NON-immune predecessors. **Fail-closed**: `recall_k==0`, a vanished predecessor, a search error, or
+`Mc` absent from the hits → delete NOTHING (`verified:false`). The citation-counter immunity
+(`consumed_by_user_lessons > 0`) is checked in consolidate and **re-loaded right before the
+irreversible delete** (never a stale read); an absent predecessor is treated immune-safe; a delete
+error is non-fatal (kept). The delete goes through the backend `deleteLesson(force:true)` so the
+per-file source is removed too — a DB-only delete would let `rebuildLibsqlIndex` resurrect the
+predecessor and undo the consolidation (the scope-audit caught this). Returns `{mcId, deleted,
+keptImmune, verified}`. Not wired to any consumer yet (RES-4c). 8 tests (happy verified-delete,
+verify-miss, search-error, recall_k=0, immune-kept, re-load-authoritative, delete-error, compress-error).
+
 ## [0.5.362] - 2026-06-08
 
 ### Added — pure memory compression port (retire-Rust RES-4a; compress = gist-mint)
