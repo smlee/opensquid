@@ -214,6 +214,11 @@ export const ProcessStep = z.object({
   as: z.string().optional(),
   if: z.string().optional(),
   on_empty: z.enum(['pass', 'block', 'continue']).optional(),
+  // on_error: how the evaluator treats a failing primitive. Absent / 'abort'
+  // (default) → return kind:'error' (historical hard-abort). 'continue' → bind
+  // the error message to `as` (if set) and proceed, letting the rule observe
+  // the failure (e.g. an audit subagent that could not spawn) and branch on it.
+  on_error: z.enum(['abort', 'continue']).optional(),
 });
 export type ProcessStep = z.infer<typeof ProcessStep>;
 

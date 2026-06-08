@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.353] - 2026-06-08
+
+### Fixed — coding-flow audits degrade gracefully on subagent-spawn failure (F0c; T-FLOW-AUDIT-DEGRADE)
+
+The SCOPE/spec content audits run as `subagent_call`; when that spawn fails (a per-session spawn
+cap after many cycles in one session), the process evaluator aborted the whole rule
+(`evaluator.ts`) and the dispatcher dropped the resulting `kind:'error'` silently (`dispatch.ts`) —
+so `advance_fsm` never fired (FSM frozen at `scoping`/`spec_authored`) and no verdict reached the
+agent. Added an `on_error: 'abort' | 'continue'` step policy to `ProcessStep` (the failure-side
+twin of `on_empty`; default `abort` keeps every existing rule unchanged): `continue` binds the
+error message to `as` and proceeds, letting a rule observe a failed step. Both coding-flow audits
+now opt in and map every audit result to a total partition — pass → advance, content-fail → warn
+(keyed positively on `UNRESOLVED`/`INCOMPLETE`, so an infra-failure no longer masquerades as a
+content failure), and audit-unavailable → an actionable BLOCK that names the recovery (re-write to
+re-trigger; a fresh session clears the spawn exhaustion) while leaving the FSM re-armable.
+Fail-closed: a no-`VERDICT:` response (incl. a malformed/truncated audit) never silently advances.
+
 ## [0.5.352] - 2026-06-07
 
 ### Added — engine→libSQL memory migration tool (T-MIGRATE-MEMORIES; retire-Rust step 1)

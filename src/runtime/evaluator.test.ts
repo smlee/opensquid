@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { FunctionRegistry, type EvalCtx, type FunctionDef } from '../functions/registry.js';
 
 import { evaluateProcess } from './evaluator.js';
-import { ok } from './result.js';
+import { err, ok } from './result.js';
 import type { Event, ProcessStep } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -61,6 +61,14 @@ const emptyArrayDef: FunctionDef<Record<string, never>, unknown[]> = {
   name: 'empty_array',
   argSchema: z.object({}),
   execute: () => Promise.resolve(ok([])),
+};
+
+// A primitive that always fails — mirrors a `subagent_call` that could not
+// spawn (FunctionError kind 'runtime'). Used for the `on_error` policy tests.
+const boomDef: FunctionDef<Record<string, never>, never> = {
+  name: 'boom',
+  argSchema: z.object({}),
+  execute: () => Promise.resolve(err({ kind: 'runtime', message: 'spawn refused' })),
 };
 
 // ---------------------------------------------------------------------------
@@ -172,6 +180,81 @@ describe('evaluateProcess — error surfacing', () => {
     if (result.kind !== 'error') throw new Error('unreachable');
     expect(result.step).toBe(0);
     expect(result.error).toContain('foo');
+  });
+
+  it("a failing primitive WITHOUT on_error aborts with kind: error (default 'abort')", async () => {
+    const reg = new FunctionRegistry();
+    reg.register(boomDef);
+    reg.register(verdictDef);
+
+    const steps: ProcessStep[] = [
+      { call: 'boom', as: 'x' },
+      { call: 'verdict', args: { level: 'warn', message: 'unreachable' } },
+    ];
+
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+
+    expect(result.kind).toBe('error');
+    if (result.kind !== 'error') throw new Error('unreachable');
+    expect(result.step).toBe(0);
+    expect(result.error).toContain('spawn refused');
+  });
+
+  it("on_error: 'abort' is explicit-equivalent to the default", async () => {
+    const reg = new FunctionRegistry();
+    reg.register(boomDef);
+
+    const steps: ProcessStep[] = [{ call: 'boom', on_error: 'abort' }];
+
+    const result = await evaluateProcess(steps, createTestCtx(), reg);
+
+    expect(result.kind).toBe('error');
+  });
+
+  it("on_error: 'continue' binds the error message to `as` and proceeds to the next step", async () => {
+    const reg = new FunctionRegistry();
+    reg.register(boomDef);
+    reg.register(verdictDef);
+
+    const ctx = createTestCtx();
+    const steps: ProcessStep[] = [
+      { call: 'boom', as: 'audit', on_error: 'continue' },
+      {
+        call: 'verdict',
+        // The bound error message is reachable in a downstream `if:` —
+        // here we simply assert the rule REACHES a terminal verdict (it did
+        // not abort) and the binding carries the error text.
+        if: 'contains(audit, "spawn refused")',
+        args: { level: 'block', message: 'audit unavailable' },
+      },
+    ];
+
+    const result = await evaluateProcess(steps, ctx, reg);
+
+    expect(result).toEqual({
+      kind: 'verdict',
+      verdict: { level: 'block', message: 'audit unavailable' },
+    });
+    expect(ctx.bindings.get('audit')).toBe('spawn refused');
+  });
+
+  it("on_error: 'continue' without `as` still proceeds (no binding written)", async () => {
+    const reg = new FunctionRegistry();
+    reg.register(boomDef);
+    reg.register(verdictDef);
+
+    const ctx = createTestCtx();
+    const steps: ProcessStep[] = [
+      { call: 'boom', on_error: 'continue' },
+      { call: 'verdict', args: { level: 'warn', message: 'reached' } },
+    ];
+
+    const result = await evaluateProcess(steps, ctx, reg);
+
+    expect(result).toEqual({
+      kind: 'verdict',
+      verdict: { level: 'warn', message: 'reached' },
+    });
   });
 });
 

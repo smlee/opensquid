@@ -52,8 +52,12 @@ rules:
           filter_names: [mcp__opensquid__recall, Read, Grep, 'Bash:read-only']
         as: depth
       # The content audit: NEVER-GUESS + BEST-SOLUTION, one combined verdict.
+      # on_error: continue — a spawn failure binds the err message to `audit`
+      # and proceeds to the trichotomy below (the AUDIT-UNAVAILABLE branch),
+      # instead of aborting the process and freezing the FSM (F0c).
       - call: subagent_call
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        on_error: continue
         args:
           model: reasoning
           timeout_ms: 170000
@@ -75,11 +79,9 @@ rules:
             re-architected; otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved
             guess OR un-weighed alternative OR un-rearchitected patch. ARTIFACT:\n\n{{effective}}
         as: audit
-      # ADVANCE only when content-complete (coupled to the verdict + depth + no open Qs).
-      - call: advance_fsm
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(audit, "VERDICT: GUESS_FREE") && !contains(effective, "OPEN QUESTION") && depth.count >= 3'
-        args:
-          event: research_done
+      # ── PRECONDITIONS (evaluated FIRST, terminal blocks; key on the artifact,
+      #    not the audit). They partition the precondition-FAILED subspace so the
+      #    audit-string trichotomy below is a clean partition over its own subspace.
       # BLOCK: unresolved open questions — answer them in SCOPE (this is the interactive phase).
       - call: verdict
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(effective, "OPEN QUESTION")'
@@ -90,22 +92,30 @@ rules:
             SCOPE is the interactive phase — ASK the user (AskUserQuestion), record + cite
             the answer, and remove the marker BEFORE authoring. Everything after scope is
             automated; a question must not survive into it.
-      # BLOCK: shallow research (folded DPC.5 depth, now gating not warn).
+      # BLOCK: shallow research (folded DPC.5 depth). Ordered after open-question; its
+      # !OPEN QUESTION guard keeps the two preconditions mutually exclusive.
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count < 3'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(effective, "OPEN QUESTION") && depth.count < 3'
         args:
           level: block
           message: >-
             SCOPE shallow: do real research (recall + Read + Grep, >=3 this turn) before the
             pre-research write — map the decision surface to teach-back depth.
-      # LOOP-BACK + WARN: guesses / no-best-solution. The advance above did NOT fire;
-      # if already at researched (a re-write), loop back to researching.
+      # ── AUDIT-STRING TRICHOTOMY (reached ONLY when depth>=3 && no open question).
+      #    {GUESS_FREE, UNRESOLVED, no-VERDICT} is a total partition of the audit string.
+      # PASS → advance.
       - call: advance_fsm
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(audit, "VERDICT: GUESS_FREE")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && contains(audit, "VERDICT: GUESS_FREE")'
+        args:
+          event: research_done
+      # CONTENT-FAIL → loop-back + warn (keyed POSITIVELY on UNRESOLVED, not !GUESS_FREE — so an
+      # audit that could not run no longer masquerades as "guesses found").
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && contains(audit, "VERDICT: UNRESOLVED")'
         args:
           event: guess_found
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(audit, "VERDICT: GUESS_FREE")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && contains(audit, "VERDICT: UNRESOLVED")'
         args:
           level: warn
           message: >-
@@ -113,6 +123,17 @@ rules:
             justified against alternatives. Resolve each (cite evidence or flag as an open
             question; weigh the alternatives + choose the simplest correct per the lexicon),
             then re-write. Audit:\n\n{{audit}}
+      # AUDIT-UNAVAILABLE → terminal BLOCK, NO advance (stays scoping, re-armable). F0c fix:
+      # the audit subagent could not spawn (a no-VERDICT response, incl. the bound err message).
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && !contains(audit, "VERDICT:")'
+        args:
+          level: block
+          message: >-
+            SCOPE audit could not run (the reviewer subagent was unavailable — typically a
+            per-session spawn cap after many cycles). This is NOT a content failure. Re-write the
+            pre-research artifact to re-trigger the audit; if it persists, a FRESH session clears
+            the spawn exhaustion. Do NOT --no-verify or gate-off. Audit error:\n\n{{audit}}
   # ── AUTHOR: advance on the track-spec write (+ capture its path) ─────────────
   - id: advance-on-spec
     process:
@@ -146,8 +167,12 @@ rules:
       - call: effective_content
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
         as: effective
+      # on_error: continue — F0c: a spawn failure binds the err to `spec_audit`
+      # and proceeds to the trichotomy (AUDIT-UNAVAILABLE branch) instead of
+      # aborting the process and freezing the FSM at spec_authored.
       - call: subagent_call
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        on_error: continue
         args:
           model: reasoning
           timeout_ms: 170000
@@ -170,12 +195,17 @@ rules:
             OR the design smells over-complected.
             DESIGN:\n\n{{design}}\n\nSPEC:\n\n{{effective}}
         as: spec_audit
+      # ── spec-audit trichotomy (clean partition over the audit string; no depth/
+      #    open-question preconditions — those are SCOPE-only).
+      # PASS → advance.
       - call: advance_fsm
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && contains(spec_audit, "VERDICT: SPEC_COMPLETE")'
         args:
           event: spec_verified
+      # CONTENT-FAIL → warn (keyed POSITIVELY on INCOMPLETE, not !SPEC_COMPLETE — so an audit
+      # that could not run no longer masquerades as an incomplete spec).
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && !contains(spec_audit, "VERDICT: SPEC_COMPLETE")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && contains(spec_audit, "VERDICT: INCOMPLETE")'
         args:
           level: warn
           message: >-
@@ -183,6 +213,16 @@ rules:
             BLOCKED) until every task block carries all 11 fields with real code (no
             pseudocode). The AUTHOR content gate: finish task authoring before coding.
             Audit:\n\n{{spec_audit}}
+      # AUDIT-UNAVAILABLE → BLOCK, no advance (stays spec_authored, re-armable). F0c fix.
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && !contains(spec_audit, "VERDICT:")'
+        args:
+          level: block
+          message: >-
+            AUTHOR audit could not run (the reviewer subagent was unavailable — typically a
+            per-session spawn cap). This is NOT a content failure. Re-write the spec to re-trigger
+            the audit; if it persists, a FRESH session clears the spawn exhaustion. Do NOT
+            --no-verify or gate-off. Audit error:\n\n{{spec_audit}}
   # ── SCOPE nudge: code-before-scope is a best-effort WARN (GF.3) ──────────────
   # GF.3 (F4): demoted from a hard block to a best-effort NUDGE. The completeness
   # burden moved to the OWNED BOUNDARY: GF.2's git pre-commit/pre-push hooks read the

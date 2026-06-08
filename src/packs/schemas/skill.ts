@@ -104,6 +104,12 @@ export const ProcessStep = z.object({
   as: z.string().optional(),
   if: conditionString.optional(),
   on_empty: z.enum(['pass', 'block', 'continue']).optional(),
+  // on_error — failure-side twin of on_empty. Absent / 'abort' (default) →
+  // the evaluator returns kind:'error' (hard-abort). 'continue' → the error
+  // message binds to `as` and the process proceeds, so a rule can branch on a
+  // failed step (e.g. an audit subagent that could not spawn). Mirror of the
+  // runtime schema at src/runtime/types.ts.
+  on_error: z.enum(['abort', 'continue']).optional(),
 });
 export type ProcessStep = z.infer<typeof ProcessStep>;
 

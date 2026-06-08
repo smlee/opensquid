@@ -207,8 +207,18 @@ export async function evaluateProcess(
       result = await registry.call(step.call, interpolatedArgs, ctx);
     }
 
-    // 4. Primitive failed — surface step index for diagnostics
+    // 4. Primitive failed.
     if (!result.ok) {
+      // `on_error: 'continue'` is the failure-side twin of `on_empty` (steps
+      // 6-8): it lets a rule OBSERVE a step error and branch on it instead of
+      // having the runtime swallow the whole process. The error message binds
+      // to `step.as` (when set) so the next step's `if:` can test it. Absent or
+      // 'abort' (the default) preserves the historical hard-abort with the
+      // failing step index for diagnostics.
+      if (step.on_error === 'continue') {
+        if (step.as !== undefined) ctx.bindings.set(step.as, result.error.message);
+        continue;
+      }
       return { kind: 'error', error: result.error.message, step: i };
     }
 

@@ -21,7 +21,7 @@ import { loadPack } from '../../src/packs/loader.js';
 import { step, validateFsm } from '../../src/runtime/fsm.js';
 import { advanceFsmState, readFsmState } from '../../src/runtime/fsm_state.js';
 import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
-import { ok } from '../../src/runtime/result.js';
+import { err, ok } from '../../src/runtime/result.js';
 import {
   HasActiveTask,
   HasGeneratedSpec,
@@ -389,6 +389,102 @@ describe('builtin coding-flow pack — the AUTHOR content gate end-to-end (spec-
     for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t); // AF.1 depth
     await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
     await dispatchEvent(specWithContent, [pack], reg, sid); // → spec_authored (Simplicity failed: stays)
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
+    expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
+  });
+});
+
+/** Per-audit outcome stub (F0c). `scopeOut` answers the guess-audit (NEVER-GUESS
+ *  prompt), `specOut` the spec-audit; the sentinel 'THROW' makes that audit return
+ *  a FunctionError, modelling a subagent that could not spawn. */
+function registryWithAuditOutcomes(scopeOut: string, specOut: string): FunctionRegistry {
+  const r = new FunctionRegistry();
+  registerEventFunctions(r);
+  registerFsmFunctions(r);
+  registerStateFunctions(r);
+  registerVerdictFunctions(r);
+  r.register({
+    name: 'subagent_call',
+    argSchema: z.object({
+      model: z.string(),
+      prompt: z.string(),
+      timeout_ms: z.number().optional(),
+    }),
+    durable: false,
+    execute: (args: { prompt: string }) => {
+      const out = args.prompt.includes('NEVER-GUESS') ? scopeOut : specOut;
+      return Promise.resolve(
+        out === 'THROW' ? err({ kind: 'runtime', message: 'spawn refused' }) : ok(out),
+      );
+    },
+  });
+  r.register(SessionToolHistory);
+  r.register(EffectiveContent);
+  r.register(HasGeneratedSpec);
+  r.register(OpenTaskCount);
+  r.register(TextPatternMatch);
+  return r;
+}
+
+describe('builtin coding-flow pack — F0c: audits degrade gracefully on subagent-spawn failure', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-f0c-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('SCOPE audit spawn-failure → actionable BLOCK (exit 2), FSM does NOT advance to researched', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAuditOutcomes('THROW', 'VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-f0c-scope-unavailable';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t); // depth >= 3
+    const res = await dispatchEvent(researchWithContent, [pack], reg, sid);
+    // F0c FIX: the audit-unavailable case BLOCKS (exit 2) with recovery text —
+    // it no longer aborts silently (the old bug surfaced exit 0 + no message).
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain('audit could not run');
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).not.toBe('researched');
+  });
+
+  it('SCOPE audit UNRESOLVED → WARN (exit 0), distinct from the spawn-failure BLOCK', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAuditOutcomes(
+      'VERDICT: UNRESOLVED\n- guess at foo',
+      'VERDICT: SPEC_COMPLETE',
+    );
+    const sid = 'cf-f0c-scope-unresolved';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    const res = await dispatchEvent(researchWithContent, [pack], reg, sid);
+    expect(res.exitCode).toBe(0); // content-fail warns, does not hard-block
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).not.toBe('researched');
+  });
+
+  it('SCOPE audit GUESS_FREE still advances to researched (regression)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAuditOutcomes('VERDICT: GUESS_FREE', 'VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-f0c-scope-pass';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    const res = await dispatchEvent(researchWithContent, [pack], reg, sid);
+    expect(res.exitCode).toBe(0);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('researched');
+  });
+
+  it('AUTHOR audit spawn-failure → BLOCK (exit 2), FSM stays spec_authored, TaskCreate blocked', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAuditOutcomes('VERDICT: GUESS_FREE', 'THROW');
+    const sid = 'cf-f0c-spec-unavailable';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
+    const res = await dispatchEvent(specWithContent, [pack], reg, sid); // spec_drafted → audit THROW → block
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain('audit could not run');
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
   });
