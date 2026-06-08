@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.365] - 2026-06-08
+
+### Added — libSQL memory list + update ops + the import-marker model (retire-Rust RES-5a)
+
+`src/rag/memory/store.ts` gains `listMemories` (paged, deterministic `ORDER BY created_at, id` →
+`{results, returned, total}`, each row carrying its tags) + `updateMemory` (re-embed + rewrite the
+content + `scope:` tag, preserving every other tag + derived_from/counters by loading the row and
+reusing the file-first `insertMemory` upsert) — the two memory-store ops the auto-memory importer
+needs that the store lacked. The auto-memory import marker is modeled as a tag
+`IMPORT_TAG_PREFIX = 'origin:import:'` + `<name>` (libSQL has no `origin` column; tags are the store's
+extensibility surface). Not wired to any consumer yet (RES-5b rewires importer/reconcile/CLI/doctor/
+snapshot). 3 tests (paging no dup/gap + total + tag round-trip; update replaces content/scope-tag +
+re-embeds while preserving marker + derived_from; missing-id throws).
+
 ## [0.5.364] - 2026-06-08
 
 ### Changed — compression cut over to the TS consolidate (retire-Rust RES-4c; RES-4 complete)

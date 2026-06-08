@@ -9,7 +9,14 @@ import { join } from 'node:path';
 import { createClient, type Client } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ensureCompressionColumns, getMemoryById, insertMemory } from './store.js';
+import {
+  ensureCompressionColumns,
+  getMemoryById,
+  insertMemory,
+  listMemories,
+  updateMemory,
+  IMPORT_TAG_PREFIX,
+} from './store.js';
 import type { MemoryRow } from './compress.js';
 
 let dir: string;
@@ -73,5 +80,73 @@ describe('memory-compression store', () => {
   it('getMemoryById returns null for a missing id', async () => {
     await ensureCompressionColumns(client);
     expect(await getMemoryById(client, 'nope')).toBeNull();
+  });
+
+  function memRow(id: string, over: Partial<MemoryRow> = {}): MemoryRow {
+    return {
+      id,
+      content: `content ${id}`,
+      tags: ['scope:user'],
+      source: 'memory',
+      author: 'agent',
+      createdAt: `2026-05-${id.slice(-2)}T00:00:00Z`,
+      derivedFrom: [],
+      consumedByUserLessons: 0,
+      ...over,
+    };
+  }
+
+  it('listMemories pages deterministically with no dup/gap + carries tags + total', async () => {
+    await ensureCompressionColumns(client);
+    const ids = ['mem-01', 'mem-02', 'mem-03', 'mem-04', 'mem-05'];
+    for (const id of ids) {
+      await insertMemory(client, memRow(id, { tags: ['scope:user', `${IMPORT_TAG_PREFIX}${id}`] }));
+    }
+    const p1 = await listMemories(client, { limit: 2, offset: 0 });
+    const p2 = await listMemories(client, { limit: 2, offset: 2 });
+    const p3 = await listMemories(client, { limit: 2, offset: 4 });
+    expect(p1.total).toBe(5);
+    expect(p1.returned).toBe(2);
+    expect(p3.returned).toBe(1);
+    const seen = [...p1.results, ...p2.results, ...p3.results].map((r) => r.id);
+    expect(seen.sort()).toEqual(ids); // every row once, no gap/dup
+    // the import marker tag round-trips insert→list
+    expect(p1.results[0]!.tags).toContain(`${IMPORT_TAG_PREFIX}mem-01`);
+  });
+
+  it('updateMemory replaces content + scope tag + re-embeds, preserving marker + derivedFrom', async () => {
+    await ensureCompressionColumns(client);
+    await insertMemory(
+      client,
+      memRow('mem-u', {
+        tags: ['scope:user', `${IMPORT_TAG_PREFIX}note`],
+        derivedFrom: ['mem-x'],
+        content: 'old content',
+      }),
+    );
+    let embedCalls = 0;
+    const embed = (_t: string): Promise<number[] | null> => {
+      embedCalls += 1;
+      return Promise.resolve([0.5]);
+    };
+    await updateMemory(client, embed, {
+      id: 'mem-u',
+      content: 'new folded content',
+      scope: 'team',
+    });
+    const got = await getMemoryById(client, 'mem-u');
+    expect(got?.content).toBe('new folded content');
+    expect(got?.tags).toContain('scope:team'); // scope replaced
+    expect(got?.tags).not.toContain('scope:user');
+    expect(got?.tags).toContain(`${IMPORT_TAG_PREFIX}note`); // marker preserved
+    expect(got?.derivedFrom).toEqual(['mem-x']); // derived_from preserved
+    expect(embedCalls).toBe(1); // re-embedded
+  });
+
+  it('updateMemory throws for a missing id', async () => {
+    await ensureCompressionColumns(client);
+    await expect(
+      updateMemory(client, () => Promise.resolve(null), { id: 'ghost', content: 'x' }),
+    ).rejects.toThrow(/not found/);
   });
 });

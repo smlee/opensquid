@@ -94,3 +94,46 @@ export async function insertMemory(client: Client, m: MemoryRow): Promise<void> 
     args: [m.id, m.content, tagsJson, m.source],
   });
 }
+
+/** The auto-memory import marker, as a tag (libSQL has no `origin` column): `origin:import:<name>`. */
+export const IMPORT_TAG_PREFIX = 'origin:import:';
+
+export interface ListMemoriesResult {
+  results: MemoryRow[];
+  returned: number;
+  total: number;
+}
+
+/** Paged list of memory rows in a deterministic order, each carrying its tags (the import marker). */
+export async function listMemories(
+  client: Client,
+  opts: { limit: number; offset: number },
+): Promise<ListMemoriesResult> {
+  const totalRs = await client.execute(`SELECT COUNT(*) AS n FROM lessons`);
+  const total = num(totalRs.rows[0]?.n);
+  const rs = await client.execute({
+    sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons
+          FROM lessons ORDER BY created_at, id LIMIT ? OFFSET ?`,
+    args: [opts.limit, opts.offset],
+  });
+  const results = rs.rows.map((r) => rowToMemory(r as unknown as Record<string, unknown>));
+  return { results, returned: results.length, total };
+}
+
+/**
+ * Update a memory's content (the folded `description\n\nbody`) + its `scope:` tag, re-embedding via
+ * `embed`. Preserves every OTHER tag (incl. the `origin:import:` marker) + derived_from/counters by
+ * loading the row and reusing the file-first `insertMemory` upsert. Throws if the id is absent.
+ */
+export async function updateMemory(
+  client: Client,
+  embed: (text: string) => Promise<number[] | null>,
+  opts: { id: string; content: string; scope?: string },
+): Promise<void> {
+  const row = await getMemoryById(client, opts.id);
+  if (row === null) throw new Error(`updateMemory: ${opts.id} not found`);
+  const tags = row.tags.filter((t) => !t.startsWith('scope:')); // replace, don't append
+  if (opts.scope !== undefined) tags.push(`scope:${opts.scope}`);
+  const embedding = await embed(opts.content);
+  await insertMemory(client, { ...row, content: opts.content, tags, embedding });
+}
