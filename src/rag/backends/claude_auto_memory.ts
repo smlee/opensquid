@@ -30,11 +30,13 @@
  * Imported by: src/rag/backend_factory.ts.
  */
 
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 
-import type { Lesson, RagBackend, RecallHit } from '../types.js';
+import { UserAuthoredImmunityError } from '../types.js';
+
+import type { DeleteResult, Lesson, RagBackend, RecallHit } from '../types.js';
 
 /**
  * Resolve the Claude Code auto-memory dir for the current project.
@@ -139,6 +141,20 @@ export function claudeAutoMemoryBackend(): RagBackend {
         lesson.content,
       ].join('\n');
       await writeFile(target, frontmatter, 'utf8');
+    },
+
+    async deleteLesson(id: string, delOpts?: { force?: boolean }): Promise<DeleteResult> {
+      const target = join(dir, `${id}.md`);
+      assertInDir(target, dir); // reject a lesson.id escaping the resolved memory dir
+      const exists = await readFile(target, 'utf8').then(
+        () => true,
+        () => false,
+      );
+      if (!exists) return { deleted: false, forced: false };
+      // Claude auto-memories are user-authored → eviction-immune; explicit force required.
+      if (!(delOpts?.force ?? false)) throw new UserAuthoredImmunityError(id);
+      await rm(target, { force: true });
+      return { deleted: true, forced: true };
     },
   };
 }

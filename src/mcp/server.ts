@@ -46,8 +46,12 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 import { EngineClient } from '../engine/client.js';
+import { createBackend } from '../rag/backend_factory.js';
+import { resolveBackendConfig } from '../rag/config.js';
 import { OPENSQUID_HOME } from '../runtime/paths.js';
 import { workGraphStore } from '../workgraph/store.js';
+
+import type { RagBackend } from '../rag/types.js';
 
 import { handleForget, ForgetSchema, type ForgetArgs } from './tools/forget.js';
 import { handleInspectSkill } from './tools/inspect-skill.js';
@@ -92,6 +96,18 @@ let engineClient: EngineClient | null = null;
 function getEngine(): EngineClient {
   engineClient ??= new EngineClient();
   return engineClient;
+}
+
+/**
+ * Build + init the configured RAG backend for a memory write/delete (retire-Rust write-path
+ * cutover). Mirrors recall.ts's seam: engine-present users hit the engine, no-engine users hit
+ * libSQL, via resolveBackendConfig. Per-call (cheap — the engine connection is the T.4 singleton;
+ * libSQL opens a local handle).
+ */
+async function ragBackend(): Promise<RagBackend> {
+  const backend = createBackend(await resolveBackendConfig());
+  await backend.init();
+  return backend;
 }
 
 /**
@@ -150,8 +166,8 @@ const ToolHandlers = {
   },
   memorize: {
     schema: MemorizeSchema,
-    handle: (args: MemorizeArgs) =>
-      handleMemorize(args, getEngine()).then((r) => JSON.stringify(r)),
+    handle: async (args: MemorizeArgs) =>
+      JSON.stringify(await handleMemorize(args, await ragBackend())),
   },
   store_lesson: {
     schema: StoreLessonSchema,
@@ -160,7 +176,8 @@ const ToolHandlers = {
   },
   forget: {
     schema: ForgetSchema,
-    handle: (args: ForgetArgs) => handleForget(args, getEngine()).then((r) => JSON.stringify(r)),
+    handle: async (args: ForgetArgs) =>
+      JSON.stringify(await handleForget(args, await ragBackend())),
   },
   log_phase: {
     schema: LogPhaseSchema,

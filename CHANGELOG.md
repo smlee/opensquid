@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.354] - 2026-06-08
+
+### Changed — memory WRITE path cut over to libSQL (retire-Rust; T-RETIRE-RUST-CUTOVER)
+
+`memorize` + `forget` MCP tools now route through the configured `RagBackend` (the same
+`createBackend(resolveBackendConfig())` seam `recall` uses) instead of the engine directly — so
+no-engine users read **and write** memories on libSQL, and engine-present users are unchanged
+(`loop_engine` delegates). Added `RagBackend.deleteLesson(id, {force})` across every backend
+(libsql/lexical/qwen3/loop-engine/claude-auto-memory): explicit-only deletion, user-authored
+lessons require `force` (the no-auto-delete invariant; libSQL removes the DB row + the per-file
+source so a rebuild won't resurrect it). The not-found contract is path-uniform — `{deleted:false}`
+→ `MemoryNotFoundError` on both the libSQL (absent row) and engine (`memoryGet` NOT_FOUND) paths.
+`memorize` now persists a `Lesson` (content-hash id **of the pre-trailer body** so re-memorizing the
+same content is idempotent; `libsql_store.storeLesson` upserts by id so the stable id replaces
+rather than PK-conflicts; `scope`/`origin` as FTS tags; `authored_by`→`Lesson.author` so `user`
+stays eviction-immune); the CTX.0 verify-probe gate stays schema-side. Fixed `loop_engine.storeLesson`
+to forward `authored_by` (it was silently dropping eviction immunity). Earlier this run the migration
+ran on real data: 162 memories → libSQL, recall verified on fastembed.
+
 ## [0.5.353] - 2026-06-08
 
 ### Fixed — coding-flow audits degrade gracefully on subagent-spawn failure (F0c; T-FLOW-AUDIT-DEGRADE)

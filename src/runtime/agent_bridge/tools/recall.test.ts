@@ -28,6 +28,7 @@ function makeBackend(impl: Partial<RagBackend> = {}): RagBackend {
     embed: () => Promise.resolve(null),
     recall: () => Promise.resolve([]),
     storeLesson: () => Promise.resolve(),
+    deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
     ...impl,
   };
 }

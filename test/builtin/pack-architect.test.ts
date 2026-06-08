@@ -109,6 +109,7 @@ describe('builtin pack-architect pack (T-MULTIMODE MM.4)', () => {
         embed: () => Promise.resolve(null),
         recall: () => Promise.resolve([]),
         storeLesson: () => Promise.resolve(),
+        deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
       },
     });
     const issues = validatePackFunctions(pack, registry);

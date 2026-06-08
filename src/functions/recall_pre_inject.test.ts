@@ -57,6 +57,7 @@ function makeBackend(recallFn: RagBackend['recall']): RagBackend {
     embed: () => Promise.resolve(null),
     recall: recallFn,
     storeLesson: () => Promise.resolve(),
+    deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
   };
 }
 

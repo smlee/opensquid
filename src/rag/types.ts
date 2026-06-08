@@ -30,9 +30,31 @@ export interface RecallHit {
   source: 'semantic' | 'lexical' | 'fused';
 }
 
+/** Result of `deleteLesson`. `deleted:false` = id not found (caller maps to INVALID_PARAMS). */
+export interface DeleteResult {
+  deleted: boolean;
+  forced: boolean;
+}
+
+/**
+ * Thrown by `deleteLesson` when the target is a `user`-authored lesson and `force` was not set.
+ * Defined here (not in mcp/tools) so every backend can throw it without depending on the MCP layer
+ * (`forget.ts` re-exports it for back-compat with existing imports). Mirrors the engine's
+ * USER_MEMORY_IMMUNE (-32003) — explicit user deletion is allowed (with force); automatic eviction
+ * of user memories is forbidden (the no-auto-delete invariant).
+ */
+export class UserAuthoredImmunityError extends Error {
+  constructor(public readonly id: string) {
+    super(`Memory ${id} is user-authored and eviction-immune. Pass force: true to delete.`);
+    this.name = 'UserAuthoredImmunityError';
+  }
+}
+
 export interface RagBackend {
   init(): Promise<void>;
   embed(text: string): Promise<number[] | null>; // null = embedder unavailable
   recall(query: string, k: number): Promise<RecallHit[]>;
   storeLesson(lesson: Lesson): Promise<void>;
+  // Explicit-only deletion (the no-auto-delete invariant): user-authored lessons require force.
+  deleteLesson(id: string, opts?: { force?: boolean }): Promise<DeleteResult>;
 }

@@ -15,10 +15,12 @@ import { type Client, type Row, createClient } from '@libsql/client';
 
 import { rrfFuse } from '../rrf.js';
 
-import { readRecords, writeRecord } from './perfile_source.js';
+import { deleteRecord, readRecords, writeRecord } from './perfile_source.js';
+
+import { UserAuthoredImmunityError } from '../types.js';
 
 import type { Embedder } from '../embedders/types.js';
-import type { Lesson, RagBackend, RecallHit } from '../types.js';
+import type { DeleteResult, Lesson, RagBackend, RecallHit } from '../types.js';
 
 export interface LibsqlStoreOpts {
   dbUrl: string;
@@ -118,6 +120,13 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       if (opts.sourceDir !== undefined) await writeRecord(opts.sourceDir, lesson);
       const vec = await embedder.embed(lesson.content);
       const tagsJson = JSON.stringify(lesson.tags);
+      // Idempotent upsert by id: re-storing a lesson with the same id (e.g. a
+      // re-memorize of the same body — id is the content-hash) REPLACES the prior
+      // row instead of raising a PRIMARY KEY conflict. Delete-then-insert covers
+      // both the main table and the contentless FTS index (FTS5 has no PK for
+      // INSERT OR REPLACE to key on), keeping the two in lockstep.
+      await client.execute({ sql: `DELETE FROM lessons WHERE id = ?`, args: [lesson.id] });
+      await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [lesson.id] });
       await client.execute({
         sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, embedding)
               VALUES (?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
@@ -137,6 +146,23 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
         sql: `INSERT INTO lessons_fts (id, content, tags, source) VALUES (?, ?, ?, ?)`,
         args: [lesson.id, lesson.content, tagsJson, lesson.source],
       });
+    },
+
+    async deleteLesson(id: string, delOpts?: { force?: boolean }): Promise<DeleteResult> {
+      if (!client) throw new Error('libsql-store: not initialized');
+      const found = await client.execute({
+        sql: `SELECT author FROM lessons WHERE id = ?`,
+        args: [id],
+      });
+      if (found.rows.length === 0) return { deleted: false, forced: false };
+      const isUser = found.rows[0]?.author === 'user';
+      const force = delOpts?.force ?? false;
+      if (isUser && !force) throw new UserAuthoredImmunityError(id);
+      await client.execute({ sql: `DELETE FROM lessons WHERE id = ?`, args: [id] });
+      await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [id] });
+      // Remove the per-file source too, else a later rebuild would resurrect the row.
+      if (opts.sourceDir !== undefined) await deleteRecord(opts.sourceDir, id);
+      return { deleted: true, forced: isUser && force };
     },
   };
 }

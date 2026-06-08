@@ -38,6 +38,7 @@ function stubBackend(): RagBackend {
     embed: () => Promise.resolve(null),
     recall: () => Promise.resolve([]),
     storeLesson: () => Promise.resolve(),
+    deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
   };
 }
 
@@ -69,6 +70,7 @@ describe('buildRegistry — T.3 RAG wiring', () => {
       embed: () => Promise.resolve(null),
       recall: () => Promise.resolve([]),
       storeLesson: () => Promise.resolve(),
+      deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
     };
     await buildRegistry({ backend, engineClient: null });
     expect(initCalled).toBe(true);

@@ -26,12 +26,14 @@ function mkBackend(hits: RecallHit[]): {
   embed: () => Promise<number[] | null>;
   recall: () => Promise<RecallHit[]>;
   storeLesson: () => Promise<void>;
+  deleteLesson: () => Promise<{ deleted: boolean; forced: boolean }>;
 } {
   return {
     init: () => Promise.resolve(),
     embed: () => Promise.resolve(null),
     recall: () => Promise.resolve(hits),
     storeLesson: () => Promise.resolve(),
+    deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
   };
 }
 

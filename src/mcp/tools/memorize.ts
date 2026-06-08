@@ -42,10 +42,11 @@
  * Imported by: mcp/server.ts (handler map).
  */
 
+import { createHash } from 'node:crypto';
+
 import { z } from 'zod';
 
-import type { EngineClient } from '../../engine/client.js';
-import type { CreateMemoryResult, MemoryOrigin, MemoryScope } from '../../engine/types.js';
+import type { Lesson, RagBackend } from '../../rag/types.js';
 
 export const MemorizeSchema = z.object({
   description: z
@@ -92,13 +93,29 @@ export interface MemorizeOutput {
 }
 
 /**
- * Map the flat user-facing scope enum to the engine's `MemoryScope` shape.
- * Engine resolves per-scope identifiers (project/team name) from the active
- * LOOP_HOME / session context when we hand it a bare object form.
+ * Map the verified memorize args to a `Lesson` for the configured backend (retire-Rust write-path
+ * cutover). The memory now lives as a `Lesson`: `scope`/`origin_label` ride as FTS-discoverable
+ * tags (recall is tag/content-based); `authored_by` collapses to `Lesson.author` (`'user'` ⇒
+ * eviction-immune). The id is a deterministic content-hash so re-memorizing the same body is
+ * idempotent (mirrors the migration). The verify-probe trailer rides in the persisted content.
  */
-function toEngineScope(scope: MemorizeArgs['scope']): MemoryScope {
-  if (scope === 'user' || scope === 'global') return scope;
-  return scope === 'project' ? { project: '' } : { team: '' };
+function lessonFromMemorize(args: MemorizeArgs): Lesson {
+  // The id identifies the MEMORY BODY (`args.content`), NOT the write event — so
+  // re-memorizing the same body is idempotent (the backend upserts by id). Hash
+  // the pre-trailer body: the verify-trailer embeds a wall-clock timestamp
+  // (withVerificationTrailer), so hashing the trailered content would make the id
+  // vary every call — defeating idempotency. The trailer still rides in the
+  // stored `content` for accountability; it just doesn't drive identity.
+  const id = `mem-${createHash('sha256').update(args.content).digest('hex').slice(0, 16)}`;
+  const content = withVerificationTrailer(args.content, args.confirmed_quote);
+  return {
+    id,
+    content,
+    tags: [`scope:${args.scope}`, `origin:${args.origin_label}`],
+    source: 'memory',
+    author: args.authored_by === 'user' ? 'user' : 'agent',
+    createdAt: new Date().toISOString(),
+  };
 }
 
 /**
@@ -117,20 +134,14 @@ function withVerificationTrailer(content: string, confirmedQuote: string): strin
 
 export async function handleMemorize(
   args: MemorizeArgs,
-  engine: EngineClient,
+  backend: RagBackend,
 ): Promise<MemorizeOutput> {
-  const origin: MemoryOrigin = { host: `opensquid-mcp:${args.origin_label}` };
-  const result: CreateMemoryResult = await engine.memoryCreate({
-    description: args.description,
-    content: withVerificationTrailer(args.content, args.confirmed_quote),
-    authored_by: args.authored_by,
-    scope: toEngineScope(args.scope),
-    origin,
-  });
+  const lesson = lessonFromMemorize(args);
+  await backend.storeLesson(lesson);
   return {
-    id: result.id,
+    id: lesson.id,
     authored_by: args.authored_by,
     scope: args.scope,
-    created_at: result.created_at,
+    created_at: lesson.createdAt,
   };
 }

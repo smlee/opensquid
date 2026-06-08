@@ -44,10 +44,12 @@
  * Imported by: src/rag/backend_factory.ts.
  */
 
-import { EngineClient } from '../../engine/client.js';
+import { ENGINE_ERROR, EngineClient, RpcError } from '../../engine/client.js';
 import { ollamaEmbed } from '../ollama_client.js';
 
-import type { Lesson, RagBackend, RecallHit } from '../types.js';
+import { UserAuthoredImmunityError } from '../types.js';
+
+import type { DeleteResult, Lesson, RagBackend, RecallHit } from '../types.js';
 
 export interface LoopEngineBackendOpts {
   /** Injected client for tests; production uses the singleton-backed default. */
@@ -112,7 +114,34 @@ export function loopEngineBackend(opts: LoopEngineBackendOpts = {}): RagBackend 
       await client.memoryCreate({
         description,
         content: lesson.content,
+        // Preserve eviction immunity across the write-path cutover: a `user`-authored memory must
+        // round-trip `authored_by` so the engine keeps it eviction-immune (else memorize→storeLesson
+        // would silently strip immunity). The string collapses to Lesson.author ('user'|'agent').
+        authored_by: lesson.author,
       });
+    },
+
+    async deleteLesson(id: string, delOpts?: { force?: boolean }): Promise<DeleteResult> {
+      try {
+        await client.memoryGet({ id }); // existence pre-check (NOT_FOUND → not-found result)
+      } catch (e) {
+        if (e instanceof RpcError && e.code === ENGINE_ERROR.NOT_FOUND) {
+          return { deleted: false, forced: false };
+        }
+        throw e;
+      }
+      try {
+        const result = await client.memoryDelete({
+          id,
+          ...(delOpts?.force === undefined ? {} : { force: delOpts.force }),
+        });
+        return { deleted: true, forced: result.forced };
+      } catch (e) {
+        if (e instanceof RpcError && e.code === ENGINE_ERROR.USER_MEMORY_IMMUNE) {
+          throw new UserAuthoredImmunityError(id);
+        }
+        throw e;
+      }
     },
   };
 }

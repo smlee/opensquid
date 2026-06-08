@@ -36,6 +36,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EngineClient } from '../../src/engine/client.js';
 import { handleForget } from '../../src/mcp/tools/forget.js';
 import { handleMemorize } from '../../src/mcp/tools/memorize.js';
+import { loopEngineBackend } from '../../src/rag/backends/loop_engine.js';
 import { handleStoreLesson } from '../../src/mcp/tools/store-lesson.js';
 import {
   fetchExistingImportIndex,
@@ -223,7 +224,7 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
           verified: true,
           confirmed_quote: 'e2e fixture: synthetic verbatim user confirmation',
         },
-        engineClient,
+        loopEngineBackend({ client: engineClient }),
       );
       expect(mem.id).toMatch(/.+/);
       const lesson = await handleStoreLesson(
@@ -237,7 +238,10 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
       );
       expect(lesson.id).toMatch(/.+/);
       expect(lesson.status).toBe('pending');
-      const del = await handleForget({ id: mem.id, force: true }, engineClient);
+      const del = await handleForget(
+        { id: mem.id, force: true },
+        loopEngineBackend({ client: engineClient }),
+      );
       expect(del.deleted).toBe(true);
       expect(del.forced).toBe(true);
     });
@@ -261,7 +265,7 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
           verified: true,
           confirmed_quote: 'e2e fixture: synthetic verbatim user confirmation',
         },
-        engineClient,
+        loopEngineBackend({ client: engineClient }),
       );
       // Poll memory.search ~3s — semantic-index writes are async vs the
       // create RPC ack. Beyond that, embedder/RAG backend isn't viable.

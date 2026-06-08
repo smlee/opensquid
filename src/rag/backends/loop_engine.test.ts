@@ -193,6 +193,7 @@ describe('loopEngineBackend', () => {
     expect(createSpy).toHaveBeenCalledWith({
       description: 'short note',
       content: 'short note',
+      authored_by: 'agent',
     });
   });
 
@@ -202,6 +203,7 @@ describe('loopEngineBackend', () => {
     expect(createSpy).toHaveBeenCalledWith({
       description: 'Long sentence here',
       content: 'Long sentence here. More text after.',
+      authored_by: 'agent',
     });
   });
 
@@ -220,6 +222,7 @@ describe('loopEngineBackend', () => {
     expect(createSpy).toHaveBeenCalledWith({
       description: 'untitled memory',
       content: '',
+      authored_by: 'agent',
     });
   });
 

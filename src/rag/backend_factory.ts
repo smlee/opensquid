@@ -175,5 +175,8 @@ export function libsqlQwen3WithLexicalFallback(opts: QwenWithFallbackOpts): RagB
     async storeLesson(l) {
       return active.storeLesson(l);
     },
+    async deleteLesson(id, opts) {
+      return active.deleteLesson(id, opts);
+    },
   };
 }

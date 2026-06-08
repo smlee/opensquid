@@ -13,7 +13,7 @@
  * Imports from: node:fs/promises, node:path, yaml, ../types.js.
  * Imported by: src/rag/backends/libsql_store.ts.
  */
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -35,6 +35,11 @@ export async function writeRecord(dir: string, lesson: Lesson): Promise<void> {
     join(dir, `${safeRecordId(lesson.id)}.md`),
     `---\n${frontmatter}---\n${lesson.content}`,
   );
+}
+
+/** Remove `<dir>/<id>.md` (explicit deletion). Idempotent — a missing file is not an error. */
+export async function deleteRecord(dir: string, id: string): Promise<void> {
+  await rm(join(dir, `${safeRecordId(id)}.md`), { force: true });
 }
 
 /** Read every `<dir>/*.md` record back into `Lesson[]`. Missing dir → `[]`. */

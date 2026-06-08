@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { libsqlStoreBackend, rebuildLibsqlIndex } from './libsql_store.js';
 import { readRecords, writeRecord } from './perfile_source.js';
 
+import { UserAuthoredImmunityError } from '../types.js';
+
 import type { Embedder } from '../embedders/types.js';
 import type { Lesson } from '../types.js';
 
@@ -93,5 +95,54 @@ describe('libsql store: per-file source + rebuild', () => {
     await backend.init();
     const hits = await backend.recall('needle', 5);
     expect(hits.some((h) => h.lesson.id === 'r1')).toBe(true);
+  });
+});
+
+describe('libsql store: deleteLesson (explicit-only, user-immune)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'pfs-del-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const mk = () =>
+    libsqlStoreBackend({
+      dbUrl: `file:${join(dir, 'd.db')}`,
+      embedder: fakeEmbedder,
+      sourceDir: dir,
+    });
+
+  it('deletes an agent lesson (no force) — DB row + per-file both gone', async () => {
+    const backend = mk();
+    await backend.init();
+    await backend.storeLesson(lesson({ id: 'a1', author: 'agent', content: 'needle one' }));
+    expect(await backend.deleteLesson('a1')).toEqual({ deleted: true, forced: false });
+    expect((await backend.recall('needle', 5)).some((h) => h.lesson.id === 'a1')).toBe(false);
+    expect((await readRecords(dir)).some((l) => l.id === 'a1')).toBe(false);
+  });
+
+  it('a user-authored lesson is immune without force (and survives)', async () => {
+    const backend = mk();
+    await backend.init();
+    await backend.storeLesson(lesson({ id: 'u1', author: 'user' }));
+    await expect(backend.deleteLesson('u1')).rejects.toBeInstanceOf(UserAuthoredImmunityError);
+    expect((await readRecords(dir)).some((l) => l.id === 'u1')).toBe(true);
+  });
+
+  it('force deletes a user-authored lesson (forced:true)', async () => {
+    const backend = mk();
+    await backend.init();
+    await backend.storeLesson(lesson({ id: 'u2', author: 'user' }));
+    expect(await backend.deleteLesson('u2', { force: true })).toEqual({
+      deleted: true,
+      forced: true,
+    });
+  });
+
+  it('a not-found id → { deleted: false }', async () => {
+    const backend = mk();
+    await backend.init();
+    expect(await backend.deleteLesson('nope')).toEqual({ deleted: false, forced: false });
   });
 });

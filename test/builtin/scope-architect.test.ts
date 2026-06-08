@@ -61,6 +61,7 @@ describe('builtin scope-architect pack', () => {
         embed: () => Promise.resolve(null),
         recall: () => Promise.resolve([]),
         storeLesson: () => Promise.resolve(),
+        deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
       },
     });
     const issues = validatePackFunctions(pack, registry);

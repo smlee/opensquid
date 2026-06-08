@@ -28,7 +28,9 @@
 
 import { type Client, type Row, createClient } from '@libsql/client';
 
-import type { Lesson, RagBackend } from '../types.js';
+import { UserAuthoredImmunityError } from '../types.js';
+
+import type { DeleteResult, Lesson, RagBackend } from '../types.js';
 
 export interface LibsqlLexicalOpts {
   dbUrl: string;
@@ -101,6 +103,21 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
         sql: `INSERT INTO lessons_fts (id, content, tags, source) VALUES (?, ?, ?, ?)`,
         args: [lesson.id, lesson.content, tagsJson, lesson.source],
       });
+    },
+
+    async deleteLesson(id: string, delOpts?: { force?: boolean }): Promise<DeleteResult> {
+      if (!client) throw new Error('libsql-lexical: not initialized');
+      const found = await client.execute({
+        sql: `SELECT author FROM lessons WHERE id = ?`,
+        args: [id],
+      });
+      if (found.rows.length === 0) return { deleted: false, forced: false };
+      const isUser = found.rows[0]?.author === 'user';
+      const force = delOpts?.force ?? false;
+      if (isUser && !force) throw new UserAuthoredImmunityError(id);
+      await client.execute({ sql: `DELETE FROM lessons WHERE id = ?`, args: [id] });
+      await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [id] });
+      return { deleted: true, forced: isUser && force };
     },
   };
 }
