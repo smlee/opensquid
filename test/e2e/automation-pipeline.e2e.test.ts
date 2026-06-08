@@ -32,6 +32,7 @@ import { EngineClient } from '../../src/engine/client.js';
 import type { Event } from '../../src/runtime/event.js';
 import { evaluateProcess } from '../../src/runtime/evaluator.js';
 import { recordCurrentSession } from '../../src/runtime/hooks/session_id.js';
+import { readPhaseLedger } from '../../src/runtime/phase_ledger.js';
 import { writeActiveTask } from '../../src/runtime/session_state.js';
 import { REQUIRED_PHASES } from '../../src/runtime/workflow_phases.js';
 import type { ProcessStep } from '../../src/runtime/types.js';
@@ -131,16 +132,16 @@ describe.skipIf(SKIP)('AP.6 — automation pipeline e2e (real engine)', () => {
 
     // 6 of 7 → gate BLOCKS.
     for (const phase of REQUIRED_PHASES.slice(0, 6)) {
-      await handleLogPhase({ phase }, engine);
+      await handleLogPhase({ phase });
     }
     expect(await gateVerdict()).toBe('verdict'); // blocked
 
     // the 7th → gate PASSES.
-    await handleLogPhase({ phase: 'fix' }, engine);
+    await handleLogPhase({ phase: 'fix' });
     expect(await gateVerdict()).toBe('no_verdict'); // passes
 
-    // and the engine ledger really holds all 7 (read back, MAU.1 bar).
-    const ledger = await engine.taskGetLedger({ task_id: 'ap6-task' });
+    // and the durable phase ledger really holds all 7 (read back, MAU.1 bar).
+    const ledger = await readPhaseLedger('ap6-task');
     expect(ledger.phases_logged.sort()).toEqual([...REQUIRED_PHASES].sort());
   });
 

@@ -2,7 +2,9 @@
  * `log_phase` MCP tool — the agent-facing writer the G-track severed (AP.3).
  *
  * Given a phase name, it writes BOTH halves the gate depends on:
- *   (a) the engine ledger (durable, append-only) via `task.log_phase`, and
+ *   (a) the durable phase ledger — TS-owned filesystem YAML via
+ *       `runtime/phase_ledger.ts` (retire-Rust: replaced `engine.task.log_phase`
+ *       with the same `~/.opensquid/phase_ledger/<task>/<phase>.yaml`), and
  *   (b) the session phase-state the workflow gate (AP.4) reads.
  *
  * Phases CANNOT be mirrored from any store (no store records "which phase the
@@ -16,24 +18,23 @@
  * then `active-task.json` for the task to log against. No active task → loud
  * error (you cannot log a phase with no task — ties to rule #1).
  *
- * No agent-loop logic: opensquid persists what the agent declares + bridges to
- * the engine. Engine type imported directly so an RPC shape change fails
- * typecheck here.
+ * No agent-loop logic: opensquid persists what the agent declares. No engine
+ * dependency — the durable ledger is TS-owned filesystem YAML.
  *
- * Imports from: zod, ../../engine/client.js, ../../runtime/*.
+ * Imports from: zod, ../../runtime/*.
  * Imported by: mcp/server.ts (handler map).
  */
 
 import { z } from 'zod';
 
-import type { EngineClient } from '../../engine/client.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
+import { writePhaseLedger } from '../../runtime/phase_ledger.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { REQUIRED_PHASES, appendPhase, isComplete } from '../../runtime/workflow_phases.js';
 
 export const LogPhaseSchema = z.object({
   phase: z.enum(REQUIRED_PHASES).describe('One of the 7 workflow phases'),
-  note: z.string().optional().describe('Optional free-text note recorded in the engine ledger'),
+  note: z.string().optional().describe('Optional free-text note recorded in the phase ledger'),
 });
 
 export type LogPhaseArgs = z.infer<typeof LogPhaseSchema>;
@@ -48,10 +49,7 @@ export interface LogPhaseOutput {
   complete: boolean;
 }
 
-export async function handleLogPhase(
-  args: LogPhaseArgs,
-  engine: EngineClient,
-): Promise<LogPhaseOutput> {
+export async function handleLogPhase(args: LogPhaseArgs): Promise<LogPhaseOutput> {
   // T-MULTISESSION MS.1 — env-first session resolution (race-free across
   // concurrent Claude Code sessions). Falls back to .current-session when
   // env is absent.
@@ -68,12 +66,9 @@ export async function handleLogPhase(
       'log_phase: no active task (active-task.json absent). Create a task and set it in_progress first (rule #1).',
     );
   }
-  // (a) durable engine ledger
-  await engine.taskLogPhase({
-    task_id: active.id,
-    phase: args.phase,
-    ...(args.note !== undefined ? { note: args.note } : {}),
-  });
+  // (a) durable phase ledger — TS-owned filesystem YAML (retire-Rust: was
+  // engine.taskLogPhase; same `~/.opensquid/phase_ledger/<task>/<phase>.yaml`).
+  await writePhaseLedger(active.id, args.phase, args.note);
   // (b) gate-readable session state
   const state = await appendPhase(sessionId, active.id, args.phase);
   const complete = isComplete(state, active.id);

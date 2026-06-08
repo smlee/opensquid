@@ -181,8 +181,7 @@ const ToolHandlers = {
   },
   log_phase: {
     schema: LogPhaseSchema,
-    handle: (args: LogPhaseArgs) =>
-      handleLogPhase(args, getEngine()).then((r) => JSON.stringify(r)),
+    handle: (args: LogPhaseArgs) => handleLogPhase(args).then((r) => JSON.stringify(r)),
   },
   workgraph_create_issue: {
     schema: WgCreateSchema,

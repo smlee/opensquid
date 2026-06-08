@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.355] - 2026-06-08
+
+### Changed — durable phase ledger ported off the Rust engine (retire-Rust; T-LOGPHASE-LEDGER-TS)
+
+`log_phase` was the last memory/task write tool still calling the Rust engine (`engine.taskLogPhase`).
+New `src/runtime/phase_ledger.ts` owns the durable per-task phase ledger in TS, writing the SAME
+filesystem YAML the engine wrote — `~/.opensquid/phase_ledger/<task>/<phase>.yaml` with
+`phase`/`logged_at`/`note`, one file per phase, atomic (tmp+rename) — so existing on-disk ledgers
+stay valid. Per the locked 2026-05-17 decision the phase ledger stays filesystem YAML, NOT libSQL.
+`handleLogPhase` drops its `EngineClient` parameter; `server.ts` no longer threads `getEngine()` into
+it. The gate-readable session-state ledger and the commit gate are unchanged. The read-back test is
+now a plain filesystem round-trip via `readPhaseLedger` (no engine). `store_lesson` was already
+engine-free (a buffer append), so this leaves the default-flip + engine removal as the remaining
+retire-Rust slices.
+
 ## [0.5.354] - 2026-06-08
 
 ### Changed — memory WRITE path cut over to libSQL (retire-Rust; T-RETIRE-RUST-CUTOVER)
