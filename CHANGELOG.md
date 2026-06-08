@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.358] - 2026-06-08
+
+### Added — wedge lesson lifecycle store on libSQL (retire-Rust RES-3b; wedge-gate port, sub-slice b)
+
+`src/rag/wedge/store.ts` + `src/rag/wedge/source.ts` — the TS/libSQL replacement for the engine's
+`lesson.*` RPC. A dedicated `wg_lessons` table + FTS + a status-dir per-file source
+(`~/.opensquid/lessons/<status>/les-*.md`, the engine's layout, so RES-3d is a re-index) hold the
+lesson lifecycle. `createLesson`/`promoteLesson`/`recallLesson`/`captureFeedback`/`recordApplied`;
+`promoteLesson` runs the RES-3a gate and throws `PromotionBlockedError{reasons}` on a block (RES-3c
+maps it to `{status:'blocked', reasons}`). **`created_at` is store-owned** (set on insert, never
+caller-supplied — the moat invariant RES-3a handed over; the gate is called with the store clock so
+the 24h floor is backdate-proof). File-first idempotent upsert (delete-then-insert across table +
+FTS), mirroring `libsql_store`. SEPARATE from the memory `lessons` table. Not wired to any consumer
+yet (RES-3c). 7-case test suite incl. the store-owned-created_at inversion + the table-separation
+assertion. (`ftsEscape` exported from `libsql_store` for reuse.)
+
 ## [0.5.357] - 2026-06-08
 
 ### Added — pure TS promotion gate (retire-Rust RES-3a; wedge-gate port, sub-slice a)

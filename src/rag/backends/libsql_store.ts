@@ -193,8 +193,9 @@ export async function rebuildLibsqlIndex(opts: {
 }
 
 // FTS5 escape: tokenize on whitespace, strip non-`[\p{L}\p{N}_]`, OR the survivors. `''` means
-// the caller skips the lexical leg.
-function ftsEscape(query: string): string {
+// the caller skips the lexical leg. Exported so the wedge lesson store (src/rag/wedge) reuses the
+// one FTS-escape rule instead of duplicating it.
+export function ftsEscape(query: string): string {
   const tokens = query
     .split(/\s+/)
     .map((t) => t.replace(/[^\p{L}\p{N}_]/gu, ''))
