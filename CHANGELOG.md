@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.361] - 2026-06-08
+
+### Fixed — native SCOPE re-arm for autonomous back-to-back runs (T-FLOW-AUTONOMOUS-REARM)
+
+The coding-flow FSM's re-arms (`enter-scoping`, `rearm-on-depletion`, `task-start`) all fired on
+`prompt_submit` or an unscoped `TaskUpdate` — neither occurs BETWEEN slices in an autonomous run, so
+after a task reached `phases_complete` nothing re-armed SCOPE and the agent had to hand-drive
+`scope_start` by script. New `rearm-on-pre-research-write` rule (FIRST in `scope-lifecycle`): a
+`*-pre-research-*.md` Write/Edit at `phases_complete`/`idle` fires `scope_start` (+ resets the track
+to the strict default) — the structural start of a new track's SCOPE, on a `tool_call` event that
+DOES occur autonomously. `scope_start` is a no-op from every mid-run state (fsm.yaml), so the rule is
+inert except at the terminal/initial boundary, and the track reset is state-gated so it can't clobber
+an in-flight fix/doc track. Removes the inter-slice `scope_start` scripting. Two tests (pure-FSM
+no-op + dispatcher re-arm → researched).
+
 ## [0.5.360] - 2026-06-08
 
 ### Added — wedge lesson migration into the libSQL index (retire-Rust RES-3d; RES-3 complete)

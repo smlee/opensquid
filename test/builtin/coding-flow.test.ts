@@ -1193,3 +1193,59 @@ describe('builtin coding-flow pack — GF.1 cross-pack profession handoffs (F1 +
     expect(JSON.stringify(r.directives)).toMatch(/scope-architect/);
   });
 });
+
+describe('builtin coding-flow pack — autonomous SCOPE re-arm (T-FLOW-AUTONOMOUS-REARM)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-rearm-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  // NEGATIVE (pure FSM): scope_start is a no-op from a mid-run state, so the re-arm rule can NEVER
+  // reset an in-flight run — it only takes effect at the terminal/initial boundary.
+  it('scope_start is a no-op from a mid-run state but re-arms phases_complete', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    expect(step(pack.fsm!, 'spec_authored', 'scope_start')).toMatchObject({
+      next: 'spec_authored',
+      transitioned: false,
+    });
+    expect(step(pack.fsm!, 'phases_complete', 'scope_start')).toMatchObject({
+      next: 'scoping',
+      transitioned: true,
+    });
+  });
+
+  // POSITIVE (dispatcher): at phases_complete, a pre-research WRITE re-arms natively + advances —
+  // no scripted scope_start, no prompt_submit. This is the autonomous between-slices boundary.
+  it('a pre-research write at phases_complete re-arms → researched', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: GUESS_FREE'); // scope-audit returns GUESS_FREE
+    const sid = `cf-rearm-${Date.now()}`;
+    // Reach the terminal state a finished prior slice leaves (one advance per backbone edge).
+    for (const ev of [
+      'scope_start',
+      'research_done',
+      'spec_drafted',
+      'spec_verified',
+      'tasks_loaded',
+      'phase_started',
+      'phases_done',
+    ]) {
+      await advanceFsmState(sid, 'coding-flow', pack.fsm!, ev, new Date().toISOString());
+    }
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('phases_complete');
+    // Research DEPTH (scope-advance needs >= 3 read-only this turn), then the autonomous boundary.
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    await dispatchEvent(writeResearch, [pack], reg, sid);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('researched');
+  });
+});

@@ -13,6 +13,32 @@ when_to_load: []
 triggers:
   - kind: tool_call
 rules:
+  # ── AUTONOMOUS re-arm (T-FLOW-AUTONOMOUS-REARM). A pre-research WRITE is the structural
+  #    start of a new track's SCOPE. The other re-arms (entry-and-handoffs' enter-scoping /
+  #    rearm-on-depletion, task-start's task_unscoped) fire on prompt_submit / an unscoped
+  #    TaskUpdate — neither occurs BETWEEN slices in an autonomous run, so the FSM stayed
+  #    parked at phases_complete and the agent had to hand-drive scope_start. Re-arm HERE on
+  #    the tool_call. scope_start is a no-op from every mid-run state (fsm.yaml: edges only
+  #    from idle/phases_complete), so this ONLY takes effect at the terminal/initial boundary;
+  #    the track reset is state-gated so it can't clobber an in-flight fix/doc track. Placed
+  #    FIRST so the re-arm lands (advance_fsm persists) before scope-advance fires research_done.
+  - id: rearm-on-pre-research-write
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: read_fsm_state
+        as: st
+      - call: advance_fsm
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && (st == "phases_complete" || st == "idle")'
+        args:
+          event: scope_start
+      - call: write_state
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && (st == "phases_complete" || st == "idle")'
+        args:
+          key: coding-flow-track
+          value: feature
   # ── SCOPE: the GATING advance (AF.1). The content audit + depth + open-question
   #    checks run BEFORE the advance, and research_done is COUPLED to them — no
   #    advisory pass. The advance fires ONLY when SCOPE content is complete:
