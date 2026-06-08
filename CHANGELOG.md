@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.351] - 2026-06-07
+
+### Changed — no-engine fallback backend is now self-contained, no Ollama (T-LIBSQL-DEFAULT; rewrite Phase 1 slice 1f)
+
+When no `loop-engine` binary is present and no backend is pinned, Open Squid now defaults to
+`libsql-fastembed` (in-process bge-small embedder, no daemon) instead of `libsql-qwen3` (which
+needs an Ollama daemon + a pulled model). Recall now works **out-of-box with zero external setup**;
+E2-validated recall parity (slice 1a). `loop-engine` remains the default when its binary is present;
+`libsql-qwen3` stays available via `OPENSQUID_RAG_BACKEND=libsql-qwen3`. Degrades gracefully to
+lexical-only if the model can't load (same path as Ollama-down).
+
 ## [0.5.350] - 2026-06-07
 
 ### Added — work-graph MCP tools: the agent can now USE the work-graph (T-WORKGRAPH-MCP; rewrite Phase 1 slice 1e)
