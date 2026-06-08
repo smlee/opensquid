@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.352] - 2026-06-07
+
+### Added — engine→libSQL memory migration tool (T-MIGRATE-MEMORIES; retire-Rust step 1)
+
+`opensquid migrate-memories` + `migrateMemories()` (`src/rag/migrate_memories.ts`) copy the engine's
+`~/.opensquid/memories/mem-*.md` into the libSQL store via the per-file source + index rebuild —
+ADDITIVE (copies, never deletes the engine files) and idempotent. Each memory keeps its semantic
+payload (description + body) + `scope` (as an FTS-discoverable tag) + `createdAt`; nested `origin`
+provenance stays in the retained source files. libsql-fastembed backend only (the command exits with
+guidance otherwise). First step toward retiring the Rust engine — the store must hold the memories
+before recall can be cut off the engine. NOT run on real data by default: the user invokes the
+command when ready.
+
 ## [0.5.351] - 2026-06-07
 
 ### Changed — no-engine fallback backend is now self-contained, no Ollama (T-LIBSQL-DEFAULT; rewrite Phase 1 slice 1f)

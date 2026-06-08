@@ -15,6 +15,8 @@
  * the CLI invocation forever, which is a foot-gun for first-time users.
  */
 
+import { join } from 'node:path';
+
 import { Command } from 'commander';
 
 import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
@@ -22,8 +24,11 @@ import { registerEngineCli } from './engine/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
 import { registerChatWatch } from './runtime/chat/watch_cli.js';
+import { resolveBackendConfig } from './rag/config.js';
+import { fastembedEmbedder } from './rag/embedders/fastembed.js';
+import { migrateMemories } from './rag/migrate_memories.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
-import { daemonPidPath } from './runtime/paths.js';
+import { daemonPidPath, OPENSQUID_HOME } from './runtime/paths.js';
 import { registerAudit } from './setup/cli/audit.js';
 import { registerAutomation } from './setup/cli/automation.js';
 import { registerCache } from './setup/cli/cache.js';
@@ -271,6 +276,32 @@ function runCli(): void {
   // bulk ingest. Dedupe by frontmatter `name` round-tripped through `origin.host`.
   // All imports tagged `authored_by: 'user'` (eviction-immune).
   registerMemory(program);
+
+  // T-MIGRATE-MEMORIES — `opensquid migrate-memories`. Copies engine mem-*.md into the libSQL
+  // store (additive) so recall can later be cut off the engine (retire-Rust). libsql-fastembed only.
+  program
+    .command('migrate-memories')
+    .description(
+      'Copy engine mem-*.md memories into the libSQL store (additive; libsql-fastembed only).',
+    )
+    .action(async () => {
+      const cfg = await resolveBackendConfig();
+      if (cfg.kind !== 'libsql-fastembed' || cfg.sourceDir === undefined) {
+        process.stderr.write(
+          `migrate-memories requires the libsql-fastembed backend with a per-file source ` +
+            `(got ${cfg.kind}); set OPENSQUID_RAG_BACKEND=libsql-fastembed.\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const { migrated } = await migrateMemories({
+        memDir: join(OPENSQUID_HOME(), 'memories'),
+        sourceDir: cfg.sourceDir,
+        dbUrl: cfg.dbUrl,
+        embedder: fastembedEmbedder(),
+      });
+      process.stdout.write(`migrated ${migrated} memories into ${cfg.sourceDir}\n`);
+    });
 
   program.parseAsync(process.argv).catch((err: unknown) => {
     process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
