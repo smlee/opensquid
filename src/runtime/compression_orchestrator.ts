@@ -20,7 +20,7 @@
  *   D1 (WHEN): only run for a group whose satisfaction probe answered
  *     "satisfied". No satisfied probe → no-op (return []).
  *   WHAT: read the group's CMP.3 candidate windows; call
- *     `engine.memoryConsolidate({ ids })` per window.
+ *     the TS `consolidate(ids)` (RES-4b) per window — engine-free.
  *   SURFACE: report the engine's outcome (deleted / kept_immune /
  *     verified); emit a drift event when `!verified` (the engine kept
  *     `Mc` alongside the predecessors — nothing was lost, but the
@@ -38,7 +38,7 @@
  * Imported by: (a session-boundary / automation-cycle trigger, TBD wiring).
  */
 
-import type { EngineClient } from '../engine/client.js';
+import type { ConsolidateOutcome } from '../rag/memory/consolidate.js';
 
 import { appendSessionDriftEvent } from './drift_catalog.js';
 import { readSatisfaction } from './satisfaction_probe.js';
@@ -85,7 +85,7 @@ export interface CompressionOutcome {
 export async function runCompression(
   sessionId: string,
   group: string,
-  engine: EngineClient,
+  consolidateWindow: (ids: string[]) => Promise<ConsolidateOutcome>,
 ): Promise<CompressionOutcome[]> {
   // D1 — only satisfied groups. No answered "satisfied" probe → no-op.
   const sat = (await readSatisfaction(sessionId)).find((s) => s.group === group);
@@ -106,21 +106,21 @@ export async function runCompression(
     };
 
     try {
-      // The engine atomically: compress → recall-replay verify → gated
-      // delete of non-immune predecessors. It guarantees the D2/D3
-      // safety contract; opensquid issues NO memory.delete here.
-      const res = await engine.memoryConsolidate({ ids });
-      outcome.mcId = res.mc_id;
+      // The TS consolidate (RES-4b) atomically: compress → recall-replay verify
+      // → gated delete of non-immune predecessors. Same D2 contract, engine-free;
+      // opensquid issues NO delete here (consolidate owns it, fail-closed).
+      const res = await consolidateWindow(ids);
+      outcome.mcId = res.mcId;
       outcome.deleted = res.deleted;
-      outcome.keptImmune = res.kept_immune;
+      outcome.keptImmune = res.keptImmune;
 
       if (!res.verified) {
         // Engine kept Mc alongside the predecessors (nothing deleted) —
         // the window wasn't safe to consolidate yet. Surface drift.
         outcome.skipped = true;
         outcome.reason =
-          'engine recall-replay gate did not verify: Mc kept alongside predecessors, nothing deleted';
-        await emitDrift(sessionId, group, w.promotedLessonId, res.mc_id, ids, outcome.reason);
+          'recall-replay gate did not verify: Mc kept alongside predecessors, nothing deleted';
+        await emitDrift(sessionId, group, w.promotedLessonId, res.mcId, ids, outcome.reason);
       }
       outcomes.push(outcome);
     } catch (e) {

@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.364] - 2026-06-08
+
+### Changed — compression cut over to the TS consolidate (retire-Rust RES-4c; RES-4 complete)
+
+`runCompression` (`compression_orchestrator.ts`) + the session-end trigger now call the RES-4b TS
+`consolidate()` instead of `engine.memoryConsolidate` — memory compression is engine-free.
+`runCompression`'s 3rd param is now a `consolidateWindow: (ids) => Promise<ConsolidateOutcome>`
+(the orchestrator stays a thin policy caller: satisfaction-gate + drift-on-unverified, `CompressionOutcome`
+shape preserved). New `src/runtime/wedge/compression_deps.ts` `makeConsolidateRunner()` binds the
+deps to the live stack — the RagBackend (`recall` → hit ids, `deleteLesson(force:true)`, `embed`) + a
+libSQL client for the `src/rag/memory/store.ts` accessors (getMemoryById/insertMemory + the additive
+compression columns) + `resolveStrategy('reasoning')` raw-text summarize; session-end builds the
+runner (dropping `new EngineClient()`) and closes it. This completes RES-4 — memory compression is
+fully on the TS/libSQL stack (compress → consolidate → orchestrator), engine-free.
+
+### Deferred
+
+The `collectCandidates` auto-nomination (RES-3c dropped its `promote_lesson` call) is NOT restored
+here — the wedge lesson (RES-3b) carries no `cited_memory_ids`, so auto-nominating a promoted lesson's
+cited memories for compression is a separate feature, not part of the engine-decoupling cutover.
+(`EngineClient` + the engine remain in the tree for the still-engine memory/auto-memory paths + the
+two engine-bound e2e suites, until RES-5/RES-6.)
+
 ## [0.5.363] - 2026-06-08
 
 ### Added — memory consolidate() port: the D2 verified, immunity-gated, fail-closed compaction (retire-Rust RES-4b)

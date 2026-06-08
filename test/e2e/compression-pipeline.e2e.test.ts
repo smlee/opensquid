@@ -43,8 +43,22 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { EngineClient, RpcError } from '../../src/engine/client.js';
 import { runCompression } from '../../src/runtime/compression_orchestrator.js';
+import type { ConsolidateOutcome } from '../../src/rag/memory/consolidate.js';
 import { emitProbe, recordAnswer } from '../../src/runtime/satisfaction_probe.js';
 import { collectCandidates } from '../../src/runtime/wedge/compress_candidates.js';
+
+// RES-4c: runCompression now takes a `consolidateWindow` fn (not an EngineClient). This engine-bound
+// e2e stays on the engine until RES-6 — adapt the engine's memory.consolidate to the window shape.
+// (The engine mints Mc on every non-throwing outcome, so mc_id is a string here; coerce the Optional.)
+const engineWindow =
+  (e: EngineClient) =>
+  (ids: string[]): Promise<ConsolidateOutcome> =>
+    e.memoryConsolidate({ ids }).then((r) => ({
+      mcId: r.mc_id ?? '',
+      deleted: r.deleted,
+      keptImmune: r.kept_immune,
+      verified: r.verified,
+    }));
 
 const DEV_BINARY = join(
   process.env.HOME ?? '/tmp',
@@ -155,7 +169,7 @@ describe.skipIf(SKIP)('CMP.5 — compression pipeline e2e (real engine)', () => 
     );
     await collectCandidates(SID, { id: 'lesson-rl', citedMemoryIds: [a, b], group: 'CMP' });
 
-    const outcomes = await runCompression(SID, 'CMP', engine);
+    const outcomes = await runCompression(SID, 'CMP', engineWindow(engine));
     // Two windows now (pg + rl); find the one whose predecessors we know.
     const rl = outcomes.find((o) => o.promotedLessonId === 'lesson-rl');
     expect(rl).toBeDefined();
@@ -214,7 +228,7 @@ describe.skipIf(SKIP)('CMP.5 — compression pipeline e2e (real engine)', () => 
       group: 'IMMUNE',
     });
 
-    const outcomes = await runCompression(SID, 'IMMUNE', engine);
+    const outcomes = await runCompression(SID, 'IMMUNE', engineWindow(engine));
     const o = outcomes[0];
     if (o?.mcId == null) return; // LLM offline → skip
     expect(o.keptImmune).toContain(cited);
@@ -268,7 +282,7 @@ describe.skipIf(SKIP)('CMP.5 — compression pipeline e2e (real engine)', () => 
     await recordAnswer(SID, 'UNSAT', false); // answered NOT satisfied
     await collectCandidates(SID, { id: 'l', citedMemoryIds: [m], group: 'UNSAT' });
 
-    const outcomes = await runCompression(SID, 'UNSAT', engine);
+    const outcomes = await runCompression(SID, 'UNSAT', engineWindow(engine));
     expect(outcomes).toEqual([]);
     const stillThere = await engine.memoryGet({ id: m });
     expect(stillThere.id).toBe(m);

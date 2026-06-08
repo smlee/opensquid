@@ -20,7 +20,7 @@
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { clearFsmState } from '../fsm_state.js';
 import { runCompression } from '../compression_orchestrator.js';
-import { EngineClient } from '../../engine/client.js';
+import { makeConsolidateRunner } from '../wedge/compression_deps.js';
 import { emitProbe, groupFromTask } from '../satisfaction_probe.js';
 import { archiveActiveTask, readActiveTask } from '../session_state.js';
 import { Event } from '../types.js';
@@ -96,25 +96,25 @@ async function main(): Promise<void> {
   // T-CTX-LOOP CTX.5 (2026-05-29) — wire the CMP.4 compression orchestrator at
   // the session boundary. The orchestrator is satisfaction-gated (D1: no
   // probe answered "satisfied" → no-op); when satisfied, it reads CMP.3
-  // candidate windows + calls engine.memoryConsolidate which atomically
-  // compresses + recall-replay verifies + force-deletes ONLY non-user-cited
-  // predecessors that the verify gate passes. The engine enforces NEVER-delete
-  // for unverified or user-cited memories — opensquid is pure policy. Fail-open
-  // per the hook contract; a compression failure must not block session-end.
+  // candidate windows + runs the TS consolidate (RES-4c, engine-free) per window:
+  // compress + recall-replay verify + force-delete ONLY non-user-cited predecessors
+  // that the verify gate passes. consolidate NEVER-deletes for unverified or
+  // user-cited memories — opensquid is pure policy. Fail-open per the hook contract;
+  // a compression failure must not block session-end.
   try {
     const active = await readActiveTask(sessionId);
     const group = groupFromTask(active);
     if (group) {
-      const engine = new EngineClient();
+      const runner = await makeConsolidateRunner();
       try {
-        const outcomes = await runCompression(sessionId, group, engine);
+        const outcomes = await runCompression(sessionId, group, runner.run);
         if (outcomes.length > 0) {
           process.stderr.write(
             `opensquid: compression — ${String(outcomes.length)} window(s) for group ${group}\n`,
           );
         }
       } finally {
-        await engine.close().catch(() => undefined);
+        await runner.close();
       }
     }
   } catch (e) {
