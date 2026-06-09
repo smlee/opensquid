@@ -13,9 +13,8 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { EngineClient } from '../../engine/client.js';
-
 import { snapshotAuto, SNAPSHOT_FILE } from './auto_memory_snapshot.js';
+import { folded, type MemoryStore } from './memory_store_handle.js';
 
 let autoDir: string;
 let home: string;
@@ -45,57 +44,30 @@ async function writeMemory(file: string, contents: string): Promise<void> {
   await fs.writeFile(join(autoDir, file), contents, 'utf-8');
 }
 
-function mkEngine(existingNames: string[] = []): {
-  client: EngineClient;
-  memoryCreate: ReturnType<typeof vi.fn>;
-  memoryList: ReturnType<typeof vi.fn>;
-  memoryUpdate: ReturnType<typeof vi.fn>;
+function mkStore(existingNames: string[] = []): {
+  store: MemoryStore;
+  create: ReturnType<typeof vi.fn>;
+  update: ReturnType<typeof vi.fn>;
 } {
-  const memoryCreate = vi.fn().mockResolvedValue({
-    id: 'mem-x',
-    description: 'd',
-    created_at: '2026-05-24T00:00:00Z',
-    scope: 'user',
-  });
-  const results = existingNames.map((name) => ({
-    id: name,
-    description: name,
-    scope: 'user' as const,
-    origin: { host: `opensquid-import:auto-memory:${name}` },
-    created_at: 't',
-    updated_at: null,
-    consumed_by_user_lessons: 0,
-  }));
-  const memoryList = vi.fn().mockResolvedValue({
-    total: results.length,
-    limit: 200,
-    offset: 0,
-    returned: results.length,
-    results,
-  });
-  // MAU.1 refresh path: existing rows are content-checked via memoryGet. The
-  // row id == name; the reader-trimmed fixture body is `body of <name>` and its
-  // description is `desc-<name>` (MF.2: the importer now compares BOTH), so
-  // returning both makes an unchanged existing entry compare equal → skipped.
-  const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
-    Promise.resolve({
-      id,
-      description: `desc-${id}`,
-      content: `body of ${id}`,
-      created_at: 't',
-      scope: 'user',
-    }),
-  );
-  const memoryUpdate = vi
+  const create = vi.fn().mockResolvedValue({ id: 'mem-x' });
+  // An existing row id == name; its FOLDED content == `desc-<name>\n\nbody of <name>`, so an
+  // unchanged existing entry compares equal → skipped.
+  const get = vi
     .fn()
-    .mockResolvedValue({ id: 'x', description: 'd', content: 'c', scope: 'user' });
-  const client = {
-    memoryCreate,
-    memoryList,
-    memoryGet,
-    memoryUpdate,
-  } as unknown as EngineClient;
-  return { client, memoryCreate, memoryList, memoryUpdate };
+    .mockImplementation((id: string) =>
+      Promise.resolve({ content: folded(`desc-${id}`, `body of ${id}`) }),
+    );
+  const update = vi.fn().mockResolvedValue(undefined);
+  const index = new Map(existingNames.map((name) => [name, { id: name }]));
+  const store = {
+    create,
+    get,
+    update,
+    delete: vi.fn().mockResolvedValue(undefined),
+    listImportIndex: vi.fn().mockResolvedValue(index),
+    close: () => Promise.resolve(),
+  } as unknown as MemoryStore;
+  return { store, create, update };
 }
 
 describe('snapshotAuto', () => {
@@ -103,16 +75,16 @@ describe('snapshotAuto', () => {
     await writeMemory('a.md', fixture('a', 'feedback'));
     await writeMemory('b.md', fixture('b', 'user'));
     await writeMemory('MEMORY.md', '# index — skip\n');
-    const { client, memoryCreate } = mkEngine();
+    const { store, create } = mkStore();
 
     const before = Date.now();
-    const result = await snapshotAuto(autoDir, home, client);
+    const result = await snapshotAuto(autoDir, home, store);
     const after = Date.now();
 
     expect(result.imported).toBe(2);
     expect(result.skipped).toBe(0);
     expect(result.errors).toEqual([]);
-    expect(memoryCreate).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(2);
 
     const stamp = Number((await fs.readFile(join(home, SNAPSHOT_FILE), 'utf-8')).trim());
     expect(stamp).toBeGreaterThanOrEqual(before);
@@ -121,18 +93,18 @@ describe('snapshotAuto', () => {
 
   it('second run with no changes imports zero files (mtime ≤ snapshot)', async () => {
     await writeMemory('a.md', fixture('a', 'feedback'));
-    const { client: c1 } = mkEngine();
+    const { store: c1 } = mkStore();
     await snapshotAuto(autoDir, home, c1);
     // Bump the snapshot a hair into the future so we deterministically beat the
     // file's mtime even on coarse fs clocks.
     const stampPath = join(home, SNAPSHOT_FILE);
     await fs.writeFile(stampPath, String(Date.now() + 5000), 'utf-8');
 
-    const { client: c2, memoryCreate } = mkEngine(['a']);
+    const { store: c2, create } = mkStore(['a']);
     const result = await snapshotAuto(autoDir, home, c2);
     expect(result.imported).toBe(0);
     expect(result.skipped).toBe(0);
-    expect(memoryCreate).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('second run imports only files modified AFTER the snapshot timestamp', async () => {
@@ -146,38 +118,38 @@ describe('snapshotAuto', () => {
     await fs.utimes(join(autoDir, 'a.md'), future, new Date(cutoff - 60_000));
     await fs.utimes(join(autoDir, 'b.md'), future, future);
 
-    const { client, memoryCreate } = mkEngine();
-    const result = await snapshotAuto(autoDir, home, client);
+    const { store, create } = mkStore();
+    const result = await snapshotAuto(autoDir, home, store);
     expect(result.imported).toBe(1);
-    expect(memoryCreate).toHaveBeenCalledTimes(1);
-    const arg = memoryCreate.mock.calls[0]?.[0] as { description: string };
+    expect(create).toHaveBeenCalledTimes(1);
+    const arg = create.mock.calls[0]?.[0] as { description: string };
     expect(arg.description).toBe('desc-b');
   });
 
   it('dedup via existingNames still applies on top of the mtime filter', async () => {
     await writeMemory('a.md', fixture('a', 'feedback'));
     // Snapshot file absent → all files are candidates; but engine already has `a`.
-    const { client, memoryCreate } = mkEngine(['a']);
-    const result = await snapshotAuto(autoDir, home, client);
+    const { store, create } = mkStore(['a']);
+    const result = await snapshotAuto(autoDir, home, store);
     expect(result.imported).toBe(0);
     expect(result.skipped).toBe(1);
-    expect(memoryCreate).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('snapshot file with corrupt content treated as missing (lastSnapshot = 0)', async () => {
     await writeMemory('a.md', fixture('a', 'feedback'));
     await fs.writeFile(join(home, SNAPSHOT_FILE), 'not-a-number\n', 'utf-8');
-    const { client, memoryCreate } = mkEngine();
-    const result = await snapshotAuto(autoDir, home, client);
+    const { store, create } = mkStore();
+    const result = await snapshotAuto(autoDir, home, store);
     expect(result.imported).toBe(1);
-    expect(memoryCreate).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it('writes the timestamp even when per-file errors occurred (no replay loop)', async () => {
     await writeMemory('good.md', fixture('good', 'feedback'));
     await writeMemory('bad.md', '# no frontmatter\n');
-    const { client } = mkEngine();
-    const result = await snapshotAuto(autoDir, home, client);
+    const { store } = mkStore();
+    const result = await snapshotAuto(autoDir, home, store);
     expect(result.imported).toBe(1);
     expect(result.errors).toHaveLength(1);
     const stamp = (await fs.readFile(join(home, SNAPSHOT_FILE), 'utf-8')).trim();
@@ -187,8 +159,8 @@ describe('snapshotAuto', () => {
   it('creates opensquidHome dir on demand (first run, fresh install)', async () => {
     await rm(home, { recursive: true, force: true });
     await writeMemory('a.md', fixture('a', 'feedback'));
-    const { client } = mkEngine();
-    await snapshotAuto(autoDir, home, client);
+    const { store } = mkStore();
+    await snapshotAuto(autoDir, home, store);
     const exists = await fs
       .stat(join(home, SNAPSHOT_FILE))
       .then((s) => s.isFile())

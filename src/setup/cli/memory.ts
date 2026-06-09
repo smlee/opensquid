@@ -5,9 +5,9 @@
  *
  *   import-auto    — bulk-imports Claude Code auto-memory files from
  *                    `~/.claude/projects/<encoded-path>/memory/` into the
- *                    loop-engine via direct `engine.memoryCreate` RPC.
- *                    Dedupe by frontmatter `name` (round-tripped through
- *                    `origin.host`).
+ *                    libSQL memory store via the MemoryStore handle (RES-5b, engine-free).
+ *                    Dedupe by frontmatter `name` (round-tripped through the
+ *                    `origin:import:` marker tag).
  *                    Flags:
  *                      --dry-run                preview without writing
  *                      --project <path>         override auto-memory project
@@ -24,11 +24,10 @@
  *
  * Stays harness-agnostic: the importer/snapshot module know nothing about
  * commander or the CLI surface. This file owns argument parsing + summary
- * formatting + engine-client lifecycle (lazy singleton mirrored from
- * `mcp/server.ts`).
+ * formatting + the MemoryStore handle lifecycle (built + closed per verb).
  *
- * Imports from: commander, node:os, node:path, ../../engine/client.js,
- *   ../../runtime/paths.js, ../migrate/auto_memory_importer.js,
+ * Imports from: commander, node:os, node:path, ../../runtime/paths.js,
+ *   ../migrate/memory_store_handle.js, ../migrate/auto_memory_importer.js,
  *   ../migrate/auto_memory_snapshot.js.
  * Imported by: src/cli.ts, src/setup/cli/memory.test.ts.
  */
@@ -36,8 +35,8 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { EngineClient } from '../../engine/client.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { makeMemoryStore, type MemoryStore } from '../migrate/memory_store_handle.js';
 import {
   fetchExistingImportIndex,
   importAutoMemoryDir,
@@ -48,8 +47,8 @@ import { snapshotAuto } from '../migrate/auto_memory_snapshot.js';
 import type { Command } from 'commander';
 
 export interface MemoryCliDeps {
-  /** Override engine client (tests inject a stub). */
-  engineFactory?: () => EngineClient;
+  /** Override the memory store (tests inject a stub/tmp store). */
+  storeFactory?: () => Promise<MemoryStore>;
   /** Override resolver for the auto-memory directory; tests use a tmp dir. */
   resolveAutoMemoryDir?: (root: string, projectPath: string) => string;
   /** Override opensquid-home directory (snapshot-auto target); tests use a tmp dir. */
@@ -125,16 +124,16 @@ function reportResult(
 async function actImportAuto(deps: Required<MemoryCliDeps>, opts: ImportAutoOpts): Promise<void> {
   const dir = await resolveDir(deps, opts, 'import-auto');
   if (dir === null) return;
-  const engine = deps.engineFactory();
+  const store = await deps.storeFactory();
   try {
-    const existingIndex = await fetchExistingImportIndex(engine);
-    const result = await importAutoMemoryDir(dir, engine, {
+    const existingIndex = await fetchExistingImportIndex(store);
+    const result = await importAutoMemoryDir(dir, store, {
       dryRun: opts.dryRun,
       existingIndex,
     });
     reportResult(deps, result, opts.dryRun ? '[dry-run] ' : '', dir);
   } finally {
-    await engine.close();
+    await store.close();
   }
 }
 
@@ -144,18 +143,18 @@ async function actSnapshotAuto(
 ): Promise<void> {
   const dir = await resolveDir(deps, opts, 'snapshot-auto');
   if (dir === null) return;
-  const engine = deps.engineFactory();
+  const store = await deps.storeFactory();
   try {
-    const result = await snapshotAuto(dir, deps.opensquidHome(), engine);
+    const result = await snapshotAuto(dir, deps.opensquidHome(), store);
     reportResult(deps, result, 'Snapshot: ', dir);
   } finally {
-    await engine.close();
+    await store.close();
   }
 }
 
 function buildDeps(d: MemoryCliDeps): Required<MemoryCliDeps> {
   return {
-    engineFactory: d.engineFactory ?? ((): EngineClient => new EngineClient()),
+    storeFactory: d.storeFactory ?? makeMemoryStore,
     resolveAutoMemoryDir: d.resolveAutoMemoryDir ?? defaultResolve,
     opensquidHome: d.opensquidHome ?? OPENSQUID_HOME,
     stdout: d.stdout ?? ((s: string): void => void process.stdout.write(s)),

@@ -2,10 +2,11 @@
  * Orchestrates the auto-memory → opensquid sync (G.6 + MAU.1).
  *
  * Reads every `*.md` (minus `MEMORY.md`, the index) in a source directory,
- * parses each via the reader, and reconciles it against the engine store:
- *   - name not present              → `engine.memoryCreate`  (imported)
- *   - name present, content changed → `engine.memoryUpdate`  (refreshed)
- *   - name present, content same    → no-op                  (skipped)
+ * parses each via the reader, and reconciles it against the libSQL MemoryStore
+ * (retire-Rust RES-5b — engine-free):
+ *   - name not present              → `store.create`  (imported)
+ *   - name present, content changed → `store.update`  (refreshed)
+ *   - name present, content same    → no-op           (skipped)
  *
  * Identity: the auto-memory file's frontmatter `name` field. Engine
  * `MemoryListRow` has no `name` column, so the slug round-trips through
@@ -29,15 +30,14 @@
  * `fileWhitelist` is the G.7 hook hand-off: when set, only basenames in the
  * list are candidates. Undefined → all `.md` files except `MEMORY.md`.
  *
- * Imports from: node:fs, node:path, ../../engine/client.js, ./auto_memory_reader.js.
+ * Imports from: node:fs, node:path, ./memory_store_handle.js, ./auto_memory_reader.js.
  * Imported by: setup/cli/memory.ts, auto_memory_snapshot.ts, auto_memory_importer.test.ts.
  */
 
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import type { EngineClient } from '../../engine/client.js';
-
+import { folded, type MemoryStore } from './memory_store_handle.js';
 import { readAutoMemory } from './auto_memory_reader.js';
 
 const TYPE_TO_SCOPE: Record<string, 'user' | { project: string }> = {
@@ -72,7 +72,7 @@ export interface ImportOpts {
 
 export async function importAutoMemoryDir(
   dir: string,
-  engine: EngineClient,
+  store: MemoryStore,
   opts: ImportOpts,
 ): Promise<ImportResult> {
   const allFiles = (await fs.readdir(dir)).filter((f) => f.endsWith('.md') && f !== 'MEMORY.md');
@@ -85,17 +85,18 @@ export async function importAutoMemoryDir(
     try {
       const parsed = await readAutoMemory(path);
       const name = parsed.frontmatter.name;
-      const scope = TYPE_TO_SCOPE[parsed.frontmatter.metadata.type] ?? 'user';
+      const rawScope = TYPE_TO_SCOPE[parsed.frontmatter.metadata.type] ?? 'user';
+      // libSQL scope is a string tag; serialize the MemoryScope (project's value is '' here → 'project').
+      const scope = typeof rawScope === 'string' ? rawScope : 'project';
       const existing = opts.existingIndex.get(name);
 
       if (existing === undefined) {
         if (!opts.dryRun) {
-          const created = await engine.memoryCreate({
+          const created = await store.create({
+            name,
             description: parsed.frontmatter.description,
-            content: parsed.body,
-            authored_by: 'user',
+            body: parsed.body,
             scope,
-            origin: { host: `${IMPORT_HOST_PREFIX}${name}` },
           });
           // Track in-map so the same name twice in one run reconciles, not re-creates.
           opts.existingIndex.set(name, { id: created.id });
@@ -109,21 +110,16 @@ export async function importAutoMemoryDir(
         result.skipped += 1;
         continue;
       }
-      const current = await engine.memoryGet({ id: existing.id });
-      // MF.2 (H3): refresh on a body OR a DESCRIPTION change — not body-only. The
-      // `description` is part of the identity/retrieval surface: ADR-0005 makes it
-      // "load-bearing" for recall (the manifest + similarity ranking key on it), so a
-      // description-only edit that left the body untouched MUST still re-index, or recall
-      // keeps using a stale description. (The decision the MAU spec left open: description
-      // IS identity, not body-only.) `memoryUpdate` already writes both fields below.
-      if (
-        current.content !== parsed.body ||
-        current.description !== parsed.frontmatter.description
-      ) {
-        await engine.memoryUpdate({
-          id: existing.id,
+      const current = await store.get(existing.id);
+      // MF.2 (H3): refresh on a body OR DESCRIPTION change. libSQL memory is content-only — the
+      // description folds into content (`description\n\nbody`), so the single folded compare covers
+      // BOTH a body and a description edit (re-index either way). A missing row (current===null) is
+      // treated as changed → re-create via update path's caller; here defensively refresh.
+      const want = folded(parsed.frontmatter.description, parsed.body);
+      if (current?.content !== want) {
+        await store.update(existing.id, {
           description: parsed.frontmatter.description,
-          content: parsed.body,
+          body: parsed.body,
           scope,
         });
         result.refreshed += 1;
@@ -138,33 +134,19 @@ export async function importAutoMemoryDir(
 }
 
 /**
- * Pages `engine.memoryList` and returns a `name → { id }` map of auto-memory
- * entries already in the engine (extracted from `origin.host` via
- * `IMPORT_HOST_PREFIX`). Non-import rows (no marker) are ignored.
+ * Returns a `name → { id }` map of auto-memory entries already in the store, via
+ * `store.listImportIndex()` (which pages the libSQL memory rows + extracts the slug from the
+ * `origin:import:` marker tag). Non-import rows (no marker) are ignored.
  *
- * The caller passes the map to `importAutoMemoryDir` (so iteration is local)
- * and to `pruneOrphanedImports` (MAU.2). The `{ id }` lets the importer
- * `memoryGet` / `memoryUpdate` the right row on refresh.
+ * The caller passes the map to `importAutoMemoryDir` (so iteration is local) and to
+ * `pruneOrphanedImports` (MAU.2). The `{ id }` lets the importer `store.get` / `store.update` the
+ * right row on refresh.
  */
 export async function fetchExistingImportIndex(
-  engine: EngineClient,
-  pageSize = 200,
+  store: MemoryStore,
 ): Promise<Map<string, ImportIndexEntry>> {
-  const index = new Map<string, ImportIndexEntry>();
-  let offset = 0;
-  // Cap iterations so a bug in the engine list doesn't infinite-loop here.
-  for (let i = 0; i < 1000; i++) {
-    const page = await engine.memoryList({ limit: pageSize, offset });
-    for (const row of page.results) {
-      const host = row.origin?.host;
-      if (host?.startsWith(IMPORT_HOST_PREFIX)) {
-        index.set(host.slice(IMPORT_HOST_PREFIX.length), { id: row.id });
-      }
-    }
-    if (page.returned < pageSize) break;
-    offset += page.returned;
-  }
-  return index;
+  // The libSQL store pages internally + maps the `origin:import:<name>` tag → {id} (RES-5a/5b).
+  return store.listImportIndex();
 }
 
 /**
@@ -188,7 +170,7 @@ export async function fetchExistingImportIndex(
  */
 export async function pruneOrphanedImports(
   dir: string,
-  engine: EngineClient,
+  store: MemoryStore,
   existingIndex: Map<string, ImportIndexEntry>,
   opts: { dryRun: boolean },
 ): Promise<{ pruned: number }> {
@@ -207,7 +189,7 @@ export async function pruneOrphanedImports(
   let pruned = 0;
   for (const [name, entry] of existingIndex) {
     if (!onDisk.has(name)) {
-      if (!opts.dryRun) await engine.memoryDelete({ id: entry.id, force: true });
+      if (!opts.dryRun) await store.delete(entry.id);
       pruned += 1;
     }
   }

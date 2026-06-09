@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { EngineClient } from '../../engine/client.js';
+import { folded, type MemoryStore } from '../migrate/memory_store_handle.js';
 
 import { encodeProjectPath, registerMemory } from './memory.js';
 
@@ -34,65 +34,34 @@ afterEach(async () => {
 });
 
 interface Stubs {
-  engineFactory: ReturnType<typeof vi.fn>;
-  memoryCreate: ReturnType<typeof vi.fn>;
-  memoryList: ReturnType<typeof vi.fn>;
+  storeFactory: ReturnType<typeof vi.fn>;
+  create: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   stdout: string[];
   stderr: string[];
 }
 
-function makeStubs(
-  opts: {
-    existing?: string[];
-    memoryListResults?: { origin?: { host?: string } | null }[];
-  } = {},
-): Stubs {
-  const memoryCreate = vi.fn().mockResolvedValue({
-    id: 'mem-x',
-    description: 'd',
-    created_at: '2026-05-24T00:00:00Z',
-    scope: 'user',
-  });
-  const results =
-    opts.memoryListResults ??
-    (opts.existing ?? []).map((name) => ({
-      id: name,
-      description: name,
-      scope: 'user',
-      origin: { host: `opensquid-import:auto-memory:${name}` },
-      created_at: 't',
-      updated_at: null,
-      consumed_by_user_lessons: 0,
-    }));
-  const memoryList = vi.fn().mockResolvedValue({
-    total: results.length,
-    limit: 200,
-    offset: 0,
-    returned: results.length,
-    results,
-  });
-  // MAU.1 refresh path: existing rows are content-checked via memoryGet. The
-  // row id == name; the reader-trimmed fixture body is `body of <name>` and its
-  // description is `<name>-desc` (MF.2: the importer now compares BOTH), so
-  // returning both makes an unchanged existing entry compare equal → skipped.
-  const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
-    Promise.resolve({
-      id,
-      description: `${id}-desc`,
-      content: `body of ${id}`,
-      created_at: 't',
-      scope: 'user',
-    }),
-  );
-  const memoryUpdate = vi
+function makeStubs(opts: { existing?: string[] } = {}): Stubs {
+  const create = vi.fn().mockResolvedValue({ id: 'mem-x' });
+  // An existing row id == name; its FOLDED content == `<name>-desc\n\nbody of <name>` → unchanged
+  // existing entry compares equal → skipped.
+  const get = vi
     .fn()
-    .mockResolvedValue({ id: 'x', description: 'd', content: 'c', scope: 'user' });
+    .mockImplementation((id: string) =>
+      Promise.resolve({ content: folded(`${id}-desc`, `body of ${id}`) }),
+    );
+  const index = new Map((opts.existing ?? []).map((name) => [name, { id: name }]));
   const close = vi.fn().mockResolvedValue(undefined);
-  const engineFactory = vi.fn(
-    () => ({ memoryCreate, memoryList, memoryGet, memoryUpdate, close }) as unknown as EngineClient,
-  );
-  return { engineFactory, memoryCreate, memoryList, close, stdout: [], stderr: [] };
+  const store = {
+    create,
+    get,
+    update: vi.fn().mockResolvedValue(undefined),
+    delete: vi.fn().mockResolvedValue(undefined),
+    listImportIndex: vi.fn().mockResolvedValue(index),
+    close,
+  } as unknown as MemoryStore;
+  const storeFactory = vi.fn(() => Promise.resolve(store));
+  return { storeFactory, create, close, stdout: [], stderr: [] };
 }
 
 async function makeFixtureDir(projectEncoded: string): Promise<string> {
@@ -112,7 +81,7 @@ async function writeFixture(memDir: string, name: string, type: string): Promise
 function makeProgram(stubs: Stubs): Command {
   const program = new Command().exitOverride(); // don't kill the test process
   registerMemory(program, {
-    engineFactory: stubs.engineFactory,
+    storeFactory: stubs.storeFactory,
     opensquidHome: () => home,
     stdout: (s) => stubs.stdout.push(s),
     stderr: (s) => stubs.stderr.push(s),
@@ -138,14 +107,14 @@ describe('opensquid memory import-auto', () => {
       ['node', 'opensquid', 'memory', 'import-auto', '--dry-run', '--auto-memory-root', root],
       { from: 'node' },
     );
-    expect(stubs.memoryCreate).not.toHaveBeenCalled();
+    expect(stubs.create).not.toHaveBeenCalled();
     expect(stubs.stdout.join('')).toMatch(
       /\[dry-run\] Imported 2, refreshed 0, skipped 0, errors 0/,
     );
     expect(stubs.close).toHaveBeenCalledTimes(1);
   });
 
-  it('non-dry-run writes via engine.memoryCreate and prints summary', async () => {
+  it('non-dry-run writes via the store and prints summary', async () => {
     const memDir = await makeFixtureDir('-Users-test-proj');
     await writeFixture(memDir, 'a', 'feedback');
     await writeFixture(memDir, 'b', 'project');
@@ -155,7 +124,7 @@ describe('opensquid memory import-auto', () => {
       ['node', 'opensquid', 'memory', 'import-auto', '--auto-memory-root', root],
       { from: 'node' },
     );
-    expect(stubs.memoryCreate).toHaveBeenCalledTimes(2);
+    expect(stubs.create).toHaveBeenCalledTimes(2);
     expect(stubs.stdout.join('')).toMatch(/Imported 2, refreshed 0, skipped 0, errors 0/);
   });
 
@@ -169,7 +138,7 @@ describe('opensquid memory import-auto', () => {
       ['node', 'opensquid', 'memory', 'import-auto', '--auto-memory-root', root],
       { from: 'node' },
     );
-    expect(stubs.memoryCreate).not.toHaveBeenCalled();
+    expect(stubs.create).not.toHaveBeenCalled();
     expect(stubs.stdout.join('')).toMatch(/Imported 0, refreshed 0, skipped 2, errors 0/);
   });
 
@@ -189,7 +158,7 @@ describe('opensquid memory import-auto', () => {
     );
     expect(process.exitCode).toBe(1);
     expect(stubs.stderr.join('')).toMatch(/does not exist/);
-    expect(stubs.engineFactory).not.toHaveBeenCalled();
+    expect(stubs.storeFactory).not.toHaveBeenCalled();
   });
 
   it('--project overrides cwd and encodes the path correctly', async () => {
@@ -210,7 +179,7 @@ describe('opensquid memory import-auto', () => {
       ],
       { from: 'node' },
     );
-    expect(stubs.memoryCreate).toHaveBeenCalledTimes(1);
+    expect(stubs.create).toHaveBeenCalledTimes(1);
     expect(stubs.stdout.join('')).toMatch(/Imported 1, refreshed 0, skipped 0, errors 0/);
   });
 
@@ -219,7 +188,7 @@ describe('opensquid memory import-auto', () => {
     const program = new Command().exitOverride();
     let helpText = '';
     registerMemory(program, {
-      engineFactory: stubs.engineFactory,
+      storeFactory: stubs.storeFactory,
       stdout: (s) => (helpText += s),
       stderr: (s) => (helpText += s),
       cwd: () => '/x',
@@ -264,7 +233,7 @@ describe('opensquid memory snapshot-auto', () => {
       ['node', 'opensquid', 'memory', 'snapshot-auto', '--auto-memory-root', root],
       { from: 'node' },
     );
-    expect(stubs.memoryCreate).toHaveBeenCalledTimes(2);
+    expect(stubs.create).toHaveBeenCalledTimes(2);
     expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 2, refreshed 0, skipped 0, errors 0/);
     const stamp = await readFile(join(home, '.last-auto-memory-snapshot'), 'utf-8');
     expect(Number(stamp.trim())).toBeGreaterThan(0);
@@ -287,7 +256,7 @@ describe('opensquid memory snapshot-auto', () => {
     );
     expect(process.exitCode).toBe(1);
     expect(stubs.stderr.join('')).toMatch(/snapshot-auto:.*does not exist/);
-    expect(stubs.engineFactory).not.toHaveBeenCalled();
+    expect(stubs.storeFactory).not.toHaveBeenCalled();
   });
 
   it('dedup via existingNames carries through to snapshot', async () => {
@@ -299,7 +268,7 @@ describe('opensquid memory snapshot-auto', () => {
       ['node', 'opensquid', 'memory', 'snapshot-auto', '--auto-memory-root', root],
       { from: 'node' },
     );
-    expect(stubs.memoryCreate).not.toHaveBeenCalled();
+    expect(stubs.create).not.toHaveBeenCalled();
     expect(stubs.stdout.join('')).toMatch(/Snapshot: Imported 0, refreshed 0, skipped 1, errors 0/);
   });
 
@@ -308,7 +277,7 @@ describe('opensquid memory snapshot-auto', () => {
     const program = new Command().exitOverride();
     let helpText = '';
     registerMemory(program, {
-      engineFactory: stubs.engineFactory,
+      storeFactory: stubs.storeFactory,
       opensquidHome: () => home,
       stdout: (s) => (helpText += s),
       stderr: (s) => (helpText += s),

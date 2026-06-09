@@ -24,8 +24,8 @@ import { join, resolve } from 'node:path';
 
 import type { Command } from 'commander';
 
-import { EngineClient } from '../../engine/client.js';
 import { computeMemoryDrift, renderMemoryDrift } from '../migrate/memory_drift.js';
+import { makeMemoryStore } from '../migrate/memory_store_handle.js';
 import { readSettingsHooks, type ParsedHookEntry } from '../wizard/settings-reader.js';
 import { OPENSQUID_BIN_FOR_EVENT } from '../wizard/settings-writer.js';
 
@@ -292,9 +292,9 @@ export function registerDoctor(program: Command): void {
         process.stdout.write(`memory: no auto-memory dir for this project (${dir})\n`);
         process.exit(0);
       }
-      const engine = new EngineClient();
+      const store = await makeMemoryStore();
       try {
-        const drift = await computeMemoryDrift(dir, engine);
+        const drift = await computeMemoryDrift(dir, store);
         process.stdout.write(renderMemoryDrift(drift) + '\n');
         if (!drift.inSync) {
           if (drift.missing.length > 0)
@@ -307,10 +307,10 @@ export function registerDoctor(program: Command): void {
         process.exit(drift.inSync ? 0 : 1); // non-zero on drift → fail loud for CI/wrappers
       } catch (e) {
         // FAIL-LOUD: a probe failure must never read as "in sync".
-        process.stderr.write(`memory: drift check FAILED (engine down?) — ${String(e)}\n`);
+        process.stderr.write(`memory: drift check FAILED — ${String(e)}\n`);
         process.exit(1);
       } finally {
-        await engine.close();
+        await store.close();
       }
     });
 

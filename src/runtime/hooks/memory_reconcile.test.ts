@@ -1,11 +1,8 @@
 /**
- * Tests for `reconcileMemoryOnSessionEnd` (MAU.3).
- *
- * Uses injected deps (readCwd, autoMemoryRoot, engineFactory, opensquidHome,
- * stderr) so every branch is exercised without a live engine or the real
- * ~/.claude tree. The engine-throws case is the fail-loud anchor: the function
- * must surface the failure on stderr and RESOLVE (never throw / block session
- * end).
+ * Tests for `reconcileMemoryOnSessionEnd` (MAU.3, retire-Rust RES-5b). Injected deps (readCwd,
+ * autoMemoryRoot, storeFactory, opensquidHome, stderr) exercise every branch without a live store or
+ * the real ~/.claude tree. The store-throws case is the fail-loud anchor: the function surfaces the
+ * failure on stderr and RESOLVES (never throws / blocks session end).
  */
 
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
@@ -14,9 +11,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { EngineClient } from '../../engine/client.js';
-
-import { IMPORT_HOST_PREFIX } from '../../setup/migrate/auto_memory_importer.js';
+import type { MemoryStore } from '../../setup/migrate/memory_store_handle.js';
 
 import { encodeProjectPath, reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
 
@@ -27,22 +22,26 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'mau3-root-'));
   home = await mkdtemp(join(tmpdir(), 'mau3-home-'));
 });
-
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
   await rm(home, { recursive: true, force: true });
 });
 
-/** A stub engine whose snapshot-relevant methods resolve to empty results. */
-function okEngine(): { client: EngineClient; close: ReturnType<typeof vi.fn> } {
+/** A stub MemoryStore. `index` is what listImportIndex returns; close is recorded. */
+function okStore(index = new Map<string, { id: string }>()): {
+  store: MemoryStore;
+  close: ReturnType<typeof vi.fn>;
+} {
   const close = vi.fn().mockResolvedValue(undefined);
-  // snapshotAuto reads memoryList (→ empty) + writes the timestamp; with an
-  // empty auto-memory dir it makes no create/update calls.
-  const memoryList = vi
-    .fn()
-    .mockResolvedValue({ total: 0, limit: 200, offset: 0, returned: 0, results: [] });
-  const client = { memoryList, close } as unknown as EngineClient;
-  return { client, close };
+  const store = {
+    listImportIndex: vi.fn().mockResolvedValue(index),
+    get: vi.fn().mockResolvedValue(null),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    close,
+  } as unknown as MemoryStore;
+  return { store, close };
 }
 
 const collectStderr = (): { write: (s: string) => void; text: () => string } => {
@@ -57,61 +56,60 @@ describe('encodeProjectPath', () => {
 });
 
 describe('reconcileMemoryOnSessionEnd', () => {
-  it('skips (no engine) when no cwd was recorded', async () => {
-    const engineFactory = vi.fn();
+  it('skips (no store) when no cwd was recorded', async () => {
+    const storeFactory = vi.fn();
     await reconcileMemoryOnSessionEnd('s', {
       readCwd: () => Promise.resolve(null),
       autoMemoryRoot: root,
-      engineFactory: engineFactory as unknown as () => EngineClient,
+      storeFactory: storeFactory as unknown as () => Promise<MemoryStore>,
       opensquidHome: () => home,
       stderr: vi.fn(),
     });
-    expect(engineFactory).not.toHaveBeenCalled();
+    expect(storeFactory).not.toHaveBeenCalled();
   });
 
-  it('skips (no engine) when the project auto-memory dir does not exist', async () => {
-    const engineFactory = vi.fn();
+  it('skips (no store) when the project auto-memory dir does not exist', async () => {
+    const storeFactory = vi.fn();
     await reconcileMemoryOnSessionEnd('s', {
-      readCwd: () => Promise.resolve('/Users/x/projects/loop'), // no matching dir under root
+      readCwd: () => Promise.resolve('/Users/x/projects/loop'),
       autoMemoryRoot: root,
-      engineFactory: engineFactory as unknown as () => EngineClient,
+      storeFactory: storeFactory as unknown as () => Promise<MemoryStore>,
       opensquidHome: () => home,
       stderr: vi.fn(),
     });
-    expect(engineFactory).not.toHaveBeenCalled();
+    expect(storeFactory).not.toHaveBeenCalled();
   });
 
   it('runs snapshotAuto when the auto-memory dir exists (happy path)', async () => {
     const cwd = '/Users/x/projects/loop';
     await mkdir(join(root, encodeProjectPath(cwd), 'memory'), { recursive: true });
-    const { client, close } = okEngine();
-    const engineFactory = vi.fn(() => client);
+    const { store, close } = okStore();
+    const storeFactory = vi.fn(() => Promise.resolve(store));
     const errs = collectStderr();
     await reconcileMemoryOnSessionEnd('s', {
       readCwd: () => Promise.resolve(cwd),
       autoMemoryRoot: root,
-      engineFactory,
+      storeFactory,
       opensquidHome: () => home,
       stderr: errs.write,
     });
-    expect(engineFactory).toHaveBeenCalledTimes(1);
-    expect(close).toHaveBeenCalledTimes(1); // engine closed in finally
+    expect(storeFactory).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1); // store closed in finally
     expect(errs.text()).toMatch(/memory reconcile — imported \d+, refreshed \d+, skipped \d+/);
   });
 
-  it('FAILS LOUD but does not throw when the engine errors', async () => {
+  it('FAILS LOUD but does not throw when the store errors', async () => {
     const cwd = '/Users/x/projects/loop';
     await mkdir(join(root, encodeProjectPath(cwd), 'memory'), { recursive: true });
-    const engineFactory = vi.fn(() => {
-      throw new Error('engine down');
+    const storeFactory = vi.fn(() => {
+      throw new Error('store down');
     });
     const errs = collectStderr();
-    // Must RESOLVE (no throw) — session end is never blocked.
     await expect(
       reconcileMemoryOnSessionEnd('s', {
         readCwd: () => Promise.resolve(cwd),
         autoMemoryRoot: root,
-        engineFactory: engineFactory as unknown as () => EngineClient,
+        storeFactory: storeFactory as unknown as () => Promise<MemoryStore>,
         opensquidHome: () => home,
         stderr: errs.write,
       }),
@@ -119,42 +117,22 @@ describe('reconcileMemoryOnSessionEnd', () => {
     expect(errs.text()).toMatch(/memory reconcile FAILED/);
   });
 
-  // MF.1 (H1): the loud self-audit AFTER reconcile. With an empty disk dir but an
-  // import-marked engine entry whose source .md is gone, the post-reconcile drift check
-  // (computeMemoryDrift) sees an ORPHAN and must surface it loudly on stderr.
+  // MF.1 (H1): the loud self-audit AFTER reconcile. An empty disk dir but an import-marked store
+  // entry whose source .md is gone → the post-reconcile drift check sees an ORPHAN, surfaced loudly.
   it('surfaces a NON-empty post-reconcile drift LOUDLY (orphaned import entry)', async () => {
     const cwd = '/Users/x/projects/loop';
     await mkdir(join(root, encodeProjectPath(cwd), 'memory'), { recursive: true }); // empty dir
-    const close = vi.fn().mockResolvedValue(undefined);
-    const memoryList = vi.fn().mockResolvedValue({
-      total: 1,
-      limit: 200,
-      offset: 0,
-      returned: 1,
-      results: [
-        {
-          id: 'id-gone',
-          description: 'd',
-          scope: 'user',
-          origin: { host: `${IMPORT_HOST_PREFIX}gone` }, // import-marked, no source on disk
-          created_at: 't',
-          updated_at: null,
-          consumed_by_user_lessons: 0,
-        },
-      ],
-    });
-    const memoryGet = vi.fn(); // orphaned → name not on disk → never fetched
-    const client = { memoryList, memoryGet, close } as unknown as EngineClient;
+    const { store, close } = okStore(new Map([['gone', { id: 'id-gone' }]]));
     const errs = collectStderr();
     await reconcileMemoryOnSessionEnd('s', {
       readCwd: () => Promise.resolve(cwd),
       autoMemoryRoot: root,
-      engineFactory: () => client,
+      storeFactory: () => Promise.resolve(store),
       opensquidHome: () => home,
       stderr: errs.write,
     });
     expect(errs.text()).toMatch(/post-reconcile drift/);
     expect(errs.text()).toMatch(/orphaned/);
-    expect(close).toHaveBeenCalledTimes(1); // engine still closed once (finally)
+    expect(close).toHaveBeenCalledTimes(1); // store still closed once (finally)
   });
 });

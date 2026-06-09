@@ -29,9 +29,8 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import type { EngineClient } from '../../engine/client.js';
-
 import { fetchExistingImportIndex } from './auto_memory_importer.js';
+import { folded, type MemoryStore } from './memory_store_handle.js';
 import { readAutoMemory } from './auto_memory_reader.js';
 
 export interface MemoryDrift {
@@ -45,34 +44,35 @@ export interface MemoryDrift {
   total: { disk: number; engineImported: number };
 }
 
-export async function computeMemoryDrift(dir: string, engine: EngineClient): Promise<MemoryDrift> {
-  // Disk side: name → body. A malformed file (reader throws) is skipped — it
-  // can't be content-compared, and that's a reader concern, not store drift.
+export async function computeMemoryDrift(dir: string, store: MemoryStore): Promise<MemoryDrift> {
+  // Disk side: name → FOLDED content (`description\n\nbody`). libSQL memory is content-only, so the
+  // disk side MUST fold to match the stored content (comparing folded-vs-bare would report every
+  // import as stale). A malformed file (reader throws) is skipped — a reader concern, not store drift.
   const diskByName = new Map<string, string>();
   const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.md') && f !== 'MEMORY.md');
   for (const f of files) {
     try {
       const parsed = await readAutoMemory(join(dir, f));
-      diskByName.set(parsed.frontmatter.name, parsed.body);
+      diskByName.set(parsed.frontmatter.name, folded(parsed.frontmatter.description, parsed.body));
     } catch {
       // malformed frontmatter — not comparable; skip (not counted as drift here)
     }
   }
 
-  // Engine side: name → { id } for import-marked entries. Errors here PROPAGATE
+  // Store side: name → { id } for import-marked entries. Errors here PROPAGATE
   // (no catch) so a failed probe never masquerades as inSync.
-  const index = await fetchExistingImportIndex(engine);
+  const index = await fetchExistingImportIndex(store);
 
   const missing: string[] = [];
   const stale: string[] = [];
-  for (const [name, body] of diskByName) {
+  for (const [name, content] of diskByName) {
     const entry = index.get(name);
     if (entry === undefined) {
       missing.push(name);
       continue;
     }
-    const current = await engine.memoryGet({ id: entry.id });
-    if (current.content !== body) stale.push(name);
+    const current = await store.get(entry.id);
+    if (current?.content !== content) stale.push(name);
   }
 
   const orphaned: string[] = [];

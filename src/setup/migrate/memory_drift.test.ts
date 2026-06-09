@@ -1,9 +1,8 @@
 /**
- * Tests for `computeMemoryDrift` + `renderMemoryDrift` (MAU.4).
- *
- * Real tmp dir for the auto-memory files; stubbed engine for the import index
- * (memoryList) + content lookups (memoryGet). The "engine error propagates"
- * case is the anti-silence anchor: a failed probe must NOT return inSync:true.
+ * Tests for `computeMemoryDrift` + `renderMemoryDrift` (MAU.4, retire-Rust RES-5b). Real tmp dir for
+ * the auto-memory files; a stubbed `MemoryStore` for the import index (listImportIndex) + content
+ * lookups (get). The "store error propagates" case is the anti-silence anchor: a failed probe must
+ * NOT return inSync:true. The disk side folds `description\n\nbody` (content-only store).
  */
 
 import { promises as fs } from 'node:fs';
@@ -13,10 +12,8 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { EngineClient } from '../../engine/client.js';
-
-import { IMPORT_HOST_PREFIX } from './auto_memory_importer.js';
 import { computeMemoryDrift, renderMemoryDrift } from './memory_drift.js';
+import { folded, type MemoryStore } from './memory_store_handle.js';
 
 let dir: string;
 
@@ -30,58 +27,48 @@ afterEach(async () => {
 function fixture(name: string): string {
   return `---\nname: ${name}\ndescription: "d-${name}"\nmetadata:\n  type: feedback\n---\nbody of ${name}\n`;
 }
-const bodyOf = (name: string): string => `body of ${name}`; // reader trims trailing \n
+/** The FOLDED content a synced store holds for `fixture(name)` = `d-<name>\n\nbody of <name>`. */
+const storedFolded = (name: string): string => folded(`d-${name}`, `body of ${name}`);
 
 async function write(file: string, contents: string): Promise<void> {
   await fs.writeFile(join(dir, file), contents, 'utf8');
 }
 
 /**
- * Stub engine. `engineEntries`: name → stored content (modeled as import-marked
- * rows id=name). `getThrows` makes memoryGet reject (probe-failure case).
+ * Stub MemoryStore. `entries`: name → stored (folded) content; listImportIndex maps name → {id:name}.
+ * `listThrows`/`getThrows` exercise the fail-loud probe-error propagation.
  */
-function mkEngine(
-  engineEntries: Record<string, string>,
+function mkStore(
+  entries: Record<string, string>,
   opts: { listThrows?: boolean; getThrows?: string } = {},
-): EngineClient {
-  const results = Object.keys(engineEntries).map((name) => ({
-    id: name,
-    description: name,
-    scope: 'user' as const,
-    origin: { host: `${IMPORT_HOST_PREFIX}${name}` },
-    created_at: 't',
-    updated_at: null,
-    consumed_by_user_lessons: 0,
-  }));
-  const memoryList = opts.listThrows
-    ? vi.fn().mockRejectedValue(new Error('engine down'))
-    : vi.fn().mockResolvedValue({
-        total: results.length,
-        limit: 200,
-        offset: 0,
-        returned: results.length,
-        results,
-      });
-  const memoryGet = vi.fn().mockImplementation(({ id }: { id: string }) =>
-    opts.getThrows === id
-      ? Promise.reject(new Error('engine down'))
-      : Promise.resolve({
-          id,
-          description: id,
-          content: engineEntries[id] ?? '',
-          created_at: 't',
-          scope: 'user',
-        }),
-  );
-  return { memoryList, memoryGet } as unknown as EngineClient;
+): MemoryStore {
+  const index = new Map(Object.keys(entries).map((name) => [name, { id: name }]));
+  const listImportIndex = opts.listThrows
+    ? vi.fn().mockRejectedValue(new Error('store down'))
+    : vi.fn().mockResolvedValue(index);
+  const get = vi
+    .fn()
+    .mockImplementation((id: string) =>
+      opts.getThrows === id
+        ? Promise.reject(new Error('store down'))
+        : Promise.resolve(entries[id] !== undefined ? { content: entries[id] } : null),
+    );
+  return {
+    listImportIndex,
+    get,
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    close: () => Promise.resolve(),
+  };
 }
 
 describe('computeMemoryDrift', () => {
-  it('reports inSync when disk and engine match', async () => {
+  it('reports inSync when disk and store match (folded)', async () => {
     await write('a.md', fixture('a'));
     await write('b.md', fixture('b'));
-    const engine = mkEngine({ a: bodyOf('a'), b: bodyOf('b') });
-    const d = await computeMemoryDrift(dir, engine);
+    const store = mkStore({ a: storedFolded('a'), b: storedFolded('b') });
+    const d = await computeMemoryDrift(dir, store);
     expect(d.inSync).toBe(true);
     expect(d).toMatchObject({
       missing: [],
@@ -91,44 +78,41 @@ describe('computeMemoryDrift', () => {
     });
   });
 
-  it('flags a disk file with no engine entry as missing', async () => {
+  it('flags a disk file with no store entry as missing', async () => {
     await write('a.md', fixture('a'));
-    const engine = mkEngine({}); // engine has nothing
-    const d = await computeMemoryDrift(dir, engine);
+    const store = mkStore({});
+    const d = await computeMemoryDrift(dir, store);
     expect(d.inSync).toBe(false);
     expect(d.missing).toEqual(['a']);
   });
 
-  it('flags an entry whose engine content differs as stale', async () => {
+  it('flags an entry whose store content differs as stale', async () => {
     await write('a.md', fixture('a'));
-    const engine = mkEngine({ a: 'OLD body of a' });
-    const d = await computeMemoryDrift(dir, engine);
+    const store = mkStore({ a: folded('d-a', 'OLD body of a') });
+    const d = await computeMemoryDrift(dir, store);
     expect(d.stale).toEqual(['a']);
     expect(d.missing).toEqual([]);
   });
 
-  it('flags an import-marked engine entry with no source file as orphaned', async () => {
+  it('flags an import-marked store entry with no source file as orphaned', async () => {
     await write('a.md', fixture('a'));
-    const engine = mkEngine({ a: bodyOf('a'), gone: bodyOf('gone') });
-    const d = await computeMemoryDrift(dir, engine);
+    const store = mkStore({ a: storedFolded('a'), gone: storedFolded('gone') });
+    const d = await computeMemoryDrift(dir, store);
     expect(d.orphaned).toEqual(['gone']);
     expect(d.inSync).toBe(false);
   });
 
-  it('PROPAGATES an engine error (never reports a falsely-clean inSync)', async () => {
+  it('PROPAGATES a store list error (never a falsely-clean inSync)', async () => {
     await write('a.md', fixture('a'));
-    const engine = mkEngine({}, { listThrows: true });
-    await expect(computeMemoryDrift(dir, engine)).rejects.toThrow(/engine down/);
+    const store = mkStore({}, { listThrows: true });
+    await expect(computeMemoryDrift(dir, store)).rejects.toThrow(/store down/);
   });
 
-  // MF.3 (M1): the OTHER engine call — per-entry memoryGet (memory_drift.ts:74) — must also
-  // propagate, not be swallowed into a falsely-clean inSync. listThrows only exercises the
-  // memoryList path; this exercises a mid-loop memoryGet rejection.
-  it('PROPAGATES a mid-loop memoryGet rejection (never a falsely-clean inSync)', async () => {
+  it('PROPAGATES a mid-loop get rejection (never a falsely-clean inSync)', async () => {
     await write('a.md', fixture('a'));
     await write('b.md', fixture('b'));
-    const engine = mkEngine({ a: bodyOf('a'), b: bodyOf('b') }, { getThrows: 'b' });
-    await expect(computeMemoryDrift(dir, engine)).rejects.toThrow(/engine down/);
+    const store = mkStore({ a: storedFolded('a'), b: storedFolded('b') }, { getThrows: 'b' });
+    await expect(computeMemoryDrift(dir, store)).rejects.toThrow(/store down/);
   });
 });
 

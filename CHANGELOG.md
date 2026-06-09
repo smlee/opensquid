@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.366] - 2026-06-08
+
+### Changed — auto-memory sync cut over to the libSQL store (retire-Rust RES-5b; RES-5 complete)
+
+The auto-memory import/reconcile/drift/CLI/doctor are engine-free. New
+`src/setup/migrate/memory_store_handle.ts` (`MemoryStore` interface + `makeMemoryStore()`) binds the
+RES-5a store ops (listMemories/updateMemory/getMemoryById/insertMemory/deleteLesson) into the five ops
+the auto-memory path needs (create/get/update/listImportIndex/delete/close), over the live backend +
+a libSQL client. `importAutoMemoryDir`/`fetchExistingImportIndex`/`pruneOrphanedImports` (importer),
+`computeMemoryDrift` (drift), `snapshotAuto`, the `memory_reconcile` hook, the `memory` CLI, and
+`doctor memory` all take a `MemoryStore` instead of an `EngineClient`. The import marker is the
+`origin:import:<name>` TAG (libSQL has no `origin` column). The engine's separate `description` +
+`content` FOLD into the content-only libSQL field (`description\n\nbody`) — one `folded` helper used by
+BOTH the importer's refresh-compare AND drift's disk side (so drift doesn't falsely report every
+import as stale). Completes RES-5 — the auto-memory subsystem is fully on the TS/libSQL stack.
+(`EngineClient` + the engine remain in the tree for the engine-bound e2e suites until RES-6.)
+
 ## [0.5.365] - 2026-06-08
 
 ### Added — libSQL memory list + update ops + the import-marker model (retire-Rust RES-5a)

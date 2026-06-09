@@ -30,13 +30,12 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import type { EngineClient } from '../../engine/client.js';
-
 import {
   fetchExistingImportIndex,
   importAutoMemoryDir,
   type ImportResult,
 } from './auto_memory_importer.js';
+import type { MemoryStore } from './memory_store_handle.js';
 
 export const SNAPSHOT_FILE = '.last-auto-memory-snapshot';
 
@@ -53,7 +52,7 @@ async function readSnapshotTimestamp(snapshotPath: string): Promise<number> {
 export async function snapshotAuto(
   autoMemoryDir: string,
   opensquidHome: string,
-  engine: EngineClient,
+  store: MemoryStore,
 ): Promise<ImportResult> {
   const snapshotPath = join(opensquidHome, SNAPSHOT_FILE);
   const lastSnapshot = await readSnapshotTimestamp(snapshotPath);
@@ -65,8 +64,8 @@ export async function snapshotAuto(
     const stat = await fs.stat(join(autoMemoryDir, f));
     if (stat.mtimeMs > lastSnapshot) recent.push(f);
   }
-  const existingIndex = await fetchExistingImportIndex(engine);
-  const result = await importAutoMemoryDir(autoMemoryDir, engine, {
+  const existingIndex = await fetchExistingImportIndex(store);
+  const result = await importAutoMemoryDir(autoMemoryDir, store, {
     dryRun: false,
     existingIndex,
     fileWhitelist: recent,

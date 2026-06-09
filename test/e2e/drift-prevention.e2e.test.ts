@@ -45,6 +45,7 @@ import {
   fetchExistingImportIndex,
   importAutoMemoryDir,
 } from '../../src/setup/migrate/auto_memory_importer.js';
+import { makeMemoryStore } from '../../src/setup/migrate/memory_store_handle.js';
 import {
   writeOpensquidHooks,
   OPENSQUID_BIN_FOR_EVENT,
@@ -339,26 +340,30 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
 
   it('G.6: auto-memory import succeeds + is idempotent on re-run', async () => {
     await scenario('G.6', 'auto-memory import + dedup on re-run', async () => {
-      if (!engineClient) {
-        throw new Error('engine binary not available — set OPENSQUID_ENGINE_BIN');
-      }
+      // RES-5b: the auto-memory path is engine-free — it uses the libSQL MemoryStore. This exercises
+      // the real store (incl the origin:import: marker tag round-trip via listImportIndex).
       const autoDir = join(tmpClaudeHome, 'projects', 'g13-fixture', 'memory');
       await buildAutoMemoryDir(autoDir, 3);
-      const existing = await fetchExistingImportIndex(engineClient);
-      const first = await importAutoMemoryDir(autoDir, engineClient, {
-        dryRun: false,
-        existingIndex: existing,
-      });
-      expect(first.imported).toBe(3);
-      expect(first.skipped).toBe(0);
-      // Re-run: same files, same names + unchanged content → all 3 should dedupe (skip).
-      const existing2 = await fetchExistingImportIndex(engineClient);
-      const second = await importAutoMemoryDir(autoDir, engineClient, {
-        dryRun: false,
-        existingIndex: existing2,
-      });
-      expect(second.imported).toBe(0);
-      expect(second.skipped).toBe(3);
+      const store = await makeMemoryStore();
+      try {
+        const existing = await fetchExistingImportIndex(store);
+        const first = await importAutoMemoryDir(autoDir, store, {
+          dryRun: false,
+          existingIndex: existing,
+        });
+        expect(first.imported).toBe(3);
+        expect(first.skipped).toBe(0);
+        // Re-run: same files, same names + unchanged content → all 3 should dedupe (skip).
+        const existing2 = await fetchExistingImportIndex(store);
+        const second = await importAutoMemoryDir(autoDir, store, {
+          dryRun: false,
+          existingIndex: existing2,
+        });
+        expect(second.imported).toBe(0);
+        expect(second.skipped).toBe(3);
+      } finally {
+        await store.close();
+      }
     });
   }, 30_000);
 

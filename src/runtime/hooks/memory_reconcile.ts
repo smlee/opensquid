@@ -21,9 +21,9 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { EngineClient } from '../../engine/client.js';
 import { computeMemoryDrift, renderMemoryDrift } from '../../setup/migrate/memory_drift.js';
 import { snapshotAuto } from '../../setup/migrate/auto_memory_snapshot.js';
+import { makeMemoryStore, type MemoryStore } from '../../setup/migrate/memory_store_handle.js';
 import { OPENSQUID_HOME } from '../paths.js';
 import { readSessionCwd } from '../session_state.js';
 
@@ -41,8 +41,8 @@ export interface ReconcileDeps {
   readCwd?: (sessionId: string) => Promise<string | null>;
   /** Defaults to `~/.claude/projects`. */
   autoMemoryRoot?: string;
-  /** Defaults to a real `EngineClient`. */
-  engineFactory?: () => EngineClient;
+  /** Defaults to a real libSQL-backed `makeMemoryStore`. */
+  storeFactory?: () => Promise<MemoryStore>;
   /** Defaults to `OPENSQUID_HOME()`. */
   opensquidHome?: () => string;
   /** Defaults to `process.stderr.write`. */
@@ -55,7 +55,7 @@ export async function reconcileMemoryOnSessionEnd(
 ): Promise<void> {
   const readCwd = deps.readCwd ?? readSessionCwd;
   const root = deps.autoMemoryRoot ?? join(homedir(), '.claude', 'projects');
-  const engineFactory = deps.engineFactory ?? ((): EngineClient => new EngineClient());
+  const storeFactory = deps.storeFactory ?? makeMemoryStore;
   const home = deps.opensquidHome ?? OPENSQUID_HOME;
   const err = deps.stderr ?? ((s: string): void => void process.stderr.write(s));
   try {
@@ -67,9 +67,9 @@ export async function reconcileMemoryOnSessionEnd(
     } catch {
       return; // this project has no auto-memory dir → nothing to sync
     }
-    const engine = engineFactory();
+    const store = await storeFactory();
     try {
-      const r = await snapshotAuto(autoMemDir, home(), engine);
+      const r = await snapshotAuto(autoMemDir, home(), store);
       err(
         `opensquid: memory reconcile — imported ${String(r.imported)}, refreshed ${String(r.refreshed)}, skipped ${String(r.skipped)}, errors ${String(r.errors.length)}\n`,
       );
@@ -78,12 +78,12 @@ export async function reconcileMemoryOnSessionEnd(
       // is the automatic surface the original silent-drift failure lacked (the on-command
       // `doctor memory` check was the only one). Runs before the `finally` close (engine
       // still open); a throw here is caught by the outer catch → loud FAILED, never blocks.
-      const drift = await computeMemoryDrift(autoMemDir, engine);
+      const drift = await computeMemoryDrift(autoMemDir, store);
       if (!drift.inSync) {
         err(`opensquid: ${renderMemoryDrift(drift)} — post-reconcile drift (expected in-sync)\n`);
       }
     } finally {
-      await engine.close();
+      await store.close();
     }
   } catch (e) {
     // FAIL-LOUD, never block session end.
