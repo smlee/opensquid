@@ -22,6 +22,10 @@ export interface Lesson {
   source: string;
   author: 'user' | 'agent';
   createdAt: string; // ISO 8601
+  // Compression columns (memory store only): default [] / 0 when absent. Carried on the base type so
+  // the per-file source + rebuild preserve a consolidated memory's trace (see compress.ts MemoryRow).
+  derivedFrom?: string[];
+  consumedByUserLessons?: number;
 }
 
 export interface RecallHit {

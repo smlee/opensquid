@@ -30,6 +30,12 @@ export async function writeRecord(dir: string, lesson: Lesson): Promise<void> {
     source: lesson.source,
     author: lesson.author,
     created_at: lesson.createdAt,
+    // Compression columns serialized ONLY when non-default, so regular-memory files stay
+    // byte-identical (no churn / no migration); only consolidated memories gain the keys.
+    ...(lesson.derivedFrom?.length ? { derived_from: lesson.derivedFrom } : {}),
+    ...(lesson.consumedByUserLessons
+      ? { consumed_by_user_lessons: lesson.consumedByUserLessons }
+      : {}),
   });
   await atomicWriteFile(
     join(dir, `${safeRecordId(lesson.id)}.md`),
@@ -62,6 +68,8 @@ export async function readRecords(dir: string): Promise<Lesson[]> {
       source: string;
       author: string;
       created_at: string;
+      derived_from: string[];
+      consumed_by_user_lessons: number;
     }>;
     out.push({
       id: fm.id ?? f.replace(/\.md$/, ''),
@@ -70,6 +78,14 @@ export async function readRecords(dir: string): Promise<Lesson[]> {
       source: fm.source ?? 'memory',
       author: fm.author === 'user' ? 'user' : 'agent',
       createdAt: fm.created_at ?? new Date(0).toISOString(),
+      // Compression keys included ONLY when present (mirrors writeRecord's non-default-only write),
+      // so a base-memory file round-trips to an object with no compression keys.
+      ...(Array.isArray(fm.derived_from) && fm.derived_from.length
+        ? { derivedFrom: fm.derived_from }
+        : {}),
+      ...(typeof fm.consumed_by_user_lessons === 'number' && fm.consumed_by_user_lessons
+        ? { consumedByUserLessons: fm.consumed_by_user_lessons }
+        : {}),
     });
   }
   return out;

@@ -12,6 +12,8 @@
  */
 import type { Client } from '@libsql/client';
 
+import { writeRecord } from '../backends/perfile_source.js';
+
 import type { MemoryRow } from './compress.js';
 
 /** Idempotently add the two compression columns to an existing `lessons` table. */
@@ -56,8 +58,18 @@ export async function getMemoryById(client: Client, id: string): Promise<MemoryR
   return rowToMemory(rs.rows[0] as unknown as Record<string, unknown>);
 }
 
-/** Insert a memory carrying the compression columns (+ FTS + optional vector). Idempotent upsert by id. */
-export async function insertMemory(client: Client, m: MemoryRow): Promise<void> {
+/**
+ * Insert a memory carrying the compression columns (+ FTS + optional vector). Idempotent upsert by id.
+ * File-first when `sourceDir` is given: writes the per-file source-of-truth (atomic) BEFORE the DB
+ * upsert, mirroring `storeLesson` — so a consolidated memory survives a `rebuildLibsqlIndex` (which
+ * re-indexes from files only). `sourceDir` undefined → DB-only (the pre-existing behavior).
+ */
+export async function insertMemory(
+  client: Client,
+  m: MemoryRow,
+  sourceDir?: string,
+): Promise<void> {
+  if (sourceDir !== undefined) await writeRecord(sourceDir, m);
   const tagsJson = JSON.stringify(m.tags);
   const vec = m.embedding ?? null;
   await client.execute({ sql: `DELETE FROM lessons WHERE id = ?`, args: [m.id] });

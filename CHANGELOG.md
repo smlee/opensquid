@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.369] - 2026-06-09
+
+### Fixed — consolidated memories (`Mc`) no longer lost on `rebuildLibsqlIndex` (HIGH; 48h-audit finding)
+
+Memory compression minted the consolidated memory `Mc` via `insertMemory`, which wrote ONLY the libSQL
+`lessons` table — no per-file source — while the consolidate step deletes predecessors via
+`deleteLesson(force)` (which DOES remove their files). `rebuildLibsqlIndex` re-indexes **from files
+only**, so after a consolidation a rebuild lost `Mc` (no file) AND its predecessors (files already
+deleted) — irreversible loss of the compressed gist. Root cause: `insertMemory` deviated from the
+file-first `storeLesson` pattern, and the per-file format + base schema never carried the compression
+columns at all. Fix makes `derived_from` + `consumed_by_user_lessons` first-class end-to-end:
+optional on `Lesson` / required on `MemoryRow` (now `extends Lesson`), in the base `CREATE TABLE` +
+`storeLesson`/`rowToLesson` + both recall SELECTs, round-tripped through `perfile_source` (serialized
+ONLY when non-default → regular-memory files stay byte-identical), and `insertMemory` gains a
+`sourceDir?` that writes the per-file source FIRST (threaded from `cfg.sourceDir` in the consolidate +
+auto-memory factories, guarded to the `libsql-fastembed` variant that carries it). A consolidated `Mc`
+now survives a rebuild with its content, `derived_from`, and `consumed_by_user_lessons` immunity counter
+intact. Tests: perfile round-trip (with + without the keys → base files stay byte-identical),
+`insertMemory(sourceDir)` writes a file (DB-only without), and a rebuild-keeps-Mc integration test
+asserting content + derivedFrom + the immunity counter all survive. **Out of scope (surfaced):** the
+never-delete vs. hard-delete-predecessors design conflict — this fix makes `Mc` durable under either.
+
 ## [0.5.368] - 2026-06-09
 
 ### Fixed — wedge promotion gate no longer crashes/mis-blocks on a snake_case `observed` lesson (MAJOR latent; 48h-audit finding)

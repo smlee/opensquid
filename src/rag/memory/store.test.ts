@@ -2,7 +2,7 @@
  * Tests for the memory-compression store accessors (retire-Rust RES-4a): the additive
  * `ensureCompressionColumns` migration + getMemoryById + insertMemory, against a tmp libSQL DB.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -80,6 +80,30 @@ describe('memory-compression store', () => {
   it('getMemoryById returns null for a missing id', async () => {
     await ensureCompressionColumns(client);
     expect(await getMemoryById(client, 'nope')).toBeNull();
+  });
+
+  it('insertMemory(sourceDir) writes a per-file source carrying derived_from; without it, DB-only', async () => {
+    await ensureCompressionColumns(client);
+    const mc: MemoryRow = {
+      id: 'mem-file-1',
+      content: 'durable gist',
+      tags: ['scope:user'],
+      source: 'memory',
+      author: 'agent',
+      createdAt: '2026-06-09T00:00:00Z',
+      derivedFrom: ['mem-a', 'mem-b'],
+      consumedByUserLessons: 3,
+    };
+    const srcDir = join(dir, 'lessons');
+    await insertMemory(client, mc, srcDir);
+    // The file-first source exists and the DB row is present too.
+    expect(await readdir(srcDir)).toContain('mem-file-1.md');
+    expect((await getMemoryById(client, 'mem-file-1'))?.derivedFrom).toEqual(['mem-a', 'mem-b']);
+
+    // No sourceDir → DB-only, no file written (and no crash).
+    await insertMemory(client, { ...mc, id: 'mem-file-2' });
+    expect(await readdir(srcDir)).not.toContain('mem-file-2.md');
+    expect(await getMemoryById(client, 'mem-file-2')).not.toBeNull();
   });
 
   function memRow(id: string, over: Partial<MemoryRow> = {}): MemoryRow {

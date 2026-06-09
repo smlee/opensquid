@@ -49,6 +49,8 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
           source TEXT NOT NULL,
           author TEXT NOT NULL,
           created_at TEXT NOT NULL,
+          derived_from TEXT NOT NULL DEFAULT '[]',
+          consumed_by_user_lessons INTEGER NOT NULL DEFAULT 0,
           embedding F32_BLOB(${embedder.dim})
         );
       `);
@@ -78,7 +80,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       if (vec) {
         try {
           const rs = await client.execute({
-            sql: `SELECT id, content, tags, source, author, created_at
+            sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons
                   FROM lessons
                   WHERE embedding IS NOT NULL
                   ORDER BY vector_distance_cos(embedding, vector32(?)) ASC
@@ -96,7 +98,8 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       if (safeMatch) {
         try {
           const lex = await client.execute({
-            sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at
+            sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at,
+                  l.derived_from, l.consumed_by_user_lessons
                   FROM lessons_fts f JOIN lessons l ON l.id = f.id
                   WHERE lessons_fts MATCH ?
                   LIMIT ?`,
@@ -127,9 +130,12 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       // INSERT OR REPLACE to key on), keeping the two in lockstep.
       await client.execute({ sql: `DELETE FROM lessons WHERE id = ?`, args: [lesson.id] });
       await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [lesson.id] });
+      const derivedFromJson = JSON.stringify(lesson.derivedFrom ?? []);
+      const consumed = lesson.consumedByUserLessons ?? 0;
       await client.execute({
-        sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, embedding)
-              VALUES (?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
+        sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, derived_from,
+              consumed_by_user_lessons, embedding)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
         args: vec
           ? [
               lesson.id,
@@ -138,9 +144,20 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
               lesson.source,
               lesson.author,
               lesson.createdAt,
+              derivedFromJson,
+              consumed,
               JSON.stringify(vec),
             ]
-          : [lesson.id, lesson.content, tagsJson, lesson.source, lesson.author, lesson.createdAt],
+          : [
+              lesson.id,
+              lesson.content,
+              tagsJson,
+              lesson.source,
+              lesson.author,
+              lesson.createdAt,
+              derivedFromJson,
+              consumed,
+            ],
       });
       await client.execute({
         sql: `INSERT INTO lessons_fts (id, content, tags, source) VALUES (?, ?, ?, ?)`,
@@ -207,6 +224,10 @@ function s(r: Row, key: string): string {
   const v = r[key];
   return typeof v === 'string' ? v : '';
 }
+function n(r: Row, key: string): number {
+  const v = r[key];
+  return typeof v === 'number' ? v : typeof v === 'bigint' ? Number(v) : 0;
+}
 function rowToLesson(r: Row): Lesson {
   return {
     id: s(r, 'id'),
@@ -215,5 +236,7 @@ function rowToLesson(r: Row): Lesson {
     source: s(r, 'source'),
     author: s(r, 'author') === 'user' ? 'user' : 'agent',
     createdAt: s(r, 'created_at'),
+    derivedFrom: JSON.parse(s(r, 'derived_from') || '[]') as string[],
+    consumedByUserLessons: n(r, 'consumed_by_user_lessons'),
   };
 }

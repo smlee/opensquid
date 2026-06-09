@@ -61,6 +61,18 @@ describe('perfile_source', () => {
   it('missing dir → []', async () => {
     expect(await readRecords(join(dir, 'nope'))).toEqual([]);
   });
+
+  it('round-trips the compression keys when non-default; base lesson stays key-free', async () => {
+    const mc = lesson({ id: 'mc-1', derivedFrom: ['mem-a', 'mem-b'], consumedByUserLessons: 4 });
+    await writeRecord(dir, mc);
+    const [got] = await readRecords(dir);
+    expect(got).toEqual(mc); // derivedFrom + consumedByUserLessons survive
+    // a base lesson (no compression keys) writes a file WITHOUT those keys → round-trips key-free
+    await writeRecord(dir, lesson({ id: 'base-1' }));
+    const baseRaw = await readFile(join(dir, 'base-1.md'), 'utf8');
+    expect(baseRaw).not.toContain('derived_from');
+    expect(baseRaw).not.toContain('consumed_by_user_lessons');
+  });
 });
 
 describe('libsql store: per-file source + rebuild', () => {
@@ -95,6 +107,28 @@ describe('libsql store: per-file source + rebuild', () => {
     await backend.init();
     const hits = await backend.recall('needle', 5);
     expect(hits.some((h) => h.lesson.id === 'r1')).toBe(true);
+  });
+
+  it('rebuild keeps a consolidated memory (Mc) AND its derived_from trace (the HIGH bug)', async () => {
+    // An Mc with a per-file source carrying derived_from (what insertMemory(sourceDir) now writes).
+    await writeRecord(
+      dir,
+      lesson({
+        id: 'mc-x',
+        content: 'compressed needle gist',
+        derivedFrom: ['mem-a', 'mem-b'],
+        consumedByUserLessons: 4, // user-immunity counter — must survive the rebuild too
+      }),
+    );
+    const dbUrl = `file:${join(dir, 'idx.db')}`;
+    await rebuildLibsqlIndex({ dbUrl, embedder: fakeEmbedder, sourceDir: dir });
+    const backend = libsqlStoreBackend({ dbUrl, embedder: fakeEmbedder });
+    await backend.init();
+    const hit = (await backend.recall('needle', 5)).find((h) => h.lesson.id === 'mc-x');
+    expect(hit).toBeDefined(); // Mc survived the rebuild (was lost before the fix)
+    expect(hit?.lesson.content).toBe('compressed needle gist');
+    expect(hit?.lesson.derivedFrom).toEqual(['mem-a', 'mem-b']); // the compression trace survived too
+    expect(hit?.lesson.consumedByUserLessons).toBe(4); // immunity counter preserved across rebuild
   });
 });
 

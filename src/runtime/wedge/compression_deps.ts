@@ -40,6 +40,9 @@ export async function makeConsolidateRunner(): Promise<ConsolidateRunner> {
     throw new Error(`compression: backend kind "${cfg.kind}" has no dbUrl — cannot consolidate`);
   }
   const dbUrl = cfg.dbUrl; // narrowed to a libsql-* variant
+  // File-first source-of-truth (only the fastembed variant carries it) so a consolidated memory
+  // survives rebuildLibsqlIndex — see T-fix-compression-durability.
+  const sourceDir = 'sourceDir' in cfg ? cfg.sourceDir : undefined;
   const backend = createBackend(cfg);
   await backend.init();
   const client = createClient({ url: dbUrl });
@@ -50,7 +53,7 @@ export async function makeConsolidateRunner(): Promise<ConsolidateRunner> {
 
   const deps: ConsolidateDeps = {
     getMemoryById: (id) => getMemoryById(client, id),
-    insertMemory: (m: MemoryRow) => insertMemory(client, m),
+    insertMemory: (m: MemoryRow) => insertMemory(client, m, sourceDir),
     recallIds: (query, k) => backend.recall(query, k).then((hits) => hits.map((h) => h.lesson.id)),
     deleteMemory: (id) => backend.deleteLesson(id, { force: true }).then(() => undefined),
     summarize: (prompt) => {

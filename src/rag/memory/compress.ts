@@ -11,6 +11,8 @@
  */
 import { createHash } from 'node:crypto';
 
+import type { Lesson } from '../types.js';
+
 import { detectCycleInWindow } from './cycle.js';
 
 const MAX_DESCRIPTION_CHARS = 200; // compress.rs:42
@@ -37,14 +39,8 @@ Output as JSON matching one of:
 
 /** The memory row compress reads/writes — the libSQL `lessons` (source:'memory') shape EXTENDED with
  * the two compression columns. No `scope` column: scope is the `scope:<v>` tag. */
-export interface MemoryRow {
-  id: string;
-  content: string;
-  tags: string[];
-  source: string;
-  author: 'user' | 'agent';
-  createdAt: string;
-  derivedFrom: string[];
+export interface MemoryRow extends Lesson {
+  derivedFrom: string[]; // re-narrowed to required (Lesson has them optional)
   consumedByUserLessons: number;
   embedding?: number[] | null;
 }

@@ -54,6 +54,9 @@ export async function makeMemoryStore(): Promise<MemoryStore> {
   const cfg = await resolveBackendConfig();
   if (!('dbUrl' in cfg)) throw new Error(`auto-memory: backend "${cfg.kind}" has no dbUrl`);
   const dbUrl = cfg.dbUrl;
+  // File-first source-of-truth (fastembed variant only) so imported memories are durable across a
+  // rebuildLibsqlIndex — see T-fix-compression-durability.
+  const sourceDir = 'sourceDir' in cfg ? cfg.sourceDir : undefined;
   const backend = createBackend(cfg);
   await backend.init();
   const client = createClient({ url: dbUrl });
@@ -65,17 +68,21 @@ export async function makeMemoryStore(): Promise<MemoryStore> {
       const content = folded(description, body);
       const id = `mem-${createHash('sha256').update(`${name}\n${content}`).digest('hex').slice(0, 16)}`;
       const embedding = await backend.embed(content);
-      await insertMemory(client, {
-        id,
-        content,
-        tags: [`scope:${scope}`, `${IMPORT_TAG_PREFIX}${name}`],
-        source: 'memory',
-        author: 'user',
-        createdAt: nowIso(),
-        derivedFrom: [],
-        consumedByUserLessons: 0,
-        embedding,
-      });
+      await insertMemory(
+        client,
+        {
+          id,
+          content,
+          tags: [`scope:${scope}`, `${IMPORT_TAG_PREFIX}${name}`],
+          source: 'memory',
+          author: 'user',
+          createdAt: nowIso(),
+          derivedFrom: [],
+          consumedByUserLessons: 0,
+          embedding,
+        },
+        sourceDir,
+      );
       return { id };
     },
     get: (id) =>
