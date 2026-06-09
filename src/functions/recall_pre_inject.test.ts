@@ -32,6 +32,13 @@ import type { Event } from '../runtime/types.js';
 import { type EvalCtx, FunctionRegistry } from './registry.js';
 import { registerRecallPreInjectFunction } from './recall_pre_inject.js';
 
+// Fix the recall scope so behavior is deterministic regardless of the test env's project context
+// (a null namespace prepends the fail-loud notice → would change the empty-result path; broke CI).
+vi.mock('../rag/scope.js', () => ({
+  resolveRecallScope: () => Promise.resolve({ namespace: 'test-ns' }),
+  NULL_SCOPE_NOTICE: 'NULL_SCOPE_NOTICE',
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

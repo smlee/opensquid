@@ -30,6 +30,7 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
+import { resolveRecallScope } from '../../rag/scope.js';
 import {
   fetchExistingImportIndex,
   importAutoMemoryDir,
@@ -69,6 +70,8 @@ export async function snapshotAuto(
     dryRun: false,
     existingIndex,
     fileWhitelist: recent,
+    // T-memory-scope-isolation: tag `project`-scoped imports with the current project's umbrella.
+    namespace: (await resolveRecallScope()).namespace,
   });
   // Ensure opensquidHome exists before writing the timestamp file.
   await fs.mkdir(opensquidHome, { recursive: true });

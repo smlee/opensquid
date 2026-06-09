@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.371] - 2026-06-09
+
+### Fixed — memory scope isolation completed: legacy rows migrated, importer-callers scoped, CI green
+
+Completes T-memory-scope-isolation (the 0.5.370 mechanism). (1) **Legacy-row migration**
+(`src/setup/migrate/migrate-scope.ts`, dry-run default): maps the pre-scope Rust-era tags to the new
+`tier`/`namespace` columns — `scope:!project loop` → namespace `loop`, `scope:!project RaumPilates-FE` →
+namespace `raumpilates`, everything else (`scope:user`, empty `!project ''`, bare `scope:project`,
+unknown names) → `shared`. Pure `classifyScope` predicate (unit-tabled); additive, idempotent, conserves
+counts, never deletes a row. RAN on the live store: 166 rows → 14 `loop` + 16 `raumpilates` + 136 shared
+(backed up first). So EXISTING memories now scope correctly, not just new ones. (2) **Importer-callers**
+(`setup/cli/memory.ts`, `setup/migrate/auto_memory_snapshot.ts`) now pass `resolveRecallScope().namespace`
+so auto-memory imports are tagged with the project's umbrella. (3) **CI fix**: the fail-loud null-namespace
+notice made `recall.test.ts`/`recall_pre_inject.test.ts` output env-dependent (null in CI, "loop" locally) —
+both now mock `resolveRecallScope` for determinism (production behavior unchanged). (4) Governing
+architecture doc gains §9b documenting the scoping model. Spec: docs/tasks/T-memory-scope-isolation.md.
+
 ## [0.5.370] - 2026-06-09
 
 ### Fixed — memory recall is project-scoped again; scopeless recall is now a compile error (completes a retire-Rust regression)

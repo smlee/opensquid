@@ -21,6 +21,13 @@ vi.mock('../../rag/backend_factory.js', () => ({
   createBackend: vi.fn(),
 }));
 
+// Fix the recall scope so the output is deterministic regardless of the test env's project context
+// (a null namespace would prepend the fail-loud notice — env-dependent, which broke CI).
+vi.mock('../../rag/scope.js', () => ({
+  resolveRecallScope: () => Promise.resolve({ namespace: 'test-ns' }),
+  NULL_SCOPE_NOTICE: 'NULL_SCOPE_NOTICE',
+}));
+
 function mkBackend(hits: RecallHit[]): {
   init: () => Promise<void>;
   embed: () => Promise<number[] | null>;

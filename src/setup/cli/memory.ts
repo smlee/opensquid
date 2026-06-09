@@ -36,6 +36,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { resolveRecallScope } from '../../rag/scope.js';
 import { makeMemoryStore, type MemoryStore } from '../migrate/memory_store_handle.js';
 import {
   fetchExistingImportIndex,
@@ -130,6 +131,8 @@ async function actImportAuto(deps: Required<MemoryCliDeps>, opts: ImportAutoOpts
     const result = await importAutoMemoryDir(dir, store, {
       dryRun: opts.dryRun,
       existingIndex,
+      // T-memory-scope-isolation: tag `project`-scoped imports with the current project's umbrella.
+      namespace: (await resolveRecallScope()).namespace,
     });
     reportResult(deps, result, opts.dryRun ? '[dry-run] ' : '', dir);
   } finally {
