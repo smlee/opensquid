@@ -17,7 +17,9 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { atomicWriteFile, safeRecordId } from '../../storage/atomic_file.js';
 
-import type { CausalNarrative, LessonStatus } from './gate.js';
+import { normalizeCausalNarrative } from './gate.js';
+
+import type { LessonStatus } from './gate.js';
 import type { WedgeLesson } from './store.js';
 
 /** gate.rs MAX_APPLIED_SESSION_IDS — cap applied_session_ids growth. */
@@ -109,7 +111,11 @@ export async function readWedgeRecords(sourceDir: string): Promise<WedgeLesson[]
             ? (fm.applied_session_ids as string[])
             : [],
           ...(fm.causal_narrative !== undefined && fm.causal_narrative !== null
-            ? { causalNarrative: fm.causal_narrative as CausalNarrative }
+            ? {
+                causalNarrative: normalizeCausalNarrative(
+                  fm.causal_narrative as Record<string, unknown>,
+                ),
+              }
             : {}),
         });
       } catch {

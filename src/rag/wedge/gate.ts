@@ -30,6 +30,24 @@ export interface CausalNarrative {
   evidenceRefs: string[];
 }
 
+/**
+ * Normalize a raw on-disk / DB `causal_narrative` object to a `CausalNarrative`. The TS writer emits
+ * camelCase `evidenceRefs`, but the RES-3d-migrated Rust lessons carry snake_case `evidence_refs`
+ * (and a richer field set — `trigger`/`failure_mode`/`correction`); a blind cast left `evidenceRefs`
+ * undefined and the gate mis-blocked (or, pre-guard, crashed) on such a lesson. Maps the key
+ * (camelCase wins if both present, absent/malformed → []) while PRESERVING every other field so a
+ * read→write round-trip is lossless. Shared by both readers (per-file source + the libSQL row).
+ */
+export function normalizeCausalNarrative(raw: Record<string, unknown>): CausalNarrative {
+  const { evidence_refs, ...rest } = raw;
+  const evidence = rest.evidenceRefs ?? evidence_refs;
+  return {
+    ...rest,
+    confidence: rest.confidence as Confidence,
+    evidenceRefs: Array.isArray(evidence) ? (evidence as string[]) : [],
+  };
+}
+
 export type LessonStatus = 'pending' | 'active' | 'promoted' | 'superseded' | 'discarded';
 
 export interface LessonFrontmatter {
@@ -122,7 +140,7 @@ export function checkPromotionGate(
     blocks.push('speculative-narrative');
   } else if (
     fm.causalNarrative.confidence === 'observed' &&
-    fm.causalNarrative.evidenceRefs.length === 0
+    (fm.causalNarrative.evidenceRefs?.length ?? 0) === 0
   ) {
     blocks.push('observed-confidence-without-evidence-refs');
   }

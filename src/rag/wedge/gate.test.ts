@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import {
   checkPromotionGate,
   DEFAULT_PROMOTION_CONFIG,
+  normalizeCausalNarrative,
+  type CausalNarrative,
   type LessonFrontmatter,
   type PromotionConfig,
 } from './gate.js';
@@ -129,6 +131,51 @@ describe('checkPromotionGate', () => {
         NOW,
       ).kind,
     ).toBe('promote');
+  });
+
+  it('observed narrative with undefined evidenceRefs → clean block, never throws (the MAJOR bug)', () => {
+    // A pre-normalize / malformed object (e.g. a raw snake_case file cast before the read-side fix)
+    // must not crash the gate — the optional-chain guard treats it as no-evidence.
+    const fm = passingFm({
+      causalNarrative: { confidence: 'observed' } as unknown as CausalNarrative,
+    });
+    expect(() => blockReasons(fm)).not.toThrow();
+    expect(blockReasons(fm)).toContain('observed-confidence-without-evidence-refs');
+  });
+
+  describe('normalizeCausalNarrative', () => {
+    it('maps snake_case evidence_refs → evidenceRefs', () => {
+      const cn = normalizeCausalNarrative({ confidence: 'observed', evidence_refs: ['m1', 'm2'] });
+      expect(cn.confidence).toBe('observed');
+      expect(cn.evidenceRefs).toEqual(['m1', 'm2']);
+    });
+    it('camelCase wins when both spellings are present', () => {
+      const cn = normalizeCausalNarrative({
+        confidence: 'observed',
+        evidenceRefs: ['camel'],
+        evidence_refs: ['snake'],
+      });
+      expect(cn.evidenceRefs).toEqual(['camel']);
+    });
+    it('absent/malformed evidence → []', () => {
+      expect(normalizeCausalNarrative({ confidence: 'inferred' }).evidenceRefs).toEqual([]);
+      expect(
+        normalizeCausalNarrative({ confidence: 'inferred', evidence_refs: 'oops' }).evidenceRefs,
+      ).toEqual([]);
+    });
+    it('preserves richer Rust fields (non-lossy)', () => {
+      const cn = normalizeCausalNarrative({
+        trigger: 't',
+        failure_mode: 'f',
+        correction: 'c',
+        confidence: 'inferred',
+        evidence_refs: ['m'],
+      }) as unknown as Record<string, unknown>;
+      expect(cn.evidenceRefs).toEqual(['m']);
+      expect(cn.trigger).toBe('t');
+      expect(cn.failure_mode).toBe('f');
+      expect(cn.correction).toBe('c');
+    });
   });
 
   it('origin-diversity inert at default 0; fires when configured', () => {

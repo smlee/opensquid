@@ -20,7 +20,7 @@ import { ftsEscape } from '../backends/libsql_store.js';
 
 import {
   checkPromotionGate,
-  type CausalNarrative,
+  normalizeCausalNarrative,
   type LessonFrontmatter,
   type LessonStatus,
 } from './gate.js';
@@ -140,7 +140,11 @@ export function wedgeLessonStore(opts: {
       thumbsDownCount: num(row.thumbs_down_count),
       externalSignalSources: JSON.parse(str(row.external_signal_sources) || '[]') as string[],
       appliedSessionIds: JSON.parse(str(row.applied_session_ids) || '[]') as string[],
-      ...(cn !== '' ? { causalNarrative: JSON.parse(cn) as CausalNarrative } : {}),
+      // Normalize the DB-stored JSON the same way as the per-file reader: RES-3d migrated rows
+      // carry snake_case `evidence_refs`, which a blind cast left undefined (gate mis-block / crash).
+      ...(cn !== ''
+        ? { causalNarrative: normalizeCausalNarrative(JSON.parse(cn) as Record<string, unknown>) }
+        : {}),
     };
   };
 

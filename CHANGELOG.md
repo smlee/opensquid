@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.368] - 2026-06-09
+
+### Fixed — wedge promotion gate no longer crashes/mis-blocks on a snake_case `observed` lesson (MAJOR latent; 48h-audit finding)
+
+`CausalNarrative` is camelCase `{ confidence, evidenceRefs }`, but two readers reconstructed it from the
+on-disk `causal_narrative` with a BLIND cast — `readWedgeRecords` (per-file) and `rowToWedge` (libSQL
+row). The RES-3d migration populated both surfaces with the Rust snake_case shape (`evidence_refs`), so
+`evidenceRefs` came back `undefined` and the gate's `observed`-arm deref (`evidenceRefs.length`) threw
+`undefined.length` → `promoteLesson` crashed (fails-closed). Live DB confirms 5 of 49 lessons carry a
+snake_case narrative (all `inferred` today → latent). Fix: one exported, **non-lossy**
+`normalizeCausalNarrative` (owned by gate.ts) that maps `evidence_refs`→`evidenceRefs` (camelCase wins
+if both present; absent/malformed → `[]`) while PRESERVING the richer Rust fields
+(`trigger`/`failure_mode`/`correction`) so a rebuild round-trip is lossless — wired at BOTH readers
+(`source.ts`, `store.ts`) — plus a total optional-chain guard at the gate deref
+(`evidenceRefs?.length ?? 0`) so the safety-critical gate never crashes on malformed input regardless of
+source. Tests: `normalizeCausalNarrative` unit (snake→camel, camel-wins, []-default, non-lossy); the
+per-file + raw-inserted-DB-row read paths; the gate guard.
+
 ## [0.5.367] - 2026-06-08
 
 ### Removed — the loop-engine subsystem is deleted; opensquid is fully engine-free (retire-Rust RES-6; retire-Rust COMPLETE)

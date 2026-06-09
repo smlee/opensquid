@@ -7,6 +7,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
@@ -52,6 +53,51 @@ describe('wedgeLessonStore', () => {
     expect(fm.status).toBe('pending');
     expect(fm.created_at).toBe(clock);
     expect(fm.applied_count).toBe(0);
+  });
+
+  it('normalizes a snake_case observed DB row on read → gate sees the evidence (the MAJOR bug)', async () => {
+    // Inject a row exactly as the RES-3d migration left it: causal_narrative JSON with snake_case
+    // evidence_refs. A blind cast left evidenceRefs undefined → the gate mis-blocked (or crashed).
+    const c = createClient({ url: `file:${join(dir, 'wg.db')}` });
+    const insertSnake = async (id: string, refs: string): Promise<void> => {
+      await c.execute({
+        sql: `INSERT INTO wg_lessons (id, description, body, status, authored_by, created_at,
+              updated_at, applied_count, thumbs_up_count, thumbs_down_count, external_signal_sources,
+              applied_session_ids, causal_narrative) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        args: [
+          id,
+          'snake lesson',
+          'body',
+          'pending',
+          'agent',
+          '2026-06-01T00:00:00.000Z', // > 24h before clock (2026-06-08) → time-floor passes
+          '2026-06-01T00:00:00.000Z',
+          5, // applied_count >= required
+          0,
+          0,
+          '["user_thumbs_up"]',
+          '[]',
+          `{"confidence":"observed","evidence_refs":${refs}}`,
+        ],
+      });
+    };
+    await insertSnake('les-snake-ok', '["mem-1","mem-2"]');
+    await insertSnake('les-snake-empty', '[]');
+
+    // With evidence present, the observed-confidence gate is satisfied → promotion SUCCEEDS.
+    const ok = await store.promoteLesson('les-snake-ok');
+    expect(ok.status).toBe('promoted');
+
+    // With empty evidence, it blocks CLEANLY (no crash) on the observed-without-evidence reason.
+    try {
+      await store.promoteLesson('les-snake-empty');
+      throw new Error('expected PromotionBlockedError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(PromotionBlockedError);
+      expect((e as PromotionBlockedError).reasons).toContain(
+        'observed-confidence-without-evidence-refs',
+      );
+    }
   });
 
   it('promoteLesson THROWS PromotionBlockedError (kebab prefixes) for a fresh lesson', async () => {
