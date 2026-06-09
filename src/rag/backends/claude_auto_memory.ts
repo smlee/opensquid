@@ -96,7 +96,10 @@ export function claudeAutoMemoryBackend(): RagBackend {
       return null;
     },
 
-    async recall(query, k): Promise<RecallHit[]> {
+    // `_scope` satisfies the RagBackend contract but is unused: this backend reads `projectMemoryDir()`
+    // (the CURRENT project's auto-memory dir), so isolation is inherent in the directory — no
+    // cross-project store to filter (T-memory-scope-isolation: documented out-of-scope backend).
+    async recall(query, k, _scope): Promise<RecallHit[]> {
       // ENOENT → no memory yet for this project. Return [] rather than
       // throwing so a fresh project doesn't blow up on first recall.
       const files = await readdir(dir).catch((): string[] => []);

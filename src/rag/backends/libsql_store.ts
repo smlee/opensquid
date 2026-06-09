@@ -17,10 +17,10 @@ import { rrfFuse } from '../rrf.js';
 
 import { deleteRecord, readRecords, writeRecord } from './perfile_source.js';
 
-import { UserAuthoredImmunityError } from '../types.js';
+import { inScope, UserAuthoredImmunityError } from '../types.js';
 
 import type { Embedder } from '../embedders/types.js';
-import type { DeleteResult, Lesson, RagBackend, RecallHit } from '../types.js';
+import type { DeleteResult, Lesson, MemoryTier, RagBackend, RecallHit } from '../types.js';
 
 export interface LibsqlStoreOpts {
   dbUrl: string;
@@ -51,9 +51,23 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
           created_at TEXT NOT NULL,
           derived_from TEXT NOT NULL DEFAULT '[]',
           consumed_by_user_lessons INTEGER NOT NULL DEFAULT 0,
+          tier TEXT NOT NULL DEFAULT 'shared',
+          namespace TEXT,
           embedding F32_BLOB(${embedder.dim})
         );
       `);
+      // Additive scope columns for pre-existing DBs (CREATE TABLE IF NOT EXISTS won't add them).
+      // Idempotent: a duplicate-column error means an already-migrated DB; any other error surfaces later.
+      for (const ddl of [
+        `ALTER TABLE lessons ADD COLUMN tier TEXT NOT NULL DEFAULT 'shared'`,
+        `ALTER TABLE lessons ADD COLUMN namespace TEXT`,
+      ]) {
+        try {
+          await client.execute(ddl);
+        } catch {
+          /* already migrated */
+        }
+      }
       await client.execute(`
         CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts
         USING fts5(id UNINDEXED, content, tags, source);
@@ -70,22 +84,26 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
 
     embed: (text) => embedder.embed(text),
 
-    async recall(query, k) {
+    async recall(query, k, scope) {
       if (!client) throw new Error('libsql-store: not initialized');
       const safeMatch = ftsEscape(query);
       const vec = await embedder.embed(query);
       const semantic: RecallHit[] = [];
       const lexical: RecallHit[] = [];
+      // Scope filter at the STORE (the real boundary): a row is eligible iff it is `shared` OR its
+      // namespace matches the recall scope. A null scope namespace binds `namespace = NULL` (always
+      // false in SQL) → only `shared` rows match → fail-closed. `ns` is the bound param for both legs.
+      const ns = scope.namespace;
 
       if (vec) {
         try {
           const rs = await client.execute({
-            sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons
+            sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons, tier, namespace
                   FROM lessons
-                  WHERE embedding IS NOT NULL
+                  WHERE embedding IS NOT NULL AND (tier = 'shared' OR namespace = ?)
                   ORDER BY vector_distance_cos(embedding, vector32(?)) ASC
                   LIMIT ?`,
-            args: [JSON.stringify(vec), k],
+            args: [ns, JSON.stringify(vec), k],
           });
           rs.rows.forEach((r, i) =>
             semantic.push({ lesson: rowToLesson(r), score: 1 / (i + 1), source: 'semantic' }),
@@ -99,11 +117,11 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
         try {
           const lex = await client.execute({
             sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at,
-                  l.derived_from, l.consumed_by_user_lessons
+                  l.derived_from, l.consumed_by_user_lessons, l.tier, l.namespace
                   FROM lessons_fts f JOIN lessons l ON l.id = f.id
-                  WHERE lessons_fts MATCH ?
+                  WHERE lessons_fts MATCH ? AND (l.tier = 'shared' OR l.namespace = ?)
                   LIMIT ?`,
-            args: [safeMatch, k],
+            args: [safeMatch, ns, k],
           });
           lex.rows.forEach((r, i) =>
             lexical.push({ lesson: rowToLesson(r), score: 1 / (i + 1), source: 'lexical' }),
@@ -113,7 +131,11 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
         }
       }
 
-      return rrfFuse([semantic, lexical], k);
+      // Post-filter via the authoritative pure predicate — a backstop so the SQL WHERE and the rule
+      // can never silently diverge (defense in depth; the isolation test asserts both).
+      return rrfFuse([semantic, lexical], k).filter((h) =>
+        inScope(h.lesson.tier, h.lesson.namespace, scope),
+      );
     },
 
     async storeLesson(lesson) {
@@ -132,10 +154,12 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [lesson.id] });
       const derivedFromJson = JSON.stringify(lesson.derivedFrom ?? []);
       const consumed = lesson.consumedByUserLessons ?? 0;
+      const tier: MemoryTier = lesson.tier ?? 'shared';
+      const namespace = lesson.namespace ?? null;
       await client.execute({
         sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, derived_from,
-              consumed_by_user_lessons, embedding)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
+              consumed_by_user_lessons, tier, namespace, embedding)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
         args: vec
           ? [
               lesson.id,
@@ -146,6 +170,8 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
               lesson.createdAt,
               derivedFromJson,
               consumed,
+              tier,
+              namespace,
               JSON.stringify(vec),
             ]
           : [
@@ -157,6 +183,8 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
               lesson.createdAt,
               derivedFromJson,
               consumed,
+              tier,
+              namespace,
             ],
       });
       await client.execute({
@@ -238,5 +266,7 @@ function rowToLesson(r: Row): Lesson {
     createdAt: s(r, 'created_at'),
     derivedFrom: JSON.parse(s(r, 'derived_from') || '[]') as string[],
     consumedByUserLessons: n(r, 'consumed_by_user_lessons'),
+    tier: s(r, 'tier') === 'project' ? 'project' : 'shared',
+    namespace: typeof r.namespace === 'string' ? r.namespace : null,
   };
 }

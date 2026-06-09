@@ -34,6 +34,7 @@
 
 import { z } from 'zod';
 
+import { resolveRecallScope } from '../../../rag/scope.js';
 import type { RagBackend, RecallHit } from '../../../rag/types.js';
 import type { ToolContext, ToolHandler, ToolSpec } from '../types.js';
 
@@ -81,7 +82,8 @@ export function makeRecallHandler(backend: RagBackend): ToolHandler {
   return async (input, _ctx: ToolContext) => {
     const parsed = input as RecallInputT;
     const k = parsed.k ?? DEFAULT_K;
-    const hits = await backend.recall(parsed.query, k);
+    const scope = await resolveRecallScope();
+    const hits = await backend.recall(parsed.query, k, scope);
     if (hits.length === 0) return `no results for query=${JSON.stringify(parsed.query)}`;
     return hits.map(formatHit).join('\n---\n');
   };

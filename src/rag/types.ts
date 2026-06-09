@@ -26,6 +26,37 @@ export interface Lesson {
   // the per-file source + rebuild preserve a consolidated memory's trace (see compress.ts MemoryRow).
   derivedFrom?: string[];
   consumedByUserLessons?: number;
+  // Scope (T-memory-scope-isolation): `shared` memories cross every project; `project` memories are
+  // namespaced to an umbrella id. Absent ⇒ `shared` / null namespace (back-compat with pre-scope rows).
+  tier?: MemoryTier;
+  namespace?: string | null;
+}
+
+/**
+ * A memory's scope tier. `shared` crosses every project (user/global knowledge); `project` is isolated
+ * to one umbrella `namespace`. Kept to exactly two grounded values — every write path can produce both
+ * (memorize enum-maps, the importer resolves the umbrella). See T-memory-scope-isolation.
+ */
+export type MemoryTier = 'shared' | 'project';
+
+/** The required recall scope: the caller's resolved umbrella namespace (null = no project context). */
+export interface RecallScope {
+  namespace: string | null;
+}
+
+/**
+ * The PURE eligibility predicate — the one place the cross/isolate rule lives, so it is unit-testable and
+ * cannot drift. A hit is eligible iff it is `shared`, OR it is `project` AND its namespace matches the
+ * recall scope. A null recall namespace (no project context) therefore matches ONLY `shared` rows
+ * (fail-closed: project memory is never leaked when the project is unknown). Absent tier ⇒ `shared`.
+ */
+export function inScope(
+  tier: MemoryTier | undefined,
+  namespace: string | null | undefined,
+  scope: RecallScope,
+): boolean {
+  if ((tier ?? 'shared') === 'shared') return true;
+  return namespace != null && namespace === scope.namespace;
 }
 
 export interface RecallHit {
@@ -57,7 +88,9 @@ export class UserAuthoredImmunityError extends Error {
 export interface RagBackend {
   init(): Promise<void>;
   embed(text: string): Promise<number[] | null>; // null = embedder unavailable
-  recall(query: string, k: number): Promise<RecallHit[]>;
+  // `scope` is REQUIRED (no default): the structural firewall. A future rewrite that forgets to thread
+  // scope is a COMPILE error, not a silent cross-project leak (the exact regression this fixes).
+  recall(query: string, k: number, scope: RecallScope): Promise<RecallHit[]>;
   storeLesson(lesson: Lesson): Promise<void>;
   // Explicit-only deletion (the no-auto-delete invariant): user-authored lessons require force.
   deleteLesson(id: string, opts?: { force?: boolean }): Promise<DeleteResult>;

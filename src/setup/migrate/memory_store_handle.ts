@@ -40,6 +40,8 @@ export interface MemoryStore {
     description: string;
     body: string;
     scope: string;
+    /** Resolved umbrella namespace for a `project`-scoped memory (T-memory-scope-isolation). */
+    namespace?: string | null;
   }): Promise<{ id: string }>;
   get(id: string): Promise<{ content: string } | null>;
   update(id: string, input: { description: string; body: string; scope: string }): Promise<void>;
@@ -64,10 +66,13 @@ export async function makeMemoryStore(): Promise<MemoryStore> {
   const nowIso = (): string => new Date().toISOString();
 
   return {
-    async create({ name, description, body, scope }) {
+    async create({ name, description, body, scope, namespace }) {
       const content = folded(description, body);
       const id = `mem-${createHash('sha256').update(`${name}\n${content}`).digest('hex').slice(0, 16)}`;
       const embedding = await backend.embed(content);
+      // Scope tier (T-memory-scope-isolation): a `project`/`team` scope is namespaced; everything else
+      // is `shared`. The resolved umbrella namespace is set only for the project tier.
+      const tier = scope === 'project' || scope === 'team' ? 'project' : 'shared';
       await insertMemory(
         client,
         {
@@ -79,6 +84,8 @@ export async function makeMemoryStore(): Promise<MemoryStore> {
           createdAt: nowIso(),
           derivedFrom: [],
           consumedByUserLessons: 0,
+          tier,
+          namespace: tier === 'project' ? (namespace ?? null) : null,
           embedding,
         },
         sourceDir,

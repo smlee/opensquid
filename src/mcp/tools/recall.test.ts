@@ -100,10 +100,10 @@ describe('handleRecall', () => {
     vi.mocked(createBackend).mockReturnValue(backend);
 
     await handleRecall({ query: 'q' });
-    expect(recallSpy).toHaveBeenCalledWith('q', 10);
+    expect(recallSpy).toHaveBeenCalledWith('q', 10, expect.anything());
 
     recallSpy.mockClear();
     await handleRecall({ query: 'q', k: 5 });
-    expect(recallSpy).toHaveBeenCalledWith('q', 5);
+    expect(recallSpy).toHaveBeenCalledWith('q', 5, expect.anything());
   });
 });

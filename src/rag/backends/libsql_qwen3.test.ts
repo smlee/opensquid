@@ -131,7 +131,7 @@ describe('libsqlQwen3Backend (real :memory: libsql)', () => {
     // If either table is missing, storeLesson throws.
     await expect(backend.storeLesson(mkLesson('a', 'hello'))).resolves.toBeUndefined();
     // Recall against the lexical leg proves both lessons + lessons_fts rows landed.
-    const hits = await backend.recall('hello', 10);
+    const hits = await backend.recall('hello', 10, { namespace: null });
     expect(hits.length).toBeGreaterThan(0);
   });
 
@@ -189,7 +189,7 @@ describe('libsqlQwen3Backend (real :memory: libsql)', () => {
     await backend.init();
     await backend.storeLesson(mkLesson('a', 'vector branch'));
     // Lexical recall against a content token proves the row landed.
-    const hits = await backend.recall('vector', 10);
+    const hits = await backend.recall('vector', 10, { namespace: null });
     expect(hits.map((h) => h.lesson.id)).toContain('a');
   });
 
@@ -199,7 +199,7 @@ describe('libsqlQwen3Backend (real :memory: libsql)', () => {
     await backend.init();
     // First storeLesson: embed throws → embedderUp=false → NULL branch.
     await expect(backend.storeLesson(mkLesson('a', 'null branch'))).resolves.toBeUndefined();
-    const hits = await backend.recall('null', 10);
+    const hits = await backend.recall('null', 10, { namespace: null });
     expect(hits.map((h) => h.lesson.id)).toContain('a');
   });
 
@@ -210,7 +210,7 @@ describe('libsqlQwen3Backend (real :memory: libsql)', () => {
     await backend.storeLesson(mkLesson('a', 'fts5 mirror verification'));
     // Recall via the FTS5 MATCH leg — a hit on 'mirror' proves the FTS5
     // row was inserted by storeLesson's second INSERT.
-    const hits = await backend.recall('mirror', 10);
+    const hits = await backend.recall('mirror', 10, { namespace: null });
     expect(hits.map((h) => h.lesson.id)).toContain('a');
   });
 
@@ -229,7 +229,7 @@ describe('libsqlQwen3Backend (real :memory: libsql)', () => {
     await backend.init();
     await backend.storeLesson(mkLesson('a', 'workflow phase audit'));
     await backend.storeLesson(mkLesson('b', 'unrelated kittens'));
-    const hits = await backend.recall('workflow', 10);
+    const hits = await backend.recall('workflow', 10, { namespace: null });
     expect(hits.map((h) => h.lesson.id)).toContain('a');
     expect(hits.every((h) => h.source === 'fused')).toBe(true);
   });
@@ -238,7 +238,7 @@ describe('libsqlQwen3Backend (real :memory: libsql)', () => {
     global.fetch = successFetch().fn;
     const backend = libsqlQwen3Backend({ dbUrl: ':memory:', ollamaUrl: 'http://x' });
     await backend.init();
-    expect(await backend.recall('anything', 10)).toEqual([]);
+    expect(await backend.recall('anything', 10, { namespace: null })).toEqual([]);
   });
 
   it('Q12: recall with empty query — ftsEscape skips lexical; semantic-only fused result', async () => {
@@ -254,8 +254,8 @@ describe('libsqlQwen3Backend (real :memory: libsql)', () => {
     await backend.init();
     await backend.storeLesson(mkLesson('a', 'seed content'));
 
-    const emptyHits = await backend.recall('', 10);
-    const whitespaceHits = await backend.recall('   ', 10);
+    const emptyHits = await backend.recall('', 10, { namespace: null });
+    const whitespaceHits = await backend.recall('   ', 10, { namespace: null });
 
     // Recall doesn't throw; result is bounded by the 1 seeded row.
     expect(emptyHits.length).toBeLessThanOrEqual(1);

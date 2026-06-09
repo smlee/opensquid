@@ -151,8 +151,8 @@ export function libsqlQwen3WithLexicalFallback(opts: QwenWithFallbackOpts): RagB
         return null;
       }
     },
-    async recall(q, k) {
-      return active.recall(q, k);
+    async recall(q, k, scope) {
+      return active.recall(q, k, scope);
     },
     async storeLesson(l) {
       return active.storeLesson(l);

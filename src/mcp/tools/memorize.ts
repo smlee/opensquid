@@ -46,7 +46,8 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
-import type { Lesson, RagBackend } from '../../rag/types.js';
+import { resolveRecallScope } from '../../rag/scope.js';
+import type { Lesson, MemoryTier, RagBackend } from '../../rag/types.js';
 
 export const MemorizeSchema = z.object({
   description: z
@@ -99,7 +100,7 @@ export interface MemorizeOutput {
  * eviction-immune). The id is a deterministic content-hash so re-memorizing the same body is
  * idempotent (mirrors the migration). The verify-probe trailer rides in the persisted content.
  */
-function lessonFromMemorize(args: MemorizeArgs): Lesson {
+function lessonFromMemorize(args: MemorizeArgs, namespace: string | null): Lesson {
   // The id identifies the MEMORY BODY (`args.content`), NOT the write event — so
   // re-memorizing the same body is idempotent (the backend upserts by id). Hash
   // the pre-trailer body: the verify-trailer embeds a wall-clock timestamp
@@ -108,6 +109,9 @@ function lessonFromMemorize(args: MemorizeArgs): Lesson {
   // stored `content` for accountability; it just doesn't drive identity.
   const id = `mem-${createHash('sha256').update(args.content).digest('hex').slice(0, 16)}`;
   const content = withVerificationTrailer(args.content, args.confirmed_quote);
+  // Scope tier (T-memory-scope-isolation): user/global cross every project (`shared`); project/team are
+  // namespaced (`project`). `namespace` is the resolved umbrella (set only for the `project` tier).
+  const tier: MemoryTier = args.scope === 'project' || args.scope === 'team' ? 'project' : 'shared';
   return {
     id,
     content,
@@ -115,6 +119,8 @@ function lessonFromMemorize(args: MemorizeArgs): Lesson {
     source: 'memory',
     author: args.authored_by === 'user' ? 'user' : 'agent',
     createdAt: new Date().toISOString(),
+    tier,
+    namespace: tier === 'project' ? namespace : null,
   };
 }
 
@@ -136,7 +142,12 @@ export async function handleMemorize(
   args: MemorizeArgs,
   backend: RagBackend,
 ): Promise<MemorizeOutput> {
-  const lesson = lessonFromMemorize(args);
+  // Resolve the umbrella namespace ONLY for project/team writes (shared memory needs none).
+  const namespace =
+    args.scope === 'project' || args.scope === 'team'
+      ? (await resolveRecallScope()).namespace
+      : null;
+  const lesson = lessonFromMemorize(args, namespace);
   await backend.storeLesson(lesson);
   return {
     id: lesson.id,

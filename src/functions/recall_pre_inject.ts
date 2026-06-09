@@ -37,6 +37,7 @@
 
 import { z } from 'zod';
 
+import { NULL_SCOPE_NOTICE, resolveRecallScope } from '../rag/scope.js';
 import type { RagBackend, RecallHit } from '../rag/types.js';
 import { applyHitBudget } from '../runtime/load_budget.js';
 import { err, ok } from '../runtime/result.js';
@@ -171,8 +172,9 @@ export function registerRecallPreInjectFunction(
       const query = await composeRecallQuery(rawPrompt, ctx.sessionId);
 
       let hits: RecallHit[];
+      const scope = await resolveRecallScope();
       try {
-        hits = await backend.recall(query, k);
+        hits = await backend.recall(query, k, scope);
       } catch (e) {
         return err({
           kind: 'runtime',
@@ -180,9 +182,16 @@ export function registerRecallPreInjectFunction(
           cause: e,
         });
       }
+      // Fail-LOUD: a null namespace means project memory was withheld this turn — inject the notice so
+      // it is visible, never a silent forget. (Rare: the resolver falls back umbrella → project-uuid.)
+      const notice = scope.namespace === null ? `${NULL_SCOPE_NOTICE}\n\n` : '';
       const { kept, truncated } = selectHitsForInjection(hits, minScore, maxTokens);
-      if (kept.length === 0) return ok(null);
-      const content = formatHitsForInjection(kept, query, truncated);
+      if (kept.length === 0) {
+        return notice === ''
+          ? ok(null)
+          : ok({ kind: 'inject_context' as const, content: notice.trim() });
+      }
+      const content = notice + formatHitsForInjection(kept, query, truncated);
       return ok({ kind: 'inject_context' as const, content });
     },
   });

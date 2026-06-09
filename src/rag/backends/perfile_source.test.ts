@@ -93,7 +93,7 @@ describe('libsql store: per-file source + rebuild', () => {
     await backend.init();
     await backend.storeLesson(lesson({ content: 'the unique needle phrase' }));
     expect(await readRecords(dir)).toHaveLength(1);
-    const hits = await backend.recall('needle', 5);
+    const hits = await backend.recall('needle', 5, { namespace: null });
     expect(hits.some((h) => h.lesson.id === 'lesson-abc123')).toBe(true);
   });
 
@@ -105,7 +105,7 @@ describe('libsql store: per-file source + rebuild', () => {
     expect(n).toBe(2);
     const backend = libsqlStoreBackend({ dbUrl, embedder: fakeEmbedder });
     await backend.init();
-    const hits = await backend.recall('needle', 5);
+    const hits = await backend.recall('needle', 5, { namespace: null });
     expect(hits.some((h) => h.lesson.id === 'r1')).toBe(true);
   });
 
@@ -124,7 +124,9 @@ describe('libsql store: per-file source + rebuild', () => {
     await rebuildLibsqlIndex({ dbUrl, embedder: fakeEmbedder, sourceDir: dir });
     const backend = libsqlStoreBackend({ dbUrl, embedder: fakeEmbedder });
     await backend.init();
-    const hit = (await backend.recall('needle', 5)).find((h) => h.lesson.id === 'mc-x');
+    const hit = (await backend.recall('needle', 5, { namespace: null })).find(
+      (h) => h.lesson.id === 'mc-x',
+    );
     expect(hit).toBeDefined(); // Mc survived the rebuild (was lost before the fix)
     expect(hit?.lesson.content).toBe('compressed needle gist');
     expect(hit?.lesson.derivedFrom).toEqual(['mem-a', 'mem-b']); // the compression trace survived too
@@ -152,7 +154,9 @@ describe('libsql store: deleteLesson (explicit-only, user-immune)', () => {
     await backend.init();
     await backend.storeLesson(lesson({ id: 'a1', author: 'agent', content: 'needle one' }));
     expect(await backend.deleteLesson('a1')).toEqual({ deleted: true, forced: false });
-    expect((await backend.recall('needle', 5)).some((h) => h.lesson.id === 'a1')).toBe(false);
+    expect(
+      (await backend.recall('needle', 5, { namespace: null })).some((h) => h.lesson.id === 'a1'),
+    ).toBe(false);
     expect((await readRecords(dir)).some((l) => l.id === 'a1')).toBe(false);
   });
 

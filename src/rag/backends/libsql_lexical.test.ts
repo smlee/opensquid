@@ -43,7 +43,7 @@ describe('libsqlLexicalBackend', () => {
     await backend.storeLesson(mkLesson('b', 'unrelated content about kittens', ['cats']));
     await backend.storeLesson(mkLesson('c', 'workflow drift detection', ['workflow']));
 
-    const hits = await backend.recall('workflow', 10);
+    const hits = await backend.recall('workflow', 10, { namespace: null });
 
     const ids = hits.map((h) => h.lesson.id).sort();
     expect(ids).toEqual(['a', 'c']);
@@ -59,8 +59,8 @@ describe('libsqlLexicalBackend', () => {
     await backend.init();
     await backend.storeLesson(mkLesson('a', 'some content'));
 
-    expect(await backend.recall('', 10)).toEqual([]);
-    expect(await backend.recall('   ', 10)).toEqual([]);
+    expect(await backend.recall('', 10, { namespace: null })).toEqual([]);
+    expect(await backend.recall('   ', 10, { namespace: null })).toEqual([]);
   });
 
   it('sanitizes FTS5 special chars without crashing', async () => {
@@ -70,7 +70,7 @@ describe('libsqlLexicalBackend', () => {
 
     // Raw FTS5 would reject `"hello"*` as a syntax error — sanitizer drops
     // the `"` and `*`, leaving "hello" which matches the stored doc.
-    const hits = await backend.recall('"hello"*', 10);
+    const hits = await backend.recall('"hello"*', 10, { namespace: null });
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]!.lesson.id).toBe('a');
   });
@@ -85,7 +85,7 @@ describe('libsqlLexicalBackend', () => {
   it('recall against an empty DB returns []', async () => {
     const backend = libsqlLexicalBackend({ dbUrl: ':memory:' });
     await backend.init();
-    expect(await backend.recall('workflow', 10)).toEqual([]);
+    expect(await backend.recall('workflow', 10, { namespace: null })).toEqual([]);
   });
 });
 
@@ -129,7 +129,7 @@ describe('libsqlQwen3WithLexicalFallback', () => {
       // The lexical backend was just `init()`-ed during the swap, so the
       // table exists in this in-memory db.
       await wrapper.storeLesson(mkLesson('a', 'workflow phase audit'));
-      const hits = await wrapper.recall('workflow', 10);
+      const hits = await wrapper.recall('workflow', 10, { namespace: null });
       expect(hits.map((h) => h.lesson.id)).toEqual(['a']);
 
       // Second embed call: already swapped, lexical.embed() returns null,

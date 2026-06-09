@@ -436,7 +436,9 @@ describe('opensquid-mcp subprocess', () => {
     });
     expect(r.error).toBeUndefined();
     const out = r.result as ToolCallResult;
-    expect(out.content[0]?.text).toBe(
+    // `.toContain` (not `.toBe`): a null-namespace recall prepends the fail-loud scope notice
+    // (T-memory-scope-isolation), which is allowed to ride ahead of the empty-result line.
+    expect(out.content[0]?.text).toContain(
       'No memories found matching "nothing-will-match-this-xyz123".',
     );
   }, 15_000);

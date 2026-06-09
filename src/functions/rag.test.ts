@@ -160,7 +160,7 @@ describe('store_lesson + recall round-trip', () => {
     expect(stored.ok).toBe(true);
 
     // Recall what we just stored to verify the row materialized with defaults.
-    const recalled = await backend.recall('hello world', 5);
+    const recalled = await backend.recall('hello world', 5, { namespace: null });
     const hit = recalled.find((h) => h.lesson.id === 'L2');
     expect(hit).toBeDefined();
     expect(hit!.lesson.tags).toEqual([]);

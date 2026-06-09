@@ -36,6 +36,7 @@
 
 import { z } from 'zod';
 
+import { resolveRecallScope } from '../rag/scope.js';
 import type { RagBackend } from '../rag/types.js';
 import { err, ok } from '../runtime/result.js';
 
@@ -87,7 +88,8 @@ export function registerRagFunctions(registry: FunctionRegistry, backend: RagBac
     costEstimateMs: 50,
     execute: async ({ query, k }) => {
       try {
-        const hits = await backend.recall(query, k ?? 5);
+        const scope = await resolveRecallScope();
+        const hits = await backend.recall(query, k ?? 5, scope);
         return ok(hits);
       } catch (e) {
         return err({

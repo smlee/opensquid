@@ -197,7 +197,7 @@ describe('recall_pre_inject', () => {
     expect(value.kind).toBe('inject_context');
     expect(value.content).toContain('top 5 memories');
     // Backend received the full k=20 ask; padding is the backend's job (it doesn't pad).
-    expect(recall).toHaveBeenCalledWith(expect.any(String), 20);
+    expect(recall).toHaveBeenCalledWith(expect.any(String), 20, expect.anything());
   });
 
   it('Zod rejects k:50 (above max 20) at registry boundary with arg_invalid', async () => {

@@ -28,9 +28,9 @@
 
 import { type Client, type Row, createClient } from '@libsql/client';
 
-import { UserAuthoredImmunityError } from '../types.js';
+import { inScope, UserAuthoredImmunityError } from '../types.js';
 
-import type { DeleteResult, Lesson, RagBackend } from '../types.js';
+import type { DeleteResult, Lesson, MemoryTier, RagBackend } from '../types.js';
 
 export interface LibsqlLexicalOpts {
   dbUrl: string;
@@ -52,9 +52,22 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
           tags TEXT NOT NULL,
           source TEXT NOT NULL,
           author TEXT NOT NULL,
-          created_at TEXT NOT NULL
+          created_at TEXT NOT NULL,
+          tier TEXT NOT NULL DEFAULT 'shared',
+          namespace TEXT
         );
       `);
+      // Additive scope columns for a pre-existing (qwen3-initialized) table. Idempotent.
+      for (const ddl of [
+        `ALTER TABLE lessons ADD COLUMN tier TEXT NOT NULL DEFAULT 'shared'`,
+        `ALTER TABLE lessons ADD COLUMN namespace TEXT`,
+      ]) {
+        try {
+          await client.execute(ddl);
+        } catch {
+          /* already migrated */
+        }
+      }
       await client.execute(`
         CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts
         USING fts5(id UNINDEXED, content, tags, source, tokenize='unicode61');
@@ -66,23 +79,25 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
       return null;
     },
 
-    async recall(query, k) {
+    async recall(query, k, scope) {
       if (!client) throw new Error('libsql-lexical: not initialized');
       const safe = sanitizeFts(query);
       if (!safe) return [];
       try {
         const rs = await client.execute({
-          sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at
+          sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at, l.tier, l.namespace
                 FROM lessons_fts f JOIN lessons l ON l.id = f.id
-                WHERE lessons_fts MATCH ?
+                WHERE lessons_fts MATCH ? AND (l.tier = 'shared' OR l.namespace = ?)
                 LIMIT ?`,
-          args: [safe, k],
+          args: [safe, scope.namespace, k],
         });
-        return rs.rows.map((r, i) => ({
-          lesson: rowToLesson(r),
-          score: 1 / (i + 1),
-          source: 'lexical' as const,
-        }));
+        return rs.rows
+          .map((r, i) => ({
+            lesson: rowToLesson(r),
+            score: 1 / (i + 1),
+            source: 'lexical' as const,
+          }))
+          .filter((h) => inScope(h.lesson.tier, h.lesson.namespace, scope));
       } catch {
         // Malformed FTS5 expression (rare, since we sanitize) — return [].
         return [];
@@ -93,9 +108,18 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
       if (!client) throw new Error('libsql-lexical: not initialized');
       const tagsJson = JSON.stringify(lesson.tags);
       await client.execute({
-        sql: `INSERT INTO lessons (id, content, tags, source, author, created_at)
-              VALUES (?, ?, ?, ?, ?, ?)`,
-        args: [lesson.id, lesson.content, tagsJson, lesson.source, lesson.author, lesson.createdAt],
+        sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, tier, namespace)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          lesson.id,
+          lesson.content,
+          tagsJson,
+          lesson.source,
+          lesson.author,
+          lesson.createdAt,
+          (lesson.tier ?? 'shared') satisfies MemoryTier,
+          lesson.namespace ?? null,
+        ],
       });
       // Mirror into FTS5 — separate statement, not a trigger, to stay
       // portable across libsql builds (same rationale as libsql-qwen3).
@@ -141,5 +165,7 @@ function rowToLesson(r: Row): Lesson {
     source: s(r, 'source'),
     author: s(r, 'author') === 'user' ? 'user' : 'agent',
     createdAt: s(r, 'created_at'),
+    tier: s(r, 'tier') === 'project' ? 'project' : 'shared',
+    namespace: typeof r.namespace === 'string' ? r.namespace : null,
   };
 }

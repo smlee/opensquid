@@ -171,7 +171,7 @@ describe('libsqlQwen3Backend RRF fusion (Q10)', () => {
     const backend = libsqlQwen3Backend({ dbUrl: ':memory:', ollamaUrl: 'http://x' });
     await backend.init();
 
-    const hits = await backend.recall('workflow', 10);
+    const hits = await backend.recall('workflow', 10, { namespace: null });
 
     const ids = hits.map((h) => h.lesson.id);
     expect(ids).toContain('a');
@@ -195,7 +195,7 @@ describe('libsqlQwen3Backend RRF fusion (Q10)', () => {
     const backend = libsqlQwen3Backend({ dbUrl: ':memory:', ollamaUrl: 'http://x' });
     await backend.init();
 
-    const hits = await backend.recall('lexical', 10);
+    const hits = await backend.recall('lexical', 10, { namespace: null });
     expect(hits.map((h) => h.lesson.id)).toEqual(['a']);
     expect(hits[0]?.source).toBe('fused');
   });

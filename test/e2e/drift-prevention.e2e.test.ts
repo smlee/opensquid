@@ -224,7 +224,7 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
       let inProcHits = 0;
       const pollDeadline = Date.now() + 3000;
       while (Date.now() < pollDeadline) {
-        const search = await backend.recall(query, 5);
+        const search = await backend.recall(query, 5, { namespace: null });
         if (search.length > 0) {
           inProcHits = search.length;
           break;

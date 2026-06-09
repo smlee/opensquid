@@ -14,6 +14,7 @@ import { createClient } from '@libsql/client';
 
 import { createBackend } from '../../rag/backend_factory.js';
 import { resolveBackendConfig } from '../../rag/config.js';
+import { resolveRecallScope } from '../../rag/scope.js';
 import { resolveStrategy } from '../../models/dispatcher.js';
 import { loadModelsConfig } from '../../models/load_config.js';
 import {
@@ -54,7 +55,10 @@ export async function makeConsolidateRunner(): Promise<ConsolidateRunner> {
   const deps: ConsolidateDeps = {
     getMemoryById: (id) => getMemoryById(client, id),
     insertMemory: (m: MemoryRow) => insertMemory(client, m, sourceDir),
-    recallIds: (query, k) => backend.recall(query, k).then((hits) => hits.map((h) => h.lesson.id)),
+    recallIds: (query, k) =>
+      resolveRecallScope().then((scope) =>
+        backend.recall(query, k, scope).then((hits) => hits.map((h) => h.lesson.id)),
+      ),
     deleteMemory: (id) => backend.deleteLesson(id, { force: true }).then(() => undefined),
     summarize: (prompt) => {
       if (reasoningCfg === undefined) {

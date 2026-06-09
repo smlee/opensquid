@@ -84,7 +84,7 @@ describe('migrateMemories', () => {
     expect(migrated).toBe(2);
     const backend = libsqlStoreBackend({ dbUrl, embedder: fakeEmbedder });
     await backend.init();
-    const hits = await backend.recall('pnpm npm', 5);
+    const hits = await backend.recall('pnpm npm', 5, { namespace: null });
     expect(hits.some((h) => h.lesson.id === 'mem-bbb222')).toBe(true);
   });
 
@@ -100,7 +100,7 @@ describe('migrateMemories', () => {
     expect(migrated).toBe(2);
     const backend = libsqlStoreBackend({ dbUrl, embedder: fakeEmbedder });
     await backend.init();
-    const hits = await backend.recall('deploy squid', 5);
+    const hits = await backend.recall('deploy squid', 5, { namespace: null });
     expect(hits.some((h) => h.lesson.id === 'mem-aaa111')).toBe(true);
   });
 });

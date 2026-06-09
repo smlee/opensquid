@@ -68,6 +68,13 @@ export interface ImportOpts {
   existingIndex: Map<string, ImportIndexEntry>;
   /** G.7 snapshot hook hand-off; undefined → all .md files except MEMORY.md. */
   fileWhitelist?: string[];
+  /**
+   * Resolved umbrella namespace for `project`-scoped imports (T-memory-scope-isolation). The CALLER
+   * resolves it from the project cwd the auto-memory dir was derived from (NOT the importer's process
+   * cwd — every file in this `dir` belongs to that one project, so one namespace is correct). Undefined
+   * ⇒ project-scoped imports get a null namespace (recallable only with no project context).
+   */
+  namespace?: string | null;
 }
 
 export async function importAutoMemoryDir(
@@ -97,6 +104,7 @@ export async function importAutoMemoryDir(
             description: parsed.frontmatter.description,
             body: parsed.body,
             scope,
+            namespace: scope === 'project' ? (opts.namespace ?? null) : null,
           });
           // Track in-map so the same name twice in one run reconciles, not re-creates.
           opts.existingIndex.set(name, { id: created.id });

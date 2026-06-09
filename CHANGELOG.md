@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.370] - 2026-06-09
+
+### Fixed — memory recall is project-scoped again; scopeless recall is now a compile error (completes a retire-Rust regression)
+
+The RAG recall returned memories from ALL projects: one global `~/.opensquid/rag.sqlite` + a scopeless
+`RagBackend.recall(query, k)`. The Rust→TS retire-Rust cutover had reimplemented recall/memorize without
+the project scoping the Rust engine had, and nothing — no type, no test — required scope, so the
+regression compiled and shipped silently (memorize even tagged bare `scope:project` with no project id).
+Fix, grounded in mem0's composed-scope model + the isolation best-practice "a metadata filter isn't
+isolation": **`recall(query, k, scope)` with `scope: RecallScope` REQUIRED** — a future rewrite that
+drops scope is now a COMPILE ERROR, not a silent leak (the structural firewall). Memories carry
+first-class `tier` (`shared` | `project`) + `namespace` columns (additive, like the 0.5.369 compression
+cols); a pure, unit-tested `inScope` predicate is the one cross/isolate rule (`shared` crosses every
+project; `project` matches only its umbrella namespace), filtered in BOTH recall legs' SQL `WHERE` and
+backstopped over results. The namespace key is the **umbrella** (so loop + loop-engine + opensquid — one
+umbrella, three project UUIDs — collapse to one namespace, matching how chat already keys inbox/lease),
+resolved umbrella → project-uuid → null; a null namespace fails **LOUD** (a notice that project memory was
+withheld — never a silent "AI forgets"). `memorize` + the auto-memory importer + `insertMemory` now record
+tier/namespace; the importer resolves the namespace from the dir's project cwd (not the process cwd). New
+scope-isolation regression test asserts a recall scoped to umbrella A returns A + shared and EXCLUDES B.
+**Follow-up (tracked):** migration of the existing legacy-tagged rows (`scope:!project loop` → namespace;
+the 5 empty `scope:!project ''` → `shared`) — until then, pre-scope rows default to `shared` (safe
+over-share, never a leak); the governing architecture doc update. Spec: docs/tasks/T-memory-scope-isolation.md.
+
 ## [0.5.369] - 2026-06-09
 
 ### Fixed — consolidated memories (`Mc`) no longer lost on `rebuildLibsqlIndex` (HIGH; 48h-audit finding)

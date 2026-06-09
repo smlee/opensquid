@@ -93,7 +93,7 @@ describe('claudeAutoMemoryBackend', () => {
 
     const backend = claudeAutoMemoryBackend();
     await backend.init();
-    const hits = await backend.recall('git', 5);
+    const hits = await backend.recall('git', 5, { namespace: null });
 
     const ids = hits.map((h) => h.lesson.id).sort();
     expect(ids).toEqual(['a', 'c']);
@@ -144,7 +144,7 @@ describe('claudeAutoMemoryBackend', () => {
     // Do NOT create memDir. The backend should swallow ENOENT.
     const backend = claudeAutoMemoryBackend();
     await backend.init();
-    const hits = await backend.recall('anything', 5);
+    const hits = await backend.recall('anything', 5, { namespace: null });
     expect(hits).toEqual([]);
   });
 

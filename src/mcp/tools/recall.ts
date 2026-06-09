@@ -34,6 +34,7 @@
 
 import { createBackend } from '../../rag/backend_factory.js';
 import { resolveBackendConfig } from '../../rag/config.js';
+import { NULL_SCOPE_NOTICE, resolveRecallScope } from '../../rag/scope.js';
 
 export interface RecallArgs {
   query: string;
@@ -46,11 +47,17 @@ export async function handleRecall(args: RecallArgs): Promise<string> {
   const backendConfig = await resolveBackendConfig();
   const backend = createBackend(backendConfig);
   await backend.init();
-  const hits = await backend.recall(args.query, args.k ?? DEFAULT_K);
+  const scope = await resolveRecallScope();
+  const hits = await backend.recall(args.query, args.k ?? DEFAULT_K, scope);
+  // Fail-LOUD: when the project is unresolved, project-scoped memory is withheld — say so, never silent.
+  const notice = scope.namespace === null ? `${NULL_SCOPE_NOTICE}\n\n` : '';
   if (hits.length === 0) {
-    return `No memories found matching "${args.query}".`;
+    return `${notice}No memories found matching "${args.query}".`;
   }
-  return hits
-    .map((h, i) => `[${i + 1}] (${h.source}, score=${h.score.toFixed(3)}) ${h.lesson.content}`)
-    .join('\n\n');
+  return (
+    notice +
+    hits
+      .map((h, i) => `[${i + 1}] (${h.source}, score=${h.score.toFixed(3)}) ${h.lesson.content}`)
+      .join('\n\n')
+  );
 }
