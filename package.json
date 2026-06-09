@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.366",
+  "version": "0.5.367",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -54,7 +54,6 @@
     "memory",
     "verification",
     "anti-self-grading",
-    "loop-engine",
     "mindcraftor"
   ],
   "author": "Sangmin Lee <sangmlee23@gmail.com>",

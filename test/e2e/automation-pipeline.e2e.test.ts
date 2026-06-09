@@ -12,7 +12,6 @@
  * drift-prevention.e2e.test.ts / log_phase.test.ts.
  */
 
-import { statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -28,7 +27,6 @@ import { registerVerdictFunctions } from '../../src/functions/verdict.js';
 import { handleLogPhase } from '../../src/mcp/tools/log_phase.js';
 import { loadPack } from '../../src/packs/loader.js';
 import { setAutomationFlag } from '../../src/runtime/automation_state.js';
-import { EngineClient } from '../../src/engine/client.js';
 import type { Event } from '../../src/runtime/event.js';
 import { evaluateProcess } from '../../src/runtime/evaluator.js';
 import { recordCurrentSession } from '../../src/runtime/hooks/session_id.js';
@@ -39,22 +37,7 @@ import type { ProcessStep } from '../../src/runtime/types.js';
 
 const HERE = fileURLToPath(import.meta.url);
 const GATE_FIXTURE = resolve(HERE, '../../fixtures/workflow-gate-pack');
-const DEV_BINARY = join(
-  process.env.HOME ?? '/tmp',
-  'projects/loop/engine/target/release/loop-engine',
-);
-
-function isExec(p: string): boolean {
-  try {
-    const s = statSync(p);
-    return s.isFile() && (s.mode & 0o111) !== 0;
-  } catch {
-    return false;
-  }
-}
-const ENV_BIN = process.env.OPENSQUID_ENGINE_BIN?.trim();
-const ENGINE_BIN = ENV_BIN !== undefined && ENV_BIN.length > 0 ? ENV_BIN : DEV_BINARY;
-const SKIP = process.env.E2E !== '1' || !isExec(ENGINE_BIN);
+const SKIP = process.env.E2E !== '1';
 
 const SID = 'ap6-e2e-sess';
 const commit: Event = {
@@ -66,7 +49,6 @@ const commit: Event = {
 
 describe.skipIf(SKIP)('AP.6 — automation pipeline e2e (real engine)', () => {
   let home: string;
-  let engine: EngineClient;
   let gateSteps: ProcessStep[];
   let prior: Record<string, string | undefined> = {};
 
@@ -74,14 +56,12 @@ describe.skipIf(SKIP)('AP.6 — automation pipeline e2e (real engine)', () => {
     prior = {
       OPENSQUID_HOME: process.env.OPENSQUID_HOME,
       LOOP_HOME: process.env.LOOP_HOME,
-      OPENSQUID_ENGINE_BIN: process.env.OPENSQUID_ENGINE_BIN,
       OPENSQUID_AUTOMATION: process.env.OPENSQUID_AUTOMATION,
     };
     delete process.env.OPENSQUID_AUTOMATION;
     home = await mkdtemp(join(tmpdir(), 'ap6-'));
     process.env.OPENSQUID_HOME = home;
     process.env.LOOP_HOME = home;
-    process.env.OPENSQUID_ENGINE_BIN = ENGINE_BIN;
 
     const pack = await loadPack(GATE_FIXTURE);
     const rule = pack.skills
@@ -89,13 +69,9 @@ describe.skipIf(SKIP)('AP.6 — automation pipeline e2e (real engine)', () => {
       ?.rules.find((r) => r.id === 'workflow-phases-required');
     if (rule?.kind !== 'track_check') throw new Error('workflow gate rule missing');
     gateSteps = rule.process;
-
-    engine = new EngineClient();
-    await engine.ping();
   }, 30_000);
 
   afterAll(async () => {
-    await engine.close().catch(() => undefined);
     for (const [k, v] of Object.entries(prior)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;

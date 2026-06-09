@@ -20,7 +20,6 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 
 import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
-import { registerEngineCli } from './engine/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
 import { registerChatWatch } from './runtime/chat/watch_cli.js';
@@ -240,11 +239,6 @@ function runCli(): void {
   // commit/push that has not completed the SCOPE→AUTHOR→7-phase flow. Total: a non-gated
   // repo (no .opensquid/active.json opting into coding-flow) is never blocked.
   registerGate(program);
-
-  // T.2 — `opensquid engine doctor|set-path|forget|kill`. Engine binary
-  // discovery + persisted-path management. Revived from the pre-reset
-  // surface; stdio-only in 0.5.108 (UDS singleton lands in T.4).
-  registerEngineCli(program);
 
   // WAB.7 — `opensquid agent-bridge {start|stop|status|restart|run-foreground}`.
   // Long-running warm-pool chat-agent daemon that wires every WAB.2-WAB.6

@@ -36,7 +36,6 @@
  * Imported by: src/runtime/bootstrap.ts (registry wiring).
  */
 
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -47,6 +46,7 @@ import { pingDaemon } from '../chat_daemon/client.js';
 import { loadActivePacks } from '../runtime/bootstrap.js';
 import { isLeaseFresh, readLease } from '../runtime/chat/live_session_lease.js';
 import { OPENSQUID_HOME, umbrellaLiveSessionLease } from '../runtime/paths.js';
+import { resolveBackendConfig } from '../rag/config.js';
 import { ok } from '../runtime/result.js';
 
 import { flowEnforcementProblems } from './check_flow_health.js';
@@ -129,18 +129,13 @@ async function daemonStatusLine(): Promise<string> {
   return up ? 'Daemon: chat-daemon reachable ✅' : 'Daemon: chat-daemon down 🔌';
 }
 
-/** Engine section: NON-spawning liveness — sock exists AND pid is alive. */
-async function engineStatusLine(): Promise<string> {
-  const home = OPENSQUID_HOME();
-  if (!existsSync(join(home, 'loop-engine.sock'))) return 'Engine/memory: down 🔌 (no socket)';
-  const pidText = (await readFile(join(home, 'loop-engine.pid'), 'utf8').catch(() => '')).trim();
-  const pid = Number.parseInt(pidText, 10);
-  if (!Number.isInteger(pid) || pid <= 0) return 'Engine/memory: down 🔌 (no pid)';
+/** Memory section: report the resolved libSQL backend (local file — no socket/daemon). */
+async function memoryStatusLine(): Promise<string> {
   try {
-    process.kill(pid, 0);
-    return 'Engine/memory: loop-engine up ✅';
+    const cfg = await resolveBackendConfig();
+    return `Memory: ${cfg.kind} ✅`;
   } catch {
-    return 'Engine/memory: down 🔌 (stale pid)';
+    return 'Memory: unavailable 🔌';
   }
 }
 
@@ -176,7 +171,7 @@ export const SessionStatusManifest: FunctionDef<z.input<typeof NoArgs>, Manifest
       safeSection('Flow gates', () => flowStatusLine(sessionId)),
       safeSection('Packs', () => packsStatusLine(sessionId)),
       safeSection('Daemon', () => daemonStatusLine()),
-      safeSection('Engine/memory', () => engineStatusLine()),
+      safeSection('Memory', () => memoryStatusLine()),
     ]);
     const content = ['📋 opensquid — session connections', ...sections.map((s) => `• ${s}`)].join(
       '\n',

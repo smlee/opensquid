@@ -1,12 +1,12 @@
 /**
  * G.13 — End-to-end drift-prevention test pass.
  *
- * Composite scenario test that walks the full G-track stack against a REAL
- * loop-engine daemon, REAL settings.json / .claude.json mutation in a per-
- * run tmpdir, and REAL compiled hook bins from `dist/runtime/hooks/`. Gated
- * by `E2E=1` (see `describe.skipIf`) because the real-engine spawn + 9
- * composite scenarios run ~30–60s — prohibitive for every-push CI but well
- * within the G.13 spec's <5min budget. CI runs via `workflow_dispatch`
+ * Composite scenario test that walks the full G-track stack against the REAL
+ * libSQL backend (RES-6: engine-free), REAL settings.json / .claude.json
+ * mutation in a per-run tmpdir, and REAL compiled hook bins from
+ * `dist/runtime/hooks/`. Gated by `E2E=1` (see `describe.skipIf`) because the
+ * embedder + 9 composite scenarios run ~30–60s — prohibitive for every-push CI
+ * but within the G.13 spec's <5min budget. CI runs via `workflow_dispatch`
  * (`.github/workflows/ci.yml`); local devs run `pnpm test:e2e`.
  *
  * Scenarios covered (9 of 10 per spec line 1940 — G.11 is audit-only per
@@ -16,16 +16,10 @@
  * auto-memory write deprecation warn, G.8 user-level MCP wiring, G.12
  * D9-guard automation-mode gating.
  *
- * Engine sharing: spawned ONCE in `beforeAll`, killed in `afterAll`. Every
- * scenario reuses the same socket — covers the cross-session memory recall
- * path that the daemon model enables (G.3 → G.4 round-trip).
- *
- * Engine binary discovery: same `OPENSQUID_ENGINE_BIN` / dev-path pattern
- * as `wedge_gate.test.ts` + `client.live.test.ts`. CI without the binary
- * + without E2E=1 skips the whole block (E2E env gate dominates).
+ * Memory: G.3 seeds + G.4 recalls via the libSQL backend (createBackend +
+ * resolveBackendConfig) — the cross-session recall path, engine-free.
  */
 
-import { statSync } from 'node:fs';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
@@ -33,7 +27,6 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { EngineClient } from '../../src/engine/client.js';
 import { handleForget } from '../../src/mcp/tools/forget.js';
 import { handleMemorize } from '../../src/mcp/tools/memorize.js';
 import { createBackend } from '../../src/rag/backend_factory.js';
@@ -51,7 +44,6 @@ import {
   OPENSQUID_BIN_FOR_EVENT,
 } from '../../src/setup/wizard/settings-writer.js';
 import { writeOpensquidMcp } from '../../src/setup/wizard/mcp-writer.js';
-import { killEngineByPidfile } from '../__util/kill-engine.js';
 
 import { DriftPreventionReport } from './drift-prevention-report.js';
 import {
@@ -64,29 +56,6 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPORT_PATH = resolve(__dirname, 'e2e-drift-prevention-report.md');
 
-// ----- Engine binary discovery (mirrors wedge_gate.test.ts) ----------------
-
-const DEV_BINARY_PATH = join(
-  process.env.HOME ?? '/tmp',
-  'projects/loop/engine/target/release/loop-engine',
-);
-
-function isExecutable(p: string): boolean {
-  try {
-    const s = statSync(p);
-    return s.isFile() && (s.mode & 0o111) !== 0;
-  } catch {
-    return false;
-  }
-}
-
-function locateEngineBinary(): string | null {
-  const fromEnv = process.env.OPENSQUID_ENGINE_BIN?.trim();
-  if (fromEnv && isExecutable(fromEnv)) return fromEnv;
-  if (isExecutable(DEV_BINARY_PATH)) return DEV_BINARY_PATH;
-  return null;
-}
-
 const E2E_GATE = process.env.E2E === '1';
 const SKIP_E2E = !E2E_GATE;
 
@@ -96,42 +65,22 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
   let tmpOpensquidHome: string;
   let tmpClaudeHome: string;
   let priorEnv: Record<string, string | undefined> = {};
-  let engineClient: EngineClient | null = null;
   const report = new DriftPreventionReport();
 
   beforeAll(async () => {
-    const bin = locateEngineBinary();
     tmpOpensquidHome = await mkdtemp(join(tmpdir(), 'opensquid-e2e-'));
     tmpClaudeHome = await mkdtemp(join(tmpdir(), 'opensquid-e2e-claude-'));
     priorEnv = {
       OPENSQUID_HOME: process.env.OPENSQUID_HOME,
       LOOP_HOME: process.env.LOOP_HOME,
-      OPENSQUID_ENGINE_BIN: process.env.OPENSQUID_ENGINE_BIN,
       OPENSQUID_AUTOMATION: process.env.OPENSQUID_AUTOMATION,
     };
     process.env.OPENSQUID_HOME = tmpOpensquidHome;
     process.env.LOOP_HOME = tmpOpensquidHome;
-    if (bin) process.env.OPENSQUID_ENGINE_BIN = bin;
     await buildSangminPack(tmpOpensquidHome);
-    // Spawn ONCE — every scenario reuses this client (and the underlying
-    // singleton-acquired daemon process). Fail fast in beforeAll rather
-    // than burning the first scenario's timeout on a bad spawn.
-    if (bin) {
-      engineClient = new EngineClient();
-      try {
-        await engineClient.ping();
-      } catch (e) {
-        process.stderr.write(`[G.13 beforeAll] engine ping failed: ${(e as Error).message}\n`);
-        engineClient = null;
-      }
-    }
   }, 30_000);
 
   afterAll(async () => {
-    if (engineClient) {
-      await engineClient.close().catch(() => undefined);
-    }
-    await killEngineByPidfile(tmpOpensquidHome);
     await rm(tmpOpensquidHome, { recursive: true, force: true });
     await rm(tmpClaudeHome, { recursive: true, force: true });
     for (const [k, v] of Object.entries(priorEnv)) {
@@ -212,9 +161,6 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
 
   it('G.3: memorize/store_lesson/forget MCP tools round-trip', async () => {
     await scenario('G.3', 'memorize/store_lesson/forget round-trip', async () => {
-      if (!engineClient) {
-        throw new Error('engine binary not available — set OPENSQUID_ENGINE_BIN');
-      }
       const mem = await handleMemorize(
         {
           description: 'g13 round-trip memory',
@@ -256,9 +202,8 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
 
   it('G.4: prompt-submit emits hookSpecificOutput.additionalContext', async () => {
     await scenario('G.4', 'prompt-submit emits additionalContext envelope', async () => {
-      if (!engineClient) {
-        throw new Error('engine binary not available — set OPENSQUID_ENGINE_BIN');
-      }
+      // RES-6: recall is libSQL (engine-free) — seed + search via the same backend.
+      const backend = createBackend(await resolveBackendConfig());
       // Seed a memory the recall will surface for the prompt below.
       const marker = `OPENSQUID_G13_MARKER_${String(Date.now())}`;
       await handleMemorize(
@@ -272,24 +217,23 @@ describe.skipIf(SKIP_E2E)('G.13 — end-to-end drift prevention', () => {
           verified: true,
           confirmed_quote: 'e2e fixture: synthetic verbatim user confirmation',
         },
-        createBackend(await resolveBackendConfig()),
+        backend,
       );
-      // Poll memory.search ~3s — semantic-index writes are async vs the
-      // create RPC ack. Beyond that, embedder/RAG backend isn't viable.
+      // Poll recall ~3s — semantic-index writes are async vs the store ack.
       const query = `what was the ${marker} golden answer for the recall pre-injection test (need at least 20 chars)?`;
       let inProcHits = 0;
       const pollDeadline = Date.now() + 3000;
       while (Date.now() < pollDeadline) {
-        const search = await engineClient.memorySearch({ query, limit: 5, mode: 'hybrid' });
-        if (search.results.length > 0) {
-          inProcHits = search.results.length;
+        const search = await backend.recall(query, 5);
+        if (search.length > 0) {
+          inProcHits = search.length;
           break;
         }
         await new Promise<void>((r) => setTimeout(r, 100));
       }
       if (inProcHits === 0) {
         throw new Error(
-          `engine memory.search returned 0 hits for marker ${marker} after 3s — embedder/RAG backend not operational; check Ollama / qwen3 / engine RAG config`,
+          `libSQL recall returned 0 hits for marker ${marker} after 3s — embedder/RAG backend not operational; check the fastembed/libSQL config`,
         );
       }
       const r = await spawnHookBin(

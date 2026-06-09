@@ -68,7 +68,7 @@ describe('session_status_manifest', () => {
     expect(r.value.content).toMatch(/• Flow gates:/);
     expect(r.value.content).toMatch(/• Packs/);
     expect(r.value.content).toMatch(/• Daemon:/);
-    expect(r.value.content).toMatch(/• Engine\/memory:/);
+    expect(r.value.content).toMatch(/• Memory:/);
   });
 
   it('lists the active packs by name (loaded from the builtin tree in-process)', async () => {

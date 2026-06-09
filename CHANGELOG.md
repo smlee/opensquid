@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.367] - 2026-06-08
+
+### Removed — the loop-engine subsystem is deleted; opensquid is fully engine-free (retire-Rust RES-6; retire-Rust COMPLETE)
+
+RES-3/4/5 moved every live path (wedge lessons, memory compression, auto-memory sync) onto the
+TS/libSQL stack, leaving `src/engine/` dead. This deletes it: `src/engine/` (14 files — the
+EngineClient JSON-RPC client, binary resolver, singleton, config, CLI, types), the `./engine/*`
+package-root re-export (`src/index.ts` is now a minimal module), the `opensquid engine` CLI verbs
+(`registerEngineCli`), the two engine-bound e2e suites (`compression-pipeline.e2e`, `wedge_gate`),
+and `test/__util/kill-engine.ts`. The `drift-prevention.e2e` recall leg (G.4) is repointed from
+`engineClient.memorySearch` to the libSQL `backend.recall`; `automation-pipeline.e2e`'s engine
+skip-gate is removed (its body was already native — `handleLogPhase`/`readPhaseLedger`/gate evaluator);
+`global-teardown` drops the stray-engine pkill net. The SessionStart manifest's `engineStatusLine`
+(socket/pid probe) becomes `memoryStatusLine` (reports the resolved libSQL backend). The `loop-engine`
+package keyword + the `OPENSQUID_ENGINE_BIN` script references are gone. `src/rag/config.ts` (libSQL
+backend config) is untouched. **opensquid no longer spawns or depends on the loop-engine binary** — the
+`loop/engine/` Rust repo remains as its own standalone project. This completes the retire-Rust track.
+
 ## [0.5.366] - 2026-06-08
 
 ### Changed — auto-memory sync cut over to the libSQL store (retire-Rust RES-5b; RES-5 complete)

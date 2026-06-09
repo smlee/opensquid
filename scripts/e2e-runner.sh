@@ -8,7 +8,6 @@
 #
 # Usage:
 #   ./scripts/e2e-runner.sh
-#   OPENSQUID_ENGINE_BIN=/path/to/loop-engine ./scripts/e2e-runner.sh
 #
 # Exit code = vitest exit code. Report is written to
 # test/e2e/e2e-drift-prevention-report.md (gitignored, regenerated per run).
@@ -25,5 +24,5 @@ if [ ! -f "dist/runtime/hooks/dispatch.js" ]; then
   pnpm build
 fi
 
-echo "[e2e-runner] launching with E2E=1 (engine: ${OPENSQUID_ENGINE_BIN:-<dev-path>})"
+echo "[e2e-runner] launching with E2E=1 (libSQL backend, engine-free)"
 exec env E2E=1 pnpm exec vitest run test/e2e/drift-prevention.e2e.test.ts "$@"
