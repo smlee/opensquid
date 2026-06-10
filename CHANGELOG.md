@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.377] - 2026-06-10
+
+### Added — honest MCP tool annotations on both servers (T-mcp-tool-annotations)
+
+Every tool in `opensquid` (18) and `opensquid-chat` (2) now carries MCP `annotations` in
+tools/list: the 11 read tools + `chat_poll_inbox` declare `readOnlyHint: true`; the six
+local additive writes (memorize, store_lesson, log_phase, the three work-graph mutations)
+declare non-destructive/non-open-world; `forget` declares `destructiveHint: true` and
+`chat_send` `openWorldHint: true` — so annotation-aware hosts (codex's
+`requires_mcp_tool_approval` is the verified consumer) auto-approve safe calls and keep
+prompting on deletion and external sends. Previously ALL tools were unannotated, which
+codex fail-closes to approval-required — non-interactive `codex exec` cancelled every
+call unless run with `--dangerously-bypass-approvals-and-sandbox`. Annotations are
+client-policy hints only; server-side protections are unchanged. No `idempotentHint`
+anywhere: the work-graph mutations append an op per call.
+
 ## [0.5.376] - 2026-06-10
 
 ### Fixed — audit window sized to measured latency; counted spawn ledger (T-audit-spawn-fix)

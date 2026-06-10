@@ -50,6 +50,7 @@ import { connect, type Socket } from 'node:net';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -462,6 +463,14 @@ const ToolHandlers = {
 
 type ToolName = keyof typeof ToolHandlers;
 
+// T-MCP-TOOL-ANNOTATIONS: honest MCP behavior hints (see server.ts for the
+// full rationale). chat_send is OPEN-WORLD — it messages external Telegram —
+// so annotation-aware hosts keep prompting on it; the inbox poll is read-only.
+const toolAnnotations: Record<ToolName, ToolAnnotations> = {
+  chat_poll_inbox: { readOnlyHint: true, openWorldHint: false },
+  chat_send: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+};
+
 const descriptions: Record<ToolName, string> = {
   chat_poll_inbox:
     "Read inbound messages for the active umbrella's chat inbox (resolved from cwd via ~/.opensquid/channels.json). Returns messages with `enqueued_at` greater than the optional `since` ISO-8601 cursor. Caller tracks the cursor between calls; server is stateless.",
@@ -504,6 +513,7 @@ async function main(): Promise<void> {
       tools: (Object.keys(ToolHandlers) as ToolName[]).map((name) => ({
         name,
         description: descriptions[name],
+        annotations: toolAnnotations[name],
         inputSchema: zodToJsonSchema(ToolHandlers[name].schema) as {
           type: 'object';
           [k: string]: unknown;

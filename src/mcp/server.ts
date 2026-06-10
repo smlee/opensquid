@@ -42,6 +42,7 @@ import { join } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -219,6 +220,43 @@ const ToolHandlers = {
 
 type ToolName = keyof typeof ToolHandlers;
 
+// T-MCP-TOOL-ANNOTATIONS: honest MCP behavior hints, emitted in tools/list so
+// annotation-aware hosts (codex's requires_mcp_tool_approval is the verified
+// consumer) can auto-approve reads and local additive writes while keeping
+// destructive tools prompted. CLIENT policy input only — never server-side
+// security; the moat stays in the handlers. Lock-step with `ToolHandlers`
+// (compile-enforced by Record over ToolName). NO idempotentHint anywhere:
+// the work-graph mutations append an op per call (store.ts:111-143), so
+// "repeated call has no additional effect" would be dishonest.
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
+const LOCAL_WRITE: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  openWorldHint: false,
+};
+
+const toolAnnotations: Record<ToolName, ToolAnnotations> = {
+  list_packs: READ_ONLY,
+  list_skills: READ_ONLY,
+  inspect_skill: READ_ONLY,
+  read_state: READ_ONLY,
+  read_violations: READ_ONLY,
+  list_drift_events: READ_ONLY,
+  recall: READ_ONLY,
+  workgraph_ready: READ_ONLY,
+  workgraph_get: READ_ONLY,
+  workgraph_list: READ_ONLY,
+  workgraph_events: READ_ONLY,
+  memorize: LOCAL_WRITE,
+  store_lesson: LOCAL_WRITE,
+  log_phase: LOCAL_WRITE,
+  workgraph_create_issue: LOCAL_WRITE,
+  workgraph_update_issue: LOCAL_WRITE,
+  workgraph_add_edge: LOCAL_WRITE,
+  // The one genuinely destructive tool: deletes a memory (tools/forget.ts).
+  forget: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+};
+
 // Centralized so the description copy lives next to (not threaded through)
 // the handler map. Keys must stay in lock-step with `ToolHandlers`.
 const descriptions: Record<ToolName, string> = {
@@ -283,6 +321,7 @@ async function main(): Promise<void> {
       tools: (Object.keys(ToolHandlers) as ToolName[]).map((name) => ({
         name,
         description: descriptions[name],
+        annotations: toolAnnotations[name],
         inputSchema: zodToJsonSchema(ToolHandlers[name].schema) as {
           type: 'object';
           [k: string]: unknown;

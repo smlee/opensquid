@@ -59,6 +59,7 @@ interface JsonRpcResponse {
 interface ToolDef {
   name: string;
   description: string;
+  annotations?: Record<string, boolean>;
   inputSchema: { type: string; properties?: Record<string, unknown> };
 }
 
@@ -429,6 +430,14 @@ RUN('opensquid-chat-bridge-mcp subprocess', () => {
       expect(t.description.length).toBeGreaterThan(0);
       expect(t.inputSchema.type).toBe('object');
     }
+    // T-MCP-TOOL-ANNOTATIONS: poll is read-only; chat_send messages EXTERNAL
+    // Telegram (open-world) so annotation-aware hosts keep prompting on it.
+    const poll = result.tools.find((t) => t.name === 'chat_poll_inbox');
+    const send = result.tools.find((t) => t.name === 'chat_send');
+    expect(poll?.annotations?.readOnlyHint).toBe(true);
+    expect(poll?.annotations?.openWorldHint).toBe(false);
+    expect(send?.annotations?.openWorldHint).toBe(true);
+    expect(send?.annotations?.readOnlyHint).toBe(false);
   }, 15000);
 
   it('A2: each tool schema documents its expected args', async () => {

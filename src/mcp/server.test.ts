@@ -56,6 +56,7 @@ interface JsonRpcResponse {
 interface ToolDef {
   name: string;
   description: string;
+  annotations?: Record<string, boolean>;
   inputSchema: { type: string; properties?: Record<string, unknown> };
 }
 
@@ -242,6 +243,23 @@ describe('opensquid-mcp subprocess', () => {
     expect(storeLesson?.description).toMatch(/do not call promote_lesson/i);
     const forgetTool = result.tools.find((t) => t.name === 'forget');
     expect(forgetTool?.description).toMatch(/force: true/i);
+    // T-MCP-TOOL-ANNOTATIONS: every tool carries honest behavior hints —
+    // annotation-aware hosts auto-approve reads/local-writes, keep prompting
+    // on the destructive tool. No idempotentHint anywhere (op-log appends).
+    for (const t of result.tools) {
+      expect(t.annotations, `${t.name} must carry annotations`).toBeDefined();
+      expect(t.annotations!.idempotentHint).toBeUndefined();
+    }
+    const ann = (n: string): Record<string, boolean> =>
+      result.tools.find((t) => t.name === n)!.annotations!;
+    for (const n of ['recall', 'list_packs', 'workgraph_get', 'workgraph_events']) {
+      expect(ann(n).readOnlyHint).toBe(true);
+      expect(ann(n).openWorldHint).toBe(false);
+    }
+    expect(ann('forget').destructiveHint).toBe(true);
+    expect(ann('memorize').readOnlyHint).toBe(false);
+    expect(ann('memorize').destructiveHint).toBe(false);
+    expect(ann('workgraph_update_issue').destructiveHint).toBe(false);
   }, 15_000);
 
   it('memorize with missing required args yields an error (Zod runs before engine)', async () => {
