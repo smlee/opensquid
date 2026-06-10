@@ -51,10 +51,12 @@ function resultText(content: unknown): string {
 }
 
 /** The in-flight TaskUpdate that triggered THIS PreToolUse — not yet in the
- *  transcript (PreToolUse fires pre-execution). Overlaid last (H4a). */
+ *  transcript (PreToolUse fires pre-execution). Overlaid last (H4a).
+ *  T-FIX-TASKSTART-GUARD-MIRROR: `status` is optional — a metadata-only
+ *  TaskUpdate is a real mutation and must be overlaid too. */
 export interface PendingUpdate {
   taskId: string;
-  status: string;
+  status?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -86,7 +88,7 @@ async function parseTranscriptTasks(
 
   const createByToolUse = new Map<string, { subject: string; metadata: Record<string, unknown> }>();
   const idByToolUse = new Map<string, string>(); // tool_use_id → harness task id (from result)
-  const updates: { taskId: string; status: string; metadata?: Record<string, unknown> }[] = [];
+  const updates: PendingUpdate[] = [];
 
   for (const line of raw.split('\n')) {
     if (line.trim().length === 0) continue;
@@ -111,14 +113,19 @@ async function parseTranscriptTasks(
         }
       } else if (b.type === 'tool_use' && b.name === 'TaskUpdate') {
         const input = b.input ?? {};
-        if (typeof input.taskId === 'string' && typeof input.status === 'string') {
-          const md =
-            input.metadata !== null && typeof input.metadata === 'object'
-              ? (input.metadata as Record<string, unknown>)
-              : undefined;
+        const status = typeof input.status === 'string' ? input.status : undefined;
+        const md =
+          input.metadata !== null && typeof input.metadata === 'object'
+            ? (input.metadata as Record<string, unknown>)
+            : undefined;
+        // T-FIX-TASKSTART-GUARD-MIRROR: a metadata-only TaskUpdate (no status)
+        // is a real mutation — dropping it left the mirror serving stale
+        // metadata, which false-fired the FU.11 task_unscoped reset mid-flow
+        // (observed twice, 2026-06-10).
+        if (typeof input.taskId === 'string' && (status !== undefined || md !== undefined)) {
           updates.push({
             taskId: input.taskId,
-            status: input.status,
+            ...(status !== undefined ? { status } : {}),
             ...(md ? { metadata: md } : {}),
           });
         }
@@ -147,10 +154,14 @@ async function parseTranscriptTasks(
       taskById.set(u.taskId, t);
     }
     if (u.metadata !== undefined) t.metadata = { ...t.metadata, ...u.metadata };
-    t.status = u.status;
-    if (u.status === 'in_progress') activeId = u.taskId;
-    else if ((u.status === 'completed' || u.status === 'deleted') && activeId === u.taskId) {
-      activeId = null;
+    // Status applied only when present — a metadata-only update mutates
+    // metadata without touching activation bookkeeping.
+    if (u.status !== undefined) {
+      t.status = u.status;
+      if (u.status === 'in_progress') activeId = u.taskId;
+      else if ((u.status === 'completed' || u.status === 'deleted') && activeId === u.taskId) {
+        activeId = null;
+      }
     }
   }
 

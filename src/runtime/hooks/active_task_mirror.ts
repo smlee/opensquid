@@ -136,14 +136,21 @@ export async function mirrorActiveTask(
   // split (no derived session dir). The legacy harness-store path below stays as
   // a fallback for older CC versions that DO write ~/.claude/tasks/.
   if (transcriptPath !== undefined && transcriptPath.length > 0) {
+    // T-FIX-TASKSTART-GUARD-MIRROR: metadata-only TaskUpdates (no status) are
+    // overlaid too — they are real mutations the mirror must see in-flight.
+    const pendingStatus = typeof args.status === 'string' ? args.status : undefined;
+    const pendingMd =
+      args.metadata !== null && typeof args.metadata === 'object'
+        ? (args.metadata as Record<string, unknown>)
+        : undefined;
     const pending =
-      tool === 'TaskUpdate' && typeof args.taskId === 'string' && typeof args.status === 'string'
+      tool === 'TaskUpdate' &&
+      typeof args.taskId === 'string' &&
+      (pendingStatus !== undefined || pendingMd !== undefined)
         ? {
             taskId: args.taskId,
-            status: args.status,
-            ...(args.metadata !== null && typeof args.metadata === 'object'
-              ? { metadata: args.metadata as Record<string, unknown> }
-              : {}),
+            ...(pendingStatus !== undefined ? { status: pendingStatus } : {}),
+            ...(pendingMd !== undefined ? { metadata: pendingMd } : {}),
           }
         : undefined;
     const active = await readActiveTaskFromTranscript(transcriptPath, pending);

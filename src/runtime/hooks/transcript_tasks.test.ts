@@ -54,6 +54,19 @@ const update = (taskId: string, status: string, metadata?: Record<string, unknow
     ],
   },
 });
+// T-FIX-TASKSTART-GUARD-MIRROR: a metadata-only TaskUpdate (no status field).
+const updateMeta = (taskId: string, metadata: Record<string, unknown>) => ({
+  message: {
+    content: [
+      {
+        type: 'tool_use',
+        id: `um-${taskId}`,
+        name: 'TaskUpdate',
+        input: { taskId, metadata },
+      },
+    ],
+  },
+});
 
 async function tx(lines: unknown[]): Promise<string> {
   const p = join(dir, 'transcript.jsonl');
@@ -137,6 +150,48 @@ describe('readActiveTaskFromTranscript', () => {
       'utf8',
     );
     expect((await readActiveTaskFromTranscript(p))?.id).toBe('16');
+  });
+
+  // T-FIX-TASKSTART-GUARD-MIRROR: a metadata-only TaskUpdate (no status) is a
+  // real mutation — it must reach the served metadata WITHOUT touching
+  // activation. (The pre-fix walk dropped it: the mirror kept serving a stale
+  // relative spec and the FU.11 guard false-reset the FSM mid-flow, twice.)
+  it('metadata-only TaskUpdate in the transcript corrects the served spec', async () => {
+    const p = await tx([
+      create('tu1', 'A', { taskId: 'A', spec: 'loop/docs/tasks/T-a.md' }),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+      updateMeta('16', { spec: '/abs/loop/docs/tasks/T-a.md' }),
+    ]);
+    expect(await readActiveTaskFromTranscript(p)).toMatchObject({
+      id: '16',
+      spec: '/abs/loop/docs/tasks/T-a.md', // corrected, not the stale relative
+    });
+  });
+
+  it('metadata-only update does NOT change activation (no status transition)', async () => {
+    const p = await tx([
+      create('tu1', 'A', { taskId: 'A' }),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+      update('16', 'completed'),
+      updateMeta('16', { spec: '/abs/x.md' }), // after completion — must NOT reactivate
+    ]);
+    expect(await readActiveTaskFromTranscript(p)).toBeNull();
+  });
+
+  it('metadata-only update as the IN-FLIGHT pending overlay is honored (H4a)', async () => {
+    const p = await tx([
+      create('tu1', 'A', { taskId: 'A', spec: 'loop/docs/tasks/T-a.md' }),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+    ]);
+    expect(
+      await readActiveTaskFromTranscript(p, {
+        taskId: '16',
+        metadata: { spec: '/abs/loop/docs/tasks/T-a.md' },
+      }),
+    ).toMatchObject({ id: '16', spec: '/abs/loop/docs/tasks/T-a.md' });
   });
 });
 

@@ -22,7 +22,7 @@
  */
 
 import { stat } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { z } from 'zod';
 
@@ -115,10 +115,13 @@ async function pathExistsAbs(p: string): Promise<boolean> {
  *
  * Provenance = `active-task.json.spec` (copied by the AP.1 mirror from the
  * harness `metadata.spec`) resolving to a real file. H7: the spec lives in the
- * loop PLANNING repo while the code-write is in another repo, so an ABSOLUTE
- * `spec` is checked directly; a relative one is resolved against the event cwd
- * (the same-repo case). No active task OR no spec OR a dangling path → not
- * generated (the conservative verdict — Gate A then blocks "scope it first").
+ * umbrella's PLANNING repo while the code-write may run in a member SUB-repo,
+ * so an ABSOLUTE `spec` is checked directly and a RELATIVE one is resolved
+ * against the event cwd AND each of its ancestors (the planning repo is an
+ * ancestor in every real layout; T-FIX-TASKSTART-GUARD-MIRROR — the old
+ * cwd-only resolution dangled from sub-repo cwds and false-fired the FU.11
+ * task_unscoped reset mid-flow). No active task OR no spec OR a path found
+ * nowhere → not generated (the conservative verdict — Gate A blocks).
  */
 export const HasGeneratedSpec: FunctionDef<z.input<typeof NoArgs>, HasGeneratedSpecResult> = {
   name: 'has_generated_spec',
@@ -133,8 +136,21 @@ export const HasGeneratedSpec: FunctionDef<z.input<typeof NoArgs>, HasGeneratedS
       const spec = active.spec;
       if (spec === undefined || spec === '') return ok({ present: true, generated: false });
       const cwd = ctx.event.kind === 'tool_call' ? (ctx.event.cwd ?? process.cwd()) : process.cwd();
-      const specPath = isAbsolute(spec) ? spec : resolve(cwd, spec);
-      return ok({ present: true, generated: await pathExistsAbs(specPath) });
+      if (isAbsolute(spec)) {
+        return ok({ present: true, generated: await pathExistsAbs(spec) });
+      }
+      // Relative: cwd first, then ancestors (bounded walk, same 64-hop bound
+      // as resolveProjectScopeRoot). Found nowhere → conservative false.
+      let dir = resolve(cwd);
+      for (let i = 0; i < 64; i++) {
+        if (await pathExistsAbs(resolve(dir, spec))) {
+          return ok({ present: true, generated: true });
+        }
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+      return ok({ present: true, generated: false });
     } catch {
       // GF.4 (F6): fail CLOSED — not generated on any read failure.
       return ok({ present: false, generated: false });

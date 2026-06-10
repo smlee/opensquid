@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.379] - 2026-06-10
+
+### Fixed — task-start guard no longer false-resets the FSM mid-flow (T-fix-taskstart-guard-mirror)
+
+The FU.11 `task_unscoped` reset fired twice mid-flow on 2026-06-10, each time wiping a
+state whose 7-phase ledger was complete. The guard was correct; both of its INPUTS were
+defective: (A) the ATM.1 transcript walk dropped metadata-only TaskUpdates (it required
+`status`), so a corrected `metadata.spec` never reached the active-task mirror — fixed:
+`PendingUpdate.status` is optional, metadata-only updates merge without touching
+activation bookkeeping (in the walk AND the in-flight H4a overlay); (B)
+`has_generated_spec` resolved a relative spec against the event cwd only, so
+planning-repo-relative paths dangled from member sub-repo cwds — fixed: relative specs
+resolve against the cwd and each ancestor (bounded walk; conservative not-found→blocked
+verdict unchanged; absolute specs untouched). Hardening the guard itself to consult the
+phase ledger before resetting is deliberately a separate future decision.
+
 ## [0.5.378] - 2026-06-10
 
 ### Fixed — one hook-ownership predicate; wizard re-runs no longer duplicate hooks (T-fix-wizard-hook-recognition)

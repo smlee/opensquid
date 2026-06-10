@@ -155,6 +155,62 @@ describe('has_generated_spec', () => {
     const r = await HasGeneratedSpec.execute({}, ctx());
     expect(r).toEqual({ ok: true, value: { present: true, generated: false } });
   });
+
+  // T-FIX-TASKSTART-GUARD-MIRROR: a RELATIVE spec resolves against the event
+  // cwd AND its ancestors — the planning repo is an ancestor of member
+  // sub-repos (H7). The pre-fix cwd-only resolution dangled from sub-repo
+  // cwds and false-fired the FU.11 task_unscoped reset mid-flow (2026-06-10).
+  it('generated:true for a relative spec resolved via an ANCESTOR of the event cwd (the live regression shape)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'opensquid-umbrella-'));
+    try {
+      await mkdir(join(root, 'docs', 'tasks'), { recursive: true });
+      await writeFile(join(root, 'docs', 'tasks', 'T-x.md'), '### Task X.1', 'utf8');
+      const subRepoCwd = join(root, 'sub', 'repo');
+      await mkdir(subRepoCwd, { recursive: true });
+      await writeActiveTask(SID, {
+        id: '15',
+        subject: 'x',
+        started_at: 'z',
+        taskId: 'X',
+        spec: join('docs', 'tasks', 'T-x.md'), // relative — planning-repo-rooted
+      });
+      const cwdCtx: EvalCtx = {
+        event: { kind: 'tool_call', tool: 'TaskUpdate', args: {}, cwd: subRepoCwd },
+        bindings: new Map(),
+        sessionId: SID,
+        packId: 'test',
+      };
+      const r = await HasGeneratedSpec.execute({}, cwdCtx);
+      expect(r).toEqual({ ok: true, value: { present: true, generated: true } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('generated:false for a relative spec found NOWHERE on the ancestor walk (conservative verdict)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'opensquid-umbrella-'));
+    try {
+      const subRepoCwd = join(root, 'sub', 'repo');
+      await mkdir(subRepoCwd, { recursive: true });
+      await writeActiveTask(SID, {
+        id: '15',
+        subject: 'x',
+        started_at: 'z',
+        taskId: 'X',
+        spec: join('docs', 'tasks', 'T-nowhere.md'),
+      });
+      const cwdCtx: EvalCtx = {
+        event: { kind: 'tool_call', tool: 'TaskUpdate', args: {}, cwd: subRepoCwd },
+        bindings: new Map(),
+        sessionId: SID,
+        packId: 'test',
+      };
+      const r = await HasGeneratedSpec.execute({}, cwdCtx);
+      expect(r).toEqual({ ok: true, value: { present: true, generated: false } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('task_list_generated (Gate B)', () => {
