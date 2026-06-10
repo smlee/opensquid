@@ -2,6 +2,7 @@
  * agent_bridge — transport bridge unit tests (WAB.2).
  */
 
+import { statSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -20,6 +21,7 @@ let inboxFile: string;
 let bus: AgentEventBus;
 let received: InboundChatEvent[];
 let warnings: string[];
+let events: Record<string, number>;
 let bridge: InboxTransportBridge | null;
 
 beforeEach(async () => {
@@ -30,6 +32,7 @@ beforeEach(async () => {
   bus = new AgentEventBus();
   received = [];
   warnings = [];
+  events = {};
   bus.on('inbound', (e) => received.push(e));
   bridge = null;
 });
@@ -39,17 +42,44 @@ afterEach(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
-/** Wait until either `pred()` returns truthy OR timeout. 5s default
- *  (was 2s) — Node 20 GitHub Actions runners + chokidar polling backend
- *  occasionally exceed 2s under shared-runner contention. Locally the
- *  predicate fires well under 500ms; the extra budget only matters in CI. */
-async function waitFor(pred: () => boolean, timeoutMs = 15000): Promise<void> {
+/** Wait until either `pred()` returns truthy OR timeout. 15s default (raised
+ *  from 2s, then 5s — shared-runner contention); on timeout the error renders
+ *  the full `snap()` state so a flake occurrence is its own post-mortem
+ *  (T-FLAKE-TRANSPORT-BRIDGE — two budget raises did NOT fix the flake; the
+ *  next lever is evidence, not budget). */
+async function waitFor(label: string, pred: () => boolean, timeoutMs = 15000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (pred()) return;
     await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error('timeout waiting for predicate');
+  throw new Error(
+    `timeout waiting for ${label} after ${Date.now() - start}ms :: ${JSON.stringify(snap())}`,
+  );
+}
+
+/** T-FLAKE-TRANSPORT-BRIDGE: full state snapshot rendered into every waitFor
+ *  timeout — the next natural flake occurrence becomes its own post-mortem
+ *  (received/cursor/stat/warnings/event-counts discriminate the seven
+ *  undefined-cursor paths; pre-research v6). Every probe is try/catch-bounded
+ *  so the snapshot can never mask the original timeout. */
+function snap(): Record<string, unknown> {
+  return {
+    received: received.length,
+    firstId: received[0]?.messageId,
+    lastId: received.at(-1)?.messageId,
+    cursor: bridge?.cursorFor(inboxFile),
+    stat: (() => {
+      try {
+        const s = statSync(inboxFile);
+        return { size: s.size, mtimeMs: s.mtimeMs };
+      } catch (e) {
+        return String(e);
+      }
+    })(),
+    warnings,
+    events,
+  };
 }
 
 function legacyRow(opts: {
@@ -93,13 +123,16 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     await fs.appendFile(
       inboxFile,
       legacyRow({ id: '1', channel: 'telegram:8075471258', senderId: '8075471258', text: 'hi' }),
     );
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     expect(received).toHaveLength(1);
     const ev = received[0]!;
     expect(ev.kind).toBe('inbound_message');
@@ -109,6 +142,10 @@ describe('InboxTransportBridge', () => {
     expect(ev.text).toBe('hi');
     expect(ev.projectUuid).toBe(TEST_PROJECT_UUID);
     expect(warnings).toEqual([]);
+    // T-FLAKE-TRANSPORT-BRIDGE: the onEvent observability seam fires on the
+    // happy path — the snapshot's event counters are live, not decorative.
+    expect(events.add ?? 0).toBeGreaterThanOrEqual(1);
+    expect(events.consume ?? 0).toBeGreaterThanOrEqual(1);
   });
 
   it('emits three events in order for three rows appended in burst', async () => {
@@ -118,6 +155,9 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     const block =
@@ -125,7 +165,7 @@ describe('InboxTransportBridge', () => {
       legacyRow({ id: 'b', channel: 'telegram:1', senderId: '1', text: 'two' }) +
       legacyRow({ id: 'c', channel: 'telegram:1', senderId: '1', text: 'three' });
     await fs.appendFile(inboxFile, block);
-    await waitFor(() => received.length >= 3);
+    await waitFor('received>=3', () => received.length >= 3);
     expect(received.map((r) => r.text)).toEqual(['one', 'two', 'three']);
     expect(warnings).toEqual([]);
   });
@@ -137,6 +177,9 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     await fs.appendFile(
@@ -144,7 +187,7 @@ describe('InboxTransportBridge', () => {
       '{ not valid json\n' +
         legacyRow({ id: 'ok', channel: 'telegram:1', senderId: '1', text: 'after-bad' }),
     );
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     expect(received).toHaveLength(1);
     expect(received[0]?.text).toBe('after-bad');
     expect(warnings.length).toBeGreaterThanOrEqual(1);
@@ -158,6 +201,9 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     await fs.appendFile(
@@ -170,7 +216,7 @@ describe('InboxTransportBridge', () => {
         threadId: '15',
       }),
     );
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     expect(received[0]?.sessionKey).toEqual({
       platform: 'telegram',
       chatId: '-1003923174632',
@@ -191,9 +237,12 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
-    await waitFor(() => received.length >= 2);
+    await waitFor('received>=2', () => received.length >= 2);
     expect(received.map((r) => r.text)).toEqual(['backlog-1', 'backlog-2']);
   });
 
@@ -204,20 +253,23 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     await fs.appendFile(
       inboxFile,
       legacyRow({ id: '1', channel: 'telegram:1', senderId: '1', text: 'first' }),
     );
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     const cursorAfterFirst = bridge.cursorFor(inboxFile)!;
     expect(cursorAfterFirst).toBeGreaterThan(0);
     await fs.appendFile(
       inboxFile,
       legacyRow({ id: '2', channel: 'telegram:1', senderId: '1', text: 'second' }),
     );
-    await waitFor(() => received.length >= 2);
+    await waitFor('received>=2', () => received.length >= 2);
     const cursorAfterSecond = bridge.cursorFor(inboxFile)!;
     expect(cursorAfterSecond).toBeGreaterThan(cursorAfterFirst);
     expect(received.map((r) => r.text)).toEqual(['first', 'second']);
@@ -230,6 +282,9 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     // Append a complete row + a partial trailer (no \n).
@@ -242,7 +297,7 @@ describe('InboxTransportBridge', () => {
     const partial =
       '{"v":1,"id":"partial","platform":"telegram","channel":"telegram:1","sender":"L","sender_id":"1","text":"par';
     await fs.appendFile(inboxFile, complete + partial);
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     expect(received).toHaveLength(1);
     expect(received[0]?.text).toBe('whole');
     // Now finish the partial.
@@ -250,7 +305,7 @@ describe('InboxTransportBridge', () => {
       inboxFile,
       'tial","received_at":"2026-05-21T19:00:00.000Z","enqueued_at":"2026-05-21T19:00:00.500Z","mentions_bot":false}\n',
     );
-    await waitFor(() => received.length >= 2);
+    await waitFor('received>=2', () => received.length >= 2);
     expect(received[1]?.text).toBe('partial');
     // Two waitFor cycles (double the IO latency) — give it explicit headroom
     // so it does not flake under full-suite parallel load (file-scope
@@ -264,13 +319,16 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     await fs.appendFile(
       inboxFile,
       legacyRow({ id: '1', channel: 'telegram:1', senderId: '1', text: 'pre-shutdown' }),
     );
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     await bridge.shutdown();
     const countAtShutdown = received.length;
     await fs.appendFile(
@@ -290,6 +348,9 @@ describe('InboxTransportBridge', () => {
       inboxRoot: inboxDir,
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     const badPlatform = JSON.stringify({
@@ -310,7 +371,7 @@ describe('InboxTransportBridge', () => {
         '\n' +
         legacyRow({ id: 'ok', channel: 'telegram:1', senderId: '1', text: 'after-bad' }),
     );
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     expect(received).toHaveLength(1);
     expect(received[0]?.text).toBe('after-bad');
     expect(warnings.some((w) => w.includes("unsupported platform 'sms'"))).toBe(true);
@@ -350,13 +411,16 @@ describe('InboxTransportBridge — umbrella keyed (CAT.5)', () => {
       umbrellaId, // no inboxRoot → resolves to umbrellaInboxDir(umbrellaId)
       usePolling: true,
       onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
     });
     await bridge.start();
     await fs.appendFile(
       umbFile,
       legacyRow({ id: '1', channel: 'telegram:8075471258', senderId: '8075471258', text: 'hi' }),
     );
-    await waitFor(() => received.length >= 1);
+    await waitFor('received>=1', () => received.length >= 1);
     expect(received).toHaveLength(1);
     expect(received[0]?.umbrellaId).toBe(umbrellaId);
     expect(received[0]?.text).toBe('hi');

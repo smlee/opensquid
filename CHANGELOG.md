@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.380] - 2026-06-10
+
+### Added — transport_bridge flake instrumentation (T-flake-transport-bridge)
+
+The recurring `transport_bridge.test.ts` flake (4× on 2026-06-10, unreproducible on
+demand, only under full-suite parallelism) now self-documents: `waitFor` timeouts render
+a full state snapshot (received count/ids, raw cursor, on-disk stat, captured warnings,
+per-kind watcher-event counts), and the bridge gains a no-op-by-default
+`TransportBridgeOptions.onEvent` observability seam (add/change/unlink/consume) — the
+discriminator that separates the four warn-silent undefined-cursor paths the existing
+probes alias. Two prior timeout-budget raises did not fix the flake; the next occurrence
+becomes its own post-mortem, and the FIX track is deliberately gated on that evidence.
+
 ## [0.5.379] - 2026-06-10
 
 ### Fixed — task-start guard no longer false-resets the FSM mid-flow (T-fix-taskstart-guard-mirror)

@@ -110,6 +110,12 @@ export interface TransportBridgeOptions {
   usePolling?: boolean;
   /** Structured warn sink for malformed rows + watcher errors. */
   onWarn?: (message: string) => void;
+  /**
+   * Test/observability seam (T-FLAKE-TRANSPORT-BRIDGE) — fires on watcher
+   * events + consume entry. No-op when unset; sibling of `onWarn` (same trust
+   * model). Observability ONLY — putting logic here is misuse.
+   */
+  onEvent?: (kind: 'add' | 'change' | 'unlink' | 'consume', path: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,13 +183,16 @@ export class InboxTransportBridge {
     });
 
     this.watcher.on('add', (path) => {
+      this.opts.onEvent?.('add', path);
       this.scheduleConsume(path);
     });
     this.watcher.on('change', (path) => {
+      this.opts.onEvent?.('change', path);
       this.scheduleConsume(path);
     });
     this.watcher.on('unlink', (path) => {
       // Rotation / truncation — drop cursor so next `add` starts at 0.
+      this.opts.onEvent?.('unlink', path);
       this.cursors.delete(path);
     });
     this.watcher.on('error', (err) => {
@@ -235,6 +244,7 @@ export class InboxTransportBridge {
    */
   private async consumeTail(path: string): Promise<void> {
     if (this.stopped) return;
+    this.opts.onEvent?.('consume', path);
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
       stat = await fs.stat(path);
