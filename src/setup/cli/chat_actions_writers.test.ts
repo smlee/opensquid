@@ -10,11 +10,13 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { ChannelsConfig } from '../../channels/routing.js';
 import type { ChatAgentConfig } from '../../packs/schemas/chat_agent.js';
 import type { ModelAlias } from '../../packs/schemas/models.js';
 
 import {
   buildActiveJson,
+  buildChannelsSeedJson,
   buildPlan,
   buildProjectCardJson,
   type PlanInput,
@@ -99,5 +101,31 @@ describe('buildPlan — activatePack emission (FRS.B)', () => {
     expect(acts).toHaveLength(1);
     expect(acts[0]?.kind).toBe('create_or_replace');
     expect(buildPlan(baseInput).actions.some((a) => a.path.endsWith('active.json'))).toBe(false);
+  });
+});
+
+describe('buildChannelsSeedJson (FRS.C)', () => {
+  it('emits a schema-valid v1 config the real loader accepts', () => {
+    const parsed = ChannelsConfig.safeParse(JSON.parse(buildChannelsSeedJson('loop', '/x/loop')));
+    expect(parsed.success).toBe(true);
+  });
+  it('reserved "general" id is schema-rejected; the -project suffix passes (the guard exists for a reason)', () => {
+    expect(
+      ChannelsConfig.safeParse(JSON.parse(buildChannelsSeedJson('general', '/x'))).success,
+    ).toBe(false);
+    expect(
+      ChannelsConfig.safeParse(JSON.parse(buildChannelsSeedJson('general-project', '/x'))).success,
+    ).toBe(true);
+  });
+});
+
+describe('buildPlan — channelsSeed emission (FRS.C)', () => {
+  it('emits the channels.json action iff channelsSeed is supplied', () => {
+    const withIt = buildPlan({
+      ...baseInput,
+      channelsSeed: { path: '/h/channels.json', umbrellaId: 'p', memberPath: '/x/p' },
+    });
+    expect(withIt.actions.filter((a) => a.path.endsWith('channels.json'))).toHaveLength(1);
+    expect(buildPlan(baseInput).actions.some((a) => a.path.endsWith('channels.json'))).toBe(false);
   });
 });

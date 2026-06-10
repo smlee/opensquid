@@ -23,7 +23,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { cancel, confirm, intro, isCancel, note, outro, select } from '@clack/prompts';
@@ -31,6 +31,7 @@ import pc from 'picocolors';
 import { lock as acquireLock } from 'proper-lockfile';
 
 import { OPENSQUID_HOME, resolveProjectUuid } from '../../runtime/paths.js';
+import { channelsConfigPath } from '../../channels/routing.js';
 
 import {
   runIdempotencyBranch,
@@ -240,8 +241,34 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
     }
     activeInput = { activatePack: { path: activePath, existing, packId: packResult.packId } };
   }
+  // FRS.C: seed minimal channels.json ONLY when truly absent (file-EXISTENCE
+  // check — loadChannelsConfig nulls on malformed too, and a malformed live
+  // config is the doctor's territory, never the wizard's).
+  let channelsInput: { channelsSeed?: { path: string; umbrellaId: string; memberPath: string } } =
+    {};
+  {
+    const chPath = channelsConfigPath();
+    let exists = true;
+    try {
+      await stat(chPath);
+    } catch {
+      exists = false;
+    }
+    if (!exists) {
+      const base = basename(d.projectCwd);
+      channelsInput = {
+        channelsSeed: {
+          path: chPath,
+          // routing.ts:71-77 forbids the reserved "general" umbrella id.
+          umbrellaId: base === 'general' ? 'general-project' : base,
+          memberPath: d.projectCwd,
+        },
+      };
+    }
+  }
   const plan = buildPlan({
     ...activeInput,
+    ...channelsInput,
     ...(existingProjectUuid === null
       ? {
           projectCard: {

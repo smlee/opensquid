@@ -78,7 +78,10 @@ describe('runChatSetupWizard — clean state full flow (api mode)', () => {
     });
 
     expect(result.outcome).toBe('completed');
-    expect(result.written ?? []).toHaveLength(4);
+    // FRS.C: the fresh tmp home has no channels.json → the wizard seeds it
+    // (5th file). Identity-controlled fixture, so the set is deterministic.
+    expect(result.written ?? []).toHaveLength(5);
+    expect(result.written).toContain(join(home(), 'channels.json'));
     expect(captured).toEqual([]);
 
     // models.yaml
@@ -409,5 +412,41 @@ describe('runChatSetupWizard — pack activation (FRS.B)', () => {
     expect(onDisk.packs).toContain('chat-agent-default');
     expect(new Set(onDisk.packs).size).toBe(onDisk.packs.length);
     expect(result.written).toContain(join(home(), 'active.json'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FRS.C — channels.json seed (orchestrator seam)
+// ---------------------------------------------------------------------------
+
+describe('runChatSetupWizard — channels.json seed (FRS.C)', () => {
+  it('absent → seeded on the executed plan; the real loader parses it and resolves the member', async () => {
+    const projectCwd = await mkdtemp(join(tmpdir(), 'frs-c-seed-'));
+    queue(...ACTV_BASE, false, 'skip', true); // decline activation; CONFIRM plan
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      projectCwd,
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.written).toContain(join(home(), 'channels.json'));
+    const onDisk = JSON.parse(await readFile(join(home(), 'channels.json'), 'utf8')) as {
+      v: number;
+      umbrellas: { id: string; members: string[] }[];
+    };
+    expect(onDisk.v).toBe(1);
+    expect(onDisk.umbrellas[0]?.members).toEqual([projectCwd]);
+  });
+
+  it('PRESENT (even malformed) → byte-identical after a full wizard run (doctor territory, never the wizard)', async () => {
+    await writeFile(join(home(), 'channels.json'), '{ not valid json', 'utf8');
+    queue(...ACTV_BASE, false, 'skip', true);
+    await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
+    expect(await readFile(join(home(), 'channels.json'), 'utf8')).toBe('{ not valid json');
   });
 });

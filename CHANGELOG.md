@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.383] - 2026-06-10
+
+### Added — wizard seeds a minimal `channels.json` when absent (T-fix-first-run-setup-completeness, Part C — track COMPLETE)
+
+When `~/.opensquid/channels.json` does not exist at wizard completion, the plan now seeds
+the minimal valid config (`{v:1, umbrellas:[{id, members:[projectCwd]}]}`) so
+umbrella-keyed inbox/lease routing engages from day one instead of silently degrading to
+legacy per-project keying. Detection is file-EXISTENCE, never load-null — a PRESENT
+config, even malformed, is never touched by the wizard (the doctor's territory; the
+routing config is the daemon's authority). The telegram target arrives later by manual
+edit (pinned: the `ensure_umbrella_topic` assurance fills topic_id only on rows that
+already carry chat_id). Reserved `general` dir names get the `-project` suffix. With
+GAP-A (0.5.381) and GAP-B (0.5.382), the first-run remediation track is COMPLETE: a
+fresh `opensquid setup chat` yields a fully wired, optionally-gated agent.
+
 ## [0.5.382] - 2026-06-10
 
 ### Added — wizard pack-activation prompt (T-fix-first-run-setup-completeness, Part B; user-confirmed default)

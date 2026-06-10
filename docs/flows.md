@@ -51,8 +51,11 @@ so — no guesswork.
 5. **`opensquid doctor`** (`setup/cli/doctor.ts`) — self-diagnosis. _(Coverage of all pieces not re-verified
    in this pass — see Not-yet-traced.)_
 
-**Net first-run state:** hooks ✅, MCP ✅, git gates ✅, models/chat config ✅; **project.json ❌, a pack ❌,
-channels.json ❌**. The remediation track is `docs/tasks/T-fix-first-run-setup-completeness.md`.
+**Net first-run state (as of 0.5.383 — the remediation track is COMPLETE):** hooks ✅, MCP ✅, git gates ✅,
+models/chat config ✅, **project.json ✅ (0.5.381), pack opt-in prompted ✅ (0.5.382), channels.json
+seeded ✅ (0.5.383 — minimal umbrella row; telegram target by manual edit)**. A fresh `opensquid setup
+chat` yields a fully wired, optionally-gated agent. Track: `docs/tasks/T-fix-first-run-setup-completeness.md`
+(loop repo).
 
 ---
 

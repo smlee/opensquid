@@ -92,6 +92,15 @@ export function buildChatAgentYaml(cfg: ChatAgentConfig): string {
 }
 
 /**
+ * Minimal `~/.opensquid/channels.json` seed (`ChannelsConfig` v1 — routing.ts
+ * schema; `telegram` optional on UmbrellaRow, target arrives by manual edit).
+ * Pure; schema-shaped.
+ */
+export function buildChannelsSeedJson(umbrellaId: string, memberPath: string): string {
+  return `${JSON.stringify({ v: 1, umbrellas: [{ id: umbrellaId, members: [memberPath] }] }, null, 2)}\n`;
+}
+
+/**
  * The user-scope `active.json` (`{ packs: string[] }` — discovery.ts schema).
  * The ONE owner of merge+dedupe+serialize; pure (deterministic in inputs).
  */
@@ -234,6 +243,10 @@ export interface PlanInput {
    *  prompt + the plan confirm both gate it — no silent install). Raw
    *  existing list from the orchestrator; buildActiveJson owns the merge. */
   activatePack?: { path: string; existing: string[]; packId: string };
+  /** FRS.C: seed minimal channels.json ONLY when the file does not exist
+   *  (existence-checked at the orchestrator — a present-but-malformed live
+   *  config is the doctor's territory, never the wizard's). */
+  channelsSeed?: { path: string; umbrellaId: string; memberPath: string };
 }
 
 export function buildPlan(input: PlanInput): WritePlan {
@@ -275,6 +288,13 @@ export function buildPlan(input: PlanInput): WritePlan {
       kind: 'create_or_replace',
       path: input.activatePack.path,
       content: buildActiveJson(input.activatePack.existing, input.activatePack.packId),
+    });
+  }
+  if (input.channelsSeed !== undefined) {
+    actions.push({
+      kind: 'create_or_replace',
+      path: input.channelsSeed.path,
+      content: buildChannelsSeedJson(input.channelsSeed.umbrellaId, input.channelsSeed.memberPath),
     });
   }
   actions.push({
