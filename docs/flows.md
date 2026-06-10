@@ -34,12 +34,13 @@ so — no guesswork.
    UserPromptSubmit) into `~/.claude/settings.json` (`settings-writer.ts`) + the MCP servers `opensquid` +
    `opensquid-chat` into `mcpServers` (`mcp-writer.ts`) + the git pre-commit/pre-push hooks (`git-hooks.ts`).
    **✅ verified by the audit — this path wires hooks + MCP correctly.**
-3. **`opensquid setup chat`** → `buildPlan()` (`setup/cli/chat_actions_writers.ts:213-252`) writes
-   `models.yaml`, `.env`, the pack `manifest.yaml`, `chat_agent.yaml`. **⚠ GAP A (HIGH):** it advertises
-   (`agent_bridge/cli.ts:233`) that it creates `.opensquid/project.json`, but **no code writes that card**
-   (paths.ts:130-168 is read-only; zero `writeFile` of it in `src/`). The agent-bridge then `exit(1)`s
-   (cli.ts:234) for a fresh user with no `OPENSQUID_PROJECT_UUID`. _(Dropped in the retire-Rust cutover — the
-   engine used to mint it.)_
+3. **`opensquid setup chat`** → `buildPlan()` (`setup/cli/chat_actions_writers.ts`) writes
+   `models.yaml`, `.env`, the pack `manifest.yaml`, `chat_agent.yaml`, **and — GAP A CLOSED at 0.5.381
+   (T-fix-first-run-setup-completeness FRS.A)** — `.opensquid/project.json` when the FULL identity
+   resolution (`OPENSQUID_PROJECT_UUID` env, then the cwd-walk) finds none: the orchestrator probes
+   `resolveProjectUuid`, mints the uuid, and the card rides the WritePlan (previewed in dry-run, backed
+   up, suppression-idempotent — an env uuid or existing card anywhere up the walk means no action).
+   The `agent_bridge/cli.ts:233` instruction is now true for fresh users.
 4. **Pack activation** — **⚠ GAP B (HIGH, by-design-but-no-scaffolding):** nothing writes
    `active.json`. A fresh user who finishes the wizard has an EMPTY pack list → an UNGATED agent (no
    coding-flow, no discipline). This is the deliberate "no silent installs" opt-in invariant

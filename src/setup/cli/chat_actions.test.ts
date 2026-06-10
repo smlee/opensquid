@@ -18,7 +18,8 @@
  *   - WAB-SUB.3 subscription-mode fixtures live in `chat_actions_wab_sub.test.ts`.
  */
 
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -259,5 +260,63 @@ describe('runChatSetupWizard — write failure rollback', () => {
     // Original models.yaml restored (still contains capable_writer, not fast_chat).
     const raw = await readFile(join(home(), 'models.yaml'), 'utf8');
     expect(raw).toContain('capable_writer');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-FIX-FIRST-RUN-SETUP A — the orchestrator seam: the wizard probes the FULL
+// project-identity resolution (env first, then cwd-walk) and supplies the
+// projectCard plan input ONLY when nothing resolves. Three runs through the
+// prompt-mock harness; the final `false` declines the confirm so nothing is
+// written and the Plan note carries the rendered preview.
+// ---------------------------------------------------------------------------
+
+const CARD_PLAN_PROMPTS = [
+  'api',
+  'claude-haiku-4-5-20251001',
+  'sk-ant-SEAMTEST0000',
+  'env',
+  'create',
+  'chat-agent-default',
+  'fast_chat',
+  'default',
+  'none',
+  'no',
+  'skip',
+  false, // decline the confirm — preview only
+];
+
+describe('runChatSetupWizard — project card (FRS.A orchestrator seam)', () => {
+  it('fresh cwd + no env → the plan preview contains the project card', async () => {
+    const projectCwd = await mkdtemp(join(tmpdir(), 'frs-a-fresh-'));
+    queue(...CARD_PLAN_PROMPTS);
+    await runChatSetupWizard({ opensquidHome: home(), envPath: env(), projectCwd, projectEnv: {} });
+    const planNote = state.notes.find((nn) => nn.title === 'Plan');
+    expect(planNote?.msg ?? '').toContain(join('.opensquid', 'project.json'));
+  });
+
+  it('pre-existing card → suppressed, and the on-disk uuid is untouched', async () => {
+    const projectCwd = await mkdtemp(join(tmpdir(), 'frs-a-card-'));
+    await mkdir(join(projectCwd, '.opensquid'), { recursive: true });
+    const card = '{\n  "version": 1,\n  "id": "pre",\n  "uuid": "pre-uuid"\n}\n';
+    await writeFile(join(projectCwd, '.opensquid', 'project.json'), card, 'utf8');
+    queue(...CARD_PLAN_PROMPTS);
+    await runChatSetupWizard({ opensquidHome: home(), envPath: env(), projectCwd, projectEnv: {} });
+    const planNote = state.notes.find((nn) => nn.title === 'Plan');
+    expect(planNote?.msg ?? '').not.toContain('project.json');
+    expect(await readFile(join(projectCwd, '.opensquid', 'project.json'), 'utf8')).toBe(card);
+  });
+
+  it('OPENSQUID_PROJECT_UUID set → suppressed (env-first, no split identity)', async () => {
+    const projectCwd = await mkdtemp(join(tmpdir(), 'frs-a-env-'));
+    queue(...CARD_PLAN_PROMPTS);
+    await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      projectCwd,
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'env-uuid' },
+    });
+    const planNote = state.notes.find((nn) => nn.title === 'Plan');
+    expect(planNote?.msg ?? '').not.toContain('project.json');
   });
 });

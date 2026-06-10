@@ -92,6 +92,15 @@ export function buildChatAgentYaml(cfg: ChatAgentConfig): string {
 }
 
 /**
+ * The `.opensquid/project.json` card (paths.ts ProjectCard schema).
+ * GENUINELY pure — deterministic in its inputs, byte-pinnable in tests; the
+ * uuid is minted at the ORCHESTRATOR (which owns create-if-absent), not here.
+ */
+export function buildProjectCardJson(id: string, uuid: string): string {
+  return `${JSON.stringify({ version: 1, id, uuid }, null, 2)}\n`;
+}
+
+/**
  * Build the `KEY=value` line(s) appended to ~/.loop/.env. We trim trailing
  * whitespace on the prior file (if any) and prepend a newline so the new
  * block is line-separated from prior content.
@@ -208,6 +217,11 @@ export interface PlanInput {
   createPackManifest: boolean;
   customPromptPath?: string;
   customPromptBody?: string;
+  /** T-FIX-FIRST-RUN-SETUP A: mint .opensquid/project.json when the FULL
+   *  resolution (env, then cwd-walk) found no project identity. Orchestrator-
+   *  gated: an env uuid or an existing card suppresses this input entirely —
+   *  suppression IS the idempotency; buildPlan never decides. */
+  projectCard?: { path: string; id: string; uuid: string };
 }
 
 export function buildPlan(input: PlanInput): WritePlan {
@@ -235,6 +249,13 @@ export function buildPlan(input: PlanInput): WritePlan {
       kind: 'create_or_replace',
       path: join(input.packRoot, 'manifest.yaml'),
       content: `name: ${input.packId}\nversion: 0.0.1\nscope: project\ngoal: starter chat-agent pack (configured via opensquid setup chat)\n`,
+    });
+  }
+  if (input.projectCard !== undefined) {
+    actions.push({
+      kind: 'create_or_replace',
+      path: input.projectCard.path,
+      content: buildProjectCardJson(input.projectCard.id, input.projectCard.uuid),
     });
   }
   actions.push({

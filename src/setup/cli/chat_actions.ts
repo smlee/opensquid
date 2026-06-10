@@ -22,14 +22,15 @@
  * `./chat_actions_prompts.ts`. This file orchestrates only.
  */
 
+import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { cancel, confirm, intro, isCancel, note, outro, select } from '@clack/prompts';
 import pc from 'picocolors';
 import { lock as acquireLock } from 'proper-lockfile';
 
-import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveProjectUuid } from '../../runtime/paths.js';
 
 import {
   runIdempotencyBranch,
@@ -81,6 +82,10 @@ export interface WizardDeps {
    * fast_chat alias. Backup of the prior models.yaml is still made.
    */
   replace?: boolean;
+  /** T-FIX-FIRST-RUN-SETUP A: project-identity probe seams (test injection).
+   *  Default process.cwd()/process.env — same pattern as opensquidHome/envPath. */
+  projectCwd?: string;
+  projectEnv?: NodeJS.ProcessEnv;
 }
 
 export interface WizardResult {
@@ -98,6 +103,8 @@ export async function runChatSetupWizard(deps: WizardDeps = {}): Promise<WizardR
   const envPath = deps.envPath ?? defaultEnvPath();
   const dryRun = deps.dryRun === true;
   const replace = deps.replace === true;
+  const projectCwd = deps.projectCwd ?? process.cwd();
+  const projectEnv = deps.projectEnv ?? process.env;
 
   await mkdir(homeDir, { recursive: true });
   const lockPath = join(homeDir, 'setup-chat.lock');
@@ -113,7 +120,15 @@ export async function runChatSetupWizard(deps: WizardDeps = {}): Promise<WizardR
     return { outcome: 'concurrent_lock' };
   }
   try {
-    return await runInner({ homeDir, envPath, setExitCode, dryRun, replace });
+    return await runInner({
+      homeDir,
+      envPath,
+      setExitCode,
+      dryRun,
+      replace,
+      projectCwd,
+      projectEnv,
+    });
   } finally {
     if (release) {
       try {
@@ -131,6 +146,8 @@ interface InnerDeps {
   setExitCode: (code: number) => void;
   dryRun: boolean;
   replace: boolean;
+  projectCwd: string;
+  projectEnv: NodeJS.ProcessEnv;
 }
 
 async function runInner(d: InnerDeps): Promise<WizardResult> {
@@ -201,7 +218,21 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
   if ((await runChannelOffer(detection.secrets)) === 'cancel') return abortNoChanges();
 
   // (g) Dry-run preview + confirm + write
+  // T-FIX-FIRST-RUN-SETUP A: mint .opensquid/project.json when the FULL
+  // resolution (env first, then the cwd-walk — the agent-bridge's own chain)
+  // finds no project identity. An env uuid or an existing card anywhere up
+  // the walk suppresses creation entirely (suppression IS the idempotency).
+  const existingProjectUuid = await resolveProjectUuid({ cwd: d.projectCwd, env: d.projectEnv });
   const plan = buildPlan({
+    ...(existingProjectUuid === null
+      ? {
+          projectCard: {
+            path: join(d.projectCwd, '.opensquid', 'project.json'),
+            id: basename(d.projectCwd),
+            uuid: randomUUID(),
+          },
+        }
+      : {}),
     homeDir: d.homeDir,
     envPath: d.envPath,
     modelsState: detection.models,
@@ -297,13 +328,18 @@ Fix: repair the file manually, OR move it aside
   mv ${models.path} ${models.path}.broken
 and re-run.`;
 
-const successOutro = (plan: WritePlan): string =>
-  `${pc.green('Chat agent configured.')}
+const successOutro = (plan: WritePlan): string => {
+  // T-FIX-FIRST-RUN-SETUP A: surface a freshly minted project card.
+  const card = plan.actions.find((a) => a.path.endsWith(join('.opensquid', 'project.json')));
+  return `${pc.green('Chat agent configured.')}${
+    card !== undefined ? `\nCreated ${card.path} (project identity).` : ''
+  }
 
 Next steps:
   - Start the bridge:    opensquid agent-bridge start
   - Test in chat:        send a message to your project Telegram channel
   - Undo this setup:     restore files from ${plan.backupDir}`;
+};
 
 // ---------------------------------------------------------------------------
 // Detection — gather all five detector snapshots in parallel

@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.381] - 2026-06-10
+
+### Fixed — `opensquid setup chat` now actually creates `.opensquid/project.json` (T-fix-first-run-setup-completeness, Part A)
+
+The agent-bridge's own error message advertised `opensquid setup chat` as the way to
+create `.opensquid/project.json`, but NO code path anywhere wrote the card — every fresh
+user without `OPENSQUID_PROJECT_UUID` hard-failed. The wizard now probes the FULL
+project-identity resolution (env first, then the 64-level cwd-walk — the agent-bridge's
+own chain) and, only when nothing resolves, mints the card through the existing
+WritePlan (dry-run previewed, backed up, rolled back on failure, surfaced in the outro).
+An env-pinned uuid or an existing card anywhere up the walk suppresses creation —
+nothing is ever overwritten. Part B of the track (wizard pack-activation prompt) is an
+architectural decision awaiting the user's call; Part C (channels.json) deferred.
+
 ## [0.5.380] - 2026-06-10
 
 ### Added — transport_bridge flake instrumentation (T-flake-transport-bridge)
