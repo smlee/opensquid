@@ -1,5 +1,5 @@
 /**
- * Tests for `runDoctorHooks` + `OPENSQUID_HOOK_REGEX` + `printReport` (G.2).
+ * Tests for `runDoctorHooks` + the shared ownership predicate gate + `printReport` (G.2).
  *
  * Coverage matches spec test fixtures:
  *   - correct opensquid-hook-pretooluse spawn → GREEN (marker present)
@@ -10,7 +10,7 @@
  *   - D9-guard prompt-type hook → SKIPPED with reason mentioning non-spawnable
  *   - settings.json doesn't exist → SKIPPED with informational reason
  *   - exit-code semantics: 0 red → returns 0; ≥1 red → returns 1
- *   - regex coverage: opensquid-hook-* + opensquid.*anti-drift match; others don't
+ *   - predicate coverage: bin names (any path/args) + legacy anti-drift match; lookalikes don't
  *   - probe payload kind matches the bin's normalized event kind label
  *
  * Uses `spawnProbe` injection so tests don't actually spawn anything; the
@@ -23,7 +23,8 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { OPENSQUID_HOOK_REGEX, printReport, runDoctorHooks, type DoctorResult } from './doctor.js';
+import { printReport, runDoctorHooks, type DoctorResult } from './doctor.js';
+import { isOpensquidHookCommand } from '../wizard/settings-writer.js';
 
 let dir: string;
 let userPath: string;
@@ -57,24 +58,36 @@ const fakeProbeSilent = async (
   return Promise.resolve({ exitCode: 0, stderr: '' });
 };
 
-describe('OPENSQUID_HOOK_REGEX', () => {
+// T-FIX-WIZARD-HOOK-RECOGNITION: doctor's managed-filter + spawn gate use the
+// SHARED ownership predicate (the old local substring regex is deleted).
+describe('isOpensquidHookCommand (doctor gate)', () => {
   it('matches opensquid-hook-* bin names', () => {
-    expect(OPENSQUID_HOOK_REGEX.test('opensquid-hook-pretooluse')).toBe(true);
-    expect(OPENSQUID_HOOK_REGEX.test('opensquid-hook-stop')).toBe(true);
-    expect(OPENSQUID_HOOK_REGEX.test('opensquid-hook-sessionend')).toBe(true);
-    expect(OPENSQUID_HOOK_REGEX.test('opensquid-hook-userpromptsubmit')).toBe(true);
+    expect(isOpensquidHookCommand('opensquid-hook-pretooluse')).toBe(true);
+    expect(isOpensquidHookCommand('opensquid-hook-stop')).toBe(true);
+    expect(isOpensquidHookCommand('opensquid-hook-sessionend')).toBe(true);
+    expect(isOpensquidHookCommand('opensquid-hook-userpromptsubmit')).toBe(true);
+  });
+
+  it('matches path-prefixed and argument variants', () => {
+    expect(isOpensquidHookCommand('/Users/u/.nvm/bin/opensquid-hook-pretooluse')).toBe(true);
+    expect(isOpensquidHookCommand('opensquid-hook-stop --flag')).toBe(true);
   });
 
   it('matches the legacy "node .../opensquid/dist/index.js anti-drift" shape', () => {
     expect(
-      OPENSQUID_HOOK_REGEX.test('node /home/u/opensquid/dist/index.js anti-drift pre-tool-use'),
+      isOpensquidHookCommand('node /home/u/opensquid/dist/index.js anti-drift pre-tool-use'),
     ).toBe(true);
   });
 
   it('does NOT match unrelated user commands', () => {
-    expect(OPENSQUID_HOOK_REGEX.test('bun run claude-memory/scripts/foo.ts')).toBe(false);
-    expect(OPENSQUID_HOOK_REGEX.test('echo hello')).toBe(false);
-    expect(OPENSQUID_HOOK_REGEX.test('npm run check')).toBe(false);
+    expect(isOpensquidHookCommand('bun run claude-memory/scripts/foo.ts')).toBe(false);
+    expect(isOpensquidHookCommand('echo hello')).toBe(false);
+    expect(isOpensquidHookCommand('npm run check')).toBe(false);
+  });
+
+  it('does NOT match lookalikes the old substring regex would have spawned (declared tightening)', () => {
+    expect(isOpensquidHookCommand('opensquid-hook-typo-not-ours')).toBe(false);
+    expect(isOpensquidHookCommand('echo opensquid-hook-stop-fake')).toBe(false);
   });
 });
 

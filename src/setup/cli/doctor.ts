@@ -7,8 +7,9 @@
  * the `[opensquid-dispatch]` marker. Marker absence = silent-no-op (the G.1
  * root-cause failure mode). Exit 0 if all green, 1 if any red (CI-friendly).
  *
- * Security gate: NEVER spawns a command that doesn't match the opensquid
- * regex — non-matching entries SKIPPED with note ("not opensquid-managed").
+ * Security gate: NEVER spawns a command the shared ownership predicate
+ * (`isOpensquidHookCommand`, settings-writer.ts) doesn't claim —
+ * non-matching entries SKIPPED with note ("not opensquid-managed").
  * D9-guard prompt-type hooks SKIPPED ("non-spawnable hook type").
  *
  * Engine-vocabulary discipline: consumer-side file — knows about Claude
@@ -27,7 +28,7 @@ import type { Command } from 'commander';
 import { computeMemoryDrift, renderMemoryDrift } from '../migrate/memory_drift.js';
 import { makeMemoryStore } from '../migrate/memory_store_handle.js';
 import { readSettingsHooks, type ParsedHookEntry } from '../wizard/settings-reader.js';
-import { OPENSQUID_BIN_FOR_EVENT } from '../wizard/settings-writer.js';
+import { OPENSQUID_BIN_FOR_EVENT, isOpensquidHookCommand } from '../wizard/settings-writer.js';
 
 /** `/`→`-`, matching Claude Code's auto-memory dir naming. Mirrors the inline
  * copies in `memory.ts` / `memory_reconcile.ts` (stable one-liner; no shared
@@ -36,8 +37,10 @@ function encodeProjectPath(projectPath: string): string {
   return projectPath.replace(/\//g, '-');
 }
 
-/** Regex that gates which hook commands doctor will spawn. */
-export const OPENSQUID_HOOK_REGEX = /opensquid-hook|opensquid.*anti-drift/;
+// T-FIX-WIZARD-HOOK-RECOGNITION: the spawn/managed gate now uses the SHARED
+// ownership predicate `isOpensquidHookCommand` (settings-writer.ts) — the old
+// local substring regex was one of three divergent classifiers and could both
+// miss real entries and spawn lookalikes (`opensquid-hook-typo-not-ours`).
 
 /** Maps Claude Code event names → canonical event-kind label + minimal
  * snake_case stdin payload satisfying each hook bin's parser. */
@@ -125,7 +128,7 @@ export async function runDoctorHooks(opts: DoctorOptions): Promise<DoctorResult[
     // present-but-broken event is already RED via probeEntry, so no double-count).
     // A scope with zero opensquid hooks is exempt (project scope is optional).
     const managed = entries.filter(
-      (e) => e.type === 'command' && OPENSQUID_HOOK_REGEX.test(e.command),
+      (e) => e.type === 'command' && isOpensquidHookCommand(e.command),
     );
     if (managed.length > 0) {
       const present = new Set(managed.map((e) => e.event));
@@ -172,8 +175,8 @@ async function probeEntry(
       'non-spawnable hook type (inline prompt)',
     );
   }
-  // Security gate: only spawn commands that look opensquid-managed.
-  if (!OPENSQUID_HOOK_REGEX.test(entry.command)) {
+  // Security gate: only spawn commands the shared ownership predicate claims.
+  if (!isOpensquidHookCommand(entry.command)) {
     return mk(scope, entry.event, entry.command, 'skipped', 'not opensquid-managed');
   }
   const probePayload = PROBE_PAYLOADS[entry.event];

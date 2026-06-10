@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.378] - 2026-06-10
+
+### Fixed — one hook-ownership predicate; wizard re-runs no longer duplicate hooks (T-fix-wizard-hook-recognition)
+
+Hook-ownership classification lived in FOUR divergent forms (writer marker+legacy-regex,
+doctor's broader substring regex at its managed-filter AND spawn security gate, and a
+substring scan in the flow-health check). Pre-marker installs carrying the bare modern
+`opensquid-hook-*` command matched neither writer arm, so `opensquid setup wizard hooks`
+"preserved" them as third-party and DUPLICATED every hook (observed live: added 6 /
+replaced 0 / preserved 6 → every hook ran twice). Now ONE shared predicate
+(`isOpensquidHookCommand`/`isOpensquidHookEntry`, exported by settings-writer) decides
+everywhere; the writer does per-ENTRY surgery (a mixed group keeps its matcher + foreign
+sibling hooks — only the owned entries are excised; wholly-owned groups converge to the
+canonical matcher-less marked entry, a declared decision); doctor's spawn gate gets
+strictly tighter (substring lookalikes like `opensquid-hook-typo-not-ours` are no longer
+spawnable — declared + test-pinned); `OPENSQUID_HOOK_REGEX` is deleted.
+
 ## [0.5.377] - 2026-06-10
 
 ### Added — honest MCP tool annotations on both servers (T-mcp-tool-annotations)

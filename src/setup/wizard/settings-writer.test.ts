@@ -260,6 +260,85 @@ describe('projectOpensquidHooks — pure-function projection', () => {
   });
 });
 
+// T-FIX-WIZARD-HOOK-RECOGNITION: pre-marker installs carry the bare modern bin
+// name (no @opensquid marker) — observed live 2026-06-10, where a wizard
+// re-run "preserved" all six as third-party and DUPLICATED every hook.
+describe('projectOpensquidHooks — bare-modern recognition + per-entry surgery', () => {
+  it('converges six bare unmarked modern entries: replaced 6, preserved 0, single entry each', () => {
+    const bare = Object.fromEntries(
+      Object.entries(OPENSQUID_BIN_FOR_EVENT).map(([event, command]) => [
+        event,
+        [{ hooks: [{ type: 'command', command }] }],
+      ]),
+    );
+    const { output, added, replaced, preserved } = projectOpensquidHooks({ hooks: bare });
+    expect({ added, replaced, preserved }).toEqual({ added: 6, replaced: 6, preserved: 0 });
+    for (const event of Object.keys(OPENSQUID_BIN_FOR_EVENT)) {
+      expect(output.hooks?.[event]).toHaveLength(1);
+      const inner = output.hooks?.[event]?.[0]?.hooks?.[0];
+      expect(inner?.['@opensquid']).toBe(true);
+    }
+  });
+
+  it('recognizes path-prefixed and argument variants of the bin names', () => {
+    const input = {
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: '/Users/u/.nvm/bin/opensquid-hook-stop' }] }],
+        PreToolUse: [
+          { hooks: [{ type: 'command', command: 'opensquid-hook-pretooluse --verbose' }] },
+        ],
+      },
+    };
+    const { replaced, preserved } = projectOpensquidHooks(input);
+    expect(replaced).toBe(2);
+    expect(preserved).toBe(0);
+  });
+
+  it('MIXED group: excises the owned entry, keeps matcher + foreign sibling (counts both replaced and preserved)', () => {
+    const input = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'Bash',
+            hooks: [
+              { type: 'command', command: 'opensquid-hook-pretooluse' },
+              { type: 'command', command: 'bun run /scripts/user-guard.ts' },
+            ],
+          },
+        ],
+      },
+    };
+    const { output, replaced, preserved } = projectOpensquidHooks(input);
+    expect(replaced).toBe(1);
+    expect(preserved).toBe(1);
+    const groups = output.hooks?.PreToolUse ?? [];
+    expect(groups).toHaveLength(2); // surgically-kept user group + canonical append
+    expect(groups[0]?.matcher).toBe('Bash');
+    expect(groups[0]?.hooks).toHaveLength(1);
+    expect(groups[0]?.hooks?.[0]?.command).toBe('bun run /scripts/user-guard.ts');
+    expect(groups[1]?.hooks?.[0]?.['@opensquid']).toBe(true);
+  });
+
+  it('wholly-owned group WITH a matcher converges to the canonical matcher-less entry (declared decision)', () => {
+    const input = {
+      hooks: {
+        Stop: [
+          {
+            matcher: 'Bash',
+            hooks: [{ type: 'command', command: 'opensquid-hook-stop' }],
+          },
+        ],
+      },
+    };
+    const { output, replaced } = projectOpensquidHooks(input);
+    expect(replaced).toBe(1);
+    const groups = output.hooks?.Stop ?? [];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.matcher).toBeUndefined();
+    expect(groups[0]?.hooks?.[0]?.['@opensquid']).toBe(true);
+  });
+});
+
 // T-HANDOFF-HARDENING HH6.1 — SessionStart registration.
 describe('writeOpensquidHooks — SessionStart (HH6.1)', () => {
   it('emits a SessionStart group with the opensquid bin + @opensquid marker', async () => {

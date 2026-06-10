@@ -29,6 +29,7 @@ import { z } from 'zod';
 
 import { loadActivePacks } from '../runtime/bootstrap.js';
 import { ok } from '../runtime/result.js';
+import { isOpensquidHookEntry } from '../setup/wizard/settings-writer.js';
 
 import type { FunctionDef } from './registry.js';
 
@@ -57,10 +58,18 @@ export async function flowEnforcementProblems(sessionId: string): Promise<string
   try {
     const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
     const raw = await readFile(join(configDir, 'settings.json'), 'utf8');
-    const settings = JSON.parse(raw) as { hooks?: Record<string, unknown> };
+    const settings = JSON.parse(raw) as {
+      hooks?: Record<string, { hooks?: { type: string; command?: string }[] }[]>;
+    };
     const hooks = settings.hooks ?? {};
+    // T-FIX-WIZARD-HOOK-RECOGNITION: presence decided by the SHARED ownership
+    // predicate (was a substring scan of the serialized groups — missed legacy
+    // shapes and matched lookalikes).
     const missing = REQUIRED_HOOK_EVENTS.filter(
-      (ev) => !JSON.stringify(hooks[ev] ?? []).includes('opensquid-hook'),
+      (ev) =>
+        !(hooks[ev] ?? []).some((group) =>
+          (group.hooks ?? []).some((h) => isOpensquidHookEntry(h)),
+        ),
     );
     if (missing.length > 0) {
       problems.push(
