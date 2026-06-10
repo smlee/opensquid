@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.388] - 2026-06-10
+
+### Fixed — codex `apply_patch` writes now hit the gates (T-codex-host-shell CHS.2)
+
+The post-trust CHS.1 live spike proved the full hook pipeline fires inside
+`codex exec` — and that a gated `src/` write sailed through, because codex's
+file-edit tool reports `tool_name: "apply_patch"` (patch text in
+`tool_input.command`), a name no pack rule matches. The pre-tool-use hook now
+normalizes each touched path into one synthesized single-path `Write` event —
+every path-predicate dialect (contains/endsWith/startsWith/==) sees a normal
+`file_path`; `Add File` sections carry the TRUE final content (the audits see the
+real artifact), `Update`/`Delete` a first-line-labeled hunk diff (explicit, never
+silently-stale). First deny wins (the permissionDecision envelope); unknown
+envelope variants pass through untouched (fail-open).
+
 ## [0.5.387] - 2026-06-10
 
 ### Added — `opensquid handoff --narrate` (T-auto-handoff AHO.2; the feature is COMPLETE)

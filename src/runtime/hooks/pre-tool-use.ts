@@ -20,6 +20,7 @@
  * bottom is the last line of defense.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { parseApplyPatch } from './apply_patch.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
 import { Event } from '../types.js';
 
@@ -131,6 +132,37 @@ async function main(): Promise<void> {
   }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
+
+  // CHS.2 — codex's file-edit tool is `apply_patch` (patch text in
+  // args.command); no pack rule matches that name. Normalize: ONE
+  // synthesized single-path Write per touched file (every PATH predicate
+  // dialect sees a normal file_path; Add carries TRUE final content,
+  // Update/Delete a labeled hunk diff — never silently-stale). First deny
+  // wins (the FU.11 envelope); all-allow → clean exit. Zero parsed paths →
+  // fall through untouched (fail-open for unknown envelope variants).
+  if (parsed.data.kind === 'tool_call' && parsed.data.tool === 'apply_patch') {
+    const cmd = (parsed.data.args as { command?: unknown }).command;
+    const patched = typeof cmd === 'string' ? parseApplyPatch(cmd) : [];
+    if (patched.length > 0) {
+      for (const f of patched) {
+        const synth = {
+          ...parsed.data,
+          // Deliberately Write for ALL kinds: effective_content must take
+          // the args.content branch, never the stale-file Edit branch.
+          tool: 'Write',
+          args: { file_path: f.path, content: f.content, apply_patch_command: cmd },
+        };
+        const r = await dispatchEvent(synth, packs, registry, sessionId);
+        if (r.exitCode === 2) {
+          process.stdout.write(JSON.stringify(buildPreToolUseDeny(r.stderr, '')));
+          process.exit(0);
+        }
+        if (r.stderr) process.stderr.write(r.stderr + '\n');
+      }
+      process.exit(0); // every touched path allowed
+    }
+  }
+
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
