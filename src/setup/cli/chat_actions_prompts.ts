@@ -33,7 +33,7 @@
 
 import { join } from 'node:path';
 
-import { cancel, isCancel, note, select, text } from '@clack/prompts';
+import { cancel, confirm, isCancel, note, select, text } from '@clack/prompts';
 
 import { ChatAgentSchema, type ChatAgentConfig } from '../../packs/schemas/chat_agent.js';
 
@@ -131,6 +131,8 @@ export interface PackResult {
   packRoot: string;
   chatAgent: ChatAgentConfig;
   createPackManifest: boolean;
+  /** FRS.B: user explicitly consented to activating the pack (active.json). */
+  activatePack: boolean;
   customPromptPath?: string;
   customPromptBody?: string;
 }
@@ -155,6 +157,14 @@ export async function runPackPrompts(
   const tunables = await pickTunables();
   if (tunables === null) return null;
 
+  // FRS.B (user-confirmed default 2026-06-10): surface the pack opt-in.
+  // Decline = today's ungated state, now explicitly chosen — never silent.
+  const activate = await confirm({
+    message: `Activate the "${packId}" discipline pack for this machine (writes active.json — opensquid stays inert without it)?`,
+    initialValue: true,
+  });
+  if (isCancel(activate)) return null;
+
   const chatAgentInput: Record<string, unknown> = {
     default_model: defaultModel,
     skills,
@@ -169,7 +179,13 @@ export async function runPackPrompts(
     return null;
   }
 
-  const result: PackResult = { packId, packRoot, chatAgent: parsed.data, createPackManifest };
+  const result: PackResult = {
+    packId,
+    packRoot,
+    chatAgent: parsed.data,
+    createPackManifest,
+    activatePack: activate === true,
+  };
   if (promptMeta.customPath !== undefined) result.customPromptPath = promptMeta.customPath;
   if (promptMeta.customBody !== undefined) result.customPromptBody = promptMeta.customBody;
   return result;

@@ -41,11 +41,13 @@ so — no guesswork.
    `resolveProjectUuid`, mints the uuid, and the card rides the WritePlan (previewed in dry-run, backed
    up, suppression-idempotent — an env uuid or existing card anywhere up the walk means no action).
    The `agent_bridge/cli.ts:233` instruction is now true for fresh users.
-4. **Pack activation** — **⚠ GAP B (HIGH, by-design-but-no-scaffolding):** nothing writes
-   `active.json`. A fresh user who finishes the wizard has an EMPTY pack list → an UNGATED agent (no
-   coding-flow, no discipline). This is the deliberate "no silent installs" opt-in invariant
-   (`pack-runtime.md` §3.1), but no wizard step prompts the user to opt a pack in, so the safety invariant
-   doubles as an onboarding cliff.
+4. **Pack activation** — **GAP B CLOSED at 0.5.382 (T-fix-first-run-setup-completeness FRS.B,
+   user-confirmed default):** after the pack step the wizard PROMPTS
+   `Activate the "<pack>" discipline pack for this machine? [Y/n]` and, only on explicit consent
+   (plus the plan confirm), writes user-scope `active.json` through the WritePlan with the MERGED
+   deduped pack list (existing entries preserved, prior file backed up). Decline = the documented
+   ungated state, now an explicit choice — the "no silent installs" invariant (`pack-runtime.md`
+   §3.1) is preserved and SURFACED instead of doubling as an onboarding cliff.
 5. **`opensquid doctor`** (`setup/cli/doctor.ts`) — self-diagnosis. _(Coverage of all pieces not re-verified
    in this pass — see Not-yet-traced.)_
 

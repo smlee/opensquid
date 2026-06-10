@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.382] - 2026-06-10
+
+### Added — wizard pack-activation prompt (T-fix-first-run-setup-completeness, Part B; user-confirmed default)
+
+After the pack step, `opensquid setup chat` now asks
+`Activate the "<pack>" discipline pack for this machine? [Y/n]` and — only on explicit
+consent plus the plan confirm — writes user-scope `active.json` through the WritePlan
+with the merged, deduped pack list (existing entries preserved; any prior file backed
+up; a malformed prior file is replaced with valid content after backup). Decline leaves
+today's ungated state, now as an explicit choice: the "no silent installs" opt-in
+invariant is preserved and SURFACED instead of doubling as an onboarding cliff. Closes
+flows.md GAP B; with 0.5.381's GAP A, a fresh `setup chat` run now yields a fully wired,
+optionally-gated agent out of the box.
+
 ## [0.5.381] - 2026-06-10
 
 ### Fixed — `opensquid setup chat` now actually creates `.opensquid/project.json` (T-fix-first-run-setup-completeness, Part A)

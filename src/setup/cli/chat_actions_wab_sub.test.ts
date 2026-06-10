@@ -51,6 +51,7 @@ describe('WAB-SUB.3 — clean state + subscription mode', () => {
       'default', // system prompt
       'none', // skills
       'no', // tunables
+      false, // FRS.B: decline pack activation (preserve fixture semantics)
       'skip', // channel offer
       true, // final confirm
     );
@@ -136,6 +137,7 @@ describe('WAB-SUB.3 — existing sub-mode → Replace → switch to api', () => 
       'default', // system prompt
       'none', // skills
       'no', // tunables
+      false, // FRS.B: decline pack activation (preserve fixture semantics)
       'skip', // channel offer
       true, // final confirm
     );
@@ -185,6 +187,7 @@ describe('WAB-SUB.3 — existing api-mode → Replace → switch to subscription
       'default', // system prompt
       'none', // skills
       'no', // tunables
+      false, // FRS.B: decline pack activation (preserve fixture semantics)
       'skip', // channel offer
       true, // final confirm
     );
@@ -232,6 +235,7 @@ describe('WAB-SUB.3 — subscription args validator requires --print', () => {
       'default',
       'none',
       'no',
+      false, // FRS.B: decline pack activation
       'skip',
       true,
     );

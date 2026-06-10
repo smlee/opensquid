@@ -62,7 +62,8 @@ describe('runChatSetupWizard — clean state full flow (api mode)', () => {
       'fast_chat', // default_model select
       'default', // system prompt choice
       'none', // skills choice
-      'no', // tunables choice
+      'no', // tunables
+      false, // FRS.B: decline pack activation (preserve fixture semantics) choice
       'skip', // channel offer
       true, // final confirm
     );
@@ -210,6 +211,7 @@ describe('runChatSetupWizard — dry-run preview', () => {
       'default',
       'none',
       'no',
+      false, // FRS.B: decline pack activation
       'skip',
       false, // DECLINE the confirm — wizard exits without writing
     );
@@ -266,6 +268,7 @@ describe('runChatSetupWizard — write failure rollback', () => {
       'default', // system prompt
       'none', // skills
       'no', // tunables
+      false, // FRS.B: decline pack activation (preserve fixture semantics)
       'skip', // channel offer
       true, // final confirm
     );
@@ -306,6 +309,7 @@ const CARD_PLAN_PROMPTS = [
   'default',
   'none',
   'no',
+  false, // FRS.B: decline pack activation
   'skip',
   false, // decline the confirm — preview only
 ];
@@ -342,5 +346,68 @@ describe('runChatSetupWizard — project card (FRS.A orchestrator seam)', () => 
     });
     const planNote = state.notes.find((nn) => nn.title === 'Plan');
     expect(planNote?.msg ?? '').not.toContain('project.json');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FRS.B — pack-activation prompt → user-scope active.json (orchestrator seam)
+// ---------------------------------------------------------------------------
+
+const ACTV_BASE = [
+  'api',
+  'claude-haiku-4-5-20251001',
+  'sk-ant-ACTV0000',
+  'env',
+  'create',
+  'chat-agent-default',
+  'fast_chat',
+  'default',
+  'none',
+  'no',
+];
+
+describe('runChatSetupWizard — pack activation (FRS.B)', () => {
+  it('consented → plan preview contains active.json', async () => {
+    queue(...ACTV_BASE, true, 'skip', false); // activate; decline plan = preview only
+    await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
+    const planNote = state.notes.find((nn) => nn.title === 'Plan');
+    expect(planNote?.msg ?? '').toContain('active.json');
+  });
+
+  it('declined → no active.json action (the explicit ungated choice)', async () => {
+    queue(...ACTV_BASE, false, 'skip', false);
+    await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
+    const planNote = state.notes.find((nn) => nn.title === 'Plan');
+    expect(planNote?.msg ?? '').not.toContain('active.json');
+  });
+
+  it('consented + plan CONFIRMED → active.json on disk, merged + deduped, prior file replaced with backup', async () => {
+    await writeFile(
+      join(home(), 'active.json'),
+      JSON.stringify({ packs: ['existing-pack'] }),
+      'utf8',
+    );
+    queue(...ACTV_BASE, true, 'skip', true); // activate; CONFIRM — executed
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
+    expect(result.outcome).toBe('completed');
+    const onDisk = JSON.parse(await readFile(join(home(), 'active.json'), 'utf8')) as {
+      packs: string[];
+    };
+    expect(onDisk.packs).toContain('existing-pack');
+    expect(onDisk.packs).toContain('chat-agent-default');
+    expect(new Set(onDisk.packs).size).toBe(onDisk.packs.length);
+    expect(result.written).toContain(join(home(), 'active.json'));
   });
 });

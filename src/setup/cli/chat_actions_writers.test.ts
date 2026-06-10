@@ -13,7 +13,12 @@ import { describe, expect, it } from 'vitest';
 import type { ChatAgentConfig } from '../../packs/schemas/chat_agent.js';
 import type { ModelAlias } from '../../packs/schemas/models.js';
 
-import { buildPlan, buildProjectCardJson, type PlanInput } from './chat_actions_writers.js';
+import {
+  buildActiveJson,
+  buildPlan,
+  buildProjectCardJson,
+  type PlanInput,
+} from './chat_actions_writers.js';
 
 const fastChatAlias: ModelAlias = {
   description: '',
@@ -66,5 +71,33 @@ describe('buildPlan — projectCard emission', () => {
     expect(cardActions).toHaveLength(1);
     expect(cardActions[0]?.kind).toBe('create_or_replace');
     expect(buildPlan(baseInput).actions.some((a) => a.path.endsWith('project.json'))).toBe(false);
+  });
+});
+
+describe('buildActiveJson (FRS.B — the one merge owner)', () => {
+  it('fresh: serializes a single-pack list', () => {
+    expect(buildActiveJson([], 'coding-flow')).toBe('{\n  "packs": [\n    "coding-flow"\n  ]\n}\n');
+  });
+  it('merge preserves existing entries', () => {
+    const parsed = JSON.parse(buildActiveJson(['a', 'b'], 'c')) as { packs: string[] };
+    expect(parsed.packs).toEqual(['a', 'b', 'c']);
+  });
+  it('dedupes on re-activation (stable content)', () => {
+    expect(buildActiveJson(['coding-flow'], 'coding-flow')).toBe(
+      buildActiveJson([], 'coding-flow'),
+    );
+  });
+});
+
+describe('buildPlan — activatePack emission (FRS.B)', () => {
+  it('emits the active.json action iff activatePack is supplied', () => {
+    const withIt = buildPlan({
+      ...baseInput,
+      activatePack: { path: '/h/active.json', existing: ['x'], packId: 'y' },
+    });
+    const acts = withIt.actions.filter((a) => a.path.endsWith('active.json'));
+    expect(acts).toHaveLength(1);
+    expect(acts[0]?.kind).toBe('create_or_replace');
+    expect(buildPlan(baseInput).actions.some((a) => a.path.endsWith('active.json'))).toBe(false);
   });
 });

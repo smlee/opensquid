@@ -92,6 +92,14 @@ export function buildChatAgentYaml(cfg: ChatAgentConfig): string {
 }
 
 /**
+ * The user-scope `active.json` (`{ packs: string[] }` — discovery.ts schema).
+ * The ONE owner of merge+dedupe+serialize; pure (deterministic in inputs).
+ */
+export function buildActiveJson(existing: string[], packId: string): string {
+  return `${JSON.stringify({ packs: [...new Set([...existing, packId])] }, null, 2)}\n`;
+}
+
+/**
  * The `.opensquid/project.json` card (paths.ts ProjectCard schema).
  * GENUINELY pure — deterministic in its inputs, byte-pinnable in tests; the
  * uuid is minted at the ORCHESTRATOR (which owns create-if-absent), not here.
@@ -222,6 +230,10 @@ export interface PlanInput {
    *  gated: an env uuid or an existing card suppresses this input entirely —
    *  suppression IS the idempotency; buildPlan never decides. */
   projectCard?: { path: string; id: string; uuid: string };
+  /** FRS.B: write user-scope active.json on EXPLICIT consent (the activation
+   *  prompt + the plan confirm both gate it — no silent install). Raw
+   *  existing list from the orchestrator; buildActiveJson owns the merge. */
+  activatePack?: { path: string; existing: string[]; packId: string };
 }
 
 export function buildPlan(input: PlanInput): WritePlan {
@@ -256,6 +268,13 @@ export function buildPlan(input: PlanInput): WritePlan {
       kind: 'create_or_replace',
       path: input.projectCard.path,
       content: buildProjectCardJson(input.projectCard.id, input.projectCard.uuid),
+    });
+  }
+  if (input.activatePack !== undefined) {
+    actions.push({
+      kind: 'create_or_replace',
+      path: input.activatePack.path,
+      content: buildActiveJson(input.activatePack.existing, input.activatePack.packId),
     });
   }
   actions.push({

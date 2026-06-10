@@ -23,7 +23,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 import { cancel, confirm, intro, isCancel, note, outro, select } from '@clack/prompts';
@@ -223,7 +223,25 @@ async function runInner(d: InnerDeps): Promise<WizardResult> {
   // finds no project identity. An env uuid or an existing card anywhere up
   // the walk suppresses creation entirely (suppression IS the idempotency).
   const existingProjectUuid = await resolveProjectUuid({ cwd: d.projectCwd, env: d.projectEnv });
+  // FRS.B: on explicit consent, merge the chosen pack into user-scope
+  // active.json via the plan (tolerant READ here; buildActiveJson owns the
+  // merge; executePlan backs up any existing file before replacing).
+  let activeInput: { activatePack?: { path: string; existing: string[]; packId: string } } = {};
+  if (packResult.activatePack) {
+    const activePath = join(d.homeDir, 'active.json');
+    let existing: string[] = [];
+    try {
+      const parsed = JSON.parse(await readFile(activePath, 'utf8')) as { packs?: unknown };
+      if (Array.isArray(parsed.packs)) {
+        existing = parsed.packs.filter((x): x is string => typeof x === 'string');
+      }
+    } catch {
+      /* ENOENT or malformed → empty; the plan's backup covers replacement */
+    }
+    activeInput = { activatePack: { path: activePath, existing, packId: packResult.packId } };
+  }
   const plan = buildPlan({
+    ...activeInput,
     ...(existingProjectUuid === null
       ? {
           projectCard: {
