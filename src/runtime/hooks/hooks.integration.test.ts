@@ -76,6 +76,10 @@ async function runHook(
   return new Promise<RunResult>((resolvePromise, reject) => {
     const proc = spawn(TSX_BIN, [hookPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      // T-AUTO-HANDOFF: hooks act on their CWD (the SessionEnd backup writer
+      // resolves the umbrella root from it) — spawn from the OS tmpdir so a
+      // hook can never write artifacts into the repo checkout.
+      cwd: tmpdir(),
       // G.2: silence the dispatch-trace marker so the legacy "empty stderr
       // on allow" assertions here keep their contract. The marker is
       // diagnostic; its presence is asserted in `hooks.bin.integration.test.ts`
