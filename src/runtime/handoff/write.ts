@@ -20,6 +20,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { sendChat } from '../../chat_daemon/client.js';
+import {
+  GENERAL_UMBRELLA,
+  loadChannelsConfig,
+  resolveOutbound,
+  resolveUmbrellaForCwd,
+} from '../../channels/routing.js';
 import { workGraphStore } from '../../workgraph/store.js';
 import { OPENSQUID_HOME } from '../paths.js';
 
@@ -132,9 +138,21 @@ export async function writeHandoffSurfaces(state: HandoffState): Promise<WriteHa
     });
   }
 
-  // (d) chat — best-effort notification; daemon down → note, never fail.
+  // (d) chat — best-effort notification; daemon down / no binding → note,
+  // never fail. The daemon's send RPC needs the `telegram:<chat_id>` wire
+  // form (live spike finding: 'project:telegram' is an MCP-bridge shorthand,
+  // not a daemon channel) — resolve via channels.json like the bridge does.
   try {
-    const result = await sendChat({ channel: 'project:telegram', text: renderChatDigest(state) });
+    const cfg = await loadChannelsConfig();
+    if (cfg === null) throw new Error('no channels.json — chat surface skipped');
+    const umbrella = resolveUmbrellaForCwd(cfg, state.cwd) ?? GENERAL_UMBRELLA;
+    const tg = resolveOutbound(cfg, umbrella);
+    if (tg === null) throw new Error(`umbrella '${umbrella}' has no telegram binding`);
+    const result = await sendChat({
+      channel: `telegram:${tg.chat_id}`,
+      text: renderChatDigest(state),
+      ...(tg.topic_id !== undefined ? { threadId: String(tg.topic_id) } : {}),
+    });
     outcomes.push({ surface: 'chat', ok: true, detail: JSON.stringify(result).slice(0, 120) });
   } catch (e) {
     outcomes.push({

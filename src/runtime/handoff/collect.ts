@@ -126,20 +126,34 @@ async function artifactOf(
   }
 }
 
-/** The umbrella root for a cwd: longest channels.json member prefix, else cwd. */
+/** The umbrella ROOT for a cwd: pick the umbrella ROW by longest member
+ *  prefix (correct row when rows nest), then return that row's SHORTEST
+ *  member containing the cwd — the umbrella root, not the sub-repo (live
+ *  spike finding: loop lists both `…/loop` and `…/loop/opensquid` as
+ *  members; docs + MEMORY.md belong at the loop root). Falls back to cwd. */
 export async function umbrellaRootFor(cwd: string): Promise<string> {
   try {
     const cfg = await loadChannelsConfig();
     if (cfg !== null) {
-      let best: string | null = null;
+      let bestRow: { members: string[] } | null = null;
+      let bestLen = -1;
       for (const u of cfg.umbrellas) {
         for (const m of u.members) {
-          if ((cwd === m || cwd.startsWith(`${m}/`)) && (best === null || m.length > best.length)) {
-            best = m;
+          if ((cwd === m || cwd.startsWith(`${m}/`)) && m.length > bestLen) {
+            bestRow = u;
+            bestLen = m.length;
           }
         }
       }
-      if (best !== null) return best;
+      if (bestRow !== null) {
+        let root: string | null = null;
+        for (const m of bestRow.members) {
+          if ((cwd === m || cwd.startsWith(`${m}/`)) && (root === null || m.length < root.length)) {
+            root = m;
+          }
+        }
+        if (root !== null) return root;
+      }
     }
   } catch {
     /* fall through */
