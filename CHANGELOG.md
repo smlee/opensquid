@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.373] - 2026-06-10
+
+### Fixed — coding-flow audit no longer re-spawns on unchanged content (F0c spawn-exhaustion solve)
+
+The SCOPE guess-audit and AUTHOR spec-audit ran `subagent_call` (a cold `claude -p` spawn) on **every**
+pre-research / spec write — the `if` keyed only on the file path, never on whether the content changed. So
+iterating on an artifact re-spawned the 170 s reviewer each time; in a long session those spawns contend on
+one subscription bucket and start hanging (the F0c "AUDIT-UNAVAILABLE" timeout). New `cached_audit` primitive
+(`src/functions/cached_audit.ts`) memoizes the verdict keyed by the audit prompt's sha256 (the prompt embeds
+the artifact, so identical content → identical key) in **cross-turn session state** — a re-fire on unchanged
+content reuses the verdict with **zero spawns**. A timeout/non-verdict output is never cached, so an
+AUDIT-UNAVAILABLE result is retried next turn (F0c fresh-session recovery preserved). `spawn_subagent`'s
+deliberate `memoizable: false` is untouched (this cache is explicit + cross-turn, which the per-run evaluator
+memo cannot be). Both audits in `scope-lifecycle` now call `cached_audit`; downstream gate conditions are
+unchanged. Tests: MISS spawns, HIT reuses without re-spawn, changed content re-spawns, non-verdict not cached.
+
+### Changed — scope-architect persona now states the research METHOD (not just the what)
+
+`scope-architect/team.yaml` + the `entry-and-handoffs` rescope directive now instruct: do all research
+(recall + Read + Grep, ≥3 calls) in the **same turn** as the pre-research write (the depth gate counts
+per-turn), then write once — don't stub-then-edit across bare turns. Closes the "how do I research" gap that
+made the per-turn depth gate trip on legitimate continuation edits. Spec:
+docs/research/T-fix-audit-spawn-and-research-precision-pre-research-2026-06-10.md.
+
 ## [0.5.372] - 2026-06-10
 
 ### Fixed — scope-architect `inline-spec-block` no longer false-blocks task specs from a sub-repo cwd

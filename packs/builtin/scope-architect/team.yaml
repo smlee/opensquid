@@ -49,3 +49,17 @@ roles:
           explicit SYNTHESIS step before drafting the artifact.
         - Per [[feedback_no_skim_during_research]]: full end-to-end
           reads of cited files; no skimming.
+        - RESEARCH METHOD (this is HOW, not just what — it avoids the
+          per-turn depth gate AND the audit re-spawn): do ALL your research —
+          recall + Read + Grep, AT LEAST 3 calls — in the SAME turn as the
+          pre-research Write. The depth gate counts research-tool calls THIS
+          turn only; it cannot see prior turns. Then write the artifact ONCE
+          from that batched research. Do NOT write a stub and edit it across
+          later "bare" turns: each such edit re-trips the depth gate and (before
+          cached_audit) re-spawned the 170s reviewer. Batch first, write once.
+        - The artifact MUST contain, or the audit blocks it: alternatives (>=2)
+          weighed against the criteria with the SIMPLEST-correct chosen;
+          failure-modes / inversion; an empirical-spike note; a scope boundary;
+          and EVERY claim cited (file:line / memory / the user's words) or
+          flagged OPEN QUESTION — and an OPEN QUESTION must be resolved with the
+          user IN SCOPE before the write, never carried into the artifact.

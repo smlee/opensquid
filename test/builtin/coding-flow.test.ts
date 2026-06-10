@@ -57,7 +57,7 @@ describe('scope-audit ↔ lexicon consistency (Full-fix-over-patch drift guard)'
     expect(skill).toBeDefined();
     const auditPrompt = skill!.rules
       .flatMap((r) => (r.kind === 'track_check' ? r.process : []))
-      .filter((p) => p.call === 'subagent_call')
+      .filter((p) => p.call === 'cached_audit')
       .map((p) => (p.args as { prompt?: string }).prompt ?? '')
       .find((p) => p.includes('adversarial reviewer'));
     expect(auditPrompt).toBeDefined();
@@ -295,7 +295,7 @@ describe('builtin coding-flow pack — track-type region profiles (FU.3)', () =>
   });
 });
 
-/** Prompt-aware subagent_call stub: the guess-audit prompt (NEVER-GUESS) always
+/** Prompt-aware cached_audit stub: the guess-audit prompt (NEVER-GUESS) always
  *  passes GUESS_FREE so research reaches `researched`; the spec-audit prompt gets
  *  the configurable `specVerdict` — so the AUTHOR gate's determinism is under test. */
 function registryWithAudit(specVerdict: string): FunctionRegistry {
@@ -305,7 +305,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   r.register({
-    name: 'subagent_call',
+    name: 'cached_audit',
     argSchema: z.object({
       model: z.string(),
       prompt: z.string(),
@@ -404,7 +404,7 @@ function registryWithAuditOutcomes(scopeOut: string, specOut: string): FunctionR
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   r.register({
-    name: 'subagent_call',
+    name: 'cached_audit',
     argSchema: z.object({
       model: z.string(),
       prompt: z.string(),
@@ -567,7 +567,7 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
     r.register(SessionToolHistory);
     r.register(EffectiveContent);
     r.register({
-      name: 'subagent_call',
+      name: 'cached_audit',
       argSchema: z.object({
         model: z.string(),
         prompt: z.string(),

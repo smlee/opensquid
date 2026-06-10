@@ -101,7 +101,10 @@ rules:
             rationale: >-
               SCOPE armed (state: scoping). Author the pre-research artifact to
               teach-back depth (alternatives + failure modes + spikes), resolving every
-              open question, BEFORE any code. Hand off to the scope-architect persona.
+              open question, BEFORE any code. METHOD: do your recall + Read + Grep
+              (>=3 calls) in THIS turn, then write the pre-research ONCE — do not
+              stub-then-edit across turns (the depth gate counts research per-turn).
+              Hand off to the scope-architect persona.
   # SCOPE done → hand off to the task-spec-author persona.
   - id: handoff-research-to-spec
     process:

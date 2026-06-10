@@ -60,6 +60,7 @@ import { join } from 'node:path';
 import { wedgeLessonStore, type WedgeLessonStore } from '../rag/wedge/store.js';
 import { wedgeLessonsDbUrl, wedgeLessonsDir } from '../rag/wedge/paths.js';
 import { registerDestinationCheckFunction } from '../functions/destination_check.js';
+import { registerCachedAuditFunction } from '../functions/cached_audit.js';
 import { registerEventFunctions } from '../functions/event.js';
 import { IsAutomationMode } from '../functions/is_automation_mode.js';
 import { registerLessonFunctions } from '../functions/lessons.js';
@@ -123,6 +124,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerFsmFunctions(r);
   registerVerdictFunctions(r);
   registerLlmFunctions(r);
+  registerCachedAuditFunction(r);
   // Phase 4: `check_destination` is the destination-side anti-drift
   // primitive. It composes `llm_classify` (registered just above) so the
   // ordering matters — register it last among the LLM-dependent primitives.

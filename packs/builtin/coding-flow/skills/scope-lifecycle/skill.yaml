@@ -81,10 +81,16 @@ rules:
       # on_error: continue — a spawn failure binds the err message to `audit`
       # and proceeds to the trichotomy below (the AUDIT-UNAVAILABLE branch),
       # instead of aborting the process and freezing the FSM (F0c).
-      - call: subagent_call
+      # cached_audit (T-FIX-AUDIT-SPAWN): memoizes the verdict by prompt-hash in
+      # cross-turn session state — a re-fire on UNCHANGED content reuses the
+      # verdict with NO `claude -p` spawn (kills the F0c re-fire storm). A
+      # timeout/error is NOT cached → on_error routes it to AUDIT-UNAVAILABLE and
+      # the next turn retries. cache_key is per-audit (guess vs spec).
+      - call: cached_audit
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         on_error: continue
         args:
+          cache_key: coding-flow-guess-audit-cache
           model: reasoning
           timeout_ms: 170000
           prompt: >-
@@ -196,10 +202,13 @@ rules:
       # on_error: continue — F0c: a spawn failure binds the err to `spec_audit`
       # and proceeds to the trichotomy (AUDIT-UNAVAILABLE branch) instead of
       # aborting the process and freezing the FSM at spec_authored.
-      - call: subagent_call
+      # cached_audit (T-FIX-AUDIT-SPAWN): same content-hash memoization as the
+      # SCOPE audit — a re-fire on an UNCHANGED spec reuses the verdict, no spawn.
+      - call: cached_audit
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
         on_error: continue
         args:
+          cache_key: coding-flow-spec-audit-cache
           model: reasoning
           timeout_ms: 170000
           prompt: >-
