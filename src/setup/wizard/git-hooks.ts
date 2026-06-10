@@ -1,12 +1,20 @@
 /**
  * GF.2 — install / check the opensquid-managed git `pre-commit` + `pre-push` hooks.
  *
- * The hooks are tiny POSIX-sh shims that `exec opensquid gate <boundary>` (see
- * `src/setup/cli/gate.ts`). They carry the `@opensquid managed hook` MARKER so
- * `opensquid doctor git-hooks` can recognise them — the same marker idiom the Claude
- * Code settings-writer uses. Installation is OPT-IN (explicit `opensquid gate install`),
- * never automatic, so opensquid never silently rewrites a user's git hooks. A pre-existing
- * FOREIGN hook is CHAINED (the gate call is appended), not clobbered.
+ * PGB.1 (T-fix-pushgate-bypass): installation is a pure GATE-FIRST composition.
+ * The previous installer APPENDED the gate call to a foreign hook — unsound for any
+ * foreign hook that ends in `exec`/`exit` (the repo's own PP.1 quality hook does:
+ * `exec pnpm prepush` made the appended gate block unreachable dead code, which is
+ * how a code push bypassed the flow gate on 2026-06-10). `composeHook` now prepends
+ * the managed block directly after the shebang, so the gate ALWAYS runs first and
+ * the foreign body keeps its exact semantics afterward. It also REPAIRS any layout
+ * where managed lines exist elsewhere (today's dead-block file), idempotently.
+ *
+ * The hooks carry the `@opensquid managed hook` MARKER so `opensquid doctor git-hooks`
+ * can recognise them. `checkGitHooks` additionally detects `unreachable` — marker
+ * present but a process-terminating line (`exec`/`exit`) precedes it. Installation is
+ * OPT-IN (explicit `opensquid gate install`), never automatic; a foreign hook body is
+ * preserved verbatim, never clobbered.
  *
  * Imported by: src/setup/cli/gate.ts (install), src/setup/cli/doctor.ts (check).
  */
@@ -16,15 +24,18 @@ import { join } from 'node:path';
 
 export const OPENSQUID_HOOK_MARKER = '@opensquid managed hook';
 
-const HOOKS: readonly { name: string; boundary: 'commit' | 'push' }[] = [
+type HookBoundary = 'commit' | 'push';
+
+const HOOKS: readonly { name: string; boundary: HookBoundary }[] = [
   { name: 'pre-commit', boundary: 'commit' },
   { name: 'pre-push', boundary: 'push' },
 ];
 
-const managedBody = (boundary: 'commit' | 'push'): string =>
-  `#!/bin/sh\n# ${OPENSQUID_HOOK_MARKER}\nexec opensquid gate ${boundary}\n`;
+const gateLine = (boundary: HookBoundary): string => `opensquid gate ${boundary} || exit $?`;
+const managedBlock = (boundary: HookBoundary): string =>
+  `# ${OPENSQUID_HOOK_MARKER}\n${gateLine(boundary)}`;
 
-export type GitHookState = 'installed' | 'missing' | 'foreign';
+export type GitHookState = 'installed' | 'missing' | 'foreign' | 'unreachable';
 export interface GitHookStatus {
   name: string;
   state: GitHookState;
@@ -32,8 +43,44 @@ export interface GitHookStatus {
 
 const hooksDir = (repoRoot: string): string => join(repoRoot, '.git', 'hooks');
 
-/** Install (idempotent) both hooks into `<repoRoot>/.git/hooks`. A foreign existing hook
- *  is chained (the gate call appended) so a user's own hook keeps running. */
+/** A line after which nothing else in the script can run (process-replace or hard exit). */
+const isTerminalLine = (l: string): boolean => /^\s*(exec\s|exit\b)/.test(l);
+
+/**
+ * Pure: compose an existing hook body (or null/empty) into the canonical gate-first
+ * layout: shebang → managed block → foreign body verbatim. Strips ALL prior managed
+ * lines wherever they sit, so it both installs and repairs (e.g. a gate block left
+ * dead below a foreign `exec`). A foreign line that itself invokes `opensquid gate
+ * <boundary>` is treated as managed and stripped — keeping it would double-run the
+ * gate. Idempotent: composeHook(composeHook(x)) === composeHook(x).
+ */
+export function composeHook(existing: string | null, boundary: HookBoundary): string {
+  if (existing === null || existing.trim() === '') {
+    return `#!/bin/sh\n${managedBlock(boundary)}\n`;
+  }
+  const lines = existing
+    .split('\n')
+    .filter((l) => !l.includes(OPENSQUID_HOOK_MARKER) && !l.includes(`opensquid gate ${boundary}`));
+  const shebang = lines[0]?.startsWith('#!') === true ? lines.shift()! : '#!/bin/sh';
+  const body = lines.join('\n').replace(/^\n+/, '').replace(/\n*$/, '\n');
+  if (body.trim() === '') {
+    return `${shebang}\n${managedBlock(boundary)}\n`;
+  }
+  return `${shebang}\n${managedBlock(boundary)}\n${body}`;
+}
+
+/** Marker present but a terminal line precedes it → the managed gate can never run. */
+export function isMarkerUnreachable(content: string): boolean {
+  const lines = content.split('\n');
+  const marker = lines.findIndex((l) => l.includes(OPENSQUID_HOOK_MARKER));
+  if (marker === -1) return false;
+  return lines.slice(0, marker).some(isTerminalLine);
+}
+
+/** Install (idempotent) both hooks into `<repoRoot>/.git/hooks` via gate-first
+ *  composition. A foreign body is preserved verbatim BELOW the gate; a broken layout
+ *  (dead managed block) is repaired. `installed` = the file is purely managed;
+ *  `foreign` = a user body rides below the gate. */
 export async function installGitHooks(repoRoot: string): Promise<GitHookStatus[]> {
   const dir = hooksDir(repoRoot);
   await mkdir(dir, { recursive: true });
@@ -41,32 +88,27 @@ export async function installGitHooks(repoRoot: string): Promise<GitHookStatus[]
   for (const { name, boundary } of HOOKS) {
     const path = join(dir, name);
     const existing = await readFile(path, 'utf8').catch(() => null);
-    if (existing !== null && !existing.includes(OPENSQUID_HOOK_MARKER)) {
-      // Foreign hook present — chain rather than clobber (idempotent on the gate line).
-      if (!existing.includes(`opensquid gate ${boundary}`)) {
-        const chained = `${existing.replace(/\n*$/, '\n')}\n# ${OPENSQUID_HOOK_MARKER}\nopensquid gate ${boundary} || exit $?\n`;
-        await writeFile(path, chained, 'utf8');
-      }
-      out.push({ name, state: 'foreign' });
-    } else {
-      await writeFile(path, managedBody(boundary), 'utf8');
-      out.push({ name, state: 'installed' });
-    }
+    const next = composeHook(existing, boundary);
+    if (next !== existing) await writeFile(path, next, 'utf8');
     await chmod(path, 0o755);
+    const pureManaged = next === composeHook(null, boundary);
+    out.push({ name, state: pureManaged ? 'installed' : 'foreign' });
   }
   return out;
 }
 
 /** Report installation state without writing. `missing` = no hook; `foreign` = a hook
- *  exists but carries no opensquid marker; `installed` = opensquid-managed. */
+ *  exists but carries no opensquid marker; `unreachable` = the marker exists but a
+ *  preceding `exec`/`exit` makes the gate dead code; `installed` = the gate runs. */
 export async function checkGitHooks(repoRoot: string): Promise<GitHookStatus[]> {
   const dir = hooksDir(repoRoot);
   const out: GitHookStatus[] = [];
   for (const { name } of HOOKS) {
     const existing = await readFile(join(dir, name), 'utf8').catch(() => null);
     if (existing === null) out.push({ name, state: 'missing' });
-    else if (existing.includes(OPENSQUID_HOOK_MARKER)) out.push({ name, state: 'installed' });
-    else out.push({ name, state: 'foreign' });
+    else if (!existing.includes(OPENSQUID_HOOK_MARKER)) out.push({ name, state: 'foreign' });
+    else if (isMarkerUnreachable(existing)) out.push({ name, state: 'unreachable' });
+    else out.push({ name, state: 'installed' });
   }
   return out;
 }

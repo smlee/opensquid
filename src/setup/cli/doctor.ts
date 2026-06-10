@@ -332,6 +332,8 @@ export function registerDoctor(program: Command): void {
       }
       const incomplete = res.some((h) => h.state !== 'installed');
       if (incomplete) process.stdout.write('remediation: opensquid gate install\n');
-      process.exit(res.some((h) => h.state === 'missing') ? 1 : 0);
+      // `unreachable` (a dead managed block below a foreign exec/exit) is as absent as
+      // `missing` — the gate never runs. Both are RED + exit 1.
+      process.exit(res.some((h) => h.state === 'missing' || h.state === 'unreachable') ? 1 : 0);
     });
 }
