@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.375] - 2026-06-10
+
+### Added — MCP servers anchor to the host-declared project dir (T-codex-mcp-connect CMC.A)
+
+A stdio MCP server's spawn cwd is HOST-controlled: Claude spawns servers with
+`cwd == CLAUDE_PROJECT_DIR` (observed 7/7 live servers), but codex — and any other MCP host —
+makes no such guarantee, while `resolveRecallScope(cwd = process.cwd())` anchors the memory
+namespace on exactly that cwd (so a codex-spawned server could namespace memorize/recall to the
+wrong umbrella, or silently withhold project memory via the null-namespace fallback). New
+`src/mcp/anchor.ts` exports `anchorProcessToProjectDir()` — chdir to `CLAUDE_PROJECT_DIR` when
+set, no-op when unset/empty, throw on a bad dir (loud startup death, never a silently wrong
+namespace) — called as the first statement of both MCP `main()`s (`server.ts`,
+`chat-bridge-server.ts`). Under Claude this is an observed same-dir no-op; under any other host
+it normalizes every cwd-derived behavior in the process at the boundary where the convention
+varies. Rider: `rag/scope.ts` header corrected from the stale five-caller list to the real
+eight (none pass a cwd — that is the design).
+
 ## [0.5.374] - 2026-06-10
 
 ### Fixed — push gate was unreachable dead code; provenance now rides the commit (T-fix-pushgate-bypass)

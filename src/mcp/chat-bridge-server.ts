@@ -64,6 +64,7 @@ import { type InboxRow } from '../runtime/chat/inbox.js';
 
 import { daemonSocketPath } from '../chat_daemon/client.js';
 
+import { anchorProcessToProjectDir } from './anchor.js';
 import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscriber.js';
 
 // ---------------------------------------------------------------------------
@@ -492,6 +493,7 @@ function readPackageVersion(): string {
 }
 
 async function main(): Promise<void> {
+  anchorProcessToProjectDir();
   const server = new Server(
     { name: 'opensquid-chat-bridge', version: readPackageVersion() },
     { capabilities: { tools: {} } },

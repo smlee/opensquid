@@ -54,6 +54,7 @@ import { workGraphStore } from '../workgraph/store.js';
 
 import type { RagBackend } from '../rag/types.js';
 
+import { anchorProcessToProjectDir } from './anchor.js';
 import { handleForget, ForgetSchema, type ForgetArgs } from './tools/forget.js';
 import { handleInspectSkill } from './tools/inspect-skill.js';
 import { handleListDriftEvents } from './tools/list-drift-events.js';
@@ -271,6 +272,7 @@ function readPackageVersion(): string {
 }
 
 async function main(): Promise<void> {
+  anchorProcessToProjectDir();
   const server = new Server(
     { name: 'opensquid', version: readPackageVersion() },
     { capabilities: { tools: {} } },

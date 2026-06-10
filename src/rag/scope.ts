@@ -10,8 +10,10 @@
  * project-uuid, null is rare.
  *
  * Imports from: ../channels/routing.js, ../runtime/paths.js, ./types.js.
- * Imported by: the recall callers (mcp/tools/recall, functions/recall_pre_inject, functions/rag,
- *   runtime/agent_bridge/tools/recall, runtime/wedge/compression_deps).
+ * Imported by: mcp/tools/recall, mcp/tools/memorize, functions/recall_pre_inject, functions/rag,
+ *   runtime/agent_bridge/tools/recall, runtime/wedge/compression_deps, setup/cli/memory,
+ *   setup/migrate/auto_memory_snapshot. All eight use the cwd default; in MCP-server processes
+ *   that cwd is normalized at boot by mcp/anchor.ts (host-controlled spawn cwd).
  */
 import { loadChannelsConfig, resolveUmbrellaForCwd } from '../channels/routing.js';
 import { resolveProjectUuidFromEnv, walkForProjectUuid } from '../runtime/paths.js';
