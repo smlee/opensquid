@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.372] - 2026-06-10
+
+### Fixed — scope-architect `inline-spec-block` no longer false-blocks task specs from a sub-repo cwd
+
+The gate that requires a pre-research artifact before a task-spec write checked
+`path_exists(..., base_file: args.file_path)` — but `args.file_path` was BARE, and the evaluator only
+interpolates `{{name.field}}` templates, so `path_exists` received the LITERAL string `"args.file_path"`,
+resolved it against the (sub-repo) cwd → a nonsense path → `exists:false` → it **false-blocked every
+task-spec write** whenever the session cwd was `opensquid/` rather than the umbrella root `loop/` (where
+`docs/` lives). Fix: `base_file: '{{targs.file_path}}'` (interpolated; `targs` is bound just above), so
+`path_exists` anchors `docs/research` to the spec's git-repo root and finds the pre-research from any cwd
+— passing when one exists, still blocking when genuinely absent. The two `text_field: args.content`/
+`args.new_string` lines are CORRECT (they're dot-paths into `ctx.event`, consumed by `text_pattern_match`)
+and untouched. Regression test: the literal `"args.file_path"` resolves to `false` vs the real path's
+`true`. Spec: docs/tasks/T-fix-inline-spec-block-basefile.md.
+
 ## [0.5.371] - 2026-06-09
 
 ### Fixed — memory scope isolation completed: legacy rows migrated, importer-callers scoped, CI green

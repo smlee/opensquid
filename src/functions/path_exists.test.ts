@@ -209,6 +209,24 @@ describe('path_exists base_file anchoring', () => {
     }
   });
 
+  it('the un-interpolated literal "args.file_path" resolves to false (the inline-spec-block bug)', async () => {
+    // T-fix-inline-spec-block-basefile: the skill used `base_file: args.file_path` BARE, which the
+    // evaluator passes verbatim (only `{{name}}` interpolates) → path_exists got the literal string
+    // "args.file_path", resolved it against the code-repo cwd → nonsense path → exists:false → the gate
+    // false-blocked every spec write. The fix interpolates `{{targs.file_path}}` to the REAL spec path
+    // (asserted true by the 'anchors to the spec file repo root' case above). This locks the contrast.
+    const reg = freshRegistry();
+    const result = await reg.call(
+      'path_exists',
+      { dir: 'docs/research', pattern: '*-pre-research-*.md', base_file: 'args.file_path' },
+      ctxWith(toolCallAt(codeRepo)),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect((result.value as PathExistsResultShape).exists).toBe(false);
+    }
+  });
+
   it('falls back to cwd when base_file has no git-repo ancestor', async () => {
     const reg = freshRegistry();
     // base_file under a tmp dir with no `.git` anywhere up the chain → fall

@@ -22,7 +22,10 @@ rules:
         args:
           dir: docs/research
           pattern: '*-pre-research-*.md'
-          base_file: args.file_path
+          # `{{targs.file_path}}` (interpolated) — NOT bare `args.file_path`, which the evaluator passes
+          # verbatim as the literal string, making path_exists resolve a nonsense path → false-block.
+          # `targs` is bound above (tool_args), so this is the Write/Edit's real absolute file path.
+          base_file: '{{targs.file_path}}'
         as: research
       - call: text_pattern_match
         if: '(tool == "Write" || tool == "Edit") && (endsWith(targs.file_path, "TASKS.md") || contains(targs.file_path, "docs/tasks/"))'
