@@ -55,7 +55,13 @@ describe('WAB-SUB.3 — clean state + subscription mode', () => {
       true, // final confirm
     );
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
 
     expect(result.outcome).toBe('completed');
     // models.yaml has subscription-mode fast_chat.
@@ -89,7 +95,13 @@ describe('WAB-SUB.3 — existing subscription config → Keep (no migration warn
     );
     queue('keep'); // idempotency choice
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
 
     expect(result.outcome).toBe('no_changes');
     const raw = await readFile(join(home(), 'models.yaml'), 'utf8');
@@ -128,7 +140,13 @@ describe('WAB-SUB.3 — existing sub-mode → Replace → switch to api', () => 
       true, // final confirm
     );
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
 
     expect(result.outcome).toBe('completed');
     // models.yaml now api mode.
@@ -171,7 +189,13 @@ describe('WAB-SUB.3 — existing api-mode → Replace → switch to subscription
       true, // final confirm
     );
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
 
     expect(result.outcome).toBe('completed');
     const raw = await readFile(join(home(), 'models.yaml'), 'utf8');
@@ -212,7 +236,13 @@ describe('WAB-SUB.3 — subscription args validator requires --print', () => {
       true,
     );
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
     expect(result.outcome).toBe('completed');
     const raw = await readFile(join(home(), 'models.yaml'), 'utf8');
     expect(raw).toContain('- --print');

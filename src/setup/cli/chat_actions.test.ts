@@ -72,6 +72,8 @@ describe('runChatSetupWizard — clean state full flow (api mode)', () => {
       opensquidHome: home(),
       envPath: env(),
       setExitCode: (c) => captured.push(c),
+      // FRS.A: pin project identity (environment-independent fixtures).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
     });
 
     expect(result.outcome).toBe('completed');
@@ -118,7 +120,13 @@ describe('runChatSetupWizard — existing fast_chat (api mode)', () => {
     );
     queue('keep'); // idempotency choice
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
 
     expect(result.outcome).toBe('no_changes');
     // Models file unchanged.
@@ -142,6 +150,8 @@ describe('runChatSetupWizard — malformed models.yaml', () => {
       opensquidHome: home(),
       envPath: env(),
       setExitCode: (c) => captured.push(c),
+      // FRS.A: pin project identity (environment-independent fixtures).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
     });
 
     expect(result.outcome).toBe('aborted');
@@ -166,7 +176,13 @@ describe('runChatSetupWizard — Ctrl-C at first prompt', () => {
     // determining work has happened before the mode is picked.
     state.injectCancelOnPrompt = 1;
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
 
     expect(result.outcome).toBe('aborted');
     expect(state.cancelMessages.join('\n')).toContain('No files modified');
@@ -198,7 +214,13 @@ describe('runChatSetupWizard — dry-run preview', () => {
       false, // DECLINE the confirm — wizard exits without writing
     );
 
-    const result = await runChatSetupWizard({ opensquidHome: home(), envPath: env() });
+    const result = await runChatSetupWizard({
+      opensquidHome: home(),
+      envPath: env(),
+      // FRS.A: pin project identity so these fixtures stay card-free and
+      // environment-independent (CI checkouts have no ancestor card).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
+    });
 
     expect(result.outcome).toBe('aborted');
     const planNote = state.notes.find((nn) => nn.title === 'Plan');
@@ -253,6 +275,8 @@ describe('runChatSetupWizard — write failure rollback', () => {
       opensquidHome: home(),
       envPath: env(),
       setExitCode: (c) => captured.push(c),
+      // FRS.A: pin project identity (environment-independent fixtures).
+      projectEnv: { OPENSQUID_PROJECT_UUID: 'fixture-uuid' },
     });
 
     expect(result.outcome).toBe('aborted');
