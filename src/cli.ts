@@ -335,7 +335,12 @@ function runCli(): void {
       '--session <id>',
       'session id to hand off (default: the project-scoped current-session pointer)',
     )
-    .action(async (opts: { session?: string }) => {
+    .option(
+      '--narrate',
+      'add the LLM narrative layer (one reasoning call; never load-bearing)',
+      false,
+    )
+    .action(async (opts: { session?: string; narrate?: boolean }) => {
       const { runHandoff } = await import('./runtime/handoff/index.js');
       const { readProjectCurrentSession } = await import('./runtime/hooks/session_id.js');
       const { resolveProjectUuid } = await import('./runtime/paths.js');
@@ -350,7 +355,7 @@ function runCli(): void {
         process.exitCode = 1;
         return;
       }
-      const result = await runHandoff(sid, cwd);
+      const result = await runHandoff(sid, cwd, { narrate: opts.narrate === true });
       for (const o of result.outcomes) {
         process.stdout.write(`${o.ok ? 'ok  ' : 'skip'} ${o.surface}: ${o.detail}\n`);
       }

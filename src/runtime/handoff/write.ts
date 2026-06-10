@@ -35,6 +35,7 @@ import {
   renderHandoverDoc,
   renderResumeBlock,
   renderWgDigest,
+  spliceNarrative,
 } from './render.js';
 
 export const HANDOFF_BEGIN = '<!-- opensquid:handoff:begin -->';
@@ -92,13 +93,20 @@ export interface WriteHandoffResult {
   outcomes: SurfaceOutcome[];
 }
 
-export async function writeHandoffSurfaces(state: HandoffState): Promise<WriteHandoffResult> {
+export async function writeHandoffSurfaces(
+  state: HandoffState,
+  opts: { narrative?: string } = {},
+): Promise<WriteHandoffResult> {
   const outcomes: SurfaceOutcome[] = [];
   const date = state.generatedAt.slice(0, 10);
   const docPath = handoverDocPath(state.umbrellaRoot, state.sessionId, date);
 
   // (a) the doc — the load-bearing record; a failure here IS a handoff failure.
-  await atomicWrite(docPath, renderHandoverDoc(state));
+  const docBody = renderHandoverDoc(state);
+  await atomicWrite(
+    docPath,
+    opts.narrative === undefined ? docBody : spliceNarrative(docBody, opts.narrative),
+  );
   outcomes.push({ surface: 'doc', ok: true, detail: docPath });
 
   // (b) MEMORY.md managed region — absent file → skip (not all hosts run auto-memory).

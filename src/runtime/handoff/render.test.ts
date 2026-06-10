@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { HandoffState } from './collect.js';
-import { renderHandoverDoc, renderResumeSteps } from './render.js';
+import { renderHandoverDoc, renderResumeSteps, spliceNarrative } from './render.js';
 
 const base: HandoffState = {
   sessionId: 'abcdefgh-1234',
@@ -71,5 +71,19 @@ describe('renderHandoverDoc', () => {
 
   it('is deterministic in its input', () => {
     expect(renderHandoverDoc(base)).toBe(renderHandoverDoc(base));
+  });
+});
+
+describe('spliceNarrative (AHO.2 — byte-identity outside the section)', () => {
+  it('inserts before RESUME; removing the section restores the original bytes', () => {
+    const doc = renderHandoverDoc(base);
+    const out = spliceNarrative(doc, 'a narrative line');
+    expect(out).toContain('## Narrative (LLM layer — non-load-bearing)');
+    expect(out.indexOf('## Narrative')).toBeLessThan(out.indexOf('## RESUME steps'));
+    const restored = out.replace(
+      /## Narrative \(LLM layer — non-load-bearing\)\n\na narrative line\n\n/,
+      '',
+    );
+    expect(restored).toBe(doc);
   });
 });

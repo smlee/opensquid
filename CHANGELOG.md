@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.387] - 2026-06-10
+
+### Added — `opensquid handoff --narrate` (T-auto-handoff AHO.2; the feature is COMPLETE)
+
+One explicit reasoning-model pass over the deterministic dump inserts a clearly
+labeled `## Narrative (LLM layer — non-load-bearing)` section above the RESUME
+steps — every other byte of the doc is identical to the non-narrated render (pinned
+structurally by the splice test). ANY model failure (unknown alias, spawn error,
+timeout, empty output) skips the narrative with a note; the layer can never fail or
+delay a handoff. Explicit-command-only: the SessionEnd backup and SessionStart lazy
+generator stay fully deterministic — spawn exhaustion is exactly when automatic
+handoffs happen. With AHO.1 (0.5.384), the auto-handoff feature is complete: dump
+foundation + narrative layer, three triggers, four surfaces.
+
 ## [0.5.386] - 2026-06-10
 
 ### Added — the codex host shell (T-codex-host-shell; T-openai-full-connect sub-track 1)

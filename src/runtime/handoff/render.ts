@@ -180,6 +180,16 @@ export function renderChatDigest(state: HandoffState): string {
   );
 }
 
+/** AHO.2 — insert the narrative section above the RESUME steps. PURE: every
+ *  other byte of the doc is untouched (the splice pin enforces it). */
+const NARRATIVE_ANCHOR = '## RESUME steps (mechanical)';
+export function spliceNarrative(doc: string, narrative: string): string {
+  const section = `## Narrative (LLM layer — non-load-bearing)\n\n${narrative}\n\n`;
+  const at = doc.indexOf(NARRATIVE_ANCHOR);
+  if (at === -1) return `${doc}\n${section}`; // defensive — append
+  return `${doc.slice(0, at)}${section}${doc.slice(at)}`;
+}
+
 /** SessionStart injection text (reader side). */
 export function renderInjection(docPath: string): string {
   return (

@@ -13,13 +13,27 @@
  */
 
 import { collectHandoffState } from './collect.js';
+import { narrateHandoff } from './narrate.js';
+import { renderHandoverDoc } from './render.js';
 import { type WriteHandoffResult, writeHandoffSurfaces } from './write.js';
 
 export { handoverDocPath, umbrellaRootFor } from './collect.js';
 export { renderInjection } from './render.js';
 export type { WriteHandoffResult } from './write.js';
 
-export async function runHandoff(sessionId: string, cwd: string): Promise<WriteHandoffResult> {
+export async function runHandoff(
+  sessionId: string,
+  cwd: string,
+  opts: { narrate?: boolean } = {},
+): Promise<WriteHandoffResult> {
   const state = await collectHandoffState(sessionId, cwd);
+  // AHO.2 — explicit-command-only narrative; ANY model failure → skip with a
+  // note. The SessionEnd backup + SessionStart lazy-gen call runHandoff
+  // WITHOUT opts and stay fully deterministic.
+  if (opts.narrate === true) {
+    const n = await narrateHandoff(renderHandoverDoc(state));
+    if (n !== null) return writeHandoffSurfaces(state, { narrative: n });
+    process.stderr.write('opensquid handoff: narrative skipped (model unavailable)\n');
+  }
   return writeHandoffSurfaces(state);
 }
