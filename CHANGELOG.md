@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.374] - 2026-06-10
+
+### Fixed — push gate was unreachable dead code; provenance now rides the commit (T-fix-pushgate-bypass)
+
+**PGB.1 — gate-first hook composition.** The repo's PP.1 quality hook ends in `exec pnpm prepush`;
+`installGitHooks` APPENDED its managed gate block below it — `exec` replaces the process, so
+`opensquid gate push` never ran (this is how a code push bypassed the flow gate on 2026-06-10).
+Installation is now a pure `composeHook` transform: shebang → managed gate line FIRST → foreign body
+verbatim. It repairs any dead-block layout idempotently, `checkGitHooks` detects the new
+`unreachable` state (marker present below an `exec`/`exit`), `opensquid doctor git-hooks` reports it
+RED + exit 1, and PP.1's installer inserts its quality line below an existing managed block instead
+of rewriting. Both installers now converge on the same canonical layout from either install order.
+
+**PGB.2 — commit attestation.** FSM/phase state is deliberately session-scoped (SessionEnd clears
+it), so a reachable push gate would FALSE-BLOCK every handover push of commits flow-authored in a
+prior session — the standing pressure for `--no-verify`/gate-off. Provenance now rides the COMMIT: a
+new managed `post-commit` hook runs `opensquid gate attest`, which records an append-only JSON line
+in `<scopeRoot>/attestations.jsonl` whenever the live session can prove the commit (docs-only, or
+completed SCOPE→AUTHOR→7-phase flow). `runGate('push')` accepts a push when EVERY outgoing commit is
+attested-or-docs-only, falling back to the unchanged live-session check otherwise — strictly more
+permissive only via genuine attestations, fail-closed preserved (a `--no-verify` code commit skips
+pre-commit but post-commit still runs, finds no flow, attests nothing → the push gate still blocks
+it). `opensquid gate attest` is also a manual CLI for re-attesting after amend/rebase.
+
 ## [0.5.373] - 2026-06-10
 
 ### Fixed — coding-flow audit no longer re-spawns on unchanged content (F0c spawn-exhaustion solve)

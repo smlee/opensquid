@@ -11,7 +11,8 @@ import { advanceFsmState } from '../../runtime/fsm_state.js';
 import { writeActiveTask } from '../../runtime/session_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
 
-import { isGatedRepo, runGate } from './gate.js';
+import { readAttestedShas } from './attestations.js';
+import { isGatedRepo, runAttest, runGate } from './gate.js';
 
 const execFileP = promisify(execFile);
 const SID = 'gate-test-session';
@@ -122,5 +123,143 @@ describe('GF.2 — owned-boundary git gate (runGate "commit")', () => {
     await stage('src/x.ts');
     delete process.env.OPENSQUID_SESSION_ID; // and no .current-session pointer under tempHome
     expect(await runGate('commit', repo)).toBe(2);
+  });
+});
+
+/** Commit whatever is staged. Returns the new HEAD sha. */
+async function commit(msg: string): Promise<string> {
+  await git(['commit', '-q', '-m', msg], repo);
+  const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repo });
+  return stdout.trim();
+}
+
+/** Wipe the seeded session state — simulates the authoring session being gone. */
+async function killSession(): Promise<void> {
+  await rm(join(tempHome, 'sessions', SID), { recursive: true, force: true });
+}
+
+const scopeRoot = (): string => join(repo, '.opensquid');
+
+describe('PGB.2 — runAttest (post-commit / manual)', () => {
+  it('completed flow → attestation row with reason flow_complete', async () => {
+    await makeGated();
+    await stage('src/x.ts');
+    await driveComplete();
+    const sha = await commit('code');
+    expect(await runAttest(repo)).toBe(0);
+    expect((await readAttestedShas(scopeRoot())).has(sha)).toBe(true);
+  });
+
+  it('docs-only commit → attested with reason docs_only (no flow needed)', async () => {
+    await makeGated();
+    await stage('docs/notes.md');
+    const sha = await commit('docs');
+    expect(await runAttest(repo)).toBe(0);
+    expect((await readAttestedShas(scopeRoot())).has(sha)).toBe(true);
+  });
+
+  it('code commit with NO flow → exit 0 but NOTHING attested', async () => {
+    await makeGated();
+    await stage('src/x.ts');
+    const sha = await commit('rogue');
+    expect(await runAttest(repo)).toBe(0);
+    expect((await readAttestedShas(scopeRoot())).has(sha)).toBe(false);
+  });
+
+  it('non-gated repo → exit 0, no attestations file created', async () => {
+    await stage('src/x.ts');
+    await commit('free');
+    expect(await runAttest(repo)).toBe(0);
+    expect((await readAttestedShas(scopeRoot())).size).toBe(0);
+  });
+
+  it('amended HEAD re-attests the NEW sha (manual gate attest path)', async () => {
+    await makeGated();
+    await stage('src/x.ts');
+    await driveComplete();
+    const first = await commit('v1');
+    await runAttest(repo);
+    await git(['commit', '-q', '--amend', '-m', 'v2'], repo);
+    const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repo });
+    const amended = stdout.trim();
+    expect(amended).not.toBe(first);
+    await runAttest(repo);
+    expect((await readAttestedShas(scopeRoot())).has(amended)).toBe(true);
+  });
+});
+
+describe('PGB.2 — runGate "push" with attestation range check', () => {
+  /** Wire a bare upstream so `@{u}..HEAD` resolves to a REAL multi-commit range. */
+  async function wireUpstream(): Promise<void> {
+    const bare = join(tempHome, 'origin.git');
+    await execFileP('git', ['init', '-q', '--bare', bare]);
+    await git(['remote', 'add', 'origin', bare], repo);
+    await git(['push', '-q', '-u', 'origin', 'HEAD'], repo);
+  }
+
+  it('HANDOVER SCENARIO: range fully attested + authoring session GONE → ALLOW', async () => {
+    await makeGated();
+    await stage('docs/base.md');
+    await commit('base');
+    await wireUpstream();
+    await stage('src/x.ts');
+    await driveComplete();
+    await commit('code in session A');
+    await runAttest(repo);
+    await killSession(); // session A is gone — only the attestation survives
+    expect(await runGate('push', repo)).toBe(0);
+  });
+
+  it('same scenario WITHOUT the attestation → BLOCK (fail-closed unchanged)', async () => {
+    await makeGated();
+    await stage('docs/base.md');
+    await commit('base');
+    await wireUpstream();
+    await stage('src/x.ts');
+    await driveComplete();
+    await commit('code in session A'); // NOT attested
+    await killSession();
+    expect(await runGate('push', repo)).toBe(2);
+  });
+
+  it('mixed range: one attested code commit + one docs-only commit → ALLOW', async () => {
+    await makeGated();
+    await stage('docs/base.md');
+    await commit('base');
+    await wireUpstream();
+    await stage('src/x.ts');
+    await driveComplete();
+    await commit('code');
+    await runAttest(repo);
+    await stage('docs/more.md');
+    await commit('docs ride along');
+    await killSession();
+    expect(await runGate('push', repo)).toBe(0);
+  });
+
+  it('one UNATTESTED code commit in the range poisons the push → BLOCK', async () => {
+    await makeGated();
+    await stage('docs/base.md');
+    await commit('base');
+    await wireUpstream();
+    await stage('src/x.ts');
+    await driveComplete();
+    await commit('attested');
+    await runAttest(repo);
+    await stage('src/y.ts');
+    await commit('rogue — never attested');
+    await killSession();
+    expect(await runGate('push', repo)).toBe(2);
+  });
+
+  it('live completed session still allows an unattested push (fallback unchanged)', async () => {
+    await makeGated();
+    await stage('docs/base.md');
+    await commit('base');
+    await wireUpstream();
+    await stage('src/x.ts');
+    await driveComplete();
+    await commit('code'); // not attested, but the session is alive + complete
+    expect(await runGate('push', repo)).toBe(0);
   });
 });

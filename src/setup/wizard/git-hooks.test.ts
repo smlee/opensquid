@@ -106,13 +106,17 @@ describe('GF.2 — git-hooks installer', () => {
     expect(res).toEqual([
       { name: 'pre-commit', state: 'installed' },
       { name: 'pre-push', state: 'installed' },
+      { name: 'post-commit', state: 'installed' },
     ]);
     const body = await readFile(join(repo, '.git', 'hooks', 'pre-commit'), 'utf8');
     expect(body).toContain(OPENSQUID_HOOK_MARKER);
     expect(body).toContain('opensquid gate commit');
+    const attest = await readFile(join(repo, '.git', 'hooks', 'post-commit'), 'utf8');
+    expect(attest).toContain('opensquid gate attest');
     expect(await checkGitHooks(repo)).toEqual([
       { name: 'pre-commit', state: 'installed' },
       { name: 'pre-push', state: 'installed' },
+      { name: 'post-commit', state: 'installed' },
     ]);
   });
 
@@ -155,6 +159,7 @@ describe('GF.2 — git-hooks installer', () => {
     expect(await checkGitHooks(repo)).toEqual([
       { name: 'pre-commit', state: 'missing' },
       { name: 'pre-push', state: 'missing' },
+      { name: 'post-commit', state: 'missing' },
     ]);
   });
 });

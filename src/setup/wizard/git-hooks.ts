@@ -24,11 +24,15 @@ import { join } from 'node:path';
 
 export const OPENSQUID_HOOK_MARKER = '@opensquid managed hook';
 
-type HookBoundary = 'commit' | 'push';
+type HookBoundary = 'commit' | 'push' | 'attest';
 
 const HOOKS: readonly { name: string; boundary: HookBoundary }[] = [
   { name: 'pre-commit', boundary: 'commit' },
   { name: 'pre-push', boundary: 'push' },
+  // PGB.2 — post-commit records flow provenance (attestations.jsonl) so a later
+  // session can push these commits without re-proving the flow. `gate attest`
+  // always exits 0; the `|| exit $?` from gateLine is harmless here.
+  { name: 'post-commit', boundary: 'attest' },
 ];
 
 const gateLine = (boundary: HookBoundary): string => `opensquid gate ${boundary} || exit $?`;

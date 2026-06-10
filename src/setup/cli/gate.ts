@@ -38,6 +38,8 @@ import { readFsmStateRaw } from '../../runtime/fsm_state.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../../runtime/workflow_phases.js';
 
+import { appendAttestation, readAttestedShas } from './attestations.js';
+
 const execFileP = promisify(execFile);
 const GATED_PACK = 'coding-flow';
 
@@ -87,12 +89,81 @@ function block(msg: string): number {
   return 2;
 }
 
+/** Does the LIVE session prove a completed flow / docs-only change right now?
+ *  Shared by the commit boundary (block decision) and the attest boundary (record
+ *  decision) so the two can never diverge. Null = not allowed. */
+export async function commitAllowedNow(
+  sid: string | null,
+  files: string[],
+): Promise<{ allowed: true; reason: 'docs_only' | 'flow_complete' } | null> {
+  if (isDocsOnly(files)) return { allowed: true, reason: 'docs_only' };
+  if (sid === null) return null;
+  const active = await readActiveTask(sid);
+  const fsm = await readFsmStateRaw(sid, GATED_PACK);
+  const phases = await readPhaseState(sid);
+  const done = active !== null && fsm === 'phases_complete' && isComplete(phases, active.id);
+  return done ? { allowed: true, reason: 'flow_complete' } : null;
+}
+
+/** The commit shas a push would publish (upstream gap; single-commit fallback). */
+async function outgoingShas(cwd: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileP('git', ['rev-list', '@{u}..HEAD'], { cwd }).catch(() =>
+      execFileP('git', ['rev-list', 'HEAD~1..HEAD'], { cwd }),
+    );
+    return stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** The files one commit touches. Empty on any git error (→ NOT docs-only → fail closed). */
+async function commitFiles(cwd: string, sha: string): Promise<string[]> {
+  try {
+    // --root: a root commit has no parent — without it diff-tree prints nothing and
+    // the commit would silently become unattestable.
+    const { stdout } = await execFileP(
+      'git',
+      ['diff-tree', '--no-commit-id', '--name-only', '-r', '--root', sha],
+      { cwd },
+    );
+    return stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** The gate decision. Returns the process exit code (0 allow, 2 block). */
 export async function runGate(boundary: 'commit' | 'push', cwd: string): Promise<number> {
   if (!(await isGatedRepo(cwd))) return 0; // unrelated repo → never block
   const files = await changedFiles(boundary, cwd);
   if (files.length === 0) return 0; // nothing to gate (amend / empty / undetermined)
   if (isDocsOnly(files)) return 0; // flow artifacts only → allow
+
+  // PGB.2 — push: accept when EVERY outgoing commit carries provenance (an attestation
+  // recorded when its commit passed the commit boundary, or a docs-only diff). This is
+  // what lets a fresh session push commits flow-authored in a PRIOR session without
+  // weakening fail-closed: an unattested code commit still needs the live-session proof
+  // below. Strictly more permissive than the session check alone, never less.
+  if (boundary === 'push') {
+    const scopeRoot = await resolveProjectScopeRoot(cwd);
+    if (scopeRoot !== null) {
+      const outgoing = await outgoingShas(cwd);
+      if (outgoing.length > 0) {
+        const attested = await readAttestedShas(scopeRoot);
+        const covered = await Promise.all(
+          outgoing.map(async (sha) => attested.has(sha) || isDocsOnly(await commitFiles(cwd, sha))),
+        );
+        if (covered.every(Boolean)) return 0;
+      }
+    }
+  }
 
   const sid = await resolveMcpSessionId();
   if (sid === null) {
@@ -102,16 +173,53 @@ export async function runGate(boundary: 'commit' | 'push', cwd: string): Promise
         `explicit authorization.`,
     );
   }
+  const verdict = await commitAllowedNow(sid, files);
+  if (verdict !== null) return 0;
   const active = await readActiveTask(sid);
   const fsm = await readFsmStateRaw(sid, GATED_PACK);
-  const phases = await readPhaseState(sid);
-  const done = active !== null && fsm === 'phases_complete' && isComplete(phases, active.id);
-  if (done) return 0;
   return block(
     `this ${boundary} has code changes but the active task has not completed the ` +
       `SCOPE→AUTHOR→7-phase flow (FSM=${fsm ?? 'none'}, active task=${active?.id ?? 'none'}). ` +
       `Finish the flow (log all 7 phases), or pass --no-verify only with explicit authorization.`,
   );
+}
+
+/** HEAD's sha, or null when it cannot be resolved (unborn branch, not a repo). */
+async function headSha(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** PGB.2 — the attest boundary (post-commit hook + `opensquid gate attest` CLI):
+ *  record provenance for HEAD when the live session can prove it RIGHT NOW. Never
+ *  blocks, never throws — recording is best-effort; an unattested commit simply
+ *  falls back to the session check at push time (fail-closed preserved). */
+export async function runAttest(cwd: string): Promise<number> {
+  try {
+    if (!(await isGatedRepo(cwd))) return 0;
+    const scopeRoot = await resolveProjectScopeRoot(cwd);
+    const sha = await headSha(cwd);
+    if (scopeRoot === null || sha === null) return 0;
+    const files = await commitFiles(cwd, sha);
+    if (files.length === 0) return 0; // empty/merge/undetermined → nothing to attest
+    const sid = await resolveMcpSessionId();
+    const verdict = await commitAllowedNow(sid, files);
+    if (verdict !== null) {
+      await appendAttestation(scopeRoot, {
+        sha,
+        ...verdict,
+        session: sid ?? 'none',
+        at: new Date().toISOString(),
+      });
+    }
+    return 0;
+  } catch {
+    return 0; // best-effort contract: attest never breaks a commit
+  }
 }
 
 /** Resolve the git work-tree root for `cwd`, or null if not in a repo. */
@@ -139,6 +247,14 @@ export function registerGate(program: Command): void {
     .description('pre-push: block a push whose commits have not completed the coding-flow')
     .action(async () => {
       process.exit(await runGate('push', process.cwd()));
+    });
+  gate
+    .command('attest')
+    .description(
+      'post-commit: record flow provenance for HEAD (also run manually after amend/rebase)',
+    )
+    .action(async () => {
+      process.exit(await runAttest(process.cwd()));
     });
   gate
     .command('install')
