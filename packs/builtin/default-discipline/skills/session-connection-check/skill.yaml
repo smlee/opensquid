@@ -34,6 +34,14 @@ rules:
     kind: track_check
     process:
       - call: session_status_manifest
+  # T-AUTO-HANDOFF — reader + tier-3 lazy generator: surfaces the previous
+  # (dead) session's auto-handover doc, GENERATING it from disk first when the
+  # dead session died without a handoff (kill-9/wedge safe via the FU.3
+  # pointer). One injection per fresh session; fail-quiet.
+  - id: surface-auto-handoff
+    kind: track_check
+    process:
+      - call: handoff_session_start
   # CAT.7 — SessionStart topic assurance (umbrella-level ≤1 topic). Unlike the
   # report-only rule above, this one takes an ACTION (sanctioned by the
   # remote-terminal override): if a chat daemon is live and the session's

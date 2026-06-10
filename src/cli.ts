@@ -315,6 +315,41 @@ function runCli(): void {
       process.stdout.write(`migrated ${migrated} lessons into the wg_lessons index\n`);
     });
 
+  // T-AUTO-HANDOFF — the PRIMARY trigger: deterministic 4-surface handoff
+  // from disk state ("when user requests or when the agent knows hand-off
+  // needs to happen"). SessionEnd is the backup writer; SessionStart the
+  // lazy generator/reader.
+  program
+    .command('handoff')
+    .description(
+      'Generate the 4-surface session handoff (doc, MEMORY.md block, work-graph, chat) from disk state',
+    )
+    .option(
+      '--session <id>',
+      'session id to hand off (default: the project-scoped current-session pointer)',
+    )
+    .action(async (opts: { session?: string }) => {
+      const { runHandoff } = await import('./runtime/handoff/index.js');
+      const { readProjectCurrentSession } = await import('./runtime/hooks/session_id.js');
+      const { resolveProjectUuid } = await import('./runtime/paths.js');
+      const cwd = process.cwd();
+      let sid = opts.session ?? process.env.CLAUDE_CODE_SESSION_ID ?? null;
+      if (sid === null || sid === undefined || sid === '') {
+        const uuid = await resolveProjectUuid({ cwd, env: process.env });
+        sid = uuid === null ? null : await readProjectCurrentSession(uuid);
+      }
+      if (sid === null || sid === '') {
+        process.stderr.write('opensquid handoff: no session id (pass --session <id>)\n');
+        process.exitCode = 1;
+        return;
+      }
+      const result = await runHandoff(sid, cwd);
+      for (const o of result.outcomes) {
+        process.stdout.write(`${o.ok ? 'ok  ' : 'skip'} ${o.surface}: ${o.detail}\n`);
+      }
+      process.stdout.write(`handover doc: ${result.docPath}\n`);
+    });
+
   program.parseAsync(process.argv).catch((err: unknown) => {
     process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);

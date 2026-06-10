@@ -73,6 +73,7 @@ import {
   WorkflowPhasesComplete,
 } from '../functions/active_task.js';
 import { CheckFlowHealth } from '../functions/check_flow_health.js';
+import { HandoffSessionStart } from '../functions/handoff_session_start.js';
 import { SessionStatusManifest } from '../functions/session_status_manifest.js';
 import { EffectiveContent } from '../functions/effective_content.js';
 import { ChatWatcherAutostart } from '../functions/chat_watcher_autostart.js';
@@ -202,6 +203,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // skill; supersedes the fragmented chat/flow injects (DRY: reuses
   // flowEnforcementProblems).
   r.register(SessionStatusManifest);
+  r.register(HandoffSessionStart);
   // T-FLOW-AUDIT-ARTIFACT — effective post-write content so the SCOPE/AUTHOR
   // content audits evaluate the real resulting file (Edit-safe), not the
   // Edit-empty `tool_args.content` that broke iterative refinement.

@@ -136,7 +136,10 @@ describe('hook subprocess integration', () => {
     const stdin = JSON.stringify({ sessionId: 'abc' });
     const r = await runHook('session-end.ts', stdin);
     expect(r.exitCode).toBe(0);
-    expect(r.stderr).toBe('');
+    // T-AUTO-HANDOFF: the SessionEnd backup writer reports its outcome on
+    // stderr (written or skipped) — the ONLY expected line for a bare session.
+    const lines = r.stderr.split('\n').filter((l) => l.trim().length > 0);
+    expect(lines.every((l) => l.includes('auto-handoff'))).toBe(true);
   }, 15000);
 
   it('pre-tool-use: snake_case payload normalized to camelCase', async () => {

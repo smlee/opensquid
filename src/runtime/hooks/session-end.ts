@@ -121,6 +121,18 @@ async function main(): Promise<void> {
     process.stderr.write(`opensquid: compression skipped — ${String(e)}\n`);
   }
 
+  // T-AUTO-HANDOFF — the SessionEnd BACKUP writer. MUST run BEFORE
+  // archiveActiveTask/clearFsmState below: those destroy the exact state the
+  // deterministic dump reads (active-task signal + FSM file). Best-effort —
+  // a handoff failure never blocks session close.
+  try {
+    const { runHandoff } = await import('../handoff/index.js');
+    const result = await runHandoff(sessionId, process.cwd());
+    process.stderr.write(`opensquid: auto-handoff written — ${result.docPath}\n`);
+  } catch (e) {
+    process.stderr.write(`opensquid: auto-handoff skipped — ${String(e)}\n`);
+  }
+
   // AP.2 / rule #16 — archive (not delete) the active-task signal at session
   // close, so an abandoned in-progress task leaves a trace. Best-effort.
   await archiveActiveTask(sessionId);
