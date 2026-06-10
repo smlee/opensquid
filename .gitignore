@@ -27,3 +27,4 @@ docs/tasks/
 
 # fastembed model cache (downloaded artifacts)
 local_cache/
+package-lock.json
