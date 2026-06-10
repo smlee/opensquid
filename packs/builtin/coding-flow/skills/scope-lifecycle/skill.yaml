@@ -86,13 +86,17 @@ rules:
       # verdict with NO `claude -p` spawn (kills the F0c re-fire storm). A
       # timeout/error is NOT cached → on_error routes it to AUDIT-UNAVAILABLE and
       # the next turn retries. cache_key is per-audit (guess vs spec).
+      # timeout_ms (T-AUDIT-SPAWN-FIX): 340s, sized to MEASURED reasoning-call
+      # latency (268s worst observed under subscription contention, 2026-06-10)
+      # and 20s under the 360s outer hook cap the setup wizard writes — the
+      # inner timer must die first so the gate fails with a readable error.
       - call: cached_audit
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         on_error: continue
         args:
           cache_key: coding-flow-guess-audit-cache
           model: reasoning
-          timeout_ms: 170000
+          timeout_ms: 340000
           prompt: >-
             You are an adversarial reviewer enforcing the lexicon's Research/Audit flow
             principles (docs/lexicon.md — never-guess, best-solution, full-fix-over-patch, teach-back depth) on a
@@ -204,13 +208,15 @@ rules:
       # aborting the process and freezing the FSM at spec_authored.
       # cached_audit (T-FIX-AUDIT-SPAWN): same content-hash memoization as the
       # SCOPE audit — a re-fire on an UNCHANGED spec reuses the verdict, no spawn.
+      # timeout_ms (T-AUDIT-SPAWN-FIX): 340s, same measured sizing as the SCOPE
+      # audit above (268s worst observed; 20s under the 360s outer hook cap).
       - call: cached_audit
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
         on_error: continue
         args:
           cache_key: coding-flow-spec-audit-cache
           model: reasoning
-          timeout_ms: 170000
+          timeout_ms: 340000
           prompt: >-
             You are an adversarial reviewer enforcing THREE author-completeness rules.
             (1) 11-FIELD CONTRACT: EVERY "### Task" block has all 11 fields (Required

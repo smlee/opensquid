@@ -42,6 +42,18 @@ import type { ModelAliasConfig, ModelStrategy } from '../types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Typed timeout rejection so callers classify by TYPE, never by message text
+ * (T-AUDIT-SPAWN-FIX — the spawn ledger counts `timeout` vs `error` outcomes).
+ * Message stays byte-identical to the historical `timeout after Xms` string.
+ */
+export class CliTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`timeout after ${timeoutMs}ms`);
+    this.name = 'CliTimeoutError';
+  }
+}
+
 export function subscriptionCliStrategy(cfg: ModelAliasConfig): ModelStrategy {
   return {
     async call(prompt: string, opts?: { timeoutMs?: number }): Promise<string> {
@@ -77,7 +89,7 @@ export function subscriptionCliStrategy(cfg: ModelAliasConfig): ModelStrategy {
           // (the kernel reaps eventually, and we've already rejected the
           // promise so the caller is unblocked).
           proc.kill('SIGTERM');
-          settle(() => reject(new Error(`timeout after ${timeoutMs}ms`)));
+          settle(() => reject(new CliTimeoutError(timeoutMs)));
         }, timeoutMs);
 
         proc.stdout.on('data', (d: Buffer) => {

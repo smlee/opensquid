@@ -29,15 +29,16 @@
  * Imported by: src/functions/index.ts (registry wiring).
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { z } from 'zod';
 
 import { resolveStrategy } from '../models/dispatcher.js';
 import { loadModelsConfig } from '../models/load_config.js';
+import { CliTimeoutError } from '../models/strategies/subscription_cli.js';
 import { sha256Hex } from '../runtime/durable/run_id.js';
-import { sessionStateFile } from '../runtime/paths.js';
+import { sessionLogFile, sessionStateFile } from '../runtime/paths.js';
 import { err, ok } from '../runtime/result.js';
 
 import type { FunctionRegistry } from './registry.js';
@@ -80,6 +81,34 @@ async function readCachedVerdict(
   }
 }
 
+/**
+ * Spawn ledger (T-AUDIT-SPAWN-FIX, wg-bc291cb0cef4 mandate item 1): one JSONL
+ * line per cached_audit RESOLUTION, so spawn rate / latency distribution /
+ * timeout share are COUNTED data, never inferred. `hash8` is a sha256 prefix —
+ * the ledger NEVER carries prompt content. Best-effort like `writeCache`: a
+ * ledger failure must never break the audit gate.
+ */
+type LedgerOutcome = 'hit' | 'verdict' | 'no_verdict' | 'timeout' | 'error';
+
+interface LedgerEntry {
+  at: string;
+  cache_key: string;
+  model: string;
+  hash8: string;
+  outcome: LedgerOutcome;
+  duration_ms: number;
+}
+
+async function appendLedger(sessionId: string, entry: LedgerEntry): Promise<void> {
+  try {
+    const path = sessionLogFile(sessionId, 'audit-spawn-ledger');
+    await mkdir(dirname(path), { recursive: true });
+    await appendFile(path, `${JSON.stringify(entry)}\n`, 'utf8');
+  } catch {
+    /* best-effort: counting must never break the gate */
+  }
+}
+
 async function writeCache(sessionId: string, key: string, entry: CacheEntry): Promise<void> {
   const path = sessionStateFile(sessionId, key);
   try {
@@ -101,8 +130,20 @@ export function registerCachedAuditFunction(registry: FunctionRegistry): void {
     costEstimateMs: 30_000,
     execute: async ({ cache_key, model, prompt, timeout_ms }, ctx) => {
       const hash = sha256Hex(prompt);
+      const hash8 = hash.slice(0, 8);
+      const stamp = (outcome: LedgerOutcome, duration_ms: number): Promise<void> =>
+        appendLedger(ctx.sessionId, {
+          at: new Date().toISOString(),
+          cache_key,
+          model,
+          hash8,
+          outcome,
+          duration_ms,
+        });
+
       const hit = await readCachedVerdict(ctx.sessionId, cache_key, hash);
       if (hit !== null) {
+        await stamp('hit', 0);
         return ok(hit); // HIT — identical prompt → reuse, no spawn
       }
       // MISS — dispatch the model (same path as subagent_call).
@@ -111,6 +152,9 @@ export function registerCachedAuditFunction(registry: FunctionRegistry): void {
       if (!aliasCfg) {
         return err({ kind: 'arg_invalid', message: `Unknown model alias "${model}"` });
       }
+      // duration_ms measures from just before strategy resolution (a sync
+      // registry lookup, microseconds) through the spawn — the spawn dominates.
+      const t0 = Date.now();
       try {
         const strategy = resolveStrategy(model, aliasCfg);
         const out =
@@ -119,11 +163,16 @@ export function registerCachedAuditFunction(registry: FunctionRegistry): void {
             : await strategy.call(prompt, { timeoutMs: timeout_ms });
         // Cache ONLY a real verdict — never a timeout/error/empty string, so an
         // AUDIT-UNAVAILABLE result is retried next turn instead of being pinned.
-        if (out.includes('VERDICT:')) {
+        const hasVerdict = out.includes('VERDICT:');
+        if (hasVerdict) {
           await writeCache(ctx.sessionId, cache_key, { hash, verdict: out });
         }
+        await stamp(hasVerdict ? 'verdict' : 'no_verdict', Date.now() - t0);
         return ok(out);
       } catch (e) {
+        await stamp(e instanceof CliTimeoutError ? 'timeout' : 'error', Date.now() - t0);
+        // UNCHANGED retry semantics: the err is returned exactly as before, so
+        // on_error routes to AUDIT-UNAVAILABLE and the next re-fire retries.
         return err({ kind: 'runtime', message: `cached_audit(${model}): ${String(e)}`, cause: e });
       }
     },

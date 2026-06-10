@@ -9,7 +9,7 @@
  * output is NOT cached (so an AUDIT-UNAVAILABLE result is retried).
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ModelAliasConfig } from '../models/types.js';
 import type { Event } from '../runtime/types.js';
+import { sessionLogFile } from '../runtime/paths.js';
 
 import { registerCachedAuditFunction } from './cached_audit.js';
 import { type EvalCtx, FunctionRegistry } from './registry.js';
@@ -153,5 +154,80 @@ describe('cached_audit', () => {
     );
     expect(retry.ok).toBe(true);
     if (retry.ok) expect(retry.value).toBe('VERDICT: GUESS_FREE');
+  });
+});
+
+// T-AUDIT-SPAWN-FIX: the spawn ledger — one JSONL line per resolution, so spawn
+// rate / latency / timeout share are COUNTED (wg-bc291cb0cef4 mandate item 1).
+describe('cached_audit spawn ledger', () => {
+  async function readLedger(sessionId: string): Promise<Record<string, unknown>[]> {
+    const raw = await readFile(sessionLogFile(sessionId, 'audit-spawn-ledger'), 'utf8');
+    return raw
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  it('stamps verdict (spawn) then hit (no spawn) with the six fields', async () => {
+    const ctx = createTestCtx();
+    installAlias('reasoning', await writeFakeEchoCli('VERDICT: GUESS_FREE'));
+    const reg = freshRegistry();
+    await reg.call('cached_audit', { cache_key: 'kl', model: 'reasoning', prompt: PROMPT }, ctx);
+    await reg.call('cached_audit', { cache_key: 'kl', model: 'reasoning', prompt: PROMPT }, ctx);
+
+    const lines = await readLedger(ctx.sessionId);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ cache_key: 'kl', model: 'reasoning', outcome: 'verdict' });
+    expect(lines[1]).toMatchObject({ cache_key: 'kl', outcome: 'hit', duration_ms: 0 });
+    expect((lines[0]!.hash8 as string).length).toBe(8);
+    expect(lines[0]!.duration_ms as number).toBeGreaterThanOrEqual(0);
+    expect(typeof lines[0]!.at).toBe('string');
+  });
+
+  it('stamps no_verdict on a verdict-less output', async () => {
+    const ctx = createTestCtx();
+    installAlias('reasoning', await writeFakeEchoCli('no verdict here'));
+    const reg = freshRegistry();
+    await reg.call('cached_audit', { cache_key: 'kl', model: 'reasoning', prompt: PROMPT }, ctx);
+    const lines = await readLedger(ctx.sessionId);
+    expect(lines.at(-1)).toMatchObject({ outcome: 'no_verdict' });
+  });
+
+  it('stamps timeout on a CliTimeoutError (typed, not message-matched)', async () => {
+    const ctx = createTestCtx();
+    const hang = join(tmpRoot, 'hang.js');
+    await writeFile(hang, 'setInterval(() => {}, 1000);', 'utf8');
+    installAlias('reasoning', hang);
+    const reg = freshRegistry();
+    const result = await reg.call(
+      'cached_audit',
+      { cache_key: 'kl', model: 'reasoning', prompt: PROMPT, timeout_ms: 150 },
+      ctx,
+    );
+    expect(result.ok).toBe(false); // err returned unchanged — re-fire retry semantics
+    const lines = await readLedger(ctx.sessionId);
+    expect(lines.at(-1)).toMatchObject({ outcome: 'timeout' });
+  });
+
+  it('stamps error on a non-timeout spawn failure', async () => {
+    const ctx = createTestCtx();
+    const cfg: Record<string, ModelAliasConfig> = {
+      reasoning: {
+        mode: 'subscription',
+        impl: 'cli',
+        cli: join(tmpRoot, 'does-not-exist-bin'),
+        args: [],
+      },
+    };
+    process.env.OPENSQUID_MODELS_CONFIG_INLINE = JSON.stringify(cfg);
+    const reg = freshRegistry();
+    const result = await reg.call(
+      'cached_audit',
+      { cache_key: 'kl', model: 'reasoning', prompt: PROMPT },
+      ctx,
+    );
+    expect(result.ok).toBe(false);
+    const lines = await readLedger(ctx.sessionId);
+    expect(lines.at(-1)).toMatchObject({ outcome: 'error' });
   });
 });

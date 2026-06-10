@@ -48,6 +48,15 @@ export const OPENSQUID_BIN_FOR_EVENT = {
 
 export type ClaudeEvent = keyof typeof OPENSQUID_BIN_FOR_EVENT;
 
+// T-AUDIT-SPAWN-FIX (2026-06-10): the PreToolUse hook hosts the BLOCKING
+// coding-flow audits (claude -p reasoning calls measured to 268s under
+// subscription contention; inner audit window 340s). Without an explicit
+// timeout the host's default hook cap (≈60s) kills the hook before any audit
+// can finish — fresh installs were broken out of the box. Only PreToolUse
+// carries the cap; the other five events keep host defaults. Existing users
+// pick it up by re-running `opensquid setup` (same convention as POSTPUSH.1).
+export const PRETOOLUSE_HOOK_TIMEOUT_S = 360;
+
 // Loose hook entry shapes — we round-trip `unknown` fields verbatim so
 // unrelated third-party schema additions survive a wizard pass.
 interface HookCommandEntry {
@@ -118,7 +127,14 @@ export function projectOpensquidHooks(input: SettingsJson): {
       }
     }
     filtered.push({
-      hooks: [{ type: 'command', command: OPENSQUID_BIN_FOR_EVENT[event], '@opensquid': true }],
+      hooks: [
+        {
+          type: 'command',
+          command: OPENSQUID_BIN_FOR_EVENT[event],
+          '@opensquid': true,
+          ...(event === 'PreToolUse' ? { timeout: PRETOOLUSE_HOOK_TIMEOUT_S } : {}),
+        },
+      ],
     });
     added += 1;
     output.hooks[event] = filtered;

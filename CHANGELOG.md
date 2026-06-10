@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.376] - 2026-06-10
+
+### Fixed — audit window sized to measured latency; counted spawn ledger (T-audit-spawn-fix)
+
+The recurring coding-flow audit timeouts ("F0c") were never a spawn cap: the reasoning
+audit call on a shared subscription takes 40–270s depending on concurrent-session
+contention (same prompt measured live: 198s and 268s, both SUCCEEDING past the deadline),
+while the gate killed at a fixed 170s. Three coordinated changes, one measured number:
+
+- **Inner window 170s → 340s** (both coding-flow audit call sites) — 268s worst observed
+  - headroom, 20s under the outer cap so the inner timer still dies first with a readable
+    error.
+- **The setup wizard now writes the outer cap it requires:** the owned PreToolUse hook
+  entry gains `timeout: 360`. Previously NO timeout was written, so fresh installs ran
+  blocking audits under the host's default hook timeout (≈60s) — broken out of the box.
+  **Existing users: re-run `opensquid setup wizard hooks`** to pick up the cap (same
+  convention as POSTPUSH.1/HH6.1).
+- **Counted spawn ledger** (wg-bc291cb0cef4 mandate): every `cached_audit` resolution
+  appends a JSONL line (`hit | verdict | no_verdict | timeout | error`, duration,
+  sha256-prefix only — never prompt content) to the session log file. Timeout
+  classification rides a new typed `CliTimeoutError` owned by the CLI strategy (message
+  text unchanged) instead of string matching.
+
 ## [0.5.375] - 2026-06-10
 
 ### Added — MCP servers anchor to the host-declared project dir (T-codex-mcp-connect CMC.A)
