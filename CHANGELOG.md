@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.386] - 2026-06-10
+
+### Added — the codex host shell (T-codex-host-shell; T-openai-full-connect sub-track 1)
+
+`opensquid setup wizard codex-hooks` wires opensquid's anti-drift gates INSIDE
+OpenAI's codex CLI: codex 0.139's hook engine is deliberately Claude
+Code-compatible (`ClaudeHooksEngine` — same payloads, same permissionDecision
+outputs), so the existing hook binaries work unchanged and the shell is pure
+config. The wizard writes the user-layer `~/.codex/hooks.json` with five entries
+(PreToolUse 360s, PostToolUse, UserPromptSubmit, Stop, SessionStart — deliberately
+NO SessionEnd: codex's Stop is turn-scoped and a sessionend wire would clear the
+coding-flow FSM every turn), absolute bin paths (codex hook spawns carry no PATH
+guarantee), `@opensquid`-marked with the shared ownership predicate — re-runs
+replace ours and preserve foreign hooks byte-intact (the 0.5.378 discipline).
+Activation requires the user to trust the entries via `/hooks` inside codex (no
+silent installs, by codex's design and ours); `opensquid doctor codex-hooks`
+reports presence + entry count. The git boundary gates remain the backstop
+enforcement regardless of trust state.
+
 ## [0.5.385] - 2026-06-10
 
 ### Fixed — transport_bridge watcher race (the flake's root cause; T-fix-transport-bridge-watcher-race)

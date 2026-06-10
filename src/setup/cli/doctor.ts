@@ -19,7 +19,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -28,7 +28,11 @@ import type { Command } from 'commander';
 import { computeMemoryDrift, renderMemoryDrift } from '../migrate/memory_drift.js';
 import { makeMemoryStore } from '../migrate/memory_store_handle.js';
 import { readSettingsHooks, type ParsedHookEntry } from '../wizard/settings-reader.js';
-import { OPENSQUID_BIN_FOR_EVENT, isOpensquidHookCommand } from '../wizard/settings-writer.js';
+import {
+  OPENSQUID_BIN_FOR_EVENT,
+  isOpensquidHookCommand,
+  isOpensquidHookEntry,
+} from '../wizard/settings-writer.js';
 
 /** `/`→`-`, matching Claude Code's auto-memory dir naming. Mirrors the inline
  * copies in `memory.ts` / `memory_reconcile.ts` (stable one-liner; no shared
@@ -98,6 +102,39 @@ export interface DoctorOptions {
   projectSettingsPath: string;
   /** Override for unit tests — defaults to spawning real subprocesses. */
   spawnProbe?: (command: string, stdin: string) => Promise<{ exitCode: number; stderr: string }>;
+}
+
+/** CHS.1 — the codex-hooks section lines (pure in the path argument). */
+export async function checkCodexHooks(path: string): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch {
+    return [
+      '[INFO]   codex shell: not installed (optional) — `opensquid setup wizard codex-hooks`',
+    ];
+  }
+  let marked = 0;
+  try {
+    const parsed = JSON.parse(raw) as { hooks?: Record<string, { hooks?: unknown[] }[]> };
+    for (const groups of Object.values(parsed.hooks ?? {})) {
+      for (const g of groups) {
+        marked += (g.hooks ?? []).filter((h) =>
+          isOpensquidHookEntry(h as Parameters<typeof isOpensquidHookEntry>[0]),
+        ).length;
+      }
+    }
+  } catch {
+    return [
+      `[RED]    codex shell: ${path} is not valid JSON — re-run \`opensquid setup wizard codex-hooks\``,
+    ];
+  }
+  return [
+    marked > 0
+      ? `[GREEN]  codex shell: ${String(marked)} opensquid hook entr${marked === 1 ? 'y' : 'ies'} in hooks.json`
+      : `[INFO]   codex shell: hooks.json present but no opensquid entries — \`opensquid setup wizard codex-hooks\``,
+    '         trust state lives in codex user-config hashes (not inspectable here) — verify via /hooks in codex',
+  ];
 }
 
 /** Pure runner — disk + spawn injectable for tests. */
@@ -274,6 +311,19 @@ export function registerDoctor(program: Command): void {
       });
       const red = printReport(results);
       process.exit(red === 0 ? 0 : 1);
+    });
+
+  // CHS.1 — the codex host shell section: file presence + marked-entry
+  // count. Trust state lives in codex's user-config hashes (not inspectable
+  // here) — the report always points at /hooks in codex. Absent ~/.codex or
+  // hooks.json = INFO, not RED (codex is optional).
+  doc
+    .command('codex-hooks')
+    .description('Check the codex host shell (~/.codex/hooks.json presence + opensquid entries)')
+    .action(async () => {
+      const lines = await checkCodexHooks(join(process.env.HOME ?? '', '.codex', 'hooks.json'));
+      for (const l of lines) process.stdout.write(`${l}\n`);
+      process.exit(0);
     });
 
   doc
