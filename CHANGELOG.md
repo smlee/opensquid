@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.385] - 2026-06-10
+
+### Fixed — transport_bridge watcher race (the flake's root cause; T-fix-transport-bridge-watcher-race)
+
+The 0.5.380 instrumentation captured its first occurrence the day it shipped: rows on
+disk, `events: {}` — the watcher was never live. Root cause: `start()` resolved
+without awaiting chokidar's `ready`, so a file created during the initial-scan window
+could produce zero events forever (derived for the polling backend the flake fired
+under; the native daemon backend carries the analogous hole). Fix: `start()` is now
+ready-gated (raced against `error`, a code-owned shutdown signal, and a 30s
+diagnostic bound) and runs a one-shot fileGlob-true self-heal scan after ready —
+cursor idempotency makes it double-emit-safe. Regression pins on BOTH backends +
+shutdown-during-start; 20× isolated loop + full-suite run green.
+
 ## [0.5.384] - 2026-06-10
 
 ### Added — automated session handoffs (T-auto-handoff; user-locked design)

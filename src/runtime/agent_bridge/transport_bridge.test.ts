@@ -427,3 +427,78 @@ describe('InboxTransportBridge — umbrella keyed (CAT.5)', () => {
     expect(warnings).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// TBW.1 — ready-gated start + self-heal scan (the captured-flake regression
+// pins; see T-fix-transport-bridge-watcher-race pre-research v2).
+// ---------------------------------------------------------------------------
+
+describe('TBW.1 — start() is ready-gated (both backends)', () => {
+  for (const [label, polling] of [
+    ['usePolling (the captured-flake config)', true],
+    ['native backend (the prod daemon config)', false],
+  ] as const) {
+    it(`start() resolved => immediately-created file is received — ${label}`, async () => {
+      bridge = new InboxTransportBridge({
+        bus,
+        projectUuid: TEST_PROJECT_UUID,
+        inboxRoot: inboxDir,
+        usePolling: polling,
+        onWarn: (m) => warnings.push(m),
+        onEvent: (k) => {
+          events[k] = (events[k] ?? 0) + 1;
+        },
+      });
+      await bridge.start();
+      // The captured flake: file created + burst-appended right after start()
+      // resolved produced ZERO events for 15s. The ready gate + self-heal
+      // make this deterministic.
+      await fs.appendFile(
+        inboxFile,
+        legacyRow({ id: 'r1', channel: 'telegram:1', senderId: '1', text: 'a' }) +
+          legacyRow({ id: 'r2', channel: 'telegram:1', senderId: '1', text: 'b' }) +
+          legacyRow({ id: 'r3', channel: 'telegram:1', senderId: '1', text: 'c' }),
+      );
+      await waitFor('received>=3 post-ready', () => received.length >= 3);
+      expect(received.map((e) => e.messageId)).toEqual(['r1', 'r2', 'r3']);
+    });
+  }
+
+  it('shutdown() during start() neither hangs nor throws', async () => {
+    const b = new InboxTransportBridge({
+      bus,
+      projectUuid: TEST_PROJECT_UUID,
+      inboxRoot: inboxDir,
+      usePolling: true,
+      onWarn: (m) => warnings.push(m),
+    });
+    const starting = b.start();
+    await b.shutdown();
+    await expect(starting).resolves.toBeUndefined();
+    bridge = null; // already shut down
+  });
+
+  it('literal fileGlob: self-heal consumes only the matching file', async () => {
+    await fs.writeFile(
+      path.join(inboxDir, 'discord.jsonl'),
+      legacyRow({ id: 'nope', channel: 'telegram:9', senderId: '9', text: 'x' }),
+      'utf8',
+    );
+    await fs.writeFile(
+      inboxFile,
+      legacyRow({ id: 'yes', channel: 'telegram:1', senderId: '1', text: 'y' }),
+      'utf8',
+    );
+    bridge = new InboxTransportBridge({
+      bus,
+      projectUuid: TEST_PROJECT_UUID,
+      inboxRoot: inboxDir,
+      usePolling: true,
+      fileGlob: 'telegram.jsonl',
+      onWarn: (m) => warnings.push(m),
+    });
+    await bridge.start();
+    await waitFor('received>=1 literal glob', () => received.length >= 1);
+    expect(received.map((e) => e.messageId)).toEqual(['yes']);
+  });
+});

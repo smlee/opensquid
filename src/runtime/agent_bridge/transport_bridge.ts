@@ -124,6 +124,9 @@ export interface TransportBridgeOptions {
 
 const AWAIT_WRITE_FINISH_STABILITY_MS = 50;
 const AWAIT_WRITE_FINISH_POLL_MS = 25;
+/** TBW.1: bound on the chokidar ready wait — pathological only (real inboxes
+ *  scan in milliseconds); the diagnostic names the pre-research. */
+const READY_TIMEOUT_MS = 30_000;
 
 const noopWarn: (message: string) => void = () => {
   /* default sink */
@@ -135,6 +138,10 @@ const noopWarn: (message: string) => void = () => {
 
 export class InboxTransportBridge {
   private watcher: FSWatcher | null = null;
+  /** TBW.1: resolves an in-flight start() ready-wait when shutdown() runs —
+   *  code-owned close semantics (chokidar's close()-mid-init emissions are
+   *  undocumented; we never depend on them). */
+  private closeRequested: (() => void) | null = null;
   /** Per-file byte-offset cursor. Key = absolute file path. */
   private readonly cursors = new Map<string, number>();
   /** Per-file in-flight read serializer — chokidar may fire `change` twice
@@ -200,12 +207,69 @@ export class InboxTransportBridge {
         `[agent_bridge.transport] watcher error: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
+
+    // TBW.1 — the watcher is NOT live until chokidar's `ready`: under both
+    // backends a file created during the initial-scan window can produce
+    // ZERO events forever (the 2026-06-10 captured flake: rows on disk,
+    // events {}). Gate start() on ready, then self-heal-scan the dir once.
+    const watcher = this.watcher;
+    await new Promise<void>((resolveReady, rejectReady) => {
+      const onReady = (): void => {
+        cleanup();
+        resolveReady();
+      };
+      const onError = (err: unknown): void => {
+        cleanup();
+        rejectReady(err instanceof Error ? err : new Error(String(err)));
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        rejectReady(
+          new Error(
+            'InboxTransportBridge.start: watcher ready not reached in 30s (see T-fix-transport-bridge-watcher-race pre-research)',
+          ),
+        );
+      }, READY_TIMEOUT_MS);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        watcher.off('ready', onReady);
+        watcher.off('error', onError);
+        this.closeRequested = null;
+      };
+      this.closeRequested = (): void => {
+        cleanup();
+        resolveReady(); // shutdown() owns the close; start() resolves clean
+      };
+      watcher.once('ready', onReady);
+      watcher.once('error', onError);
+    });
+    if (this.stopped) return; // shutdown won the race — nothing to self-heal
+
+    // Self-heal: files created during the scan window exist on disk but may
+    // have produced no events (the captured profile). One readdir, fileGlob-
+    // filtered; cursor idempotency makes a duplicate consume a no-op.
+    const entries = await fs.readdir(this.inboxDir).catch(() => [] as string[]);
+    for (const name of entries) {
+      if (this.matchesFileGlob(name)) this.scheduleConsume(join(this.inboxDir, name));
+    }
+  }
+
+  /** The bridge's fileGlob is a basename pattern ('*.jsonl' or a literal like
+   *  'telegram.jsonl'); `*` is the one supported wildcard. */
+  private matchesFileGlob(name: string): boolean {
+    if (!this.fileGlob.includes('*')) return name === this.fileGlob;
+    const escaped = this.fileGlob
+      .split('*')
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*');
+    return new RegExp(`^${escaped}$`).test(name);
   }
 
   /** Close the watcher; drain in-flight reads. Idempotent. */
   async shutdown(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.closeRequested?.();
     const w = this.watcher;
     this.watcher = null;
     if (w !== null) await w.close();
