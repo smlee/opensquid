@@ -180,7 +180,9 @@ async function runBin(
     // Spawn with TRACE forced on (default-on; belt + braces in case CI env
     // sets OPENSQUID_DISPATCH_TRACE=0 for some other test's cleanup).
     const env = { ...process.env, OPENSQUID_DISPATCH_TRACE: '1' };
-    const p = spawn('node', [binPath], { stdio: ['pipe', 'pipe', 'pipe'], env });
+    // T-AUTO-HANDOFF: hooks act on their CWD (SessionEnd backup writer) —
+    // spawn from the OS tmpdir so artifacts never land in the repo checkout.
+    const p = spawn('node', [binPath], { stdio: ['pipe', 'pipe', 'pipe'], env, cwd: tmpdir() });
     let stderr = '';
     p.stderr.on('data', (b: Buffer) => (stderr += b.toString('utf8')));
     p.on('error', rej);
