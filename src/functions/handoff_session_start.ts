@@ -27,6 +27,7 @@ import {
   runHandoff,
   umbrellaRootFor,
 } from '../runtime/handoff/index.js';
+import { hasResumableState } from '../runtime/handoff/substance.js';
 import { readProjectCurrentSession } from '../runtime/hooks/session_id.js';
 import { resolveProjectUuid, sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
@@ -70,15 +71,15 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
       const umbrellaRoot = await umbrellaRootFor(cwd);
       const fsmPath = sessionStateFile(deadSid, 'fsm-coding-flow');
       const fsmM = await mtimeOf(fsmPath);
-      // No FSM state at all → the dead session left nothing flow-relevant; do
-      // not fabricate a handoff, but still stamp so we probe only once.
+      // AHO.4: the shared substance predicate (an FSM at bare scoping with no
+      // task/artifact is the junk class — same gate as the SessionEnd writer).
       let docPath: string | null = null;
-      if (fsmM !== null) {
+      if (await hasResumableState(deadSid)) {
         // AHO.3: sid-only key — the probe now finds the doc regardless of
         // which day it was generated (the date-keyed path missed yesterday's).
         docPath = handoverDocPath(umbrellaRoot, deadSid);
         const docM = await mtimeOf(docPath);
-        if (docM === null || docM < fsmM) {
+        if (docM === null || fsmM === null || docM < fsmM) {
           const result = await runHandoff(deadSid, cwd); // generate from disk
           docPath = result.docPath;
         }

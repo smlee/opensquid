@@ -83,6 +83,18 @@ describe('handoff_session_start (tier 3)', () => {
     expect(r.ok && r.value === null).toBe(true);
   });
 
+  it('dead session at BARE scoping (no task, no artifact) → no generation (AHO.4 junk class)', async () => {
+    const stateDir = join(home, 'sessions', DEAD, 'state');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      sessionStateFile(DEAD, 'fsm-coding-flow'),
+      JSON.stringify({ state: 'scoping', history: [{ state: 'scoping', at: 't' }] }),
+      'utf8',
+    );
+    const r = await HandoffSessionStart.execute({}, ctx());
+    expect(r.ok && r.value === null).toBe(true);
+  });
+
   it('pointer names the FRESH session itself → no-op', async () => {
     await writeFile(projectCurrentSessionPath(UUID), FRESH, 'utf8');
     const r = await HandoffSessionStart.execute({}, ctx());

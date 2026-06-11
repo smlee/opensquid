@@ -131,14 +131,11 @@ async function main(): Promise<void> {
   // holds resumable state; the explicit command and the SessionStart lazy
   // generator are unaffected.
   try {
-    const { stat } = await import('node:fs/promises');
-    const { sessionStateFile } = await import('../paths.js');
-    const hasFsm = await stat(sessionStateFile(sessionId, 'fsm-coding-flow')).then(
-      () => true,
-      () => false,
-    );
-    const hasTask = (await readActiveTask(sessionId)) !== null;
-    if (hasFsm || hasTask) {
+    // AHO.4: ONE substance predicate shared with the tier-3 lazy generator
+    // (the AHO.3 FSM-exists probe passed for scope-intent trivia whose FSM
+    // this very hook then deleted — the evidence self-erased).
+    const { hasResumableState } = await import('../handoff/substance.js');
+    if (await hasResumableState(sessionId)) {
       const { runHandoff } = await import('../handoff/index.js');
       const result = await runHandoff(sessionId, process.cwd());
       process.stderr.write(`opensquid: auto-handoff written — ${result.docPath}\n`);

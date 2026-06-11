@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.392] - 2026-06-11
+
+### Fixed — handoff substance is now RESUMABILITY, not flow presence (T-auto-handoff AHO.4)
+
+AHO.3's "FSM file exists" gate was mis-calibrated: any scope-intent-matching
+prompt (every audit subprocess, codex coding probes) mints an FSM at bare
+`scoping`, passed the gate, and SessionEnd's own cleanup erased the evidence —
+23 junk handoffs regenerated in 90 minutes. One shared `hasResumableState`
+predicate now gates BOTH writers (SessionEnd backup + the SessionStart lazy
+generator): generate iff the dump would hold an active task, an FSM beyond
+bare scoping, or a recorded pre-research artifact (so a genuine cap-hit at
+SCOPE keeps its handoff). Bare-scoping trivia skips everywhere.
+
 ## [0.5.391] - 2026-06-11
 
 ### Changed — gate activation binds to the AGENT, never to locations (T-fix-gate-docs-classifier GDC.2)
