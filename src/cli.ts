@@ -75,7 +75,44 @@ function readPackageVersion(): string {
   }
 }
 
+/** UPD.1 (wg-7091e922881b): the once-per-day update notice. Cache-read only
+ *  on the hot path (ZERO network); fire-and-forget — NEVER awaited; a stale
+ *  cache spawns a detached `update --check-only` refresher that writes the
+ *  cache for the NEXT invocation. Marked reviewer subagent trees skip the
+ *  refresher spawn (cleanliness — they shouldn't fan out children). */
+function maybeNotifyUpdate(current: string): void {
+  // Re-entry guard: the detached refresher IS a CLI invocation (`update
+  // --check-only`) — without this, it would see the same stale cache and
+  // fan out another refresher before its own probe lands. The `update`
+  // verb family handles its own probing; the notice adds nothing there.
+  if (process.argv[2] === 'update') return;
+  void (async () => {
+    try {
+      const { readUpdateCache, writeUpdateCache, noticeLine, isStale } =
+        await import('./runtime/update_check.js');
+      const cache = await readUpdateCache();
+      const now = Date.now();
+      const line = noticeLine(cache, current, now);
+      if (line !== null && cache !== null) {
+        process.stderr.write(`${line}\n`);
+        await writeUpdateCache({ ...cache, notified_at: new Date(now).toISOString() });
+      }
+      if (isStale(cache, now) && process.env.OPENSQUID_SUBAGENT !== '1') {
+        const { spawn } = await import('node:child_process');
+        const { fileURLToPath } = await import('node:url');
+        spawn(process.execPath, [fileURLToPath(import.meta.url), 'update', '--check-only'], {
+          detached: true,
+          stdio: 'ignore',
+        }).unref();
+      }
+    } catch {
+      /* the notice must never break a CLI command */
+    }
+  })();
+}
+
 function runCli(): void {
+  maybeNotifyUpdate(readPackageVersion());
   const program = new Command()
     .name('opensquid')
     .description('Tracks for your AI agent — destination-first.')

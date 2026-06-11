@@ -389,4 +389,30 @@ export function registerDoctor(program: Command): void {
       // `missing` — the gate never runs. Both are RED + exit 1.
       process.exit(res.some((h) => h.state === 'missing' || h.state === 'unreachable') ? 1 : 0);
     });
+  doc
+    .command('update')
+    .description('Check the installed opensquid version against the npm registry (UPD.1)')
+    .action(async () => {
+      // Doctor is the explicitly-interactive surface — the ONE place a
+      // blocking live probe (3s cap, fail-quiet) is fine. Also refreshes
+      // the notice cache via the merge-preserving write path.
+      const { probeLatest, readCurrentVersion, refreshCache } =
+        await import('../../runtime/update_check.js');
+      const { gt } = await import('semver');
+      const current = await readCurrentVersion();
+      const latest = await probeLatest();
+      if (latest === null) {
+        process.stdout.write(`[WARN]\tupdate: registry unreachable (current ${current})\n`);
+        process.exit(0);
+      }
+      await refreshCache(latest, new Date().toISOString());
+      if (gt(latest, current)) {
+        process.stdout.write(
+          `[WARN]\tupdate: ${current} → ${latest} available — run \`opensquid update\`\n`,
+        );
+      } else {
+        process.stdout.write(`[GREEN]\tupdate: ${current} is the latest published version\n`);
+      }
+      process.exit(0);
+    });
 }

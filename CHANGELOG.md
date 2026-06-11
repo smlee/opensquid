@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.400] - 2026-06-11
+
+### Fixed — installed copies silently age now that the package is public (T-npm-auto-update UPD.1, wg-7091e922881b)
+
+The npm rollout's update story, check layer: every `opensquid` CLI
+invocation now reads a 24h cache (`~/.opensquid/update-check.json`, zero
+network on the hot path) and prints one stderr notice when a newer version
+is published; a stale cache spawns a detached `update --check-only`
+refresher (re-entry-guarded so the refresher can't fan out copies of
+itself); `opensquid doctor update` does a live registry check. The
+refresher's write path is read-merge-write so the notice throttle stamp
+survives concurrent refreshes. Hook bins, the MCP server, and the
+chat-daemon worker deliberately have no update-check path (grep-pinned in
+the suite) — a hook never pays a network call. Auto-apply is intentionally
+absent: updating remains a foreground user-invoked command
+(`opensquid update`, lands with UPD.2), so live-session hook-binary skew
+cannot occur.
+
 ## [0.5.399] - 2026-06-11
 
 ### Fixed — the handoff lazy generator dumped LIVE sessions as dead (T-handoff-nested-session-spam SUB.3, wg-627effbb2c38)
