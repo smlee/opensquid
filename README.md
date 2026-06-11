@@ -14,7 +14,7 @@ It is an MCP operating layer that adds durable memory, dependency-aware task sta
 
 `opensquid` is the package, CLI, MCP server name, and `~/.opensquid/` data root. OpenSquid is the human-facing wordmark.
 
-> **Status, June 10, 2026.** Pre-1.0 and moving fast (`0.5.x`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
+> **Status, June 11, 2026.** Pre-1.0 and moving fast (`0.5.x`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
 
 ## Quickstart
 
@@ -38,6 +38,13 @@ Optional hooks:
 ```bash
 node dist/cli.js setup wizard hooks
 node dist/cli.js doctor hooks
+```
+
+Using codex? The same gates install inside codex CLI (its hook protocol is Claude Code-compatible):
+
+```bash
+node dist/cli.js setup wizard codex-hooks   # then trust the entries via /hooks inside codex
+node dist/cli.js doctor codex-hooks
 ```
 
 Restart your MCP host. Your agent now has tools for memory, task graph state, pack inspection, workflow phase logs, and lesson capture.
@@ -88,14 +95,15 @@ OpenSquid treats those as continuity problems. Memory, task state, workflow phas
 
 OpenSquid is built from six pieces that work together.
 
-| Layer          | What it gives the agent                                                                                                   |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Memory         | `recall`, `memorize`, and `forget` over a durable local store, with user-authored memories protected from quiet eviction. |
-| Workgraph      | Issues, blockers, dependency edges, ready queues, and append-only event history for task state.                           |
-| Workflow gates | Phase logging and hook-enforced process checks, including the seven-phase coding flow when that pack is active.           |
-| Packs          | Portable rules, skills, state machines, models, drift policies, and chat-agent bindings.                                  |
-| MCP + hooks    | Agent-facing tools through MCP, plus optional Claude Code hooks that catch drift even when no tool is called.             |
-| Sync + devices | A path for multi-device memory/workgraph continuity and future routing to device-specific capabilities.                   |
+| Layer          | What it gives the agent                                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Memory         | `recall`, `memorize`, and `forget` over a durable local store, with user-authored memories protected from quiet eviction.      |
+| Workgraph      | Issues, blockers, dependency edges, ready queues, and append-only event history for task state.                                |
+| Workflow gates | Phase logging and hook-enforced process checks, including the seven-phase coding flow when that pack is active.                |
+| Packs          | Portable rules, skills, state machines, models, drift policies, and chat-agent bindings.                                       |
+| MCP + hooks    | Agent-facing tools through MCP, plus optional hooks (Claude Code and codex) that catch drift even when no tool is called.      |
+| Handoffs       | Deterministic session handoffs: `opensquid handoff`, a session-end backup, and lazy generation that survives a killed session. |
+| Sync + devices | A path for multi-device memory/workgraph continuity and future routing to device-specific capabilities.                        |
 
 The shape is deliberately agent-native. Instead of asking a model to remember a process in its prompt forever, OpenSquid exposes the process as tools and state:
 
@@ -134,13 +142,14 @@ For other MCP hosts, point the host at the server entrypoint:
 
 Useful entrypoints:
 
-| Entrypoint                       | Purpose                                                     |
-| -------------------------------- | ----------------------------------------------------------- |
-| `dist/cli.js`                    | Main CLI.                                                   |
-| `dist/mcp/server.js`             | Primary OpenSquid MCP server.                               |
-| `dist/mcp/chat-bridge-server.js` | Chat bridge MCP server.                                     |
-| `opensquid chat watch`           | Stream new inbound chat messages into a live agent session. |
-| `opensquid agent-bridge start`   | Start the always-on chat agent bridge.                      |
+| Entrypoint                       | Purpose                                                                          |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| `dist/cli.js`                    | Main CLI.                                                                        |
+| `dist/mcp/server.js`             | Primary OpenSquid MCP server.                                                    |
+| `dist/mcp/chat-bridge-server.js` | Chat bridge MCP server.                                                          |
+| `opensquid handoff`              | Generate a session handoff (doc, memory block, workgraph, chat) from disk state. |
+| `opensquid chat watch`           | Stream new inbound chat messages into a live agent session.                      |
+| `opensquid agent-bridge start`   | Start the always-on chat agent bridge.                                           |
 
 ## MCP Tool Surface
 
@@ -228,6 +237,8 @@ pre_research -> learn -> code -> test -> audit -> post_research -> fix
 
 When active, the commit gate reads the phase ledger written by `log_phase`. Hooks can also catch drift patterns before tool execution, at stop time, or on session start. The important property is that process state is outside the model's narration. The agent logs what it did; the gate decides whether that is enough.
 
+The gates bind to the agent, never to you. Agent-spawned git commands are recognized by the environment markers agent hosts set; your own terminal passes through and git behaves normally, with commits still recorded in the provenance trail.
+
 ## Memory And Lessons
 
 OpenSquid separates memory from lessons.
@@ -247,6 +258,18 @@ There are two delivery paths:
 
 Both use the same project routing and lease model so the live session and always-on daemon do not intentionally answer the same message. The chat tools stay MCP-shaped: the agent reads with `chat_poll_inbox` and replies with `chat_send`.
 
+## Session Handoffs
+
+Sessions end; work does not. `opensquid handoff` generates a handoff from disk state — never from the model's narration — across four surfaces: a handover document with mechanical resume steps, a managed block in the agent's memory file, a workgraph issue, and a chat digest.
+
+Three triggers cover the failure modes:
+
+- The explicit command, for when you or the agent knows it is handoff time.
+- A session-end backup, gated so trivial sessions do not generate noise.
+- Lazy generation at the next session start, which recovers even a killed session from its on-disk state.
+
+Artifact paths carry content hashes so the next session verifies disk truth instead of trusting prose. An optional `--narrate` flag adds an LLM-written summary layer on top; the deterministic dump stays the record either way. This is the session-level half of the continuity promise below.
+
 ## Continuity Across Devices
 
 OpenSquid is not meant to be local-only. Local state is the trust base: fast, inspectable, recoverable, and usable offline. The larger product direction is cross-device continuity for AI power users.
@@ -261,11 +284,13 @@ OpenSquid stores local state under `~/.opensquid/`.
 
 The implementation uses plain files where they are the right source of truth and libSQL where indexed queries are the right interface. The design goal is durable state: inspectable local data, rebuildable projections, and a cloud-sync path that adds continuity without making local development depend on a remote service.
 
-The engine-backed path can use `loop-engine` for the lower-level memory substrate. OpenSquid sets the runtime home to `~/.opensquid/` when it launches the engine, so standalone `loop-engine` data under `~/.loop/` does not collide with OpenSquid-managed state.
+An optional legacy path can use `loop-engine` for the lower-level memory substrate; the current default is engine-free. When the engine is used, OpenSquid sets its runtime home to `~/.opensquid/` so standalone `loop-engine` data under `~/.loop/` does not collide with OpenSquid-managed state.
 
 ## Other Hosts
 
 OpenSquid is just MCP at the boundary. Claude Code is the dogfood target, but any host that can launch a local MCP server can point at `dist/mcp/server.js`.
+
+codex CLI gets more than tools: its hook protocol is Claude Code-compatible, so `setup wizard codex-hooks` installs the same gating and drift checks inside codex sessions, including its `apply_patch` file edits.
 
 Hermes Agent can use OpenSquid the same way: add the MCP server alongside the user's existing Hermes memory backend. OpenSquid should be framed as additive rule and state discipline, not as a replacement runtime.
 
@@ -277,7 +302,9 @@ Works today:
 - Chat bridge MCP server with send and inbox polling.
 - Local workgraph with ready queries and event history.
 - Pack runtime with YAML schemas, skills, drift policies, state-machine support, and chat-agent bindings.
-- Optional Claude Code hooks for workflow and drift enforcement.
+- Optional hooks for workflow and drift enforcement in Claude Code and codex CLI.
+- Deterministic session handoffs with automatic backup and recovery triggers.
+- Git gates that bind to the agent and pass humans through, with commit provenance.
 - Multi-host MCP setup paths for local development.
 
 Still evolving:
