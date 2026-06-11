@@ -58,6 +58,10 @@ const EXCLUDE_PATTERNS: RegExp[] = [
   /^loop-engine\./,
   /^umbrellas\/[^/]+\/live-session\.lease$/,
   /^memories\/[^/]+\.vec$/,
+  // The fastembed model cache: a multi-MB downloaded artifact, re-fetched on
+  // first use — machine-local, never truth (live-spike catch: its tokenizer
+  // configs also tripped the secret scan's old substring match).
+  /^models(\/|$)/,
 ];
 export function isExcluded(rel: string): boolean {
   return EXCLUDE_PATTERNS.some((p) => p.test(rel));
@@ -88,7 +92,9 @@ export function redactConfig(parsed: Record<string, unknown>): Record<string, un
   return out;
 }
 
-const SECRET_KEY = /(token|secret|password|api_?key)/i;
+// Word-precise: `token` must not match `tokenizer_*` (the live spike's false
+// positive); match key names that ARE or END IN the credential word.
+const SECRET_KEY = /(^|_)(token|secret|password|api_?key)$/i;
 
 /** Fail-closed: any uncatalogued secret-shaped value in structured config
  *  refuses the export, naming the exact path. `env:` URIs and the redaction

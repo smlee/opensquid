@@ -81,6 +81,7 @@ describe('isExcluded / buildExportList', () => {
     expect(isExcluded('memories/mem-1.vec')).toBe(true);
     expect(isExcluded('umbrellas/loop/live-session.lease')).toBe(true);
     expect(isExcluded('chat-daemon.sock')).toBe(true);
+    expect(isExcluded('models/fast-bge-small-en-v1.5/tokenizer_config.json')).toBe(true);
     expect(isExcluded('memories/mem-1.md')).toBe(false);
     expect(isExcluded('store/issues/op-1.json')).toBe(false);
     const list = await buildExportList(srcHome);
@@ -148,6 +149,12 @@ describe('secrets', () => {
     expect(scanForSecrets('x.json', { bot_token: '<redacted-on-export>' })).toEqual([]);
     expect(scanForSecrets('x.json', { nested: { password: 'supersecret123' } })).toEqual([
       'x.json: nested.password',
+    ]);
+    // The live-spike false positive: key names CONTAINING but not ENDING in
+    // the credential word are not secrets.
+    expect(scanForSecrets('x.json', { tokenizer_class: 'BertTokenizerFast' })).toEqual([]);
+    expect(scanForSecrets('x.json', { bot_token: 'realtoken123456' })).toEqual([
+      'x.json: bot_token',
     ]);
   });
 });
