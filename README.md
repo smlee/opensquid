@@ -1,4 +1,4 @@
-![OpenSquid banner](./banner.png)
+![OpenSquid banner](https://raw.githubusercontent.com/smlee/opensquid/main/banner.png)
 
 # OpenSquid
 

@@ -1,7 +1,7 @@
 {
   "name": "opensquid",
   "version": "0.5.394",
-  "description": "Tracks for your AI agent — destination-first.",
+  "description": "Continuity layer for coding agents: durable memory, dependency-aware task state, workflow gates, and inspectable packs over MCP.",
   "type": "module",
   "exports": {
     ".": {
@@ -51,10 +51,13 @@
     "mcp",
     "model-context-protocol",
     "ai-agent",
-    "memory",
-    "verification",
-    "anti-self-grading",
-    "mindcraftor"
+    "agent-memory",
+    "workgraph",
+    "workflow-gates",
+    "continuity",
+    "claude-code",
+    "codex",
+    "anti-self-grading"
   ],
   "author": "Sangmin Lee <sangmlee23@gmail.com>",
   "license": "MIT",
