@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.390] - 2026-06-11
+
+### Fixed — humans use git naturally; non-code commits never gated (T-fix-gate-docs-classifier)
+
+Two composed fixes from a live block of the user's own README commit. (1) The
+commit/push gate's "docs-only" classifier was a `docs/`-prefix allowlist — a
+root-level README or banner classified as CODE. A commit is now CODE iff it
+touches the protected boundary (`src/` ∪ `packs/` ∪ `test/` — the same set the
+in-session write gates arm on; a drift-pin test keeps the two encodings
+identical). (2) THE GATE'S SUBJECT IS THE AGENT, NEVER THE HUMAN: agent hosts
+mark their spawned shells (Claude Code: CLAUDECODE/AI_AGENT; codex:
+CODEX_THREAD_ID/AI_AGENT — both live-probed); a human terminal sets none, so a
+marker-free invocation passes both boundaries naturally and is attested with
+the new `human` provenance reason. The human check rides the one shared
+commit/attest seam and dominates the no-session block (a contributor on a
+fresh machine was the worst-blocked case). Env-scrubbing evasion is the
+`--no-verify` class, policed in-session.
+
 ## [0.5.389] - 2026-06-11
 
 ### Fixed — SessionEnd handoff backup gated on substance; one doc per session (T-auto-handoff AHO.3)

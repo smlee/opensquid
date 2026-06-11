@@ -22,7 +22,7 @@ import { join } from 'node:path';
 export interface Attestation {
   sha: string;
   allowed: boolean;
-  reason: 'docs_only' | 'flow_complete';
+  reason: 'docs_only' | 'flow_complete' | 'human';
   session: string;
   at: string;
 }

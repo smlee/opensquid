@@ -79,10 +79,28 @@ async function changedFiles(boundary: 'commit' | 'push', cwd: string): Promise<s
   }
 }
 
-/** A change touching ONLY `docs/` is a flow ARTIFACT (pre-research / spec / changelog) —
- *  the flow's own intermediate output, never the code the flow protects. Allowed. */
+/** GDC.1 — the flow protects CODE: the same boundary set the in-session write
+ *  gates arm on (scope-lifecycle/skill.yaml:284 — keep the two lists in sync;
+ *  the drift pin in gate.test.ts enforces it). Those matchers are deliberately
+ *  loose substrings; THIS layer is "the precise boundary" (skill.yaml's own
+ *  framing), so startsWith over git's repo-relative paths is the exact form.
+ *  A change touching NONE of these is not the flow's subject (README, banner,
+ *  docs/, LICENSE, CI config…) → allowed, attested under the existing
+ *  `docs_only` wire reason (now meaning "non-code"). [] still fails closed
+ *  (commitFiles' git-error contract). */
+export const PROTECTED_PREFIXES = ['src/', 'packs/', 'test/'] as const;
 const isDocsOnly = (files: string[]): boolean =>
-  files.length > 0 && files.every((f) => f.startsWith('docs/'));
+  files.length > 0 && files.every((f) => !PROTECTED_PREFIXES.some((p) => f.startsWith(p)));
+
+/** GDC.1 — the gate's subject is the AGENT, never the human (user directive
+ *  2026-06-11: "I should be able to use the commands naturally"). Agent hosts
+ *  mark their spawned shells (live-probed: Claude Code sets CLAUDECODE +
+ *  AI_AGENT; codex exec sets CODEX_THREAD_ID + AI_AGENT); a human terminal
+ *  sets none. Env-scrubbing evasion is the --no-verify class — policed
+ *  in-session (GF.3), not here. Seam injectable for tests. */
+export const AGENT_ENV_MARKERS = ['AI_AGENT', 'CLAUDECODE', 'CODEX_THREAD_ID'] as const;
+export const isAgentInvocation = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  AGENT_ENV_MARKERS.some((m) => (env[m] ?? '') !== '');
 
 function block(msg: string): number {
   process.stderr.write(`\n🦑 [opensquid gate] BLOCKED: ${msg}\n`);
@@ -95,7 +113,11 @@ function block(msg: string): number {
 export async function commitAllowedNow(
   sid: string | null,
   files: string[],
-): Promise<{ allowed: true; reason: 'docs_only' | 'flow_complete' } | null> {
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ allowed: true; reason: 'docs_only' | 'flow_complete' | 'human' } | null> {
+  // GDC.1: the gate's subject is the AGENT — a human terminal (no host marker
+  // env) uses git naturally; the attestation trail still records provenance.
+  if (!isAgentInvocation(env)) return { allowed: true, reason: 'human' };
   if (isDocsOnly(files)) return { allowed: true, reason: 'docs_only' };
   if (sid === null) return null;
   const active = await readActiveTask(sid);
@@ -140,7 +162,11 @@ async function commitFiles(cwd: string, sha: string): Promise<string[]> {
 }
 
 /** The gate decision. Returns the process exit code (0 allow, 2 block). */
-export async function runGate(boundary: 'commit' | 'push', cwd: string): Promise<number> {
+export async function runGate(
+  boundary: 'commit' | 'push',
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
   if (!(await isGatedRepo(cwd))) return 0; // unrelated repo → never block
   const files = await changedFiles(boundary, cwd);
   if (files.length === 0) return 0; // nothing to gate (amend / empty / undetermined)
@@ -165,7 +191,13 @@ export async function runGate(boundary: 'commit' | 'push', cwd: string): Promise
     }
   }
 
+  // GDC.1 tail REORDER: commitAllowedNow decides FIRST (the human branch must
+  // dominate — a human on a fresh machine has NO resolvable session and was
+  // blocked by the old early sid-null check, the most natural human case);
+  // the no-session block below is agent-only by construction.
   const sid = await resolveMcpSessionId();
+  const verdict = await commitAllowedNow(sid, files, env);
+  if (verdict !== null) return 0;
   if (sid === null) {
     return block(
       `no resolvable opensquid session — cannot prove the SCOPE→AUTHOR→7-phase flow ran for ` +
@@ -173,8 +205,6 @@ export async function runGate(boundary: 'commit' | 'push', cwd: string): Promise
         `explicit authorization.`,
     );
   }
-  const verdict = await commitAllowedNow(sid, files);
-  if (verdict !== null) return 0;
   const active = await readActiveTask(sid);
   const fsm = await readFsmStateRaw(sid, GATED_PACK);
   return block(
@@ -198,7 +228,10 @@ async function headSha(cwd: string): Promise<string | null> {
  *  record provenance for HEAD when the live session can prove it RIGHT NOW. Never
  *  blocks, never throws — recording is best-effort; an unattested commit simply
  *  falls back to the session check at push time (fail-closed preserved). */
-export async function runAttest(cwd: string): Promise<number> {
+export async function runAttest(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
   try {
     if (!(await isGatedRepo(cwd))) return 0;
     const scopeRoot = await resolveProjectScopeRoot(cwd);
@@ -207,7 +240,7 @@ export async function runAttest(cwd: string): Promise<number> {
     const files = await commitFiles(cwd, sha);
     if (files.length === 0) return 0; // empty/merge/undetermined → nothing to attest
     const sid = await resolveMcpSessionId();
-    const verdict = await commitAllowedNow(sid, files);
+    const verdict = await commitAllowedNow(sid, files, env);
     if (verdict !== null) {
       await appendAttestation(scopeRoot, {
         sha,

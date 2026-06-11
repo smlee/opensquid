@@ -14,6 +14,12 @@ import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
 import { readAttestedShas } from './attestations.js';
 import { isGatedRepo, runAttest, runGate } from './gate.js';
 
+// GDC.1 — every gate call injects the env explicitly (ambient env must never
+// decide: CI runners carry no agent marker, the authoring session carries
+// several — the pin-ambient-state-in-fixtures discipline).
+const AGENT_ENV = { AI_AGENT: '1' } as NodeJS.ProcessEnv;
+const HUMAN_ENV = {} as NodeJS.ProcessEnv;
+
 const execFileP = promisify(execFile);
 const SID = 'gate-test-session';
 const NOW = '2026-06-04T00:00:00.000Z';
@@ -90,39 +96,39 @@ describe('GF.2 — owned-boundary git gate (runGate "commit")', () => {
   it('non-gated repo (no active.json) → ALLOW (0)', async () => {
     await stage('src/x.ts');
     expect(await isGatedRepo(repo)).toBe(false);
-    expect(await runGate('commit', repo)).toBe(0);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
   });
 
   it('gated repo, code staged, flow NOT complete → BLOCK (2)', async () => {
     await makeGated();
     await stage('src/x.ts'); // no session state seeded → active/fsm absent
     expect(await isGatedRepo(repo)).toBe(true);
-    expect(await runGate('commit', repo)).toBe(2);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
   it('gated repo, code staged, flow COMPLETE → ALLOW (0)', async () => {
     await makeGated();
     await stage('src/x.ts');
     await driveComplete();
-    expect(await runGate('commit', repo)).toBe(0);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
   });
 
   it('gated repo, docs-only staged → ALLOW (flow artifact)', async () => {
     await makeGated();
     await stage('docs/research/T-x-pre-research.md');
-    expect(await runGate('commit', repo)).toBe(0);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
   });
 
   it('gated repo, nothing staged → ALLOW (0)', async () => {
     await makeGated();
-    expect(await runGate('commit', repo)).toBe(0);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
   });
 
   it('gated repo, code staged, NO resolvable session → BLOCK (2)', async () => {
     await makeGated();
     await stage('src/x.ts');
     delete process.env.OPENSQUID_SESSION_ID; // and no .current-session pointer under tempHome
-    expect(await runGate('commit', repo)).toBe(2);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 });
 
@@ -146,7 +152,7 @@ describe('PGB.2 — runAttest (post-commit / manual)', () => {
     await stage('src/x.ts');
     await driveComplete();
     const sha = await commit('code');
-    expect(await runAttest(repo)).toBe(0);
+    expect(await runAttest(repo, AGENT_ENV)).toBe(0);
     expect((await readAttestedShas(scopeRoot())).has(sha)).toBe(true);
   });
 
@@ -154,7 +160,7 @@ describe('PGB.2 — runAttest (post-commit / manual)', () => {
     await makeGated();
     await stage('docs/notes.md');
     const sha = await commit('docs');
-    expect(await runAttest(repo)).toBe(0);
+    expect(await runAttest(repo, AGENT_ENV)).toBe(0);
     expect((await readAttestedShas(scopeRoot())).has(sha)).toBe(true);
   });
 
@@ -162,14 +168,14 @@ describe('PGB.2 — runAttest (post-commit / manual)', () => {
     await makeGated();
     await stage('src/x.ts');
     const sha = await commit('rogue');
-    expect(await runAttest(repo)).toBe(0);
+    expect(await runAttest(repo, AGENT_ENV)).toBe(0);
     expect((await readAttestedShas(scopeRoot())).has(sha)).toBe(false);
   });
 
   it('non-gated repo → exit 0, no attestations file created', async () => {
     await stage('src/x.ts');
     await commit('free');
-    expect(await runAttest(repo)).toBe(0);
+    expect(await runAttest(repo, AGENT_ENV)).toBe(0);
     expect((await readAttestedShas(scopeRoot())).size).toBe(0);
   });
 
@@ -178,12 +184,12 @@ describe('PGB.2 — runAttest (post-commit / manual)', () => {
     await stage('src/x.ts');
     await driveComplete();
     const first = await commit('v1');
-    await runAttest(repo);
+    await runAttest(repo, AGENT_ENV);
     await git(['commit', '-q', '--amend', '-m', 'v2'], repo);
     const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repo });
     const amended = stdout.trim();
     expect(amended).not.toBe(first);
-    await runAttest(repo);
+    await runAttest(repo, AGENT_ENV);
     expect((await readAttestedShas(scopeRoot())).has(amended)).toBe(true);
   });
 });
@@ -205,9 +211,9 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
     await stage('src/x.ts');
     await driveComplete();
     await commit('code in session A');
-    await runAttest(repo);
+    await runAttest(repo, AGENT_ENV);
     await killSession(); // session A is gone — only the attestation survives
-    expect(await runGate('push', repo)).toBe(0);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
   });
 
   it('same scenario WITHOUT the attestation → BLOCK (fail-closed unchanged)', async () => {
@@ -219,7 +225,7 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
     await driveComplete();
     await commit('code in session A'); // NOT attested
     await killSession();
-    expect(await runGate('push', repo)).toBe(2);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(2);
   });
 
   it('mixed range: one attested code commit + one docs-only commit → ALLOW', async () => {
@@ -230,11 +236,11 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
     await stage('src/x.ts');
     await driveComplete();
     await commit('code');
-    await runAttest(repo);
+    await runAttest(repo, AGENT_ENV);
     await stage('docs/more.md');
     await commit('docs ride along');
     await killSession();
-    expect(await runGate('push', repo)).toBe(0);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
   });
 
   it('one UNATTESTED code commit in the range poisons the push → BLOCK', async () => {
@@ -245,11 +251,11 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
     await stage('src/x.ts');
     await driveComplete();
     await commit('attested');
-    await runAttest(repo);
+    await runAttest(repo, AGENT_ENV);
     await stage('src/y.ts');
     await commit('rogue — never attested');
     await killSession();
-    expect(await runGate('push', repo)).toBe(2);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(2);
   });
 
   it('live completed session still allows an unattested push (fallback unchanged)', async () => {
@@ -260,6 +266,74 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
     await stage('src/x.ts');
     await driveComplete();
     await commit('code'); // not attested, but the session is alive + complete
-    expect(await runGate('push', repo)).toBe(0);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GDC.1 — boundary-based non-code classification + human passthrough.
+// ---------------------------------------------------------------------------
+
+import { fileURLToPath as fileURLToPathGdc } from 'node:url';
+import { dirname as dirnameGdc, resolve as resolveGdc } from 'node:path';
+import { readFile as readFileGdc } from 'node:fs/promises';
+
+import { AGENT_ENV_MARKERS, PROTECTED_PREFIXES, isAgentInvocation } from './gate.js';
+
+const REPO_ROOT_GDC = resolveGdc(dirnameGdc(fileURLToPathGdc(import.meta.url)), '../../..');
+
+describe('GDC.1 — non-code classification (the live README repro)', () => {
+  it('root-level README + banner → non-code, allowed with no flow (agent env)', async () => {
+    await makeGated();
+    await stage('README.md');
+    await stage('banner.png');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('mixed commit (README + src file) → CODE, blocked without a completed flow (agent env)', async () => {
+    await makeGated();
+    await stage('README.md');
+    await stage('src/x.ts');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('drift pin: PROTECTED_PREFIXES ≡ the scope-lifecycle write-gate substrings', async () => {
+    const yaml = await readFileGdc(
+      join(REPO_ROOT_GDC, 'packs/builtin/coding-flow/skills/scope-lifecycle/skill.yaml'),
+      'utf8',
+    );
+    const predicate = yaml.split('\n').find((l) => l.includes('contains(targs.file_path, "src/")'));
+    expect(predicate).toBeDefined();
+    for (const p of PROTECTED_PREFIXES) {
+      expect(predicate).toContain(`"${p}"`);
+    }
+    const matches = [...(predicate ?? '').matchAll(/contains\(targs\.file_path, "([^"]+)"\)/g)].map(
+      (m) => m[1],
+    );
+    expect(new Set(matches)).toEqual(new Set(PROTECTED_PREFIXES));
+  });
+});
+
+describe('GDC.1 — human passthrough (the gate gates agents, never humans)', () => {
+  it('human env → allowed even with src changes, at both boundaries', async () => {
+    await makeGated();
+    await stage('src/x.ts');
+    expect(await runGate('commit', repo, HUMAN_ENV)).toBe(0);
+    expect(await runGate('push', repo, HUMAN_ENV)).toBe(0);
+  });
+
+  it("human commit → attested with reason 'human' (provenance preserved)", async () => {
+    await makeGated();
+    await stage('src/x.ts');
+    const sha = await commit('human code');
+    expect(await runAttest(repo, HUMAN_ENV)).toBe(0);
+    expect((await readAttestedShas(scopeRoot())).has(sha)).toBe(true);
+  });
+
+  it('isAgentInvocation pins both directions + the codex marker', () => {
+    expect(isAgentInvocation(HUMAN_ENV)).toBe(false);
+    expect(isAgentInvocation(AGENT_ENV)).toBe(true);
+    expect(isAgentInvocation({ CODEX_THREAD_ID: 't' })).toBe(true);
+    expect(AGENT_ENV_MARKERS).toContain('CLAUDECODE');
   });
 });

@@ -281,6 +281,9 @@ rules:
       - call: read_fsm_state
         as: st
       - call: has_generated_spec
+      # GDC.1: this src/∪packs/∪test/ boundary is ALSO encoded in gate.ts
+      # PROTECTED_PREFIXES (the precise git-layer form) — a gate.test.ts drift
+      # pin keeps the two lists identical; change them together.
         if: '(tool == "Write" || tool == "Edit") && (contains(targs.file_path, "src/") || contains(targs.file_path, "packs/") || contains(targs.file_path, "test/"))'
         as: spec
       # Same condition as before (incl. the GF.4 F7 spec_complete allow set), but WARN.
