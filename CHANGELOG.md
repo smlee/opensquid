@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.394] - 2026-06-11
+
+### Added — `opensquid export` / `import` / `rebuild`: migration-grade portability (T-portability; roadmap stage ②)
+
+Whole-home machine migration over the local-first truth/projection split: the
+bundle carries TRUTH FILES ONLY (denylist over the home — everything not
+machine-local or a projection exports by default), and import rebuilds the
+sqlite projections from the extracted files via the existing idempotent
+entries. Credentials never ride a bundle: the catalogued chat-connection token
+fields are redacted in the bundled copy (the live file untouched), and a
+fail-closed scan refuses the export on any uncatalogued secret-shaped value in
+structured config (user-authored text is out of scope, stated in the summary).
+Import refuses a lived-in home with NO override (merge is future work) and
+refuses newer-version bundles unless --force. A failed rebuild never deletes
+extracted truth and prints the exact re-run commands — all real verbs,
+including the new standalone `opensquid rebuild`. The format-freeze contract
+ships as docs/state-formats.md (the npm-distribution prerequisite).
+
 ## [0.5.393] - 2026-06-11
 
 ### Fixed — hook exit-crash that made codex mark UserPromptSubmit Failed (T-fix-ups-hook-ort-crash)

@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.393",
+  "version": "0.5.394",
   "description": "Tracks for your AI agent — destination-first.",
   "type": "module",
   "exports": {
@@ -70,6 +70,7 @@
     "@clack/prompts": "^0.7.0",
     "@libsql/client": "^0.14.0",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@types/tar": "^7.0.87",
     "chevrotain": "^11.2.0",
     "chokidar": "^3.6.0",
     "commander": "^12.1.0",
@@ -83,6 +84,7 @@
     "proper-lockfile": "^4.1.2",
     "re2js": "^2.8.3",
     "semver": "^7.6.0",
+    "tar": "^7.5.16",
     "yaml": "^2.5.0",
     "zod": "^3.23.0"
   },

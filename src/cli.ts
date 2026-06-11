@@ -39,6 +39,7 @@ import { registerDoctor } from './setup/cli/doctor.js';
 import { registerGate } from './setup/cli/gate.js';
 import { registerSetupWizard } from './setup/cli/hooks.js';
 import { registerCodexHooksWizard } from './setup/cli/codex_hooks.js';
+import { registerPortability } from './setup/cli/portability.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
 import { registerSetupWizardMcp } from './setup/cli/mcp.js';
@@ -222,6 +223,11 @@ function runCli(): void {
   // turn-scoped) into ~/.codex/hooks.json with absolute bin paths; user
   // trusts via /hooks in codex (no silent activation).
   registerCodexHooksWizard(wizardGroup);
+
+  // POR.1 — `opensquid export | import | rebuild`: migration-grade whole-home
+  // portability (truth files only; projections rebuild on import; credentials
+  // redacted; secrets fail-closed). Roadmap stage ②.
+  registerPortability(program);
 
   // G.8 — `opensquid setup wizard mcp`. Writes opensquid's two MCP server
   // entries (opensquid + opensquid-chat) into `~/.claude.json` at the USER
