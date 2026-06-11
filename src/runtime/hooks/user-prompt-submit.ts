@@ -17,6 +17,7 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
 import { resetTurnLedger } from '../session_state.js';
@@ -66,6 +67,7 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  exitIfSubagent('user-prompt-submit'); // SUB.1: before stdin read / any state write
   const raw = await readStdin();
   if (!raw.trim()) {
     process.stderr.write('opensquid: empty UserPromptSubmit payload — proceeding\n');

@@ -28,6 +28,7 @@
  * Fail-open: any internal crash exits 0 with a stderr message.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { exitIfSubagent } from './subagent_guard.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -83,6 +84,7 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  exitIfSubagent('post-tool-use'); // SUB.1: before stdin read / any state write
   const raw = await readStdin();
   if (!raw.trim()) {
     process.stderr.write('opensquid: empty PostToolUse payload — proceeding\n');

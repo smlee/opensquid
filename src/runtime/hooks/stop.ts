@@ -18,6 +18,7 @@
  * Fail-open on any internal error — see `main().catch()` below.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { exitIfSubagent } from './subagent_guard.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -64,6 +65,7 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  exitIfSubagent('stop'); // SUB.1: before stdin read / any state write
   const raw = await readStdin();
   if (!raw.trim()) {
     process.stderr.write('opensquid: empty Stop payload — proceeding\n');

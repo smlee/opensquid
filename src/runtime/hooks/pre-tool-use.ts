@@ -20,6 +20,7 @@
  * bottom is the last line of defense.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { exitIfSubagent } from './subagent_guard.js';
 import { parseApplyPatch } from './apply_patch.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
 import { Event } from '../types.js';
@@ -69,6 +70,7 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  exitIfSubagent('pre-tool-use'); // SUB.1: before stdin read / any state write
   const raw = await readStdin();
   if (!raw.trim()) {
     process.stderr.write('opensquid: empty PreToolUse payload — proceeding\n');

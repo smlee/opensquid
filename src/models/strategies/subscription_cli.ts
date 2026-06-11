@@ -67,6 +67,12 @@ export function subscriptionCliStrategy(cfg: ModelAliasConfig): ModelStrategy {
       return new Promise<string>((resolve, reject) => {
         const proc = spawn(cliBin, args, {
           stdio: ['pipe', 'pipe', 'pipe'],
+          // SUB.1 (wg-627effbb2c38): mark the reviewer child tree so the
+          // opensquid hook bins short-circuit inside it — a reviewer
+          // one-shot must never mint coding-flow state, dump handoffs, or
+          // spawn nested audits (the observed recursion class). The
+          // env-var name is opensquid-owned — no vendor identity here.
+          env: { ...process.env, OPENSQUID_SUBAGENT: '1' },
         });
 
         let stdout = '';

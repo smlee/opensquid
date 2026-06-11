@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.397] - 2026-06-11
+
+### Fixed — reviewer subagents ran the full hook pipeline (T-handoff-nested-session-spam SUB.1, wg-627effbb2c38)
+
+The `claude -p` reviewer children spawned by the audit gates ran the
+complete opensquid hook chain: they minted coding-flow FSM/state for their
+own session ids, emitted junk auto-handover docs + work-graph issues,
+clobbered the MEMORY.md resume block of the LIVE parent session, and — when
+orphaned by a timeout — went full-agent on the artifact embedded in their
+prompt and recursively spawned their own audits (observed live 2026-06-11:
+a grandchild audit under an abandoned reviewer). The
+`subscription`/`cli` strategy now marks its child tree with
+`OPENSQUID_SUBAGENT=1`, and all six hook bins exit 0 immediately inside a
+marked tree (`src/runtime/hooks/subagent_guard.ts`) — a reviewer one-shot
+owns zero session state and can never nest an audit. Agent-bridge working
+agents are deliberately NOT marked (they stay fully gated). The optional
+reviewer tool-restriction knob (models.yaml `args`) is documented in
+docs/pack-runtime.md.
+
 ## [0.5.396] - 2026-06-11
 
 ### Fixed — cold `npm install` / `npx -y opensquid` failed ERESOLVE (T-npm-launch-eresolve, wg-4b72293774e6)

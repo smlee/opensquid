@@ -31,6 +31,7 @@
  * inject_context on `session_start`, this bin produces no stdout.
  */
 import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { Event } from '../types.js';
 
@@ -62,6 +63,7 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  exitIfSubagent('session-start'); // SUB.1: before stdin read / any state write
   const raw = await readStdin();
   if (!raw.trim()) {
     process.stderr.write('opensquid: empty SessionStart payload — proceeding\n');

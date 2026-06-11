@@ -41,3 +41,22 @@ describe('subscriptionCliStrategy timeout', () => {
     await expect(p).rejects.toThrow('timeout after 150ms');
   });
 });
+
+describe('subscriptionCliStrategy subagent marker (SUB.1, wg-627effbb2c38)', () => {
+  it('the spawned child sees OPENSQUID_SUBAGENT=1', async () => {
+    const script = join(tmpRoot, 'echo-marker.js');
+    await writeFile(
+      script,
+      'process.stdout.write(String(process.env.OPENSQUID_SUBAGENT));',
+      'utf8',
+    );
+    const strategy = subscriptionCliStrategy({
+      mode: 'subscription',
+      impl: 'cli',
+      cli: process.execPath,
+      args: [script],
+    });
+
+    await expect(strategy.call('prompt', { timeoutMs: 10_000 })).resolves.toBe('1');
+  });
+});

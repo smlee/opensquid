@@ -975,6 +975,18 @@ names in source per `feedback_stop_haiku_drift`).
 | `spawn_subagent`    | `{id: string}`                        | Long-running subagent spawn      |
 | `check_destination` | `{state: …}`                          | Destination_check rule body      |
 
+**Reviewer subagents are hook-silenced (`OPENSQUID_SUBAGENT`).** Every
+`subscription`/`cli` spawn marks its child tree with `OPENSQUID_SUBAGENT=1`;
+the opensquid hook bins exit 0 immediately inside a marked tree
+(`src/runtime/hooks/subagent_guard.ts`). A reviewer one-shot therefore mints
+no session state, writes no handoff dump, and can never spawn a nested
+audit of its own (the recursion class observed in wg-627effbb2c38). The
+agent-bridge's working agents are deliberately NOT marked — they act on the
+user's behalf and stay fully gated. Optionally, users can also restrict the
+reviewer's tool surface at the alias level via `models.yaml` `args` (e.g.
+the host CLI's own tool-allowlist flags) — that knob is user-owned config;
+opensquid never hardcodes vendor flags in source.
+
 ### 5.7 Verdict + control (`src/functions/verdict.ts`)
 
 | Primitive               | Returns            | Use                                            |
