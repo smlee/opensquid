@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.403] - 2026-06-11
+
+### Fixed — 0.5.399's liveness guard over-suppressed quick resumes (T-fix-spawnkill-liveness FXK.2)
+
+The shipped guard skipped the ENTIRE handoff path (including injection of
+an already-written dump) whenever the dead session's files were modified
+within 30 minutes — so a quick restart after a graceful death, the most
+common resume, got no handoff context for up to half an hour. Liveness
+now gates GENERATION only: a CURRENT dump (doc mtime ≥ FSM mtime) injects
+immediately regardless (injection clobbers nothing — the observed
+MEMORY.md overwrites were regeneration writes), and the window tightens
+to 10 minutes — sized to the longest a LIVE session goes quiet on its
+probed files (the 340s audit wait) plus margin. The kill-9-then-restart-
+within-10-minutes case remains the accepted, now-much-smaller residual.
+
 ## [0.5.402] - 2026-06-11
 
 ### Fixed — 0.5.398's SIGKILL escalation never fired in the hook context (T-fix-spawnkill-liveness FXK.1)

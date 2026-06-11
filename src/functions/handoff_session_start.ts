@@ -69,17 +69,6 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
       const stamp = sessionStateFile(ctx.sessionId, 'handoff-read');
       if ((await mtimeOf(stamp)) !== null) return ok(null);
 
-      // SUB.3 (wg-627effbb2c38): a "dead" sid with a fresh tool-ledger /
-      // active-task mtime is a LIVE session (nested child, second terminal)
-      // — dumping it would clobber its in-flight resume surfaces (observed
-      // live 2026-06-11: the MEMORY.md managed block overwritten twice
-      // mid-run by exactly this path). Skip WITHOUT writing the
-      // handoff-read stamp: if the session actually just crashed, the next
-      // fresh session retries once FRESH_MS lapses — the loss is transient
-      // by construction, never pinned by a stale stamp.
-      const liveness = await isSessionPlausible(deadSid);
-      if (liveness.plausible) return ok(null);
-
       const umbrellaRoot = await umbrellaRootFor(cwd);
       const fsmPath = sessionStateFile(deadSid, 'fsm-coding-flow');
       const fsmM = await mtimeOf(fsmPath);
@@ -91,7 +80,20 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
         // which day it was generated (the date-keyed path missed yesterday's).
         docPath = handoverDocPath(umbrellaRoot, deadSid);
         const docM = await mtimeOf(docPath);
-        if (docM === null || fsmM === null || docM < fsmM) {
+        const docCurrent = docM !== null && fsmM !== null && docM >= fsmM;
+        if (!docCurrent) {
+          // SUB.3 refined by FXK.2 (0.5.403): liveness gates GENERATION
+          // ONLY — injecting a CURRENT doc clobbers nothing (the observed
+          // MEMORY.md overwrites were regeneration writes), so graceful-
+          // death quick restarts inject instantly. A plausibly-LIVE "dead"
+          // sid (nested child, second terminal) skips WITHOUT writing the
+          // handoff-read stamp, so a later session retries once the window
+          // lapses. freshMs = 10min: the longest a LIVE session goes quiet
+          // on its probed files is the 340s audit wait (wg-bc291cb0cef4's
+          // inner-window sizing) + margin — 5min would re-open the clobber,
+          // 30min over-suppressed kill-9 resumes (the shipped SUB.3 flaw).
+          const liveness = await isSessionPlausible(deadSid, { freshMs: 10 * 60_000 });
+          if (liveness.plausible) return ok(null);
           const result = await runHandoff(deadSid, cwd); // generate from disk
           docPath = result.docPath;
         }
