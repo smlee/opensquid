@@ -136,14 +136,13 @@ describe('hook subprocess integration', () => {
     expect(r.stderr).toBe('');
   }, 15000);
 
-  it('session-end: valid payload → exit 0', async () => {
-    const stdin = JSON.stringify({ sessionId: 'abc' });
+  it('session-end: bare session (no FSM, no task) → handoff SKIPPED by the substance gate', async () => {
+    const stdin = JSON.stringify({ sessionId: 'bare-gate-test' });
     const r = await runHook('session-end.ts', stdin);
     expect(r.exitCode).toBe(0);
-    // T-AUTO-HANDOFF: the SessionEnd backup writer reports its outcome on
-    // stderr (written or skipped) — the ONLY expected line for a bare session.
-    const lines = r.stderr.split('\n').filter((l) => l.trim().length > 0);
-    expect(lines.every((l) => l.includes('auto-handoff'))).toBe(true);
+    // AHO.3: trivial sessions must produce NO surfaces — just the skip note.
+    expect(r.stderr).toContain('auto-handoff skipped — no resumable state');
+    expect(r.stderr).not.toContain('auto-handoff written');
   }, 15000);
 
   it('pre-tool-use: snake_case payload normalized to camelCase', async () => {

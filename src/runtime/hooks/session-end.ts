@@ -125,10 +125,26 @@ async function main(): Promise<void> {
   // archiveActiveTask/clearFsmState below: those destroy the exact state the
   // deterministic dump reads (active-task signal + FSM file). Best-effort —
   // a handoff failure never blocks session close.
+  // AHO.3 SUBSTANCE GATE: trivial sessions (every codex exec probe and hook
+  // subprocess carries a session id) left 26+ junk docs/issues in one day and
+  // clobbered the MEMORY.md resume block. Back up ONLY when the dying session
+  // holds resumable state; the explicit command and the SessionStart lazy
+  // generator are unaffected.
   try {
-    const { runHandoff } = await import('../handoff/index.js');
-    const result = await runHandoff(sessionId, process.cwd());
-    process.stderr.write(`opensquid: auto-handoff written — ${result.docPath}\n`);
+    const { stat } = await import('node:fs/promises');
+    const { sessionStateFile } = await import('../paths.js');
+    const hasFsm = await stat(sessionStateFile(sessionId, 'fsm-coding-flow')).then(
+      () => true,
+      () => false,
+    );
+    const hasTask = (await readActiveTask(sessionId)) !== null;
+    if (hasFsm || hasTask) {
+      const { runHandoff } = await import('../handoff/index.js');
+      const result = await runHandoff(sessionId, process.cwd());
+      process.stderr.write(`opensquid: auto-handoff written — ${result.docPath}\n`);
+    } else {
+      process.stderr.write('opensquid: auto-handoff skipped — no resumable state\n');
+    }
   } catch (e) {
     process.stderr.write(`opensquid: auto-handoff skipped — ${String(e)}\n`);
   }

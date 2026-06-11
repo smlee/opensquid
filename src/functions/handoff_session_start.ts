@@ -74,10 +74,9 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
       // not fabricate a handoff, but still stamp so we probe only once.
       let docPath: string | null = null;
       if (fsmM !== null) {
-        // The doc date is unknowable without generating; probe both the dead
-        // session's plausible docs by suffix match via generation-on-stale:
-        const today = new Date().toISOString().slice(0, 10);
-        docPath = handoverDocPath(umbrellaRoot, deadSid, today);
+        // AHO.3: sid-only key — the probe now finds the doc regardless of
+        // which day it was generated (the date-keyed path missed yesterday's).
+        docPath = handoverDocPath(umbrellaRoot, deadSid);
         const docM = await mtimeOf(docPath);
         if (docM === null || docM < fsmM) {
           const result = await runHandoff(deadSid, cwd); // generate from disk

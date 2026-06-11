@@ -260,9 +260,11 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
   };
 }
 
-/** Stable doc path for a session's handover (idempotent rewrites). */
-export function handoverDocPath(umbrellaRoot: string, sessionId: string, date: string): string {
-  return join(umbrellaRoot, 'docs', `handover-${date}-session-${sessionId.slice(0, 8)}-auto.md`);
+/** Stable doc path for a session's handover — keyed on sid ONLY (AHO.3:
+ *  date-keying minted a second doc for the same session across midnight and
+ *  broke the tier-3 staleness probe; generatedAt rides inside the doc). */
+export function handoverDocPath(umbrellaRoot: string, sessionId: string): string {
+  return join(umbrellaRoot, 'docs', `handover-session-${sessionId.slice(0, 8)}-auto.md`);
 }
 
 /** Re-export for callers building ids/labels. */

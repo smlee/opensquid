@@ -98,8 +98,7 @@ export async function writeHandoffSurfaces(
   opts: { narrative?: string } = {},
 ): Promise<WriteHandoffResult> {
   const outcomes: SurfaceOutcome[] = [];
-  const date = state.generatedAt.slice(0, 10);
-  const docPath = handoverDocPath(state.umbrellaRoot, state.sessionId, date);
+  const docPath = handoverDocPath(state.umbrellaRoot, state.sessionId);
 
   // (a) the doc — the load-bearing record; a failure here IS a handoff failure.
   const docBody = renderHandoverDoc(state);

@@ -112,9 +112,9 @@ describe('helpers', () => {
   it('umbrellaRootFor falls back to cwd without channels.json', async () => {
     expect(await umbrellaRootFor(cwd)).toBe(cwd);
   });
-  it('handoverDocPath is stable per session id + date', () => {
-    expect(handoverDocPath('/u', 'abcdefgh-rest', '2026-06-10')).toBe(
-      '/u/docs/handover-2026-06-10-session-abcdefgh-auto.md',
+  it('handoverDocPath is keyed on sid ONLY (one doc per session — AHO.3)', () => {
+    expect(handoverDocPath('/u', 'abcdefgh-rest')).toBe(
+      '/u/docs/handover-session-abcdefgh-auto.md',
     );
   });
 });

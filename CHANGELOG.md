@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.389] - 2026-06-11
+
+### Fixed — SessionEnd handoff backup gated on substance; one doc per session (T-auto-handoff AHO.3)
+
+One day live, the SessionEnd backup fired for EVERY dying session — each trivial
+`codex exec` probe minted a junk handover doc, a junk work-graph issue, a chat
+digest, and clobbered the MEMORY.md resume block (the highest-value surface
+corrupted by the lowest-value sessions). The backup now runs only when the dying
+session left resumable state (`fsm-coding-flow.json` exists or an active task is
+recorded); below the gate it skips with one stderr line. The explicit command and
+the SessionStart lazy generator are unchanged. Also: the handover doc path is now
+keyed on session id only (`handover-session-<sid8>-auto.md`) — the date key minted
+a second doc for the same session across midnight and made the SessionStart
+staleness probe miss any doc generated yesterday.
+
 ## [0.5.388] - 2026-06-10
 
 ### Fixed — codex `apply_patch` writes now hit the gates (T-codex-host-shell CHS.2)
