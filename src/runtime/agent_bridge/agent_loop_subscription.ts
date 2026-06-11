@@ -67,10 +67,10 @@
  *
  * Imports from: node:child_process, ./types.js.
  * Imported by: ./index.ts (barrel), ./agent_loop_subscription.test.ts.
- *   Future: dispatcher.ts (WAB-SUB.2) when the daemon path is wired.
+ *   dispatcher.ts (WAB-SUB.2 — wired live; runAgentTurnSubscription at :397).
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { runOneShotCli } from '../spawn_lifecycle.js';
 
 import type { ChatHistoryContentBlock, ChatHistoryEntry, SessionState } from './types.js';
 
@@ -263,14 +263,11 @@ function hasTextBlock(entry: ChatHistoryEntry): boolean {
 // ---------------------------------------------------------------------------
 // defaultClaudeCliClient — production spawn-based impl.
 //
-// Mirrors src/models/strategies/subscription_cli.ts lifecycle:
-//   1. spawn(cli, args, stdio=['pipe','pipe','pipe'])
-//   2. setTimeout(timeoutMs) — SIGTERM + reject on fire
-//   3. write stdin + end()
-//   4. accumulate stdout / stderr
-//   5. on close: clearTimeout; exit 0 → resolve stdout; else reject with stderr
+// Lifecycle owned by runtime/spawn_lifecycle.ts (SUB.2) — the same shared
+// helper as models/strategies/subscription_cli.ts (explicit lifecycle FSM,
+// detached group leadership, SIGTERM -> ref'd grace -> group SIGKILL).
 //
-// Differences from subscription_cli.ts:
+// Differences from subscription_cli.ts (preserved through the helper):
 //   - Does NOT call .trim() on stdout — caller trims (lets tests assert
 //     exact bytes when needed).
 //   - Caller-supplied timeoutMs is required (no DEFAULT_TIMEOUT_MS fallback
@@ -279,57 +276,20 @@ function hasTextBlock(entry: ChatHistoryEntry): boolean {
 
 export const defaultClaudeCliClient: ClaudeCliClient = {
   run(req: ClaudeCliRunRequest): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const proc: ChildProcess = spawn(req.cli, req.args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
-
-      const settle = (fn: () => void): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        fn();
-      };
-
-      const timer = setTimeout(() => {
-        proc.kill('SIGTERM');
-        settle(() => reject(new Error(`subscription cli timeout after ${req.timeoutMs}ms`)));
-      }, req.timeoutMs);
-
-      proc.stdout?.on('data', (d: Buffer) => {
-        stdout += d.toString('utf8');
-      });
-      proc.stderr?.on('data', (d: Buffer) => {
-        stderr += d.toString('utf8');
-      });
-
-      proc.on('error', (e) => {
-        settle(() => reject(new Error(`subscription cli spawn failed: ${e.message}`)));
-      });
-
-      proc.on('close', (code) => {
-        settle(() => {
-          if (code === 0) {
-            resolve(stdout);
-          } else {
-            reject(new Error(`subscription cli exit ${code}: ${stderr.trim()}`));
-          }
-        });
-      });
-
-      // stdin.end() flushes the prompt and signals EOF. Wrapped in
-      // try/catch because synchronous spawn errors (e.g. Windows
-      // ENOENT) can close stdin before this write lands.
-      try {
-        proc.stdin?.write(req.stdin);
-        proc.stdin?.end();
-      } catch (e) {
-        settle(() => reject(new Error(`subscription cli stdin write failed: ${String(e)}`)));
-      }
+    // SUB.2 (wg-627effbb2c38): lifecycle delegated to the SHARED helper
+    // (explicit FSM, SIGTERM -> ref'd grace -> group SIGKILL). Bridge
+    // children are WORKING AGENTS acting on the user's behalf — they stay
+    // fully hooked/gated, so markSubagent is false (the GDC design lock);
+    // they are still SUPERVISED (kill-tree membership) like every helper
+    // spawn. Stdout is intentionally NOT trimmed — caller trims.
+    return runOneShotCli({
+      cli: req.cli,
+      args: req.args,
+      prompt: req.stdin,
+      timeoutMs: req.timeoutMs,
+      markSubagent: false,
+      timeoutError: (ms) => new Error(`subscription cli timeout after ${ms}ms`),
+      errorPrefix: 'subscription cli ',
     });
   },
 };

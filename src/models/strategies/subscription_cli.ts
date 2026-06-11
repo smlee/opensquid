@@ -8,35 +8,24 @@
  * `models.yaml`; opensquid treats it as an opaque string. The audit-grep
  * defined in the task spec must return empty against this file.
  *
- * Lifecycle:
- *   1. spawn(cli, args) with stdio: ['pipe', 'pipe', 'pipe']
- *   2. setTimeout(timeoutMs ?? 30_000) — on fire, SIGTERM the child + reject
- *   3. write the prompt to stdin and end it (signals EOF to the binary)
- *   4. accumulate stdout / stderr
- *   5. on close: clearTimeout; exit 0 → resolve stdout.trim(); else reject
- *      with stderr-tagged message
+ * Lifecycle (SUB.2, wg-627effbb2c38): owned by the SHARED helper
+ * `runtime/spawn_lifecycle.ts` — explicit lifecycle FSM, detached group
+ * leadership, SIGTERM → ref'd 5s grace → process-group SIGKILL, and the
+ * SUB.1 `OPENSQUID_SUBAGENT` hook-silencing marker (this site spawns
+ * REVIEWERS — they must never own coding-flow state). The >64KB
+ * stdin-pipe deadlock limitation is documented there (Phase-2 scope).
  *
- * Phase-1 limitation — stdin/stdout deadlock for >64KB prompts:
- *   Node's pipe stdio uses OS pipe buffers (~64KB on Linux/macOS). For a
- *   very large prompt, `proc.stdin.write(prompt)` can fill the kernel buffer
- *   before the child has read enough, and the child may concurrently fill
- *   its stdout buffer waiting for us to drain — classic mutual-deadlock.
- *   Phase 1 documents this limit; Phase 2 (cross-cutting LLM track) adds a
- *   temp-file fallback for prompts above the threshold. Do NOT add a stdin
- *   `drain` handler here without the temp-file path landing — partial
- *   mitigations have hidden failure modes.
- *
- * Exit-code contract:
+ * Exit-code contract (preserved through the helper):
  *   - exit 0   → resolve(stdout.trim())
  *   - exit ≠ 0 → reject(Error(`exit ${code}: ${stderr.trim()}`))
- *   - spawn error (ENOENT etc.) → reject via `proc.on('error')`
- *   - timeout  → SIGTERM + reject(Error('timeout after Xms'))
+ *   - spawn error (ENOENT etc.) → reject(Error('spawn failed: …'))
+ *   - timeout  → SIGTERM + reject(CliTimeoutError('timeout after Xms'))
  *
- * Imports from: node:child_process, ../types.js.
+ * Imports from: ../../runtime/spawn_lifecycle.js, ../types.js.
  * Imported by: models/dispatcher.ts.
  */
 
-import { spawn } from 'node:child_process';
+import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
 
 import type { ModelAliasConfig, ModelStrategy } from '../types.js';
 
@@ -64,75 +53,20 @@ export function subscriptionCliStrategy(cfg: ModelAliasConfig): ModelStrategy {
       const args = cfg.args ?? [];
       const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-      return new Promise<string>((resolve, reject) => {
-        const proc = spawn(cliBin, args, {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          // SUB.1 (wg-627effbb2c38): mark the reviewer child tree so the
-          // opensquid hook bins short-circuit inside it — a reviewer
-          // one-shot must never mint coding-flow state, dump handoffs, or
-          // spawn nested audits (the observed recursion class). The
-          // env-var name is opensquid-owned — no vendor identity here.
-          env: { ...process.env, OPENSQUID_SUBAGENT: '1' },
-        });
-
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
-
-        // Idempotent settlement: spawn-error, exit, and timeout can race
-        // (e.g. timer fires while close is already in flight); first one
-        // wins, the others are no-ops.
-        const settle = (fn: () => void): void => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          fn();
-        };
-
-        const timer = setTimeout(() => {
-          // SIGTERM lets the child clean up; if it ignores SIGTERM the
-          // process leaks until OS kills it — acceptable Phase 1 trade-off
-          // (the kernel reaps eventually, and we've already rejected the
-          // promise so the caller is unblocked).
-          proc.kill('SIGTERM');
-          settle(() => reject(new CliTimeoutError(timeoutMs)));
-        }, timeoutMs);
-
-        proc.stdout.on('data', (d: Buffer) => {
-          stdout += d.toString('utf8');
-        });
-        proc.stderr.on('data', (d: Buffer) => {
-          stderr += d.toString('utf8');
-        });
-
-        proc.on('error', (e) => {
-          // ENOENT (cli not on PATH), EACCES (not executable), etc. The
-          // 'close' event may or may not fire after 'error' — settle here
-          // to avoid both firing.
-          settle(() => reject(new Error(`spawn failed: ${e.message}`)));
-        });
-
-        proc.on('close', (code) => {
-          settle(() => {
-            if (code === 0) {
-              resolve(stdout.trim());
-            } else {
-              reject(new Error(`exit ${code}: ${stderr.trim()}`));
-            }
-          });
-        });
-
-        // stdin.end() flushes the prompt and signals EOF to the binary.
-        // Wrapped in try/catch because the child may have already exited
-        // (e.g. spawn error fired synchronously on Windows) and writing
-        // to a closed stream throws EPIPE.
-        try {
-          proc.stdin.write(prompt);
-          proc.stdin.end();
-        } catch (e) {
-          settle(() => reject(new Error(`stdin write failed: ${String(e)}`)));
-        }
+      // SUB.2 (wg-627effbb2c38): the spawn lifecycle (detached group
+      // leadership, SIGTERM -> ref'd grace -> group SIGKILL, the SUB.1
+      // OPENSQUID_SUBAGENT marker) lives in the SHARED helper — one
+      // implementation for this site and the agent-bridge client. The
+      // reviewer child tree is hook-silenced via markSubagent.
+      const out = await runOneShotCli({
+        cli: cliBin,
+        args,
+        prompt,
+        timeoutMs,
+        markSubagent: true,
+        timeoutError: (ms) => new CliTimeoutError(ms),
       });
+      return out.trim();
     },
   };
 }

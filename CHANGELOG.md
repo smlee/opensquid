@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.398] - 2026-06-11
+
+### Fixed — timed-out CLI children survived SIGTERM and piled up (T-handoff-nested-session-spam SUB.2, wg-627effbb2c38)
+
+The two one-shot spawn sites (the audit reviewer in
+`models/strategies/subscription_cli.ts` and the agent-bridge working agent
+in `runtime/agent_bridge/agent_loop_subscription.ts`) SIGTERM'd their child
+at the timeout and walked away — but `claude -p` ignores SIGTERM, so every
+timeout leaked a live orphan that kept contending on the shared
+subscription bucket (each timeout made the next spawn slower — the
+launch-night wedge mechanism, measured live: killing two orphans dropped
+the next identical audit from >340s timeouts to a 309s verdict). Both
+sites now delegate to ONE shared `runtime/spawn_lifecycle.ts`: an explicit
+lifecycle FSM that spawns the outermost child detached as a process-group
+leader, SIGTERMs at timeout, and after a REF'D 5s grace SIGKILLs the WHOLE
+GROUP — sweeping recursion grandchildren too. Nested helper spawns (inside
+a supervised tree, `OPENSQUID_SUPERVISED`) deliberately do not detach, so
+they cannot escape the ancestor's sweep. Both sites' error/trim contracts
+are preserved (typed `CliTimeoutError`; the bridge's message prefix).
+
 ## [0.5.397] - 2026-06-11
 
 ### Fixed — reviewer subagents ran the full hook pipeline (T-handoff-nested-session-spam SUB.1, wg-627effbb2c38)
