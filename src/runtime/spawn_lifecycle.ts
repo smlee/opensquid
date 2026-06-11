@@ -10,17 +10,22 @@
  *
  *   running ──close──────────────► closed        (resolve/reject by exit code)
  *   running ──spawn 'error'──────► spawn_failed  (reject)
- *   running ──timeout────────────► term_sent     (reject NOW; grace timer armed, REF'D)
- *   term_sent ──close────────────► closed_late   (clear grace; child obeyed SIGTERM)
+ *   running ──timeout────────────► term_sent     (reject NOW; grace timer armed, REF'D;
+ *                                                 sync 'exit' kill handler registered)
+ *   term_sent ──close────────────► closed_late   (clear grace + remove the exit handler;
+ *                                                 child obeyed SIGTERM)
  *   term_sent ──grace expiry─────► group_killed  (kill(-pid) sweep; ESRCH = already gone)
+ *   term_sent ──supervisor exit──► group_killed  (FXK.1, 0.5.402: the sync 'exit' handler
+ *                                                 — hook bins call process.exit() ms after
+ *                                                 the rejection, which destroys ANY timer,
+ *                                                 ref'd or not; reproduced in isolation
+ *                                                 before this fix. 'exit' listeners run
+ *                                                 synchronously under explicit exit and
+ *                                                 process.kill is sync — spiked, not
+ *                                                 assumed.)
  *
- * `term_sent → supervisor SIGKILLed externally` leaks the child by design —
- * enumerated residual: the REF'D grace timer holds the supervisor alive
- * through grace in every non-forced teardown (an unref'd timer dies when a
- * hook bin exits right after the rejection — observed live as SIGTERM-
- * ignoring `claude -p` orphans piling up on the subscription bucket), and a
- * forced external SIGKILL of the supervisor is outside any in-process
- * guarantee.
+ * Only a forced external SIGKILL of the supervisor leaks the child now —
+ * outside any in-process guarantee, enumerated residual.
  *
  * Two ORTHOGONAL env markers — never merge them:
  *   - OPENSQUID_SUBAGENT  (hook policy, SUB.1): set only when
@@ -108,16 +113,27 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       }
     };
 
+    // FXK.1 (0.5.402): the supervisor-exit escalation path. Sync-only body
+    // — the process is dying; state check + sync kill, nothing else.
+    const exitKill = (): void => {
+      if (state.phase === 'term_sent') groupKill();
+    };
+
     const timer = setTimeout(() => {
       if (state.phase !== 'running') return;
       state = { phase: 'term_sent' };
       proc.kill('SIGTERM');
-      // REF'D on purpose: an unref'd timer is destroyed when the hook bin
-      // exits right after this rejection — SIGKILL would never fire exactly
-      // where SIGTERM-ignoring orphans were observed. The ≤graceMs tail
-      // sits far inside the 360s outer hook cap; 'closed_late' clears it
-      // for well-behaved children.
-      graceTimer = setTimeout(groupKill, opts.graceMs ?? 5_000);
+      // BOTH escalation paths are required (FXK.1, spiked): the REF'D timer
+      // covers long-lived supervisors (bridge daemon — prompt 5s kill); the
+      // sync 'exit' handler covers supervisors that exit before grace (hook
+      // bins call process.exit() milliseconds after this rejection, which
+      // destroys ANY timer, ref'd or not — the 0.5.398 hole). 'closed_late'
+      // clears both for well-behaved children.
+      process.once('exit', exitKill);
+      graceTimer = setTimeout(() => {
+        process.removeListener('exit', exitKill);
+        groupKill();
+      }, opts.graceMs ?? 5_000);
       reject(opts.timeoutError(opts.timeoutMs));
     }, opts.timeoutMs);
 
@@ -144,6 +160,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       } else if (state.phase === 'term_sent') {
         state = { phase: 'closed_late' }; // child obeyed SIGTERM inside grace
         if (graceTimer !== undefined) clearTimeout(graceTimer);
+        process.removeListener('exit', exitKill); // hygiene: long-lived callers
       }
       // closed / spawn_failed / group_killed: terminal — nothing to do.
     });

@@ -217,6 +217,83 @@ describe('runOneShotCli — SIGTERM → grace → group SIGKILL', () => {
     expect(survivors).toBe('');
   }, 15_000);
 
+  it('FXK.1: SHORT-LIVED supervisor (the hook-bin shape) — exit handler kills the child the timer cannot', async () => {
+    // The 0.5.398 hole class: vitest workers are long-lived, so the timer
+    // path always worked IN TESTS while hook bins (which process.exit()
+    // milliseconds after the rejection) never fired it. This test runs the
+    // BUILT helper inside a real short-lived supervisor process.
+    const { pathToFileURL, fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const helperUrl = pathToFileURL(path.resolve(repoRoot, 'dist/runtime/spawn_lifecycle.js')).href;
+
+    const child = join(tmpRoot, 'fxk-child.js');
+    await writeFile(
+      child,
+      "process.on('SIGTERM', () => {});" +
+        "require('fs').writeFileSync(process.env.PIDFILE, String(process.pid));" +
+        'setInterval(() => {}, 1000);',
+      'utf8',
+    );
+    const pidFile = join(tmpRoot, 'fxk-pid');
+    const supervisor = join(tmpRoot, 'fxk-supervisor.mjs');
+    await writeFile(
+      supervisor,
+      `import { runOneShotCli } from '${helperUrl}';\n` +
+        `runOneShotCli({ cli: process.execPath, args: ['${child}'], prompt: '', ` +
+        `timeoutMs: 300, graceMs: 60000, markSubagent: true, ` +
+        `timeoutError: (ms) => new Error('timeout ' + ms) })` +
+        `.catch(() => process.exit(2)); // the hook-bin shape: exit AT the rejection\n`,
+      'utf8',
+    );
+
+    const { spawn: spawnProc } = await import('node:child_process');
+    await new Promise<void>((res) => {
+      const sup = spawnProc(process.execPath, [supervisor], {
+        stdio: 'ignore',
+        env: { ...process.env, PIDFILE: pidFile },
+      });
+      sup.on('close', () => res());
+    });
+    // graceMs is 60s — if the child dies, it was the EXIT HANDLER, not the timer.
+    await waitMs(700);
+    const { readFileSync } = await import('node:fs');
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+    }
+    if (alive) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* cleanup */
+      }
+    }
+    expect(alive).toBe(false);
+  }, 20_000);
+
+  it('FXK.1: exit-listener count returns to baseline across sequential calls (bridge-daemon hygiene)', async () => {
+    const baseline = process.listenerCount('exit');
+    const script = join(tmpRoot, 'obey2.js');
+    await writeFile(script, 'setInterval(() => {}, 1000);', 'utf8');
+    for (let i = 0; i < 5; i++) {
+      await runOneShotCli({
+        cli: process.execPath,
+        args: [script],
+        prompt: '',
+        timeoutMs: 200,
+        markSubagent: false,
+        timeoutError,
+        graceMs: 500,
+      }).catch(() => undefined);
+    }
+    await waitMs(900); // let every closed_late / timer path settle
+    expect(process.listenerCount('exit')).toBe(baseline);
+  }, 15_000);
+
   it('SIGTERM-obeying child clears the grace timer (closed_late path — vitest exits promptly)', async () => {
     const script = join(tmpRoot, 'obey-term.js');
     await writeFile(script, 'setInterval(() => {}, 1000);', 'utf8'); // default SIGTERM = die

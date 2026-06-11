@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.402] - 2026-06-11
+
+### Fixed — 0.5.398's SIGKILL escalation never fired in the hook context (T-fix-spawnkill-liveness FXK.1)
+
+Found by adversarial self-re-examination after the user asked "are you
+100% confident?": every hook bin exits via explicit `process.exit()`
+milliseconds after an audit-timeout rejection — which destroys the 5s
+grace timer whether ref'd or unref'd, so the group SIGKILL shipped in
+0.5.398 never fired in exactly the context it was built for (vitest's
+long-lived workers hid this; the negative spike reproduced the hole in
+isolation). `term_sent` now ALSO registers a sync `process.once('exit')`
+kill handler — 'exit' listeners run synchronously under explicit exit and
+`process.kill` is sync (spiked, not assumed) — with listener hygiene on
+every terminal path for long-lived callers (the bridge daemon). A
+subprocess test running the BUILT helper inside a real short-lived
+supervisor pins the hole class against the vitest blind spot forever.
+
 ## [0.5.401] - 2026-06-11
 
 ### Fixed — no supported way to update an installed copy (T-npm-auto-update UPD.2, wg-7091e922881b)
