@@ -17,10 +17,21 @@ import { describe, expect, it } from 'vitest';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '../..');
 // Cited docs may live in the opensquid repo OR the umbrella planning repo.
-const TASKS_DIRS = [resolve(REPO, 'docs/tasks'), resolve(REPO, '../docs/tasks')];
+// The umbrella repo is NOT present on CI runners (opensquid checks out
+// alone), so umbrella-resident citations are pinned by NAME here and by
+// EXISTENCE whenever the umbrella is available (local dev + the pre-push
+// gate, which runs this suite where the umbrella exists).
+const LOCAL_TASKS_DIR = resolve(REPO, 'docs/tasks');
+const UMBRELLA_TASKS_DIR = resolve(REPO, '../docs/tasks');
+const KNOWN_UMBRELLA_DOCS = [
+  'WAB.1-architecture.md',
+  'WIZ.1-flow.md',
+  'T-telegram-realtime.md',
+  'T-compression.md',
+];
 
 describe('spec-citation integrity (FAC.1)', () => {
-  it('every docs/tasks/*.md cited in non-test src exists on disk', () => {
+  it('every docs/tasks/*.md cited in non-test src exists on disk (or is a known umbrella doc when the umbrella is absent)', () => {
     const out = execSync(
       `grep -rhoE 'docs/tasks/[A-Za-z0-9._-]+\\.md' src --include='*.ts' --exclude='*.test.ts' || true`,
       { cwd: REPO, encoding: 'utf8' },
@@ -29,7 +40,21 @@ describe('spec-citation integrity (FAC.1)', () => {
       s.replace('docs/tasks/', ''),
     );
     expect(cited.length).toBeGreaterThan(0); // the grep itself must be live
-    const dangling = cited.filter((doc) => !TASKS_DIRS.some((d) => existsSync(resolve(d, doc))));
-    expect(dangling).toEqual([]);
+
+    const umbrellaAvailable = existsSync(UMBRELLA_TASKS_DIR);
+    const resolves = (doc: string): boolean => {
+      if (existsSync(resolve(LOCAL_TASKS_DIR, doc))) return true;
+      if (umbrellaAvailable) return existsSync(resolve(UMBRELLA_TASKS_DIR, doc));
+      return KNOWN_UMBRELLA_DOCS.includes(doc); // CI: pinned by name only
+    };
+    expect(cited.filter((doc) => !resolves(doc))).toEqual([]);
+  });
+
+  it('the known-umbrella allowlist is existence-verified whenever the umbrella is available', () => {
+    if (!existsSync(UMBRELLA_TASKS_DIR)) return; // CI — verified in local dev + pre-push
+    const missing = KNOWN_UMBRELLA_DOCS.filter(
+      (doc) => !existsSync(resolve(UMBRELLA_TASKS_DIR, doc)),
+    );
+    expect(missing).toEqual([]);
   });
 });
