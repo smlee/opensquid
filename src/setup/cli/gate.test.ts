@@ -337,3 +337,44 @@ describe('GDC.1 — human passthrough (the gate gates agents, never humans)', ()
     expect(AGENT_ENV_MARKERS).toContain('CLAUDECODE');
   });
 });
+
+describe('GDC.2 — activation binds to the AGENT (user scope), never to locations', () => {
+  async function makeRepoWithoutProjectActivation(): Promise<void> {
+    await mkdir(join(repo, '.opensquid'), { recursive: true });
+    // deliberately NO active.json at project scope
+  }
+
+  it('user-scope coding-flow → gated even with NO project active.json', async () => {
+    await makeRepoWithoutProjectActivation();
+    await writeFile(
+      join(tempHome, 'active.json'),
+      JSON.stringify({ packs: ['coding-flow'] }),
+      'utf8',
+    );
+    await stage('src/x.ts');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('neither scope active → ungated', async () => {
+    await makeRepoWithoutProjectActivation();
+    await stage('src/x.ts');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('project-only activation still gates (back-compat)', async () => {
+    await makeGated();
+    await stage('src/x.ts');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('user-scope gating never touches a human terminal (the composed model)', async () => {
+    await makeRepoWithoutProjectActivation();
+    await writeFile(
+      join(tempHome, 'active.json'),
+      JSON.stringify({ packs: ['coding-flow'] }),
+      'utf8',
+    );
+    await stage('src/x.ts');
+    expect(await runGate('commit', repo, HUMAN_ENV)).toBe(0);
+  });
+});

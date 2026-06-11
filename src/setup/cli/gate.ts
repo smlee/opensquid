@@ -33,7 +33,7 @@ import { promisify } from 'node:util';
 import type { Command } from 'commander';
 
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
-import { resolveProjectScopeRoot } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveProjectScopeRoot } from '../../runtime/paths.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../../runtime/workflow_phases.js';
@@ -43,17 +43,26 @@ import { appendAttestation, readAttestedShas } from './attestations.js';
 const execFileP = promisify(execFile);
 const GATED_PACK = 'coding-flow';
 
-/** Is `cwd` inside a project whose `.opensquid/active.json` opts into the coding-flow gate? */
+/** GDC.2 — is this invocation gated? The gate binds to the AGENT, not to a
+ *  location (user directive 2026-06-11: "all agents in any harness; git on
+ *  the terminal behaves normally"): `coding-flow` in the USER scope
+ *  (~/.opensquid/active.json — the agent's own config) gates the agent in
+ *  EVERY repo; a project-scope opt-in still works too (e.g. a team gating
+ *  one repo for all agents). Humans pass upstream regardless
+ *  (isAgentInvocation, GDC.1). */
 export async function isGatedRepo(cwd: string): Promise<boolean> {
+  const candidates: string[] = [join(OPENSQUID_HOME(), 'active.json')];
   const scopeRoot = await resolveProjectScopeRoot(cwd);
-  if (scopeRoot === null) return false;
-  try {
-    const raw = await readFile(join(scopeRoot, 'active.json'), 'utf8');
-    const parsed = JSON.parse(raw) as { packs?: unknown };
-    return Array.isArray(parsed.packs) && parsed.packs.includes(GATED_PACK);
-  } catch {
-    return false;
+  if (scopeRoot !== null) candidates.push(join(scopeRoot, 'active.json'));
+  for (const path of candidates) {
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as { packs?: unknown };
+      if (Array.isArray(parsed.packs) && parsed.packs.includes(GATED_PACK)) return true;
+    } catch {
+      /* absent/malformed scope → not active here */
+    }
   }
+  return false;
 }
 
 /** The files a `commit` would record (staged) or a `push` would publish (HEAD vs upstream).

@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.391] - 2026-06-11
+
+### Changed — gate activation binds to the AGENT, never to locations (T-fix-gate-docs-classifier GDC.2)
+
+Completing the model the user locked: "all agents in any harness; git on the
+terminal behaves normally." `coding-flow` in the USER scope
+(`~/.opensquid/active.json` — the agent's own config) now gates the agent in
+EVERY repo: the git boundary consults user scope OR project scope, and the
+in-session loader already merged user scope, so no other change was needed.
+No root-level activation, no per-repo opt-in required (a project-scope opt-in
+still works for teams gating one repo). Humans pass everywhere via the GDC.1
+marker passthrough. Gate quality is strictly non-decreasing: agent coverage
+widens to every repo and harness, the hard fail-closed layer is unchanged
+where hooks exist, and human commits carry 'human' attestation provenance.
+
 ## [0.5.390] - 2026-06-11
 
 ### Fixed — humans use git naturally; non-code commits never gated (T-fix-gate-docs-classifier)
