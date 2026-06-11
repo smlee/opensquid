@@ -1,0 +1,10 @@
+{
+  "rule": "training-bot-change",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "vercel.json",
+      "content": "{\"redirects\": []}"
+    }
+  }
+}

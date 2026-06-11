@@ -1,0 +1,10 @@
+{
+  "rule": "ssr-regression",
+  "event": {
+    "tool": "Edit",
+    "args": {
+      "file_path": "src/app/programs/page.tsx",
+      "new_string": "\"use client\";\nexport default function Page() {}"
+    }
+  }
+}

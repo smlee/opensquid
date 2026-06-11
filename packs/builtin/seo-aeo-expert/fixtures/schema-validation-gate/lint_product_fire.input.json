@@ -1,0 +1,10 @@
+{
+  "rule": "schema-lint-product",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/components/ProductJsonLd.tsx",
+      "content": "{ \"@type\": \"Product\", \"name\": \"10-Class Reformer Pack\", \"offers\": { \"price\": \"450\" } }"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "rule": "stale-tactic",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/app/blog/seo-tips/page.tsx",
+      "content": "Add an llms.txt file to boost AI citation visibility for the studio."
+    }
+  }
+}

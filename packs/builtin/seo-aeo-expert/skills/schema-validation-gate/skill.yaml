@@ -1,0 +1,163 @@
+# schema-validation-gate — no unvalidated JSON-LD ships. Three jobs:
+#   1. schema-touched   — a JSON-LD edit ENTERS the FSM fix cycle (fix_start);
+#                         one informative warn when entering from idle
+#   2. schema-lint-*    — deterministic regex lints for the two highest-yield
+#                         Merchant/rich-result errors
+#   3. validation-run   — running a schema validator fires validation_passed
+#                         (P0 evidence proxy; P1 upgrades to exit-code proof)
+# Evidence: [[freehand-schema-forbidden]] + [[schema-actual-role]].
+name: schema-validation-gate
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: schema-touched
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: jsonld_w
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - 'application/ld\+json'
+            - '"@context"[^\n]{0,60}schema\.org'
+      - call: text_pattern_match
+        as: jsonld_e
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - 'application/ld\+json'
+            - '"@context"[^\n]{0,60}schema\.org'
+      - call: read_fsm_state
+        if: 'jsonld_w.matched.length > 0 || jsonld_e.matched.length > 0'
+        as: st
+      - call: advance_fsm
+        if: 'jsonld_w.matched.length > 0 || jsonld_e.matched.length > 0'
+        args:
+          event: fix_start
+      - call: verdict
+        if: '(jsonld_w.matched.length > 0 || jsonld_e.matched.length > 0) && st == "idle"'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/schema: JSON-LD touched — entering the
+            validate-before-push cycle. LLMs are unreliable at freehand
+            schema; run a validator (ajv / Rich Results Test) before `git
+            push` or the push gate will flag it. [[freehand-schema-forbidden]]
+
+  - id: schema-lint-product
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: product_w
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - '"@type"\s*:\s*"Product"'
+      - call: text_pattern_match
+        as: price_w
+        if: 'product_w.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - 'priceValidUntil'
+      - call: text_pattern_match
+        as: product_e
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - '"@type"\s*:\s*"Product"'
+      - call: text_pattern_match
+        as: price_e
+        if: 'product_e.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - 'priceValidUntil'
+      - call: verdict
+        if: '(product_w.matched.length > 0 && price_w.matched.length == 0) || (product_e.matched.length > 0 && price_e.matched.length == 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/schema-lint: Product JSON-LD without
+            `priceValidUntil` — triggers a Rich Results warning, and Merchant
+            listing eligibility also wants MerchantReturnPolicy +
+            OfferShippingDetails (2024+ requirement). See the seo-ecommerce
+            skill for the full Offer template.
+
+  - id: schema-lint-rating
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: rating_w
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - 'ratingValue'
+      - call: text_pattern_match
+        as: count_w
+        if: 'rating_w.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - '(reviewCount|ratingCount)'
+      - call: text_pattern_match
+        as: rating_e
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - 'ratingValue'
+      - call: text_pattern_match
+        as: count_e
+        if: 'rating_e.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - '(reviewCount|ratingCount)'
+      - call: verdict
+        if: '(rating_w.matched.length > 0 && count_w.matched.length == 0) || (rating_e.matched.length > 0 && count_e.matched.length == 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/schema-lint: `ratingValue` without `reviewCount`
+            or `ratingCount` — invalid AggregateRating; the rich result will
+            be dropped. Also: self-fabricated review ratings are an FTC
+            violation (Oct-2024 final rule) and demoted by Google.
+
+  - id: validation-run
+    process:
+      - call: match_command
+        args:
+          pattern: '(ajv\b|rich-results|structured[- ]data|schema[^\n]{0,40}valid|valid[^\n]{0,40}schema)'
+          target: tool_args.command
+        as: valrun
+      - call: advance_fsm
+        if: 'valrun'
+        args:
+          event: validation_passed
+prose: |
+  The schema gate pairs with the FSM: touching JSON-LD opens the cycle,
+  running a validator closes it, and pre-push-seo-checklist reads the state.
+  P0 treats "validator was run" as the evidence proxy; P1 moves to
+  exit-code/cached_audit proof via the `validating` station.

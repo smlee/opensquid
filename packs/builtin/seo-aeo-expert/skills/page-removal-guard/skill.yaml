@@ -1,0 +1,30 @@
+# page-removal-guard — no 404s without redirects. Deleting a routable page
+# orphans its inbound links, internal links, and sitemap entry; AI engines
+# keep citing the dead URL for weeks. warn (deletion can be correct — 410 for
+# retired long-tail is policy per the seo-technical skill).
+name: page-removal-guard
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: page-removal
+    process:
+      - call: match_command
+        args:
+          pattern: '\b(rm|git\s+rm)\b[^|;&\n]*/(app|pages|content)/[^ \n]+\.(tsx|jsx|ts|js|md|mdx|astro|html)'
+          target: tool_args.command
+        as: removing
+      - call: verdict
+        if: 'removing'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/page-removal: deleting a routable page/content
+            file. Before shipping: (1) add a 301 in next.config redirects /
+            vercel.json (or intentionally 410 for retired long-tail), (2)
+            update the sitemap, (3) grep internal links to the dead route.
+            Soft-404s and orphaned citations decay AI + organic visibility —
+            decision tree in the seo-technical skill.
+prose: |
+  Bash-side deletion guard. Write-tool route deletions (full-file overwrite of
+  a routes config) are P1 scope; rm/git rm is how routes actually die.

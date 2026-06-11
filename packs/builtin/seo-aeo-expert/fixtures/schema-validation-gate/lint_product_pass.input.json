@@ -1,0 +1,10 @@
+{
+  "rule": "schema-lint-product",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/components/ProductJsonLd.tsx",
+      "content": "{ \"@type\": \"Product\", \"offers\": { \"price\": \"450\", \"priceValidUntil\": \"2026-12-31\" } }"
+    }
+  }
+}

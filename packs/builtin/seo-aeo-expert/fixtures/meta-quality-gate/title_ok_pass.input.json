@@ -1,0 +1,10 @@
+{
+  "rule": "meta-title-length",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/app/layout.tsx",
+      "content": "export const metadata = { title: 'Raum Pilates | Englewood Cliffs' }"
+    }
+  }
+}

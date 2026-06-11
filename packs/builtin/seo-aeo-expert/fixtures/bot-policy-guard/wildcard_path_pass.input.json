@@ -1,0 +1,10 @@
+{
+  "rule": "robots-wildcard-disallow",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "public/robots.txt",
+      "content": "User-agent: *\nDisallow: /admin\n"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "if": "(claim_w.matched.length > 0 || claim_e.matched.length > 0) && gt.exists == false",
+  "bindings": {
+    "claim_w": {
+      "matched": ["\"price\"\\s*:"]
+    },
+    "claim_e": {
+      "matched": []
+    },
+    "gt": {
+      "exists": true
+    }
+  }
+}

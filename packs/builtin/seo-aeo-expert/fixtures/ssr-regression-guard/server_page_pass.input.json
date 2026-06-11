@@ -1,0 +1,10 @@
+{
+  "rule": "ssr-regression",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/app/staff/page.tsx",
+      "content": "export default async function StaffPage() { const staff = await getStaff(); }"
+    }
+  }
+}

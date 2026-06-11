@@ -1,0 +1,11 @@
+# seo-aeo-expert drift policy — block ONLY irreversible/invisible damage
+# (robots-level de-indexing, citation-bot blocking: silent total-visibility
+# loss with no acceptable accidental path). Everything else warns: SEO is
+# judgment-heavy — the pack informs, the human decides. The §4.3 push gate
+# (push-while-unvalidated) starts at warn for the dogfood week (spec §10.6)
+# and is promoted to block_tool after false-positive review.
+default: warn
+
+per_rule:
+  citation-bot-disallow: block_tool
+  robots-wildcard-disallow: block_tool

@@ -1,0 +1,66 @@
+# ground-truth-gate — claim-bearing schema requires a ground-truth source.
+# Born from the 2026-06-10 dogfood incident: a syntactically perfect
+# OfferCatalog advertised a nonexistent product for weeks. Validators check
+# shape, not truth ([[schema-claims-need-ground-truth]]). This guard fires
+# when priced/offer-bearing structured data is written in a project that has
+# no business ground-truth doc (docs/BUSINESS.md) to trace claims against.
+name: ground-truth-gate
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: claim-bearing-schema-no-ground-truth
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: claim_w
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - '"@type"\s*:\s*"Offer"'
+            - '"price"\s*:'
+            - 'priceSpecification'
+            - '"offers"\s*:'
+            - 'priceCurrency'
+      - call: text_pattern_match
+        as: claim_e
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - '"@type"\s*:\s*"Offer"'
+            - '"price"\s*:'
+            - 'priceSpecification'
+            - '"offers"\s*:'
+            - 'priceCurrency'
+      - call: path_exists
+        as: gt
+        if: 'claim_w.matched.length > 0 || claim_e.matched.length > 0'
+        args:
+          dir: docs
+          pattern: 'BUSINESS.md'
+      - call: verdict
+        if: '(claim_w.matched.length > 0 || claim_e.matched.length > 0) && gt.exists == false'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/ground-truth: priced/offer-bearing structured data
+            is being written but this project has NO business ground-truth
+            doc (docs/BUSINESS.md). Schema validators check SHAPE, not TRUTH
+            — wrong prices and nonexistent products pass every validator and
+            get repeated verbatim by AI engines. Establish the real catalog
+            first (live API/DB the UI renders from, or owner confirmation),
+            record it in docs/BUSINESS.md, then trace every claim to it.
+            [[schema-claims-need-ground-truth]]
+prose: |
+  The truth gate, complementing schema-validation-gate (shape) and the FSM
+  (process). Deterministic: pattern-match for claim-bearing fields +
+  path_exists for the ground-truth doc. When the doc exists, the gate is
+  silent — lesson 19 carries the tracing discipline; this guard only
+  catches the worst case (claims authored with no truth source at all).

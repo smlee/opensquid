@@ -1,0 +1,10 @@
+{
+  "rule": "meta-description-length",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/app/layout.tsx",
+      "content": "description: 'Raum Pilates is a boutique reformer pilates studio in Englewood Cliffs New Jersey offering private one on one sessions group classes and barre with bilingual English and Korean instruction for every level.'"
+    }
+  }
+}

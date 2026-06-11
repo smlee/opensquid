@@ -1,0 +1,128 @@
+# seo-aeo-expert — evidence-gated SEO/AEO discipline as a domain pack.
+# Spec: ~/projects/loop/docs/opensquid-seo-aeo-pack-spec.md (2026-06-09).
+# Thesis: every commercial AEO tool observes; knowledge skills advise; this pack
+# ENFORCES at write-time (guards), remembers (seed lessons), and disciplines the
+# audit → fix → validate → ship → measure loop (fsm.yaml). Deep how-to lives in
+# the seo-* Claude skill suite — the pack never duplicates it.
+name: seo-aeo-expert
+version: 0.2.0
+scope: domain
+goal: >-
+  Enforce evidence-based SEO/AEO discipline while building and operating
+  websites — block visibility-destroying changes (citation-bot disallows,
+  robots wildcards), warn on 2026-deprecated tactics and AI-invisible
+  rendering, and gate ship-time on validation evidence via the SEO ops FSM.
+description: >-
+  Domain pack for SEO + AEO/GEO (AI search) work, June-2026 evidence base.
+  Three runtime layers: 18 seed lessons (knowledge, each with primary-source
+  URL + confidence tag), deterministic guards (discipline), and the SEO ops
+  lifecycle FSM (audit/fix/validate/ship/measure). Blocks are reserved for
+  irreversible invisible damage (robots-level de-indexing, citation-bot
+  blocking); everything else warns — SEO is judgment-heavy, so the pack
+  informs and the human decides. Never encodes vendor folklore: every rule
+  traces to a primary source recorded in its lesson.
+evolves: true
+foundation:
+  domains:
+    - seo
+    - aeo-geo
+    - web-marketing
+    - content
+  methodologies:
+    - evidence-gated-recommendations
+    - answer-first-content
+    - entity-seo
+
+# No detected_by gate: opt-in via active.json IS the pin (same decision as
+# coding-flow, for the same EWG.3.1 reason — found live 2026-06-10). The IDF.3
+# DetectionContext only pre-stages 5 well-known root files (package.json,
+# tsconfig.json, Cargo.toml, pyproject.toml, go.mod) and leaves recentPrompts
+# empty, so file_glob clauses like `*/next.config.*` and conversation_signal
+# clauses can NEVER match today — any such clause silently DISABLES an
+# opted-in pack (verified: dispatch loaded packs=4 without this pack until
+# the clauses were removed). Off-domain noise is acceptable because every
+# rule already self-gates on file paths (robots.txt, page.tsx, JSON-LD
+# content) before any verdict. Revisit when IDF.3 Phase 2/3 stages globs +
+# prompt history.
+
+# L1 — the knowledge layer. Each lesson: claim → evidence (URL + date) →
+# confidence ([H]/[M]/[C]) → how to apply. Idempotent ingest (external_id =
+# sha256(pack@version|title)); this list is the pack's upgrade surface — when
+# evidence changes, edit the lesson + bump version.
+seed_lessons:
+  - title: 'AI Mode is the default Google experience — optimize for query fan-out'
+    body_path: lessons/ai-mode-default-fanout/lesson.md
+    tags: [seo, aeo, google, ai-mode]
+    source: 'https://developers.google.com/search/docs/fundamentals/ai-optimization-guide'
+  - title: 'Google official AI guide: AEO is still SEO; llms.txt/AI-markup/chunking not needed for Google'
+    body_path: lessons/google-official-ai-guide/lesson.md
+    tags: [seo, aeo, google]
+    source: 'https://developers.google.com/search/docs/fundamentals/ai-optimization-guide'
+  - title: 'Get cited, not just ranked — citation inside AI answers recovers clicks'
+    body_path: lessons/citation-over-rank/lesson.md
+    tags: [seo, aeo, ctr]
+    source: 'https://www.pewresearch.org/short-reads/2025/07/22/google-users-are-less-likely-to-click-on-links-when-an-ai-summary-appears-in-the-results/'
+  - title: 'Unlinked brand mentions out-correlate backlinks ~3x for AI visibility'
+    body_path: lessons/mentions-beat-backlinks/lesson.md
+    tags: [seo, aeo, links, mentions]
+    source: 'https://ahrefs.com/blog/ai-overview-brand-correlation/'
+  - title: 'Three AI bot classes: training vs search/citation vs user-fetch — per-class policy'
+    body_path: lessons/bot-taxonomy-three-classes/lesson.md
+    tags: [seo, aeo, bots, robots-txt]
+    source: 'https://developers.openai.com/api/docs/bots'
+  - title: 'Cloudflare blocks AI bots by default since 2025-07 — audit before assuming AI visibility'
+    body_path: lessons/cloudflare-default-block/lesson.md
+    tags: [seo, aeo, bots, cloudflare]
+    source: 'https://blog.cloudflare.com/introducing-pay-per-crawl/'
+  - title: 'No major AI crawler executes JavaScript — SSR/SSG is a hard gate for AI visibility'
+    body_path: lessons/no-js-execution/lesson.md
+    tags: [seo, aeo, rendering, ssr]
+    source: 'https://vercel.com/blog/the-rise-of-the-ai-crawler'
+  - title: 'ChatGPT Search is the Bing index — Bing Webmaster Tools is a prerequisite'
+    body_path: lessons/bing-is-chatgpt/lesson.md
+    tags: [seo, aeo, bing, chatgpt]
+    source: 'https://www.soci.ai/blog/how-to-rank-in-chatgpt-perplexity-and-google-ai-overview/'
+  - title: 'AI engines barely overlap (~11% ChatGPT/Perplexity) — route per engine'
+    body_path: lessons/engine-divergence/lesson.md
+    tags: [seo, aeo, engines]
+    source: 'https://authoritytech.io/curated/ai-citation-11-percent-platform-overlap-per-engine-audit-2026'
+  - title: 'GEO content levers: statistics, expert quotes, cited sources (Princeton GEO)'
+    body_path: lessons/geo-content-levers/lesson.md
+    tags: [seo, aeo, content, geo]
+    source: 'https://seenrank.com/blog/the-princeton-geo-study-explained-for-marketers/'
+  - title: 'Chunk shape: 200-400-word self-contained sections, answer-first openings'
+    body_path: lessons/chunk-shape/lesson.md
+    tags: [seo, aeo, content]
+    source: 'https://www.lumar.io/blog/best-practice/content-chunking-ai-extractability-geo-aeo-explainer/'
+  - title: 'Schema actual role: Bing/Copilot comprehension + rich results yes; Google AI-citation lever no'
+    body_path: lessons/schema-actual-role/lesson.md
+    tags: [seo, aeo, schema, structured-data]
+    source: 'https://searchengineland.com/microsoft-bing-copilot-use-schema-for-its-llms-453455'
+  - title: 'llms.txt is dead as a ranking lever — zero correlation across 300k domains'
+    body_path: lessons/llms-txt-dead/lesson.md
+    tags: [seo, aeo, llms-txt]
+    source: 'https://www.searchenginejournal.com/google-says-llms-txt-is-purely-speculative-for-now/577576/'
+  - title: 'UGC citation channels: Reddit/YouTube/Wikipedia economics, volatile mix'
+    body_path: lessons/ugc-citation-channels/lesson.md
+    tags: [seo, aeo, ugc, reddit, youtube]
+    source: 'https://searchengineland.com/ai-search-engines-cite-reddit-youtube-and-linkedin-most-study-473138'
+  - title: 'Local AI gap: ChatGPT recommends 1.2% of local businesses — profile stack is the fix'
+    body_path: lessons/local-ai-gap/lesson.md
+    tags: [seo, aeo, local, gbp]
+    source: 'https://www.soci.ai/blog/how-to-rank-in-chatgpt-perplexity-and-google-ai-overview/'
+  - title: 'Measurement discontinuities: Sept-2025 num=100, May-2026 AI-Mode default, GSC GenAI limits'
+    body_path: lessons/measurement-discontinuities/lesson.md
+    tags: [seo, aeo, analytics, gsc, ga4]
+    source: 'https://developers.google.com/search/blog/2026/06/gen-ai-performance-reports'
+  - title: 'Deprecated SEO tactics 2026 — the do-not-encode blocklist'
+    body_path: lessons/deprecated-tactics-2026/lesson.md
+    tags: [seo, aeo, deprecated]
+    source: 'https://developers.google.com/search/docs/fundamentals/ai-optimization-guide'
+  - title: 'Freehand LLM-generated JSON-LD is forbidden — validator before ship'
+    body_path: lessons/freehand-schema-forbidden/lesson.md
+    tags: [seo, schema, validation]
+    source: 'https://www.frase.io/blog/ai-agents-for-seo'
+  - title: 'Schema is claim-bearing — syntactic validation cannot catch fiction; every value needs a ground-truth source'
+    body_path: lessons/schema-claims-need-ground-truth/lesson.md
+    tags: [seo, schema, ground-truth, aeo]
+    source: 'live incident, raumpilates 2026-06-10 — stale OfferCatalog served fictional product for weeks'

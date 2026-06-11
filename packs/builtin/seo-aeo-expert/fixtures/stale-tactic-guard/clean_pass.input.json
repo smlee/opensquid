@@ -1,0 +1,10 @@
+{
+  "rule": "stale-tactic",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/app/page.tsx",
+      "content": "Boutique reformer pilates in Englewood Cliffs."
+    }
+  }
+}

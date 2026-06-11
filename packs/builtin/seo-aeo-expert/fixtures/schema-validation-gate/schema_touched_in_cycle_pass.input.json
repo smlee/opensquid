@@ -1,0 +1,12 @@
+{
+  "if": "(jsonld_w.matched.length > 0 || jsonld_e.matched.length > 0) && st == \"idle\"",
+  "bindings": {
+    "jsonld_w": {
+      "matched": ["application/ld\\+json"]
+    },
+    "jsonld_e": {
+      "matched": []
+    },
+    "st": "fixing"
+  }
+}

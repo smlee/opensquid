@@ -1,0 +1,10 @@
+{
+  "rule": "stale-tactic",
+  "event": {
+    "tool": "Edit",
+    "args": {
+      "file_path": "src/components/organisms/FaqSection.tsx",
+      "new_string": "const jsonLd = { \"@type\": \"FAQPage\", mainEntity: [] }"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "if": "removing",
+  "bindings": {
+    "removing": false
+  }
+}

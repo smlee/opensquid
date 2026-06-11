@@ -1,0 +1,10 @@
+{
+  "rule": "citation-bot-disallow",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "public/robots.txt",
+      "content": "User-agent: OAI-SearchBot\nAllow: /\n\nUser-agent: GPTBot\nDisallow: /\n"
+    }
+  }
+}

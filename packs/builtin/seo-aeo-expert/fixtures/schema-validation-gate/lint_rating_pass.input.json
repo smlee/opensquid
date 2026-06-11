@@ -1,0 +1,10 @@
+{
+  "rule": "schema-lint-rating",
+  "event": {
+    "tool": "Edit",
+    "args": {
+      "file_path": "src/components/Reviews.tsx",
+      "new_string": "\"aggregateRating\": { \"ratingValue\": \"4.9\", \"reviewCount\": 27 }"
+    }
+  }
+}

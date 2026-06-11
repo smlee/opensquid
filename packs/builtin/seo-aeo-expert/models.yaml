@@ -1,0 +1,19 @@
+# seo-aeo-expert model aliases — alias names + call modes ONLY, never literal
+# model names (user binds alias → concrete model in ~/.opensquid/models.yaml).
+# P0 ships deterministic guards only; these aliases are declared now so the
+# P1 skills (answer-first-content-check, evidence-gated-recs, destination
+# check) land without a manifest change.
+fast_classifier:
+  description: >-
+    Single-label classification: folklore-vs-evidenced recommendation check,
+    pack destination check. Suggested tier: fast.
+  mode: subscription
+  impl: cli
+
+content_judge:
+  description: >-
+    Short structured judgement on content shape (answer-first opening,
+    extractable facts) and validation-evidence audits via cached_audit.
+    Suggested tier: fast-to-mid.
+  mode: subscription
+  impl: cli

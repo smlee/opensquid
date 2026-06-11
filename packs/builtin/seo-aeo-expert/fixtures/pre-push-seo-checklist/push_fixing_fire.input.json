@@ -1,0 +1,7 @@
+{
+  "if": "pushing && (st == \"fixing\" || st == \"validating\")",
+  "bindings": {
+    "pushing": true,
+    "st": "fixing"
+  }
+}

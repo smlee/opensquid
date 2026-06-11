@@ -1,0 +1,61 @@
+# pre-push-seo-checklist — the ship gate, FSM-backed (spec §4.3/§5.9).
+#   push while fixing/validating → unvalidated SEO work in flight → warn
+#     (dogfood week; promotes to block_tool in drift_response after FP review)
+#   push from validated → surface the one-screen checklist + advance `pushed`
+#   push from idle (no SEO cycle this session) → untouched
+# `\bgit\s+push\b` matches anywhere — compound commands (`cd x && git push`)
+# can't evade (the coding-flow FU.1 lesson).
+name: pre-push-seo-checklist
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: push-while-unvalidated
+    process:
+      - call: match_command
+        args:
+          pattern: '\bgit\s+push\b'
+          target: tool_args.command
+        as: pushing
+      - call: read_fsm_state
+        if: 'pushing'
+        as: st
+      - call: verdict
+        if: 'pushing && (st == "fixing" || st == "validating")'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/push-gate: SEO fix cycle is OPEN (state: {{st}}) —
+            JSON-LD or SEO-relevant files were touched this session and no
+            schema validation has run. Run the validator (ajv / Rich Results
+            Test) before pushing; a validation command advances the cycle to
+            `validated` automatically. [[freehand-schema-forbidden]]
+
+  - id: push-checklist
+    process:
+      - call: match_command
+        args:
+          pattern: '\bgit\s+push\b'
+          target: tool_args.command
+        as: pushing
+      - call: read_fsm_state
+        if: 'pushing'
+        as: st
+      - call: advance_fsm
+        if: 'pushing && st == "validated"'
+        args:
+          event: pushed
+      - call: verdict
+        if: 'pushing && st == "validated"'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/push-checklist: validation passed — final sweep
+            before ship: sitemap updated for new/removed routes · 301s for
+            removed pages · build output is SSR/SSG (no page-level "use
+            client" regressions) · robots/bot policy unchanged-or-intended ·
+            canonical tags on new pages. Cycle marked `shipped`.
+prose: |
+  The EXECUTE gate of the SEO ops FSM, symmetric with coding-flow's commit
+  gate. P0 ships it at warn (spec §10.6 dogfood week); promotion to
+  block_tool is a one-line drift_response change, no skill edit.

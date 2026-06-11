@@ -1,0 +1,137 @@
+# meta-quality-gate — cheap deterministic on-write lints for the metadata
+# fields that get silently truncated or rewritten. Google rewrites ~60% of
+# titles, more when they overflow; descriptions truncate ~160 chars; images
+# without alt are invisible to extraction. All warn-level (false-positive
+# tolerant by design — regex lints, not a parser).
+name: meta-quality-gate
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: meta-title-length
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: webfile
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - '\.(tsx|jsx|html)$'
+            - '\.mdx?$'
+      - call: text_pattern_match
+        as: long_w
+        if: 'webfile.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - '<title>[^<]{61,}'
+            - 'title:\s*["''][^"'']{61,}["'']'
+      - call: text_pattern_match
+        as: long_e
+        if: 'webfile.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - '<title>[^<]{61,}'
+            - 'title:\s*["''][^"'']{61,}["'']'
+      - call: verdict
+        if: 'webfile.matched.length > 0 && (long_w.matched.length > 0 || long_e.matched.length > 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/meta: title over ~60 chars RENDERED — it will
+            truncate in SERPs, and Google rewrites ~60% of titles (overflow
+            invites it). REMEMBER the template budget: if a layout title
+            template appends a brand suffix ("%s | Brand" ≈ +15 chars), the
+            bare title must stay ~45 chars — a 46-60-char bare title passes
+            this regex but overflows rendered (live miss, 2026-06-10).
+            Front-load the differentiator.
+
+  - id: meta-description-length
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: webfile
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - '\.(tsx|jsx|html)$'
+            - '\.mdx?$'
+      - call: text_pattern_match
+        as: long_w
+        if: 'webfile.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - 'description:\s*["''][^"'']{161,}["'']'
+            - 'name="description"[^>]{0,80}content="[^"]{161,}'
+      - call: text_pattern_match
+        as: long_e
+        if: 'webfile.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - 'description:\s*["''][^"'']{161,}["'']'
+            - 'name="description"[^>]{0,80}content="[^"]{161,}'
+      - call: verdict
+        if: 'webfile.matched.length > 0 && (long_w.matched.length > 0 || long_e.matched.length > 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/meta: meta description over ~160 chars truncates.
+            Lead with the answer — AI Overviews and snippets extract from the
+            first sentence.
+
+  - id: meta-img-alt
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: webfile
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - '\.(tsx|jsx|html)$'
+            - '\.mdx?$'
+      - call: text_pattern_match
+        as: noalt_w
+        if: 'webfile.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - '<img(?![^>]{0,300}\balt=)[^>]{0,300}>'
+      - call: text_pattern_match
+        as: noalt_e
+        if: 'webfile.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - '<img(?![^>]{0,300}\balt=)[^>]{0,300}>'
+      - call: verdict
+        if: 'webfile.matched.length > 0 && (noalt_w.matched.length > 0 || noalt_e.matched.length > 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/meta: `<img>` without alt text — invisible to
+            extraction and an accessibility miss. Decorative images get
+            alt=""; content images get a descriptive alt.
+prose: |
+  Regex lints, deliberately recall-over-precision at warn level. A parserized
+  version (real HTML/JSX AST) is out of scope — these catch the common 90%.

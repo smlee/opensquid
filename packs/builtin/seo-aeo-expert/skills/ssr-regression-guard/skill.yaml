@@ -1,0 +1,58 @@
+# ssr-regression-guard — content must exist without JavaScript. Zero major AI
+# crawlers execute JS (500M+ GPTBot fetches, zero JS execution; Vercel study,
+# still true 2026). Client-rendering page content makes it invisible to
+# ChatGPT/Claude/Perplexity — and ChatGPT rides Bing's limited rendering too.
+# Evidence: [[no-js-execution]].
+name: ssr-regression-guard
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: ssr-regression
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: pagefile
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - 'app/.*page\.(tsx|jsx)$'
+            - 'app/.*layout\.(tsx|jsx)$'
+            - '(^|/)pages/.*\.(tsx|jsx)$'
+      - call: text_pattern_match
+        as: hit_w
+        if: 'pagefile.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - '["'']use client["'']'
+            - 'useEffect\([\s\S]{0,500}?fetch\('
+      - call: text_pattern_match
+        as: hit_e
+        if: 'pagefile.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - '["'']use client["'']'
+            - 'useEffect\([\s\S]{0,500}?fetch\('
+      - call: verdict
+        if: 'pagefile.matched.length > 0 && (hit_w.matched.length > 0 || hit_e.matched.length > 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/ssr: `"use client"` or client-side fetch on a
+            PAGE-level file — no major AI crawler executes JavaScript, so
+            client-rendered content is invisible to ChatGPT, Claude, and
+            Perplexity (Googlebot is the only full renderer). Keep indexable
+            content in server components / SSG; push `"use client"` to the
+            interactive leaf. [[no-js-execution]]
+prose: |
+  Atomic-design corollary: pages and layouts stay server-rendered; client
+  interactivity belongs in leaf organisms. This guard fires on the page/layout
+  boundary only, so leaf components are untouched.

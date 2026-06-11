@@ -1,0 +1,10 @@
+{
+  "rule": "ssr-regression",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/app/staff/page.tsx",
+      "content": "useEffect(() => { fetch(\"/api/staff\").then(setStaff) }, [])"
+    }
+  }
+}

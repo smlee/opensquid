@@ -1,0 +1,43 @@
+# seo-aeo-expert ops lifecycle — audit → fix → validate → ship → measure as ONE
+# total FSM (spec §4.3). Makes "close the execution gap" mechanical: SEO-relevant
+# edits enter the cycle (fix_start), validation evidence advances it
+# (validation_passed), and the pre-push gate reads the state — push while
+# `fixing`/`validating` means unvalidated SEO work in flight.
+#
+# P0 wiring (deterministic only):
+#   fix_start          — fired by schema-validation-gate when JSON-LD is touched
+#   validation_passed  — fired when a schema-validation command runs (Bash)
+#   pushed             — fired by pre-push-seo-checklist from `validated`
+# audit_* / fixes_applied / validation_failed / measurement_logged transitions
+# are declared for the P1+ skills (cached_audit advance-on-proof, closed-loop
+# measurement) so the machine shape is stable across phases.
+#
+# Session-scoped (cleared at SessionEnd) — disciplines a working session; the
+# workgraph is the cross-session backlog (spec §4.4).
+initial: idle
+states:
+  - idle
+  - auditing
+  - audit_done
+  - fixing
+  - validating
+  - validated
+  - shipped
+  - measured
+transitions:
+  # Audit region (P1: profession-mode site audits)
+  - { from: '*', on: audit_start, to: auditing }
+  - { from: auditing, on: audit_complete, to: audit_done }
+  # Fix region — any SEO-relevant edit (re-)enters the fix cycle from anywhere,
+  # including validated/shipped (new fixes invalidate prior validation).
+  - { from: '*', on: fix_start, to: fixing }
+  - { from: fixing, on: fixes_applied, to: validating }
+  # Validation — P0 deterministic shortcut fires validation_passed straight
+  # from `fixing` (running the validator IS the P0 evidence proxy); P1 upgrades
+  # to exit-code/cached_audit proof via the `validating` station.
+  - { from: fixing, on: validation_passed, to: validated }
+  - { from: validating, on: validation_passed, to: validated }
+  - { from: validating, on: validation_failed, to: fixing }
+  # Ship + measure (closed loop, P3)
+  - { from: validated, on: pushed, to: shipped }
+  - { from: shipped, on: measurement_logged, to: measured }

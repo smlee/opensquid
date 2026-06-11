@@ -1,0 +1,72 @@
+# stale-tactic-guard — structurally refuse 2026-disproven SEO tactics in
+# shipped content/code. warn-level: surfaces the evidence, human decides.
+# Exempt: research/docs/lessons/tests/fixtures (writing ABOUT a dead tactic is
+# legitimate — this pack's own lessons discuss llms.txt). Evidence:
+# [[deprecated-tactics-2026]] + [[llms-txt-dead]].
+name: stale-tactic-guard
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: stale-tactic
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: exempt
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - '(^|/)research/'
+            - '(^|/)docs/'
+            - '(^|/)lessons/'
+            - '(^|/)fixtures/'
+            - '\.test\.(ts|js|tsx|jsx)$'
+            - 'CHANGELOG\.md$'
+            - '\.opensquid/'
+      - call: text_pattern_match
+        as: stale_w
+        if: 'is_write.matched.length > 0 && exempt.matched.length == 0'
+        args:
+          text_field: args.content
+          patterns:
+            - 'llms\.txt[^\n]{0,100}(rank|citation|visib|boost)'
+            - '(rank|citation|visib|boost)[^\n]{0,100}llms\.txt'
+            - 'keyword[ -]density'
+            - 'meta[ -]keywords'
+            - '\bLSI keyword'
+            - '"@type"\s*:\s*"(FAQPage|HowTo)"'
+      - call: text_pattern_match
+        as: stale_e
+        if: 'is_write.matched.length > 0 && exempt.matched.length == 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - 'llms\.txt[^\n]{0,100}(rank|citation|visib|boost)'
+            - '(rank|citation|visib|boost)[^\n]{0,100}llms\.txt'
+            - 'keyword[ -]density'
+            - 'meta[ -]keywords'
+            - '\bLSI keyword'
+            - '"@type"\s*:\s*"(FAQPage|HowTo)"'
+      - call: verdict
+        if: 'is_write.matched.length > 0 && exempt.matched.length == 0 && (stale_w.matched.length > 0 || stale_e.matched.length > 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/stale-tactic: a 2026-deprecated SEO tactic is being
+            shipped. llms.txt has ZERO measured citation correlation (SE
+            Ranking 300k-domain study; Google calls it "purely speculative" —
+            harmless for agent docs, dead as a ranking lever). FAQ/HowTo rich
+            results were removed (2023; FAQ fully dead 2026-05) — FAQPage
+            markup only plausibly aids Bing/Copilot comprehension. Keyword
+            density / meta keywords / LSI are folklore; the Princeton GEO
+            study measured keyword stuffing as neutral-to-NEGATIVE for AI
+            citations. See [[deprecated-tactics-2026]].
+prose: |
+  The evidence gate for tactics. The field is drowning in folklore; this
+  pack's credibility position is refusing disproven advice at write time.

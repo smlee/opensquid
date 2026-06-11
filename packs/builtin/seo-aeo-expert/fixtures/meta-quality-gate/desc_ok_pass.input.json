@@ -1,0 +1,10 @@
+{
+  "rule": "meta-description-length",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/app/layout.tsx",
+      "content": "description: 'Boutique reformer pilates studio in Englewood Cliffs, NJ.'"
+    }
+  }
+}

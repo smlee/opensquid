@@ -1,0 +1,10 @@
+{
+  "rule": "ssr-regression",
+  "event": {
+    "tool": "Edit",
+    "args": {
+      "file_path": "src/components/organisms/Header.tsx",
+      "new_string": "\"use client\";\nexport function Header() {}"
+    }
+  }
+}

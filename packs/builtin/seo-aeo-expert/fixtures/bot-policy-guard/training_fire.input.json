@@ -1,0 +1,10 @@
+{
+  "rule": "training-bot-change",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "public/robots.txt",
+      "content": "User-agent: GPTBot\nDisallow: /\n"
+    }
+  }
+}

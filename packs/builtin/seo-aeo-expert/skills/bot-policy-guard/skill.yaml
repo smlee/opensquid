@@ -1,0 +1,159 @@
+# bot-policy-guard — the highest-value guard. Cloudflare/Webflow default-block
+# (2025-07) makes ACCIDENTAL AI invisibility the #1 silent AEO failure. Three
+# rules, by damage class:
+#   citation-bot-disallow   BLOCK  blocking a search/citation bot removes the
+#                                  site from that engine's answers entirely
+#   robots-wildcard-disallow BLOCK Disallow: / under User-agent: * = de-index
+#   training-bot-change     warn   blocking training bots is a legitimate
+#                                  choice — surface the trade-off, don't block
+# Evidence: lessons [[bot-taxonomy-three-classes]] + [[cloudflare-default-block]].
+name: bot-policy-guard
+load: preload
+triggers:
+  - kind: tool_call
+rules:
+  - id: citation-bot-disallow
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: botfile
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - 'robots\.txt$'
+            - 'vercel\.json$'
+            - 'middleware\.(ts|js)$'
+            - '\.htaccess$'
+            - 'nginx[^/]*\.conf$'
+            - '_headers$'
+            - 'wrangler\.toml$'
+      - call: text_pattern_match
+        as: write_hit
+        if: 'botfile.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - 'user-agent:\s*(OAI-SearchBot|Claude-SearchBot|PerplexityBot|Bingbot|Googlebot)\b(?:(?!user-agent)[\s\S]){0,200}?disallow:\s*/'
+            - '(deny|block)[^\n]{0,120}\b(OAI-SearchBot|Claude-SearchBot|PerplexityBot|Bingbot|Googlebot)\b'
+            - '\b(OAI-SearchBot|Claude-SearchBot|PerplexityBot|Bingbot|Googlebot)\b[^\n]{0,120}(deny|block)'
+      - call: text_pattern_match
+        as: edit_hit
+        if: 'botfile.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - 'user-agent:\s*(OAI-SearchBot|Claude-SearchBot|PerplexityBot|Bingbot|Googlebot)\b(?:(?!user-agent)[\s\S]){0,200}?disallow:\s*/'
+            - '(deny|block)[^\n]{0,120}\b(OAI-SearchBot|Claude-SearchBot|PerplexityBot|Bingbot|Googlebot)\b'
+            - '\b(OAI-SearchBot|Claude-SearchBot|PerplexityBot|Bingbot|Googlebot)\b[^\n]{0,120}(deny|block)'
+      - call: verdict
+        if: 'botfile.matched.length > 0 && (write_hit.matched.length > 0 || edit_hit.matched.length > 0)'
+        args:
+          level: block
+          message: >-
+            seo-aeo-expert/bot-policy: this blocks an AI SEARCH/CITATION bot
+            (OAI-SearchBot, Claude-SearchBot, PerplexityBot, Bingbot, or
+            Googlebot) — that removes the site from the corresponding engine's
+            answers entirely. Distinct from TRAINING bots (GPTBot, ClaudeBot,
+            Google-Extended), which are fine to block. ChatGPT visibility also
+            dies with Bingbot (its index is Bing). See lesson
+            [[bot-taxonomy-three-classes]]. If genuinely intentional, the user
+            must override.
+
+  - id: robots-wildcard-disallow
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: robotsfile
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - 'robots\.txt$'
+      - call: text_pattern_match
+        as: wild_w
+        if: 'robotsfile.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - 'user-agent:\s*\*(?:(?!user-agent)[\s\S]){0,300}?\ndisallow:\s*/[ \t]*(\n|$)'
+      - call: text_pattern_match
+        as: wild_e
+        if: 'robotsfile.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - 'user-agent:\s*\*(?:(?!user-agent)[\s\S]){0,300}?\ndisallow:\s*/[ \t]*(\n|$)'
+      - call: verdict
+        if: 'robotsfile.matched.length > 0 && (wild_w.matched.length > 0 || wild_e.matched.length > 0)'
+        args:
+          level: block
+          message: >-
+            seo-aeo-expert/bot-policy: `Disallow: /` under `User-agent: *`
+            de-indexes the ENTIRE site from every crawler — Google, Bing, and
+            all AI engines. This is full search invisibility. If this is a
+            staging host, scope it by hostname/environment instead. User must
+            override to proceed.
+
+  - id: training-bot-change
+    process:
+      - call: text_pattern_match
+        as: is_write
+        args:
+          text_field: tool
+          patterns:
+            - '^(Write|Edit|NotebookEdit)$'
+      - call: text_pattern_match
+        as: botfile
+        if: 'is_write.matched.length > 0'
+        args:
+          text_field: args.file_path
+          patterns:
+            - 'robots\.txt$'
+            - 'vercel\.json$'
+            - 'middleware\.(ts|js)$'
+            - '\.htaccess$'
+            - 'nginx[^/]*\.conf$'
+            - '_headers$'
+            - 'wrangler\.toml$'
+      - call: text_pattern_match
+        as: train_w
+        if: 'botfile.matched.length > 0'
+        args:
+          text_field: args.content
+          patterns:
+            - '\b(GPTBot|ClaudeBot|Google-Extended|Bytespider|Meta-ExternalAgent|CCBot|anthropic-ai)\b'
+      - call: text_pattern_match
+        as: train_e
+        if: 'botfile.matched.length > 0'
+        args:
+          text_field: args.new_string
+          patterns:
+            - '\b(GPTBot|ClaudeBot|Google-Extended|Bytespider|Meta-ExternalAgent|CCBot|anthropic-ai)\b'
+      - call: verdict
+        if: 'botfile.matched.length > 0 && (train_w.matched.length > 0 || train_e.matched.length > 0)'
+        args:
+          level: warn
+          message: >-
+            seo-aeo-expert/bot-policy: TRAINING-bot policy touched (GPTBot /
+            ClaudeBot / Google-Extended / Bytespider / Meta-ExternalAgent /
+            CCBot). Blocking these is a legitimate content-protection choice
+            and does NOT affect search/citation visibility — Google-Extended
+            does not control AI Overviews (Googlebot does), and GPTBot does
+            not control ChatGPT Search (OAI-SearchBot does). Know which class
+            you are changing: [[bot-taxonomy-three-classes]].
+prose: |
+  Bot-policy guard. Citation-bot disallows and robots wildcards are blocked
+  because the damage is invisible until traffic is already gone (and AI
+  engines re-crawl slowly — recovery is weeks). Training-bot changes warn
+  with the class distinction so the trade-off is a decision, not an accident.

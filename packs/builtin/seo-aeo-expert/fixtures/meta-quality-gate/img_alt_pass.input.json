@@ -1,0 +1,10 @@
+{
+  "rule": "meta-img-alt",
+  "event": {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/components/Hero.html",
+      "content": "<img src=\"/hero.jpg\" alt=\"Reformer studio interior\">"
+    }
+  }
+}
