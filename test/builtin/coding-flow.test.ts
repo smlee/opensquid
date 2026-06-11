@@ -665,6 +665,34 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
       await advanceFsmState(sid, 'coding-flow', pack.fsm!, ev, now); // → phases_complete
   }
 
+  it('SDG.1: scope stop WITHOUT AskUserQuestion this turn → BLOCK (exit 2)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-sdg-block';
+    await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping
+    const r = await dispatchEvent(stop, [pack], reg, sid);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toMatch(/SCOPE stop without a pending question/);
+  });
+
+  it('SDG.1: scope stop WITH AskUserQuestion this turn → allowed', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-sdg-ok';
+    await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping (resets turn)
+    await appendTool(sid, 'AskUserQuestion');
+    const r = await dispatchEvent(stop, [pack], reg, sid);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).not.toMatch(/SCOPE stop without/);
+  });
+
+  it('SDG.1: idle stop → untouched (no run armed)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const r = await dispatchEvent(stop, [pack], reg, 'cf-sdg-idle');
+    expect(r.exitCode).toBe(0);
+  });
+
   it('GF.6: AskUserQuestion past SCOPE → BLOCK (exit 2)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const sid = 'cf-af6-q';

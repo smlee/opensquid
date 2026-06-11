@@ -31,8 +31,37 @@ rules:
             to the next phase/task and keep going until the whole backlog is depleted. (A
             SCOPE stop to await a genuine user answer is the only allowed pause, and you are
             past SCOPE.)
+  # SDG.1 (wg-66307bc8af35) — the SCOPE-stop exception was unconditional, so a
+  # decision-DEFERRAL pause ("your call", "say the word") slipped through at
+  # scoping between slices. The precise allow-signal: a SCOPE stop is
+  # legitimate iff a fork is ACTUALLY awaiting the user — AskUserQuestion ran
+  # this turn (the tool ledger is written at PreToolUse, immune to the stop
+  # text's off-by-one that killed the text-match design; see the
+  # pre-research). A prose question gets blocked once and re-posed through
+  # the tool — the structured-fork upgrade is intended.
+  - id: scope-stop-needs-a-question
+    process:
+      - call: read_fsm_state
+        as: st
+      - call: session_tool_history
+        args:
+          scope: current_turn
+          filter_names: [AskUserQuestion]
+        as: asked
+      - call: verdict
+        if: '(st == "scoping" || st == "researching") && asked.count == 0'
+        args:
+          level: block
+          message: >-
+            DRIFT: a SCOPE stop without a pending question. A stop during SCOPE
+            is for awaiting a genuine user answer — pose the fork via
+            AskUserQuestion (state the options, ask it), or continue the
+            research. A deferral ("your call", "say the word") is not a pause
+            ticket.
 prose: |
   Stopping during AUTHOR or EXECUTE — or at phases_complete with open tasks remaining — is
   drift, and is now HARD-BLOCKED (GF.6). The only legitimate pause is a genuine
-  user-question during the interactive SCOPE phase; everything downstream runs to depletion.
-  A depleted run (idle, or phases_complete with zero open tasks) stops freely.
+  user-question during the interactive SCOPE phase — and SDG.1 makes that literal: a stop at
+  scoping/researching is allowed only when AskUserQuestion ran this turn (a fork is actually
+  awaiting the user); a deferral is not a pause ticket. Everything downstream runs to
+  depletion. A depleted run (idle, or phases_complete with zero open tasks) stops freely.

@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.395] - 2026-06-11
+
+### Fixed — the SCOPE deferral-pause gate hole (T-fix-scope-deferral-gate, wg-66307bc8af35)
+
+The Stop gate's SCOPE exception was unconditional, so a decision-deferral
+pause ("your call", "say the word") slipped through whenever the FSM sat at
+scoping between slices. New pause-stop-guard rule: a stop at
+scoping/researching is allowed only when AskUserQuestion ran in the current
+turn — a fork genuinely awaiting the user. The text-match design was killed in
+review against the stop hook's own off-by-one documentation; the tool-ledger
+allow-signal needs no new plumbing, no language patterns, and upgrades scope
+forks to structured questions.
+
 ## [0.5.394] - 2026-06-11
 
 ### Added — `opensquid export` / `import` / `rebuild`: migration-grade portability (T-portability; roadmap stage ②)
