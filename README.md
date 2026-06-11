@@ -3,10 +3,9 @@
 # OpenSquid
 
 [![CI](https://github.com/smlee/opensquid/actions/workflows/ci.yml/badge.svg)](https://github.com/smlee/opensquid/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/opensquid)](https://www.npmjs.com/package/opensquid)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
-
-<!-- [![npm](https://img.shields.io/npm/v/opensquid)](https://www.npmjs.com/package/opensquid) — uncomment once published -->
 
 OpenSquid gives your coding agent continuity: memory, ready work, gates, and a path across devices.
 
@@ -18,33 +17,28 @@ It is an MCP operating layer that adds durable memory, dependency-aware task sta
 
 ## Quickstart
 
-OpenSquid is not published to npm yet. For now, build from the repo:
-
 ```bash
-git clone git@github.com:smlee/opensquid.git
-cd opensquid
-pnpm install
-pnpm build
+npm install -g opensquid
 ```
 
 Register the MCP server with Claude Code:
 
 ```bash
-node dist/cli.js setup wizard mcp
+opensquid setup wizard mcp
 ```
 
 Optional hooks:
 
 ```bash
-node dist/cli.js setup wizard hooks
-node dist/cli.js doctor hooks
+opensquid setup wizard hooks
+opensquid doctor hooks
 ```
 
 Using codex? The same gates install inside codex CLI (its hook protocol is Claude Code-compatible):
 
 ```bash
-node dist/cli.js setup wizard codex-hooks   # then trust the entries via /hooks inside codex
-node dist/cli.js doctor codex-hooks
+opensquid setup wizard codex-hooks   # then trust the entries via /hooks inside codex
+opensquid doctor codex-hooks
 ```
 
 Restart your MCP host. Your agent now has tools for memory, task graph state, pack inspection, workflow phase logs, and lesson capture.

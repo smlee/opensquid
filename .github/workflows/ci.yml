@@ -39,6 +39,33 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  # T-npm-launch-eresolve NPM.2 — the 0.5.395 launch defect class: pnpm
+  # tolerates peer-graph inconsistencies the npm resolver refuses, and
+  # nothing in CI exercised the npm resolver. This job installs the REAL
+  # packed tarball with npm's resolver in an empty dir — ERESOLVE here is a
+  # red build, not a launch-day incident. No registry dependency on our own
+  # package: the tarball is local.
+  cold-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Pack the local tarball
+        run: npm pack --pack-destination /tmp
+      - name: Cold-install with the real npm resolver
+        run: |
+          dir="$(mktemp -d)"
+          cd "$dir"
+          npm init -y >/dev/null
+          npm install /tmp/opensquid-*.tgz
+          ./node_modules/.bin/opensquid --version
+
   # G.13 — End-to-end drift-prevention pass. Spawns a real loop-engine
   # daemon, compiled hook bins, real fs mutations. ~5min wall-clock; do
   # NOT run on every push (CI cost). Triggered manually via
