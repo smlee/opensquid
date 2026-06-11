@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.395",
+  "version": "0.5.396",
   "description": "Continuity layer for coding agents: durable memory, dependency-aware task state, workflow gates, and inspectable packs over MCP.",
   "type": "module",
   "exports": {
@@ -111,7 +111,7 @@
   },
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.0",
-    "@anthropic-ai/sdk": "^0.30.0",
+    "@anthropic-ai/sdk": ">=0.30.0 <1.0.0",
     "@slack/socket-mode": "^2.0.0",
     "@slack/web-api": "^7.0.0",
     "discord.js": "^14.16.0",

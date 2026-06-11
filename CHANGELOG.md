@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.396] - 2026-06-11
+
+### Fixed — cold `npm install` / `npx -y opensquid` failed ERESOLVE (T-npm-launch-eresolve, wg-4b72293774e6)
+
+Launch-day defect: the `@anthropic-ai/sdk` peer range `^0.30.0` could not
+co-resolve with `@anthropic-ai/claude-agent-sdk`'s own peer `>=0.93.0` — the
+ranges never intersected, so every cold install through the npm resolver
+failed ERESOLVE. pnpm tolerated the inconsistency; nothing in CI exercised
+the npm resolver. Widened the peer to `>=0.30.0 <1.0.0` — the two lazy
+variable-indirection consumers (`src/runtime/agent_bridge/daemon.ts`
+`constructAnthropicClient`, `src/models/strategies/api_anthropic.ts`
+`loadSdk`) bind a structural contract (`{apiKey}` constructor +
+`messages.create`) satisfied across the widened range. The peer is NOT
+dead and must not be deleted.
+
 ## [0.5.395] - 2026-06-11
 
 ### Fixed — the SCOPE deferral-pause gate hole (T-fix-scope-deferral-gate, wg-66307bc8af35)
