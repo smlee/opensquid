@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.401] - 2026-06-11
+
+### Fixed — no supported way to update an installed copy (T-npm-auto-update UPD.2, wg-7091e922881b)
+
+`opensquid update` lands: detects the install mode and acts — npm-global →
+`npm install -g opensquid@latest`, pnpm-global → `pnpm add -g
+opensquid@latest` (the package manager's own output is the UI; post-success
+prints the real old→new delta + `opensquid doctor hooks` guidance);
+linked-dev (npm-linked repo), npx-ephemeral, and project-dependency
+installs are refused/redirected with the exact manual action — the
+classifier never mutates a tree it shouldn't. `--check-only` (the 0.5.400
+detached refresher's entrypoint) probes the registry and refreshes the
+notice cache through the merge-preserving write path. `opensquid doctor
+update` now also reports the detected install mode. Auto-apply remains
+deliberately absent (foreground user-invoked updates only — no
+live-session hook-binary skew); the opt-in auto-apply + SessionStart-latch
+design is seeded in the work-graph for a future track.
+
 ## [0.5.400] - 2026-06-11
 
 ### Fixed — installed copies silently age now that the package is public (T-npm-auto-update UPD.1, wg-7091e922881b)

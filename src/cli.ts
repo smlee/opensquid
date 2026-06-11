@@ -49,6 +49,7 @@ import { registerPermissions } from './setup/cli/permissions.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
 import { registerTriggers } from './setup/cli/triggers.js';
+import { registerUpdate } from './setup/cli/update.js';
 import { registerWebhooks } from './setup/cli/webhooks.js';
 
 // CAT.1d — internal worker entrypoint short-circuit. `chat-daemon-worker` is
@@ -296,6 +297,12 @@ function runCli(): void {
   // 1 = any red. NEVER spawns commands that don't match the opensquid regex
   // (security gate against running arbitrary user-configured commands).
   registerDoctor(program);
+
+  // UPD.2 — `opensquid update`: install-mode-aware self-update (refuses
+  // linked-dev/npx/local-dep with the right manual action; runs the user's
+  // own package manager for the global modes). `--check-only` is the UPD.1
+  // detached refresher's entrypoint.
+  registerUpdate(program);
 
   // GF.2 — `opensquid gate commit|push|install`. The owned-boundary EXECUTE gate: the
   // installed git pre-commit/pre-push hooks `exec opensquid gate <boundary>`, which reads

@@ -399,7 +399,12 @@ export function registerDoctor(program: Command): void {
       const { probeLatest, readCurrentVersion, refreshCache } =
         await import('../../runtime/update_check.js');
       const { gt } = await import('semver');
+      // UPD.2 (finding 2): the install-mode line lives here because the
+      // classifier is update.ts's.
+      const { classifyInstall, gatherInstallFacts } = await import('./update.js');
       const current = await readCurrentVersion();
+      const mode = classifyInstall(gatherInstallFacts());
+      process.stdout.write(`[INFO]\tupdate: install mode ${mode.kind} (${mode.packageRoot})\n`);
       const latest = await probeLatest();
       if (latest === null) {
         process.stdout.write(`[WARN]\tupdate: registry unreachable (current ${current})\n`);
