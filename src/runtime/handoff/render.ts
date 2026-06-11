@@ -151,13 +151,19 @@ ${section('Open work-graph issues', issues)}
 `;
 }
 
+/** HPB.1 (wg-c34349377f81) — a POINTER-ONLY projection. The project's locked
+ *  thesis (event-sourced work-graph; the memory axiom): disk state is the
+ *  truth; shared-mutable surfaces carry pointers, never content. The inline
+ *  steps this used to carry were a stale-prone duplicate of what the
+ *  SessionStart directive injection (0.5.404) renders fresh — and an
+ *  overwritten POINTER loses nothing, because the doc it names is lazily
+ *  regenerated to currency at read time. */
 export function renderResumeBlock(state: HandoffState): string {
   const sid8 = state.sessionId.slice(0, 8);
-  const steps = renderResumeSteps(state);
   return (
-    `## ‼️ AUTO-HANDOFF (session ${sid8}, ${state.generatedAt}) — FSM ${fsmStateOf(state)}\n` +
-    `Full record: see the auto-handover doc for session ${sid8} under the umbrella docs/ dir. ` +
-    `First step: ${steps[0] ?? '(none)'} Final step: commit the handover doc(s).`
+    `## 📦 AUTO-HANDOFF pointer (session ${sid8}, ${state.generatedAt}) — FSM ${fsmStateOf(state)}\n` +
+    `Full record: \`docs/handover-session-${sid8}-auto.md\` under the umbrella root. ` +
+    `The next session AUTO-RESUMES from it on any first prompt (0.5.404 directive) — no manual action needed.`
   );
 }
 

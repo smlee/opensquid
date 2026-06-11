@@ -174,3 +174,22 @@ describe('gatherSiblingFacts — impure shell (tmp OPENSQUID_HOME)', () => {
     ).toBeNull();
   });
 });
+
+// HPB.1 — migration-is-automatic pin: an OLD rich multi-line block is replaced
+// wholesale by the new pointer at the next splice; outside bytes untouched.
+describe('spliceResumeBlock — pointer migration (HPB.1)', () => {
+  it('replaces a legacy rich block with the 2-line pointer wholesale', () => {
+    const legacy =
+      `## ‼️ AUTO-HANDOFF (session old, t) — FSM scoping\n` +
+      `Full record: ... First step: Re-fire the artifact... Final step: commit.\n` +
+      `extra legacy narrative line`;
+    const before = `# Mind\n\nabove\n\n${HANDOFF_BEGIN}\n${legacy}\n${HANDOFF_END}\n\nbelow\n`;
+    const pointer = `## 📦 AUTO-HANDOFF pointer (session new12345, t2) — FSM researched\nFull record: \`docs/handover-session-new12345-auto.md\` ...`;
+    const after = spliceResumeBlock(before, pointer);
+    expect(after).toContain(pointer);
+    expect(after).not.toContain('First step');
+    expect(after).not.toContain('legacy narrative');
+    expect(after.startsWith('# Mind\n\nabove\n\n')).toBe(true);
+    expect(after.endsWith('\n\nbelow\n')).toBe(true);
+  });
+});

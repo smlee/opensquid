@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.405] - 2026-06-11
+
+### Changed — the MEMORY.md resume block is a pointer-only projection (T-handoff-pointer-block HPB.1, wg-c34349377f81)
+
+The user's architecture challenge ("does it have to be in an md file? is
+this the best solution?… no patches, only best full solution"): the
+resume block was the ONE handoff surface violating the project's locked
+projection discipline (event-sourced truth, rebuildable projections,
+index-lines-not-content in MEMORY.md) by carrying derived content — the
+stale-prone duplicate that three defensive slices (0.5.399/403/404)
+existed to guard. It is now a two-line POINTER (session, state, where
+the full record lives, "auto-resumes on any first prompt"); the single
+authority is disk state, rendered fresh by the SessionStart directive
+injection; the committed handover doc remains the durable git/human
+projection. An overwritten pointer loses nothing — the doc it names is
+lazily regenerated to currency at read time. Migration is automatic: the
+next handoff's splice replaces any legacy rich block wholesale.
+
 ## [0.5.404] - 2026-06-11
 
 ### Fixed — handoff resume required a resume-specific prompt; the resume block was last-writer-wins (T-handoff-resume-autonomy HRA.1, wg-c34349377f81)

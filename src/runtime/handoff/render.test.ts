@@ -100,3 +100,49 @@ describe('renderInjection (the resume-on-any-prompt directive)', () => {
     expect(out).toContain('any first prompt');
   });
 });
+
+// HPB.1 (wg-c34349377f81) — the resume block is a POINTER-ONLY projection.
+describe('renderResumeBlock (pointer-only)', () => {
+  it('two lines: heading + pointer; no step content', async () => {
+    const { renderResumeBlock, renderResumeSteps } = await import('./render.js');
+    const state = {
+      sessionId: 'abcdef1234567890',
+      generatedAt: '2026-06-11T12:00:00.000Z',
+      cwd: '/u/loop',
+      umbrellaRoot: '/u/loop',
+      fsm: { state: 'scoping' },
+      activeTask: null,
+      phaseSet: {},
+      phaseLedger: [],
+      guessAuditHead: '',
+      specAuditHead: '',
+      spawnLedgerTail: [],
+      attestationsTail: [],
+      artifacts: [
+        {
+          kind: 'pre_research',
+          path: '/u/loop/docs/research/T-x-pre-research.md',
+          sha8: 'deadbeef',
+        },
+      ],
+      git: [],
+      openIssues: [],
+    } as never;
+
+    const out = renderResumeBlock(state);
+    expect(out.split('\n')).toHaveLength(2);
+    expect(out).toContain('abcdef12');
+    expect(out).toContain('2026-06-11T12:00:00.000Z');
+    expect(out).toContain('scoping');
+    expect(out).toContain('handover-session-abcdef12-auto.md');
+    expect(out).toContain('AUTO-RESUMES');
+    expect(out).toContain('any first prompt');
+    // The duplication pin: NO inline steps survive.
+    expect(out).not.toContain('First step');
+    expect(out).not.toContain('Final step');
+    const steps = renderResumeSteps(state);
+    if (steps.length > 0 && steps[0] !== undefined) {
+      expect(out).not.toContain(steps[0]);
+    }
+  });
+});
