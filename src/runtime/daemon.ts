@@ -419,6 +419,10 @@ export class OpenSquidDaemon {
 
   private async fireScheduleEntry(entry: ScheduleEntry): Promise<void> {
     const fireTime = new Date(this.nowFn()).toISOString();
+    // FAC.1: the concurrent slot guards the triggered run — release on
+    // every exit after a successful check() (floors at 0; no-op when
+    // unconfigured).
+    let acquiredSlot = false;
     try {
       if (this.opts.rateLimiter) {
         const decision = await this.opts.rateLimiter.check(entry.pack, 'schedule', entry.id);
@@ -426,6 +430,7 @@ export class OpenSquidDaemon {
           this.auditLog({ event: 'schedule_rate_limited', entryId: entry.id, fireTime });
           return;
         }
+        acquiredSlot = true;
       }
       const event: ScheduleEvent = {
         kind: 'schedule',
@@ -442,6 +447,10 @@ export class OpenSquidDaemon {
         reason: err instanceof Error ? err.message : String(err),
         fireTime,
       });
+    } finally {
+      if (acquiredSlot && this.opts.rateLimiter) {
+        await this.opts.rateLimiter.release(entry.pack, 'schedule', entry.id);
+      }
     }
   }
 

@@ -126,7 +126,10 @@ export function registerLlmFunctions(registry: FunctionRegistry): void {
     name: 'llm_classify',
     argSchema: LlmClassifyArgs,
     durable: true,
-    memoizable: true,
+    // NOT memoizable (FAC.1): reads ctx.packModels (pack-scoped model
+    // aliases) — outside the memo key; a cached result would cross
+    // pack alias configs.
+    memoizable: false,
     costEstimateMs: 3000,
     execute: async ({ model, prompt, allowed_labels, timeout_ms }, ctx) => {
       // PR-followup: same `ctx.packModels` thread-through as `subagent_call`.

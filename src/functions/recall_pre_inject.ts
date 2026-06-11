@@ -141,7 +141,10 @@ export function registerRecallPreInjectFunction(
     argSchema: RecallPreInjectArgs,
     // Backend recall is the same call as `recall`; same durability profile.
     durable: true,
-    memoizable: true,
+    // NOT memoizable (FAC.1): reads ctx.event.prompt + ctx.sessionId —
+    // outside the memo key; a cached hit would inject the FIRST
+    // prompt's recall into later prompts (stale context injection).
+    memoizable: false,
     costEstimateMs: 50,
     execute: async (args, ctx) => {
       // Zod `.default()` is applied by the registry's `safeParse` before

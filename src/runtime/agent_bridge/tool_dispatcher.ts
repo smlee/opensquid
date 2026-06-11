@@ -1,7 +1,7 @@
 /**
  * agent_bridge — tool dispatcher (WAB.4, 0.5.97).
  *
- * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.4.
+ * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.4.
  * Architecture: `docs/tasks/WAB.1-architecture.md` decisions (e) + (f).
  *
  * Responsibility:

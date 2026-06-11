@@ -2,7 +2,7 @@
  * Pack folder loader — turn a directory on disk into a typed `Pack`.
  *
  * Authoritative source: `docs/opensquid-real-design.md` §"Pack format" folder
- * layout + Task 2.3 of `docs/tasks/phase-2-pack-format.md`.
+ * layout + Task 2.3 of the phase-2 pack-format planning notes [not retained — this header is the authority].
  *
  * A pack on disk looks like:
  *

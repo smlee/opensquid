@@ -240,6 +240,56 @@ describe('WebhookServer — rate-limit', () => {
     expect(h.dispatched).toHaveLength(0);
   });
 
+  // FAC.1 (wg-8f7d9b919a40): the concurrent slot acquired by an allowed
+  // check() is RELEASED on every post-check exit — a counting stub limiter
+  // pins check/release pairing across the dispatch path, the idempotent
+  // short-circuit, and the denied path (no release without acquisition).
+  it('releases the slot after dispatch AND after the idempotent short-circuit; never on denial', async () => {
+    let checks = 0;
+    let releases = 0;
+    let allow = true;
+    const limiter: Partial<RateLimiter> = {
+      check: () => {
+        checks += 1;
+        return Promise.resolve(
+          allow ? { allowed: true } : { allowed: false, reason: 'concurrent_exceeded' as const },
+        );
+      },
+      release: () => {
+        releases += 1;
+        return Promise.resolve();
+      },
+    };
+    const sub = makeSubscription({ rateLimit: { max: 100, per: 'minute' } });
+    const h = await startServer({ rateLimiter: limiter as RateLimiter }, [sub]);
+    const body = '{"x":"fac1"}';
+    const headers = {
+      'content-type': 'application/json',
+      'x-opensquid-signature': sign(FIXED_SECRET, body),
+    };
+
+    // 1. Normal dispatch: check + release pair.
+    const r1 = await fetch(`${h.url}/webhook/stripe-events`, { method: 'POST', headers, body });
+    expect(r1.status).toBe(200);
+    expect(checks).toBe(1);
+    expect(releases).toBe(1);
+
+    // 2. Duplicate body → idempotent short-circuit AFTER the check — the
+    //    slot must still be released (the post-check early-exit class).
+    const r2 = await fetch(`${h.url}/webhook/stripe-events`, { method: 'POST', headers, body });
+    expect(r2.status).toBe(200);
+    expect(checks).toBe(2);
+    expect(releases).toBe(2);
+    expect(h.dispatched).toHaveLength(1); // second was idempotent
+
+    // 3. Denied: no slot acquired → no release.
+    allow = false;
+    const r3 = await fetch(`${h.url}/webhook/stripe-events`, { method: 'POST', headers, body });
+    expect(r3.status).toBe(429);
+    expect(checks).toBe(3);
+    expect(releases).toBe(2);
+  });
+
   it('skips rate-limit check when subscription has no rateLimit config', async () => {
     let called = false;
     const limiter: Partial<RateLimiter> = {

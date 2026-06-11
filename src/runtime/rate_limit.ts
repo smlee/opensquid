@@ -1,7 +1,7 @@
 /**
  * Pack-declared rate limits — token-bucket with libsql persistence (AUTO.2).
  *
- * Authoritative source: `docs/tasks/automation.md` AUTO.2.
+ * Authoritative source: the automation planning notes [not retained — this header is the authority] AUTO.2.
  *
  * Token-bucket over fixed-window because the trigger sources AUTO.2 feeds
  * (SCHED.1, AUTO.5, AUTO.6, SCHED.2) are bursty — a save firing 50

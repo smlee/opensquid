@@ -92,8 +92,11 @@ export interface FunctionError {
 //                       persisting them).
 //
 //   `memoizable`      — when `true`, identical `(fn, args)` calls within a
-//                       run can be served from the memo cache (DURABLE.3,
-//                       not yet wired). `memoizable: true, durable: false`
+//                       run can be served from the memo cache (DURABLE.3 —
+//                       LIVE: evaluator.ts invokeMemoized; the key EXCLUDES
+//                       ctx, so memoizable primitives must be TRANSITIVELY
+//                       ctx-pure — see memo_purity.test.ts, FAC.1).
+//                       `memoizable: true, durable: false`
 //                       is allowed but unusual — the cache persists only
 //                       for the lifetime of the in-memory tier (LRU); it
 //                       does not survive daemon restart on its own.

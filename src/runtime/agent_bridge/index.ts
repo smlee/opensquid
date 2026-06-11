@@ -1,7 +1,7 @@
 /**
  * agent_bridge — warm-pool chat-agent shell.
  *
- * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` +
+ * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] +
  * `docs/tasks/WAB.1-architecture.md`. Currently shipped slices:
  *   - WAB.2 (0.5.94): types, typed event bus, transport bridge.
  *   - WAB.3 (0.5.95): SessionManager + SessionPersistence + history types.

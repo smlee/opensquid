@@ -1,7 +1,7 @@
 /**
  * agent_bridge — warm-pool session manager (WAB.3, 0.5.95).
  *
- * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.3.
+ * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.3.
  * Architecture: `docs/tasks/WAB.1-architecture.md` decisions (b) + (c) +
  * Section 2 module layout (≤350 LOC budget for this file).
  *

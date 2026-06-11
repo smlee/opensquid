@@ -1,6 +1,6 @@
 /**
  * Sealed built-in denylist for the capability gate (AUTO.3).
- * Spec: `docs/tasks/automation.md` AUTO.3 risk callouts.
+ * Spec: the automation planning notes [not retained — this header is the authority] AUTO.3 risk callouts.
  *
  * Value-only constants file. Exports are `Object.freeze`d so a misbehaving
  * consumer can't monkey-patch at runtime (the audit constraint demands the

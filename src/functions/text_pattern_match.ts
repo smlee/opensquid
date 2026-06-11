@@ -64,7 +64,10 @@ export const TextPatternMatch: FunctionDef<
   name: 'text_pattern_match',
   argSchema: TextPatternMatchArgs,
   durable: false,
-  memoizable: true,
+  // NOT memoizable (FAC.1): reads ctx.event — the memo key is
+  // sha256({fn, args}) only (evaluator.ts:437), so a cached result
+  // would cross turn boundaries (stale guard matches on old text).
+  memoizable: false,
   costEstimateMs: 1,
   execute: (args, ctx) => {
     const caseSensitive = args.case_sensitive ?? false;

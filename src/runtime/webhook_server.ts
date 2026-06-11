@@ -218,6 +218,7 @@ export class WebhookServer {
       return sendJson(res, 401, { error: 'invalid_signature' });
     }
 
+    let acquiredSlot = false;
     if (sub.rateLimit && this.rateLimiter) {
       const decision = await this.rateLimiter.check(sub.pack, 'webhook', sub.id);
       if (!decision.allowed) {
@@ -230,8 +231,31 @@ export class WebhookServer {
           { 'retry-after': retrySec },
         );
       }
+      acquiredSlot = true;
     }
 
+    // FAC.1 (wg-8f7d9b919a40): the concurrent slot acquired by check()
+    // guards the triggered RUN — EVERY post-check exit (idempotent return,
+    // deliver-only returns, dispatch completion, throws) must release it.
+    // release() floors at 0 and no-ops when unconfigured (rate_limit.ts
+    // contract), and the acquired flag keeps denied/unconfigured paths out.
+    try {
+      return await this.handleAfterRateLimit(req, res, sub, subscriptionId, body, receivedAt);
+    } finally {
+      if (acquiredSlot && this.rateLimiter) {
+        await this.rateLimiter.release(sub.pack, 'webhook', sub.id);
+      }
+    }
+  }
+
+  private async handleAfterRateLimit(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sub: Subscription,
+    subscriptionId: string,
+    body: Buffer,
+    receivedAt: string,
+  ): Promise<void> {
     const dedupKey = `${sub.id}:${createHash('sha256').update(body).digest('hex')}`;
     const now = this.nowFn();
     const seenAt = this.idempotencyCache.get(dedupKey);

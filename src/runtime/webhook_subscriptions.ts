@@ -2,7 +2,7 @@
  * Webhook subscription loader — reads `~/.opensquid/webhooks.yaml` and
  * resolves declared secrets through the user's configured `SecretResolver`.
  *
- * Authoritative source: `docs/tasks/scheduling.md` SCHED.1 "Key code shapes"
+ * Authoritative source: the scheduling planning notes [not retained — this header is the authority] SCHED.1 "Key code shapes"
  * + memory `project_opensquid_file_organization` (one concern per file).
  *
  * The YAML lives outside any pack — it's user-config, not pack-content —

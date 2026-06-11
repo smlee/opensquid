@@ -3,7 +3,7 @@
  * `triggers: [{kind: schedule, cron: ...}]` declarations into a flat list of
  * cron entries the daemon can register with node-cron.
  *
- * Authoritative source: `docs/tasks/scheduling.md` SCHED.1.
+ * Authoritative source: the scheduling planning notes [not retained — this header is the authority] SCHED.1.
  *
  * Validation contract (load-time, not run-time):
  *

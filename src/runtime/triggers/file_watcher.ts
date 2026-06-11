@@ -1,7 +1,7 @@
 /**
  * `FileWatcher` — chokidar-backed file-change trigger source (AUTO.5).
  *
- * Authoritative source: `docs/tasks/automation.md` AUTO.5. Watches the glob
+ * Authoritative source: the automation planning notes [not retained — this header is the authority] AUTO.5. Watches the glob
  * paths a skill declares in `triggers: [{kind: 'file_changed', paths: [...]}]`
  * and emits `FileChangedEvent` into the runtime evaluator.
  *
@@ -16,8 +16,10 @@
  *     suppresses partial-write events (atomic save / IDE auto-save).
  *   - Default `ignored`: `['**\/node_modules/**', '**\/.git/**']`.
  *   - Rate-limit gate (AUTO.2): `rateLimiter.check(pack, 'file_changed',
- *     path)` runs BEFORE every dispatch; denial drops + audits.
- *     `release()` is the evaluator's job (out of scope for AUTO.5).
+ *     path)` runs BEFORE every dispatch; denial drops + audits. The
+ *     concurrent slot is RELEASED in this file after the dispatch settles
+ *     (FAC.1 — the old "release is the evaluator's job" deferral was the
+ *     half-wired lifecycle the whole-source audit caught).
  *
  * Fail-closed (constraint C10): `dispatch` errors + chokidar backend
  * errors audit as `file_changed_error`. No silent swallows.
@@ -244,6 +246,13 @@ export class FileWatcher {
         path,
         reason: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      // FAC.1 (wg-8f7d9b919a40): the concurrent slot acquired by the
+      // allowed check() above guards this dispatch — release on success
+      // AND on dispatch error (floors at 0; no-op when unconfigured).
+      // The old header's "release() is the evaluator's job" deferral was
+      // the half-wired lifecycle the whole-source audit caught.
+      await this.rateLimiter.release(this.cfg.pack, 'file_changed', path);
     }
   }
 }

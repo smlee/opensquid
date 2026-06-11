@@ -69,5 +69,5 @@ export {
 
 // Warm-agent chat bridge (WAB.2, 0.5.94) — typed event bus + per-project
 // inbox JSONL → InboundChatEvent transport bridge. Foundation for the
-// WAB.3-WAB.7 warm-pool chat agent. See docs/tasks/T-warm-agent-chat-bridge.md.
+// WAB.3-WAB.7 warm-pool chat agent. See the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is].
 export * from './agent_bridge/index.js';

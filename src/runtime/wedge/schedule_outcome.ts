@@ -1,7 +1,7 @@
 /**
  * Two-stage wedge gate applied to schedule outcomes (SCHED.4).
  *
- * Authoritative source: `docs/tasks/scheduling.md` §"Task SCHED.4" +
+ * Authoritative source: the scheduling planning notes [not retained — this header is the authority] §"Task SCHED.4" +
  * `docs/opensquid-real-design.md` §"Two-stage wedge gate" + the Phase 7
  * capture/promote pattern (see `./capture.ts` + `./promote.ts`).
  *

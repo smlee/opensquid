@@ -1,7 +1,7 @@
 /**
  * agent_bridge — adaptive batch coordinator (WAB.5, 0.5.99).
  *
- * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.5.
+ * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.5.
  * Architecture: `docs/tasks/WAB.1-architecture.md` decision (d).
  *
  * Responsibility:

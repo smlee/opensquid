@@ -8,7 +8,7 @@
  * file is internal layout, not a new public surface.
  *
  * Authoritative source: `docs/opensquid-real-design.md` §"The architecture
- * in six concepts" (concept 1: Event) + `docs/tasks/automation.md` AUTO.1
+ * in six concepts" (concept 1: Event) + the automation planning notes [not retained — this header is the authority] AUTO.1
  * "Key code shapes" (the four new event variants + `triggers:` block).
  *
  * What lives here:

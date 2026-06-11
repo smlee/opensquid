@@ -1,7 +1,7 @@
 /**
  * Auto-correct drift policy runtime (AUTO.4).
  *
- * Authoritative source: `docs/tasks/automation.md` AUTO.4.
+ * Authoritative source: the automation planning notes [not retained — this header is the authority] AUTO.4.
  *
  * Lifecycle of an `auto_correct` verdict:
  *   1. Drift dispatcher emits `RuntimeAction{kind:'auto_correct', correctiveSkill, verdict}`.

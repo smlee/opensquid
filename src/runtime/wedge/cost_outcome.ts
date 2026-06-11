@@ -1,7 +1,7 @@
 /**
  * Stage 2 wedge gate applied to cost-tier outcomes (AUTO.7).
  *
- * Authoritative source: `docs/tasks/automation.md` §"Task AUTO.7" + Stage 2
+ * Authoritative source: the automation planning notes [not retained — this header is the authority] §"Task AUTO.7" + Stage 2
  * pattern from `./promote.ts` + `./schedule_outcome.ts` + memory
  * `project_opensquid_wedge_gate_two_stages`.
  *

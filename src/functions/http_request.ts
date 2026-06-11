@@ -43,7 +43,10 @@ export function registerHttpRequestFunction(
     name: 'http_request',
     argSchema: HttpRequestArgs,
     durable: true,
-    memoizable: true,
+    // NOT memoizable (FAC.1): ctx.packId feeds the capability gate —
+    // outside the memo key; a cached verdict would serve pack A's
+    // allow/deny to pack B for identical (url, method).
+    memoizable: false,
     costEstimateMs: 500,
     execute: async ({ url, method }, ctx) => {
       const verdict = await opts.gate.check({

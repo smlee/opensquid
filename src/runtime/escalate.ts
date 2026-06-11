@@ -1,7 +1,7 @@
 /**
  * Escalate drift policy runtime (AUTO.4).
  *
- * Authoritative source: `docs/tasks/automation.md` AUTO.4.
+ * Authoritative source: the automation planning notes [not retained — this header is the authority] AUTO.4.
  *
  * Semantics: when a verdict's drift response is `escalate`, the runtime
  * bumps the severity tier to `'critical'` (regardless of the original
@@ -99,8 +99,9 @@ export async function escalateSeverity(deps: EscalateDeps): Promise<EscalateResu
 
   // 1. Rate-limit check (AUTO.2 integration). Locked: `inbound_channel`
   //    trigger kind is the closest fit for outbound critical paging.
+  const rateLimitKey = deps.rateLimitKey ?? verdict.ruleId ?? 'default';
   if (rateLimiter !== undefined) {
-    const key = deps.rateLimitKey ?? verdict.ruleId ?? 'default';
+    const key = rateLimitKey;
     let decision;
     try {
       decision = await rateLimiter.check(packId, 'inbound_channel', key);
@@ -130,30 +131,45 @@ export async function escalateSeverity(deps: EscalateDeps): Promise<EscalateResu
     }
   }
 
-  // 2. Resolve targets BEFORE sending. If zero, fail-loud + fall through to
-  //    notify_pause (C10: no silent drops).
-  const targets = notificationRouter.resolve(reroutedSeverity, project, routing);
-  if (targets.length === 0) {
-    return {
-      escalated: false,
-      reroutedSeverity,
-      multicast: null,
-      fallthrough: {
-        kind: 'no_critical_channels',
-        reason: `escalate: no critical-tier channels configured (project=${project ?? '∅'}); page suppressed`,
-      },
+  // FAC.1 (wg-8f7d9b919a40): the concurrent slot acquired by the allowed
+  // check() above guards the paging run — every exit below (zero-target
+  // fallthrough, multicast completion, throws) releases it. The deny/throw
+  // paths already returned, so reaching here with a limiter means acquired.
+  try {
+    // 2. Resolve targets BEFORE sending. If zero, fail-loud + fall through to
+    //    notify_pause (C10: no silent drops).
+    const targets = notificationRouter.resolve(reroutedSeverity, project, routing);
+    if (targets.length === 0) {
+      return {
+        escalated: false,
+        reroutedSeverity,
+        multicast: null,
+        fallthrough: {
+          kind: 'no_critical_channels',
+          reason: `escalate: no critical-tier channels configured (project=${project ?? '∅'}); page suppressed`,
+        },
+      };
+    }
+
+    // 3. Multicast. NotificationRouter swallows per-adapter throws and
+    //    reports partial success via `MulticastResult.errors`.
+    const message: ChannelMessage = {
+      text: formatEscalateMessage(verdict),
+      severity: reroutedSeverity,
     };
+    const multicast = await notificationRouter.multicast(
+      reroutedSeverity,
+      project,
+      message,
+      routing,
+    );
+
+    return { escalated: true, reroutedSeverity, multicast };
+  } finally {
+    if (rateLimiter !== undefined) {
+      await rateLimiter.release(packId, 'inbound_channel', rateLimitKey);
+    }
   }
-
-  // 3. Multicast. NotificationRouter swallows per-adapter throws and
-  //    reports partial success via `MulticastResult.errors`.
-  const message: ChannelMessage = {
-    text: formatEscalateMessage(verdict),
-    severity: reroutedSeverity,
-  };
-  const multicast = await notificationRouter.multicast(reroutedSeverity, project, message, routing);
-
-  return { escalated: true, reroutedSeverity, multicast };
 }
 
 // ---------------------------------------------------------------------------

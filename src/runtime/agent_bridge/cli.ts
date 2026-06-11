@@ -1,7 +1,7 @@
 /**
  * agent_bridge — `opensquid agent-bridge {start|stop|status|restart|run-foreground}` CLI (WAB.7).
  *
- * Authoritative spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.7 §"CLI".
+ * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.7 §"CLI".
  *
  * Shape: start spawns detached `run-foreground`; stop/status read pid file +
  * `kill -0` liveness; restart = stop + wait for pid removal + start;

@@ -1,6 +1,6 @@
 /**
  * Capability gate (AUTO.3) — POSIX-style declared-capability check.
- * Spec: `docs/tasks/automation.md` AUTO.3.
+ * Spec: the automation planning notes [not retained — this header is the authority] AUTO.3.
  *
  * Precedence: builtin-deny → pack-deny → pack-allow → prompt → deny+audit.
  * Engine-vocabulary: gate speaks in `(pack, capability, target)` only.

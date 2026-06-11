@@ -121,7 +121,11 @@ export function registerDestinationCheckFunction(registry: FunctionRegistry): vo
     name: 'check_destination',
     argSchema: CheckDestinationArgs,
     durable: true,
-    memoizable: true,
+    // NOT memoizable (FAC.1, TRANSITIVE): forwards ctx into
+    // registry.call('llm_classify', …, ctx), which reads
+    // ctx.packModels — the outer memo would cross packs even with the
+    // callee unmemoized. Purity review follows registry.call forwarding.
+    memoizable: false,
     costEstimateMs: 5000,
     execute: async ({ goal, recent_actions, model }, ctx) => {
       // Prompt construction — kept simple + deterministic. Pack authors who

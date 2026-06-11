@@ -8,7 +8,7 @@
  * starving the agent budget.
  *
  * Authoritative source: `docs/opensquid-real-design.md` §"Skill format" +
- * §"Skill properties" + spec `docs/tasks/phase-3-dynamic-loading.md` task 3.1.
+ * §"Skill properties" + spec the phase-3 dynamic-loading planning notes [not retained — this header is the authority] task 3.1.
  *
  * Four matcher kinds (discriminated on `kind`):
  *

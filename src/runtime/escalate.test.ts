@@ -238,6 +238,11 @@ describe('escalateSeverity — RateLimiter integration (paging fatigue)', () => 
         order.push('rate_limit');
         return { allowed: true };
       }),
+      // FAC.1: the slot acquired by check() is released after the paging
+      // run — the order pin now covers the full acquire→run→release pair.
+      release: vi.fn(async () => {
+        order.push('release');
+      }),
     } as unknown as RateLimiter;
     const realMulticast = router.multicast.bind(router);
     router.multicast = async (...args) => {
@@ -253,7 +258,7 @@ describe('escalateSeverity — RateLimiter integration (paging fatigue)', () => 
       rateLimiter: limiter,
     });
 
-    expect(order).toEqual(['rate_limit', 'multicast']);
+    expect(order).toEqual(['rate_limit', 'multicast', 'release']);
   });
 
   it('no limiter supplied → multicast proceeds directly', async () => {

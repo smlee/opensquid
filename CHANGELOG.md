@@ -7,6 +7,39 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.406] - 2026-06-11
+
+### Fixed — the whole-source audit's correctness survivors (T-fix-audit-correctness, wg-8f7d9b919a40)
+
+Three class fixes from the 153-agent adversarial audit (116 findings → 3
+survived refutation; each then widened to its class through four spec
+review rounds):
+
+- **Memoizable purity (5 primitives):** the evaluator memo keys on
+  (fn, args) only — ctx excluded — so memoized primitives that read ctx
+  served another turn/pack/session's result: `text_pattern_match` (stale
+  guard matches), `recall_pre_inject` (stale recall injection),
+  `http_request` (cross-pack capability verdicts), `llm_classify`
+  (cross-pack model aliases), and `destination_check` (TRANSITIVELY, via
+  its ctx-forwarded llm_classify call). All five flipped to
+  `memoizable: false` with the dependence named in-line; a new
+  memo-purity allowlist test pins the memoizable set to the three
+  reviewed-transitively-pure primitives (embed/recall/recall_lesson) so
+  the class cannot regrow.
+- **Rate-limiter slot lifecycle (4 trigger paths):** `release()` had zero
+  production callers — every trigger path acquired concurrent slots and
+  never freed them (latent: one pack-manifest `concurrent:` line away
+  from permanently fail-closing all triggers). The slot now follows the
+  triggered run: released on EVERY post-check exit (webhook incl. the
+  idempotent and deliver-only short-circuits and throws; schedule;
+  file_changed; escalate paging), pinned by a check/release pairing test.
+- **Spec-citation integrity (35 sites):** non-test sources cited five
+  planning docs that were never committed to either repo as their
+  "authoritative source." All 35 citations replaced with
+  inline-authority statements (comment-only changes); a new census test
+  asserts every cited docs/tasks/\*.md exists, permanently. The stale
+  "memo not yet wired" comment in registry.ts corrected in passing.
+
 ## [0.5.405] - 2026-06-11
 
 ### Changed — the MEMORY.md resume block is a pointer-only projection (T-handoff-pointer-block HPB.1, wg-c34349377f81)

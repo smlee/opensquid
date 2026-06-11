@@ -1,7 +1,7 @@
 /**
  * `InboundRouter` — AUTO.6 inbound-channel dispatcher.
  *
- * Authoritative source: `docs/tasks/automation.md` AUTO.6. Walks the user's
+ * Authoritative source: the automation planning notes [not retained — this header is the authority] AUTO.6. Walks the user's
  * `RoutingConfig.channelMapping`, finds the adapter for each concrete URI,
  * and (when the adapter implements `subscribeInbound`) attaches a per-
  * abstract-channel listener. Inbound messages flow:

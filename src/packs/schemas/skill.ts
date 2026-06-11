@@ -224,7 +224,7 @@ export type Rule = z.infer<typeof Rule>;
 // ---------------------------------------------------------------------------
 // Trigger — which Event kinds fire this skill (AUTO.1).
 //
-// Authoritative source: `docs/tasks/automation.md` AUTO.1 "Key code shapes"
+// Authoritative source: the automation planning notes [not retained — this header is the authority] AUTO.1 "Key code shapes"
 // section + memory `project_opensquid_modular_function_skill_separation`.
 //
 // A skill's `triggers:` list declares which `Event` kinds the dispatcher

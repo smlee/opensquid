@@ -2,7 +2,7 @@
  * agent_bridge — event-bus → batch → session → agent-loop glue
  * (WAB.5 + WAB-SUB.2 mode dispatch, 0.5.106).
  *
- * Spec: `docs/tasks/T-warm-agent-chat-bridge.md` WAB.5 + WAB-SUB.2
+ * Spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.5 + WAB-SUB.2
  * §"dispatcher integration". Architecture:
  * `docs/tasks/WAB.1-architecture.md` decision (d).
  *

@@ -1,7 +1,7 @@
 /**
  * Cross-subscription cost routing (AUTO.7).
  *
- * Authoritative source: `docs/tasks/automation.md` §"Task AUTO.7" +
+ * Authoritative source: the automation planning notes [not retained — this header is the authority] §"Task AUTO.7" +
  * `docs/opensquid-real-design.md` §"Two-stage wedge gate" + memory
  * `project_opensquid_multi_subscription_gateway`.
  *
