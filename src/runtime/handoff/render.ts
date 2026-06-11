@@ -190,11 +190,17 @@ export function spliceNarrative(doc: string, narrative: string): string {
   return `${doc.slice(0, at)}${section}${doc.slice(at)}`;
 }
 
-/** SessionStart injection text (reader side). */
+/** SessionStart injection text (reader side). HRA.1 (wg-c34349377f81): a
+ *  DIRECTIVE, not an FYI — the user's bar is "resume on ANY first prompt"
+ *  (their morning words: "i thought it would be automatic"). The yield
+ *  clause keeps the user's actual ask sovereign. */
 export function renderInjection(docPath: string): string {
   return (
-    `📦 AUTO-HANDOFF available from the previous session: ${docPath}\n` +
-    `Read it BEFORE starting substantive work — it carries the mechanical RESUME steps ` +
-    `(research-flow-first when the flow was mid-flight) and disk-truth artifact hashes.`
+    `📦 AUTO-HANDOFF PENDING from the previous session: ${docPath}\n` +
+    `This is an ACTIVE task, not background context: read that doc and execute its ` +
+    `RESUME steps NOW — announce in one line that you are resuming, then drive the ` +
+    `steps to completion. Yield ONLY if the user's first prompt explicitly requests ` +
+    `different work (their ask always wins); otherwise any first prompt — including a ` +
+    `greeting — starts the resume.`
   );
 }

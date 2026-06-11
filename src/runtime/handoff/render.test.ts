@@ -87,3 +87,16 @@ describe('spliceNarrative (AHO.2 — byte-identity outside the section)', () => 
     expect(restored).toBe(doc);
   });
 });
+
+// HRA.1 (wg-c34349377f81) — the injection is a DIRECTIVE, not an FYI.
+describe('renderInjection (the resume-on-any-prompt directive)', () => {
+  it('carries the imperative, the yield clause, and the doc path', async () => {
+    const { renderInjection } = await import('./render.js');
+    const out = renderInjection('/u/loop/docs/handover-session-abc-auto.md');
+    expect(out).toContain('PENDING');
+    expect(out).toContain('NOW');
+    expect(out).toContain('Yield ONLY');
+    expect(out).toContain('/u/loop/docs/handover-session-abc-auto.md');
+    expect(out).toContain('any first prompt');
+  });
+});

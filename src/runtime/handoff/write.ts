@@ -15,9 +15,12 @@
  * Imported by: handoff/index.ts.
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+
+import { readSessionCwd } from '../session_state.js';
+import { sessionStateFile } from '../paths.js';
 
 import { sendChat } from '../../chat_daemon/client.js';
 import {
@@ -88,6 +91,87 @@ async function atomicWrite(path: string, content: string): Promise<void> {
   await rename(tmp, path);
 }
 
+// ---------------------------------------------------------------------------
+// HRA.1 (wg-c34349377f81) — the umbrella-scoped in-flight guard for surface
+// (b). MEMORY.md is per-umbrella, so ONLY a same-umbrella sibling session
+// with a fresh tool-ledger may suppress the resume-block splice (a global
+// scan would let any other project's live session silently stale this
+// project's block — the spec-review correction). Doc/wg/chat are NEVER
+// guarded: their redundancy is what makes the skip safe. Fail direction is
+// always OPEN (write the block) — unattributable/absent facts never count
+// as in-flight.
+// ---------------------------------------------------------------------------
+
+export interface SiblingFact {
+  sid: string;
+  /** recorded cwd (session_state.readSessionCwd), realpath-canonicalized; null when unattributable. */
+  cwd: string | null;
+  /** tool-ledger mtime ms, null when absent/unreadable. */
+  ledgerMtimeMs: number | null;
+}
+
+/** The first OTHER session of THIS umbrella with a fresh ledger, or null.
+ *  freshMs default 10min = the FXK.2 live-session quiet-gap bound (the 340s
+ *  audit wait + margin). Pure — all facts injected. */
+export function inFlightSibling(args: {
+  siblings: SiblingFact[];
+  umbrellaRoot: string;
+  dyingSid: string;
+  nowMs: number;
+  freshMs?: number;
+}): string | null {
+  const fresh = args.freshMs ?? 10 * 60_000;
+  const root = args.umbrellaRoot.endsWith('/') ? args.umbrellaRoot : `${args.umbrellaRoot}/`;
+  for (const s of args.siblings) {
+    if (s.sid === args.dyingSid) continue;
+    if (s.cwd === null || s.ledgerMtimeMs === null) continue; // unattributable → fail-open
+    const cwd = s.cwd.endsWith('/') ? s.cwd : `${s.cwd}/`;
+    if (!cwd.startsWith(root)) continue; // other umbrella → never suppresses
+    if (args.nowMs - s.ledgerMtimeMs <= fresh) return s.sid;
+  }
+  return null;
+}
+
+/** realpath-or-identity: a symlink-alias cwd of the umbrella root must still
+ *  match the prefix test; unresolvable paths return as-is (fail-open at the
+ *  comparison). */
+async function canonical(p: string): Promise<string> {
+  try {
+    return await realpath(p);
+  } catch {
+    return p;
+  }
+}
+
+/** Exported for the impure-shell test (tmp OPENSQUID_HOME + symlink pin). */
+export async function gatherSiblingFacts(): Promise<SiblingFact[]> {
+  const dir = join(OPENSQUID_HOME(), 'sessions');
+  const out: SiblingFact[] = [];
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return out; // no sessions dir → no siblings → fail-open
+  }
+  for (const sid of entries) {
+    let cwd: string | null = null;
+    let ledgerMtimeMs: number | null = null;
+    try {
+      const recorded = await readSessionCwd(sid);
+      cwd = recorded === null ? null : await canonical(recorded);
+    } catch {
+      /* unattributable */
+    }
+    try {
+      ledgerMtimeMs = (await stat(sessionStateFile(sid, 'tool-ledger'))).mtimeMs;
+    } catch {
+      /* absent */
+    }
+    out.push({ sid, cwd, ledgerMtimeMs });
+  }
+  return out;
+}
+
 export interface WriteHandoffResult {
   docPath: string;
   outcomes: SurfaceOutcome[];
@@ -108,18 +192,35 @@ export async function writeHandoffSurfaces(
   );
   outcomes.push({ surface: 'doc', ok: true, detail: docPath });
 
-  // (b) MEMORY.md managed region — absent file → skip (not all hosts run auto-memory).
-  const memPath = memoryMdPathFor(state.umbrellaRoot);
-  try {
-    const current = await readFile(memPath, 'utf8');
-    await atomicWrite(memPath, spliceResumeBlock(current, renderResumeBlock(state)));
-    outcomes.push({ surface: 'memory', ok: true, detail: memPath });
-  } catch (e) {
+  // (b) MEMORY.md managed region — absent file → skip (not all hosts run
+  // auto-memory). HRA.1: a fresh same-umbrella sibling owns the resume
+  // block — a dying nested/sibling session must not overwrite the live
+  // session's resume surface (observed twice on 2026-06-11 pre-fix).
+  const sibling = inFlightSibling({
+    siblings: await gatherSiblingFacts(),
+    umbrellaRoot: await canonical(state.umbrellaRoot),
+    dyingSid: state.sessionId,
+    nowMs: Date.now(),
+  });
+  if (sibling !== null) {
     outcomes.push({
       surface: 'memory',
       ok: false,
-      detail: `skipped: ${e instanceof Error ? e.message : String(e)}`,
+      detail: `skipped: in-flight sibling ${sibling.slice(0, 8)} owns this umbrella's resume block`,
     });
+  } else {
+    const memPath = memoryMdPathFor(state.umbrellaRoot);
+    try {
+      const current = await readFile(memPath, 'utf8');
+      await atomicWrite(memPath, spliceResumeBlock(current, renderResumeBlock(state)));
+      outcomes.push({ surface: 'memory', ok: true, detail: memPath });
+    } catch (e) {
+      outcomes.push({
+        surface: 'memory',
+        ok: false,
+        detail: `skipped: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
   }
 
   // (c) work-graph upsert — stable title key; update-or-create.

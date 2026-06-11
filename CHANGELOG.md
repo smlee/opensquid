@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.404] - 2026-06-11
+
+### Fixed — handoff resume required a resume-specific prompt; the resume block was last-writer-wins (T-handoff-resume-autonomy HRA.1, wg-c34349377f81)
+
+The user's bar ("i thought it would be automatic" / "it's not fixed
+unless it's automatic"): the SessionStart handoff injection is now a
+DIRECTIVE — a fresh session reads the dump and executes its RESUME steps
+on ANY first prompt (announcing the resumption in one line), yielding
+only to an explicitly different ask. And the SessionEnd MEMORY.md splice
+is now guarded by an UMBRELLA-SCOPED in-flight check: a dying
+nested/sibling session skips the resume-block write (observable outcome
+row) when another session of the SAME umbrella has a fresh tool-ledger
+(10-minute window; cwd realpath-canonicalized so symlink aliases still
+match; other projects' sessions never suppress this project's block —
+the spec-review correction). Doc/work-graph/chat surfaces stay
+unconditional; every unattributable fact fails open to today's behavior.
+True zero-keystroke (scheduled headless) resume remains seeded in
+wg-c34349377f81.
+
 ## [0.5.403] - 2026-06-11
 
 ### Fixed — 0.5.399's liveness guard over-suppressed quick resumes (T-fix-spawnkill-liveness FXK.2)
