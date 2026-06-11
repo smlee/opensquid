@@ -3,7 +3,8 @@
  * injection (the FU.3 dead-session pointer path).
  */
 
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -99,5 +100,50 @@ describe('handoff_session_start (tier 3)', () => {
     await writeFile(projectCurrentSessionPath(UUID), FRESH, 'utf8');
     const r = await HandoffSessionStart.execute({}, ctx());
     expect(r.ok && r.value === null).toBe(true);
+  });
+
+  // SUB.3 (wg-627effbb2c38) — the liveness guard: a plausibly-LIVE "dead"
+  // session is never dumped, and the skip writes NO handoff-read stamp.
+  it('LIVE dead-sid (fresh tool-ledger mtime) → no generation, NO stamp (stampless skip)', async () => {
+    const stateDir = join(home, 'sessions', DEAD, 'state');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      sessionStateFile(DEAD, 'fsm-coding-flow'),
+      JSON.stringify({ state: 'researched', history: [{ state: 'researched', at: 't' }] }),
+      'utf8',
+    );
+    // The liveness probe's signal: a tool-ledger written "just now".
+    await writeFile(sessionStateFile(DEAD, 'tool-ledger'), '{"turn":[],"session":[]}', 'utf8');
+
+    const r = await HandoffSessionStart.execute({}, ctx());
+    expect(r.ok && r.value === null).toBe(true);
+    // Stampless: a later session (or this one re-firing) retries after
+    // FRESH_MS lapses instead of being pinned by the once-per-session stamp.
+    expect(existsSync(sessionStateFile(FRESH, 'handoff-read'))).toBe(false);
+    // And nothing was generated for the live session.
+    expect(existsSync(join(home, 'sessions', DEAD, 'state', 'handoff-doc'))).toBe(false);
+  });
+
+  it('genuinely dead sid (tool-ledger mtime older than FRESH_MS) → regeneration path unchanged', async () => {
+    const stateDir = join(home, 'sessions', DEAD, 'state');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      sessionStateFile(DEAD, 'fsm-coding-flow'),
+      JSON.stringify({ state: 'researched', history: [{ state: 'researched', at: 't' }] }),
+      'utf8',
+    );
+    const ledger = sessionStateFile(DEAD, 'tool-ledger');
+    await writeFile(ledger, '{"turn":[],"session":[]}', 'utf8');
+    // Backdate the probe signals past the freshness window (FSM file is NOT
+    // probed by isSessionPlausible — only active-task + tool-ledger are).
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(ledger, old, old);
+
+    const r = await HandoffSessionStart.execute({}, ctx());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value?.kind).toBe('inject_context');
+    // The stamp IS written on the non-skip path (once-per-session preserved).
+    expect(existsSync(sessionStateFile(FRESH, 'handoff-read'))).toBe(true);
   });
 });

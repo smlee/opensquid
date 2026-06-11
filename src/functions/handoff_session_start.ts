@@ -28,6 +28,7 @@ import {
   umbrellaRootFor,
 } from '../runtime/handoff/index.js';
 import { hasResumableState } from '../runtime/handoff/substance.js';
+import { isSessionPlausible } from '../runtime/hooks/session_liveness.js';
 import { readProjectCurrentSession } from '../runtime/hooks/session_id.js';
 import { resolveProjectUuid, sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
@@ -67,6 +68,17 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
       // Once per fresh session.
       const stamp = sessionStateFile(ctx.sessionId, 'handoff-read');
       if ((await mtimeOf(stamp)) !== null) return ok(null);
+
+      // SUB.3 (wg-627effbb2c38): a "dead" sid with a fresh tool-ledger /
+      // active-task mtime is a LIVE session (nested child, second terminal)
+      // — dumping it would clobber its in-flight resume surfaces (observed
+      // live 2026-06-11: the MEMORY.md managed block overwritten twice
+      // mid-run by exactly this path). Skip WITHOUT writing the
+      // handoff-read stamp: if the session actually just crashed, the next
+      // fresh session retries once FRESH_MS lapses — the loss is transient
+      // by construction, never pinned by a stale stamp.
+      const liveness = await isSessionPlausible(deadSid);
+      if (liveness.plausible) return ok(null);
 
       const umbrellaRoot = await umbrellaRootFor(cwd);
       const fsmPath = sessionStateFile(deadSid, 'fsm-coding-flow');

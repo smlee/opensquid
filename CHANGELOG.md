@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.399] - 2026-06-11
+
+### Fixed — the handoff lazy generator dumped LIVE sessions as dead (T-handoff-nested-session-spam SUB.3, wg-627effbb2c38)
+
+The SessionStart tier-3 lazy generator treated "the project pointer names a
+session that isn't me" as "that session is dead" — so any nested or sibling
+session (a manual `claude -p` one-shot, a second terminal) regenerated the
+LIVE parent's handoff dump mid-run and clobbered its MEMORY.md resume block
+(observed twice on 2026-06-11). The generator now consults
+`isSessionPlausible` (the existing automation-CLI liveness probe — fresh
+tool-ledger/active-task mtime = live) and skips WITHOUT writing its
+once-per-session `handoff-read` stamp, so a genuinely just-crashed session
+is retried by a later session once the freshness window lapses — the skip
+is transient and self-healing, never pinned. Completes the
+T-handoff-nested-session-spam track (SUB.1 0.5.397 + SUB.2 0.5.398 +
+SUB.3): marked reviewer trees mint no state, timed-out children are
+group-SIGKILLed, and unmarked nested classes can no longer clobber a live
+session's resume surfaces.
+
 ## [0.5.398] - 2026-06-11
 
 ### Fixed — timed-out CLI children survived SIGTERM and piled up (T-handoff-nested-session-spam SUB.2, wg-627effbb2c38)
