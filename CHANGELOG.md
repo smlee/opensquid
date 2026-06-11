@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.393] - 2026-06-11
+
+### Fixed — hook exit-crash that made codex mark UserPromptSubmit Failed (T-fix-ups-hook-ort-crash)
+
+The recall-injecting hook emitted its full output and then crashed at process
+exit (SIGABRT — onnxruntime 1.21's macOS environment-teardown defect, pulled in
+transitively by fastembed). Claude Code tolerated the stdout-then-crash, which
+masked the bug; codex correctly treated the non-zero exit as failure and codex
+sessions silently lost recall context. Fixed with a pnpm override to
+onnxruntime-node 1.26.0 — spike-proven before shipping: 20/20 clean hook
+replays (previously crashed every run), live recall content intact, and the
+full embedding test suite green on the new runtime.
+
 ## [0.5.392] - 2026-06-11
 
 ### Fixed — handoff substance is now RESUMABILITY, not flow presence (T-auto-handoff AHO.4)
