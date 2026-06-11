@@ -15,6 +15,7 @@
  * the CLI invocation forever, which is a foot-gun for first-time users.
  */
 
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Command } from 'commander';
@@ -61,11 +62,24 @@ if (process.argv[2] === 'chat-daemon-worker') {
   runCli();
 }
 
+/** The live package.json version (same idiom as mcp/server.ts) — this file
+ *  lives at <root>/{dist,src}/cli.{js,ts}; package.json is one level up. A
+ *  hardcoded literal here went stale for 311 releases (0.5.85 → 0.5.396). */
+function readPackageVersion(): string {
+  try {
+    const pkgJsonPath = new URL('../package.json', import.meta.url);
+    const parsed = JSON.parse(readFileSync(pkgJsonPath, 'utf8')) as { version?: string };
+    return parsed.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 function runCli(): void {
   const program = new Command()
     .name('opensquid')
     .description('Tracks for your AI agent — destination-first.')
-    .version('0.5.85');
+    .version(readPackageVersion());
 
   const daemon = program.command('daemon').description('Background daemon lifecycle');
 

@@ -22,6 +22,14 @@ variable-indirection consumers (`src/runtime/agent_bridge/daemon.ts`
 `messages.create`) satisfied across the widened range. The peer is NOT
 dead and must not be deleted.
 
+Also caught by the cold-install acceptance run:
+
+- `pnpm-lock.yaml` regenerated for the peer-range change (CI installs with
+  `--frozen-lockfile`; the first 0.5.396 push went red on the mismatch).
+- `opensquid --version` printed a hardcoded `0.5.85` — stale for 311
+  releases. The CLI now reads the live `package.json` version at runtime
+  (the same `readPackageVersion()` idiom `mcp/server.ts` already used).
+
 ## [0.5.395] - 2026-06-11
 
 ### Fixed — the SCOPE deferral-pause gate hole (T-fix-scope-deferral-gate, wg-66307bc8af35)
