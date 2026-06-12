@@ -106,6 +106,15 @@ describe('collectHandoffState — populated home (real shapes)', () => {
     expect(art?.path).toBe(preResearch);
     expect(art?.sha8).toMatch(/^[0-9a-f]{8}$/);
   });
+
+  it('a cleared (empty-string) artifact-path key yields NO artifact, not a broken one (wg-4c48ef1b9969)', async () => {
+    // simulate the scope_start re-arm having cleared the key to '' (or null)
+    const keyPath = sessionStateFile(SID, 'coding-flow-pre-research-path');
+    await mkdir(join(keyPath, '..'), { recursive: true });
+    await writeFile(keyPath, JSON.stringify(''), 'utf8');
+    const state = await collectHandoffState(SID, cwd);
+    expect(state.artifacts.find((a) => a.kind === 'pre_research')).toBeUndefined();
+  });
 });
 
 describe('helpers', () => {

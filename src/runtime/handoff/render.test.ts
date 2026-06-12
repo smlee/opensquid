@@ -55,6 +55,22 @@ describe('renderResumeSteps (the locked rules)', () => {
     expect(steps[0]).toContain('phases_complete');
     expect(steps.at(-1)).toContain('Commit the handover doc');
   });
+
+  it('re-armed scoping with cleared artifacts → "start at SCOPE", NOT a re-fire of a shipped track (wg-4c48ef1b9969)', () => {
+    // The scope_start re-arm cleared the per-track keys → artifactOf yields none.
+    const steps = renderResumeSteps({
+      ...base,
+      fsm: { state: 'scoping', history: [] },
+      activeTask: null,
+      phaseLedger: [],
+      artifacts: [],
+    });
+    const joined = steps.join('\n');
+    expect(joined).toContain('start the track at SCOPE');
+    expect(joined).not.toContain('Re-fire');
+    expect(joined).not.toContain('NOT READABLE ON DISK');
+    expect(steps.at(-1)).toContain('Commit the handover doc');
+  });
 });
 
 describe('renderHandoverDoc', () => {

@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.409] - 2026-06-12
+
+### Fixed — handoff renderer re-fired already-shipped tracks (T-handoff-stale-resume-steps, wg-4c48ef1b9969)
+
+After the coding-flow FSM re-armed to `scoping` for a new track (the post-ship `scope_start`
+edge), the per-track scope state (`coding-flow-pre-research-path` / `-spec-path` / `-design`)
+was never cleared, so it still pointed at the SHIPPED track. The handover renderer then told the
+successor to "re-fire the pre-research / spec / TaskCreate" for finished work, and the AUTHOR
+coverage audit could read a stale design.
+
+The per-track scope state now clears as a single unit on the re-arm via a new
+`reset_scope_track_state` primitive keyed off one constant (`SCOPE_TRACK_STATE_KEYS`) — so the
+reset can no longer drift out of sync across files. Content-hashed audit caches, the
+self-resetting scope-dwell counter, and `coding-flow-track` (own reset) are deliberately
+excluded. `artifactOf` now treats an empty/whitespace path as "no artifact" rather than a broken
+one, so a cleared key renders as "start the track at SCOPE" instead of a phantom re-fire.
+
 ## [0.5.408] - 2026-06-12
 
 ### Fixed — docs-only commit-nudge parity (T-commit-nudge-docsonly-parity, wg-3dcca3b29ed1)

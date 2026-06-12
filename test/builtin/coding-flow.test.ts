@@ -16,6 +16,7 @@ import { registerEventFunctions } from '../../src/functions/event.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
 import { FunctionRegistry } from '../../src/functions/registry.js';
 import { registerStateFunctions } from '../../src/functions/state.js';
+import { registerResetScopeTrackStateFunction } from '../../src/functions/reset_scope_track_state.js';
 import { registerVerdictFunctions } from '../../src/functions/verdict.js';
 import { loadPack } from '../../src/packs/loader.js';
 import { step, validateFsm } from '../../src/runtime/fsm.js';
@@ -41,6 +42,7 @@ function registry(): FunctionRegistry {
   registerEventFunctions(r);
   registerFsmFunctions(r);
   registerStateFunctions(r);
+  registerResetScopeTrackStateFunction(r); // wg-4c48ef1b9969: the re-arm rule clears per-track state
   registerVerdictFunctions(r);
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match

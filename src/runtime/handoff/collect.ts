@@ -114,7 +114,9 @@ async function artifactOf(
   const path = typeof parsed === 'string' && !parsed.startsWith('<unreadable') ? parsed : null;
   const fromJson = typeof parsed === 'string' ? null : parsed;
   const p = path ?? (typeof fromJson === 'string' ? fromJson : null);
-  if (p === null) return null;
+  // A blank/whitespace path (e.g. a key cleared on the scope_start re-arm,
+  // wg-4c48ef1b9969) is semantically "no artifact" — NOT a broken one.
+  if (p === null || p.trim() === '') return null;
   try {
     const sha8 = createHash('sha256')
       .update(await readFile(p, 'utf8'))

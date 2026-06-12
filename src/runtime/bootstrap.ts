@@ -85,6 +85,7 @@ import { FunctionRegistry } from '../functions/registry.js';
 import { SessionToolHistory } from '../functions/session_tool_history.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerStagedDocsOnlyFunction } from '../functions/staged_docs_only.js';
+import { registerResetScopeTrackStateFunction } from '../functions/reset_scope_track_state.js';
 import { registerFsmFunctions } from '../functions/fsm.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
@@ -124,6 +125,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerEventFunctions(r);
   registerStateFunctions(r);
   registerStagedDocsOnlyFunction(r);
+  registerResetScopeTrackStateFunction(r);
   registerFsmFunctions(r);
   registerVerdictFunctions(r);
   registerLlmFunctions(r);

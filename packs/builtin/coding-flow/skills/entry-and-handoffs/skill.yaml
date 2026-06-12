@@ -39,6 +39,12 @@ rules:
         args:
           key: coding-flow-track
           value: feature
+      # wg-4c48ef1b9969: clear the per-track scope state (pre-research/spec/design
+      # pointers) as a UNIT so a shipped track's artifacts don't leak into the new
+      # track (renderer re-fires the finished track; AUTHOR audit reads stale design).
+      # Best-effort, ordered AFTER advance_fsm — never blocks the arm.
+      - call: reset_scope_track_state
+        if: 'len(intent.matched) > 0'
       # GF.5 (F5): a feature-intent probe. A downgrade to fix/doc/trivial applies ONLY
       # when NO feature-intent keyword is present — a mixed-intent prompt ("build X and
       # fix Y") stays `feature` (strictest), so one stray keyword can't disable the
