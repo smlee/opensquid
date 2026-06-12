@@ -33,6 +33,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { type EvalCtx, type FunctionDef, FunctionRegistry } from '../functions/registry.js';
+import { TextPatternMatch } from '../functions/text_pattern_match.js';
 
 import { CheckpointStore } from './durable/checkpoint_store.js';
 import { MemoCache } from './durable/memo_cache.js';
@@ -204,6 +205,43 @@ describe('evaluator + MemoCache — memoizable-only enforcement', () => {
 
     const rs = await client.execute('SELECT COUNT(*) AS n FROM memo_cache');
     expect(Number(rs.rows[0]?.n ?? 0)).toBe(0);
+  });
+
+  // FAC.2 (wg-862460b1af86) — the original FAC.1 instance as a regression:
+  // text_pattern_match reads ctx.event, so identical args across two events
+  // must yield per-event results. Red if the primitive is ever flipped back
+  // to `memoizable: true` (the memo key excludes ctx — event B would be
+  // served event A's cached match).
+  it('text_pattern_match returns per-event results on identical args (FAC.1 regression)', async () => {
+    const reg = new FunctionRegistry();
+    reg.register(TextPatternMatch);
+    const steps: ProcessStep[] = [
+      {
+        call: 'text_pattern_match',
+        args: { text_field: 'assistantText', patterns: ['\\bWant me to\\b'] },
+        as: 'm',
+      },
+    ];
+
+    // Event A: the phrase present → one match.
+    const ctxA = createTestCtx({
+      event: { kind: 'stop', assistantText: 'Want me to continue?' },
+    });
+    await evaluateProcess(steps, ctxA, reg, {
+      checkpoint: { store, runId: 'run-A' },
+      memo: { cache },
+    });
+    expect((ctxA.bindings.get('m') as { matched: string[] }).matched).toHaveLength(1);
+
+    // Event B: IDENTICAL args, different event text → zero matches.
+    const ctxB = createTestCtx({
+      event: { kind: 'stop', assistantText: 'Proceeding with the fix.' },
+    });
+    await evaluateProcess(steps, ctxB, reg, {
+      checkpoint: { store, runId: 'run-B' },
+      memo: { cache },
+    });
+    expect((ctxB.bindings.get('m') as { matched: string[] }).matched).toHaveLength(0);
   });
 });
 

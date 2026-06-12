@@ -1,7 +1,7 @@
 /**
  * agent_bridge built-in tools — barrel + BUILT_INS registry.
  *
- * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.6 §"Tool
+ * Authoritative spec: the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.6 §"Tool
  * surface". The three built-ins (`chat_send`, `recall`, `store_lesson`) are
  * shipped as factories — `pack_binding.ts` constructs them with the
  * runtime-wide dependencies (RagBackend, optional daemon-send seam) and

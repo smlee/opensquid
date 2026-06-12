@@ -3,7 +3,7 @@
  * (WAB.2, 0.5.94).
  *
  * Authoritative source: `docs/tasks/WAB.1-architecture.md` decisions (a) +
- * (b); the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.2 Part B spec.
+ * (b); the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.2 Part B spec.
  *
  * Reads the CANONICAL per-project inbox path:
  *   `~/.opensquid/projects/<projectUuid>/inbox/<platform>.jsonl`

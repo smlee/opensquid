@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.407] - 2026-06-12
+
+### Fixed — the FAC.1 remainder (T-fac1-remainder, wg-5e40d7675154 + wg-862460b1af86)
+
+- **The 18 mangled citation splices repaired (comment-only):** 0.5.406's
+  warm-agent re-point template left a dangling clause ("…which is] WAB.x")
+  in all 18 agent_bridge-family headers; one substitution makes each line
+  grammatical while keeping the `WAB.1-architecture.md` re-point (design
+  Alternative 8) and the census pin green.
+- **The two FAC.1 test promises shipped:** the two-event
+  `text_pattern_match` memoization regression (identical args, two events
+  → per-event results; red if the primitive is ever flipped back to
+  `memoizable: true`) in `evaluator.memo.test.ts`, and the real-limiter
+  webhook `concurrent: 1` round-trip (released slot admits the next
+  request through the server path; distinct bodies so the idempotent
+  short-circuit cannot mask a held slot) in `webhook_server.test.ts`.
+
 ## [0.5.406] - 2026-06-11
 
 ### Fixed — the whole-source audit's correctness survivors (T-fix-audit-correctness, wg-8f7d9b919a40)

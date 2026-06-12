@@ -1,7 +1,7 @@
 /**
  * agent_bridge built-in tool — `recall`.
  *
- * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.6 §"Tool
+ * Authoritative spec: the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.6 §"Tool
  * surface". Wraps the project-scoped RAG backend's `recall(query, k)` method.
  *
  * Responsibility:

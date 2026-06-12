@@ -1,7 +1,7 @@
 /**
  * agent_bridge built-in tool — `chat_send`.
  *
- * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.6 §"Tool
+ * Authoritative spec: the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.6 §"Tool
  * surface". Wraps the chat-daemon's `send` JSON-RPC method so the warm
  * agent can reply on the same channel that delivered the inbound message.
  *

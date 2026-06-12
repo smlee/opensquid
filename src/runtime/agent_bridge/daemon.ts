@@ -1,7 +1,7 @@
 /**
  * agent_bridge — long-running daemon (WAB.7 + WAB-SUB.2 lazy api client, 0.5.106).
  *
- * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.7 +
+ * Authoritative spec: the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.7 +
  * WAB-SUB.2 §"daemon mode-aware lazy client". Architecture:
  * `docs/tasks/WAB.1-architecture.md` decisions (a)-(g).
  *

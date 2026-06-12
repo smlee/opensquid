@@ -2,7 +2,7 @@
  * agent_bridge — shared types (WAB.2, 0.5.94).
  *
  * Authoritative source: `docs/tasks/WAB.1-architecture.md` decisions (b) +
- * (c), and the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.2 spec.
+ * (c), and the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.2 spec.
  *
  * Why one types module: all six WAB sub-modules (event_bus, transport_bridge,
  * session_manager, agent_loop, batch, dispatcher) share the SessionKey +

@@ -1,7 +1,7 @@
 /**
  * agent_bridge — pack binding (WAB.6 + WAB-SUB.2 mode dispatcher, 0.5.106).
  *
- * Specs: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.6 §"pack_binding.ts"
+ * Specs: the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.6 §"pack_binding.ts"
  * + WAB-SUB.2 §"mode dispatcher". Architecture: `WAB.1-architecture.md`
  * decisions (e) + (g).
  *

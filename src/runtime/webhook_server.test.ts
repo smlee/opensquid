@@ -19,9 +19,11 @@
  */
 
 import { createHmac } from 'node:crypto';
+import { createClient } from '@libsql/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { RateLimiter } from './rate_limit.js';
+import { RateLimiter } from './rate_limit.js';
+import type { PackRateLimits } from './rate_limit.js';
 import type { WebhookEvent } from './event.js';
 import type { Subscription } from './webhook_subscriptions.js';
 import { WebhookServer } from './webhook_server.js';
@@ -288,6 +290,52 @@ describe('WebhookServer — rate-limit', () => {
     expect(r3.status).toBe(429);
     expect(checks).toBe(3);
     expect(releases).toBe(2);
+  });
+
+  // FAC.2 (wg-862460b1af86) — the round-trip the pairing stub cannot prove:
+  // on a REAL limiter with concurrent:1, the slot freed by the FAC.1 finally
+  // must admit the NEXT request through the server path. Red without the
+  // release finally: request 2 → 429 concurrent_exceeded. The second request
+  // uses a DISTINCT body — an identical one would take the idempotent
+  // short-circuit and mask whether the slot is actually free.
+  it('concurrent:1 — the released slot admits the next request through the server path (FAC.1 round-trip)', async () => {
+    const limiterClient = createClient({ url: ':memory:' });
+    try {
+      const limits = new Map<string, PackRateLimits>([
+        ['billing', { webhook: { max: 100, per: 'minute', concurrent: 1 } }],
+      ]);
+      const limiter = new RateLimiter(limiterClient, { limits });
+      // The subscription's rateLimit only gates WHETHER check() runs
+      // ({max, per}); the concurrent cap itself lives in the limiter's
+      // limits map (PackRateLimits) keyed to pack 'billing'.
+      const sub = makeSubscription({ rateLimit: { max: 100, per: 'minute' } });
+      const h = await startServer({ rateLimiter: limiter }, [sub]);
+
+      const b1 = '{"x":"rt-1"}';
+      const r1 = await fetch(`${h.url}/webhook/stripe-events`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-opensquid-signature': sign(FIXED_SECRET, b1),
+        },
+        body: b1,
+      });
+      expect(r1.status).toBe(200);
+
+      const b2 = '{"x":"rt-2"}';
+      const r2 = await fetch(`${h.url}/webhook/stripe-events`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-opensquid-signature': sign(FIXED_SECRET, b2),
+        },
+        body: b2,
+      });
+      expect(r2.status).toBe(200);
+      expect(h.dispatched).toHaveLength(2);
+    } finally {
+      limiterClient.close();
+    }
   });
 
   it('skips rate-limit check when subscription has no rateLimit config', async () => {

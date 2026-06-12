@@ -1,7 +1,7 @@
 /**
  * Zod schema for `chat_agent.yaml` — the pack's chat-agent binding side-file.
  *
- * Authoritative source: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] §WAB.6
+ * Authoritative source: the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) §WAB.6
  * "Key code shapes". This file is the schema slice (WAB.6 prep); the loader
  * delta + runtime binding land in WAB.6 proper.
  *

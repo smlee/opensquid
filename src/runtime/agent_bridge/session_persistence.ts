@@ -2,7 +2,7 @@
  * agent_bridge — append-only JSONL persistence for warm-pool session
  * history (WAB.3, 0.5.95).
  *
- * Authoritative spec: the warm-agent planning notes [not retained — see docs/tasks/WAB.1-architecture.md, which is] WAB.3.
+ * Authoritative spec: the warm-agent planning notes (not retained — docs/tasks/WAB.1-architecture.md is the surviving authority) WAB.3.
  * Architecture: `docs/tasks/WAB.1-architecture.md` decision (c) + Section 2
  * module layout (≤200 LOC budget for this file).
  *
