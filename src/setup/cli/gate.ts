@@ -34,6 +34,7 @@ import type { Command } from 'commander';
 
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { OPENSQUID_HOME, resolveProjectScopeRoot } from '../../runtime/paths.js';
+import { PROTECTED_PREFIXES, isDocsOnly } from '../../runtime/protected_paths.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../../runtime/workflow_phases.js';
@@ -96,10 +97,12 @@ async function changedFiles(boundary: 'commit' | 'push', cwd: string): Promise<s
  *  A change touching NONE of these is not the flow's subject (README, banner,
  *  docs/, LICENSE, CI config…) → allowed, attested under the existing
  *  `docs_only` wire reason (now meaning "non-code"). [] still fails closed
- *  (commitFiles' git-error contract). */
-export const PROTECTED_PREFIXES = ['src/', 'packs/', 'test/'] as const;
-const isDocsOnly = (files: string[]): boolean =>
-  files.length > 0 && files.every((f) => !PROTECTED_PREFIXES.some((p) => f.startsWith(p)));
+ *  (commitFiles' git-error contract). The predicate now lives in one home —
+ *  `runtime/protected_paths.ts` — shared with the in-session `staged_docs_only`
+ *  primitive so the boundary and the nudge can never diverge. Imported for local
+ *  use AND re-exported because gate.test.ts's drift pin imports
+ *  `PROTECTED_PREFIXES` from this module. */
+export { PROTECTED_PREFIXES };
 
 /** GDC.1 — the gate's subject is the AGENT, never the human (user directive
  *  2026-06-11: "I should be able to use the commands naturally"). Agent hosts

@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.408] - 2026-06-12
+
+### Fixed — docs-only commit-nudge parity (T-commit-nudge-docsonly-parity, wg-3dcca3b29ed1)
+
+The in-session `phase-logged-before-commit` nudge blocked a zero-phase `git commit` on
+phase-count alone, with no diff inspection — so it over-blocked docs-only commits that the
+git-owned hard gate (`gate.ts` `isDocsOnly`) deliberately allows. A fresh session could not
+execute a handoff's "commit the handover doc" step without re-driving a full
+SCOPE→AUTHOR→7-phase flow just to log seven phases for a `docs/` commit.
+
+The nudge now mirrors the boundary: the `isDocsOnly`/`PROTECTED_PREFIXES` predicate moves to
+one home (`src/runtime/protected_paths.ts`), a new `staged_docs_only` function primitive reads
+the staged diff with fixed-argv `git diff --cached --name-only` (no shell, categorically unlike
+the gated `shell_exec` stub), and the rule suppresses its block when the staged set is docs-only.
+A zero-phase code commit is still blocked; the primitive fails toward the block on any git error
+so it never falsely suppresses a real code-commit warning. The git hook remains the hard gate.
+
 ## [0.5.407] - 2026-06-12
 
 ### Fixed — the FAC.1 remainder (T-fac1-remainder, wg-5e40d7675154 + wg-862460b1af86)

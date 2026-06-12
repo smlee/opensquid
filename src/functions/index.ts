@@ -35,3 +35,5 @@ export {
 export { registerFileWriteFunction } from './file_write.js';
 export { registerShellExecFunction } from './shell_exec.js';
 export { registerHttpRequestFunction } from './http_request.js';
+// Fixed-argv git read (no shell, no injection) — NOT a gated stub like the two above.
+export { registerStagedDocsOnlyFunction } from './staged_docs_only.js';
