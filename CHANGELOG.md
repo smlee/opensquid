@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.410] - 2026-06-12
+
+### Fixed — the SCOPE depth gate false-fired on multi-turn research (T-depth-signal-quality, wg-3e241144f441)
+
+The DPC.5 "SCOPE shallow" gate counted research tools over `current_turn`, but the turn ledger
+resets on every prompt — so research that legitimately spanned several turns (read code across a
+few turns, then write the pre-research) showed as "shallow" and blocked the write, forcing an
+awkward "do all your research in one turn" contortion.
+
+The tool ledger now keeps a per-track `sinceScope` window that survives turn boundaries and resets
+only when a new track begins (folded into the `reset_scope_track_state` re-arm primitive); the depth
+gate reads `since_scope_start`. A genuinely un-researched pre-research write still warns. The
+`Grep` filter entry is kept (harmless when the harness has no Grep tool, and the sole credit for
+Grep-research when it does). The empirical-spike classifier widening (heredoc/piped interpreters)
+remains tracked separately on the issue.
+
 ## [0.5.409] - 2026-06-12
 
 ### Fixed — handoff renderer re-fired already-shipped tracks (T-handoff-stale-resume-steps, wg-4c48ef1b9969)

@@ -22,6 +22,7 @@ import { atomicWriteFile } from '../runtime/atomic_write.js';
 import { SCOPE_TRACK_STATE_KEYS } from '../runtime/coding_flow_keys.js';
 import { sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
+import { resetScopeWindow } from '../runtime/session_state.js';
 
 import type { FunctionRegistry } from './registry.js';
 
@@ -41,6 +42,13 @@ export function registerResetScopeTrackStateFunction(registry: FunctionRegistry)
         } catch {
           /* best-effort: a clear failure must never block the scope_start arm */
         }
+      }
+      // wg-3e241144f441: the per-track research window is also per-track scope state —
+      // zero it on the same re-arm. Own try/catch so a ledger failure never blocks the arm.
+      try {
+        await resetScopeWindow(ctx.sessionId);
+      } catch {
+        /* best-effort */
       }
       return ok(null);
     },

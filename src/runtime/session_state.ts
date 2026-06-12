@@ -54,10 +54,14 @@ const LEDGER_KEY = 'tool-ledger';
 export interface ToolLedger {
   turn: string[];
   session: string[];
+  /** wg-3e241144f441: per-track research window. Reset at scope_start (the re-arm,
+   *  via reset_scope_track_state), SURVIVES turn resets — so the SCOPE depth gate
+   *  counts research across all of a track's scoping turns, not just the write-turn. */
+  sinceScope: string[];
 }
 
 function emptyLedger(): ToolLedger {
-  return { turn: [], session: [] };
+  return { turn: [], session: [], sinceScope: [] };
 }
 
 async function readLedger(sessionId: string): Promise<ToolLedger> {
@@ -78,7 +82,12 @@ async function readLedger(sessionId: string): Promise<ToolLedger> {
       const session = (parsed as { session: unknown[] }).session.filter(
         (x): x is string => typeof x === 'string',
       );
-      return { turn, session };
+      // Backward-compatible: a pre-upgrade ledger has no `sinceScope` → default [].
+      const rawSince = (parsed as { sinceScope?: unknown }).sinceScope;
+      const sinceScope = Array.isArray(rawSince)
+        ? rawSince.filter((x): x is string => typeof x === 'string')
+        : [];
+      return { turn, session, sinceScope };
     }
     return emptyLedger();
   } catch {
@@ -169,6 +178,7 @@ export async function appendTool(
   const push = (name: string): void => {
     ledger.turn.push(name);
     ledger.session.push(name);
+    ledger.sinceScope.push(name);
   };
   push(toolName);
   if (toolName === 'Bash' && typeof command === 'string' && isReadOnlyBash(command)) {
@@ -176,6 +186,9 @@ export async function appendTool(
   }
   if (ledger.session.length > SESSION_LEDGER_CAP) {
     ledger.session = ledger.session.slice(-SESSION_LEDGER_CAP);
+  }
+  if (ledger.sinceScope.length > SESSION_LEDGER_CAP) {
+    ledger.sinceScope = ledger.sinceScope.slice(-SESSION_LEDGER_CAP);
   }
   await writeLedger(sessionId, ledger);
 }
@@ -219,6 +232,15 @@ export async function resetTurnLedger(sessionId: string): Promise<void> {
   await writeLedger(sessionId, ledger);
 }
 
+/** wg-3e241144f441: zero the per-track research window at scope_start (the re-arm).
+ *  Called by reset_scope_track_state — `sinceScope` survives turn resets but resets
+ *  when a NEW track begins, so the SCOPE depth gate measures research for THIS track. */
+export async function resetScopeWindow(sessionId: string): Promise<void> {
+  const ledger = await readLedger(sessionId);
+  ledger.sinceScope = [];
+  await writeLedger(sessionId, ledger);
+}
+
 /**
  * Read the tool ledger for the given scope. `current_turn` returns names
  * since the last `UserPromptSubmit`; `session` returns up to the most-recent
@@ -227,10 +249,16 @@ export async function resetTurnLedger(sessionId: string): Promise<void> {
  */
 export async function readSessionToolLedger(
   sessionId: string,
-  scope: 'current_turn' | 'session',
+  scope: 'current_turn' | 'session' | 'since_scope_start',
 ): Promise<{ tools: string[] }> {
   const ledger = await readLedger(sessionId);
-  return { tools: scope === 'current_turn' ? [...ledger.turn] : [...ledger.session] };
+  const tools =
+    scope === 'current_turn'
+      ? ledger.turn
+      : scope === 'since_scope_start'
+        ? ledger.sinceScope
+        : ledger.session;
+  return { tools: [...tools] };
 }
 
 // ---------------------------------------------------------------------------

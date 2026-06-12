@@ -35,7 +35,7 @@ import type { FunctionDef } from './registry.js';
 
 export const SessionToolHistoryArgs = z
   .object({
-    scope: z.enum(['current_turn', 'session']).default('current_turn'),
+    scope: z.enum(['current_turn', 'session', 'since_scope_start']).default('current_turn'),
     filter_names: z.array(z.string()).optional(),
   })
   .strict();

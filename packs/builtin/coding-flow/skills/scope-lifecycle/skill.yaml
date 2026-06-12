@@ -74,7 +74,11 @@ rules:
       - call: session_tool_history
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         args:
-          scope: current_turn
+          # wg-3e241144f441: per-track window (reset at scope_start, survives turn
+          # boundaries) — research legitimately spans turns, so current_turn false-fired.
+          # filter_names UNCHANGED: Grep is harmless-when-dead, signal-preserving-when-live
+          # (Bash:read-only only covers grep dispatched AS Bash, not a native Grep tool).
+          scope: since_scope_start
           filter_names: [mcp__opensquid__recall, Read, Grep, 'Bash:read-only']
         as: depth
       # The content audit: NEVER-GUESS + BEST-SOLUTION, one combined verdict.

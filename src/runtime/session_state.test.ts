@@ -30,6 +30,7 @@ import {
   readSessionToolLedger,
   readSkillTicks,
   recordSessionCwd,
+  resetScopeWindow,
   resetTurnLedger,
   writeActiveTask,
 } from './session_state.js';
@@ -81,6 +82,51 @@ describe('session_state tool ledger', () => {
 
     expect(turn.tools).toEqual([]);
     expect(session.tools).toEqual(['Bash', 'Read']);
+  });
+
+  it('appendTool grows sinceScope; readSessionToolLedger(since_scope_start) returns it (wg-3e241144f441)', async () => {
+    const sid = 'sess-since';
+    await appendTool(sid, 'mcp__opensquid__recall');
+    await appendTool(sid, 'Read');
+    const since = await readSessionToolLedger(sid, 'since_scope_start');
+    expect(since.tools).toEqual(['mcp__opensquid__recall', 'Read']);
+  });
+
+  it('resetTurnLedger preserves sinceScope (research survives turn boundaries)', async () => {
+    const sid = 'sess-since-turn';
+    await appendTool(sid, 'Read');
+    await resetTurnLedger(sid);
+    expect((await readSessionToolLedger(sid, 'current_turn')).tools).toEqual([]);
+    expect((await readSessionToolLedger(sid, 'since_scope_start')).tools).toEqual(['Read']);
+  });
+
+  it('resetScopeWindow clears sinceScope but PRESERVES turn + session', async () => {
+    const sid = 'sess-since-reset';
+    await appendTool(sid, 'Read');
+    await appendTool(sid, 'mcp__opensquid__recall');
+    await resetScopeWindow(sid);
+    expect((await readSessionToolLedger(sid, 'since_scope_start')).tools).toEqual([]);
+    expect((await readSessionToolLedger(sid, 'current_turn')).tools).toEqual([
+      'Read',
+      'mcp__opensquid__recall',
+    ]);
+    expect((await readSessionToolLedger(sid, 'session')).tools).toEqual([
+      'Read',
+      'mcp__opensquid__recall',
+    ]);
+  });
+
+  it('a ledger JSON missing sinceScope reads as [] (backward-compatible)', async () => {
+    const sid = 'sess-since-bc';
+    const path = sessionStateFile(sid, 'tool-ledger');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify({ turn: ['Read'], session: ['Read'] }), 'utf8');
+    expect((await readSessionToolLedger(sid, 'since_scope_start')).tools).toEqual([]);
+    // and a subsequent append populates it without throwing
+    await appendTool(sid, 'mcp__opensquid__recall');
+    expect((await readSessionToolLedger(sid, 'since_scope_start')).tools).toEqual([
+      'mcp__opensquid__recall',
+    ]);
   });
 
   it('trims session list to SESSION_LEDGER_CAP on overflow', async () => {

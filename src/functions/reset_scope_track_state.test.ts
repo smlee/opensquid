@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { sessionStateFile } from '../runtime/paths.js';
+import { appendTool, readSessionToolLedger } from '../runtime/session_state.js';
 import type { Event } from '../runtime/event.js';
 
 import { FunctionRegistry } from './registry.js';
@@ -85,5 +86,15 @@ describe('reset_scope_track_state primitive', () => {
   it('is a no-op (no throw) when the keys are already absent', async () => {
     await callReset();
     expect(await readKey('coding-flow-pre-research-path')).toBeNull();
+  });
+
+  it('also zeroes the per-track research window sinceScope (wg-3e241144f441)', async () => {
+    await appendTool(SID, 'Read');
+    await appendTool(SID, 'mcp__opensquid__recall');
+    expect((await readSessionToolLedger(SID, 'since_scope_start')).tools).toHaveLength(2);
+    await callReset();
+    expect((await readSessionToolLedger(SID, 'since_scope_start')).tools).toEqual([]);
+    // session window is untouched (only the per-track window resets on re-arm)
+    expect((await readSessionToolLedger(SID, 'session')).tools).toHaveLength(2);
   });
 });
