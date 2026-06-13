@@ -29,8 +29,8 @@ import {
 } from '../runtime/handoff/index.js';
 import { hasResumableState } from '../runtime/handoff/substance.js';
 import { isSessionPlausible } from '../runtime/hooks/session_liveness.js';
-import { readProjectCurrentSession } from '../runtime/hooks/session_id.js';
-import { resolveProjectUuid, sessionStateFile } from '../runtime/paths.js';
+import { readSessionPointer } from '../runtime/hooks/session_id.js';
+import { sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
 
 import type { FunctionDef } from './registry.js';
@@ -60,9 +60,8 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
     try {
       const cwd =
         ctx.event.kind === 'session_start' ? (ctx.event.cwd ?? process.cwd()) : process.cwd();
-      const uuid = await resolveProjectUuid({ cwd, env: process.env });
-      if (uuid === null) return ok(null);
-      const deadSid = await readProjectCurrentSession(uuid);
+      // wg-16803ed82901: the one canonical pointer read (CLAUDE_PROJECT_DIR ?? cwd).
+      const deadSid = await readSessionPointer(cwd, process.env);
       if (deadSid === null || deadSid === ctx.sessionId) return ok(null);
 
       // Once per fresh session.

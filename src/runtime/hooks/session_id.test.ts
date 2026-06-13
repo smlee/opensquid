@@ -18,8 +18,10 @@ import {
   extractSessionId,
   readCurrentSession,
   readProjectCurrentSession,
+  readSessionPointer,
   recordCurrentSession,
   resolveMcpSessionId,
+  writeSessionPointer,
 } from './session_id.js';
 
 let tempHome: string;
@@ -213,5 +215,46 @@ describe('FU.7 — CLAUDE_CODE_SESSION_ID guarded by session-dir existence', () 
   it('unset CLAUDE_CODE_SESSION_ID leaves resolution unchanged (global fallback)', async () => {
     await recordCurrentSession('global-only');
     expect(await resolveMcpSessionId()).toBe('global-only');
+  });
+});
+
+describe('session pointer pair (wg-16803ed82901 — CLAUDE_PROJECT_DIR ?? cwd)', () => {
+  it('writeSessionPointer keys on CLAUDE_PROJECT_DIR, NOT the (sub-repo) cwd', async () => {
+    const dirA = await makeProject('uuid-A');
+    const dirB = await makeProject('uuid-B'); // a different project (stands in for the sub-repo cwd)
+    await writeSessionPointer('sid-live', dirB, { CLAUDE_PROJECT_DIR: dirA });
+    expect(await readProjectCurrentSession('uuid-A')).toBe('sid-live'); // wrote to CLAUDE_PROJECT_DIR's pointer
+    expect(await readProjectCurrentSession('uuid-B')).toBeNull(); // NOT the cwd's
+  });
+
+  it('back-compat: CLAUDE_PROJECT_DIR unset → writes the cwd-keyed pointer', async () => {
+    const dirB = await makeProject('uuid-B');
+    await writeSessionPointer('sid-cli', dirB, {});
+    expect(await readProjectCurrentSession('uuid-B')).toBe('sid-cli');
+  });
+
+  it('readSessionPointer round-trips what writeSessionPointer wrote, via CLAUDE_PROJECT_DIR', async () => {
+    const dirA = await makeProject('uuid-A');
+    const dirB = await makeProject('uuid-B');
+    await writeSessionPointer('sid-live', dirB, { CLAUDE_PROJECT_DIR: dirA });
+    expect(await readSessionPointer(dirB, { CLAUDE_PROJECT_DIR: dirA })).toBe('sid-live');
+  });
+
+  it('resolveMcpSessionId resolves the LIVE session even when cwd is a sub-repo (the bug)', async () => {
+    const dirA = await makeProject('uuid-A');
+    const dirB = await makeProject('uuid-B');
+    // The live session's UPS cwd is the sub-repo (dirB); CLAUDE_PROJECT_DIR is the umbrella (dirA).
+    await recordCurrentSession('live-sid', dirB === '' ? undefined : dirB); // legacy write target would be uuid-B
+    await writeSessionPointer('live-sid', dirB, { CLAUDE_PROJECT_DIR: dirA }); // the fixed write → uuid-A
+    // MCP env: CLAUDE_CODE_SESSION_ID has no session dir; CLAUDE_PROJECT_DIR = dirA.
+    process.env.CLAUDE_CODE_SESSION_ID = 'mcp-frozen-no-dir';
+    process.env.CLAUDE_PROJECT_DIR = dirA;
+    expect(await resolveMcpSessionId()).toBe('live-sid');
+  });
+
+  it('writeSessionPointer no-ops (no throw) when the uuid cannot be resolved', async () => {
+    const plain = await mkdtemp(join(tmpdir(), 'opensquid-nouuid-'));
+    projDirs.push(plain);
+    await expect(writeSessionPointer('sid', plain, {})).resolves.toBeUndefined();
   });
 });

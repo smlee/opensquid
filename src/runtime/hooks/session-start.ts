@@ -36,7 +36,7 @@ import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
-import { extractSessionId } from './session_id.js';
+import { extractSessionId, recordCurrentSession } from './session_id.js';
 
 interface SessionStartPayload {
   session_id?: string;
@@ -100,6 +100,10 @@ async function main(): Promise<void> {
   // so a chat message drives THIS session + the headless stands down — even
   // before the first keystroke. No-op in `responder: headless` mode / no umbrella.
   const startCwd = parsed.data.kind === 'session_start' ? parsed.data.cwd : process.cwd();
+  // wg-16803ed82901: record the live-session pointer from session START (not only the
+  // first UPS), so the MCP server resolves THIS session immediately — closing the
+  // window where it would otherwise read a stale/foreign project pointer.
+  await recordCurrentSession(sessionId, startCwd);
   // T-CHAT-REALTIME: a session START is the user's deliberate "route chat HERE" signal —
   // the session changes even when the project doesn't, so TAKE OVER the umbrella lease
   // (newest-session-wins) rather than defer to a possibly-dead prior holder. The

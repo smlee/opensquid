@@ -75,12 +75,7 @@ export async function recordCurrentSession(sessionId: string, cwd?: string): Pro
     // pointer and can't clobber this one. Skipped (no error) for a cwd that
     // isn't inside a uuid-bound project (`.opensquid/project.json` absent).
     if (cwd !== undefined && cwd !== '') {
-      const uuid = await resolveProjectUuid({ cwd });
-      if (uuid !== null) {
-        const scoped = projectCurrentSessionPath(uuid);
-        await mkdir(dirname(scoped), { recursive: true });
-        await writeFile(scoped, sessionId, 'utf-8');
-      }
+      await writeSessionPointer(sessionId, cwd, process.env);
     }
   } catch {
     // best-effort: a write failure must never break the hook
@@ -104,6 +99,42 @@ export async function readProjectCurrentSession(projectUuid: string): Promise<st
     return raw === '' ? null : raw;
   } catch {
     return null;
+  }
+}
+
+/** wg-16803ed82901: the dir to start the project-uuid walk from for SESSION-POINTER
+ *  purposes — the authoritative project root `CLAUDE_PROJECT_DIR` when set, else the
+ *  local cwd. Internal: the ONLY place the pointer's start dir is decided, so the
+ *  read and write sides can never diverge (the MCP keys on CLAUDE_PROJECT_DIR while a
+ *  session's working cwd may be a sub-repo with its own project card). */
+function pointerUuidStart(cwd: string, env: NodeJS.ProcessEnv): string {
+  const pd = env.CLAUDE_PROJECT_DIR;
+  return pd !== undefined && pd !== '' ? pd : cwd;
+}
+
+/** Read the project-scoped live-session id, keyed the ONE canonical way. The single
+ *  chokepoint every reader (resolveMcpSessionId, the handoff CLI, handoff_session_start)
+ *  routes through — no site resolves the pointer uuid itself. */
+export async function readSessionPointer(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  const uuid = await resolveProjectUuid({ cwd: pointerUuidStart(cwd, env), env });
+  return uuid === null ? null : readProjectCurrentSession(uuid);
+}
+
+/** Write the project-scoped live-session id, keyed the SAME canonical way as the read.
+ *  Best-effort is the caller's contract (recordCurrentSession's try/catch). */
+export async function writeSessionPointer(
+  sessionId: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const uuid = await resolveProjectUuid({ cwd: pointerUuidStart(cwd, env), env });
+  if (uuid !== null) {
+    const scoped = projectCurrentSessionPath(uuid);
+    await mkdir(dirname(scoped), { recursive: true });
+    await writeFile(scoped, sessionId, 'utf-8');
   }
 }
 
@@ -176,11 +207,8 @@ export async function resolveMcpSessionId(): Promise<string | null> {
   if (ccEnv !== undefined && ccEnv.length > 0 && (await sessionDirExists(ccEnv))) return ccEnv;
   const projectDir = env.CLAUDE_PROJECT_DIR;
   if (projectDir !== undefined && projectDir.length > 0) {
-    const uuid = await resolveProjectUuid({ cwd: projectDir, env });
-    if (uuid !== null) {
-      const scoped = await readProjectCurrentSession(uuid);
-      if (scoped !== null) return scoped;
-    }
+    const scoped = await readSessionPointer(projectDir, env);
+    if (scoped !== null) return scoped;
   }
   return readCurrentSession();
 }

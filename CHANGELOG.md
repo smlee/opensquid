@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.411] - 2026-06-12
+
+### Fixed — MCP server resolved a stale/foreign session (T-mcp-hook-session-split, wg-16803ed82901)
+
+`mcp__opensquid__log_phase` (and the other MCP tools / the git gate, when their env's
+`CLAUDE_CODE_SESSION_ID` has no session dir) resolved the session via the project-scoped pointer —
+but the WRITE side (`recordCurrentSession`, from the UPS hook) keyed the pointer on `process.cwd()`
+while the READ side keys on `CLAUDE_PROJECT_DIR`. When the working cwd is a sub-repo (a separate
+project card) under the umbrella `CLAUDE_PROJECT_DIR`, the live session wrote one pointer and the
+MCP read a different, stale one (a prior/other-harness session) — so `log_phase` reported "no
+active task" for a session that had one.
+
+Both sides now resolve the pointer uuid through a single chokepoint pair
+(`readSessionPointer`/`writeSessionPointer`) keyed the ONE canonical way — `CLAUDE_PROJECT_DIR ?? cwd`
+— so a sub-repo cwd no longer diverges the read from the write. SessionStart records the pointer
+immediately (not only on the first prompt). Off-Claude harnesses (no `CLAUDE_PROJECT_DIR`) fall back
+to cwd exactly as before. (The separate multi-harness last-writer-wins race remains tracked on
+wg-c34349377f81.)
+
 ## [0.5.410] - 2026-06-12
 
 ### Fixed — the SCOPE depth gate false-fired on multi-turn research (T-depth-signal-quality, wg-3e241144f441)
