@@ -36,6 +36,8 @@ export async function writeRecord(dir: string, lesson: Lesson): Promise<void> {
     ...(lesson.consumedByUserLessons
       ? { consumed_by_user_lessons: lesson.consumedByUserLessons }
       : {}),
+    // Retention (wg-9e4f4eb2a40f): non-default-only, so a rebuild preserves the demoted state.
+    ...(lesson.retired_at ? { retired_at: lesson.retired_at } : {}),
   });
   await atomicWriteFile(
     join(dir, `${safeRecordId(lesson.id)}.md`),
@@ -70,6 +72,7 @@ export async function readRecords(dir: string): Promise<Lesson[]> {
       created_at: string;
       derived_from: string[];
       consumed_by_user_lessons: number;
+      retired_at: string;
     }>;
     out.push({
       id: fm.id ?? f.replace(/\.md$/, ''),
@@ -86,6 +89,7 @@ export async function readRecords(dir: string): Promise<Lesson[]> {
       ...(typeof fm.consumed_by_user_lessons === 'number' && fm.consumed_by_user_lessons
         ? { consumedByUserLessons: fm.consumed_by_user_lessons }
         : {}),
+      ...(typeof fm.retired_at === 'string' && fm.retired_at ? { retired_at: fm.retired_at } : {}),
     });
   }
   return out;

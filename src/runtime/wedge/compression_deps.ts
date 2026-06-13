@@ -59,7 +59,17 @@ export async function makeConsolidateRunner(): Promise<ConsolidateRunner> {
       resolveRecallScope().then((scope) =>
         backend.recall(query, k, scope).then((hits) => hits.map((h) => h.lesson.id)),
       ),
-    deleteMemory: (id) => backend.deleteLesson(id, { force: true }).then(() => undefined),
+    demoteMemory: (id) => {
+      // wg-9e4f4eb2a40f: DEMOTE (retire), not hard-delete — retain the rollback floor. The live
+      // libsql-fastembed store always implements demoteLesson (like the dbUrl guard above); fail
+      // loud if a non-consolidating backend is ever wired here.
+      if (backend.demoteLesson === undefined) {
+        return Promise.reject(
+          new Error('compression: backend has no demoteLesson — cannot consolidate'),
+        );
+      }
+      return backend.demoteLesson(id);
+    },
     summarize: (prompt) => {
       if (reasoningCfg === undefined) {
         return Promise.reject(new Error('compression: no "reasoning" model alias configured'));

@@ -54,6 +54,16 @@ describe('libsqlLexicalBackend', () => {
     }
   });
 
+  it('demoteLesson retires a memory — excluded from recall, sibling still live (wg-9e4f4eb2a40f)', async () => {
+    const backend = libsqlLexicalBackend({ dbUrl: ':memory:' });
+    await backend.init();
+    await backend.storeLesson(mkLesson('a', 'workflow phase audit', ['workflow']));
+    await backend.storeLesson(mkLesson('b', 'workflow drift detection', ['workflow']));
+    await backend.demoteLesson!('a');
+    const ids = (await backend.recall('workflow', 10, { namespace: null })).map((h) => h.lesson.id);
+    expect(ids).toEqual(['b']); // 'a' demoted (retired_at set) → out of the injectable surface
+  });
+
   it('returns [] for an empty query', async () => {
     const backend = libsqlLexicalBackend({ dbUrl: ':memory:' });
     await backend.init();

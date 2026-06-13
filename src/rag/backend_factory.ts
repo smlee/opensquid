@@ -160,5 +160,9 @@ export function libsqlQwen3WithLexicalFallback(opts: QwenWithFallbackOpts): RagB
     async deleteLesson(id, opts) {
       return active.deleteLesson(id, opts);
     },
+    // wg-9e4f4eb2a40f: delegate demote to the active backend (no-op if it doesn't implement it).
+    async demoteLesson(id) {
+      return active.demoteLesson?.(id);
+    },
   };
 }

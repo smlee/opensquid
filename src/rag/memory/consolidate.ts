@@ -21,8 +21,9 @@ export const DEFAULT_CONSOLIDATE_RECALL_K = 5;
 export interface ConsolidateDeps extends CompressDeps {
   /** Backend recall → the hit ids (e.g. `recall(q,k).then(hs => hs.map(h => h.lesson.id))`). */
   recallIds: (query: string, k: number) => Promise<string[]>;
-  /** Backend `deleteLesson(id, {force:true})` — removes the per-file source too (NOT a DB-only delete). */
-  deleteMemory: (id: string) => Promise<void>;
+  /** Backend `demoteLesson(id)` (wg-9e4f4eb2a40f) — sets `retired_at` (out of recall) and retains the
+   *  row + per-file source as the rollback floor. NOT a hard delete; slice 3's sweeper deletes later. */
+  demoteMemory: (id: string) => Promise<void>;
 }
 
 export interface ConsolidateOutcome {
@@ -75,22 +76,25 @@ export async function consolidate(
   // 3. fail-closed: a verify miss deletes NOTHING. Mc lives alongside the predecessors.
   if (!verified) return { mcId: mc.id, deleted: [], keptImmune: [], verified: false };
 
-  // 4. gated delete — RE-LOAD the authoritative citation counter right before the irreversible delete.
+  // 4. gated DEMOTE (wg-9e4f4eb2a40f) — RE-LOAD the authoritative citation counter right before the
+  // (reversible) demotion. `deleted` holds the ids removed from the live recall surface — now via
+  // demotion (retired_at), NOT a hard delete; the rows + per-file sources are retained as the
+  // rollback floor, and slice 3's sweeper hard-deletes them after 30 untouched days.
   const deleted: string[] = [];
   const keptImmune: string[] = [];
   for (const pid of unique) {
     const reloaded = await deps.getMemoryById(pid);
-    // Absent/unreadable → treat as immune-safe (never force-delete the unconfirmable).
+    // Absent/unreadable → treat as immune-safe (never touch the unconfirmable). Citation-only immunity.
     const immune = reloaded === null ? true : reloaded.consumedByUserLessons > 0;
     if (immune) {
       keptImmune.push(pid);
       continue;
     }
     try {
-      await deps.deleteMemory(pid);
+      await deps.demoteMemory(pid);
       deleted.push(pid);
     } catch {
-      keptImmune.push(pid); // a delete error is non-fatal — keep it; Mc preserves the trace
+      keptImmune.push(pid); // a demote error is non-fatal — keep it live; Mc preserves the trace
     }
   }
   return { mcId: mc.id, deleted, keptImmune, verified: true };

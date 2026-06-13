@@ -30,6 +30,10 @@ export interface Lesson {
   // namespaced to an umbrella id. Absent ⇒ `shared` / null namespace (back-compat with pre-scope rows).
   tier?: MemoryTier;
   namespace?: string | null;
+  // Retention (wg-9e4f4eb2a40f): ISO timestamp set when consolidation DEMOTES this predecessor. A
+  // retired memory stays queryable by id (the rollback floor + replay oracle) but is EXCLUDED from
+  // the injectable recall surface. Absent ⇒ live. Slice 3's sweeper hard-deletes after 30 quiet days.
+  retired_at?: string;
 }
 
 /**
@@ -94,4 +98,7 @@ export interface RagBackend {
   storeLesson(lesson: Lesson): Promise<void>;
   // Explicit-only deletion (the no-auto-delete invariant): user-authored lessons require force.
   deleteLesson(id: string, opts?: { force?: boolean }): Promise<DeleteResult>;
+  // Demote (retire) a memory: leaves it queryable by id (rollback floor) but OUT of the injectable
+  // recall surface (wg-9e4f4eb2a40f). OPTIONAL — only consolidation-capable backends implement it.
+  demoteLesson?(id: string): Promise<void>;
 }

@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.412] - 2026-06-12
+
+### Changed — consolidation now DEMOTES predecessors instead of hard-deleting (T-retention-window-delete slice 1, wg-9e4f4eb2a40f)
+
+Memory consolidation previously force-DELETED a window's verified, non-cited predecessors (row +
+per-file source gone). Per the locked retention model, it now DEMOTES them: sets a `retired_at`
+timestamp that EXCLUDES the memory from the injectable recall surface while KEEPING the row and its
+per-file source as the rollback floor + replay oracle.
+
+`retired_at` is a new nullable column on both libSQL backends (`libsql_store`, `libsql_lexical`),
+added to recall's `WHERE … AND retired_at IS NULL`, round-tripped through the per-file source so a
+rebuild preserves demotion, and set via a new optional `RagBackend.demoteLesson` (the per-file store
+reuses `storeLesson` for a single durable path; the pure-DB lexical backend does a direct UPDATE).
+Citation-immunity and the fail-closed recall-replay verify are unchanged. This is slice 1 of 3 — the
+30-day touch clock (slice 2) and the sweeper that actually hard-deletes after the quiet window
+(slice 3) remain on the issue; until the sweeper lands, demoted rows simply persist out of recall.
+
 ## [0.5.411] - 2026-06-12
 
 ### Fixed — MCP server resolved a stale/foreign session (T-mcp-hook-session-split, wg-16803ed82901)

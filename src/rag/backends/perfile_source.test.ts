@@ -47,6 +47,14 @@ describe('perfile_source', () => {
     expect(got).toEqual(l);
   });
 
+  it('round-trips retired_at (non-default-only) so a rebuild preserves demotion (wg-9e4f4eb2a40f)', async () => {
+    await writeRecord(dir, lesson({ id: 'r', retired_at: '2026-06-12T00:00:00.000Z' }));
+    await writeRecord(dir, lesson({ id: 'live' })); // no retired_at
+    const got = await readRecords(dir);
+    expect(got.find((l) => l.id === 'r')?.retired_at).toBe('2026-06-12T00:00:00.000Z');
+    expect(got.find((l) => l.id === 'live')).not.toHaveProperty('retired_at');
+  });
+
   it('writes the standard ---fenced form and no .tmp lingers', async () => {
     await writeRecord(dir, lesson());
     const raw = await readFile(join(dir, 'lesson-abc123.md'), 'utf8');

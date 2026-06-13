@@ -54,13 +54,15 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
           author TEXT NOT NULL,
           created_at TEXT NOT NULL,
           tier TEXT NOT NULL DEFAULT 'shared',
-          namespace TEXT
+          namespace TEXT,
+          retired_at TEXT
         );
       `);
       // Additive scope columns for a pre-existing (qwen3-initialized) table. Idempotent.
       for (const ddl of [
         `ALTER TABLE lessons ADD COLUMN tier TEXT NOT NULL DEFAULT 'shared'`,
         `ALTER TABLE lessons ADD COLUMN namespace TEXT`,
+        `ALTER TABLE lessons ADD COLUMN retired_at TEXT`,
       ]) {
         try {
           await client.execute(ddl);
@@ -85,9 +87,9 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
       if (!safe) return [];
       try {
         const rs = await client.execute({
-          sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at, l.tier, l.namespace
+          sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at, l.tier, l.namespace, l.retired_at
                 FROM lessons_fts f JOIN lessons l ON l.id = f.id
-                WHERE lessons_fts MATCH ? AND (l.tier = 'shared' OR l.namespace = ?)
+                WHERE lessons_fts MATCH ? AND (l.tier = 'shared' OR l.namespace = ?) AND l.retired_at IS NULL
                 LIMIT ?`,
           args: [safe, scope.namespace, k],
         });
@@ -108,8 +110,8 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
       if (!client) throw new Error('libsql-lexical: not initialized');
       const tagsJson = JSON.stringify(lesson.tags);
       await client.execute({
-        sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, tier, namespace)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, tier, namespace, retired_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           lesson.id,
           lesson.content,
@@ -119,6 +121,7 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
           lesson.createdAt,
           (lesson.tier ?? 'shared') satisfies MemoryTier,
           lesson.namespace ?? null,
+          lesson.retired_at ?? null,
         ],
       });
       // Mirror into FTS5 — separate statement, not a trigger, to stay
@@ -142,6 +145,16 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
       await client.execute({ sql: `DELETE FROM lessons WHERE id = ?`, args: [id] });
       await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [id] });
       return { deleted: true, forced: isUser && force };
+    },
+
+    // wg-9e4f4eb2a40f: demote (retire) — DB-only here (this backend has no per-file source, so no
+    // rebuild concern). Leaves the row in `lessons`/`lessons_fts` (rollback floor), out of recall.
+    async demoteLesson(id: string): Promise<void> {
+      if (!client) throw new Error('libsql-lexical: not initialized');
+      await client.execute({
+        sql: `UPDATE lessons SET retired_at = ? WHERE id = ?`,
+        args: [new Date().toISOString(), id],
+      });
     },
   };
 }
@@ -167,5 +180,8 @@ function rowToLesson(r: Row): Lesson {
     createdAt: s(r, 'created_at'),
     tier: s(r, 'tier') === 'project' ? 'project' : 'shared',
     namespace: typeof r.namespace === 'string' ? r.namespace : null,
+    ...(typeof r.retired_at === 'string' && r.retired_at !== ''
+      ? { retired_at: r.retired_at }
+      : {}),
   };
 }

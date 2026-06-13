@@ -55,8 +55,8 @@ function makeDeps(rows: MemoryRow[], opts: Opts = {}) {
       const base = ['m-a', 'm-b'];
       return Promise.resolve(opts.recallReturnsMc !== false && mcId ? [mcId, ...base] : base);
     },
-    deleteMemory: (id) => {
-      if (opts.deleteThrowsFor === id) return Promise.reject(new Error('delete failed'));
+    demoteMemory: (id: string) => {
+      if (opts.deleteThrowsFor === id) return Promise.reject(new Error('demote failed'));
       captured.deleted.push(id);
       byId.delete(id);
       return Promise.resolve();

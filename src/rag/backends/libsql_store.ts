@@ -53,6 +53,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
           consumed_by_user_lessons INTEGER NOT NULL DEFAULT 0,
           tier TEXT NOT NULL DEFAULT 'shared',
           namespace TEXT,
+          retired_at TEXT,
           embedding F32_BLOB(${embedder.dim})
         );
       `);
@@ -61,6 +62,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       for (const ddl of [
         `ALTER TABLE lessons ADD COLUMN tier TEXT NOT NULL DEFAULT 'shared'`,
         `ALTER TABLE lessons ADD COLUMN namespace TEXT`,
+        `ALTER TABLE lessons ADD COLUMN retired_at TEXT`,
       ]) {
         try {
           await client.execute(ddl);
@@ -98,9 +100,9 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       if (vec) {
         try {
           const rs = await client.execute({
-            sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons, tier, namespace
+            sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons, tier, namespace, retired_at
                   FROM lessons
-                  WHERE embedding IS NOT NULL AND (tier = 'shared' OR namespace = ?)
+                  WHERE embedding IS NOT NULL AND (tier = 'shared' OR namespace = ?) AND retired_at IS NULL
                   ORDER BY vector_distance_cos(embedding, vector32(?)) ASC
                   LIMIT ?`,
             args: [ns, JSON.stringify(vec), k],
@@ -117,9 +119,9 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
         try {
           const lex = await client.execute({
             sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at,
-                  l.derived_from, l.consumed_by_user_lessons, l.tier, l.namespace
+                  l.derived_from, l.consumed_by_user_lessons, l.tier, l.namespace, l.retired_at
                   FROM lessons_fts f JOIN lessons l ON l.id = f.id
-                  WHERE lessons_fts MATCH ? AND (l.tier = 'shared' OR l.namespace = ?)
+                  WHERE lessons_fts MATCH ? AND (l.tier = 'shared' OR l.namespace = ?) AND l.retired_at IS NULL
                   LIMIT ?`,
             args: [safeMatch, ns, k],
           });
@@ -156,10 +158,11 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       const consumed = lesson.consumedByUserLessons ?? 0;
       const tier: MemoryTier = lesson.tier ?? 'shared';
       const namespace = lesson.namespace ?? null;
+      const retiredAt = lesson.retired_at ?? null;
       await client.execute({
         sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, derived_from,
-              consumed_by_user_lessons, tier, namespace, embedding)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
+              consumed_by_user_lessons, tier, namespace, retired_at, embedding)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
         args: vec
           ? [
               lesson.id,
@@ -172,6 +175,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
               consumed,
               tier,
               namespace,
+              retiredAt,
               JSON.stringify(vec),
             ]
           : [
@@ -185,6 +189,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
               consumed,
               tier,
               namespace,
+              retiredAt,
             ],
       });
       await client.execute({
@@ -208,6 +213,23 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       // Remove the per-file source too, else a later rebuild would resurrect the row.
       if (opts.sourceDir !== undefined) await deleteRecord(opts.sourceDir, id);
       return { deleted: true, forced: isUser && force };
+    },
+
+    // wg-9e4f4eb2a40f: demote (retire) — leaves the row + per-file source as the rollback floor but
+    // out of recall. REUSE storeLesson (the file-first durable upsert) so the `<id>.md` carries
+    // retired_at and rebuildLibsqlIndex preserves it — no second durable path.
+    async demoteLesson(id: string): Promise<void> {
+      if (!client) throw new Error('libsql-store: not initialized');
+      const rs = await client.execute({
+        sql: `SELECT id, content, tags, source, author, created_at, derived_from,
+              consumed_by_user_lessons, tier, namespace, retired_at FROM lessons WHERE id = ?`,
+        args: [id],
+      });
+      const row = rs.rows[0];
+      if (row === undefined) return;
+      const lesson = rowToLesson(row);
+      if (lesson.retired_at) return; // already retired — idempotent
+      await this.storeLesson({ ...lesson, retired_at: new Date().toISOString() });
     },
   };
 }
@@ -268,5 +290,8 @@ function rowToLesson(r: Row): Lesson {
     consumedByUserLessons: n(r, 'consumed_by_user_lessons'),
     tier: s(r, 'tier') === 'project' ? 'project' : 'shared',
     namespace: typeof r.namespace === 'string' ? r.namespace : null,
+    ...(typeof r.retired_at === 'string' && r.retired_at !== ''
+      ? { retired_at: r.retired_at }
+      : {}),
   };
 }
