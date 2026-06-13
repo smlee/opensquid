@@ -115,5 +115,12 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
         ],
       });
       return;
+    case 'wedge_marked':
+      // GR.3 — record the wedge reason; listReady excludes wedge-marked items (escalate, not re-attempt).
+      await client.execute({
+        sql: `UPDATE wg_issues SET wedge_reason = ?, updated_at = ? WHERE id = ?`,
+        args: [s(p.reason), s(p.ts), op.issueId],
+      });
+      return;
   }
 }

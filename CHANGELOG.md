@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.415] - 2026-06-13
+
+### Added — lap-supervisor + undroppable escalation + work-graph wedge-mark — gated-ralph GR.3
+
+The third gated-ralph slice (spec `docs/tasks/T-gated-ralph-loop.md` GR.3; wg-4ab2012392b0):
+
+- `src/runtime/ralph/supervisor.ts` — `superviseLap(run, opts)`: bounded respawn with backoff + an
+  observable `heartbeat` tick (Inv 6, no silent death / no unbounded retry). Retries ONLY the transient
+  infra failures `CRASH`/`TIMEOUT`; every other outcome (`SHIPPED` / `HUMAN_REQUIRED` / `WEDGE`) is a
+  terminal lap verdict returned as-is — a self-declared `WEDGE` is NOT retried (re-running it just
+  re-wedges the same item). On retry exhaustion it returns a typed `HUMAN_REQUIRED{UNRECOVERABLE_WEDGE}`,
+  never a quiet stop. `costUsd` accumulates across attempts so GR.4 can sum the Inv 11 budget.
+- `src/runtime/ralph/escalate_lap.ts` — `escalateLap(reason, {item, payload, escalate})`: the UNDROPPABLE
+  escalation. A delivery failure throws `EscalationUndeliverableError` rather than being swallowed (Inv 6).
+  Decoupled from the notification stack via an injected `LapEscalator` (GR.4 wires the real
+  `escalateSeverity` critical-tier path), keeping it unit-testable.
+- `src/workgraph/` — additive `wedge_marked` op + `wedge_reason` column + `wedgeMark(id, reason)` store
+  method; `listReady` excludes wedge-marked items (escalate, don't crash-loop the wall). Additive,
+  query-time, replay-safe — the same event-sourced pattern as GR.1's claim.
+
+Loop-off by default (consumed by the GR.4 orchestrator). Tests: 6 supervisor + 3 escalation + 2 wedge-mark.
+
 ## [0.5.414] - 2026-06-13
 
 ### Added — typed lap-exit contract + decide-vs-escalate classifier — gated-ralph GR.2

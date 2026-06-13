@@ -50,6 +50,7 @@ const rowToIssue = (r: Row): Issue => {
   const claimToken = optStr(r, 'claim_token');
   const claimAudience = parseAudience(r);
   const claimExpiresAt = optStr(r, 'claim_expires_at');
+  const wedgeReason = optStr(r, 'wedge_reason');
   return {
     id: str(r, 'id'),
     title: str(r, 'title'),
@@ -60,6 +61,7 @@ const rowToIssue = (r: Row): Issue => {
     ...(claimToken === undefined ? {} : { claimToken }),
     ...(claimAudience === undefined ? {} : { claimAudience }),
     ...(claimExpiresAt === undefined ? {} : { claimExpiresAt }),
+    ...(wedgeReason === undefined ? {} : { wedgeReason }),
   };
 };
 
@@ -71,14 +73,15 @@ async function createSchema(client: Client): Promise<void> {
     id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     lww INTEGER NOT NULL DEFAULT 0,
-    claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT);`);
+    claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT, wedge_reason TEXT);`);
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_edges (
     edge_key TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL);`);
-  // GR.1 — additive claim columns for a pre-existing wg_issues (idempotent; already-migrated throws).
+  // GR.1/GR.3 — additive claim + wedge columns for a pre-existing wg_issues (idempotent; already-migrated throws).
   for (const ddl of [
     `ALTER TABLE wg_issues ADD COLUMN claim_token TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN claim_audience TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN claim_expires_at TEXT`,
+    `ALTER TABLE wg_issues ADD COLUMN wedge_reason TEXT`,
   ]) {
     try {
       await client.execute(ddl);
@@ -190,12 +193,18 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       const rs = await db().execute({
         sql: `SELECT * FROM wg_issues WHERE status = 'open'
           AND (claim_token IS NULL OR claim_expires_at <= ?)
+          AND wedge_reason IS NULL
           AND id NOT IN (
             SELECT e.to_id FROM wg_edges e JOIN wg_issues x ON x.id = e.from_id
             WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_at`,
         args: [now],
       });
       return rs.rows.map(rowToIssue);
+    },
+
+    async wedgeMark(id, reason: string) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(id, 'wedge_marked', { reason });
     },
 
     async claimIssue(id, audience: ClaimAudience, ttlSec) {

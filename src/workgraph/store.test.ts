@@ -205,6 +205,33 @@ describe('workGraphStore claim + audience (GR.1)', () => {
     }
   });
 
+  it('wedgeMark excludes an item from ready (escalate, not re-attempt) — survives rebuild', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wg-wedge-'));
+    try {
+      const wg = workGraphStore({ dbUrl: `file:${join(dir, 'wg.db')}`, sourceDir: dir });
+      await wg.init();
+      const a = await wg.createIssue({ title: 'wall' });
+      expect((await wg.listReady()).map((i) => i.id)).toContain(a.id);
+      await wg.wedgeMark(a.id, 'UNRECOVERABLE_WEDGE');
+      expect((await wg.listReady()).map((i) => i.id)).not.toContain(a.id);
+      expect((await wg.getIssue(a.id))?.wedgeReason).toBe('UNRECOVERABLE_WEDGE');
+      // rebuild recognizes wedge_marked (S5-style)
+      const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const wg2 = workGraphStore({ dbUrl: rebuiltUrl });
+      await wg2.init();
+      expect((await wg2.getIssue(a.id))?.wedgeReason).toBe('UNRECOVERABLE_WEDGE');
+      expect((await wg2.listReady()).map((i) => i.id)).not.toContain(a.id);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('wedgeMark on a missing issue throws', async () => {
+    const wg = await fresh();
+    await expect(wg.wedgeMark('wg-nope', 'X')).rejects.toThrow(/no issue/);
+  });
+
   it('old logs WITHOUT claim ops project unchanged (additive)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'wg-noclaim-'));
     try {

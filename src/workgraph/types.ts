@@ -33,6 +33,8 @@ export interface Issue {
   claimToken?: string; // unique per claim attempt — the CAS winner's token
   claimAudience?: ClaimAudience;
   claimExpiresAt?: string; // ISO 8601
+  // GR.3 wedge-mark — a re-attempt SKIPS a wedge-marked item (escalate, don't crash-loop the wall).
+  wedgeReason?: string;
 }
 
 /** Event-sourced op-log types (slice 1d). Ops are the source of truth; issues/edges are folded. */
@@ -41,7 +43,8 @@ export type WgOpType =
   | 'issue_set'
   | 'dep_added'
   | 'dep_removed'
-  | 'claim_acquired';
+  | 'claim_acquired'
+  | 'wedge_marked';
 
 export interface WgOp {
   id: string;
@@ -73,6 +76,11 @@ export interface WorkGraphStore {
     audience: ClaimAudience,
     ttlSec: number,
   ): Promise<{ won: boolean; expiresAt: string }>;
+  /**
+   * Mark an item as wedged (GR.3): a re-attempt SKIPS it (it's escalated, not retried) so the
+   * supervisor can't crash-loop the same wall. Excluded from `listReady` until the reason is cleared.
+   */
+  wedgeMark(id: string, reason: string): Promise<void>;
   /** The append-only op-log for an issue, in (lamport, id) order. */
   listEvents(issueId: string): Promise<WgOp[]>;
 }
