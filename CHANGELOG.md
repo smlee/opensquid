@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.417] - 2026-06-13
+
+### Added — gated-ralph wizard writer (GR.4, part 2a of the capstone)
+
+- `src/setup/wizard/ralph_writer.ts` — `installRalph()` (Inv 12, wizard-configured): idempotently writes
+  `~/.opensquid/RALPH.md` (from the `RALPH_MD` directive) + `~/.opensquid/ralph.config.json` (auth-mode,
+  budget/rate caps, supervisor bounds, harness — `RalphConfigFileSchema`-validated, fail-loud on read).
+  An identical file is a no-op; a divergent one is snapshotted to `<file>.bak` before the atomic overwrite
+  (the settings-writer contract). Absent config ⇒ loop OFF ⇒ today's behavior unchanged (additive).
+  `readRalphConfig()` returns the validated config the CLI will hydrate into the orchestrator's runtime
+  `RalphConfig`.
+
+Still loop-OFF until the `opensquid loop` CLI wires the orchestrator to these artifacts + a real escalator
+(the remaining GR.4 work + the user-authorized `0.6.0` cut). Tests: 7 writer cases (create / idempotent
+no-op / `.bak`-on-divergence / partial-override merge / fail-loud validation).
+
 ## [0.5.416] - 2026-06-13
 
 ### Added — gated-ralph orchestrator core + RALPH.md template (GR.4, part 1 of the capstone)
