@@ -198,12 +198,13 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 18 tools (11 base + 7 work-graph) with JSON Schema', async () => {
+  it('tools/list returns the 20 tools (+ decision_classify, gated-ralph) with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
     const names = result.tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      'decision_classify',
       'forget',
       'inspect_skill',
       'list_drift_events',
