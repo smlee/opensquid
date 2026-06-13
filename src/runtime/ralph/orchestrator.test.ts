@@ -137,11 +137,15 @@ describe('runRalphLoop', () => {
     expect(r.stopped).toBe('BOARD_EMPTY');
   });
 
-  it('lap-emitted RATE_BUDGET (resource pause) → escalate + STOP, item parked', async () => {
+  it('lap-emitted RATE_BUDGET (transient resource pause) → escalate + STOP, item NOT wedge-marked (retries)', async () => {
+    const esc = vi.fn(() => P({ escalated: true }));
+    const wg = mockStore(['a', 'b']);
     const runLap = lap({ kind: 'HUMAN_REQUIRED', reason: 'RATE_BUDGET', costUsd: 0.01 });
-    const r = await runRalphLoop(cfg(), deps(mockStore(['a', 'b']), runLap));
+    const r = await runRalphLoop(cfg(), deps(wg, runLap, esc));
     expect(r.stopped).toBe('RATE_BUDGET');
-    expect(r.parked).toEqual([{ id: 'a', reason: 'RATE_BUDGET' }]);
+    expect(r.parked).toEqual([]); // a TRANSIENT pause must NOT permanently park the item
+    expect(esc).toHaveBeenCalledTimes(1); // still escalates (no silent stop)
+    expect((await wg.getIssue('a'))?.wedgeReason).toBeUndefined(); // NOT wedged → re-surfaces once the claim expires
   });
 
   it('undroppable escalation: a failed delivery throws (no silent drop)', async () => {

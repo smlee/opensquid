@@ -67,12 +67,15 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   const parked: { id: string; reason: HumanRequiredReason }[] = [];
   let spent = 0;
 
-  // THE single uniform stop-layer (Inv 5): every reason wedge-marks any involved item + chat-escalates
-  // through ONE path — no per-trigger code paths (rejects Alt D). continue-vs-stop is the SEPARATE,
-  // explicit decision (isResourcePause), never a divergent escalate-helper per reason.
+  // THE single uniform stop-layer (Inv 5): every reason chat-escalates through ONE path — no per-trigger
+  // code paths (rejects Alt D). Two SEPARATE, explicit decisions ride alongside it: (a) wedge-mark ONLY the
+  // per-item residual (IRREVERSIBLE_BOUNDARY/SCOPE_FORK/UNRECOVERABLE_WEDGE) — a resource pause
+  // (BUDGET/RATE_BUDGET/BOARD_EMPTY) is TRANSIENT, so the item stays in `ready` to retry after the
+  // window/budget resets (wedge-marking it would PERMANENTLY park healthy work); (b) continue-vs-stop is
+  // isResourcePause at the call sites.
   const parkAndEscalate = async (reason: HumanRequiredReason, item?: Issue): Promise<void> => {
-    if (item !== undefined) {
-      await wg.wedgeMark(item.id, reason); // GR.3 — a marked item SKIPS on re-attempt
+    if (item !== undefined && !isResourcePause(reason)) {
+      await wg.wedgeMark(item.id, reason); // a marked item SKIPS on re-attempt (residual only — GR.3)
       parked.push({ id: item.id, reason });
     }
     // GR.3 — undroppable. Omit `item` entirely when absent (exactOptionalPropertyTypes: no explicit undefined).

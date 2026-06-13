@@ -7,6 +7,45 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.419] - 2026-06-13
+
+### Added — the `opensquid loop` CLI: the gated-ralph loop is now RUNNABLE (GR.4, part 2b-ii)
+
+The user-invoked entry that assembles the orchestrator's deps and runs the loop (spec
+`docs/tasks/T-gated-ralph-loop.md` GR.4; wg-ecccf0e79a91). opensquid stays an MCP server / tool provider —
+the loop is a CLI COMMAND (not a daemon), and the agent loop runs inside the spawned harness, not opensquid.
+
+- `src/setup/cli/ralph.ts` + `src/cli.ts` — `registerRalph`: `opensquid loop [--once] [--max-budget-usd]`
+  reads the wizard config (loop OFF if absent), hydrates the runtime `RalphConfig` (`buildRalphConfig` —
+  exponential backoff from the base, claim TTL, supervisor caps), and runs `runRalphLoop` with assembled
+  deps: the work-graph store, env-derived `claimAudience` (GR.1), `makeSpawnLap` (spawns
+  `claude -p RALPH.md --item … --dangerously-skip-permissions`, parses the typed exit; a deadline overrun
+  → typed `TIMEOUT`, a spawn failure → CRASH), and a chat-daemon escalator. Plus `opensquid loop resolve
+  <itemId> --misclassified` (the human-override residual-shrink path → `resolveParked`).
+- `src/runtime/ralph/escalator.ts` — `chatEscalator`: a `LapEscalator` that delivers the lap's typed
+  escalation to the human via the live chat-daemon UDS `send` (the same path `chat_send` uses — the real
+  Telegram escalation). Undroppable: a delivery failure → `escalated:false` → `escalateLap` throws (Inv 6).
+  Transport injected (unit-tested without a daemon); `daemonChatSend` is the real one-shot UDS client.
+
+### Fixed / hardened (spec-audit-driven, same slice)
+
+- **`RalphConfigFileSchema` now enforces the S7 invariant `claimTtlSec*1000 > wallClockMs` (T > W)
+  fail-loud** — a config whose claim TTL does not exceed the lap deadline is rejected. Without it a long
+  lap outruns its claim, `listReady` re-surfaces the item mid-run, a second runner CAS-wins, and the loop
+  DOUBLE-SHIPS (the wg-c34349377f81 hazard). This caught + fixed a real default-config bug (`claimTtlSec`
+  had equaled the deadline; now 1h > 30m).
+- **`runRalphLoop` no longer wedge-marks a TRANSIENT resource pause.** `parkAndEscalate` previously
+  wedge-marked the item for ANY reason — so a lap-emitted `HUMAN_REQUIRED{RATE_BUDGET}` permanently parked
+  healthy work that should simply retry after the window resets. Now it wedge-marks only the per-item
+  residual (IRREVERSIBLE_BOUNDARY / SCOPE_FORK / UNRECOVERABLE_WEDGE); resource pauses escalate + stop
+  without parking.
+
+Loop runnable end-to-end via mocked unit tests (config hydration, spawn→TIMEOUT/CRASH, escalator
+delivery/undroppable, T≤W rejection, resource-pause-not-parked). REMAINING for the user-authorized `0.6.0`
+cut: the **S4 proof-of-loop** (one real already-scoped `ready` item, unattended, gated — the empirical
+acceptance gate) + the README loop section. Ships as an additive `0.5.x` patch; the minor bump waits on
+S4 + a green CI confirmation.
+
 ## [0.5.418] - 2026-06-13
 
 ### Added — lap-side classifier tool + work-graph un-wedge + the override resolution path (GR.4, part 2b-i)

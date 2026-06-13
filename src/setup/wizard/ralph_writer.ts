@@ -23,21 +23,30 @@ import { atomicWriteFile } from '../../runtime/atomic_write.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 import { RALPH_MD } from '../../runtime/ralph/ralph_template.js';
 
-export const RalphConfigFileSchema = z.object({
-  /** Auth mode resolves the per-lap bound (Inv 11): API → dollar budget; subscription → wall-clock W. */
-  authMode: z.enum(['api', 'subscription']),
-  /** API dollar budget (running sum of the verified total_cost_usd). Ignored in subscription mode. */
-  maxBudgetUsd: z.number().positive(),
-  /** Per-item claim TTL (GR.1). */
-  claimTtlSec: z.number().int().positive(),
-  /** Per-lap wall-clock deadline W (the subscription bound + the TIMEOUT trigger). */
-  wallClockMs: z.number().int().positive(),
-  /** Supervisor retry cap R (CRASH/TIMEOUT only) and the backoff base for exponential backoff. */
-  maxRetries: z.number().int().nonnegative(),
-  backoffBaseMs: z.number().int().positive(),
-  /** Harness is a PARAMETER (Inv 10): the lap CLI + the RALPH.md path it reads. */
-  harness: z.object({ cli: z.string().min(1), ralphMdPath: z.string().min(1) }),
-});
+export const RalphConfigFileSchema = z
+  .object({
+    /** Auth mode resolves the per-lap bound (Inv 11): API → dollar budget; subscription → wall-clock W. */
+    authMode: z.enum(['api', 'subscription']),
+    /** API dollar budget (running sum of the verified total_cost_usd). Ignored in subscription mode. */
+    maxBudgetUsd: z.number().positive(),
+    /** Per-item claim TTL (GR.1). */
+    claimTtlSec: z.number().int().positive(),
+    /** Per-lap wall-clock deadline W (the subscription bound + the TIMEOUT trigger). */
+    wallClockMs: z.number().int().positive(),
+    /** Supervisor retry cap R (CRASH/TIMEOUT only) and the backoff base for exponential backoff. */
+    maxRetries: z.number().int().nonnegative(),
+    backoffBaseMs: z.number().int().positive(),
+    /** Harness is a PARAMETER (Inv 10): the lap CLI + the RALPH.md path it reads. */
+    harness: z.object({ cli: z.string().min(1), ralphMdPath: z.string().min(1) }),
+  })
+  .refine((c) => c.claimTtlSec * 1000 > c.wallClockMs, {
+    // HARD INVARIANT (S7): the claim TTL T must exceed the lap deadline W — else a legitimately long lap
+    // outruns its own claim, ready() re-surfaces the item mid-run, a second runner's CAS succeeds, and the
+    // loop DOUBLE-SHIPS (the wg-c34349377f81 hazard the claim layer exists to prevent). Fail-loud, not the operator's job.
+    message:
+      'claimTtlSec*1000 must exceed wallClockMs (T > W) — else a long lap outruns its claim → double-ship',
+    path: ['claimTtlSec'],
+  });
 export type RalphConfigFile = z.infer<typeof RalphConfigFileSchema>;
 
 export const ralphMdPath = (home: string = OPENSQUID_HOME()): string => join(home, 'RALPH.md');
@@ -49,7 +58,7 @@ export function defaultRalphConfig(home: string = OPENSQUID_HOME()): RalphConfig
   return {
     authMode: 'subscription',
     maxBudgetUsd: 10,
-    claimTtlSec: 1800,
+    claimTtlSec: 3600, // T = 1h claim TTL — MUST exceed wallClockMs (W = 30m deadline) per S7 (T > W)
     wallClockMs: 30 * 60 * 1000,
     maxRetries: 2,
     backoffBaseMs: 2000,

@@ -73,4 +73,17 @@ describe('readRalphConfig', () => {
       RalphConfigFileSchema.parse({ ...defaultRalphConfig(home), maxBudgetUsd: 0 }),
     ).toThrow();
   });
+
+  it('the schema enforces T > W (claimTtlSec*1000 > wallClockMs) — anti double-ship (S7)', () => {
+    // T <= W → a long lap outruns its claim → double-ship; must be rejected fail-loud.
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        claimTtlSec: 60,
+        wallClockMs: 120_000,
+      }),
+    ).toThrow(/T > W/);
+    // the defaults satisfy T > W (1h claim TTL > 30m deadline)
+    expect(() => RalphConfigFileSchema.parse(defaultRalphConfig(home))).not.toThrow();
+  });
 });

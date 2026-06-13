@@ -46,6 +46,7 @@ import { registerLimits } from './setup/cli/limits.js';
 import { registerSetupWizardMcp } from './setup/cli/mcp.js';
 import { registerMemory } from './setup/cli/memory.js';
 import { registerPermissions } from './setup/cli/permissions.js';
+import { registerRalph } from './setup/cli/ralph.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
 import { registerTriggers } from './setup/cli/triggers.js';
@@ -184,6 +185,7 @@ function runCli(): void {
   // declared in pack manifests). No dispatcher wired here yet — `run` records
   // a force-fire entry and the daemon picks it up via subsequent integration.
   registerSchedule(program);
+  registerRalph(program);
 
   // OBSERVE.2 — `opensquid trace <runId> | tail | export <runId>`.
   // Registered via a sibling module to keep the verb tree's commander wiring
