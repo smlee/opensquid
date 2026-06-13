@@ -21,16 +21,30 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphStore
   });
   const store: WorkGraphStore = {
     listReady: () =>
-      P(ids.filter((id) => { const r = rows.get(id)!; return r.status === 'open' && !r.wedged && !r.claimed; }).map(issue)),
+      P(
+        ids
+          .filter((id) => {
+            const r = rows.get(id)!;
+            return r.status === 'open' && !r.wedged && !r.claimed;
+          })
+          .map(issue),
+      ),
     claimIssue: (id: string) => {
       rows.get(id)!.claimed = true; // either way it now carries a live claim → excluded next pass
-      return P(claimLost.has(id) ? { won: false, expiresAt: '' } : { won: true, expiresAt: '2026-01-01T00:30:00.000Z' });
+      return P(
+        claimLost.has(id)
+          ? { won: false, expiresAt: '' }
+          : { won: true, expiresAt: '2026-01-01T00:30:00.000Z' },
+      );
     },
     updateIssue: (id: string, patch: { status?: 'open' | 'closed' }) => {
       if (patch.status) rows.get(id)!.status = patch.status;
       return P(issue(id));
     },
-    wedgeMark: (id: string) => { rows.get(id)!.wedged = true; return P(undefined); },
+    wedgeMark: (id: string) => {
+      rows.get(id)!.wedged = true;
+      return P(undefined);
+    },
     // unused by the loop — present to satisfy the interface
     init: () => P(undefined),
     createIssue: () => P(issue(ids[0] ?? 'x')),
@@ -47,7 +61,12 @@ const cfg = (over: Partial<RalphConfig> = {}): RalphConfig => ({
   maxBudgetUsd: 100,
   claimTtlSec: 1800,
   once: false,
-  supervise: { maxRetries: 0, backoffMs: () => 0, heartbeat: () => undefined, sleep: () => P(undefined) },
+  supervise: {
+    maxRetries: 0,
+    backoffMs: () => 0,
+    heartbeat: () => undefined,
+    sleep: () => P(undefined),
+  },
   ...over,
 });
 
@@ -123,6 +142,8 @@ describe('runRalphLoop', () => {
   it('undroppable escalation: a failed delivery throws (no silent drop)', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
     const failEsc = vi.fn(() => P({ escalated: false, reason: 'no channel' }));
-    await expect(runRalphLoop(cfg(), deps(mockStore([]), runLap, failEsc))).rejects.toThrow(/UNDELIVERABLE/);
+    await expect(runRalphLoop(cfg(), deps(mockStore([]), runLap, failEsc))).rejects.toThrow(
+      /UNDELIVERABLE/,
+    );
   });
 });
