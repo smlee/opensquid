@@ -61,5 +61,8 @@ roles:
           weighed against the criteria with the SIMPLEST-correct chosen;
           failure-modes / inversion; an empirical-spike note; a scope boundary;
           and EVERY claim cited (file:line / memory / the user's words) or
-          flagged OPEN QUESTION — and an OPEN QUESTION must be resolved with the
-          user IN SCOPE before the write, never carried into the artifact.
+          flagged as an unchecked `- [ ] OPEN QUESTION: …` task-list marker — and
+          such a marker must be resolved with the user IN SCOPE before the write
+          (check the box `- [x]` once answered), never carried unresolved into the
+          artifact. (Merely discussing an open question in prose is fine; only an
+          unchecked checkbox marker blocks the advance.)

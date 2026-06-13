@@ -43,7 +43,9 @@ rules:
   #    checks run BEFORE the advance, and research_done is COUPLED to them — no
   #    advisory pass. The advance fires ONLY when SCOPE content is complete:
   #    GUESS_FREE (every claim cited-or-flagged + the BEST/simplest solution justified)
-  #    AND zero unresolved OPEN QUESTION markers AND research depth >= 3 this turn.
+  #    AND zero unresolved open-question markers (an unchecked `- [ ] OPEN QUESTION:` task-list
+  #    item — GM.3 made this a STRUCTURED marker so prose that merely mentions the phrase no
+  #    longer false-blocks) AND research depth >= 3 this turn.
   - id: scope-advance
     process:
       - call: tool_name
@@ -106,7 +108,8 @@ rules:
             principles (docs/lexicon.md — never-guess, best-solution, full-fix-over-patch, teach-back depth) on a
             pre-research / scope artifact. (1) NEVER-GUESS: a claim is acceptable ONLY if DERIVED from cited
             evidence (a file:line, a memory, or the user's own words) OR explicitly flagged
-            as an OPEN QUESTION to ask the user. (2) BEST-SOLUTION: the artifact must show
+            as an unresolved open question — an unchecked `- [ ] OPEN QUESTION: …` task-list
+            marker — to ask the user (resolve it by checking the box `- [x]`). (2) BEST-SOLUTION: the artifact must show
             the best solution was found — alternatives weighed against the criteria and the
             SIMPLEST correct one chosen per docs/lexicon.md (no proliferating special-cases).
             (3) FULL-FIX: the chosen solution must be the FULL fix — when the existing shape
@@ -124,18 +127,20 @@ rules:
       #    audit-string trichotomy below is a clean partition over its own subspace.
       # BLOCK: unresolved open questions — answer them in SCOPE (this is the interactive phase).
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && contains(effective, "OPEN QUESTION")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question")'
         args:
           level: block
           message: >-
-            SCOPE incomplete: the pre-research still has unresolved OPEN QUESTION(s).
-            SCOPE is the interactive phase — ASK the user (AskUserQuestion), record + cite
-            the answer, and remove the marker BEFORE authoring. Everything after scope is
-            automated; a question must not survive into it.
+            SCOPE incomplete: the pre-research still has an unresolved open-question marker
+            (an unchecked `- [ ] OPEN QUESTION: …` task-list item). SCOPE is the interactive
+            phase — ASK the user (AskUserQuestion), record + cite the answer, then CHECK THE BOX
+            (`- [x]`) or remove the item BEFORE authoring. Everything after scope is automated;
+            a question must not survive into it. (Merely MENTIONING the phrase in prose is fine —
+            only an unchecked checkbox marker blocks.)
       # BLOCK: shallow research (folded DPC.5 depth). Ordered after open-question; its
-      # !OPEN QUESTION guard keeps the two preconditions mutually exclusive.
+      # !match(OQ-marker) guard keeps the two preconditions mutually exclusive.
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !contains(effective, "OPEN QUESTION") && depth.count < 3'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && depth.count < 3'
         args:
           level: block
           message: >-
@@ -145,17 +150,17 @@ rules:
       #    {GUESS_FREE, UNRESOLVED, no-VERDICT} is a total partition of the audit string.
       # PASS → advance.
       - call: advance_fsm
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && contains(audit, "VERDICT: GUESS_FREE")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && contains(audit, "VERDICT: GUESS_FREE")'
         args:
           event: research_done
       # CONTENT-FAIL → loop-back + warn (keyed POSITIVELY on UNRESOLVED, not !GUESS_FREE — so an
       # audit that could not run no longer masquerades as "guesses found").
       - call: advance_fsm
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && contains(audit, "VERDICT: UNRESOLVED")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && contains(audit, "VERDICT: UNRESOLVED")'
         args:
           event: guess_found
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && contains(audit, "VERDICT: UNRESOLVED")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && contains(audit, "VERDICT: UNRESOLVED")'
         args:
           level: warn
           message: >-
@@ -166,7 +171,7 @@ rules:
       # AUDIT-UNAVAILABLE → terminal BLOCK, NO advance (stays scoping, re-armable). F0c fix:
       # the audit subagent could not spawn (a no-VERDICT response, incl. the bound err message).
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !contains(effective, "OPEN QUESTION") && !contains(audit, "VERDICT:")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && !contains(audit, "VERDICT:")'
         args:
           level: block
           message: >-

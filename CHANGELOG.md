@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.423] - 2026-06-13
+
+### Fixed — OPEN-QUESTION precondition is now a structured marker (GM.4, wg-52e57e2ed252)
+
+The SCOPE gate's open-question precondition matched the bare phrase `OPEN QUESTION` anywhere in a
+pre-research doc (`contains(effective, …)`) — so a doc that merely DISCUSSED the convention (like the
+pre-research for this very fix) was false-blocked. It now matches a STRUCTURED marker — an unchecked
+`- [ ] OPEN QUESTION: …` task-list item — via the existing `match` (RE2) function. Prose mention no
+longer blocks; an unchecked checkbox blocks; checking the box (`- [x]`) resolves it in place.
+
+- `coding-flow/skills/scope-lifecycle` — the block precondition + the five `!contains` sibling guards
+  flipped to `match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question")`; the guess-audit prompt,
+  block message, and comments reworded to teach the checkbox marker.
+- `scope-architect/team.yaml` — the agent brief now instructs the checkbox marker.
+- `coding-flow.test.ts` — migrated the OQ fixture to the marker; added the false-fire-fix triple
+  (prose mention advances; unchecked `- [ ]` blocks; checked `- [x]` advances). The dispatch tests
+  prove the `match()` regex resolves correctly through YAML → expression lexer → RE2.
+
+Accepted narrow residual (pre-research §4.3): a meta-doc that shows the literal marker as an example
+checkbox at line-start still matches — the LLM guess-audit backstops, and only `-pre-research-` Writes
+are gated.
+
+---
+
 ## [0.5.422] - 2026-06-13
 
 ### Fixed — builtin git matchers no longer false-fire (GM.3, wg-52e57e2ed252)

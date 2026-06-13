@@ -547,19 +547,54 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
     args: { file_path: 'docs/research/x-pre-research-2026-06-04.md', content },
   });
 
-  it('BLOCKS the advance while an OPEN QUESTION is unresolved (answer it in scope)', async () => {
+  // GM.4 (wg-52e57e2ed252): the open-question precondition is a STRUCTURED marker (an unchecked
+  // `- [ ] OPEN QUESTION:` task-list item), not the bare phrase — so it blocks a real unresolved
+  // question but no longer false-fires on a doc that merely MENTIONS the phrase in prose.
+  it('BLOCKS the advance while an unchecked `- [ ] OPEN QUESTION` marker is present', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registryWithAudit('VERDICT: SPEC_COMPLETE'); // research audit → GUESS_FREE
     const sid = 'cf-af1-openq';
     for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
     const r = await dispatchEvent(
-      research('# Pre-research\n\nOPEN QUESTION: which approach?'),
+      research('# Pre-research\n\n- [ ] OPEN QUESTION: which approach?'),
       [pack],
       reg,
       sid,
     );
     expect(r.exitCode).toBe(2);
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).not.toBe('researched');
+  });
+
+  it('does NOT block when the doc merely MENTIONS the phrase in prose (the false-fire fix)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-af1-openq-prose';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    const r = await dispatchEvent(
+      research(
+        '# Pre-research\n\nThis DISCUSSES the OPEN QUESTION precondition. Derived from src/foo.ts:1.',
+      ),
+      [pack],
+      reg,
+      sid,
+    );
+    expect(r.exitCode).toBe(0);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('researched');
+  });
+
+  it('does NOT block once the marker is resolved (checked `- [x]`)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registryWithAudit('VERDICT: SPEC_COMPLETE');
+    const sid = 'cf-af1-openq-resolved';
+    for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
+    const r = await dispatchEvent(
+      research('# Pre-research\n\n- [x] OPEN QUESTION: settled — chose X (src/foo.ts:1).'),
+      [pack],
+      reg,
+      sid,
+    );
+    expect(r.exitCode).toBe(0);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('researched');
   });
 
   it('BLOCKS the advance on shallow research (depth < 3)', async () => {
