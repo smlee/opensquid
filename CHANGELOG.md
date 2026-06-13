@@ -21,7 +21,7 @@ the loop is a CLI COMMAND (not a daemon), and the agent loop runs inside the spa
   deps: the work-graph store, env-derived `claimAudience` (GR.1), `makeSpawnLap` (spawns
   `claude -p RALPH.md --item … --dangerously-skip-permissions`, parses the typed exit; a deadline overrun
   → typed `TIMEOUT`, a spawn failure → CRASH), and a chat-daemon escalator. Plus `opensquid loop resolve
-  <itemId> --misclassified` (the human-override residual-shrink path → `resolveParked`).
+<itemId> --misclassified` (the human-override residual-shrink path → `resolveParked`).
 - `src/runtime/ralph/escalator.ts` — `chatEscalator`: a `LapEscalator` that delivers the lap's typed
   escalation to the human via the live chat-daemon UDS `send` (the same path `chat_send` uses — the real
   Telegram escalation). Undroppable: a delivery failure → `escalated:false` → `escalateLap` throws (Inv 6).
