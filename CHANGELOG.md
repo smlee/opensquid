@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.414] - 2026-06-13
+
+### Added — typed lap-exit contract + decide-vs-escalate classifier — gated-ralph GR.2
+
+The second gated-ralph slice (spec `docs/tasks/T-gated-ralph-loop.md` GR.2; wg-521cf32bd28e):
+
+- `src/runtime/ralph/lap_outcome.ts` — the single typed-exit contract (Inv 5): a `LapOutcome` union (SHIPPED / HUMAN_REQUIRED{reason} / WEDGE / TIMEOUT / CRASH) + `parseLapOutcome`, a TOTAL mapping of the headless `--output-format json` envelope that never throws and never returns a false SHIPPED (unparseable / `is_error` → CRASH; clean + no tag → SHIPPED). `extractTypedExit` defensively scans the lap's greppable `RALPH-EXIT: {json}` line (balanced-brace slice, last-tag-wins, malformed → no-tag).
+- `src/runtime/ralph/decision_classifier.ts` — the deterministic-first decide-vs-escalate classifier: ESCALATE on irreversible/outward boundaries (npm publish, OTP, force-push, rm -rf, drop table, deploy prod), DECIDE on principle-settleable surface choices, else DEFER to the in-lap agent's own judgment (Inv 3 → DECIDE). A misclassification is recorded as a session drift event (the residual-shrink path). CODE-phase refinement: ambiguous cases DEFER to the lap agent rather than a redundant `llm_classify` (which needs the flows executor context).
+
+Loop-off by default (consumed by the GR.4 orchestrator). Tests: 13 typed-exit + 5 classifier cases.
+
 ## [0.5.413] - 2026-06-13
 
 ### Added — work-graph item CLAIM (exactly-once, audience-stamped, query-time expiry) — gated-ralph GR.1
