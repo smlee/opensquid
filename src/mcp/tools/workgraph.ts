@@ -10,6 +10,8 @@
  */
 import { z } from 'zod';
 
+import { claimAudience } from '../../workgraph/audience.js';
+
 import type { WorkGraphStore } from '../../workgraph/types.js';
 
 const Status = z.enum(['open', 'in_progress', 'closed']);
@@ -30,6 +32,10 @@ export const WgAddEdgeSchema = z.object({
 export const WgIdSchema = z.object({ id: z.string().min(1) });
 export const WgListSchema = z.object({ status: Status.optional() });
 export const WgReadySchema = z.object({});
+export const WgClaimSchema = z.object({
+  id: z.string().min(1),
+  ttlSec: z.number().int().positive().default(1800),
+});
 
 export const handleWgCreate = async (
   a: z.infer<typeof WgCreateSchema>,
@@ -79,3 +85,9 @@ export const handleWgEvents = async (
   a: z.infer<typeof WgIdSchema>,
   s: WorkGraphStore,
 ): Promise<string> => JSON.stringify(await s.listEvents(a.id));
+
+// GR.1 — atomic claim. Audience is stamped from the trusted env markers, NEVER from caller args.
+export const handleWgClaim = async (
+  a: z.infer<typeof WgClaimSchema>,
+  s: WorkGraphStore,
+): Promise<string> => JSON.stringify(await s.claimIssue(a.id, claimAudience(), a.ttlSec));

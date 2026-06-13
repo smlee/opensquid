@@ -19,7 +19,7 @@ import { atomicWriteFile, safeRecordId } from '../storage/atomic_file.js';
 
 import { applyOp, makeOpId } from './events.js';
 
-import type { EdgeType, Issue, IssueStatus, WgOp, WorkGraphStore } from './types.js';
+import type { ClaimAudience, EdgeType, Issue, IssueStatus, WgOp, WorkGraphStore } from './types.js';
 
 const EDGE_TYPES = new Set<EdgeType>(['blocks', 'parent-child', 'discovered-from', 'related']);
 
@@ -33,14 +33,35 @@ const newIssueId = (title: string): string =>
 const str = (r: Row, k: string): string => (typeof r[k] === 'string' ? r[k] : '');
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0));
 const toStatus = (s: string): IssueStatus => (s === 'in_progress' || s === 'closed' ? s : 'open');
-const rowToIssue = (r: Row): Issue => ({
-  id: str(r, 'id'),
-  title: str(r, 'title'),
-  body: str(r, 'body'),
-  status: toStatus(str(r, 'status')),
-  createdAt: str(r, 'created_at'),
-  updatedAt: str(r, 'updated_at'),
-});
+const optStr = (r: Row, k: string): string | undefined => {
+  const v = r[k];
+  return typeof v === 'string' && v !== '' ? v : undefined;
+};
+const parseAudience = (r: Row): ClaimAudience | undefined => {
+  const raw = optStr(r, 'claim_audience');
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw) as ClaimAudience;
+  } catch {
+    return undefined;
+  }
+};
+const rowToIssue = (r: Row): Issue => {
+  const claimToken = optStr(r, 'claim_token');
+  const claimAudience = parseAudience(r);
+  const claimExpiresAt = optStr(r, 'claim_expires_at');
+  return {
+    id: str(r, 'id'),
+    title: str(r, 'title'),
+    body: str(r, 'body'),
+    status: toStatus(str(r, 'status')),
+    createdAt: str(r, 'created_at'),
+    updatedAt: str(r, 'updated_at'),
+    ...(claimToken === undefined ? {} : { claimToken }),
+    ...(claimAudience === undefined ? {} : { claimAudience }),
+    ...(claimExpiresAt === undefined ? {} : { claimExpiresAt }),
+  };
+};
 
 async function createSchema(client: Client): Promise<void> {
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_ops (
@@ -49,9 +70,22 @@ async function createSchema(client: Client): Promise<void> {
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_issues (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    lww INTEGER NOT NULL DEFAULT 0);`);
+    lww INTEGER NOT NULL DEFAULT 0,
+    claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT);`);
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_edges (
     edge_key TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL);`);
+  // GR.1 — additive claim columns for a pre-existing wg_issues (idempotent; already-migrated throws).
+  for (const ddl of [
+    `ALTER TABLE wg_issues ADD COLUMN claim_token TEXT`,
+    `ALTER TABLE wg_issues ADD COLUMN claim_audience TEXT`,
+    `ALTER TABLE wg_issues ADD COLUMN claim_expires_at TEXT`,
+  ]) {
+    try {
+      await client.execute(ddl);
+    } catch {
+      /* column already exists */
+    }
+  }
   await client.execute(`DROP TABLE IF EXISTS wg_events;`); // clean cutover from the 1c state-primary store
 }
 
@@ -150,10 +184,34 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
     },
 
     async listReady() {
-      const rs = await db().execute(`SELECT * FROM wg_issues WHERE status = 'open' AND id NOT IN (
-        SELECT e.to_id FROM wg_edges e JOIN wg_issues x ON x.id = e.from_id
-        WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_at`);
+      // Open, unblocked, AND not live-claimed. A claim with claim_expires_at <= now is treated as
+      // unclaimed (query-time expiry — no reaper). ISO-8601 UTC sorts lexically == chronologically.
+      const now = new Date().toISOString();
+      const rs = await db().execute({
+        sql: `SELECT * FROM wg_issues WHERE status = 'open'
+          AND (claim_token IS NULL OR claim_expires_at <= ?)
+          AND id NOT IN (
+            SELECT e.to_id FROM wg_edges e JOIN wg_issues x ON x.id = e.from_id
+            WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_at`,
+        args: [now],
+      });
       return rs.rows.map(rowToIssue);
+    },
+
+    async claimIssue(id, audience: ClaimAudience, ttlSec) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
+      // Unique per attempt → robust read-back (no two claims collide even at the same ms/expiry).
+      const claimToken =
+        'clm-' +
+        createHash('sha256')
+          .update(`${id}\n${String(Date.now())}\n${String(Math.random())}`)
+          .digest('hex')
+          .slice(0, 16);
+      await appendOp(id, 'claim_acquired', { claimToken, audience, expiresAt });
+      // applyOp ran the conditional CAS; we won iff OUR token is the one that landed.
+      const cur = await getIssue(id);
+      return { won: cur?.claimToken === claimToken, expiresAt };
     },
 
     async listEvents(issueId) {

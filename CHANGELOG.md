@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.413] - 2026-06-13
+
+### Added — work-graph item CLAIM (exactly-once, audience-stamped, query-time expiry) — gated-ralph GR.1
+
+The first slice of the gated-ralph loop subsystem (pre-research `docs/research/T-gated-ralph-loop-pre-research-2026-06-13.md`, GUESS_FREE; spec `docs/tasks/T-gated-ralph-loop.md`, SPEC_COMPLETE). A runner can now atomically claim a `ready` work-graph item:
+
+- New `claim_acquired` op + `claimIssue(id, audience, ttlSec)` store method + `workgraph_claim` MCP tool (LOCAL_WRITE). Exactly-once is a conditional-UPDATE CAS in the projection reducer (`applyOp`) keyed on a unique per-attempt claim token — concurrent/duplicate claims return `won:false`.
+- Audience is stamped from the trusted GDC env markers (CLAUDECODE / CODEX_THREAD_ID), never from caller input — the work-graph-item instance of the claim/audience pattern from wg-c34349377f81.
+- Claim expiry is resolved at **query time** (`listReady` excludes live claims; a claim with `claim_expires_at <= now` re-surfaces) — no reaper, preserving the single-writable-home invariant. The wall-clock expiry stamp is a liveness heuristic, orthogonal to the Lamport op-ordering ([[project-workgraph-eventsourced-decision]]).
+- Schema is additive (`claim_token` / `claim_audience` / `claim_expires_at` columns, idempotent ALTERs); the projection rebuild recognizes the new op and old logs replay unchanged. No data migration.
+
+Loop-off by default (this is library surface; the orchestrator that drives it is GR.4). Tests: 7 claim cases (CAS, expiry re-surface, rebuild survival, additive-old-log) + 5 audience unit cases.
+
 ## [0.5.412] - 2026-06-12
 
 ### Changed — consolidation now DEMOTES predecessors instead of hard-deleting (T-retention-window-delete slice 1, wg-9e4f4eb2a40f)

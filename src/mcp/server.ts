@@ -73,12 +73,14 @@ import {
 } from './tools/store-lesson.js';
 import {
   WgAddEdgeSchema,
+  WgClaimSchema,
   WgCreateSchema,
   WgIdSchema,
   WgListSchema,
   WgReadySchema,
   WgUpdateSchema,
   handleWgAddEdge,
+  handleWgClaim,
   handleWgCreate,
   handleWgEvents,
   handleWgGet,
@@ -216,6 +218,10 @@ const ToolHandlers = {
     schema: WgIdSchema,
     handle: async (a: z.infer<typeof WgIdSchema>) => handleWgEvents(a, await getWorkGraph()),
   },
+  workgraph_claim: {
+    schema: WgClaimSchema,
+    handle: async (a: z.infer<typeof WgClaimSchema>) => handleWgClaim(a, await getWorkGraph()),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -253,6 +259,7 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   workgraph_create_issue: LOCAL_WRITE,
   workgraph_update_issue: LOCAL_WRITE,
   workgraph_add_edge: LOCAL_WRITE,
+  workgraph_claim: LOCAL_WRITE,
   // The one genuinely destructive tool: deletes a memory (tools/forget.ts).
   forget: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 };
@@ -287,6 +294,8 @@ const descriptions: Record<ToolName, string> = {
   workgraph_get: 'Get one work-graph issue by id (or null).',
   workgraph_list: 'List work-graph issues, optionally filtered by status {status?}.',
   workgraph_events: 'List the append-only op-log (history) for an issue by id.',
+  workgraph_claim:
+    'Atomically claim a work-graph issue {id, ttlSec?} for exclusive work (exactly-once). Stamps the calling harness as audience. Returns {won, expiresAt}; won:false means another runner holds it. An expired claim is reclaimable.',
 };
 
 /**

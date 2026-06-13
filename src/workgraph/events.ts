@@ -95,5 +95,25 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
         args: [edgeKey(s(p.from), s(p.to))],
       });
       return;
+    case 'claim_acquired':
+      // GR.1 — exactly-once CAS at the projection: the claim lands ONLY if the item is currently
+      // unclaimed OR its prior claim already expired (claim_expires_at <= this op's ts). Replaying
+      // in lamport order makes exactly one concurrent claim win; the loser's UPDATE matches 0 rows.
+      // Expiry is read at query time (listReady) — no reaper. claim_token is the unique winner mark.
+      await client.execute({
+        sql: `UPDATE wg_issues
+              SET claim_token = ?, claim_audience = ?, claim_expires_at = ?, updated_at = ?
+              WHERE id = ? AND status = 'open'
+                AND (claim_token IS NULL OR claim_expires_at <= ?)`,
+        args: [
+          s(p.claimToken),
+          s(p.audience === undefined ? '' : JSON.stringify(p.audience)),
+          s(p.expiresAt),
+          s(p.ts),
+          op.issueId,
+          s(p.ts),
+        ],
+      });
+      return;
   }
 }

@@ -8,7 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { rebuildWorkGraph, workGraphStore } from './store.js';
 
@@ -122,5 +122,104 @@ describe('workGraphStore per-file source + rebuild', () => {
     const wg2 = workGraphStore({ dbUrl: rebuiltUrl });
     await wg2.init();
     expect((await wg2.getIssue(a.id))?.status).toBe('closed');
+  });
+});
+
+describe('workGraphStore claim + audience (GR.1)', () => {
+  const claude = { source: 'claudecode', version: '1.2.3' } as const;
+  const codex = { source: 'codex', threadId: 'abc' } as const;
+
+  it('claimIssue wins on an unclaimed item and removes it from ready', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'claim me' });
+    const r = await wg.claimIssue(a.id, claude, 1800);
+    expect(r.won).toBe(true);
+    expect((await wg.listReady()).map((i) => i.id)).not.toContain(a.id);
+    expect((await wg.getIssue(a.id))?.claimAudience).toEqual(claude);
+    // claim is a status op on the op-log, not a side store
+    expect((await wg.listEvents(a.id)).map((o) => o.type)).toEqual([
+      'issue_created',
+      'claim_acquired',
+    ]);
+  });
+
+  it('a second concurrent claim loses (exactly-once CAS)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'contended' });
+    const first = await wg.claimIssue(a.id, claude, 1800);
+    const second = await wg.claimIssue(a.id, codex, 1800);
+    expect(first.won).toBe(true);
+    expect(second.won).toBe(false);
+    // the FIRST claimant's audience stands
+    expect((await wg.getIssue(a.id))?.claimAudience).toEqual(claude);
+  });
+
+  it('a closed item cannot be claimed (CAS requires status=open)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'done' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    expect((await wg.claimIssue(a.id, claude, 1800)).won).toBe(false);
+  });
+
+  it('claiming a missing issue throws', async () => {
+    const wg = await fresh();
+    await expect(wg.claimIssue('wg-nope', claude, 1800)).rejects.toThrow(/no issue/);
+  });
+
+  it('an expired claim re-surfaces in ready and is reclaimable (query-time expiry, no reaper)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-06-13T00:00:00.000Z'));
+      const wg = await fresh();
+      const a = await wg.createIssue({ title: 'ttl' });
+      expect((await wg.claimIssue(a.id, claude, 60)).won).toBe(true); // 60s TTL
+      expect((await wg.listReady()).map((i) => i.id)).not.toContain(a.id);
+      // advance past expiry — no write, just time
+      vi.setSystemTime(new Date('2026-06-13T00:01:01.000Z')); // +61s
+      expect((await wg.listReady()).map((i) => i.id)).toContain(a.id);
+      // a fresh claim wins again (prior claim expired)
+      expect((await wg.claimIssue(a.id, codex, 60)).won).toBe(true);
+      expect((await wg.getIssue(a.id))?.claimAudience).toEqual(codex);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a claim survives projection rebuild (S5) and stays out of ready', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wg-claim-'));
+    try {
+      const wg = workGraphStore({ dbUrl: `file:${join(dir, 'wg.db')}`, sourceDir: dir });
+      await wg.init();
+      const a = await wg.createIssue({ title: 'persist' });
+      await wg.claimIssue(a.id, codex, 86400); // long TTL so it's still live after rebuild
+      const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const wg2 = workGraphStore({ dbUrl: rebuiltUrl });
+      await wg2.init();
+      const issue = await wg2.getIssue(a.id);
+      expect(issue?.claimAudience).toEqual(codex);
+      expect(issue?.claimToken).toBeTruthy();
+      expect((await wg2.listReady()).map((i) => i.id)).not.toContain(a.id);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('old logs WITHOUT claim ops project unchanged (additive)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wg-noclaim-'));
+    try {
+      const wg = workGraphStore({ dbUrl: `file:${join(dir, 'wg.db')}`, sourceDir: dir });
+      await wg.init();
+      const a = await wg.createIssue({ title: 'legacy' });
+      const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const wg2 = workGraphStore({ dbUrl: rebuiltUrl });
+      await wg2.init();
+      const issue = await wg2.getIssue(a.id);
+      expect(issue?.claimToken).toBeUndefined();
+      expect((await wg2.listReady()).map((i) => i.id)).toContain(a.id);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

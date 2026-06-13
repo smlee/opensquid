@@ -216,6 +216,7 @@ describe('opensquid-mcp subprocess', () => {
       'recall',
       'store_lesson',
       'workgraph_add_edge',
+      'workgraph_claim',
       'workgraph_create_issue',
       'workgraph_events',
       'workgraph_get',

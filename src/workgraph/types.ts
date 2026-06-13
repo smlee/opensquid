@@ -10,6 +10,17 @@ export type EdgeType = 'blocks' | 'parent-child' | 'discovered-from' | 'related'
 
 export type IssueStatus = 'open' | 'in_progress' | 'closed';
 
+/**
+ * Who claimed an item, derived at claim time from the GDC env markers the gate already trusts
+ * (`AGENT_ENV_MARKERS` — CLAUDECODE / CODEX_THREAD_ID / AI_AGENT). Informational; the exactly-once
+ * guarantee comes from the claim token, not this field. (GR.1 of the gated-ralph loop.)
+ */
+export interface ClaimAudience {
+  source: 'claudecode' | 'codex' | 'unknown';
+  threadId?: string; // CODEX_THREAD_ID when codex
+  version?: string; // CLAUDECODE value when claude
+}
+
 export interface Issue {
   id: string;
   title: string;
@@ -17,10 +28,20 @@ export interface Issue {
   status: IssueStatus;
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
+  // GR.1 claim fields — absent/undefined when unclaimed. A claim with claimExpiresAt <= now is
+  // treated as unclaimed (query-time expiry; no reaper).
+  claimToken?: string; // unique per claim attempt — the CAS winner's token
+  claimAudience?: ClaimAudience;
+  claimExpiresAt?: string; // ISO 8601
 }
 
 /** Event-sourced op-log types (slice 1d). Ops are the source of truth; issues/edges are folded. */
-export type WgOpType = 'issue_created' | 'issue_set' | 'dep_added' | 'dep_removed';
+export type WgOpType =
+  | 'issue_created'
+  | 'issue_set'
+  | 'dep_added'
+  | 'dep_removed'
+  | 'claim_acquired';
 
 export interface WgOp {
   id: string;
@@ -40,8 +61,18 @@ export interface WorkGraphStore {
     patch: { status?: IssueStatus; title?: string; body?: string },
   ): Promise<Issue>;
   addEdge(fromId: string, toId: string, type: EdgeType): Promise<void>;
-  /** Open issues with no un-closed `blocks` blocker, oldest-first (a deterministic queue). */
+  /** Open issues with no un-closed `blocks` blocker AND no live claim, oldest-first. */
   listReady(): Promise<Issue[]>;
+  /**
+   * Atomically claim an item for `ttlSec` (exactly-once CAS via a unique claim token). Returns
+   * `won:true` only for the single winner; concurrent/duplicate claims get `won:false`. An item
+   * whose prior claim has expired is claimable again (query-time staleness). (GR.1.)
+   */
+  claimIssue(
+    id: string,
+    audience: ClaimAudience,
+    ttlSec: number,
+  ): Promise<{ won: boolean; expiresAt: string }>;
   /** The append-only op-log for an issue, in (lamport, id) order. */
   listEvents(issueId: string): Promise<WgOp[]>;
 }
