@@ -88,6 +88,7 @@ import {
   handleWgReady,
   handleWgUpdate,
 } from './tools/workgraph.js';
+import { DecisionClassifySchema, handleDecisionClassify } from './tools/ralph.js';
 
 import type { WorkGraphStore } from '../workgraph/types.js';
 
@@ -222,6 +223,11 @@ const ToolHandlers = {
     schema: WgClaimSchema,
     handle: async (a: z.infer<typeof WgClaimSchema>) => handleWgClaim(a, await getWorkGraph()),
   },
+  decision_classify: {
+    schema: DecisionClassifySchema,
+    handle: (a: z.infer<typeof DecisionClassifySchema>) =>
+      Promise.resolve(handleDecisionClassify(a)),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -260,6 +266,7 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   workgraph_update_issue: LOCAL_WRITE,
   workgraph_add_edge: LOCAL_WRITE,
   workgraph_claim: LOCAL_WRITE,
+  decision_classify: READ_ONLY,
   // The one genuinely destructive tool: deletes a memory (tools/forget.ts).
   forget: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 };
@@ -296,6 +303,8 @@ const descriptions: Record<ToolName, string> = {
   workgraph_events: 'List the append-only op-log (history) for an issue by id.',
   workgraph_claim:
     'Atomically claim a work-graph issue {id, ttlSec?} for exclusive work (exactly-once). Stamps the calling harness as audience. Returns {won, expiresAt}; won:false means another runner holds it. An expired claim is reclaimable.',
+  decision_classify:
+    'Classify an in-lap decision {decision} as DECIDE / ESCALATE / DEFER (gated-ralph, deterministic-first). DECIDE = settle by principles and proceed; ESCALATE = irreversible/outward boundary or genuine fork (emit HUMAN_REQUIRED, stamping this verdict in the payload); DEFER = no signal, the agent decides (Inv 3 → DECIDE). Returns {verdict, confidence, source, matched}.',
 };
 
 /**

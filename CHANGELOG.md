@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.418] - 2026-06-13
+
+### Added — lap-side classifier tool + work-graph un-wedge + the override resolution path (GR.4, part 2b-i)
+
+Wires GR.2's decide-vs-escalate classifier LIVE (it was built in 0.5.414 but had no invocation site — a
+gap the spec-audit caught) via an explicit single-home design (spec `docs/tasks/T-gated-ralph-loop.md`
+GR.4; wg-ecccf0e79a91):
+
+- `src/mcp/tools/ralph.ts` + `src/mcp/server.ts` — the `decision_classify` MCP tool (READ-only): the
+  in-lap `claude -p` agent consults GR.2's `classifyDecision` mid-execution → DECIDE / ESCALATE / DEFER.
+  Classification is LAP-SIDE; the orchestrator never runs it.
+- `src/workgraph/` — additive `wedge_cleared` op + `clearWedge(id)` store method: the un-wedge that
+  re-surfaces a parked item to `listReady`. Query-time, replay-safe (rebuild recognizes it), like the
+  GR.1 claim / GR.3 wedge-mark ops.
+- `src/runtime/ralph/orchestrator.ts` — `resolveParked(itemId, deps)`: the human-override INPUT
+  (`opensquid loop resolve <itemId> --misclassified`, CLI next) — records `recordMisclassification`
+  (heuristic ESCALATE, correct DECIDE) → a session drift event (the residual-shrink path), then
+  `clearWedge`. The SOLE caller of GR.2's `recordMisclassification`; post-hoc, NOT the hot loop.
+
+Still loop-OFF until the `opensquid loop` CLI assembles the orchestrator deps (the remaining GR.4 + the
+`0.6.0` cut). Tests: 4 classify-tool + 2 clearWedge (store, incl. rebuild) + 2 resolveParked.
+
 ## [0.5.417] - 2026-06-13
 
 ### Added — gated-ralph wizard writer (GR.4, part 2a of the capstone)

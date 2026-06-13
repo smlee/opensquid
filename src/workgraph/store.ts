@@ -207,6 +207,11 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       await appendOp(id, 'wedge_marked', { reason });
     },
 
+    async clearWedge(id) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(id, 'wedge_cleared', {});
+    },
+
     async claimIssue(id, audience: ClaimAudience, ttlSec) {
       if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
       const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();

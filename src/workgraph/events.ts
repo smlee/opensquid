@@ -122,5 +122,12 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
         args: [s(p.reason), s(p.ts), op.issueId],
       });
       return;
+    case 'wedge_cleared':
+      // GR.4 — un-wedge (human-override resolution): the item re-enters listReady for another lap.
+      await client.execute({
+        sql: `UPDATE wg_issues SET wedge_reason = NULL, updated_at = ? WHERE id = ?`,
+        args: [s(p.ts), op.issueId],
+      });
+      return;
   }
 }

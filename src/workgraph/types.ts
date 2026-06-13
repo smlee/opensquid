@@ -44,7 +44,8 @@ export type WgOpType =
   | 'dep_added'
   | 'dep_removed'
   | 'claim_acquired'
-  | 'wedge_marked';
+  | 'wedge_marked'
+  | 'wedge_cleared';
 
 export interface WgOp {
   id: string;
@@ -81,6 +82,9 @@ export interface WorkGraphStore {
    * supervisor can't crash-loop the same wall. Excluded from `listReady` until the reason is cleared.
    */
   wedgeMark(id: string, reason: string): Promise<void>;
+  /** Clear a wedge-mark (GR.4 human-override resolution): `wedge_reason` → null → the item re-enters
+   * `listReady` for another lap. The residual-shrink path's un-wedge. */
+  clearWedge(id: string): Promise<void>;
   /** The append-only op-log for an issue, in (lamport, id) order. */
   listEvents(issueId: string): Promise<WgOp[]>;
 }

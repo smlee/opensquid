@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runRalphLoop, type RalphConfig, type RalphDeps } from './orchestrator.js';
+import { runRalphLoop, resolveParked, type RalphConfig, type RalphDeps } from './orchestrator.js';
 import type { Issue, WorkGraphStore } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
 
@@ -18,6 +18,7 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphStore
     status: rows.get(id)!.status,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
+    ...(rows.get(id)!.wedged ? { wedgeReason: 'UNRECOVERABLE_WEDGE' } : {}),
   });
   const store: WorkGraphStore = {
     listReady: () =>
@@ -43,6 +44,10 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphStore
     },
     wedgeMark: (id: string) => {
       rows.get(id)!.wedged = true;
+      return P(undefined);
+    },
+    clearWedge: (id: string) => {
+      rows.get(id)!.wedged = false;
       return P(undefined);
     },
     // unused by the loop — present to satisfy the interface
@@ -145,5 +150,25 @@ describe('runRalphLoop', () => {
     await expect(runRalphLoop(cfg(), deps(mockStore([]), runLap, failEsc))).rejects.toThrow(
       /UNDELIVERABLE/,
     );
+  });
+});
+
+describe('resolveParked (human-override residual-shrink path)', () => {
+  it('on a wedge-marked item → records misclassification (DECIDE/ESCALATE) + un-wedges', async () => {
+    const wg = mockStore(['a']);
+    await wg.wedgeMark('a', 'UNRECOVERABLE_WEDGE'); // parked
+    const rec = vi.fn(() => P(undefined));
+    await resolveParked('a', { wg, recordMisclassification: rec, sessionId: 's1', nowIso: 'now' });
+    expect(rec).toHaveBeenCalledWith('s1', 'DECIDE', 'ESCALATE', 'a', 'now'); // expected vs got
+    expect((await wg.listReady()).map((i) => i.id)).toEqual(['a']); // un-wedged → back in ready
+  });
+
+  it('on a NON-parked item (no wedgeReason) → throws, no misclassification recorded', async () => {
+    const wg = mockStore(['a']);
+    const rec = vi.fn(() => P(undefined));
+    await expect(
+      resolveParked('a', { wg, recordMisclassification: rec, sessionId: 's1', nowIso: 'now' }),
+    ).rejects.toThrow(/not a parked item/);
+    expect(rec).not.toHaveBeenCalled();
   });
 });

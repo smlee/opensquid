@@ -19,6 +19,7 @@ import type { HumanRequiredReason } from './lap_outcome.js';
 import type { LapResult, SuperviseOpts } from './supervisor.js';
 import { superviseLap } from './supervisor.js';
 import { escalateLap, type LapEscalator } from './escalate_lap.js';
+import type { DecisionVerdict } from './decision_classifier.js';
 
 export interface RalphConfig {
   /** Auth mode from CONFIG (Inv 11; no runtime auto-detect). API → dollar budget; subscription → W. */
@@ -115,4 +116,35 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     }
     if (cfg.once) return { stopped: 'once', spent, closed, parked };
   }
+}
+
+/** GR.2's recordMisclassification, injected (kept testable / decoupled). */
+export type RecordMisclassification = (
+  sessionId: string,
+  expected: DecisionVerdict,
+  got: DecisionVerdict,
+  decision: string,
+  nowIso: string,
+) => Promise<void>;
+
+/**
+ * `opensquid loop resolve <itemId> --misclassified` — the human-override INPUT (post-hoc residual-shrink
+ * path; NOT the hot loop). The human marks a parked escalation as principle-settleable: we record the
+ * misclassification (the heuristic said ESCALATE, the correct verdict was DECIDE) and un-wedge the item so
+ * it re-enters `ready` for another lap. The SOLE caller of GR.2's recordMisclassification.
+ */
+export async function resolveParked(
+  itemId: string,
+  deps: {
+    wg: WorkGraphStore;
+    recordMisclassification: RecordMisclassification;
+    sessionId: string;
+    nowIso: string;
+  },
+): Promise<void> {
+  const item = await deps.wg.getIssue(itemId);
+  if (item?.wedgeReason === undefined)
+    throw new Error(`resolveParked: not a parked item: ${itemId}`);
+  await deps.recordMisclassification(deps.sessionId, 'DECIDE', 'ESCALATE', item.title, deps.nowIso);
+  await deps.wg.clearWedge(itemId); // un-wedge → re-enters listReady
 }
