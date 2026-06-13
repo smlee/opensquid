@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.420] - 2026-06-13
+
+### Added — `shell_parse`: a quote-aware command tokenizer + git-invocation predicate (GM.1)
+
+Foundation for the gate-correctness fix (wg-52e57e2ed252, spec `docs/tasks/T-gate-matcher-substring.md`).
+The coding-flow / default-discipline git gates currently match a raw `git…commit` regex against the
+whole command string, so they false-fire on `git commit` inside a grep pattern, an echo arg, or a quoted
+subprocess prompt (`claude -p "…git commit…"`). This slice adds the structural primitive that replaces
+that substring match (wired in GM.2/GM.3).
+
+- `src/functions/shell_parse.ts` — `tokenizeShell` (quote/escape-aware; splits on UNQUOTED `&& || | ; &
+newline` + whitespace, strips quotes) and `commandInvokes(command, {program, subcommand?, flagAny?})`
+  (basename match, git `-C`/`-c` global-value skip, long/short-cluster flag detection). Pure,
+  deterministic, total; best-effort by design (the owned git pre-commit/pre-push hook is the hard
+  boundary — honest-agent self-discipline threat model, not adversary-proof).
+- `src/functions/shell_parse.test.ts` — 24 tests incl. the false-fire corpus (grep/echo/subprocess-prompt
+  → FALSE) and real invocations (`cd && git commit`, `/usr/bin/git`, `-C`/`-c` globals, `-n`/`--amend`/
+  `--no-verify`, `git push -n` → FALSE for verify-skip).
+
+---
+
 ## [0.5.419] - 2026-06-13
 
 ### Added — the `opensquid loop` CLI: the gated-ralph loop is now RUNNABLE (GR.4, part 2b-ii)
