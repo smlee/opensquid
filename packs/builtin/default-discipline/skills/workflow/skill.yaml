@@ -34,10 +34,14 @@ rules:
 
   - id: phase-logged-before-commit
     process:
-      - call: match_command
+      # T-GATE-MATCHER-SUBSTRING (GM.3, wg-52e57e2ed252): was a raw-string regex over the whole
+      # command (boundary-anchored, but still matched `; git commit` inside a quoted echo/prompt).
+      # `command_invokes` parses real shell segments → matches only a genuine `git commit`
+      # invocation (compounds like `cd … && git commit` still match).
+      - call: command_invokes
         args:
-          pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*commit\b' # FU.14: command-boundary (start or after ; && || | newline ( ) — catches `cd … && git commit`
-          target: tool_args.command
+          program: git
+          subcommand: commit
         as: committing
       - call: read_state
         if: committing

@@ -7,6 +7,33 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.422] - 2026-06-13
+
+### Fixed — builtin git matchers no longer false-fire (GM.3, wg-52e57e2ed252)
+
+The four builtin git-invocation gates migrated from raw-string `match_command` regex to the
+structural `command_invokes` primitive — so they match a REAL git invocation, not the substring
+`git…commit` inside a grep pattern, an echo arg, or a quoted subprocess prompt. The user-reported
+false-fires (a read-only `grep -n "…git commit…"` blocked as a `--no-verify` bypass; `claude -p
+"…git commit…"` blocked as a commit) are gone; real commits stay gated.
+
+- `coding-flow/skills/execute-gate` (`committing`) → `command_invokes(git, commit)`.
+- `coding-flow/skills/scope-lifecycle` (no-verify-block) → `command_invokes(git, commit, [--no-verify,
+-n]) || command_invokes(git, push, [--no-verify])` — `-n` is verify-skip for commit only (push `-n`
+  is `--dry-run`). The "over-block is intentional" band-aid comment is retired.
+- `default-discipline/skills/workflow` (`committing`) and `default-discipline/manifest` `never-amend`
+  (`command_invokes(git, commit, [--amend])`) likewise migrated.
+- Tests: GM.3 false-fire regressions in `coding-flow.test.ts` (grep/echo/subprocess-prompt NOT blocked;
+  real commit/`-n`/push `--no-verify` blocked; push `-n` NOT) + a `never-amend` wiring + mention test in
+  `default-discipline.test.ts`; `command_boundary.skill.test.ts` updated (migrated gates left regex).
+
+Scope: the in-repo BUILTIN matchers. NOT folded (surfaced as follow-ups): `default-discipline`'s
+`no-force-push-main` + `npm version` matchers (same raw-string class, but need a positional-arg matcher
+`command_invokes` does not yet have); matcher #5 (cross-repo path+message); the user's out-of-repo
+`sangmin-personal-rules` matchers.
+
+---
+
 ## [0.5.421] - 2026-06-13
 
 ### Added — `command_invokes` core primitive: a structural git-matcher for packs (GM.2)

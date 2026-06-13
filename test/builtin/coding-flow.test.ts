@@ -214,6 +214,41 @@ describe('builtin coding-flow pack — gates fire through the dispatcher (FU.2)'
     expect(r.stderr).not.toMatch(/--no-verify bypasses/);
   });
 
+  // GM.3 (wg-52e57e2ed252): the no-verify matcher is now structural (command_invokes),
+  // so it no longer false-fires on a command that merely MENTIONS the flag/phrase.
+  it('GM.3: the verify-skip gate does NOT false-fire on read-only commands that mention it', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'cf-noverify-falsefire';
+    const bash = (command: string): ToolCallEvent => ({
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command },
+    });
+    // The live false-fire: a read-only grep whose pattern mentions "git commit" + grep's -n flag.
+    for (const cmd of [
+      'grep -n "git commit" file',
+      'echo "run git commit --no-verify"',
+      'claude -p "should I git commit --no-verify here?"',
+    ]) {
+      const res = await dispatchEvent(bash(cmd), [pack], reg, sid);
+      expect(res.stderr).not.toMatch(/--no-verify bypasses/);
+    }
+    // A REAL verify-skip still blocks (recall preserved within the invocation).
+    expect((await dispatchEvent(bash('git commit --no-verify'), [pack], reg, sid)).exitCode).toBe(
+      2,
+    );
+    expect(
+      (await dispatchEvent(bash('cd x && git commit -nm wip'), [pack], reg, sid)).exitCode,
+    ).toBe(2);
+    expect(
+      (await dispatchEvent(bash('git push --no-verify origin main'), [pack], reg, sid)).exitCode,
+    ).toBe(2);
+    // `git push -n` is --dry-run, NOT a verify-skip → must NOT block.
+    const dryRun = await dispatchEvent(bash('git push -n origin main'), [pack], reg, sid);
+    expect(dryRun.stderr).not.toMatch(/--no-verify bypasses/);
+  });
+
   it('AUTHOR gate: TaskCreate is blocked until the spec passes audit (stays at spec_authored)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();

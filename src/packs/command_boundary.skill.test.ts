@@ -7,6 +7,13 @@
  * prefix `(?:^|[;&|\n(])\s*`. This loads the REAL pack and asserts each pattern
  * matches both the bare and the `cd … &&` compound form, and does NOT match a
  * quoted mention inside an `echo`.
+ *
+ * GM.3 (wg-52e57e2ed252): the git-INVOCATION gates (workflow commit, never-amend) were
+ * migrated off regex `match_command` onto the structural `command_invokes` primitive — so
+ * they no longer carry a pattern string and are no longer in CASES here. Their bare/compound/
+ * quoted behavior is now proven by `src/functions/shell_parse.test.ts` + the GM.3 cases in
+ * `test/builtin/{coding-flow,default-discipline}.test.ts`. The matchers that REMAIN on
+ * `match_command` (versioning `npm version`, no-force-push-main) keep their FU.14 regex coverage.
  */
 
 import { resolve } from 'node:path';
@@ -44,22 +51,11 @@ interface Case {
 }
 
 const CASES: Case[] = [
-  {
-    skill: 'workflow',
-    rule: 'phase-logged-before-commit',
-    bare: 'git commit -m "x"',
-    compound: 'cd /Users/slee/projects/opensquid && git commit -m "x"',
-    quoted: 'echo "git commit -m x"',
-  },
+  // NOTE: workflow/phase-logged-before-commit and guard:never-amend moved to command_invokes
+  // (GM.3) — they no longer have a match_command pattern, so they are covered elsewhere (see
+  // the file header). Only the matchers still on match_command remain here.
   {
     // FC.1b: git/versioning are now compiled guards under default-discipline/guards.
-    skill: 'default-discipline/guards',
-    rule: 'guard:never-amend',
-    bare: 'git commit --amend -m "x"',
-    compound: 'cd /repo && git commit --amend -m "x"',
-    quoted: 'echo "git commit --amend"',
-  },
-  {
     skill: 'default-discipline/guards',
     rule: 'guard:versioning-pre1-patch-only',
     bare: 'npm version minor',

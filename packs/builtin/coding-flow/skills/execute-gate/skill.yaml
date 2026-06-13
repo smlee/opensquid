@@ -15,17 +15,16 @@ triggers:
 rules:
   - id: phase-logged-before-commit
     process:
-      - call: match_command
+      # T-GATE-MATCHER-SUBSTRING (GM.3, wg-52e57e2ed252): was a raw-string `match_command`
+      # regex `\bgit…commit\b` over the whole command — it false-fired on `git commit` inside a
+      # grep pattern, an echo arg, or a quoted subprocess prompt (`claude -p "…git commit…"`).
+      # `command_invokes` parses the command into real shell segments and matches only a genuine
+      # `git commit` INVOCATION (compounds like `cd x && git commit` still match; the owned git
+      # pre-commit hook stays the hard boundary). Recall-over-precision band-aid retired.
+      - call: command_invokes
         args:
-          # T-FLOW-UNSKIPPABLE FU.1 (the real root cause): this was `^git…commit`, anchored
-          # at START — so a COMPOUND command `cd <dir> && git commit …` (how every commit is
-          # actually made, since the Bash tool resets cwd) starts with `cd` and EVADED the
-          # gate entirely. The gate was dead for real commits. Match `git … commit` ANYWHERE
-          # (`\b`, like the sibling no-verify matcher) so compounds can't slip past. A false
-          # match on a string that merely mentions `git commit` is the safe direction (recall
-          # over precision, same as no-verify-block).
-          pattern: '\bgit\s+(?:-[cC]\s+\S+\s+)*commit\b'
-          target: tool_args.command
+          program: git
+          subcommand: commit
         as: committing
       # T-FLOW-UNSKIPPABLE FU.1 (D1): the gates must COMPOSE. The "no active task ⇒
       # ad-hoc ⇒ allow" branch below was a SEAM — a blocked TaskCreate (AUTHOR gate)

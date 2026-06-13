@@ -28,6 +28,7 @@ import { loadPack } from '../../src/packs/loader.js';
 import { validatePackFunctions } from '../../src/packs/validate_functions.js';
 import { validateUniqueSkillNames } from '../../src/packs/validate_uniqueness.js';
 import { buildRegistry } from '../../src/runtime/bootstrap.js';
+import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
 
 describe('builtin default-discipline pack', () => {
   it('loads cleanly via loadPack', async () => {
@@ -141,5 +142,43 @@ describe('builtin default-discipline pack', () => {
         `${r.id} has no per_rule policy → would hit full_stop default`,
       ).toBeDefined();
     }
+  });
+
+  // GM.3 (wg-52e57e2ed252): the never-amend guard is now structural (command_invokes).
+  // Two guarantees: (1) wiring — the compiled guard passes the right args (a typo'd flag_any
+  // would surface here); (2) behavior — a command that merely MENTIONS `git commit --amend`
+  // (a grep/echo) no longer false-fires through the dispatcher.
+  it('never-amend is wired to command_invokes(git commit --amend) and does not false-fire on a mention', async () => {
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
+    const guards = pack.skills.find((s) => s.name === 'default-discipline/guards');
+    const amendRule = guards?.rules.find((r) => r.id === 'guard:never-amend');
+    const step =
+      amendRule && 'process' in amendRule
+        ? amendRule.process.find((p) => p.call === 'command_invokes')
+        : undefined;
+    expect(step?.args).toMatchObject({
+      program: 'git',
+      subcommand: 'commit',
+      flag_any: ['--amend'],
+    });
+
+    const registry = await buildRegistry({
+      backend: {
+        init: () => Promise.resolve(),
+        embed: () => Promise.resolve(null),
+        recall: () => Promise.resolve([]),
+        storeLesson: () => Promise.resolve(),
+        deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+      },
+    });
+    // The amend string inside a grep is NOT an invocation → no guard fires → not blocked.
+    const mention = await dispatchEvent(
+      { kind: 'tool_call', tool: 'Bash', args: { command: 'grep -n "git commit --amend" log' } },
+      [pack],
+      registry,
+      'dd-amend',
+    );
+    expect(mention.exitCode).toBe(0);
+    expect(mention.stderr).not.toMatch(/BLOCKED/);
   });
 });

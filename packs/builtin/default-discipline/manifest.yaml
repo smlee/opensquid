@@ -34,13 +34,16 @@ evolves: true
 # command-boundary prefixes survive).
 guards:
   # git hygiene (block_tool)
+  # T-GATE-MATCHER-SUBSTRING (GM.3, wg-52e57e2ed252): structural — matches a real
+  # `git commit --amend` invocation, not the substring inside a grep/echo/prompt.
   - name: never-amend
     on: tool_call
     detect:
-      call: match_command
+      call: command_invokes
       args:
-        pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*commit\b[^\n]*\s--amend\b'
-        target: tool_args.command
+        program: git
+        subcommand: commit
+        flag_any: ['--amend']
     when: hit
     level: block
     message: >-

@@ -303,25 +303,27 @@ rules:
             code commit/push that has not completed the flow.)
   # ── verify-skip detector: the ONE closed opt-out token (GF.3) ────────────────
   # The git gate (GF.2) is bypassable only by passing the verify-skipping flag to `git
-  # commit/push` (or `git commit -n`) — a single explicit opt-out (not a denylist over an
-  # open set), so it is a hard BLOCK. `git push -n` is --dry-run, NOT a verify-skip, so -n
-  # is matched for `commit` only. KNOWN LIMITATION (matching a shell string is imperfect):
-  # the flag literal appearing inside a `-m "…"` commit MESSAGE also matches → over-block.
-  # That direction is INTENTIONAL and safe for a bypass-detector: a false positive (an
-  # annoying block on a message that mentions the flag) beats a false negative (letting a
-  # real bypass through). Do NOT "fix" this by anchoring to flag position — that
-  # reintroduces a false negative on `git commit -m msg <flag>`.
+  # commit/push` — a single explicit opt-out (not a denylist over an open set), so it is a
+  # hard BLOCK. `git push -n` is --dry-run, NOT a verify-skip, so `-n` is matched for `commit`
+  # ONLY (git-commit(1) `-n,--no-verify`; git-push(1) `-n,--dry-run`).
+  # T-GATE-MATCHER-SUBSTRING (GM.3, wg-52e57e2ed252): was a raw-string `match_command` that
+  # false-fired on a read-only `grep -n "…git commit…"` (the prose `git commit` + grep's `-n`).
+  # `command_invokes` parses real shell segments and detects the flag only WITHIN a genuine git
+  # invocation — so a real `git commit --no-verify`/`-n` still blocks (recall preserved within the
+  # invocation), but prose/grep/echo no longer trip it. The old "over-block is intentional"
+  # band-aid is retired: blocking read-only work gave zero bypass-protection value.
   - id: no-verify-block
     process:
       - call: tool_name
         as: tool
-      - call: match_command
-        args:
-          pattern: '(?:\bgit\s+commit\b.*(?:--no-verify|\s-n\b))|(?:\bgit\s+push\b.*--no-verify)'
-          target: tool_args.command
-        as: skipping
+      - call: command_invokes
+        args: { program: git, subcommand: commit, flag_any: ['--no-verify', '-n'] }
+        as: skip_commit
+      - call: command_invokes
+        args: { program: git, subcommand: push, flag_any: ['--no-verify'] }
+        as: skip_push
       - call: verdict
-        if: '(tool == "Bash") && skipping'
+        if: '(tool == "Bash") && (skip_commit || skip_push)'
         args:
           level: block
           message: >-
