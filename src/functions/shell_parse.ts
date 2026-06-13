@@ -161,8 +161,10 @@ function flagPresent(args: string[], flag: string): boolean {
 
 export interface InvokeQuery {
   program: string;
-  subcommand?: string;
-  flagAny?: string[];
+  // `| undefined` (not just `?`) so callers under exactOptionalPropertyTypes can pass an
+  // explicitly-undefined optional through (the primitive forwards Zod-optional fields).
+  subcommand?: string | undefined;
+  flagAny?: string[] | undefined;
 }
 
 /**

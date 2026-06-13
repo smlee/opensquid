@@ -286,3 +286,73 @@ describe('match_command', () => {
     expect(result).toEqual(ok(false));
   });
 });
+
+// ---------------------------------------------------------------------------
+// command_invokes — structural git-invocation predicate (GM.2, wg-52e57e2ed252).
+// Replaces the raw-string git matchers: no false-fire on `git commit` inside a
+// grep pattern / echo arg / quoted subprocess prompt; matches a real invocation.
+// ---------------------------------------------------------------------------
+
+describe('command_invokes', () => {
+  const bash = (command: string): Event => ({ kind: 'tool_call', tool: 'Bash', args: { command } });
+
+  it('matches a real compound git commit', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx(bash('cd x && git commit -m "y"'));
+    expect(
+      await reg.call('command_invokes', { program: 'git', subcommand: 'commit' }, ctx),
+    ).toEqual(ok(true));
+  });
+
+  it('does NOT match git commit inside a grep pattern (the false-fire)', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx(bash('grep -n "git commit" file'));
+    expect(
+      await reg.call('command_invokes', { program: 'git', subcommand: 'commit' }, ctx),
+    ).toEqual(ok(false));
+  });
+
+  it('does NOT match git commit inside a quoted subprocess prompt', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx(bash('claude -p "do a git commit thing"'));
+    expect(
+      await reg.call('command_invokes', { program: 'git', subcommand: 'commit' }, ctx),
+    ).toEqual(ok(false));
+  });
+
+  it('matches a verify-skip flag inside a real commit', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx(bash('git commit -n'));
+    expect(
+      await reg.call(
+        'command_invokes',
+        { program: 'git', subcommand: 'commit', flag_any: ['--no-verify', '-n'] },
+        ctx,
+      ),
+    ).toEqual(ok(true));
+  });
+
+  it('returns ok(false) on a non-tool_call event', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx({ kind: 'prompt_submit', prompt: 'git commit' });
+    expect(
+      await reg.call('command_invokes', { program: 'git', subcommand: 'commit' }, ctx),
+    ).toEqual(ok(false));
+  });
+
+  it('returns ok(false) when the command field is missing', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx({ kind: 'tool_call', tool: 'Bash', args: {} });
+    expect(
+      await reg.call('command_invokes', { program: 'git', subcommand: 'commit' }, ctx),
+    ).toEqual(ok(false));
+  });
+
+  it('returns err(arg_invalid) on an unexpected arg key (.strict())', async () => {
+    const reg = freshRegistry();
+    const ctx = createTestCtx(bash('git commit'));
+    const result = await reg.call('command_invokes', { program: 'git', bogus: 1 }, ctx);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.kind).toBe('arg_invalid');
+  });
+});

@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.421] - 2026-06-13
+
+### Added — `command_invokes` core primitive: a structural git-matcher for packs (GM.2)
+
+The design-layer fix for wg-52e57e2ed252. Until now core's ONLY command-matching primitive was
+`match_command` (raw `RegExp.test` over the command string), which forced every pack — builtin and
+user — into substring regex. `command_invokes` gives pack authors a structural option, so a gate can
+ask "does this command really invoke `git commit`?" instead of "does the string contain `git…commit`?".
+
+- `src/functions/event.ts` — new `command_invokes` event primitive (Zod `{program, subcommand?,
+flag_any?}`, `.strict()`), delegating to `shell_parse.commandInvokes`; reads the default `command`
+  field; wrong-kind → `ok(false)` (matches `match_command`). No allow-list edit needed —
+  `validate_functions` resolves it via `registry.has`.
+- `src/functions/event.test.ts` — 7 cases incl. the grep/subprocess-prompt false-fires (FALSE), a real
+  compound commit + verify-skip flag (TRUE), wrong-kind, missing field, and `.strict()` arg rejection.
+
+---
+
 ## [0.5.420] - 2026-06-13
 
 ### Added — `shell_parse`: a quote-aware command tokenizer + git-invocation predicate (GM.1)

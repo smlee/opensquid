@@ -35,6 +35,7 @@ import { z } from 'zod';
 
 import { err, ok } from '../runtime/result.js';
 
+import { commandInvokes } from './shell_parse.js';
 import type { FunctionRegistry } from './registry.js';
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,15 @@ const MatchCommandArgs = z.object({
   pattern: z.string(),
   target: z.string().optional(),
 });
+// command_invokes args: gate on a real `program` invocation (+ optional subcommand /
+// flag). `.strict()` so a YAML typo surfaces as arg_invalid (matches EmptyArgs).
+const CommandInvokesArgs = z
+  .object({
+    program: z.string(),
+    subcommand: z.string().optional(),
+    flag_any: z.array(z.string()).optional(),
+  })
+  .strict();
 
 // ---------------------------------------------------------------------------
 // resolveCommandField — shallow `tool_args.<field>` lookup for match_command.
@@ -166,6 +176,26 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
         });
       }
       return ok(regex.test(command));
+    },
+  });
+
+  // command_invokes — the STRUCTURAL replacement for the git-matcher use of
+  // `match_command` (wg-52e57e2ed252). Instead of regex-testing the raw command
+  // string (which false-fires on `git commit` inside a grep pattern / echo arg /
+  // quoted subprocess prompt), it parses the command into real shell segments
+  // and gates on whether any segment INVOKES `program` (basename) with the
+  // optional subcommand + flag. Pure delegate to `shell_parse.commandInvokes`.
+  // Wrong-kind → ok(false), matching `match_command`.
+  registry.register({
+    name: 'command_invokes',
+    argSchema: CommandInvokesArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
+    execute: async ({ program, subcommand, flag_any }, ctx) => {
+      if (ctx.event.kind !== 'tool_call') return ok(false);
+      const command = resolveCommandField(ctx.event.args, undefined);
+      return ok(commandInvokes(command, { program, subcommand, flagAny: flag_any }));
     },
   });
 }
