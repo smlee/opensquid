@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.416] - 2026-06-13
+
+### Added — gated-ralph orchestrator core + RALPH.md template (GR.4, part 1 of the capstone)
+
+The S1 spike PASSED — a nested `claude -p --dangerously-skip-permissions` lap's ungated commit was
+blocked by the gate (no commit landed, no `--no-verify` workaround), proving spawn-a-lap is safe — so
+GR.4 composes a real spawn-a-lap loop (not Alternative-F daemon-push). This slice lands its testable core
+(spec `docs/tasks/T-gated-ralph-loop.md` GR.4; wg-ecccf0e79a91):
+
+- `src/runtime/ralph/orchestrator.ts` — `runRalphLoop(cfg, deps)`: the thin non-LLM loop composing GR.1–3
+  (listReady → claim → superviseLap → act on the typed `LapOutcome`). ONE uniform stop-layer
+  `parkAndEscalate(reason, item?)` (Inv 5, no per-trigger paths); continue-vs-stop is the explicit
+  `isResourcePause` decision (BUDGET / RATE_BUDGET / BOARD_EMPTY end the run; the per-item residual parks
+  the item + takes the next). Dependencies are INJECTED (`RalphDeps`) so the loop is pure composition,
+  unit-testable without the notification stack or a real `claude` subprocess.
+- `src/runtime/ralph/ralph_template.ts` — `RALPH_MD`, the stable per-lap directive (the Ralph constant):
+  resume, lean load, the gated 7-phase, DECIDE-per-principles, ESCALATE only the genuine residual, and the
+  one hard contract — emit a greppable `RALPH-EXIT: {json}` `LapOutcome` line.
+
+Loop-off / inert until the CLI wires it (the `opensquid loop` command + wizard + the S4 proof-of-loop are
+the remaining GR.4 work and the user-authorized `0.6.0` cut). Tests: 8 orchestrator cases.
+
 ## [0.5.415] - 2026-06-13
 
 ### Added — lap-supervisor + undroppable escalation + work-graph wedge-mark — gated-ralph GR.3
