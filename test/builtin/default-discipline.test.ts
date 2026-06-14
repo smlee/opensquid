@@ -181,4 +181,48 @@ describe('builtin default-discipline pack', () => {
     expect(mention.exitCode).toBe(0);
     expect(mention.stderr).not.toMatch(/BLOCKED/);
   });
+
+  // GMP.1 (wg-320845a92b65): the two last raw matchers migrated to command_invokes + arg_any.
+  it('no-force-push-main + versioning-pre1-patch-only block real commands but not a prose mention', async () => {
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
+    const guards = pack.skills.find((s) => s.name === 'default-discipline/guards');
+    const detectArgs = (id: string) => {
+      const rule = guards?.rules.find((r) => r.id === id);
+      return rule && 'process' in rule
+        ? rule.process.find((p) => p.call === 'command_invokes')?.args
+        : undefined;
+    };
+    expect(detectArgs('guard:no-force-push-main')).toMatchObject({
+      program: 'git',
+      subcommand: 'push',
+      flag_any: ['--force', '-f', '--force-with-lease'],
+      arg_any: ['main', 'master'],
+    });
+    expect(detectArgs('guard:versioning-pre1-patch-only')).toMatchObject({
+      program: 'npm',
+      subcommand: 'version',
+      arg_any: ['minor', 'major'],
+    });
+
+    const registry = await buildRegistry({
+      backend: {
+        init: () => Promise.resolve(),
+        embed: () => Promise.resolve(null),
+        recall: () => Promise.resolve([]),
+        storeLesson: () => Promise.resolve(),
+        deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+      },
+    });
+    const bash = (command: string, sid: string) =>
+      dispatchEvent({ kind: 'tool_call', tool: 'Bash', args: { command } }, [pack], registry, sid);
+
+    // Real commands block.
+    expect((await bash('git push --force origin main', 'dd-fp1')).exitCode).toBe(2);
+    expect((await bash('npm version major', 'dd-v1')).exitCode).toBe(2);
+    // Prose / non-main-target / patch do NOT block.
+    expect((await bash('echo "git push --force main"', 'dd-fp2')).exitCode).toBe(0);
+    expect((await bash('git push --force origin main:develop', 'dd-fp3')).exitCode).toBe(0);
+    expect((await bash('npm version patch', 'dd-v2')).exitCode).toBe(0);
+    expect((await bash('grep "npm version major" notes.md', 'dd-v3')).exitCode).toBe(0);
+  });
 });

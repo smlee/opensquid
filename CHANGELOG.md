@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.441] - 2026-06-14
+
+### Changed — the last two raw command-matchers migrated to structural `command_invokes` (GMP.1, wg-320845a92b65)
+
+- `command_invokes` gains `arg_any`: a bounded, refspec-target-aware positional matcher. It compares
+  only the push TARGET (dst of `src:dst`, `+`-stripped, basename after `/`), conjunctive with
+  `flag_any`. `no-force-push-main` and `versioning-pre1-patch-only` migrate off evadable regex
+  `match_command` onto it — so a prose/grep/echo mention (`echo "git push --force main"`) no longer
+  false-fires, while real `git push --force* <main-target>` / `npm version minor|major` still block.
+  `--force-with-lease` is preserved; `git push origin main:develop` (pushing TO develop) and
+  `feature/main-x` correctly do NOT block. All git/version command gates are now structural;
+  `command_boundary.skill.test` flips to a regression guard against reverting to regex.
+
 ## [0.5.440] - 2026-06-14
 
 ### Added — request-type llm refinement on uncertainty (RTC.5, wg-3d175ec06767)

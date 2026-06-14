@@ -165,6 +165,22 @@ export interface InvokeQuery {
   // explicitly-undefined optional through (the primitive forwards Zod-optional fields).
   subcommand?: string | undefined;
   flagAny?: string[] | undefined;
+  // wg-320845a92b65: exact-match a non-flag positional's refspec TARGET (dst of `src:dst`,
+  // `+`-stripped, basename after `/`). Conjunctive with flagAny.
+  argAny?: string[] | undefined;
+}
+
+/**
+ * The branch TARGET a push positional refers to: the destination of a `src:dst` refspec (after
+ * the LAST `:`), with a leading `+` force-modifier stripped and the basename taken after `/`.
+ * `main:develop` → `develop`; `HEAD:main`/`+main`/`origin/main`/`refs/heads/main` → `main`;
+ * `feature/main-x` → `main-x`; a token with no delimiter (npm's `minor`/`major`) → itself.
+ */
+function refTarget(a: string): string {
+  const dst = a.includes(':') ? a.slice(a.lastIndexOf(':') + 1) : a;
+  const noPlus = dst.startsWith('+') ? dst.slice(1) : dst;
+  const slash = noPlus.lastIndexOf('/');
+  return slash === -1 ? noPlus : noPlus.slice(slash + 1);
 }
 
 /**
@@ -183,8 +199,14 @@ export function commandInvokes(command: string, q: InvokeQuery): boolean {
       j += GIT_VALUE_GLOBALS.has(argv[j]!) ? 2 : 1;
     }
     if (j >= argv.length || argv[j] !== q.subcommand) continue;
-    if (q.flagAny === undefined) return true;
-    if (q.flagAny.some((f) => flagPresent(argv.slice(j + 1), f))) return true;
+    const rest = argv.slice(j + 1);
+    // flagAny + argAny gate CONJUNCTIVELY (both must hold when both are given).
+    if (q.flagAny !== undefined && !q.flagAny.some((f) => flagPresent(rest, f))) continue;
+    if (q.argAny !== undefined) {
+      const targets = rest.filter((a) => !a.startsWith('-')).map(refTarget);
+      if (!q.argAny.some((v) => targets.includes(v))) continue;
+    }
+    return true;
   }
   return false;
 }

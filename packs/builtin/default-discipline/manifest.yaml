@@ -51,13 +51,19 @@ guards:
       Even on unpushed commits — make a follow-up commit instead.
       Override only if the user explicitly requested an amend in
       THIS turn.
+  # GMP.1 (wg-320845a92b65): structural — matches a real force-push to main/master (program +
+  # subcommand + a force flag + a main/master refspec TARGET), not the substring inside a
+  # grep/echo/prose mention. arg_any matches the push destination (src:dst → dst), so
+  # `main:develop` (push TO develop) does NOT false-block.
   - name: no-force-push-main
     on: tool_call
     detect:
-      call: match_command
+      call: command_invokes
       args:
-        pattern: '(?:^|[;&|\n(])\s*git\s+(?:-[cC]\s+\S+\s+)*push\b[^\n]*(--force|-f)\b[^\n]*\b(main|master)\b'
-        target: tool_args.command
+        program: git
+        subcommand: push
+        flag_any: ['--force', '-f', '--force-with-lease']
+        arg_any: ['main', 'master']
     when: hit
     level: block
     message: >-
@@ -81,13 +87,16 @@ guards:
       engine types only — re-word using substrate vocabulary.
 
   # versioning patch-only (full_stop_and_redo per drift_response)
+  # GMP.1 (wg-320845a92b65): structural — a real `npm version minor|major` invocation, not a prose
+  # mention. arg_any matches the bump keyword positional after the `version` subcommand.
   - name: versioning-pre1-patch-only
     on: tool_call
     detect:
-      call: match_command
+      call: command_invokes
       args:
-        pattern: '(?:^|[;&|\n(])\s*npm\s+version\s+(minor|major)\b'
-        target: tool_args.command
+        program: npm
+        subcommand: version
+        arg_any: ['minor', 'major']
     when: hit
     level: block
     message: >-

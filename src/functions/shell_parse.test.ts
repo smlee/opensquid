@@ -161,3 +161,43 @@ describe('commandInvokes — subcommand discrimination', () => {
     expect(commandInvokes('git log', { program: 'git' })).toBe(true);
   });
 });
+
+describe('commandInvokes — arg_any (refspec-target positional match, wg-320845a92b65)', () => {
+  const forcePush = { program: 'git', subcommand: 'push', flagAny: ['--force', '-f', '--force-with-lease'], argAny: ['main', 'master'] };
+  const npmBump = { program: 'npm', subcommand: 'version', argAny: ['minor', 'major'] };
+
+  it('blocks real force-pushes targeting main/master (incl. refspec forms)', () => {
+    expect(commandInvokes('git push --force origin main', forcePush)).toBe(true);
+    expect(commandInvokes('git push --force-with-lease origin main', forcePush)).toBe(true);
+    expect(commandInvokes('git push --force origin HEAD:main', forcePush)).toBe(true);
+    expect(commandInvokes('git push --force +main', forcePush)).toBe(true);
+    expect(commandInvokes('git push --force origin refs/heads/master', forcePush)).toBe(true);
+    expect(commandInvokes('git push --force-with-lease=origin/main origin master', forcePush)).toBe(true);
+  });
+
+  it('does NOT block when the target is not main/master', () => {
+    expect(commandInvokes('git push --force origin main:develop', forcePush)).toBe(false); // pushing TO develop
+    expect(commandInvokes('git push --force origin feature/main-x', forcePush)).toBe(false);
+    expect(commandInvokes('git push --force origin develop', forcePush)).toBe(false);
+    expect(commandInvokes('git push origin main', forcePush)).toBe(false); // no force flag
+  });
+
+  it('does NOT false-fire on a prose / grep / echo mention', () => {
+    expect(commandInvokes('echo "git push --force main"', forcePush)).toBe(false);
+    expect(commandInvokes('grep -n "git push --force main" file', forcePush)).toBe(false);
+  });
+
+  it('npm version minor|major blocks; patch / literal / prose do not', () => {
+    expect(commandInvokes('npm version major', npmBump)).toBe(true);
+    expect(commandInvokes('npm version minor', npmBump)).toBe(true);
+    expect(commandInvokes('npm version patch', npmBump)).toBe(false);
+    expect(commandInvokes('npm version 1.2.3', npmBump)).toBe(false);
+    expect(commandInvokes('grep "npm version major" notes.md', npmBump)).toBe(false);
+  });
+
+  it('flag_any + arg_any are conjunctive (both required)', () => {
+    // force flag present but target develop → no; target main but no force flag → no.
+    expect(commandInvokes('git push --force origin develop', forcePush)).toBe(false);
+    expect(commandInvokes('git push origin main', forcePush)).toBe(false);
+  });
+});

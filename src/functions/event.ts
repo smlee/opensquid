@@ -57,6 +57,8 @@ const CommandInvokesArgs = z
     program: z.string(),
     subcommand: z.string().optional(),
     flag_any: z.array(z.string()).optional(),
+    // wg-320845a92b65: match a non-flag positional's refspec target (e.g. main/master, minor/major).
+    arg_any: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -206,10 +208,12 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
     durable: false,
     memoizable: false,
     costEstimateMs: 0.1,
-    execute: async ({ program, subcommand, flag_any }, ctx) => {
+    execute: async ({ program, subcommand, flag_any, arg_any }, ctx) => {
       if (ctx.event.kind !== 'tool_call') return ok(false);
       const command = resolveCommandField(ctx.event.args, undefined);
-      return ok(commandInvokes(command, { program, subcommand, flagAny: flag_any }));
+      return ok(
+        commandInvokes(command, { program, subcommand, flagAny: flag_any, argAny: arg_any }),
+      );
     },
   });
 }
