@@ -35,6 +35,16 @@ but the chain-handoff stalls.
 | `skill-yaml-author-walkthrough` | PreToolUse Edit/Write of `packs/*/skills/*/skill.yaml`                              | Surface verdict with skill-field checklist (cites pack-runtime.md §2 + skill-grammar-guide.md)  |
 | `fsm-author-walkthrough`        | PreToolUse Edit/Write of `packs/*/fsm.yaml`                                         | Surface verdict with FSM checklist (cites pack-fsm-architecture.md; coding-flow example)        |
 
+### Discipline: gates teach their rubric (TR.C, wg-2d1d8698f563)
+
+A gate is not just a blocker — it must TEACH its bar. If a skill emits a block/audit verdict with a content
+rubric (like coding-flow's guess/spec audits), it must ship a companion that DELIVERS that rubric to the
+agent BEFORE the gated action, sourced from the gate's single canonical rubric (e.g. `read_rubric` →
+`inject_context` at `prompt_submit`). Otherwise the agent authors content-blind and learns the bar only by
+tripping the gate. Light block/warn gates (no heavy content rubric) teach via a remedy-naming message
+instead. The `skill-yaml-author-walkthrough` checklist enforces this; the coding-flow pairing is the
+reference implementation.
+
 ## The 4-phase pack-authoring workflow (when spawned as profession)
 
 1. **Identify scope + persona** — kind/usage decisions, detected_by

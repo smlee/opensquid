@@ -45,6 +45,13 @@ rules:
                   functions per skill-grammar-guide.md
               [ ] Final step emits a verdict
                   (pass / block / warn / surface / directive)
+              [ ] GATES TEACH (TR.C, wg-2d1d8698f563): if a rule emits a
+                  block/audit verdict (a GATE with a content rubric), ship a
+                  companion that DELIVERS that gate's rubric to the agent BEFORE
+                  the gated action, sourced from the gate's canonical rubric
+                  (e.g. read_rubric → inject_context at prompt_submit). A gate
+                  teaches its bar; it does not only block. (Light block/warn
+                  gates teach via a remedy-naming message instead.)
               [ ] For directive verdict: next_action is skill XOR tool
                   XOR profession (exactly one)
               [ ] No vendor model names anywhere (use model_alias)

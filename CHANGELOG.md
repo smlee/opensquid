@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.426] - 2026-06-13
+
+### Added — pack-architect "gates teach their rubric" discipline + coverage (TR.C, wg-2d1d8698f563)
+
+Generalizes TR.A/B into a pack-authoring discipline so new gated packs comply by construction.
+
+- `pack-architect/skills/skill-yaml-author-walkthrough` — a new checklist item: a gate with a content rubric
+  MUST ship a companion that delivers that rubric to the agent before the gated action (read_rubric →
+  inject_context); light block/warn gates teach via a remedy-naming message.
+- `pack-architect/SKILL.md` — documents the discipline (the coding-flow pairing is the reference impl).
+- `test/builtin/gates-teach.test.ts` — coverage: the coding-flow audit reads `read_rubric` AND a paired rule
+  (`rubric_pre_inject`) delivers it from the same source; pack-architect teaches the discipline; a light gate
+  (default-discipline never-amend) names its remedy.
+
+This completes the rubric-transfer rearchitecture (TR.A/B/C, wg-2d1d8698f563): the audit rubric is
+single-sourced, the agent receives it before authoring, and the discipline is taught for future packs.
+
+---
+
 ## [0.5.425] - 2026-06-13
 
 ### Added — deliver the rubric to the agent BEFORE it authors (TR.B, wg-2d1d8698f563)
