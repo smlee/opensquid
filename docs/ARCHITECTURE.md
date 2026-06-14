@@ -246,6 +246,8 @@ edit; a state-shape edit is a gate edit; a key edit is a chat+memory edit. Walk 
 
 Found during this mapping; each is a real disconnect to clean (drives the cleanup pass, tracked in the work-graph):
 
+- **Pack discovery is not resilient** (`wg-a3e928b8255b`, **HIGH** — verified via CLI audit): one malformed pack in `~/.opensquid/packs/` crashes every pack-enumerating command (`schedule list`, `triggers list`, …) — `loadPack` throws on the first bad pack even when it isn't in `active.json`. Trigger here: a stale `sangmin-personal-rules.dpc6-backup/` dir. Discovery of the installed SET should fail-soft per-pack (skip+warn); an explicitly-loaded pack can still fail loud.
+- **`dist/` ships dead code** (`wg-98a8d32127dd`, **HIGH** — ships to npm): `tsc` never cleans `dist/`, so `dist/anti-drift/*`, `dist/engine-client.js`, `dist/rag/backends/loop_engine.js`, and **56 `*.test.js`** (all with no live `src/`) accumulate and ship. Fix: `rm -rf dist` before build. (`npm/engine-*` = local cruft, not shipped.)
 - **Install-flow holes** (`wg-5eedceaaa19f`): no `postinstall`/first-run nudge; `setup wizard mcp` `detectOpensquidRoot()` is dead code (defined, never called); the README happy-path assumes manual wizard steps; `daemon start/stop/restart` are stubs.
 - **`~/.loop/.env` vs `~/.opensquid/.env`** — the chat wizard still references `~/.loop/.env` in places (SHL.1 made `~/.opensquid/.env` canonical); reconcile. The `~/.loop` tree is a rename remnant.
 - **`dist/anti-drift/*`** — legacy 0.7.x monolith compiled output; superseded by `src/runtime/hooks/*` + dispatch; should not ship (and `dist/**/*.test.js` shouldn't ship either — packaging bloat).
