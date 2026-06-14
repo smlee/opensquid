@@ -163,7 +163,12 @@ describe('commandInvokes — subcommand discrimination', () => {
 });
 
 describe('commandInvokes — arg_any (refspec-target positional match, wg-320845a92b65)', () => {
-  const forcePush = { program: 'git', subcommand: 'push', flagAny: ['--force', '-f', '--force-with-lease'], argAny: ['main', 'master'] };
+  const forcePush = {
+    program: 'git',
+    subcommand: 'push',
+    flagAny: ['--force', '-f', '--force-with-lease'],
+    argAny: ['main', 'master'],
+  };
   const npmBump = { program: 'npm', subcommand: 'version', argAny: ['minor', 'major'] };
 
   it('blocks real force-pushes targeting main/master (incl. refspec forms)', () => {
@@ -172,7 +177,9 @@ describe('commandInvokes — arg_any (refspec-target positional match, wg-320845
     expect(commandInvokes('git push --force origin HEAD:main', forcePush)).toBe(true);
     expect(commandInvokes('git push --force +main', forcePush)).toBe(true);
     expect(commandInvokes('git push --force origin refs/heads/master', forcePush)).toBe(true);
-    expect(commandInvokes('git push --force-with-lease=origin/main origin master', forcePush)).toBe(true);
+    expect(commandInvokes('git push --force-with-lease=origin/main origin master', forcePush)).toBe(
+      true,
+    );
   });
 
   it('does NOT block when the target is not main/master', () => {
