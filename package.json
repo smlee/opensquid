@@ -36,7 +36,7 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/runtime/hooks/*.js dist/mcp/server.js dist/mcp/chat-bridge-server.js",
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/runtime/hooks/*.js dist/mcp/server.js dist/mcp/chat-bridge-server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -48,7 +48,7 @@
     "prepare": "bash scripts/install-git-hooks.sh",
     "schemas": "tsx scripts/emit-schemas.ts && prettier --write 'schemas/*.json'",
     "sync-fixtures": "tsx scripts/sync-fixtures-from-live.ts",
-    "prepublishOnly": "pnpm schemas && pnpm build"
+    "prepublishOnly": "pnpm clean && pnpm schemas && pnpm build"
   },
   "keywords": [
     "mcp",
