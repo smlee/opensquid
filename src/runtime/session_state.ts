@@ -41,6 +41,7 @@ import { readFile, rename, unlink } from 'node:fs/promises';
 import { atomicWriteFile } from './atomic_write.js';
 
 import { activeTaskArchiveFile, activeTaskFile, sessionStateFile } from './paths.js';
+import type { RequestTypeRecord } from './request_type.js';
 import { advanceTick, createTick } from './tick.js';
 import type { Event } from './types.js';
 import type { TickState } from './unload_conditions.js';
@@ -216,6 +217,30 @@ export async function readSessionCwd(sessionId: string): Promise<string | null> 
   try {
     const raw = (await readFile(sessionStateFile(sessionId, CWD_KEY), 'utf8')).trim();
     return raw === '' ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
+// wg-3d175ec06767: the per-prompt request-type classification, written once at the
+// pre-dispatch chokepoint and read by enter-scoping + the stop guards. Keyed
+// `'request-type'` so pack rules read it via read_state(key:'request-type').
+const REQUEST_TYPE_KEY = 'request-type';
+
+/** Persist the per-prompt request-type record (called by UPS before dispatch). */
+export async function writeRequestType(sessionId: string, rec: RequestTypeRecord): Promise<void> {
+  await atomicWriteFile(
+    sessionStateFile(sessionId, REQUEST_TYPE_KEY),
+    JSON.stringify(rec, null, 2),
+  );
+}
+
+/** Read the current request-type record, or `null` if absent/unreadable. */
+export async function readRequestType(sessionId: string): Promise<RequestTypeRecord | null> {
+  try {
+    return JSON.parse(
+      await readFile(sessionStateFile(sessionId, REQUEST_TYPE_KEY), 'utf8'),
+    ) as RequestTypeRecord;
   } catch {
     return null;
   }

@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.436] - 2026-06-14
+
+### Added — persistent request-type classification (RTC.1, wg-3d175ec06767)
+
+- A per-prompt request-type record (`research` = understand-only incl. questions; `work` = will-build)
+  is now computed ONCE at the harness-neutral pre-dispatch chokepoint (`user-prompt-submit.ts`, which
+  fires under Claude Code AND codex) and persisted to session state (`request-type.json`), so the arm
+  decision + stop guards can read ONE classification instead of re-deriving prompt intent. `classifyRequestType`
+  is a pure cheap-first deterministic classifier (work-lead vs interrogative/investigation); ambiguous or
+  empty → `confidence:'low'` with the SAFE default `research` (defaulting to `work` would re-arm the
+  codex-pause-wedge; the git commit/push gate backstops a missed work turn). `writeRequestType`/`readRequestType`
+  mirror the existing session-state writers.
+- This is the mechanism slice; the consumers (enter-scoping RTC.2, stop guards RTC.3, resume-staleness reset
+  RTC.4, observability + llm refinement RTC.5) follow — together they dissolve the three codex-pause-wedge causes.
+
 ## [0.5.435] - 2026-06-14
 
 ### Added — author docs for the `procedure.md` surface (PPW.3, wg-7f6225238a27)

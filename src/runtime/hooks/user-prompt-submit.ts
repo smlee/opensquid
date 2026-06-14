@@ -20,7 +20,9 @@ import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
-import { resetTurnLedger } from '../session_state.js';
+import { resetTurnLedger, writeRequestType } from '../session_state.js';
+import { classifyRequestType } from '../request_type.js';
+import { sha256Hex } from '../durable/run_id.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -126,6 +128,24 @@ async function main(): Promise<void> {
     await resetTurnLedger(sessionId);
   } catch (e) {
     process.stderr.write(`opensquid: tool-ledger turn-reset failed — ${String(e)}\n`);
+  }
+  // wg-3d175ec06767: classify the prompt ONCE here (the harness-neutral pre-dispatch
+  // chokepoint — fires under Claude Code AND codex) and persist the request-type record, so
+  // enter-scoping + the stop guards read ONE classification instead of re-deriving intent.
+  // Deterministic + research-default-on-low-confidence; the llm refinement is a pack rule
+  // (RTC.5, needs pack model config). Best-effort: never crash the hook over classification.
+  if (parsed.data.kind === 'prompt_submit') {
+    try {
+      const cls = classifyRequestType(parsed.data.prompt);
+      await writeRequestType(sessionId, {
+        ...cls,
+        source: 'deterministic',
+        prompt_hash: sha256Hex(parsed.data.prompt).slice(0, 16),
+        at: new Date().toISOString(),
+      });
+    } catch (e) {
+      process.stderr.write(`opensquid: request-type classification failed — ${String(e)}\n`);
+    }
   }
   // The idle → scoping transition is no longer hardcoded here — the opt-in
   // `coding-flow` pack's `enter-scoping` rule (entry-and-handoffs) matches
