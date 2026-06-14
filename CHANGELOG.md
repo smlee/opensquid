@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.424] - 2026-06-13
+
+### Changed — single-source the coding-flow audit rubric (TR.A, wg-2d1d8698f563)
+
+The guess/spec audits no longer HARDCODE their pass-criteria in the prompt (the `docs/lexicon.md:40`
+duplication). The criteria now live in dedicated, shipped fragments and are interpolated — so editing the
+rubric changes the audit by construction (the `sha256(prompt)` cache invalidates), and the same source feeds
+the agent-facing transfer (TR.B).
+
+- `docs/rubric/scope.md` + `docs/rubric/author.md` — the single canonical home for each phase's rubric; added
+  to `package.json` `files[]` so they ship.
+- `src/functions/read_rubric.ts` — `read_rubric` primitive + exported `readRubricContent(name)`; reads the
+  fragment WHOLE, MODULE-RELATIVE to the package (not cwd → dodges the sub-repo/umbrella split); returns
+  `null` on file-miss/path-misresolve/over-cap (64k ceiling), never throws/truncates.
+- `coding-flow/scope-lifecycle` — both audits read `read_rubric(scope|author)` and interpolate `{{rubric}}`,
+  each preceded by a FAIL-LOUD `rubric == null → block` precondition (the audit never runs rubric-less; a
+  rubric-less verdict would be a silent fallback worse than fail-open). The AUDIT-UNAVAILABLE branches now
+  gate on `rubric != null` so a missing rubric surfaces the clear packaging-fault message.
+- `docs/lexicon.md` §Research/Audit-flow points to the fragments (removes the stale "hardcodes" claim).
+- Tests: `read_rubric.test.ts` (happy + real-ENOENT fail-loud + enum reject) + the scope-audit↔lexicon
+  drift-guard updated (criteria asserted in the fragment + `{{rubric}}` in the prompt).
+
+---
+
 ## [0.5.423] - 2026-06-13
 
 ### Fixed — OPEN-QUESTION precondition is now a structured marker (GM.4, wg-52e57e2ed252)

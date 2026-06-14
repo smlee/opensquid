@@ -87,6 +87,7 @@ import { registerStateFunctions } from '../functions/state.js';
 import { registerStagedDocsOnlyFunction } from '../functions/staged_docs_only.js';
 import { registerResetScopeTrackStateFunction } from '../functions/reset_scope_track_state.js';
 import { registerFsmFunctions } from '../functions/fsm.js';
+import { registerReadRubric } from '../functions/read_rubric.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
 import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
@@ -130,6 +131,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerVerdictFunctions(r);
   registerLlmFunctions(r);
   registerCachedAuditFunction(r);
+  registerReadRubric(r); // TR.A: the audits interpolate {{rubric}} from this; rubric_pre_inject reuses it
   // Phase 4: `check_destination` is the destination-side anti-drift
   // primitive. It composes `llm_classify` (registered just above) so the
   // ordering matters — register it last among the LLM-dependent primitives.

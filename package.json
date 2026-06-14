@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.423",
+  "version": "0.5.424",
   "description": "Continuity layer for coding agents: durable memory, dependency-aware task state, workflow gates, and inspectable packs over MCP.",
   "type": "module",
   "exports": {
@@ -26,7 +26,8 @@
     "packs/builtin",
     "docs/pack-runtime.md",
     "docs/skill-grammar-guide.md",
-    "docs/load-budget.md"
+    "docs/load-budget.md",
+    "docs/rubric"
   ],
   "engines": {
     "node": ">=20.0.0"

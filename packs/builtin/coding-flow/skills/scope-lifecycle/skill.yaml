@@ -96,8 +96,23 @@ rules:
       # latency (268s worst observed under subscription contention, 2026-06-10)
       # and 20s under the 360s outer hook cap the setup wizard writes — the
       # inner timer must die first so the gate fails with a readable error.
-      - call: cached_audit
+      # TR.A (wg-2d1d8698f563): the rubric is single-sourced to docs/rubric/scope.md and interpolated as
+      # {{rubric}} below — NOT hardcoded here. read_rubric returns null on a missing/unreadable fragment.
+      - call: read_rubric
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args: { name: scope }
+        as: rubric
+      # FAIL-LOUD: never run the audit rubric-less (a rubric-less verdict would be a silent fallback worse
+      # than fail-open). docs/rubric/scope.md MUST ship (package.json files[]).
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && rubric == null'
+        args:
+          level: block
+          message: >-
+            SCOPE audit cannot run: the canonical rubric (docs/rubric/scope.md) is unreadable — a
+            packaging/install fault, NOT a content failure. Verify the opensquid package ships docs/rubric/.
+      - call: cached_audit
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && rubric != null'
         on_error: continue
         args:
           cache_key: coding-flow-guess-audit-cache
@@ -105,17 +120,8 @@ rules:
           timeout_ms: 340000
           prompt: >-
             You are an adversarial reviewer enforcing the lexicon's Research/Audit flow
-            principles (docs/lexicon.md — never-guess, best-solution, full-fix-over-patch, teach-back depth) on a
-            pre-research / scope artifact. (1) NEVER-GUESS: a claim is acceptable ONLY if DERIVED from cited
-            evidence (a file:line, a memory, or the user's own words) OR explicitly flagged
-            as an unresolved open question — an unchecked `- [ ] OPEN QUESTION: …` task-list
-            marker — to ask the user (resolve it by checking the box `- [x]`). (2) BEST-SOLUTION: the artifact must show
-            the best solution was found — alternatives weighed against the criteria and the
-            SIMPLEST correct one chosen per docs/lexicon.md (no proliferating special-cases).
-            (3) FULL-FIX: the chosen solution must be the FULL fix — when the existing shape
-            is the cause, it is re-architected, NOT a local patch that bolts on a special-case
-            to dodge the rework (that patch is itself the proliferating-special-case
-            overcomplication the Full-fix-over-patch guideline forbids).
+            principles on a pre-research / scope artifact. Apply EXACTLY this rubric (the single
+            canonical source, docs/rubric/scope.md):\n\n{{rubric}}\n\n
             Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every
             claim is cited-or-flagged-open AND the simplest-correct solution is justified
             against alternatives AND is a full fix, not a patch around a design that should be
@@ -171,7 +177,7 @@ rules:
       # AUDIT-UNAVAILABLE → terminal BLOCK, NO advance (stays scoping, re-armable). F0c fix:
       # the audit subagent could not spawn (a no-VERDICT response, incl. the bound err message).
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && !contains(audit, "VERDICT:")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && rubric != null && !contains(audit, "VERDICT:")'
         args:
           level: block
           message: >-
@@ -219,25 +225,29 @@ rules:
       # SCOPE audit — a re-fire on an UNCHANGED spec reuses the verdict, no spawn.
       # timeout_ms (T-AUDIT-SPAWN-FIX): 340s, same measured sizing as the SCOPE
       # audit above (268s worst observed; 20s under the 360s outer hook cap).
-      - call: cached_audit
+      # TR.A (wg-2d1d8698f563): the AUTHOR rubric is single-sourced to docs/rubric/author.md,
+      # interpolated as {{rubric}} below — NOT hardcoded. Fail-loud on a missing fragment (below).
+      - call: read_rubric
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        args: { name: author }
+        as: rubric
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && rubric == null'
+        args:
+          level: block
+          message: >-
+            AUTHOR audit cannot run: the canonical rubric (docs/rubric/author.md) is unreadable — a
+            packaging/install fault, NOT a content failure. Verify the opensquid package ships docs/rubric/.
+      - call: cached_audit
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && rubric != null'
         on_error: continue
         args:
           cache_key: coding-flow-spec-audit-cache
           model: reasoning
           timeout_ms: 340000
           prompt: >-
-            You are an adversarial reviewer enforcing THREE author-completeness rules.
-            (1) 11-FIELD CONTRACT: EVERY "### Task" block has all 11 fields (Required
-            skills, Deliverable, Depends on, Files affected, Key code shapes, Test
-            fixtures, Acceptance criteria, Risk callouts, References, Verification
-            commands, 7-phase steps), every Key-code-shapes block is REAL code (not
-            pseudocode), every 7-phase step names concrete files/decisions. (2) 100%
-            DESIGN COVERAGE: the task set covers EVERY element of the SCOPE design below —
-            no design item is left without a task. (3) SIMPLICITY (per docs/lexicon.md):
-            the design is the SIMPLEST correct solution — no proliferating special-cases
-            (that signals a missed decomposition), every lifecycle an explicit
-            total-transition FSM, every transform a pure function, no implicit state.
+            You are an adversarial reviewer enforcing THREE author-completeness rules. Apply EXACTLY
+            this rubric (the single canonical source, docs/rubric/author.md):\n\n{{rubric}}\n\n
             Begin your response with EXACTLY one line — `VERDICT: SPEC_COMPLETE` ONLY if
             ALL THREE hold; otherwise `VERDICT: INCOMPLETE` + one bullet per offending
             block, uncovered design element, OR over-complected smell. Never say
@@ -265,7 +275,7 @@ rules:
             Audit:\n\n{{spec_audit}}
       # AUDIT-UNAVAILABLE → BLOCK, no advance (stays spec_authored, re-armable). F0c fix.
       - call: verdict
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && !contains(spec_audit, "VERDICT:")'
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && rubric != null && !contains(spec_audit, "VERDICT:")'
         args:
           level: block
           message: >-

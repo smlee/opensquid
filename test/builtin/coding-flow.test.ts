@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { registerEventFunctions } from '../../src/functions/event.js';
+import { registerReadRubric } from '../../src/functions/read_rubric.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
 import { FunctionRegistry } from '../../src/functions/registry.js';
 import { registerStateFunctions } from '../../src/functions/state.js';
@@ -44,6 +45,7 @@ function registry(): FunctionRegistry {
   registerStateFunctions(r);
   registerResetScopeTrackStateFunction(r); // wg-4c48ef1b9969: the re-arm rule clears per-track state
   registerVerdictFunctions(r);
+  registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
@@ -63,11 +65,14 @@ describe('scope-audit ↔ lexicon consistency (Full-fix-over-patch drift guard)'
       .map((p) => (p.args as { prompt?: string }).prompt ?? '')
       .find((p) => p.includes('adversarial reviewer'));
     expect(auditPrompt).toBeDefined();
-    // Each lexicon-enforced principle must have a clause in the self-contained prompt.
-    expect(auditPrompt).toMatch(/NEVER-GUESS/);
-    expect(auditPrompt).toMatch(/BEST-SOLUTION/);
-    expect(auditPrompt).toMatch(/FULL-FIX/);
-    // …and the lexicon must define the guideline the prompt enforces (no lexicon↔prompt drift).
+    // TR.A (wg-2d1d8698f563): the criteria are single-sourced in docs/rubric/scope.md and interpolated as
+    // {{rubric}} — they no longer live hardcoded in the prompt (the de-dup the rearchitecture delivers).
+    expect(auditPrompt).toMatch(/\{\{rubric\}\}/);
+    const scopeRubric = await readFile(resolve('docs/rubric/scope.md'), 'utf8');
+    expect(scopeRubric).toMatch(/NEVER-GUESS/);
+    expect(scopeRubric).toMatch(/BEST-SOLUTION/);
+    expect(scopeRubric).toMatch(/FULL-FIX/);
+    // …and the lexicon must still define the guideline (no lexicon↔rubric drift).
     const lexicon = await readFile(resolve('docs/lexicon.md'), 'utf8');
     expect(lexicon).toMatch(/\*\*Full-fix over patch\*\*/);
   });
@@ -341,6 +346,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
   registerFsmFunctions(r);
   registerStateFunctions(r);
   registerVerdictFunctions(r);
+  registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   r.register({
     name: 'cached_audit',
     argSchema: z.object({
@@ -440,6 +446,7 @@ function registryWithAuditOutcomes(scopeOut: string, specOut: string): FunctionR
   registerFsmFunctions(r);
   registerStateFunctions(r);
   registerVerdictFunctions(r);
+  registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   r.register({
     name: 'cached_audit',
     argSchema: z.object({
@@ -635,6 +642,7 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
     registerFsmFunctions(r);
     registerStateFunctions(r);
     registerVerdictFunctions(r);
+    registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
     r.register(HasGeneratedSpec);
     r.register(SessionToolHistory);
     r.register(EffectiveContent);
@@ -912,6 +920,7 @@ function registryExec(): FunctionRegistry {
   registerEventFunctions(r);
   registerFsmFunctions(r); // FU.1: the commit gate consults read_fsm_state (mid-flow → not ad-hoc)
   registerVerdictFunctions(r);
+  registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   r.register(HasActiveTask);
   r.register(WorkflowPhasesComplete);
   return r;
@@ -1051,6 +1060,7 @@ function registryTaskStart(): FunctionRegistry {
   registerEventFunctions(r);
   registerFsmFunctions(r);
   registerVerdictFunctions(r);
+  registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   r.register(HasGeneratedSpec);
   return r;
 }
@@ -1142,6 +1152,7 @@ function registryPhaseAudit(): FunctionRegistry {
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerVerdictFunctions(r);
+  registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   r.register(SessionToolHistory);
   r.register(EffectiveContent);
   return r;

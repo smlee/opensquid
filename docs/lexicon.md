@@ -36,10 +36,11 @@ other (the failure this file exists to prevent). Grow it as we label things.
 
 ## Research / Audit flow
 
-The principles governing the SCOPE/research stage and the `/research-audit` flow. These were
-previously enforced (the coding-flow guess-audit hardcodes never-guess + best-solution +
-teach-back depth) but unlabeled; this is their canonical home — the guess-audit and the
-`research-audit` skill both reference it. One labeled principle per line.
+The principles governing the SCOPE/research stage and the `/research-audit` flow. The coding-flow
+gate's OPERATIONAL pass-criteria are single-sourced in `docs/rubric/scope.md` + `docs/rubric/author.md`
+(read by `read_rubric` — interpolated into the guess/spec audits AND injected to the agent before
+authoring; TR.A/B, wg-2d1d8698f563). This section names the underlying principles those criteria
+operationalize. One labeled principle per line.
 
 - **No-skim / breadth** — read the decision surface end-to-end before judging; excerpts may
   LOCATE, never CONCLUDE.
