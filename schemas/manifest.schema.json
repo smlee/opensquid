@@ -15,13 +15,7 @@
         },
         "scope": {
           "type": "string",
-          "enum": [
-            "universal",
-            "domain",
-            "specialty",
-            "workflow",
-            "project"
-          ]
+          "enum": ["universal", "domain", "specialty", "workflow", "project"]
         },
         "goal": {
           "type": "string",
@@ -64,21 +58,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             },
             "prompt_submit": {
@@ -90,21 +77,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             },
             "session_end": {
@@ -116,21 +96,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             },
             "stop": {
@@ -142,21 +115,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             },
             "schedule": {
@@ -168,21 +134,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             },
             "webhook": {
@@ -194,21 +153,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             },
             "inbound_channel": {
@@ -220,21 +172,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             },
             "file_changed": {
@@ -246,21 +191,14 @@
                 },
                 "per": {
                   "type": "string",
-                  "enum": [
-                    "minute",
-                    "hour",
-                    "day"
-                  ]
+                  "enum": ["minute", "hour", "day"]
                 },
                 "concurrent": {
                   "type": "integer",
                   "exclusiveMinimum": 0
                 }
               },
-              "required": [
-                "max",
-                "per"
-              ],
+              "required": ["max", "per"],
               "additionalProperties": false
             }
           },
@@ -306,19 +244,9 @@
                   "type": "array",
                   "items": {
                     "type": "string",
-                    "enum": [
-                      "GET",
-                      "POST",
-                      "PUT",
-                      "PATCH",
-                      "DELETE",
-                      "HEAD",
-                      "OPTIONS"
-                    ]
+                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
                   },
-                  "default": [
-                    "GET"
-                  ]
+                  "default": ["GET"]
                 },
                 "deny": {
                   "type": "array",
@@ -438,9 +366,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "name"
-                ],
+                "required": ["name"],
                 "additionalProperties": false
               },
               "default": []
@@ -466,13 +392,7 @@
         },
         "activation_scope": {
           "type": "string",
-          "enum": [
-            "project",
-            "user",
-            "hybrid",
-            "team",
-            "global"
-          ],
+          "enum": ["project", "user", "hybrid", "team", "global"],
           "default": "project"
         },
         "detected_by": {
@@ -491,10 +411,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "path"
-                ],
+                "required": ["kind", "path"],
                 "additionalProperties": false
               },
               {
@@ -509,10 +426,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "path"
-                ],
+                "required": ["kind", "path"],
                 "additionalProperties": false
               },
               {
@@ -533,11 +447,7 @@
                     }
                   }
                 },
-                "required": [
-                  "kind",
-                  "path",
-                  "matches"
-                ],
+                "required": ["kind", "path", "matches"],
                 "additionalProperties": false
               },
               {
@@ -557,10 +467,7 @@
                     "default": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "pattern"
-                ],
+                "required": ["kind", "pattern"],
                 "additionalProperties": false
               },
               {
@@ -575,10 +482,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "pattern"
-                ],
+                "required": ["kind", "pattern"],
                 "additionalProperties": false
               },
               {
@@ -593,10 +497,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "pattern"
-                ],
+                "required": ["kind", "pattern"],
                 "additionalProperties": false
               },
               {
@@ -607,9 +508,7 @@
                     "const": "user_pinned"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               }
             ]
@@ -618,19 +517,12 @@
         },
         "kind": {
           "type": "string",
-          "enum": [
-            "focused",
-            "composite"
-          ],
+          "enum": ["focused", "composite"],
           "default": "focused"
         },
         "usage": {
           "type": "string",
-          "enum": [
-            "active",
-            "profession",
-            "both"
-          ],
+          "enum": ["active", "profession", "both"],
           "default": "active"
         },
         "includes": {
@@ -647,10 +539,7 @@
                 "minLength": 1
               }
             },
-            "required": [
-              "pack_id",
-              "semver"
-            ],
+            "required": ["pack_id", "semver"],
             "additionalProperties": false
           },
           "default": []
@@ -684,9 +573,7 @@
               "default": null
             }
           },
-          "required": [
-            "base_version"
-          ],
+          "required": ["base_version"],
           "additionalProperties": false
         },
         "seed_lessons": {
@@ -709,10 +596,7 @@
               },
               "scope": {
                 "type": "string",
-                "enum": [
-                  "user",
-                  "global"
-                ],
+                "enum": ["user", "global"],
                 "default": "user"
               },
               "tags": {
@@ -727,9 +611,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "title"
-            ],
+            "required": ["title"],
             "additionalProperties": false
           },
           "default": []
@@ -750,17 +632,10 @@
                 "properties": {
                   "event_kind": {
                     "type": "string",
-                    "enum": [
-                      "tool_call",
-                      "prompt_submit",
-                      "stop",
-                      "session_end"
-                    ]
+                    "enum": ["tool_call", "prompt_submit", "stop", "session_end"]
                   }
                 },
-                "required": [
-                  "event_kind"
-                ],
+                "required": ["event_kind"],
                 "additionalProperties": false
               },
               "check": {
@@ -772,29 +647,18 @@
                 "properties": {
                   "level": {
                     "type": "string",
-                    "enum": [
-                      "warn",
-                      "block"
-                    ]
+                    "enum": ["warn", "block"]
                   },
                   "message": {
                     "type": "string",
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "level",
-                  "message"
-                ],
+                "required": ["level", "message"],
                 "additionalProperties": false
               }
             },
-            "required": [
-              "name",
-              "when",
-              "check",
-              "on_fail"
-            ],
+            "required": ["name", "when", "check", "on_fail"],
             "additionalProperties": false
           },
           "default": []
@@ -812,12 +676,7 @@
               },
               "on": {
                 "type": "string",
-                "enum": [
-                  "tool_call",
-                  "prompt_submit",
-                  "stop",
-                  "session_end"
-                ],
+                "enum": ["tool_call", "prompt_submit", "stop", "session_end"],
                 "default": "tool_call"
               },
               "detect": {
@@ -832,9 +691,7 @@
                     "additionalProperties": {}
                   }
                 },
-                "required": [
-                  "call"
-                ],
+                "required": ["call"],
                 "additionalProperties": false
               },
               "as": {
@@ -848,22 +705,14 @@
               },
               "level": {
                 "type": "string",
-                "enum": [
-                  "warn",
-                  "block"
-                ]
+                "enum": ["warn", "block"]
               },
               "message": {
                 "type": "string",
                 "minLength": 1
               }
             },
-            "required": [
-              "name",
-              "when",
-              "level",
-              "message"
-            ],
+            "required": ["name", "when", "level", "message"],
             "additionalProperties": false
           },
           "default": []
@@ -883,20 +732,13 @@
                 "default": {}
               }
             },
-            "required": [
-              "template"
-            ],
+            "required": ["template"],
             "additionalProperties": false
           },
           "default": []
         }
       },
-      "required": [
-        "name",
-        "version",
-        "scope",
-        "goal"
-      ],
+      "required": ["name", "version", "scope", "goal"],
       "additionalProperties": false
     }
   },

@@ -44,7 +44,7 @@
     "format:check": "prettier --check .",
     "prepush": "bash scripts/pre-push.sh",
     "prepare": "bash scripts/install-git-hooks.sh",
-    "schemas": "tsx scripts/emit-schemas.ts",
+    "schemas": "tsx scripts/emit-schemas.ts && prettier --write 'schemas/*.json'",
     "sync-fixtures": "tsx scripts/sync-fixtures-from-live.ts",
     "prepublishOnly": "pnpm schemas && pnpm build"
   },

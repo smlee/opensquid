@@ -10,10 +10,7 @@
         },
         "load": {
           "type": "string",
-          "enum": [
-            "preload",
-            "lazy"
-          ],
+          "enum": ["preload", "lazy"],
           "default": "lazy"
         },
         "when_to_load": {
@@ -32,10 +29,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "tool"
-                ],
+                "required": ["kind", "tool"],
                 "additionalProperties": false
               },
               {
@@ -50,10 +44,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "pattern"
-                ],
+                "required": ["kind", "pattern"],
                 "additionalProperties": false
               },
               {
@@ -68,10 +59,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "kind",
-                  "glob"
-                ],
+                "required": ["kind", "glob"],
                 "additionalProperties": false
               },
               {
@@ -97,10 +85,7 @@
                     ]
                   }
                 },
-                "required": [
-                  "kind",
-                  "type"
-                ],
+                "required": ["kind", "type"],
                 "additionalProperties": false
               }
             ]
@@ -119,9 +104,7 @@
                     "const": "automation_mode_on"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -132,9 +115,7 @@
                     "const": "active_task_present"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               }
             ]
@@ -153,9 +134,7 @@
                     "const": "active_task_completes"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -166,9 +145,7 @@
                     "const": "session_ends"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -183,10 +160,7 @@
                     "exclusiveMinimum": 0
                   }
                 },
-                "required": [
-                  "kind",
-                  "n"
-                ],
+                "required": ["kind", "n"],
                 "additionalProperties": false
               }
             ]
@@ -205,9 +179,7 @@
                     "const": "tool_call"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -218,9 +190,7 @@
                     "const": "post_tool_call"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -231,9 +201,7 @@
                     "const": "prompt_submit"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -244,9 +212,7 @@
                     "const": "session_end"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -257,9 +223,7 @@
                     "const": "stop"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -270,9 +234,7 @@
                     "const": "session_start"
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -287,16 +249,10 @@
                   },
                   "cost_tier": {
                     "type": "string",
-                    "enum": [
-                      "cheap",
-                      "balanced",
-                      "premium"
-                    ]
+                    "enum": ["cheap", "balanced", "premium"]
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -311,16 +267,10 @@
                   },
                   "cost_tier": {
                     "type": "string",
-                    "enum": [
-                      "cheap",
-                      "balanced",
-                      "premium"
-                    ]
+                    "enum": ["cheap", "balanced", "premium"]
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -338,16 +288,10 @@
                   },
                   "cost_tier": {
                     "type": "string",
-                    "enum": [
-                      "cheap",
-                      "balanced",
-                      "premium"
-                    ]
+                    "enum": ["cheap", "balanced", "premium"]
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               },
               {
@@ -371,16 +315,10 @@
                   },
                   "cost_tier": {
                     "type": "string",
-                    "enum": [
-                      "cheap",
-                      "balanced",
-                      "premium"
-                    ]
+                    "enum": ["cheap", "balanced", "premium"]
                   }
                 },
-                "required": [
-                  "kind"
-                ],
+                "required": ["kind"],
                 "additionalProperties": false
               }
             ]
@@ -420,9 +358,7 @@
                               "const": "automation_mode_on"
                             }
                           },
-                          "required": [
-                            "kind"
-                          ],
+                          "required": ["kind"],
                           "additionalProperties": false
                         },
                         {
@@ -433,9 +369,7 @@
                               "const": "active_task_present"
                             }
                           },
-                          "required": [
-                            "kind"
-                          ],
+                          "required": ["kind"],
                           "additionalProperties": false
                         }
                       ]
@@ -463,32 +397,20 @@
                         },
                         "on_empty": {
                           "type": "string",
-                          "enum": [
-                            "pass",
-                            "block",
-                            "continue"
-                          ]
+                          "enum": ["pass", "block", "continue"]
                         },
                         "on_error": {
                           "type": "string",
-                          "enum": [
-                            "abort",
-                            "continue"
-                          ]
+                          "enum": ["abort", "continue"]
                         }
                       },
-                      "required": [
-                        "call"
-                      ],
+                      "required": ["call"],
                       "additionalProperties": false
                     },
                     "minItems": 1
                   }
                 },
-                "required": [
-                  "id",
-                  "process"
-                ],
+                "required": ["id", "process"],
                 "additionalProperties": false
               },
               {
@@ -510,9 +432,7 @@
                         "exclusiveMinimum": 0
                       }
                     },
-                    "required": [
-                      "every_n_tool_calls"
-                    ],
+                    "required": ["every_n_tool_calls"],
                     "additionalProperties": false
                   },
                   "model_alias": {
@@ -523,12 +443,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "id",
-                  "kind",
-                  "interval",
-                  "prompt_template"
-                ],
+                "required": ["id", "kind", "interval", "prompt_template"],
                 "additionalProperties": false
               }
             ]
@@ -546,9 +461,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "name"
-      ],
+      "required": ["name"],
       "additionalProperties": false
     }
   },
