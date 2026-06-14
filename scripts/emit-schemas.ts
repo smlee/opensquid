@@ -54,6 +54,7 @@ import { Manifest } from '../src/packs/schemas/manifest.js';
 import { ModelsConfig } from '../src/packs/schemas/models.js';
 import { NotificationsConfig } from '../src/packs/schemas/notifications.js';
 import { Skill } from '../src/packs/schemas/skill.js';
+import { Team } from '../src/packs/schemas/team.js';
 
 // ---------------------------------------------------------------------------
 // Schema registry — the six pack-config Zod schemas.
@@ -71,6 +72,8 @@ const SCHEMAS: ReadonlyArray<readonly [string, ZodType<unknown>]> = [
   ['models', ModelsConfig as ZodType<unknown>],
   ['notifications', NotificationsConfig as ZodType<unknown>],
   ['skill', Skill as ZodType<unknown>],
+  // wg-b400d5bc5ada: team.yaml is load-validated already; emit its schema for editor `$schema` hints too.
+  ['team', Team as ZodType<unknown>],
 ];
 
 // ---------------------------------------------------------------------------

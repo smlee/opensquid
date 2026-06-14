@@ -30,6 +30,14 @@
             ]
           },
           "default": {}
+        },
+        "corrective_skills": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": {}
         }
       },
       "additionalProperties": false

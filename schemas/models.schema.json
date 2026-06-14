@@ -12,11 +12,19 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["subscription", "api", "local", "mcp"]
+            "enum": [
+              "subscription",
+              "api",
+              "local",
+              "mcp"
+            ]
           },
           "impl": {
             "type": "string",
-            "enum": ["cli", "sdk"]
+            "enum": [
+              "cli",
+              "sdk"
+            ]
           },
           "cli": {
             "type": "string"
@@ -48,7 +56,9 @@
             "type": "string"
           }
         },
-        "required": ["mode"],
+        "required": [
+          "mode"
+        ],
         "additionalProperties": false
       },
       "default": {}

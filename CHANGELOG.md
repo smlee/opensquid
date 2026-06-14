@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.432] - 2026-06-14
+
+### Added — `team.yaml` JSON schema for editor hints + regenerated schema set (wg-b400d5bc5ada)
+
+- `team.yaml` (the Mode-A team/profession manifest) is already load-validated (`team.ts` → `loader.ts:171`),
+  but its JSON Schema wasn't emitted, so editors gave no `$schema` hints. `scripts/emit-schemas.ts` now
+  emits `schemas/team.schema.json` (the `Team`/`SubagentRole` shape). This also regenerated the schema set
+  to canonical, resolving the long-standing uncommitted `schemas/*.json` drift (wg-862460b1af86 item).
+- (Docs/terminology cleanup — "profession" vs the stale ADR-0013 "persona" paths — remains a separate
+  diffuse follow-up on wg-b400d5bc5ada.)
+
 ## [0.5.431] - 2026-06-14
 
 ### Fixed — gated-ralph lap actually receives RALPH.md + the item id (LAP.1, wg-5729c7afafad, 0.6.0 blocker)

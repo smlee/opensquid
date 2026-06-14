@@ -10,7 +10,10 @@
         },
         "load": {
           "type": "string",
-          "enum": ["preload", "lazy"],
+          "enum": [
+            "preload",
+            "lazy"
+          ],
           "default": "lazy"
         },
         "when_to_load": {
@@ -29,7 +32,10 @@
                     "minLength": 1
                   }
                 },
-                "required": ["kind", "tool"],
+                "required": [
+                  "kind",
+                  "tool"
+                ],
                 "additionalProperties": false
               },
               {
@@ -44,7 +50,10 @@
                     "minLength": 1
                   }
                 },
-                "required": ["kind", "pattern"],
+                "required": [
+                  "kind",
+                  "pattern"
+                ],
                 "additionalProperties": false
               },
               {
@@ -59,7 +68,10 @@
                     "minLength": 1
                   }
                 },
-                "required": ["kind", "glob"],
+                "required": [
+                  "kind",
+                  "glob"
+                ],
                 "additionalProperties": false
               },
               {
@@ -71,10 +83,58 @@
                   },
                   "type": {
                     "type": "string",
-                    "enum": ["tool_call", "prompt_submit", "stop", "session_end"]
+                    "enum": [
+                      "tool_call",
+                      "post_tool_call",
+                      "prompt_submit",
+                      "session_end",
+                      "stop",
+                      "session_start",
+                      "schedule",
+                      "webhook",
+                      "inbound_channel",
+                      "file_changed"
+                    ]
                   }
                 },
-                "required": ["kind", "type"],
+                "required": [
+                  "kind",
+                  "type"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "default": []
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "automation_mode_on"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "active_task_present"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -93,7 +153,9 @@
                     "const": "active_task_completes"
                   }
                 },
-                "required": ["kind"],
+                "required": [
+                  "kind"
+                ],
                 "additionalProperties": false
               },
               {
@@ -104,7 +166,9 @@
                     "const": "session_ends"
                   }
                 },
-                "required": ["kind"],
+                "required": [
+                  "kind"
+                ],
                 "additionalProperties": false
               },
               {
@@ -119,12 +183,214 @@
                     "exclusiveMinimum": 0
                   }
                 },
-                "required": ["kind", "n"],
+                "required": [
+                  "kind",
+                  "n"
+                ],
                 "additionalProperties": false
               }
             ]
           },
           "default": []
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "tool_call"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "post_tool_call"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "prompt_submit"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "session_end"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "stop"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "session_start"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "schedule"
+                  },
+                  "cron": {
+                    "type": "string"
+                  },
+                  "cost_tier": {
+                    "type": "string",
+                    "enum": [
+                      "cheap",
+                      "balanced",
+                      "premium"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "webhook"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "cost_tier": {
+                    "type": "string",
+                    "enum": [
+                      "cheap",
+                      "balanced",
+                      "premium"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "inbound_channel"
+                  },
+                  "channel": {
+                    "type": "string"
+                  },
+                  "sender_pattern": {
+                    "type": "string"
+                  },
+                  "cost_tier": {
+                    "type": "string",
+                    "enum": [
+                      "cheap",
+                      "balanced",
+                      "premium"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "file_changed"
+                  },
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "ignored": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "cost_tier": {
+                    "type": "string",
+                    "enum": [
+                      "cheap",
+                      "balanced",
+                      "premium"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "minItems": 1,
+          "default": [
+            {
+              "kind": "tool_call"
+            }
+          ]
         },
         "rules": {
           "type": "array",
@@ -141,6 +407,40 @@
                     "type": "string",
                     "const": "track_check",
                     "default": "track_check"
+                  },
+                  "requires": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "automation_mode_on"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "active_task_present"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "default": []
                   },
                   "process": {
                     "type": "array",
@@ -163,16 +463,32 @@
                         },
                         "on_empty": {
                           "type": "string",
-                          "enum": ["pass", "block", "continue"]
+                          "enum": [
+                            "pass",
+                            "block",
+                            "continue"
+                          ]
+                        },
+                        "on_error": {
+                          "type": "string",
+                          "enum": [
+                            "abort",
+                            "continue"
+                          ]
                         }
                       },
-                      "required": ["call"],
+                      "required": [
+                        "call"
+                      ],
                       "additionalProperties": false
                     },
                     "minItems": 1
                   }
                 },
-                "required": ["id", "process"],
+                "required": [
+                  "id",
+                  "process"
+                ],
                 "additionalProperties": false
               },
               {
@@ -194,7 +510,9 @@
                         "exclusiveMinimum": 0
                       }
                     },
-                    "required": ["every_n_tool_calls"],
+                    "required": [
+                      "every_n_tool_calls"
+                    ],
                     "additionalProperties": false
                   },
                   "model_alias": {
@@ -205,7 +523,12 @@
                     "type": "string"
                   }
                 },
-                "required": ["id", "kind", "interval", "prompt_template"],
+                "required": [
+                  "id",
+                  "kind",
+                  "interval",
+                  "prompt_template"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -223,7 +546,9 @@
           "type": "string"
         }
       },
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "additionalProperties": false
     }
   },

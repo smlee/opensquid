@@ -42,6 +42,7 @@ const EXPECTED_FILES = [
   'models.schema.json',
   'notifications.schema.json',
   'skill.schema.json',
+  'team.schema.json',
 ];
 
 let outDir: string;

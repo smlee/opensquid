@@ -1,0 +1,46 @@
+{
+  "$ref": "#/definitions/team",
+  "definitions": {
+    "team": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pack": {
+                "type": "string",
+                "minLength": 1
+              },
+              "model_alias": {
+                "type": "string",
+                "minLength": 1
+              },
+              "handoff_signal": {
+                "type": "string"
+              },
+              "instructions": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "pack", "model_alias"],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        }
+      },
+      "required": ["name", "roles"],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

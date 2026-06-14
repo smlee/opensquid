@@ -13,13 +13,26 @@
             }
           },
           "propertyNames": {
-            "enum": ["critical", "error", "warning", "info"]
+            "enum": [
+              "critical",
+              "error",
+              "warning",
+              "info"
+            ]
           },
           "default": {
-            "critical": ["alerts"],
-            "error": ["alerts"],
-            "warning": ["chat"],
-            "info": ["chat"]
+            "critical": [
+              "alerts"
+            ],
+            "error": [
+              "alerts"
+            ],
+            "warning": [
+              "chat"
+            ],
+            "info": [
+              "chat"
+            ]
           }
         },
         "per_project_override": {
@@ -33,7 +46,12 @@
               }
             },
             "propertyNames": {
-              "enum": ["critical", "error", "warning", "info"]
+              "enum": [
+                "critical",
+                "error",
+                "warning",
+                "info"
+              ]
             }
           },
           "default": {}
