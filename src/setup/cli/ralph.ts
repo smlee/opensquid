@@ -11,6 +11,7 @@
  * Imports from: commander, node:net, ../../runtime/paths.js, ../../runtime/spawn_lifecycle.js,
  * ../../runtime/ralph/*, ../../workgraph/*, ../wizard/ralph_writer.js.
  */
+import { readFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import type { Command } from 'commander';
@@ -52,22 +53,35 @@ export function makeSpawnLap(
   runCli: typeof runOneShotCli = runOneShotCli,
 ): (item: Issue) => Promise<LapResult> {
   return async (item: Issue) => {
+    // wg-5729c7afafad: deliver the RALPH.md CONTENT (not its path) as the stdin prompt, with the item id
+    // appended — `claude -p` reads the prompt from stdin (empirically verified). Fail loud if the directive
+    // is missing (a setup problem, not a retryable lap CRASH).
+    let ralphMd: string;
+    try {
+      ralphMd = await readFile(file.harness.ralphMdPath, 'utf8');
+    } catch {
+      throw new Error(
+        `RALPH.md not found at ${file.harness.ralphMdPath} — run \`opensquid loop\` (installRalph) to create it`,
+      );
+    }
+    const prompt =
+      ralphMd +
+      `\n\n---\nYour assigned work-item id: ${item.id}\n(Read it with workgraph_get("${item.id}").)\n`;
     let stdout: string;
     try {
       stdout = await runCli({
         cli: file.harness.cli, // Inv 10 — harness is a parameter
+        // NO `--item` (not a claude flag → crash) and no `-p <path>` (that passes the path string as the
+        // prompt). `-p` + prompt-via-stdin; `--max-budget-usd` is valid ("only works with --print").
         args: [
           '-p',
-          file.harness.ralphMdPath,
-          '--item',
-          item.id,
           '--output-format',
           'json',
           '--max-budget-usd',
           String(cfg.maxBudgetUsd),
           '--dangerously-skip-permissions',
         ],
-        prompt: '',
+        prompt,
         timeoutMs: file.wallClockMs,
         markSubagent: true,
         timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),

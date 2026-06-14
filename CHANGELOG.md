@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.431] - 2026-06-14
+
+### Fixed — gated-ralph lap actually receives RALPH.md + the item id (LAP.1, wg-5729c7afafad, 0.6.0 blocker)
+
+- `makeSpawnLap` spawned `claude -p <ralphMdPath> --item <id>` — two bugs: `--item` is not a claude flag
+  (verified `claude --help` → unknown-flag CRASH → retry → WEDGE), and `-p <path>` passes the _path
+  string_ as the prompt, not the file content. So a real lap never got its directive or work item; the
+  loop failed at the first lap (the orchestrator/stub tests masked it).
+- Fix: read the RALPH.md CONTENT and pass it as the stdin prompt (empirically verified: `claude -p` with
+  no positional reads stdin), with the item id appended (`workgraph_get(<id>)`); args drop `--item` and
+  `-p <path>`. A missing RALPH.md now fails loud (`/RALPH.md not found … run \`opensquid loop\`/`) before
+spawn, not an opaque ENOENT-CRASH-retry. `ralph_template.ts`updated (no more "via`--item`"). New
+real-arg test asserts no `--item` + the prompt carries content+id (not a mock that ignores argv).
+- `--max-budget-usd` kept — it IS a valid claude flag ("only works with --print"); the wg secondary
+  concern dissolved. (The real-claude S4 proof-of-loop remains the 0.6.0-cut gate, wg-ecccf0e79a91.)
+
 ## [0.5.430] - 2026-06-14
 
 ### Fixed — opensquid is usable as a standalone install (CLI.1-3, wg-798ce60dbb13)

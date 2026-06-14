@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { buildRalphConfig, makeSpawnLap } from './ralph.js';
 import type { RalphConfigFile } from '../wizard/ralph_writer.js';
 import type { Issue } from '../../workgraph/types.js';
@@ -39,31 +43,61 @@ describe('buildRalphConfig', () => {
 });
 
 describe('makeSpawnLap', () => {
-  const cfg = buildRalphConfig(FILE, { once: true });
+  let ralphDir: string;
+  let localFile: RalphConfigFile;
+  let cfg: ReturnType<typeof buildRalphConfig>;
+  const RALPH_BODY = '# RALPH\nDo the one assigned item, then exit with a typed verdict.';
 
-  it('parses a clean JSON envelope into the typed LapOutcome + cost', async () => {
-    let seen: { cli: string; args: string[] } | undefined;
-    const runCli = vi.fn((o: { cli: string; args: string[] }) => {
+  beforeAll(async () => {
+    ralphDir = await mkdtemp(join(tmpdir(), 'opensquid-ralph-'));
+    const ralphPath = join(ralphDir, 'RALPH.md');
+    await writeFile(ralphPath, RALPH_BODY);
+    localFile = { ...FILE, harness: { ...FILE.harness, ralphMdPath: ralphPath } };
+    cfg = buildRalphConfig(localFile, { once: true });
+  });
+  afterAll(async () => {
+    await rm(ralphDir, { recursive: true, force: true });
+  });
+
+  it('delivers RALPH.md content + item id via stdin prompt; NO --item / no -p<path> (wg-5729c7afafad)', async () => {
+    let seen: { cli: string; args: string[]; prompt: string } | undefined;
+    const runCli = vi.fn((o: { cli: string; args: string[]; prompt: string }) => {
       seen = o;
       return Promise.resolve('{"result":"done","is_error":false,"total_cost_usd":0.07}');
     }) as unknown as typeof runOneShotCli;
-    const out = await makeSpawnLap(cfg, FILE, runCli)(ITEM);
+    const out = await makeSpawnLap(cfg, localFile, runCli)(ITEM);
     expect(out).toEqual({ kind: 'SHIPPED', costUsd: 0.07 });
-    // spawns the configured harness with --item + skip-permissions
     expect(seen?.cli).toBe('claude');
+    expect(seen?.args).toContain('-p');
+    expect(seen?.args).toContain('--output-format');
     expect(seen?.args).toContain('--dangerously-skip-permissions');
-    expect(seen?.args).toContain('a');
+    // the two bugs this fixes:
+    expect(seen?.args).not.toContain('--item'); // not a claude flag → crash
+    expect(seen?.args).not.toContain(localFile.harness.ralphMdPath); // -p<path> would be path-as-prompt
+    // the directive + work item are actually delivered (via stdin):
+    expect(seen?.prompt).toContain(RALPH_BODY);
+    expect(seen?.prompt).toContain('a'); // the item id
   });
 
   it('a deadline overrun (__timeout) → typed TIMEOUT, not CRASH', async () => {
     const runCli = vi.fn(() =>
       Promise.reject(Object.assign(new Error('lap timeout'), { __timeout: true })),
     );
-    expect(await makeSpawnLap(cfg, FILE, runCli)(ITEM)).toEqual({ kind: 'TIMEOUT', costUsd: 0 });
+    expect(await makeSpawnLap(cfg, localFile, runCli)(ITEM)).toEqual({
+      kind: 'TIMEOUT',
+      costUsd: 0,
+    });
   });
 
   it('a genuine spawn failure rethrows (→ superviseLap maps to CRASH)', async () => {
     const runCli = vi.fn(() => Promise.reject(new Error('ENOENT: claude not found')));
-    await expect(makeSpawnLap(cfg, FILE, runCli)(ITEM)).rejects.toThrow(/ENOENT/);
+    await expect(makeSpawnLap(cfg, localFile, runCli)(ITEM)).rejects.toThrow(/ENOENT/);
+  });
+
+  it('a missing RALPH.md fails loud BEFORE spawn (wg-5729c7afafad)', async () => {
+    const badFile = { ...FILE, harness: { ...FILE.harness, ralphMdPath: '/no/such/RALPH.md' } };
+    const runCli = vi.fn(() => Promise.resolve('{}')) as unknown as typeof runOneShotCli;
+    await expect(makeSpawnLap(cfg, badFile, runCli)(ITEM)).rejects.toThrow(/RALPH\.md not found/);
+    expect(runCli).not.toHaveBeenCalled();
   });
 });

@@ -18,7 +18,7 @@
 export const RALPH_MD = `# RALPH.md — the gated-ralph per-lap directive
 
 You are ONE lap of an autonomous gated loop. A thin orchestrator handed you exactly one already-claimed
-work-item id via \`--item <id>\`. Your context is FRESH — nothing carried over from the previous lap
+work-item id — it is appended to THIS prompt (read it with \`workgraph_get(<id>)\`). Your context is FRESH — nothing carried over from the previous lap
 except the durable disk (the work-graph + the wedge-gated lesson store). That is by design: you are the
 dumb loop's smart body (Inv 1/2). Do the item, then exit with a typed verdict. Do not try to do the
 whole board — the orchestrator takes the next item.
