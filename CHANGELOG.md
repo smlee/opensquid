@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.443] - 2026-06-14
+
+### Changed — the handover doc is a gitignored projection; the generator stops manufacturing a commit obligation (HDP.1)
+
+- `renderResumeSteps` no longer emits a final "Commit the handover doc(s)" step, and the rendered
+  doc's surface-1 line is reframed from "uncommitted; committing it is resume step N" to "a
+  gitignored on-disk projection … read it, never commit it". The doc is rebuildable from session
+  state (its own HPB.1 comment already calls it a lazily-regenerated projection), so by the
+  `single-writable-home-markdown-is-view` principle it must not be a git-tracked commit target —
+  the durable resume anchors are the MEMORY.md pointer + the work-graph `handoff-<sid8>` issue.
+- This dissolves the gate-hole where the resume's own housekeeping step ("commit the handover
+  doc") tripped the coding-flow commit gate, WITHOUT weakening that gate (no docs-exemption hole —
+  the obligation simply should never have existed). `renderWgDigest`/`renderChatDigest` inherit the
+  change via `renderResumeSteps`; the other three surfaces, `handoverDocPath`, `renderInjection`,
+  and the commit-gate matcher are byte-unchanged. (Loop-side: `.gitignore` now ignores
+  `docs/handover-session-*-auto.md`; the previously-tracked docs are untracked, kept on disk.)
+
 ## [0.5.442] - 2026-06-14
 
 ### Fixed — the published package no longer ships dead code (wg-98a8d32127dd)

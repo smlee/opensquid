@@ -5,9 +5,10 @@
  * MEMORY.md resume block (compressed pointer), the work-graph digest, and the
  * chat digest. Resume steps are MECHANICAL: a mid-flow FSM always resumes at
  * the RESEARCH flow (re-fire the pre-research artifact — audits re-run on the
- * fresh session's budget; user-locked), and the FINAL step is always
- * "commit the handover doc(s)" (the successor-commits half of the locked
- * commit policy).
+ * fresh session's budget; user-locked). The handover doc is a gitignored
+ * on-disk PROJECTION (single-writable-home): the successor reads it and never
+ * commits it — the durable resume anchors are the MEMORY.md pointer + the
+ * work-graph issue, not git-tracked markdown.
  *
  * Imports from: ./collect.js (types only).
  * Imported by: handoff/index.ts, handoff/write.ts.
@@ -51,7 +52,7 @@ function fsmHistoryTail(state: HandoffState, n = 3): string[] {
     );
 }
 
-/** The mechanical resume steps (research-flow-first; commit-doc last). */
+/** The mechanical resume steps (research-flow-first; the doc is a gitignored projection — no commit step). */
 export function renderResumeSteps(state: HandoffState): string[] {
   const steps: string[] = [];
   const fsmState = fsmStateOf(state);
@@ -87,8 +88,7 @@ export function renderResumeSteps(state: HandoffState): string[] {
       `FSM is at "${fsmState}" — no mid-flow recovery needed; pick the next backlog item (open work-graph issues below).`,
     );
   }
-  steps.push('Commit the handover doc(s) — left uncommitted by the generator deliberately.');
-  return steps;
+  return steps; // the doc is a gitignored projection; no commit step (single-writable-home)
 }
 
 function section(title: string, body: string): string {
@@ -131,7 +131,7 @@ let the successor verify disk truth directly.
 
 ## The handoff lives on 4 surfaces
 
-1. THIS doc (\`${state.umbrellaRoot}/docs/\` — uncommitted; committing it is resume step ${String(renderResumeSteps(state).length)}).
+1. THIS doc (\`${state.umbrellaRoot}/docs/\` — a gitignored on-disk projection, regenerated each handoff; read it, never commit it).
 2. The auto-memory MEMORY.md managed resume block (\`opensquid:handoff\` markers).
 3. Work-graph issue \`handoff-${sid8}\`.
 4. The umbrella chat topic (best-effort digest).

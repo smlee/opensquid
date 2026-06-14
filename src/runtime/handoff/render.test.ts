@@ -1,6 +1,6 @@
 /**
  * T-AUTO-HANDOFF — render.ts: the locked resume-step rules + doc content
- * (research-flow-first when mid-flow; commit-the-doc LAST; phase ledger,
+ * (research-flow-first when mid-flow; the doc is a gitignored projection — NO commit step; phase ledger,
  * UNRESOLVED bullets, and artifact hashes present in the rendered doc).
  */
 
@@ -37,12 +37,12 @@ const base: HandoffState = {
 };
 
 describe('renderResumeSteps (the locked rules)', () => {
-  it('mid-flow → FIRST step is the pre-research re-fire with path + hash; LAST is commit-the-doc', () => {
+  it('mid-flow → FIRST step is the pre-research re-fire with path + hash; NO commit step', () => {
     const steps = renderResumeSteps(base);
     expect(steps[0]).toContain('/u/docs/research/pre.md');
     expect(steps[0]).toContain('aabbccdd');
     expect(steps[0]).toContain('RESEARCH flow');
-    expect(steps.at(-1)).toContain('Commit the handover doc');
+    expect(steps.join('\n')).not.toContain('Commit the handover doc');
   });
 
   it('an unreadable spec artifact is surfaced as NOT READABLE (disk-truth, never narrative)', () => {
@@ -50,10 +50,11 @@ describe('renderResumeSteps (the locked rules)', () => {
     expect(steps.join('\n')).toContain('NOT READABLE ON DISK');
   });
 
-  it('terminal FSM → no recovery steps, but commit-the-doc still LAST', () => {
+  it('terminal FSM → a single step (pick the next backlog item), no commit step', () => {
     const steps = renderResumeSteps({ ...base, fsm: { state: 'phases_complete', history: [] } });
+    expect(steps).toHaveLength(1);
     expect(steps[0]).toContain('phases_complete');
-    expect(steps.at(-1)).toContain('Commit the handover doc');
+    expect(steps.join('\n')).not.toContain('Commit the handover doc');
   });
 
   it('re-armed scoping with cleared artifacts → "start at SCOPE", NOT a re-fire of a shipped track (wg-4c48ef1b9969)', () => {
@@ -69,7 +70,7 @@ describe('renderResumeSteps (the locked rules)', () => {
     expect(joined).toContain('start the track at SCOPE');
     expect(joined).not.toContain('Re-fire');
     expect(joined).not.toContain('NOT READABLE ON DISK');
-    expect(steps.at(-1)).toContain('Commit the handover doc');
+    expect(joined).not.toContain('Commit the handover doc');
   });
 });
 
@@ -82,7 +83,8 @@ describe('renderHandoverDoc', () => {
     expect(doc).toContain('the one open bullet'); // UNRESOLVED resume point
     expect(doc).toContain('aabbccdd');
     expect(doc).toContain('handoff-abcdefgh'); // wg surface key in the index? sid8 present
-    expect(doc).toContain('Commit the handover doc');
+    expect(doc).not.toContain('Commit the handover doc');
+    expect(doc).toContain('never commit it'); // surface-1 reframed as a gitignored projection
   });
 
   it('is deterministic in its input', () => {
