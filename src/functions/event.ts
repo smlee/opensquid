@@ -157,6 +157,20 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
   });
 
   registry.register({
+    name: 'current_prompt',
+    argSchema: EmptyArgs,
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 0.1,
+    execute: async (_args, ctx) => {
+      // RTC.5: the current user prompt, for interpolation into an llm_classify prompt
+      // (the request-type refinement). Only present on prompt_submit; null elsewhere.
+      if (ctx.event.kind === 'prompt_submit') return ok(ctx.event.prompt);
+      return ok(null);
+    },
+  });
+
+  registry.register({
     name: 'match_command',
     argSchema: MatchCommandArgs,
     durable: false,

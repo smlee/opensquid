@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.440] - 2026-06-14
+
+### Added — request-type llm refinement on uncertainty (RTC.5, wg-3d175ec06767)
+
+- When the deterministic classifier was UNCERTAIN (`confidence:'low'`), a fast `llm_classify` now
+  decides research-vs-work and refines the persisted record (`source:'llm'`) — the "ACCURATE" half of
+  the lock. New primitives: `current_prompt` (exposes the prompt for the classifier) + `set_request_type`
+  (writes the refined verdict, preserving `prompt_hash`/`at`). Gated strictly on `confidence=='low'`
+  (the clear-cut majority never pays the llm cost); UNCERTAIN/invalid output leaves the safe `research`
+  default unchanged. This completes the request-type classifier (RTC.1-5) — all three codex-pause-wedge
+  causes fixed (keyword arm-on-question, harness-portable stop allow-signal, resumed-thread orphan reset).
+- DEFERRED to a follow-up: misclassification observability (needs a downstream ground-truth/feedback
+  signal) and the DPC-depth-reads-record tie-in (the DPC shallow-warn fires on pre-research _writes_ —
+  work-turn activity — so request-type doesn't suppress it). Neither is load-bearing for the wedge fix.
+
 ## [0.5.439] - 2026-06-14
 
 ### Added — SessionStart(resume) reset of orphaned scoping (RTC.4, wg-3d175ec06767)

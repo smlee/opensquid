@@ -105,6 +105,35 @@ rules:
   # ordering). rubric_pre_inject reads the coding-flow FSM and, when in an active SCOPE/AUTHOR phase, returns
   # an inject_context payload carrying the FULL rubric (scope + author — prompt_submit can't track mid-turn
   # phase advances, so one injection must cover the whole uninterrupted turn). Inject-only; never blocks.
+  # RTC.5 (wg-3d175ec06767): when the deterministic classifier was UNCERTAIN (confidence:low), a fast
+  # llm_classify decides research-vs-work and refines the persisted record (source:llm) — the "ACCURATE"
+  # half of the lock. Gated strictly on confidence==low (the clear-cut majority never pays the llm cost).
+  # Placed AFTER enter-scoping: the current turn's arm safely used the deterministic research-default
+  # (backed by the git commit/push gate for a missed work turn); the refinement sharpens the record for
+  # the downstream stop guards + measurement. UNCERTAIN/invalid llm output → record unchanged (stays safe).
+  - id: refine-request-type
+    process:
+      - call: read_state
+        args:
+          key: request-type
+        as: rt
+      - call: current_prompt
+        as: p
+      - call: llm_classify
+        if: 'rt.confidence == "low"'
+        args:
+          model: fast_classifier
+          prompt: |
+            Classify the user prompt as exactly one label:
+            - research: a question, investigation, or understand-only request (no code change follows)
+            - work: a request to build, change, or fix code
+            Prompt: {{p}}
+          allowed_labels: [research, work]
+        as: refined
+      - call: set_request_type
+        if: 'rt.confidence == "low" && (refined == "research" || refined == "work")'
+        args:
+          type: '{{refined}}'
   - id: inject-rubric
     process:
       - call: rubric_pre_inject

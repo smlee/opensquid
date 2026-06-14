@@ -90,6 +90,7 @@ import { registerFsmFunctions } from '../functions/fsm.js';
 import { registerReadRubric } from '../functions/read_rubric.js';
 import { registerRubricPreInject } from '../functions/rubric_pre_inject.js';
 import { registerProcedurePreInject } from '../functions/procedure_pre_inject.js';
+import { registerSetRequestType } from '../functions/set_request_type.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
 import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
@@ -136,6 +137,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerReadRubric(r); // TR.A: the audits interpolate {{rubric}} from this; rubric_pre_inject reuses it
   registerRubricPreInject(r); // TR.B: injects the rubric to the agent before authoring (prompt_submit)
   registerProcedurePreInject(r); // wg-7f6225238a27: injects the pack's operating procedure when engaged (prompt_submit)
+  registerSetRequestType(r); // wg-3d175ec06767: RTC.5 llm refinement writes the refined request-type
   // Phase 4: `check_destination` is the destination-side anti-drift
   // primitive. It composes `llm_classify` (registered just above) so the
   // ordering matters — register it last among the LLM-dependent primitives.
