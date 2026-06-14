@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.434] - 2026-06-14
+
+### Added — coding-flow ships its operating procedure (PPW.2, wg-7f6225238a27)
+
+- `packs/builtin/coding-flow/procedure.md` — the operating manual (the METHOD: how to run a track so
+  the gates pass first-try; the complement to the rubric's BAR). Covers request-type flow selection,
+  the SCOPE→AUTHOR→CODE steps (recall+Read+Grep ≥3 then write once, 11-field real-code specs, 7-phase
+  logging, `pnpm`/explicit-`git add`/`format:check`-last), and the on-block protocol — each rule traced
+  to its locked feedback memory.
+- An unconditional `inject-procedure` rule in `entry-and-handoffs` calls `procedure_pre_inject`, which
+  self-gates on coding-flow's own FSM (engaged = state ≠ idle), so the procedure rides every armed turn
+  across the whole lifecycle. Dispatch test: scope-authoring prompt → injected; idle → silent.
+
 ## [0.5.433] - 2026-06-14
 
 ### Added — per-pack operating-procedure surface: `procedure.md` (PPW.1, wg-7f6225238a27)

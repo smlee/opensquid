@@ -16,6 +16,7 @@ import { registerEventFunctions } from '../../src/functions/event.js';
 import { registerStagedDocsOnlyFunction } from '../../src/functions/staged_docs_only.js';
 import { registerReadRubric } from '../../src/functions/read_rubric.js';
 import { registerRubricPreInject } from '../../src/functions/rubric_pre_inject.js';
+import { registerProcedurePreInject } from '../../src/functions/procedure_pre_inject.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
 import { FunctionRegistry } from '../../src/functions/registry.js';
 import { registerStateFunctions } from '../../src/functions/state.js';
@@ -49,6 +50,7 @@ function registry(): FunctionRegistry {
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   registerRubricPreInject(r); // TR.B: entry-and-handoffs inject-rubric rule
+  registerProcedurePreInject(r); // wg-7f6225238a27: entry-and-handoffs inject-procedure rule
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
@@ -1388,5 +1390,45 @@ describe('builtin coding-flow pack — autonomous SCOPE re-arm (T-FLOW-AUTONOMOU
     for (const t of ['mcp__opensquid__recall', 'Read', 'Read']) await appendTool(sid, t);
     await dispatchEvent(writeResearch, [pack], reg, sid);
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('researched');
+  });
+});
+
+describe('builtin coding-flow pack — operating-procedure injection (PPW.2, wg-7f6225238a27)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-cf-procedure-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  const HEADER = 'operating procedure (follow this to pass the gates first-try)';
+  const promptEv = (text: string): PromptSubmitEvent => ({ kind: 'prompt_submit', prompt: text });
+
+  it('ships procedure.md (loaded into Pack.procedure)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    expect(pack.procedure).toBeDefined();
+    expect(pack.procedure).toContain('operating procedure');
+  });
+
+  it('injects the procedure on a scope-authoring prompt (FSM armed to scoping); silent from idle', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry(); // includes procedure_pre_inject + enter-scoping deps
+    const sid = 'cf-procedure-inject';
+
+    // idle: a plain (non-scope) prompt does NOT arm scoping → procedure NOT injected.
+    const idle = await dispatchEvent(promptEv('hello there'), [pack], reg, sid);
+    expect(idle.contextInjections.join('\n')).not.toContain(HEADER);
+
+    // scope-authoring prompt: enter-scoping arms idle→scoping; inject-procedure (later in
+    // file order) sees the just-armed non-idle state and injects coding-flow's procedure.md.
+    const scoping = await dispatchEvent(promptEv('scope the new feature'), [pack], reg, sid);
+    expect(scoping.contextInjections.join('\n')).toContain(HEADER);
   });
 });

@@ -98,6 +98,14 @@ rules:
   - id: inject-rubric
     process:
       - call: rubric_pre_inject
+  # wg-7f6225238a27 — deliver coding-flow's OPERATING PROCEDURE (the METHOD: how to run a track so
+  # the gates pass first-try) alongside the rubric (the BAR). Unconditional like inject-rubric;
+  # procedure_pre_inject self-gates on coding-flow's own FSM (engaged = state != idle), so the whole
+  # active lifecycle (SCOPE→AUTHOR→EXECUTE) is covered — gate-fighting happens in EXECUTE too. The
+  # content is packs/builtin/coding-flow/procedure.md, threaded via Pack.procedure → ctx.packProcedure.
+  - id: inject-procedure
+    process:
+      - call: procedure_pre_inject
   # GF.1 (F9) — the re-scope NUDGE, surfaced on prompt_submit (where directives are
   # delivered) for the `scoping` state. Fires after `enter-scoping` advanced idle→scoping
   # (or after task-start's task_unscoped reset, or GF.7's phases_complete re-arm landed
