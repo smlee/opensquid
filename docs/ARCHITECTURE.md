@@ -93,20 +93,21 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 
 ## 3. Subsystems at a glance
 
-| Subsystem | Owns | Key code | Deep-dive |
-|---|---|---|---|
-| **Install/Setup** | the npm package, the wizards, the `~/.opensquid/` + `~/.claude/` layout | `src/cli.ts`, `src/setup/`, `src/runtime/paths.ts`, `package.json` | §4.1 |
-| **Runtime** | hooks → dispatch → evaluator → ~50 primitives; the event/verdict model | `src/runtime/hooks/`, `dispatch.ts`, `evaluator/`, `src/functions/`, `bootstrap.ts` | `pack-runtime.md` |
-| **Packs** | pack format (manifest+skills+side-files), loader, the builtin pack set | `src/packs/`, `src/runtime/types.ts` (`Pack`), `packs/builtin/` | `pack-runtime.md` |
-| **Flows/Gates** | the coding-flow FSM, guess/spec/phase gates, git-owned gate, request-type classifier | `packs/builtin/coding-flow/`, `src/runtime/fsm*.ts`, `src/functions/cached_audit.ts`, `src/setup/cli/gate.ts`, `src/runtime/request_type.ts` | `pack-fsm-architecture.md`, `flows.md` |
-| **Memory** | RAG (libsql+fastembed), lessons + wedge gate, work-graph, compression/retention | `src/rag/`, `src/workgraph/`, `src/runtime/phase_ledger.ts`, `src/mcp/tools/` | `state-formats.md` |
-| **Chat** | chat-daemon, umbrella routing, inbound watcher + drain, `chat_send` bridge | `src/channels/`, `src/runtime/chat/`, `src/mcp/chat-bridge-server.ts`, `src/chat_daemon/client.ts` | — |
+| Subsystem         | Owns                                                                                 | Key code                                                                                                                                     | Deep-dive                              |
+| ----------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| **Install/Setup** | the npm package, the wizards, the `~/.opensquid/` + `~/.claude/` layout              | `src/cli.ts`, `src/setup/`, `src/runtime/paths.ts`, `package.json`                                                                           | §4.1                                   |
+| **Runtime**       | hooks → dispatch → evaluator → ~50 primitives; the event/verdict model               | `src/runtime/hooks/`, `dispatch.ts`, `evaluator/`, `src/functions/`, `bootstrap.ts`                                                          | `pack-runtime.md`                      |
+| **Packs**         | pack format (manifest+skills+side-files), loader, the builtin pack set               | `src/packs/`, `src/runtime/types.ts` (`Pack`), `packs/builtin/`                                                                              | `pack-runtime.md`                      |
+| **Flows/Gates**   | the coding-flow FSM, guess/spec/phase gates, git-owned gate, request-type classifier | `packs/builtin/coding-flow/`, `src/runtime/fsm*.ts`, `src/functions/cached_audit.ts`, `src/setup/cli/gate.ts`, `src/runtime/request_type.ts` | `pack-fsm-architecture.md`, `flows.md` |
+| **Memory**        | RAG (libsql+fastembed), lessons + wedge gate, work-graph, compression/retention      | `src/rag/`, `src/workgraph/`, `src/runtime/phase_ledger.ts`, `src/mcp/tools/`                                                                | `state-formats.md`                     |
+| **Chat**          | chat-daemon, umbrella routing, inbound watcher + drain, `chat_send` bridge           | `src/channels/`, `src/runtime/chat/`, `src/mcp/chat-bridge-server.ts`, `src/chat_daemon/client.ts`                                           | —                                      |
 
 ---
 
 ## 4. Per-subsystem — owns / inputs / outputs / **touchpoints**
 
 ### 4.1 Install / Setup / State-layout
+
 - **Owns:** the npm `bin` set (the CLI + 6 hook bins + 2 MCP servers, `package.json:12-22`); the wizards
   (`src/setup/wizard/{settings-writer,mcp-writer,codex-hooks-writer}.ts`, `src/setup/cli/chat_*`); the
   canonical path layout (`src/runtime/paths.ts`, `OPENSQUID_HOME()`).
@@ -116,10 +117,11 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 - **Touchpoints (downstream dependents):** Runtime hooks depend on `settings.json` being present+correct;
   the MCP tools depend on `~/.claude.json`; Packs load from `active.json` + `~/.opensquid/packs/`; Chat
   depends on `config.json` (tokens) + `channels.json` (routing); Memory keys on the umbrella from `channels.json`.
-- **This is the root dependency.** If setup is broken, *every* other subsystem silently no-ops.
+- **This is the root dependency.** If setup is broken, _every_ other subsystem silently no-ops.
 - **Verify:** `opensquid doctor {hooks,codex-hooks,memory,git-hooks,update}`.
 
 ### 4.2 Runtime (the spine)
+
 - **Owns:** the 6 hook bins; `dispatchEvent` (walks packs→skills→rules, threads `packId/packModels/packFsm/packProcedure`
   into the eval context, aggregates `contextInjections`+`directives`); the evaluator + `if:` interpreter;
   the function registry (~50 primitives registered in `bootstrap.ts`); the Event (8 kinds) + Verdict (5 levels) model.
@@ -131,6 +133,7 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
   `dispatch.ts` if it reads pack content, + register in test registries if pack rules call it — see [Change-impact](#change-impact-map)).
 
 ### 4.3 Packs
+
 - **Owns:** `manifest.yaml` (+ `skills/*/skill.yaml`) and the optional side-files `fsm.yaml`, `team.yaml`,
   `models.yaml`, `drift_response.yaml`, `chat_agent.yaml`, `channels.yaml`, `notifications.yaml`, **`procedure.md`**;
   the loader (`loadPack`); the runtime `Pack` object (`types.ts:351`); the 13 builtin packs.
@@ -140,6 +143,7 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 - **A pack is the unit of behavior.** Editing a pack changes the agent's flow, gates, and injected guidance at once.
 
 ### 4.4 Flows / Gates
+
 - **Owns:** `coding-flow/fsm.yaml` (idle→SCOPE→AUTHOR→CODE, 9 states); the content gates — guess-audit
   (SCOPE→`GUESS_FREE`), spec-audit (AUTHOR→`SPEC_COMPLETE`), phase-log (7 phases); the in-session skills
   (entry-and-handoffs, scope-lifecycle, execute-gate, phase-advance/audit, pause-stop-guard, pause-prevention,
@@ -151,6 +155,7 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
   enter-scoping + the stop guards. **Two-layer design:** in-session gates = best-effort NUDGE; `gate.ts` = fail-closed.
 
 ### 4.5 Memory
+
 - **Owns:** the RAG store (`libsql-fastembed` default; per-file `store/lessons/<id>.md` = git-versionable truth;
   lexical + claude-auto-memory backends); the Lesson type (durability, retired_at, tier/namespace); recall/memorize/forget;
   the **wedge gate** (anti-self-grading lesson promotion); the **work-graph** (event-sourced op-log + libSQL projection,
@@ -161,6 +166,7 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 - **Scope is fail-closed:** null namespace → only `shared` memory; cross-project leakage is structurally prevented.
 
 ### 4.6 Chat
+
 - **Owns:** the long-lived `chat-daemon` (owns the bot tokens, a UDS socket, writes umbrella inbox JSONL);
   umbrella routing (`channels.json`, pure FSM); the inbound watcher (real-time push) + Stop-hook drain (fallback);
   outbound `chat_send` (the separate `opensquid-chat-bridge-mcp` server → daemon RPC); the live-session lease.
@@ -173,14 +179,14 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 
 ## 5. Relationship matrix — "if I change ROW, it affects COLUMN"
 
-| ↓ change / → affects | Install | Runtime | Packs | Flows | Memory | Chat |
-|---|---|---|---|---|---|---|
-| **Install/Setup** | — | hooks must re-register | pack discovery (`active.json`) | gate install | store/scope paths | daemon tokens+routing |
-| **Runtime** | hook bin names ↔ `package.json` `bin` + settings-writer | — | dispatch threading of side-files | primitives the gates call | recall/state primitives | inbox drain + chat_send |
-| **Packs** | — | new side-file ⇒ thread in dispatch | — | **coding-flow pack = the FSM+gates** | models.yaml ⇒ embedder; recall rules | chat_agent.yaml |
-| **Flows** | gate.ts ↔ git hooks | audit primitives, classifier in UPS | the coding-flow pack content | — | log_phase ⇒ ledger; rubric docs | stop-guard reads request-type |
-| **Memory** | store/db paths | recall/recall_pre_inject shape | recall hits feed pack rules | request-type/FSM records drive gates | — | umbrella namespace = scope key |
-| **Chat** | channels.json/config.json | inbound event → hooks | chat_agent binding | — | umbrella key = memory namespace | — |
+| ↓ change / → affects | Install                                                 | Runtime                             | Packs                            | Flows                                | Memory                               | Chat                           |
+| -------------------- | ------------------------------------------------------- | ----------------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------ | ------------------------------ |
+| **Install/Setup**    | —                                                       | hooks must re-register              | pack discovery (`active.json`)   | gate install                         | store/scope paths                    | daemon tokens+routing          |
+| **Runtime**          | hook bin names ↔ `package.json` `bin` + settings-writer | —                                   | dispatch threading of side-files | primitives the gates call            | recall/state primitives              | inbox drain + chat_send        |
+| **Packs**            | —                                                       | new side-file ⇒ thread in dispatch  | —                                | **coding-flow pack = the FSM+gates** | models.yaml ⇒ embedder; recall rules | chat_agent.yaml                |
+| **Flows**            | gate.ts ↔ git hooks                                     | audit primitives, classifier in UPS | the coding-flow pack content     | —                                    | log_phase ⇒ ledger; rubric docs      | stop-guard reads request-type  |
+| **Memory**           | store/db paths                                          | recall/recall_pre_inject shape      | recall hits feed pack rules      | request-type/FSM records drive gates | —                                    | umbrella namespace = scope key |
+| **Chat**             | channels.json/config.json                               | inbound event → hooks               | chat_agent binding               | —                                    | umbrella key = memory namespace      | —                              |
 
 Read a row before you change that subsystem. Each non-empty cell is a place that can break.
 
@@ -217,19 +223,19 @@ The shared substrate. Detailed shapes in `docs/state-formats.md`; this is the in
 
 The "what gets brittle when you touch X" reference. **Before changing a left-column item, check the right column.**
 
-| If you change… | …re-verify (these get brittle) |
-|---|---|
-| **`coding-flow/fsm.yaml`** (states/transitions) | every skill that `advance_fsm`; the gates that read state (execute-gate, pause-stop-guard); `gate.ts` `commitAllowedNow` (keys on `phases_complete` + 7 phases); request-type idle-return + RTC.4 stranded-scoping; the FSM-active set in `rubric_pre_inject`/`procedure_pre_inject` |
-| **session-state shape/key** (`sessions/<sid>/state/*`) | all `read_state` consumers across packs; the audits' cache keys; the classifier record; `gate.ts` (reads FSM+phases+active-task); the request-type consumers |
-| **a pack side-file** (add/rename, e.g. `procedure.md`) | `loadPack` (load it), `types.ts` `Pack` (field), `dispatch.ts` (thread it into eval ctx), the consuming primitive, and **test registries** (`coding-flow.test.ts`/`default-discipline.test.ts` must register any primitive a shipped rule calls — or dispatch tests break) |
-| **a new primitive** (`src/functions/*`) | register in `bootstrap.ts`; export in `src/functions/index.ts`; if it reads pack content, add the field to `FunctionContext` + thread in `dispatch.ts`; if a shipped pack rule calls it, register it in the dispatch test registries |
-| **the rubric** (`docs/rubric/{scope,author}.md`) | BOTH the audit pass-criteria AND the agent-injected guidance change (single-source by design — that's the point; don't add a second copy) |
-| **hook wiring** (`package.json` `bin` ↔ `settings-writer.ts` `OPENSQUID_BIN_FOR_EVENT`) | the whole pipeline: a renamed/missing bin = that event silently no-ops; re-run `opensquid setup wizard hooks` + `doctor hooks` |
-| **the umbrella/namespace key** (`channels.json` routing or `scope.ts`) | Chat routing AND Memory scoping AND the live-session lease all key on it together — change one, reconcile all three |
-| **the RAG backend / Lesson schema** (`src/rag/`) | `recall`/`recall_pre_inject`, all backends (libsql/lexical/auto-memory + the fallback wrapper), per-file source round-trip, `rebuildLibsqlIndex`, the wedge store |
-| **the git gate** (`gate.ts`) | the gate-binding model (agents armed / humans pass); `isDocsOnly`; the attestation trail (pre-commit ↔ pre-push); the in-session execute-gate must stay consistent with it |
-| **`command_invokes` / matchers** | the git-class guards in `default-discipline` (never-amend, no-force-push-main, npm-version); `command_boundary.skill.test` (regression guard) |
-| **the version (minor/major bump)** | the final-audit-flow gate (planned, `wg-54eef8b4927c`) + `gate.ts` version-bump detection (FA.0 positional matcher shipped) |
+| If you change…                                                                          | …re-verify (these get brittle)                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`coding-flow/fsm.yaml`** (states/transitions)                                         | every skill that `advance_fsm`; the gates that read state (execute-gate, pause-stop-guard); `gate.ts` `commitAllowedNow` (keys on `phases_complete` + 7 phases); request-type idle-return + RTC.4 stranded-scoping; the FSM-active set in `rubric_pre_inject`/`procedure_pre_inject` |
+| **session-state shape/key** (`sessions/<sid>/state/*`)                                  | all `read_state` consumers across packs; the audits' cache keys; the classifier record; `gate.ts` (reads FSM+phases+active-task); the request-type consumers                                                                                                                         |
+| **a pack side-file** (add/rename, e.g. `procedure.md`)                                  | `loadPack` (load it), `types.ts` `Pack` (field), `dispatch.ts` (thread it into eval ctx), the consuming primitive, and **test registries** (`coding-flow.test.ts`/`default-discipline.test.ts` must register any primitive a shipped rule calls — or dispatch tests break)           |
+| **a new primitive** (`src/functions/*`)                                                 | register in `bootstrap.ts`; export in `src/functions/index.ts`; if it reads pack content, add the field to `FunctionContext` + thread in `dispatch.ts`; if a shipped pack rule calls it, register it in the dispatch test registries                                                 |
+| **the rubric** (`docs/rubric/{scope,author}.md`)                                        | BOTH the audit pass-criteria AND the agent-injected guidance change (single-source by design — that's the point; don't add a second copy)                                                                                                                                            |
+| **hook wiring** (`package.json` `bin` ↔ `settings-writer.ts` `OPENSQUID_BIN_FOR_EVENT`) | the whole pipeline: a renamed/missing bin = that event silently no-ops; re-run `opensquid setup wizard hooks` + `doctor hooks`                                                                                                                                                       |
+| **the umbrella/namespace key** (`channels.json` routing or `scope.ts`)                  | Chat routing AND Memory scoping AND the live-session lease all key on it together — change one, reconcile all three                                                                                                                                                                  |
+| **the RAG backend / Lesson schema** (`src/rag/`)                                        | `recall`/`recall_pre_inject`, all backends (libsql/lexical/auto-memory + the fallback wrapper), per-file source round-trip, `rebuildLibsqlIndex`, the wedge store                                                                                                                    |
+| **the git gate** (`gate.ts`)                                                            | the gate-binding model (agents armed / humans pass); `isDocsOnly`; the attestation trail (pre-commit ↔ pre-push); the in-session execute-gate must stay consistent with it                                                                                                           |
+| **`command_invokes` / matchers**                                                        | the git-class guards in `default-discipline` (never-amend, no-force-push-main, npm-version); `command_boundary.skill.test` (regression guard)                                                                                                                                        |
+| **the version (minor/major bump)**                                                      | the final-audit-flow gate (planned, `wg-54eef8b4927c`) + `gate.ts` version-bump detection (FA.0 positional matcher shipped)                                                                                                                                                          |
 
 **Process rule that falls out of this map:** never change a subsystem in isolation. A pack edit is a flow
 edit; a state-shape edit is a gate edit; a key edit is a chat+memory edit. Walk the arrows.
@@ -257,4 +263,4 @@ Found during this mapping; each is a real disconnect to clean (drives the cleanu
 - **Before a change:** find the subsystem (§4), read its touchpoints, then the [Change-impact map](#change-impact-map). Walk the arrows.
 - **Onboarding / "what does what":** §1–§3.
 - **Finding stale/disconnected work:** §8 (kept in sync with the work-graph).
-- **Exact shapes/APIs:** follow the deep-dive links — this doc is the map, not the territory; keep the details single-sourced in those docs, and keep *this* doc the authoritative map of how they connect.
+- **Exact shapes/APIs:** follow the deep-dive links — this doc is the map, not the territory; keep the details single-sourced in those docs, and keep _this_ doc the authoritative map of how they connect.
