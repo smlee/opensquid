@@ -418,6 +418,9 @@ export const Pack = z.object({
   guards: z.array(Guard).optional(),
   /** Pack-declared lifecycle FSM (slice A2; from `fsm.yaml`). Validated total. */
   fsm: Fsm.optional(),
+  /** Pack-owned agent-facing operating procedure (from `procedure.md`); injected to the
+   *  agent when the pack is engaged (wg-7f6225238a27). Optional; absent → ships none. */
+  procedure: z.string().optional(),
 });
 export type Pack = z.infer<typeof Pack>;
 

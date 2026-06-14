@@ -168,6 +168,11 @@ export async function loadPack(dir: string): Promise<Pack> {
   }
   const fsm = await loadOptionalFsm(join(dir, 'fsm.yaml'), flowsResult.expansion);
 
+  // wg-7f6225238a27 — procedure.md: the pack's agent-facing operating procedure.
+  // OPTIONAL (ENOENT → undefined); size-capped (re-injected per prompt, so it shares
+  // the rubric's context-budget cost profile, not the programmatically-consumed siblings').
+  const procedure = await loadOptionalProcedure(join(dir, 'procedure.md'));
+
   // MM.1 (2026-05-30) — team.yaml existence check for profession-mode packs.
   // `usage: profession | both` REQUIRES team.yaml declaring ≥1 SubagentRole.
   // MM.2 (2026-05-30) extends this: actually LOAD + parse the team.yaml so
@@ -233,7 +238,28 @@ export async function loadPack(dir: string): Promise<Pack> {
     ...(models !== undefined ? { models } : {}),
     ...(driftResponse !== undefined ? { driftResponse } : {}),
     ...(fsm !== undefined ? { fsm } : {}),
+    ...(procedure !== undefined ? { procedure } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// loadOptionalProcedure — read the pack's `procedure.md` if present.
+//
+// ENOENT → `undefined` (the side-file is OPTIONAL, like the loadOptional* family).
+// Size-capped at MAX_PROCEDURE: over-cap → `undefined` (never a partial read), mirroring
+// read_rubric's over-cap→null behavior — procedure.md is re-injected into agent context on
+// every engaged prompt_submit, so it shares the rubric's context-budget cost profile, unlike
+// the programmatically-consumed YAML side-files. Raw markdown read (no schema). (wg-7f6225238a27)
+// ---------------------------------------------------------------------------
+const MAX_PROCEDURE = 64_000;
+async function loadOptionalProcedure(path: string): Promise<string | undefined> {
+  try {
+    const content = await fs.readFile(path, 'utf8');
+    return content.length > MAX_PROCEDURE ? undefined : content;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------

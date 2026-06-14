@@ -400,6 +400,9 @@ export async function dispatchEvent(
           // Slice A3b: thread the pack's declared lifecycle FSM so the
           // read_fsm_state / advance_fsm primitives can read + advance it.
           ...(pack.fsm !== undefined ? { packFsm: pack.fsm } : {}),
+          // wg-7f6225238a27: thread the pack's operating procedure so
+          // procedure_pre_inject can inject it without re-loading the pack.
+          ...(pack.procedure !== undefined ? { packProcedure: pack.procedure } : {}),
         };
         const result = await evaluateProcess(rule.process, ctx, registry);
 

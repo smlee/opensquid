@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { readFsmStateRaw } from '../runtime/fsm_state.js';
 import { ok } from '../runtime/result.js';
 
+import { buildInjectContext } from './inject_context.js';
 import { readRubricContent } from './read_rubric.js';
 import type { FunctionRegistry } from './registry.js';
 
@@ -55,7 +56,7 @@ export function registerRubricPreInject(registry: FunctionRegistry): void {
         '### AUTHOR (task specs)',
         author ?? '_(author rubric unavailable)_',
       ].join('\n');
-      return ok({ kind: 'inject_context' as const, content });
+      return ok(buildInjectContext(content));
     },
   });
 }

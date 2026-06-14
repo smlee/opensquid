@@ -16,6 +16,8 @@ export { registerRagFunctions } from './rag.js';
 export { registerRecallPreInjectFunction } from './recall_pre_inject.js';
 export { registerReadRubric, readRubricContent } from './read_rubric.js';
 export { registerRubricPreInject } from './rubric_pre_inject.js';
+export { registerProcedurePreInject } from './procedure_pre_inject.js';
+export { buildInjectContext } from './inject_context.js';
 export { registerStateFunctions } from './state.js';
 export { registerVerdictFunctions } from './verdict.js';
 export {

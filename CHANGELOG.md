@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.433] - 2026-06-14
+
+### Added — per-pack operating-procedure surface: `procedure.md` (PPW.1, wg-7f6225238a27)
+
+- Packs may now carry a `procedure.md` at their root — the agent-facing OPERATING PROCEDURE (the
+  positive "how to do this work so it passes the gates first-try"), the complement to the gates'
+  quality BAR (the rubric). It is loaded into `Pack.procedure` (`loadOptionalProcedure`: ENOENT-silent,
+  size-capped at 64_000 like the re-injected rubric), threaded into `FunctionContext.packProcedure`
+  (mirroring `packModels`/`packFsm`), and injected to the agent by the new `procedure_pre_inject`
+  primitive on `prompt_submit` while the pack is ENGAGED — generically: FSM state ≠ `initial`, or no
+  FSM (loaded ⇒ engaged). NO hardcoded pack id — gating derives from the pack's own FSM.
+- A shared `buildInjectContext` helper single-sources the `inject_context` envelope; `rubric_pre_inject`
+  is refactored onto it (its only change — byte-identical payload, regression-guarded).
+- This is the mechanism slice; coding-flow's own `procedure.md` + wiring (PPW.2) and author docs (PPW.3)
+  follow. Closes the root-cause "packs carry gates but not the procedure that satisfies them" gap.
+
 ## [0.5.432] - 2026-06-14
 
 ### Added — `team.yaml` JSON schema for editor hints + regenerated schema set (wg-b400d5bc5ada)

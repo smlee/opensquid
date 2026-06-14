@@ -57,6 +57,12 @@ export interface EvalCtx {
    * `fsm.yaml` (those primitives then no-op).
    */
   packFsm?: Fsm;
+  /**
+   * wg-7f6225238a27: the calling pack's operating procedure (`Pack.procedure`, from
+   * `procedure.md`), threaded like `packModels`/`packFsm` so `procedure_pre_inject` reads it
+   * without re-loading the pack. `undefined` when the pack ships no `procedure.md`.
+   */
+  packProcedure?: string;
 }
 
 // ---------------------------------------------------------------------------

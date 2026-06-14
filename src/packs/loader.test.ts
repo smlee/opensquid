@@ -176,6 +176,49 @@ describe('loadPack — error + edge cases', () => {
     expect(pack.chatAgent).toBeUndefined();
   });
 
+  // wg-7f6225238a27 — procedure.md: the pack's agent-facing operating procedure.
+  it('loads procedure.md when present, folding it into Pack.procedure', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      [
+        'name: with-procedure',
+        'version: 0.1.0',
+        'scope: workflow',
+        'goal: procedure side-file',
+      ].join('\n') + '\n',
+      'utf8',
+    );
+    const proc = '# how to do the work\n\n1. do X\n2. do Y\n';
+    await writeFile(join(dir, 'procedure.md'), proc, 'utf8');
+    const pack = await loadPack(dir);
+    expect(pack.procedure).toBe(proc);
+  });
+
+  it('leaves Pack.procedure undefined when procedure.md is absent', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: no-procedure', 'version: 0.1.0', 'scope: workflow', 'goal: no side-file'].join('\n') +
+        '\n',
+      'utf8',
+    );
+    const pack = await loadPack(dir);
+    expect(pack.procedure).toBeUndefined();
+  });
+
+  it('leaves Pack.procedure undefined when procedure.md is over the size cap', async () => {
+    await writeFile(
+      join(dir, 'manifest.yaml'),
+      ['name: big-procedure', 'version: 0.1.0', 'scope: workflow', 'goal: oversize side-file'].join(
+        '\n',
+      ) + '\n',
+      'utf8',
+    );
+    // > MAX_PROCEDURE (64_000) → treated as absent (never a partial read).
+    await writeFile(join(dir, 'procedure.md'), 'x'.repeat(64_001), 'utf8');
+    const pack = await loadPack(dir);
+    expect(pack.procedure).toBeUndefined();
+  });
+
   it('surfaces a chat_agent.yaml schema error verbatim (typo top-level key)', async () => {
     await writeFile(
       join(dir, 'manifest.yaml'),
