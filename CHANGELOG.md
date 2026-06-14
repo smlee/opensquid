@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.435] - 2026-06-14
+
+### Added — author docs for the `procedure.md` surface (PPW.3, wg-7f6225238a27)
+
+- `docs/pack-runtime.md` §1.5 now documents `procedure.md` as an auto-loaded-by-filename side file
+  (alongside `fsm.yaml`): the agent-facing operating procedure (METHOD), raw markdown, 64k cap,
+  `pack.procedure` → `FunctionContext.packProcedure`, injected by `procedure_pre_inject` when the pack
+  is engaged; with the coding-flow worked example. The pack-architect authoring walkthrough gains a
+  "PACK TEACHES ITS METHOD" checklist item pointing authors at it.
+- Completes T-per-pack-workflow-instructions (PPW.1 mechanism + PPW.2 coding-flow instance + PPW.3 docs).
+
 ## [0.5.434] - 2026-06-14
 
 ### Added — coding-flow ships its operating procedure (PPW.2, wg-7f6225238a27)

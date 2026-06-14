@@ -1,6 +1,6 @@
 # Pack runtime — authoritative reference
 
-Version: 0.5.293 · Last updated: 2026-06-03 · Spec: T-IDENTITY-FOUNDATION (IDF.1–IDF.5) + T-PACK-FSM-STANDARDIZATION (FSM engine, `fsm.yaml`, `guards:`, `read_fsm_state`/`advance_fsm`)
+Version: 0.5.435 · Last updated: 2026-06-14 · Spec: T-IDENTITY-FOUNDATION (IDF.1–IDF.5) + T-PACK-FSM-STANDARDIZATION (FSM engine, `fsm.yaml`, `guards:`, `read_fsm_state`/`advance_fsm`) + T-per-pack-workflow-instructions (`procedure.md`, `procedure_pre_inject`)
 
 This document is the authoritative reference for the opensquid pack
 runtime: how a pack is identified on disk, what it can declare, how
@@ -43,6 +43,7 @@ packs/<name>/
     <skill-name>/
       skill.yaml          # required — skill rules
   fsm.yaml                # optional — pack-lifecycle FSM (auto-loaded by name; see 1.13)
+  procedure.md            # optional — agent-facing operating procedure (auto-loaded by name; see 1.5)
   chat_agent.yaml         # optional — chat-bridge agent identity
   models.yaml             # optional — model aliases for LLM primitives
   channels.yaml           # optional — chat channel registry
@@ -262,21 +263,36 @@ field naming a file in the same pack directory. The loader reads +
 validates each via its own Zod schema; failures throw with a
 path-bearing error so authors can fix the config.
 
-| Side file             | Schema                                | Purpose                                                                         |
-| --------------------- | ------------------------------------- | ------------------------------------------------------------------------------- |
-| `chat_agent.yaml`     | `src/packs/schemas/chat_agent.ts`     | Chat-bridge identity (display name + persona)                                   |
-| `models.yaml`         | `src/packs/schemas/models.ts`         | Model aliases (e.g. `reasoning` → vendor model id) — keeps source model-neutral |
-| `channels.yaml`       | `src/packs/schemas/channels.ts`       | Chat channel registry (project-bridge mapping)                                  |
-| `notifications.yaml`  | `src/packs/schemas/notifications.ts`  | Notification routing rules                                                      |
-| `drift_response.yaml` | `src/packs/schemas/drift_response.ts` | Per-rule drift policy + corrective_skills (see §4.3)                            |
-| `team.yaml`           | `src/packs/schemas/team.ts`           | Profession-pack marker (`role:` + `skills_catalog:`)                            |
-| `fsm.yaml`            | `Fsm` in `src/runtime/fsm.ts`         | Pack-lifecycle FSM (see §1.13). **Auto-loaded by filename — NO `*_ref`.**       |
+| Side file             | Schema                                | Purpose                                                                                  |
+| --------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `chat_agent.yaml`     | `src/packs/schemas/chat_agent.ts`     | Chat-bridge identity (display name + persona)                                            |
+| `models.yaml`         | `src/packs/schemas/models.ts`         | Model aliases (e.g. `reasoning` → vendor model id) — keeps source model-neutral          |
+| `channels.yaml`       | `src/packs/schemas/channels.ts`       | Chat channel registry (project-bridge mapping)                                           |
+| `notifications.yaml`  | `src/packs/schemas/notifications.ts`  | Notification routing rules                                                               |
+| `drift_response.yaml` | `src/packs/schemas/drift_response.ts` | Per-rule drift policy + corrective_skills (see §4.3)                                     |
+| `team.yaml`           | `src/packs/schemas/team.ts`           | Profession-pack marker (`role:` + `skills_catalog:`)                                     |
+| `fsm.yaml`            | `Fsm` in `src/runtime/fsm.ts`         | Pack-lifecycle FSM (see §1.13). **Auto-loaded by filename — NO `*_ref`.**                |
+| `procedure.md`        | _(raw markdown — no schema)_          | Agent-facing OPERATING PROCEDURE (the METHOD). **Auto-loaded by filename — NO `*_ref`.** |
 
 **`fsm.yaml` is the exception to the `*_ref:` rule.** It is read by
 fixed filename (`loader.ts:199` `loadOptionalFsm`), validated for totality
 (`validateFsm`), and folded onto the runtime `Pack` as `pack.fsm`
 (`types.ts:415`). Absent file → `pack.fsm` is `undefined`; the FSM primitives
 then return `null` (no machine to walk).
+
+**`procedure.md` is the other auto-loaded-by-filename side file** (wg-7f6225238a27). It is the
+pack's **agent-facing operating procedure** — the positive _METHOD_ ("how to do this work so it
+passes the gates first-try"), complementing the gates' quality _BAR_ (the rubric). It is raw markdown
+(no schema), read whole by `loadOptionalProcedure` (`loader.ts`), size-capped at 64,000 chars
+(over-cap → treated as absent, like an over-cap rubric — it is re-injected per prompt, so it shares
+the rubric's context-budget cost profile), and folded onto the runtime `Pack` as `pack.procedure`
+(threaded into `FunctionContext.packProcedure`). A pack delivers it by adding a rule that calls the
+`procedure_pre_inject` primitive (unconditionally — the primitive self-gates): on `prompt_submit`,
+when the pack is **engaged** (its FSM state ≠ `initial`, or the pack ships no FSM), the procedure is
+injected into the agent's context. Absent file → nothing injects. Worked example:
+`packs/builtin/coding-flow/procedure.md` + the `inject-procedure` rule in `entry-and-handoffs`.
+Keep it METHOD, not CRITERIA — the gate criteria are single-sourced in the rubric; the procedure
+references them, it does not restate them.
 
 ### 1.6 `scope:` (layering precedence)
 
