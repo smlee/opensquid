@@ -104,7 +104,10 @@ async function runApiAliasSetup(secrets: SecretsState): Promise<AliasResult | nu
     const dest = await select({
       message: 'Where should the key be stored?',
       options: [
-        { value: 'env', label: '~/.loop/.env (default — chmod 600, opensquid secrets backend)' },
+        {
+          value: 'env',
+          label: '~/.opensquid/.env (default — chmod 600, opensquid secrets backend)',
+        },
         { value: 'skip', label: "Skip — I'll set ANTHROPIC_API_KEY manually in my shell rc" },
       ],
       initialValue: 'env',

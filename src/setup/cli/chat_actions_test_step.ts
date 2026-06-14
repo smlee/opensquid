@@ -363,9 +363,9 @@ function recoveryHintFor(err: unknown): string {
     /invalid token/i.test(message)
   ) {
     return [
-      'Telegram rejected the bot token. Fix OPENSQUID_TELEGRAM_BOT_TOKEN in ~/.loop/.env:',
+      'Telegram rejected the bot token. Fix OPENSQUID_TELEGRAM_BOT_TOKEN in ~/.opensquid/.env:',
       '  1. Visit @BotFather on Telegram → /mybots → select your bot → API Token',
-      '  2. Update OPENSQUID_TELEGRAM_BOT_TOKEN=<new_token> in ~/.loop/.env (chmod 600)',
+      '  2. Update OPENSQUID_TELEGRAM_BOT_TOKEN=<new_token> in ~/.opensquid/.env (chmod 600)',
       '  3. Restart the chat-daemon: opensquid chat-daemon restart',
     ].join('\n');
   }

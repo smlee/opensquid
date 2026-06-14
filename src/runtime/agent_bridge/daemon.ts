@@ -57,6 +57,7 @@ import { lock as acquireLock } from 'proper-lockfile';
 
 import { GENERAL_UMBRELLA } from '../../channels/routing.js';
 import { loadModelsConfig } from '../../models/load_config.js';
+import { locateEnvFile } from '../../channels/env-token.js';
 import type { ModelAliasConfig } from '../../models/types.js';
 import { loadPack } from '../../packs/loader.js';
 import { libsqlQwen3WithLexicalFallback } from '../../rag/backend_factory.js';
@@ -280,7 +281,7 @@ export class AgentBridgeDaemon {
       await ragBackend.init();
       // One chat-agent binding per daemon: the pack declares one chat
       // agent so per-session re-binding would only duplicate work.
-      const secrets = this.opts.secrets ?? defaultSecretResolver();
+      const secrets = this.opts.secrets ?? (await defaultSecretResolver());
       this.bindingResult = await buildChatToolDispatcher({
         pack,
         packRoot: this.opts.packRoot,
@@ -545,11 +546,13 @@ function defaultRagBackend(home: string): RagBackend {
   return libsqlQwen3WithLexicalFallback({ dbUrl, ollamaUrl });
 }
 
-/** Default secret resolver: env-only + optional `~/.loop/.env` dotenv file.
- *  The dotenv path matches the user's documented config location; the env
- *  backend's process.env-wins behavior means real env vars override the file. */
-function defaultSecretResolver(): SecretResolver {
-  return createResolver([dotenvBackend({ path: join(homedir(), '.loop', '.env') })]);
+/** Default secret resolver: env-only + the canonical `~/.opensquid/.env` dotenv file (wg-45512ec39739).
+ *  Read-both: `locateEnvFile()` prefers the canonical path, falls back to a legacy `~/.loop/.env` so
+ *  existing tokens aren't lost; defaults to canonical on a fresh box. SINGLE dotenvBackend — two would
+ *  collapse on `scheme:'env'`. The env backend's process.env-wins behavior still overrides the file. */
+async function defaultSecretResolver(): Promise<SecretResolver> {
+  const envPath = (await locateEnvFile()) ?? join(OPENSQUID_HOME(), '.env');
+  return createResolver([dotenvBackend({ path: envPath })]);
 }
 
 // Env-resolution helpers (re-used by ./cli.ts).

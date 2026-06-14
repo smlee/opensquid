@@ -98,8 +98,8 @@ export async function locateEnvFile(): Promise<string | null> {
   const candidates: string[] = [];
   const fromEnv = process.env.OPENSQUID_ENV_FILE;
   if (fromEnv !== undefined && fromEnv.length > 0) candidates.push(fromEnv);
-  candidates.push(join(homedir(), '.loop', '.env'));
-  candidates.push(join(OPENSQUID_HOME(), '.env'));
+  candidates.push(join(OPENSQUID_HOME(), '.env')); // canonical (read-both: preferred)
+  candidates.push(join(homedir(), '.loop', '.env')); // legacy fallback (loop→opensquid rename; no token loss)
   candidates.push(join(process.cwd(), '.env'));
 
   for (const c of candidates) {

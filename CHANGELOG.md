@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.429] - 2026-06-13
+
+### Fixed — secrets/env path uses canonical `~/.opensquid/.env`, not stale `~/.loop/.env` (SHL.1, wg-45512ec39739)
+
+- The dotenv secrets path was hard-coded to `~/.loop/.env` (loop→opensquid rename leftover) while
+  everything else uses `OPENSQUID_HOME()` (`~/.opensquid`). A fresh user was prompted to write a stray
+  `~/.loop/.env`. Now: **WRITE canonical** (`defaultEnvPath()` → `~/.opensquid/.env`); **READ both**
+  (`locateEnvFile()` reordered: canonical first, legacy `~/.loop/.env` as fallback so existing tokens
+  aren't lost); the agent-bridge daemon's `defaultSecretResolver` reuses `locateEnvFile()` (single
+  `dotenvBackend` — two would collapse on `scheme:'env'`). User-facing hints now show `~/.opensquid/.env`.
+- New read-both regression (legacy found when canonical absent; canonical wins when both exist). The
+  "personal pack shouldn't write to `~/`" report was the same stale env step — no separate pack-build
+  `~/` write exists (verified). Full suite 3539 green.
+
 ## [0.5.428] - 2026-06-13
 
 ### Fixed — docs-only commits no longer false-blocked by the EXECUTE gate (DOCSONLY.1 extension, wg-3dcca3b29ed1)

@@ -268,7 +268,7 @@ describe('runChannelTestStep — bot token invalid', () => {
     expect(state.spinnerStops.join(' | ')).toMatch(/Test failed/);
     const hintNote = state.notes.find((n) => n.title === 'Test');
     expect(hintNote?.msg ?? '').toContain('OPENSQUID_TELEGRAM_BOT_TOKEN');
-    expect(hintNote?.msg ?? '').toMatch(/~\/\.loop\/\.env/);
+    expect(hintNote?.msg ?? '').toMatch(/~\/\.opensquid\/\.env/);
     expect(hintNote?.msg ?? '').toMatch(/BotFather/);
   });
 });

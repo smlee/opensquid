@@ -467,7 +467,7 @@ async function runChannelOffer(secrets: SecretsState): Promise<'ok' | 'cancel'> 
       );
     } else {
       note(
-        'OPENSQUID_TELEGRAM_BOT_TOKEN not found. Add it to ~/.loop/.env before accepting the post-save test.',
+        'OPENSQUID_TELEGRAM_BOT_TOKEN not found. Add it to ~/.opensquid/.env before accepting the post-save test.',
         'Channel',
       );
     }

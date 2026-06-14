@@ -10,7 +10,7 @@
  * precedence and are set per-test where needed.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -186,5 +186,25 @@ describe('resolveToken — priority order', () => {
     const r = await resolveToken('OPENSQUID_TELEGRAM_BOT_TOKEN', 'from-config');
     expect(r.value).toBe('from-file');
     expect(r.source).toBe('env-file');
+  });
+});
+
+describe('locateEnvFile — read-both migration (wg-45512ec39739)', () => {
+  // canonical = <OPENSQUID_HOME>/.env = tmpDir/.env ; legacy = ~/.loop/.env = tmpDir/.loop/.env
+  it('finds a legacy ~/.loop/.env when the canonical is absent (no token loss)', async () => {
+    const legacyDir = join(tmpDir, '.loop');
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(join(legacyDir, '.env'), 'OPENSQUID_TELEGRAM_BOT_TOKEN=legacy\n');
+    _clearEnvFileCache();
+    expect(await locateEnvFile()).toBe(join(legacyDir, '.env'));
+  });
+
+  it('prefers the canonical ~/.opensquid/.env when both exist', async () => {
+    const legacyDir = join(tmpDir, '.loop');
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(join(legacyDir, '.env'), 'X=legacy\n');
+    await writeFile(join(tmpDir, '.env'), 'X=canonical\n');
+    _clearEnvFileCache();
+    expect(await locateEnvFile()).toBe(join(tmpDir, '.env'));
   });
 });

@@ -39,7 +39,6 @@
 
 import { access, readFile, readdir, stat } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 import { ModelsConfig, type ModelMode } from '../../packs/schemas/models.js';
@@ -129,7 +128,9 @@ export const defaultPacksDir = (): string => join(OPENSQUID_HOME(), 'packs');
 export const defaultChatDaemonPidPath = (): string => join(OPENSQUID_HOME(), 'chat-daemon.pid');
 export const defaultChatDaemonSockPath = (): string => join(OPENSQUID_HOME(), 'chat-daemon.sock');
 export const defaultAgentBridgePidPath = (): string => join(OPENSQUID_HOME(), 'agent-bridge.pid');
-export const defaultEnvPath = (): string => join(homedir(), '.loop', '.env');
+// WRITE canonical (wg-45512ec39739): always ~/.opensquid/.env (OPENSQUID_HOME). NEVER routed through
+// the read-both resolver — a legacy-fallback here would keep writing ~/.loop/.env for existing users.
+export const defaultEnvPath = (): string => join(OPENSQUID_HOME(), '.env');
 
 // ---------------------------------------------------------------------------
 // detectModelsConfig — read ~/.opensquid/models.yaml through the Zod schema
