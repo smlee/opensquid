@@ -89,6 +89,15 @@ rules:
         args:
           key: coding-flow-track
           value: trivial
+  # TR.B (wg-2d1d8698f563): deliver the coding-flow quality rubric to the agent BEFORE it authors — the
+  # fix for the blind-first-draft root cause. Placed AFTER enter-scoping so the cold kickoff turn's
+  # just-armed `scoping` is visible (rules walk file-order; handoff-rescope-nudge below relies on the same
+  # ordering). rubric_pre_inject reads the coding-flow FSM and, when in an active SCOPE/AUTHOR phase, returns
+  # an inject_context payload carrying the FULL rubric (scope + author — prompt_submit can't track mid-turn
+  # phase advances, so one injection must cover the whole uninterrupted turn). Inject-only; never blocks.
+  - id: inject-rubric
+    process:
+      - call: rubric_pre_inject
   # GF.1 (F9) — the re-scope NUDGE, surfaced on prompt_submit (where directives are
   # delivered) for the `scoping` state. Fires after `enter-scoping` advanced idle→scoping
   # (or after task-start's task_unscoped reset, or GF.7's phases_complete re-arm landed

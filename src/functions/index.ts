@@ -15,6 +15,7 @@ export { registerLlmFunctions } from './llm.js';
 export { registerRagFunctions } from './rag.js';
 export { registerRecallPreInjectFunction } from './recall_pre_inject.js';
 export { registerReadRubric, readRubricContent } from './read_rubric.js';
+export { registerRubricPreInject } from './rubric_pre_inject.js';
 export { registerStateFunctions } from './state.js';
 export { registerVerdictFunctions } from './verdict.js';
 export {

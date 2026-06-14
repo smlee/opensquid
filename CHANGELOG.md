@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.425] - 2026-06-13
+
+### Added — deliver the rubric to the agent BEFORE it authors (TR.B, wg-2d1d8698f563)
+
+The reactive audit caught a content-blind first draft; now the same rubric reaches the agent up front, so
+the bar is held before authoring — not learned by tripping the gate. The fix for the "blind initial runs"
+the user reported.
+
+- `src/functions/rubric_pre_inject.ts` — a `prompt_submit` primitive: when the coding-flow FSM is in an
+  active SCOPE/AUTHOR phase, returns an `inject_context` payload carrying the FULL rubric (BOTH
+  `read_rubric(scope)` + `read_rubric(author)`) — emitted as `additionalContext` at UserPromptSubmit
+  (`recall_pre_inject` precedent). Full rubric, not phase-gated: `prompt_submit` fires per-prompt while
+  phases advance mid-turn, so under run-to-exhaustion one injection must cover the whole turn. Reuses
+  `readRubricContent` — ONE source for the audit and the agent.
+- `coding-flow/entry-and-handoffs` — a new `inject-rubric` rule, ordered AFTER `enter-scoping` so the cold
+  kickoff turn's just-armed `scoping` is visible (rules walk file-order). Inject-only; never blocks (the
+  audit stays the sole blocker). When the flow isn't armed, nothing injects — and no audit is owed.
+- Tests: `rubric_pre_inject.test.ts` (active-phase injects the full rubric 1:1 with the audit source;
+  idle/terminal/wrong-kind → null) + a coding-flow dispatch test proving the cold-turn ordering
+  (a `design` prompt injects; a non-coding prompt does not).
+
+---
+
 ## [0.5.424] - 2026-06-13
 
 ### Changed — single-source the coding-flow audit rubric (TR.A, wg-2d1d8698f563)

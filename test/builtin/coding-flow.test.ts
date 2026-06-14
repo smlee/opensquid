@@ -14,6 +14,7 @@ import { z } from 'zod';
 
 import { registerEventFunctions } from '../../src/functions/event.js';
 import { registerReadRubric } from '../../src/functions/read_rubric.js';
+import { registerRubricPreInject } from '../../src/functions/rubric_pre_inject.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
 import { FunctionRegistry } from '../../src/functions/registry.js';
 import { registerStateFunctions } from '../../src/functions/state.js';
@@ -46,6 +47,7 @@ function registry(): FunctionRegistry {
   registerResetScopeTrackStateFunction(r); // wg-4c48ef1b9969: the re-arm rule clears per-track state
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
+  registerRubricPreInject(r); // TR.B: entry-and-handoffs inject-rubric rule
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
@@ -294,6 +296,32 @@ describe('builtin coding-flow pack — track-type region profiles (FU.3)', () =>
     await dispatchEvent(writeResearch, [pack], reg, sid); // → researched
     await dispatchEvent(writeSpec, [pack], reg, sid); // → spec_authored
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // feature → AUTHOR fires
+  });
+
+  // TR.B (wg-2d1d8698f563): the rubric reaches the agent BEFORE it authors. The inject-rubric rule is
+  // ordered AFTER enter-scoping, so on the cold kickoff turn enter-scoping arms `scoping` and inject-rubric
+  // reads the just-armed state in the same dispatch → injects the FULL rubric (both phases).
+  it('TR.B: a scope-authoring prompt injects the full rubric (after enter-scoping arms scoping)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const armed = await dispatchEvent(
+      prompt('design the new feature'),
+      [pack],
+      reg,
+      'cf-inject-on',
+    );
+    const injected = armed.contextInjections.join('\n');
+    expect(injected).toMatch(/Coding-flow quality rubric/i);
+    expect(injected).toContain('NEVER-GUESS'); // SCOPE rubric delivered
+    expect(injected).toContain('11-FIELD'); // AUTHOR rubric delivered too (full rubric, both phases)
+    // A non-coding prompt leaves the FSM idle → no injection (and no audit is owed).
+    const idle = await dispatchEvent(
+      prompt('what is the weather today'),
+      [pack],
+      reg,
+      'cf-inject-off',
+    );
+    expect(idle.contextInjections.join('\n')).not.toMatch(/Coding-flow quality rubric/i);
   });
 
   it('fix track → AUTHOR gate SKIPS (TaskCreate allowed at spec_authored)', async () => {
