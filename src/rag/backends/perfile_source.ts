@@ -38,6 +38,9 @@ export async function writeRecord(dir: string, lesson: Lesson): Promise<void> {
       : {}),
     // Retention (wg-9e4f4eb2a40f): non-default-only, so a rebuild preserves the demoted state.
     ...(lesson.retired_at ? { retired_at: lesson.retired_at } : {}),
+    // Durability (wg-4f91e0b5cb8c): serialize only the non-default `point_in_time` (durable = absent),
+    // so base-memory files stay byte-identical (no churn / no migration).
+    ...(lesson.durability === 'point_in_time' ? { durability: lesson.durability } : {}),
   });
   await atomicWriteFile(
     join(dir, `${safeRecordId(lesson.id)}.md`),
@@ -73,6 +76,7 @@ export async function readRecords(dir: string): Promise<Lesson[]> {
       derived_from: string[];
       consumed_by_user_lessons: number;
       retired_at: string;
+      durability: string;
     }>;
     out.push({
       id: fm.id ?? f.replace(/\.md$/, ''),
@@ -90,6 +94,9 @@ export async function readRecords(dir: string): Promise<Lesson[]> {
         ? { consumedByUserLessons: fm.consumed_by_user_lessons }
         : {}),
       ...(typeof fm.retired_at === 'string' && fm.retired_at ? { retired_at: fm.retired_at } : {}),
+      ...(fm.durability === 'durable' || fm.durability === 'point_in_time'
+        ? { durability: fm.durability }
+        : {}),
     });
   }
   return out;

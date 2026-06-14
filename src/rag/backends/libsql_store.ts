@@ -54,6 +54,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
           tier TEXT NOT NULL DEFAULT 'shared',
           namespace TEXT,
           retired_at TEXT,
+          durability TEXT,
           embedding F32_BLOB(${embedder.dim})
         );
       `);
@@ -63,6 +64,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
         `ALTER TABLE lessons ADD COLUMN tier TEXT NOT NULL DEFAULT 'shared'`,
         `ALTER TABLE lessons ADD COLUMN namespace TEXT`,
         `ALTER TABLE lessons ADD COLUMN retired_at TEXT`,
+        `ALTER TABLE lessons ADD COLUMN durability TEXT`,
       ]) {
         try {
           await client.execute(ddl);
@@ -100,7 +102,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       if (vec) {
         try {
           const rs = await client.execute({
-            sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons, tier, namespace, retired_at
+            sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons, tier, namespace, retired_at, durability
                   FROM lessons
                   WHERE embedding IS NOT NULL AND (tier = 'shared' OR namespace = ?) AND retired_at IS NULL
                   ORDER BY vector_distance_cos(embedding, vector32(?)) ASC
@@ -119,7 +121,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
         try {
           const lex = await client.execute({
             sql: `SELECT l.id, l.content, l.tags, l.source, l.author, l.created_at,
-                  l.derived_from, l.consumed_by_user_lessons, l.tier, l.namespace, l.retired_at
+                  l.derived_from, l.consumed_by_user_lessons, l.tier, l.namespace, l.retired_at, l.durability
                   FROM lessons_fts f JOIN lessons l ON l.id = f.id
                   WHERE lessons_fts MATCH ? AND (l.tier = 'shared' OR l.namespace = ?) AND l.retired_at IS NULL
                   LIMIT ?`,
@@ -159,10 +161,11 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       const tier: MemoryTier = lesson.tier ?? 'shared';
       const namespace = lesson.namespace ?? null;
       const retiredAt = lesson.retired_at ?? null;
+      const durability = lesson.durability ?? null;
       await client.execute({
         sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, derived_from,
-              consumed_by_user_lessons, tier, namespace, retired_at, embedding)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
+              consumed_by_user_lessons, tier, namespace, retired_at, durability, embedding)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
         args: vec
           ? [
               lesson.id,
@@ -176,6 +179,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
               tier,
               namespace,
               retiredAt,
+              durability,
               JSON.stringify(vec),
             ]
           : [
@@ -190,6 +194,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
               tier,
               namespace,
               retiredAt,
+              durability,
             ],
       });
       await client.execute({
@@ -222,7 +227,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       if (!client) throw new Error('libsql-store: not initialized');
       const rs = await client.execute({
         sql: `SELECT id, content, tags, source, author, created_at, derived_from,
-              consumed_by_user_lessons, tier, namespace, retired_at FROM lessons WHERE id = ?`,
+              consumed_by_user_lessons, tier, namespace, retired_at, durability FROM lessons WHERE id = ?`,
         args: [id],
       });
       const row = rs.rows[0];
@@ -292,6 +297,9 @@ function rowToLesson(r: Row): Lesson {
     namespace: typeof r.namespace === 'string' ? r.namespace : null,
     ...(typeof r.retired_at === 'string' && r.retired_at !== ''
       ? { retired_at: r.retired_at }
+      : {}),
+    ...(r.durability === 'durable' || r.durability === 'point_in_time'
+      ? { durability: r.durability }
       : {}),
   };
 }

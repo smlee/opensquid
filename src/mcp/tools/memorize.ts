@@ -46,6 +46,7 @@ import { createHash } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { classifyDurability } from '../../rag/durability.js';
 import { resolveRecallScope } from '../../rag/scope.js';
 import type { Lesson, MemoryTier, RagBackend } from '../../rag/types.js';
 
@@ -81,6 +82,14 @@ export const MemorizeSchema = z.object({
       "Verbatim user confirmation quote — the user's own words approving " +
         'the save. Appended to the persisted memory body as a verification ' +
         'trailer so accountability survives into the long-term RAG store.',
+    ),
+  durability: z
+    .enum(['durable', 'point_in_time'])
+    .optional()
+    .describe(
+      'Durability axis (wg-4f91e0b5cb8c). `point_in_time` = a fact bound to a moment/session/version ' +
+        '(handoff/resume/status snapshot) — subject to recency decay + retirement at recall. Omit to ' +
+        'auto-classify from content (leading HANDOFF/RESUME/TO SHIP marker ⇒ point_in_time, else durable).',
     ),
 });
 
@@ -121,6 +130,7 @@ function lessonFromMemorize(args: MemorizeArgs, namespace: string | null): Lesso
     createdAt: new Date().toISOString(),
     tier,
     namespace: tier === 'project' ? namespace : null,
+    durability: classifyDurability(args.content, args.durability),
   };
 }
 

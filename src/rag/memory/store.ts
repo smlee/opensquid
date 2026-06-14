@@ -24,6 +24,8 @@ export async function ensureCompressionColumns(client: Client): Promise<void> {
     // Scope columns (T-memory-scope-isolation) — additive, idempotent, same as the compression cols.
     `ALTER TABLE lessons ADD COLUMN tier TEXT NOT NULL DEFAULT 'shared'`,
     `ALTER TABLE lessons ADD COLUMN namespace TEXT`,
+    // Durability axis (wg-4f91e0b5cb8c) — additive, idempotent.
+    `ALTER TABLE lessons ADD COLUMN durability TEXT`,
   ]) {
     try {
       await client.execute(ddl);
@@ -49,13 +51,16 @@ function rowToMemory(row: Record<string, unknown>): MemoryRow {
     consumedByUserLessons: num(row.consumed_by_user_lessons),
     tier: str(row.tier) === 'project' ? 'project' : 'shared',
     namespace: typeof row.namespace === 'string' ? row.namespace : null,
+    ...(row.durability === 'durable' || row.durability === 'point_in_time'
+      ? { durability: row.durability }
+      : {}),
   };
 }
 
 /** Load one memory by id (the `lessons` row), or null. */
 export async function getMemoryById(client: Client, id: string): Promise<MemoryRow | null> {
   const rs = await client.execute({
-    sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons, tier, namespace
+    sql: `SELECT id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons, tier, namespace, durability
           FROM lessons WHERE id = ?`,
     args: [id],
   });
@@ -81,10 +86,11 @@ export async function insertMemory(
   await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [m.id] });
   const tier = m.tier ?? 'shared';
   const namespace = m.namespace ?? null;
+  const durability = m.durability ?? null;
   await client.execute({
     sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, derived_from,
-          consumed_by_user_lessons, tier, namespace, embedding)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
+          consumed_by_user_lessons, tier, namespace, durability, embedding)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${vec ? 'vector32(?)' : 'NULL'})`,
     args: vec
       ? [
           m.id,
@@ -97,6 +103,7 @@ export async function insertMemory(
           m.consumedByUserLessons,
           tier,
           namespace,
+          durability,
           JSON.stringify(vec),
         ]
       : [
@@ -110,6 +117,7 @@ export async function insertMemory(
           m.consumedByUserLessons,
           tier,
           namespace,
+          durability,
         ],
   });
   await client.execute({

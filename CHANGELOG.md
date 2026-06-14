@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.427] - 2026-06-13
+
+### Added — durability axis on memories (SCI.1, wg-4f91e0b5cb8c)
+
+- `Lesson.durability?: 'durable' | 'point_in_time'` (absent ⇒ `durable`, back-compat). `point_in_time`
+  memories assert a fact bound to a moment/session/version (handoff/resume/status snapshots) and will be
+  subject to recency decay (SCI.2) + supersession/age retirement (SCI.3) at recall — `author` does not
+  encode this (a user-authored handoff is point-in-time), so it needs its own axis.
+- `classifyDurability(content, explicit?)` (`src/rag/durability.ts`): explicit caller arg wins, else a
+  deterministic leading-prose marker (`HANDOFF` / `RESUME` / `TO SHIP`) ⇒ `point_in_time`, else `durable`
+  (fail-safe). `memorize` accepts an optional `durability` arg; omitted ⇒ auto-classify.
+- Threaded through the full round-trip (DB + per-file + rebuild): `libsql_store` CREATE/ALTER + recall
+  SELECTs + storeLesson/demoteLesson + rowToLesson; `perfile_source` (non-default-only); `memory/store`
+  insertMemory + `ensureCompressionColumns`. Backfill of existing rows deferred to land with SCI.2/SCI.3.
+
 ## [0.5.426] - 2026-06-13
 
 ### Added — pack-architect "gates teach their rubric" discipline + coverage (TR.C, wg-2d1d8698f563)

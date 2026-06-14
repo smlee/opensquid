@@ -34,7 +34,17 @@ export interface Lesson {
   // retired memory stays queryable by id (the rollback floor + replay oracle) but is EXCLUDED from
   // the injectable recall surface. Absent ⇒ live. Slice 3's sweeper hard-deletes after 30 quiet days.
   retired_at?: string;
+  // Durability axis (wg-4f91e0b5cb8c): `point_in_time` memories assert a fact bound to a moment/
+  // session/version that becomes false once acted on (handoff/resume/status/version snapshots); they
+  // are subject to recency decay at recall (SCI.2) + supersession/age retirement (SCI.3). `durable`
+  // (the default when absent ⇒ back-compat) memories are decay-immune. Classified ONCE at write time
+  // by `classifyDurability` (durability.ts). No existing field encodes this — `author` spans both
+  // classes (a user-authored handoff is point-in-time), so it needs its own axis.
+  durability?: Durability;
 }
+
+/** A memory's durability class. Absent ⇒ `durable`. See `Lesson.durability` + `classifyDurability`. */
+export type Durability = 'durable' | 'point_in_time';
 
 /**
  * A memory's scope tier. `shared` crosses every project (user/global knowledge); `project` is isolated
