@@ -33,7 +33,7 @@ import {
   OpenTaskCount,
   WorkflowPhasesComplete,
 } from '../../src/functions/active_task.js';
-import { appendTool, writeActiveTask } from '../../src/runtime/session_state.js';
+import { appendTool, writeActiveTask, writeRequestType } from '../../src/runtime/session_state.js';
 import { EffectiveContent } from '../../src/functions/effective_content.js';
 import { SessionToolHistory } from '../../src/functions/session_tool_history.js';
 import { TextPatternMatch } from '../../src/functions/text_pattern_match.js';
@@ -1430,5 +1430,57 @@ describe('builtin coding-flow pack — operating-procedure injection (PPW.2, wg-
     // file order) sees the just-armed non-idle state and injects coding-flow's procedure.md.
     const scoping = await dispatchEvent(promptEv('scope the new feature'), [pack], reg, sid);
     expect(scoping.contextInjections.join('\n')).toContain(HEADER);
+  });
+});
+
+describe('builtin coding-flow pack — request-type gating of scope-arm (RTC.2, wg-3d175ec06767)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-rtc2-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  const scopePrompt = (): PromptSubmitEvent => ({ kind: 'prompt_submit', prompt: "what's the plan here?" });
+  const rec = (type: 'research' | 'work') => ({
+    type,
+    confidence: 'high' as const,
+    source: 'deterministic' as const,
+    prompt_hash: 'x',
+    at: '2026-06-14T00:00:00.000Z',
+  });
+
+  it('research-classified prompt does NOT arm scope even with a scope keyword', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'rtc2-research';
+    await writeRequestType(sid, rec('research'));
+    await dispatchEvent(scopePrompt(), [pack], reg, sid);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('idle');
+  });
+
+  it('work-classified scope prompt DOES arm scope', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'rtc2-work';
+    await writeRequestType(sid, rec('work'));
+    await dispatchEvent(scopePrompt(), [pack], reg, sid);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('scoping');
+  });
+
+  it('absent record arms as before (backward-compat — member access on null short-circuits)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const reg = registry();
+    const sid = 'rtc2-absent';
+    // no writeRequestType → record absent
+    await dispatchEvent(scopePrompt(), [pack], reg, sid);
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('scoping');
   });
 });

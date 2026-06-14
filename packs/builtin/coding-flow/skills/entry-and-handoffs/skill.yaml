@@ -24,8 +24,18 @@ rules:
             - '\bdesign\b'
             - '\bplan\b'
         as: intent
+      # RTC.2 (wg-3d175ec06767): consult the persistent request-type record. A research-classified
+      # prompt (understand-only / a question) must NOT arm scope even if it matches a scope keyword
+      # ("what's the plan here?" matches \bplan\b but is a question) — that arm-on-question is cause-3
+      # of the codex-pause-wedge. Null-safe: an absent record → rt.type is undefined → `undefined !=
+      # "research"` is true → arms as before (backward-compat; member access on null short-circuits to
+      # undefined, interpreter.ts:177-187).
+      - call: read_state
+        args:
+          key: request-type
+        as: rt
       - call: advance_fsm
-        if: 'len(intent.matched) > 0'
+        if: 'len(intent.matched) > 0 && rt.type != "research"'
         args:
           event: scope_start
       # FU.3: record the track-type so the AUTHOR gate can consult it. RESET to the

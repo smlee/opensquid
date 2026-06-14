@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.437] - 2026-06-14
+
+### Changed — enter-scoping consults the request-type record: no scope-arm on a research turn (RTC.2, wg-3d175ec06767)
+
+- `enter-scoping` now reads the persistent `request-type` record and does NOT advance `scope_start`
+  when the prompt is classified `research` (understand-only / a question), even if it matches a scope
+  keyword — e.g. "what's the plan here?" matches `\bplan\b` but is a question. This is cause-3 of the
+  codex-pause-wedge (keyword arm-on-question). Null-safe: an absent record leaves the arm behavior
+  unchanged (member access on null short-circuits to undefined → arms as before), so existing sessions
+  are unaffected.
+
 ## [0.5.436] - 2026-06-14
 
 ### Added — persistent request-type classification (RTC.1, wg-3d175ec06767)
