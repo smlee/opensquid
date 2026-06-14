@@ -1448,7 +1448,10 @@ describe('builtin coding-flow pack — request-type gating of scope-arm (RTC.2, 
     await rm(tempHome, { recursive: true, force: true });
   });
 
-  const scopePrompt = (): PromptSubmitEvent => ({ kind: 'prompt_submit', prompt: "what's the plan here?" });
+  const scopePrompt = (): PromptSubmitEvent => ({
+    kind: 'prompt_submit',
+    prompt: "what's the plan here?",
+  });
   const rec = (type: 'research' | 'work') => ({
     type,
     confidence: 'high' as const,
