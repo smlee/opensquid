@@ -26,6 +26,14 @@ rules:
           program: git
           subcommand: commit
         as: committing
+      # T-commit-nudge-docsonly-parity (wg-3dcca3b29ed1): a docs-only commit the git-owned
+      # HARD gate ALLOWS (gate.ts isDocsOnly) must not be over-blocked by this in-session gate
+      # either — predicate parity, the SAME `staged_docs_only` primitive the default-discipline
+      # nudge uses. Reads the staged diff (fixed-argv git); fails toward `false` (= not docs-only
+      # = the gate still fires) on any error, so it can never falsely SUPPRESS a real code block.
+      - call: staged_docs_only
+        if: 'committing'
+        as: docs_only
       # T-FLOW-UNSKIPPABLE FU.1 (D1): the gates must COMPOSE. The "no active task ⇒
       # ad-hoc ⇒ allow" branch below was a SEAM — a blocked TaskCreate (AUTHOR gate)
       # leaves NO active task, so its code leaked out as an "ad-hoc" commit. Close it:
@@ -38,7 +46,7 @@ rules:
         if: 'committing'
         as: st
       - call: verdict
-        if: 'committing && (st == "scoping" || st == "researching" || st == "researched" || st == "spec_authored")'
+        if: 'committing && !docs_only && (st == "scoping" || st == "researching" || st == "researched" || st == "spec_authored")'
         args:
           level: block
           message: >-
@@ -53,7 +61,7 @@ rules:
         if: 'committing && active.present == true'
         as: phases
       - call: verdict
-        if: 'committing && active.present == true && phases.complete == false'
+        if: 'committing && active.present == true && phases.complete == false && !docs_only'
         args:
           level: block
           message: >-

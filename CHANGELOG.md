@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.428] - 2026-06-13
+
+### Fixed — docs-only commits no longer false-blocked by the EXECUTE gate (DOCSONLY.1 extension, wg-3dcca3b29ed1)
+
+- The coding-flow `execute-gate` (the second commit gate, alongside the default-discipline `workflow`
+  nudge that already had parity) blocked a `git commit` whenever the active task's 7-phase flow was
+  incomplete — with NO diff inspection, so it over-blocked **docs-only** commits the git-owned hard gate
+  (`gate.ts` `isDocsOnly`) deliberately allows. This is the gate that false-fired on committing handover
+  docs during an active code task.
+- Fix = predicate parity: the `execute-gate` rule now calls the existing `staged_docs_only` primitive and
+  suppresses BOTH block points (mid-flow authoring-incomplete + phases-incomplete) for docs-only staged
+  sets (`!docs_only`). Code commits still block (regression-guarded). New rule-firing test
+  `execute_gate_docsonly.skill.test.ts` (5 cases) + the coding-flow test registry now wires the primitive.
+
 ## [0.5.427] - 2026-06-13
 
 ### Added — durability axis on memories (SCI.1, wg-4f91e0b5cb8c)

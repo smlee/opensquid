@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { registerEventFunctions } from '../../src/functions/event.js';
+import { registerStagedDocsOnlyFunction } from '../../src/functions/staged_docs_only.js';
 import { registerReadRubric } from '../../src/functions/read_rubric.js';
 import { registerRubricPreInject } from '../../src/functions/rubric_pre_inject.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
@@ -949,6 +950,7 @@ function registryExec(): FunctionRegistry {
   registerFsmFunctions(r); // FU.1: the commit gate consults read_fsm_state (mid-flow → not ad-hoc)
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
+  registerStagedDocsOnlyFunction(r); // wg-3dcca3b29ed1: the gate now checks docs-only parity
   r.register(HasActiveTask);
   r.register(WorkflowPhasesComplete);
   return r;
