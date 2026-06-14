@@ -33,7 +33,7 @@ function commandInvokesArgs(
   const rule = skill?.rules.find((r) => r.id === ruleId);
   if (!rule || !('process' in rule)) return undefined;
   const step = rule.process.find((p) => p.call === 'command_invokes');
-  return step?.args as Record<string, unknown> | undefined;
+  return step?.args;
 }
 
 /** True if a rule still carries an (evadable) match_command pattern step. */
