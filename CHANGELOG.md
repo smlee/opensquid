@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.439] - 2026-06-14
+
+### Added — SessionStart(resume) reset of orphaned scoping (RTC.4, wg-3d175ec06767)
+
+- On a `resume`, an ORPHANED coding-flow scoping (a thread that entered `scoping`/`researching` long
+  ago and was never advanced — cause-1 of the codex-pause-wedge) is now reset to idle via
+  `clearFsmState`. `isStrandedScoping` is a conservative triple-gate that NEVER resets a live scoping:
+  stale `started_at` (> 6h before resume) AND no current-turn tool activity AND no work artifacts
+  (`coding-flow-pre-research-path`/`coding-flow-spec-path` absent). RTC.2 prevents NEW stranding; this
+  clears pre-existing resumed-thread orphans. New readers: `readFsmStateFile` (exposes `started_at`),
+  `readSessionStateValue` (generic pack-record existence check).
+
 ## [0.5.438] - 2026-06-14
 
 ### Changed — harness-portable SCOPE-stop allow-signal via request-type (RTC.3, wg-3d175ec06767)

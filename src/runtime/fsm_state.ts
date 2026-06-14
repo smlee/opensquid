@@ -126,6 +126,25 @@ export async function readFsmStateRaw(sessionId: string, packName: string): Prom
   return null;
 }
 
+/**
+ * Read the FULL persisted FSM-state file (`state` + `started_at` + `history`) for
+ * `(session, pack)`, or null when absent/unreadable. Unlike `readFsmStateRaw` (state string
+ * only), this exposes `started_at` for staleness checks (RTC.4 resume-orphan reset, wg-3d175ec06767).
+ */
+export async function readFsmStateFile(
+  sessionId: string,
+  packName: string,
+): Promise<FsmStateFile | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(sessionStateFile(sessionId, fsmKey(packName)), 'utf8'),
+    ) as unknown;
+    return isFsmStateFile(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Remove a pack's FSM-state file (SessionEnd cleanup). ENOENT swallowed. */
 export async function clearFsmState(sessionId: string, packName: string): Promise<void> {
   try {

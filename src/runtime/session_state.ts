@@ -247,6 +247,19 @@ export async function readRequestType(sessionId: string): Promise<RequestTypeRec
 }
 
 /**
+ * Generic reader for a pack-written session-state value (the JSON value a `write_state(key,value)`
+ * primitive persisted), or `null` when absent/unreadable. Used by runtime code (e.g. RTC.4) to
+ * check whether a pack record exists without going through the function registry.
+ */
+export async function readSessionStateValue(sessionId: string, key: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(sessionStateFile(sessionId, key), 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Reset the current-turn list on `UserPromptSubmit`. The session-wide list
  * carries forward across turn boundaries — only the turn slice resets.
  * A missing ledger is created with an empty `turn` (no-op semantically).

@@ -34,6 +34,8 @@ import { buildRegistry, loadActivePacks } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { Event } from '../types.js';
+import { clearFsmState } from '../fsm_state.js';
+import { isStrandedScoping } from '../handoff/stranded_scoping.js';
 
 import { dispatchEvent } from './dispatch.js';
 import { extractSessionId, recordCurrentSession } from './session_id.js';
@@ -109,6 +111,20 @@ async function main(): Promise<void> {
   // (newest-session-wins) rather than defer to a possibly-dead prior holder. The
   // mid-session UPS/Stop heartbeat keeps the default acquire-if-free.
   await claimUmbrellaLeaseForSession(sessionId, startCwd, { forceTakeover: true });
+  // RTC.4 (wg-3d175ec06767): on a RESUME, clear an ORPHANED coding-flow scoping — a thread that
+  // entered scoping/researching long ago and was never advanced (the codex-pause-wedge cause-1).
+  // The triple-gate (stale started_at + no turn activity + no work artifacts) never resets a live
+  // scoping. Best-effort: a SessionStart hook must never block.
+  if (parsed.data.kind === 'session_start' && parsed.data.source === 'resume') {
+    try {
+      if (await isStrandedScoping(sessionId, new Date().toISOString())) {
+        await clearFsmState(sessionId, 'coding-flow');
+        process.stderr.write('opensquid: cleared an orphaned coding-flow scoping on resume\n');
+      }
+    } catch (e) {
+      process.stderr.write(`opensquid: stranded-scoping check failed — ${String(e)}\n`);
+    }
+  }
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections } = await dispatchEvent(
