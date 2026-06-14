@@ -24,6 +24,7 @@
     "dist",
     "schemas",
     "packs/builtin",
+    "docs/ARCHITECTURE.md",
     "docs/pack-runtime.md",
     "docs/skill-grammar-guide.md",
     "docs/load-budget.md",

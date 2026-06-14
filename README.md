@@ -13,7 +13,7 @@ It is an MCP operating layer that adds durable memory, dependency-aware task sta
 
 `opensquid` is the package, CLI, MCP server name, and `~/.opensquid/` data root. OpenSquid is the human-facing wordmark.
 
-> **Status, June 11, 2026.** Pre-1.0 and moving fast (`0.5.x`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
+> **Status, June 12, 2026.** Pre-1.0 and moving fast (`0.5.x`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
 
 ## Quickstart
 
@@ -276,9 +276,7 @@ The promise is simple: start anywhere, continue anywhere, and eventually use the
 
 OpenSquid stores local state under `~/.opensquid/`.
 
-The implementation uses plain files where they are the right source of truth and libSQL where indexed queries are the right interface. The design goal is durable state: inspectable local data, rebuildable projections, and a cloud-sync path that adds continuity without making local development depend on a remote service.
-
-An optional legacy path can use `loop-engine` for the lower-level memory substrate; the current default is engine-free. When the engine is used, OpenSquid sets its runtime home to `~/.opensquid/` so standalone `loop-engine` data under `~/.loop/` does not collide with OpenSquid-managed state.
+The implementation uses plain files where they are the right source of truth and libSQL where indexed queries are the right interface. Memory and lessons use the in-process libSQL + fastembed stack by default, with lexical and Ollama-backed options available through RAG configuration. The design goal is durable state: inspectable local data, rebuildable projections, and a cloud-sync path that adds continuity without making local development depend on a remote service.
 
 ## Other Hosts
 
@@ -303,7 +301,7 @@ Works today:
 
 Still evolving:
 
-- npm distribution and prebuilt binary packaging.
+- npm distribution polish and release ergonomics.
 - Public tool-surface stability before 1.0.
 - More polished first-run setup for every host and chat path.
 - The final default pack set.
@@ -313,6 +311,7 @@ Still evolving:
 
 Start here when you need the deeper contracts:
 
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — **the single source of truth**: how every subsystem connects + what gets brittle when you change something. Read this first.
 - [`docs/pack-runtime.md`](./docs/pack-runtime.md)
 - [`docs/pack-fsm-architecture.md`](./docs/pack-fsm-architecture.md)
 - [`docs/skill-grammar-guide.md`](./docs/skill-grammar-guide.md)
