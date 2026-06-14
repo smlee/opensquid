@@ -1487,3 +1487,48 @@ describe('builtin coding-flow pack — request-type gating of scope-arm (RTC.2, 
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('scoping');
   });
 });
+
+describe('builtin coding-flow pack — request-type stop allow-signal (RTC.3, wg-3d175ec06767)', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+  const NOW = '2026-06-14T00:00:00.000Z';
+  const stop = { kind: 'stop', assistantText: '' } as const;
+  const rtRec = (type: 'research' | 'work') => ({
+    type,
+    confidence: 'high' as const,
+    source: 'deterministic' as const,
+    prompt_hash: 'x',
+    at: NOW,
+  });
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-rtc3-'));
+    process.env.OPENSQUID_HOME = tempHome;
+  });
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  it('research-classified scope stop is ALLOWED with no AskUserQuestion (harness-portable)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'rtc3-research';
+    await advanceFsmState(sid, 'coding-flow', pack.fsm!, 'scope_start', NOW); // scoping (armed by prior work)
+    await writeRequestType(sid, rtRec('research')); // current turn is a question
+    const r = await dispatchEvent(stop, [pack], registry(), sid);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).not.toMatch(/SCOPE stop without/);
+  });
+
+  it('work-classified scope stop without AskUserQuestion still BLOCKS', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'rtc3-work';
+    await advanceFsmState(sid, 'coding-flow', pack.fsm!, 'scope_start', NOW); // scoping
+    await writeRequestType(sid, rtRec('work'));
+    const r = await dispatchEvent(stop, [pack], registry(), sid);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toMatch(/SCOPE stop without a pending question/);
+  });
+});

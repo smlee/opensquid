@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.438] - 2026-06-14
+
+### Changed — harness-portable SCOPE-stop allow-signal via request-type (RTC.3, wg-3d175ec06767)
+
+- `scope-stop-needs-a-question` now ALSO allows a scoping/researching stop when the request-type
+  record is `research` (understand-only / a question), not only when `AskUserQuestion` ran this turn.
+  Reading the harness-NEUTRAL record (instead of the Claude-only AskUserQuestion-ran signal) fixes
+  cause-2 of the codex-pause-wedge: a codex Q&A stop is now legitimate without a carve-out. The
+  `AskUserQuestion` path remains an additional allow-signal; a `work`-classified scope stop without a
+  pending question still blocks; absent record preserves today's behavior (null-safe).
+
 ## [0.5.437] - 2026-06-14
 
 ### Changed — enter-scoping consults the request-type record: no scope-arm on a research turn (RTC.2, wg-3d175ec06767)

@@ -48,8 +48,18 @@ rules:
           scope: current_turn
           filter_names: [AskUserQuestion]
         as: asked
+      # RTC.3 (wg-3d175ec06767): a research-classified turn (understand-only / a question) never
+      # armed the flow and owes no structured fork — its stop is legitimate on ANY harness. Reading
+      # the harness-NEUTRAL request-type record (not the Claude-only AskUserQuestion-ran signal) is
+      # the portable allow-signal that fixes cause-2 of the codex-pause-wedge (codex has no
+      # AskUserQuestion). Null-safe: absent record → rt.type undefined → `rt.type != "research"` true
+      # → preserves today's block (AskUserQuestion stays an additional allow-signal via asked.count).
+      - call: read_state
+        args:
+          key: request-type
+        as: rt
       - call: verdict
-        if: '(st == "scoping" || st == "researching") && asked.count == 0'
+        if: '(st == "scoping" || st == "researching") && asked.count == 0 && rt.type != "research"'
         args:
           level: block
           message: >-
