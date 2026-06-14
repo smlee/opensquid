@@ -39,6 +39,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { gt, valid } from 'semver';
 import { z } from 'zod';
 
 import { loadChannelsConfig, resolveOutbound, resolveUmbrellaForCwd } from '../channels/routing.js';
@@ -46,6 +47,7 @@ import { pingDaemon } from '../chat_daemon/client.js';
 import { loadActivePacks } from '../runtime/bootstrap.js';
 import { isLeaseFresh, readLease } from '../runtime/chat/live_session_lease.js';
 import { OPENSQUID_HOME, umbrellaLiveSessionLease } from '../runtime/paths.js';
+import { readCurrentVersion, readUpdateCache } from '../runtime/update_check.js';
 import { resolveBackendConfig } from '../rag/config.js';
 import { ok } from '../runtime/result.js';
 
@@ -156,6 +158,21 @@ function safeSection(label: string, probe: () => Promise<string>): Promise<strin
   });
 }
 
+/** Version section (wg-798ce60dbb13): current version + CACHE-ONLY update status (no network probe —
+ *  the daily probe stays in maybeNotifyUpdate). Reuses `noticeLine` for the semver comparison. */
+async function versionStatusLine(): Promise<string> {
+  const current = await readCurrentVersion();
+  const cache = await readUpdateCache();
+  if (
+    cache !== null &&
+    valid(cache.latest) !== null &&
+    valid(current) !== null &&
+    gt(cache.latest, current)
+  )
+    return `Version: opensquid ${current} → ${cache.latest} available (run \`opensquid update\`)`;
+  return `Version: opensquid ${current}${cache !== null ? ' (up to date)' : ' (latest unknown)'}`;
+}
+
 export const SessionStatusManifest: FunctionDef<z.input<typeof NoArgs>, ManifestResult | null> = {
   name: 'session_status_manifest',
   argSchema: NoArgs,
@@ -172,6 +189,7 @@ export const SessionStatusManifest: FunctionDef<z.input<typeof NoArgs>, Manifest
       safeSection('Packs', () => packsStatusLine(sessionId)),
       safeSection('Daemon', () => daemonStatusLine()),
       safeSection('Memory', () => memoryStatusLine()),
+      safeSection('Version', () => versionStatusLine()),
     ]);
     const content = ['📋 opensquid — session connections', ...sections.map((s) => `• ${s}`)].join(
       '\n',

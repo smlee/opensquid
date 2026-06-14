@@ -55,20 +55,21 @@ describe('session_status_manifest', () => {
     await rm(configDir, { recursive: true, force: true });
   });
 
-  it('emits the header + exactly five sections, every bullet labelled', async () => {
+  it('emits the header + exactly six sections, every bullet labelled', async () => {
     await writeFile(join(configDir, 'settings.json'), JSON.stringify(WIRED), 'utf8');
     const r = await SessionStatusManifest.execute({}, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok || r.value === null) throw new Error('manifest must always produce content');
     const lines = r.value.content.split('\n');
     expect(lines[0]).toBe('📋 opensquid — session connections');
-    expect(lines).toHaveLength(6); // header + 5 bullets
+    expect(lines).toHaveLength(7); // header + 6 bullets
     for (const b of lines.slice(1)) expect(b.startsWith('• ')).toBe(true);
     expect(r.value.content).toMatch(/• Chat:/);
     expect(r.value.content).toMatch(/• Flow gates:/);
     expect(r.value.content).toMatch(/• Packs/);
     expect(r.value.content).toMatch(/• Daemon:/);
     expect(r.value.content).toMatch(/• Memory:/);
+    expect(r.value.content).toMatch(/• Version: opensquid \d+\.\d+\.\d+/); // CLI.3 (wg-798ce60dbb13)
   });
 
   it('lists the active packs by name (loaded from the builtin tree in-process)', async () => {
@@ -100,11 +101,11 @@ describe('session_status_manifest', () => {
     expect(r.value.content).not.toMatch(/RESTART this session/);
   });
 
-  it('never throws and always yields 5 sections even with no settings.json (fail-quiet)', async () => {
+  it('never throws and always yields 6 sections even with no settings.json (fail-quiet)', async () => {
     // no settings.json written → flow probe degrades, others still resolve.
     const r = await SessionStatusManifest.execute({}, ctx);
     expect(r.ok).toBe(true);
     if (!r.ok || r.value === null) throw new Error('no manifest');
-    expect(r.value.content.split('\n')).toHaveLength(6);
+    expect(r.value.content.split('\n')).toHaveLength(7);
   });
 });

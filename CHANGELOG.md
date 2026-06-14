@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.430] - 2026-06-14
+
+### Fixed — opensquid is usable as a standalone install (CLI.1-3, wg-798ce60dbb13)
+
+- **`opensquid -v`** now prints the version (was "unknown option" — commander's default binds `-V` only;
+  `cli.ts:121` now passes `'-v, --version'`). The conventional lowercase `-v` is what users (and the bug
+  repro) reach for.
+- **`opensquid setup wizard mcp`** no longer requires the opensquid repo root — it registers the shipped
+  `opensquid-mcp` / `opensquid-chat-bridge-mcp` **bins** (on PATH after `npm install -g`), exactly how
+  `wizard hooks` already registers `opensquid-hook-*` bins. `buildDesiredEntries()` defaults to bins (no
+  root); `--opensquid-root` becomes an OPTIONAL override forcing the legacy `node <root>/dist/...` form
+  for PATH-stripped hosts. `projectOpensquidMcp`'s key-based overwrite auto-migrates a prior node-path
+  entry on re-run. This makes the README quickstart (`npm install -g` → `wizard mcp`) actually work for
+  global installs (it previously errored for every `-g` user).
+- **Version/upgrade visibility**: the SessionStart session-connections manifest now shows an
+  `opensquid vX.Y.Z (up to date / update available / latest unknown)` line (cache-only, no network probe).
+
 ## [0.5.429] - 2026-06-13
 
 ### Fixed — secrets/env path uses canonical `~/.opensquid/.env`, not stale `~/.loop/.env` (SHL.1, wg-45512ec39739)

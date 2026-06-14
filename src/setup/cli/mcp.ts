@@ -39,6 +39,7 @@ import {
   projectOpensquidMcp,
   readClaudeUserConfig,
   writeOpensquidMcp,
+  type McpServerEntry,
   type McpWriteResult,
 } from '../wizard/mcp-writer.js';
 import {
@@ -60,7 +61,7 @@ export interface McpCliFlags {
 }
 
 export interface McpCliDeps {
-  writer?: (path: string, root: string) => Promise<McpWriteResult>;
+  writer?: (path: string, root?: string) => Promise<McpWriteResult>;
   reader?: (path: string) => Promise<unknown>;
   cwd?: () => string;
   home?: () => string;
@@ -74,7 +75,7 @@ export interface McpCliDeps {
 }
 
 interface ResolvedDeps {
-  writer: (path: string, root: string) => Promise<McpWriteResult>;
+  writer: (path: string, root?: string) => Promise<McpWriteResult>;
   reader: (path: string) => Promise<unknown>;
   cwd: () => string;
   home: () => string;
@@ -152,14 +153,10 @@ export async function detectProjectMcpCleanup(
 /** Pulled out of the commander action so tests can drive it directly. */
 export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): Promise<void> {
   const r = buildDeps(deps);
-  const root = flags.opensquidRoot ?? (await detectOpensquidRoot(r.cwd()));
-  if (root === null || root === undefined || root === '') {
-    r.err(
-      'opensquid setup wizard mcp: could not auto-detect opensquid repo root from cwd; pass --opensquid-root <path>\n',
-    );
-    process.exitCode = 1;
-    return;
-  }
+  // wg-798ce60dbb13: NO repo root required — register the shipped bins by default
+  // (buildDesiredEntries with no root). `--opensquid-root` is an OPTIONAL override (PATH-stripped
+  // hosts) that forces the legacy `node <root>/dist/...` form. undefined ⇒ bins.
+  const root = flags.opensquidRoot;
   // D1: default = claude-code only; opt into others via --hosts.
   const hostIds = parseHosts(flags.hosts, r.err);
   if (hostIds.length === 0) {
@@ -191,8 +188,10 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
       );
     }
     const desired = buildDesiredEntries(root);
-    r.out(`  opensquid       → node ${desired.opensquid.args?.[0] ?? ''}\n`);
-    r.out(`  opensquid-chat  → node ${desired['opensquid-chat'].args?.[0] ?? ''}\n`);
+    const cmdline = (e: McpServerEntry): string =>
+      `${e.command ?? ''} ${(e.args ?? []).join(' ')}`.trim();
+    r.out(`  opensquid       → ${cmdline(desired.opensquid)}\n`);
+    r.out(`  opensquid-chat  → ${cmdline(desired['opensquid-chat'])}\n`);
   } else {
     r.out('opensquid setup wizard mcp — writing entries\n');
     for (const id of hostIds) {

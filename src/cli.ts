@@ -118,7 +118,8 @@ function runCli(): void {
   const program = new Command()
     .name('opensquid')
     .description('Tracks for your AI agent — destination-first.')
-    .version(readPackageVersion());
+    // wg-798ce60dbb13: bind the conventional lowercase `-v` (commander's default is `-V` only).
+    .version(readPackageVersion(), '-v, --version');
 
   const daemon = program.command('daemon').description('Background daemon lifecycle');
 

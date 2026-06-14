@@ -69,7 +69,24 @@ export interface DesiredEntries {
   'opensquid-chat': McpServerEntry;
 }
 
-export function buildDesiredEntries(opensquidRepoRoot: string): DesiredEntries {
+export function buildDesiredEntries(opensquidRepoRoot?: string): DesiredEntries {
+  // wg-798ce60dbb13: default (standalone) registers the SHIPPED bins (package.json `bin`:
+  // opensquid-mcp → dist/mcp/server.js, opensquid-chat-bridge-mcp → dist/mcp/chat-bridge-server.js),
+  // on PATH after `npm install -g` — exactly how `wizard hooks` registers the opensquid-hook-* bins,
+  // so no repo root is needed. The `--opensquid-root` override forces the legacy `node <root>/dist/...`
+  // form for PATH-stripped hosts.
+  if (opensquidRepoRoot === undefined || opensquidRepoRoot === '') {
+    return {
+      opensquid: { type: 'stdio', command: 'opensquid-mcp', args: [], env: {}, '@opensquid': true },
+      'opensquid-chat': {
+        type: 'stdio',
+        command: 'opensquid-chat-bridge-mcp',
+        args: [],
+        env: {},
+        '@opensquid': true,
+      },
+    };
+  }
   return {
     opensquid: {
       type: 'stdio',
@@ -102,7 +119,7 @@ export interface McpWriteResult {
 /** Pure projection. Disk-untouched. Used by both writer and `--dry-run`. */
 export function projectOpensquidMcp(
   input: ClaudeUserConfig,
-  opensquidRepoRoot: string,
+  opensquidRepoRoot?: string,
 ): { output: ClaudeUserConfig; added: string[]; replaced: string[]; preserved: number } {
   const output = JSON.parse(JSON.stringify(input)) as ClaudeUserConfig;
   output.mcpServers ??= {};
@@ -134,7 +151,7 @@ export function projectOpensquidMcp(
  */
 export async function writeOpensquidMcp(
   claudeConfigPath: string,
-  opensquidRepoRoot: string,
+  opensquidRepoRoot?: string,
 ): Promise<McpWriteResult> {
   const input = await readClaudeUserConfig(claudeConfigPath);
   const backupPath = `${claudeConfigPath}.bak`;

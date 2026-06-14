@@ -162,7 +162,7 @@ describe('runMcpWizard — write mode', () => {
     const fakeCwd = join(root, 'cwd');
     await mkdir(fakeCwd, { recursive: true });
 
-    const seen: { path: string; root: string }[] = [];
+    const seen: { path: string; root: string | undefined }[] = [];
     await runMcpWizard(
       { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false },
       {

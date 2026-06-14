@@ -238,4 +238,14 @@ describe('buildDesiredEntries', () => {
     expect(d.opensquid.args).toEqual([`${REPO_ROOT}/dist/mcp/server.js`]);
     expect(d['opensquid-chat'].args).toEqual([`${REPO_ROOT}/dist/mcp/chat-bridge-server.js`]);
   });
+
+  it('emits the shipped BIN names with NO root — standalone default (wg-798ce60dbb13)', () => {
+    const d = buildDesiredEntries();
+    expect(d.opensquid.command).toBe('opensquid-mcp');
+    expect(d.opensquid.args).toEqual([]);
+    expect(d['opensquid-chat'].command).toBe('opensquid-chat-bridge-mcp');
+    expect(d['opensquid-chat'].args).toEqual([]);
+    expect(d.opensquid['@opensquid']).toBe(true);
+    expect(d['opensquid-chat']['@opensquid']).toBe(true);
+  });
 });
