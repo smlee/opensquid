@@ -1,6 +1,6 @@
 {
   "name": "opensquid",
-  "version": "0.5.441",
+  "version": "0.5.442",
   "description": "Continuity layer for coding agents: durable memory, dependency-aware task state, workflow gates, and inspectable packs over MCP.",
   "type": "module",
   "exports": {
@@ -35,7 +35,8 @@
   },
   "packageManager": "pnpm@10.33.2",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/runtime/hooks/*.js dist/mcp/server.js dist/mcp/chat-bridge-server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

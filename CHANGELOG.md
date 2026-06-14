@@ -7,6 +7,16 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.442] - 2026-06-14
+
+### Fixed — the published package no longer ships dead code (wg-98a8d32127dd)
+
+- `build` now cleans `dist/` first (`rm -rf dist && tsc -p tsconfig.build.json`) + a `clean` script.
+  `tsc` is additive — it never deletes outputs whose source was removed, so `dist/` had accumulated
+  the retired `anti-drift/*`, `engine-client.js`, `rag/backends/loop_engine.js`, and 56 compiled
+  `*.test.js` files (no live `src/`), all shipping in the npm tarball. Verified: `npm pack --dry-run`
+  no longer lists any of them. Found in the CLI/stale audit; recorded in `docs/ARCHITECTURE.md` §8.
+
 ## [0.5.441] - 2026-06-14
 
 ### Changed — the last two raw command-matchers migrated to structural `command_invokes` (GMP.1, wg-320845a92b65)
