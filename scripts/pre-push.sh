@@ -14,8 +14,12 @@ run() {
 
 run "lint" pnpm lint
 run "typecheck" pnpm typecheck
-run "test" pnpm test
+# build BEFORE test: hooks.bin.integration.test.ts spawns the COMPILED dist/ hook bins and
+# asserts they exist — its header documents "CI always runs pnpm build before pnpm test".
+# Running test first made it rely on a stale-dist rebuild in beforeAll, which flaked under
+# full-suite load ("compiled bin missing"). Build-first guarantees fresh bins. (wg-b7ebe4bd74ce)
 run "build" pnpm build
+run "test" pnpm test
 run "format:check" pnpm format:check
 
 printf '\n\033[32m✓ pre-push gate green — pushing\033[0m\n'
