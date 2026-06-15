@@ -2,15 +2,17 @@
  * agent_bridge — transport bridge unit tests (WAB.2).
  */
 
+import { EventEmitter } from 'node:events';
 import { statSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import type { FSWatcher } from 'chokidar';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentEventBus } from './event_bus.js';
-import { InboxTransportBridge } from './transport_bridge.js';
+import { InboxTransportBridge, type TransportBridgeOptions } from './transport_bridge.js';
 import type { InboundChatEvent } from './types.js';
 
 const TEST_PROJECT_UUID = '00000000-0000-0000-0000-000000000001';
@@ -500,5 +502,46 @@ describe('TBW.1 — start() is ready-gated (both backends)', () => {
     await bridge.start();
     await waitFor('received>=1 literal glob', () => received.length >= 1);
     expect(received.map((e) => e.messageId)).toEqual(['yes']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TBR.1 — periodic self-heal reconcile (wg-4d2bc0929a32). The post-ready flake:
+// a file created after start() resolved, whose chokidar `add` never fired,
+// stayed undelivered forever (TBW.1's self-heal is one-shot at ready). The fix
+// is a life-of-bridge reconcile interval. To PIN it (a chokidar-served test
+// would pass even with the reconcile reverted) we inject a stub watcher that
+// emits `ready` but never `add`/`change`, so the reconcile is the ONLY delivery
+// path. No production branch — the seam is the injectable `watch` factory.
+// ---------------------------------------------------------------------------
+
+describe('TBR.1 — periodic reconcile delivers when watcher events are lost', () => {
+  it('delivers a post-ready file via reconcile alone (watcher emits no add/change)', async () => {
+    const stub = new EventEmitter();
+    Object.assign(stub, { close: () => Promise.resolve(undefined) });
+    const watchStub = ((): FSWatcher => {
+      setImmediate(() => stub.emit('ready'));
+      return stub as unknown as FSWatcher;
+    }) as unknown as NonNullable<TransportBridgeOptions['watch']>;
+    bridge = new InboxTransportBridge({
+      bus,
+      projectUuid: TEST_PROJECT_UUID,
+      inboxRoot: inboxDir,
+      rescanIntervalMs: 50,
+      watch: watchStub,
+      onWarn: (m) => warnings.push(m),
+      onEvent: (k) => {
+        events[k] = (events[k] ?? 0) + 1;
+      },
+    });
+    await bridge.start();
+    await fs.appendFile(
+      inboxFile,
+      legacyRow({ id: 'r1', channel: 'telegram:1', senderId: '1', text: 'via-reconcile' }),
+    );
+    await waitFor('received via reconcile', () => received.length >= 1);
+    expect(received[0]?.text).toBe('via-reconcile');
+    // The stub never fires `add` — proves the reconcile timer delivered it.
+    expect(events.add ?? 0).toBe(0);
   });
 });

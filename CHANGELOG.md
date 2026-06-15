@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.457] - 2026-06-15
+
+### Fixed — inbox transport bridge self-heals on a periodic reconcile, closing the post-ready flake (TBR.1, wg-4d2bc0929a32)
+
+- `InboxTransportBridge` now runs a life-of-bridge reconcile interval (`rescanIntervalMs`, default
+  2000): every tick it re-scans the inbox dir and re-consumes each `fileGlob` match. The byte-offset
+  cursor makes a redundant consume a no-op, so a reconcile NEVER re-emits — worst-case detection
+  latency is bounded to the interval regardless of which events chokidar drops. This generalizes
+  TBW.1's one-shot ready-time self-heal (`rescanOnce()` is now shared by both) and hardens the prod
+  native backend against the silent event-drop class.
+- Closes the captured CI flake: a file created AFTER `start()` resolved, whose chokidar `add` never
+  fired within 15s (rows on disk, `events:{}`), was delivered by nothing — TBW.1's self-heal is
+  one-shot at ready. The reconcile gives every post-ready file a second chance.
+- Pinned by a regression test that injects a stub watcher (new `watch` factory options seam) which
+  emits `ready` but never `add`/`change`, so the reconcile is the ONLY delivery path; the test
+  asserts `events.add === 0`. No production code branches on a test-only flag. Timer is `.unref()`'d
+  and cleared in `shutdown()`. The shared watch+reconcile primitive lift stays wg-83e8e91f39d2's scope.
+
 ## [0.5.456] - 2026-06-15
 
 ### Added — `opensquid pack install` blocks a pack with an unknown `call:` (PV.2, T-wire-pack-validators)

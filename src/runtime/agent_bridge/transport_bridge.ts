@@ -108,6 +108,21 @@ export interface TransportBridgeOptions {
   fileGlob?: string;
   /** Test seam — usePolling forces chokidar's polling backend. */
   usePolling?: boolean;
+  /**
+   * Self-heal reconcile interval (ms). The bridge re-scans the inbox dir every
+   * tick and re-consumes each fileGlob match; the byte cursor makes this a
+   * no-op when nothing new arrived, so it NEVER re-emits. Bounds worst-case
+   * detection latency regardless of which events chokidar drops (TBR.1,
+   * wg-4d2bc0929a32). Default 2000.
+   */
+  rescanIntervalMs?: number;
+  /**
+   * Watcher factory seam — defaults to chokidar's `watch`. Tests inject a stub
+   * that emits `ready` but never `add`/`change`, isolating the reconcile as the
+   * ONLY delivery path (a chokidar-served test could not pin the reconcile).
+   * Production must not set this — the default keeps the daemon on real chokidar.
+   */
+  watch?: typeof watch;
   /** Structured warn sink for malformed rows + watcher errors. */
   onWarn?: (message: string) => void;
   /**
@@ -127,6 +142,8 @@ const AWAIT_WRITE_FINISH_POLL_MS = 25;
 /** TBW.1: bound on the chokidar ready wait — pathological only (real inboxes
  *  scan in milliseconds); the diagnostic names the pre-research. */
 const READY_TIMEOUT_MS = 30_000;
+/** TBR.1: life-of-bridge periodic self-heal reconcile interval (ms). */
+const DEFAULT_RESCAN_INTERVAL_MS = 2_000;
 
 const noopWarn: (message: string) => void = () => {
   /* default sink */
@@ -150,6 +167,9 @@ export class InboxTransportBridge {
   private readonly warn: (message: string) => void;
   private readonly inboxDir: string;
   private readonly fileGlob: string;
+  /** TBR.1: periodic self-heal reconcile timer (null until start(), cleared in shutdown()). */
+  private rescanTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly rescanIntervalMs: number;
   private stopped = false;
 
   constructor(private readonly opts: TransportBridgeOptions) {
@@ -160,6 +180,7 @@ export class InboxTransportBridge {
         ? umbrellaInboxDir(opts.umbrellaId)
         : join(homedir(), '.opensquid', 'projects', opts.projectUuid, 'inbox'));
     this.fileGlob = opts.fileGlob ?? '*.jsonl';
+    this.rescanIntervalMs = opts.rescanIntervalMs ?? DEFAULT_RESCAN_INTERVAL_MS;
   }
 
   /** Open the chokidar watcher. Re-call after `shutdown()` throws. */
@@ -176,7 +197,10 @@ export class InboxTransportBridge {
     await fs.mkdir(this.inboxDir, { recursive: true });
 
     const pattern = join(this.inboxDir, this.fileGlob);
-    this.watcher = watch(pattern, {
+    // TBR.1: watch-factory seam — defaults to real chokidar `watch`; tests inject
+    // a stub that never fires add/change so the reconcile is the only delivery path.
+    const watchFn = this.opts.watch ?? watch;
+    this.watcher = watchFn(pattern, {
       awaitWriteFinish: {
         stabilityThreshold: AWAIT_WRITE_FINISH_STABILITY_MS,
         pollInterval: AWAIT_WRITE_FINISH_POLL_MS,
@@ -245,9 +269,23 @@ export class InboxTransportBridge {
     });
     if (this.stopped) return; // shutdown won the race — nothing to self-heal
 
-    // Self-heal: files created during the scan window exist on disk but may
-    // have produced no events (the captured profile). One readdir, fileGlob-
-    // filtered; cursor idempotency makes a duplicate consume a no-op.
+    // TBW.1 one-shot self-heal + TBR.1 periodic reconcile share `rescanOnce`:
+    // files created during the scan window (or whose post-ready `add` chokidar
+    // dropped) exist on disk but may have produced no events. The interval makes
+    // delivery independent of event reliability; cursor idempotency keeps every
+    // redundant consume a no-op so a reconcile NEVER re-emits.
+    await this.rescanOnce();
+    this.rescanTimer = setInterval(() => {
+      void this.rescanOnce();
+    }, this.rescanIntervalMs);
+    this.rescanTimer.unref?.();
+  }
+
+  /** Re-scan the inbox dir; schedule a consume for each fileGlob match. The
+   *  cursor makes a redundant consume a no-op, so this never re-emits. Shared
+   *  by the one-shot ready self-heal and the periodic reconcile timer (TBR.1). */
+  private async rescanOnce(): Promise<void> {
+    if (this.stopped) return;
     const entries = await fs.readdir(this.inboxDir).catch(() => [] as string[]);
     for (const name of entries) {
       if (this.matchesFileGlob(name)) this.scheduleConsume(join(this.inboxDir, name));
@@ -269,6 +307,10 @@ export class InboxTransportBridge {
   async shutdown(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    if (this.rescanTimer !== null) {
+      clearInterval(this.rescanTimer);
+      this.rescanTimer = null;
+    }
     this.closeRequested?.();
     const w = this.watcher;
     this.watcher = null;
