@@ -6,9 +6,19 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// PV.1: validateActivePacks is mocked (default []) so these tests stay deterministic + independent of
+// builtin-pack cleanliness; one test overrides it to assert the PACK INTEGRITY section appears.
+vi.mock('../packs/validate_active.js', () => ({
+  validateActivePacks: vi.fn().mockResolvedValue([]),
+}));
+
+import { validateActivePacks } from '../packs/validate_active.js';
 
 import { CheckFlowHealth } from './check_flow_health.js';
+
+const mockIntegrity = vi.mocked(validateActivePacks);
 
 // A minimal EvalCtx — check_flow_health only reads ctx.sessionId.
 const ctx = { sessionId: 'cfh-test', event: { kind: 'session_start' as const } } as never;
@@ -73,6 +83,21 @@ describe('check_flow_health (FU.3)', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.value?.content).toMatch(/could not read .*settings\.json/);
+    }
+  });
+
+  it('PV.1: surfaces a PACK INTEGRITY section when active packs have integrity problems', async () => {
+    await writeFile(join(configDir, 'settings.json'), JSON.stringify(WIRED), 'utf8'); // flow healthy
+    mockIntegrity.mockResolvedValueOnce([
+      'pack "x" → skill "s" → rule "r1" step 0: unknown primitive "verdcit" (did you mean "verdict"?)',
+    ]);
+    const r = await CheckFlowHealth.execute({}, ctx);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      // The PACK INTEGRITY section is present regardless of the flow-enforcement dimension (which
+      // depends on whether a gate pack loads in this env — see the "all hooks wired" test).
+      expect(r.value?.content).toMatch(/PACK INTEGRITY/);
+      expect(r.value?.content).toMatch(/verdcit/);
     }
   });
 });

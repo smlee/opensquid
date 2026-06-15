@@ -27,6 +27,7 @@ import { join } from 'node:path';
 
 import { z } from 'zod';
 
+import { validateActivePacks } from '../packs/validate_active.js';
 import { loadActivePacks } from '../runtime/bootstrap.js';
 import { ok } from '../runtime/result.js';
 import { isOpensquidHookEntry } from '../setup/wizard/settings-writer.js';
@@ -104,15 +105,29 @@ export const CheckFlowHealth: FunctionDef<z.input<typeof NoArgs>, CheckFlowHealt
   memoizable: false,
   costEstimateMs: 4,
   execute: async (_args, ctx) => {
-    const problems = await flowEnforcementProblems(ctx.sessionId);
+    const flow = await flowEnforcementProblems(ctx.sessionId);
+    // PV.1: pack-integrity (unknown `call:` / skill-name collisions) over the active packs —
+    // an unknown primitive makes a rule SILENTLY non-enforcing. validateActivePacks is fail-open.
+    const integrity = await validateActivePacks(ctx.sessionId);
 
-    if (problems.length === 0) return ok(null); // healthy → silent
+    if (flow.length === 0 && integrity.length === 0) return ok(null); // healthy → silent
 
-    const content =
-      '⛔ FLOW ENFORCEMENT IS NOT ACTIVE — ' +
-      problems.join('; ') +
-      '. The SCOPE→AUTHOR→7-phase gates will NOT run this session, so work can be committed un-gated. ' +
-      'Run `opensquid setup` and then RESTART this session (Claude Code wires hooks only at session start — a running session cannot self-heal).';
-    return ok({ kind: 'inject_context' as const, content });
+    const sections: string[] = [];
+    if (flow.length > 0) {
+      sections.push(
+        '⛔ FLOW ENFORCEMENT IS NOT ACTIVE — ' +
+          flow.join('; ') +
+          '. The SCOPE→AUTHOR→7-phase gates will NOT run this session, so work can be committed un-gated. ' +
+          'Run `opensquid setup` and then RESTART this session (Claude Code wires hooks only at session start — a running session cannot self-heal).',
+      );
+    }
+    if (integrity.length > 0) {
+      sections.push(
+        '⚠️ PACK INTEGRITY — ' +
+          integrity.join('; ') +
+          '. Fix the pack (`opensquid pack install` blocks this for new installs).',
+      );
+    }
+    return ok({ kind: 'inject_context' as const, content: sections.join('\n\n') });
   },
 };

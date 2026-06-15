@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.454] - 2026-06-15
+
+### Added — pack validation activated at session start; a bad `call:` is no longer a silent dead gate (PV.1, T-wire-pack-validators)
+
+- The previously-orphaned validators (`validatePackFunctions`, `validateUniqueSkillNames`) are now
+  wired into the live design. `validateActivePacks(sessionId)` (new `src/packs/validate_active.ts`,
+  fail-OPEN) runs both over the active packs; `check_flow_health` surfaces the results as a "⚠️ PACK
+  INTEGRITY" section in its session-start inject. An unknown `call:` (e.g. `match_commnd`) — which
+  loads fine but makes that rule SILENTLY non-enforcing — is now flagged with a Levenshtein
+  suggestion, and cross-pack skill-name collisions are surfaced.
+- New `buildValidationRegistry()` (`bootstrap.ts`) builds a names-complete registry with no-op
+  backends (no libsql/embedder I/O) so the validator's name set always matches the real runtime
+  (anti-drift). The lesson-store stub is non-null so the lesson primitive names register (a `null`
+  store would drop them and false-fail packs).
+- First slice of T-wire-pack-validators; install-time block (PV.2) + dispatcher error-visibility
+  (PV.3) follow. Relates wg-5eedceaaa19f (install-flow), wg-54eef8b4927c (final-audit-flow).
+
 ## [0.5.453] - 2026-06-15
 
 ### Changed — pack-architect (the pack builder) cites the canonical guide + teaches the matcher discipline (PB.1, wg-45e284212c84)

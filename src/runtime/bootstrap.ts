@@ -268,6 +268,41 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
 }
 
 // ---------------------------------------------------------------------------
+// Validation registry (T-wire-pack-validators PV.1).
+//
+// A FunctionRegistry with EVERY primitive NAME registered but NO real backend
+// (no libsql/embedder I/O). For pack validation, which only reads
+// `registry.has`/`list`. The no-op backends satisfy the interfaces so all
+// names register; init() resolves and the other methods are never invoked
+// during validation. The lessonStore is a STUB (NOT null) so the lesson
+// primitive names (propose/promote/recall_lesson) register — `null` would
+// DROP them and false-fail any pack that calls them.
+// ---------------------------------------------------------------------------
+
+const NOOP_BACKEND: RagBackend = {
+  init: () => Promise.resolve(),
+  embed: () => Promise.resolve(null),
+  recall: () => Promise.resolve([]),
+  storeLesson: () => Promise.resolve(),
+  deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+};
+
+const NOOP_LESSON_STORE: WedgeLessonStore = {
+  init: () => Promise.resolve(),
+  createLesson: () => Promise.reject(new Error('validation registry: lesson store is unused')),
+  promoteLesson: () => Promise.reject(new Error('validation registry: lesson store is unused')),
+  recallLesson: () => Promise.resolve({ query: '', returned: 0, results: [] }),
+  captureFeedback: () => Promise.resolve(),
+  recordApplied: () => Promise.resolve(),
+  rebuild: () => Promise.resolve({ indexed: 0 }),
+};
+
+/** Build a names-complete registry with no-op backends (no I/O) — for pack validation only. */
+export async function buildValidationRegistry(): Promise<FunctionRegistry> {
+  return buildRegistry({ backend: NOOP_BACKEND, lessonStore: NOOP_LESSON_STORE });
+}
+
+// ---------------------------------------------------------------------------
 // Active packs — three composing sources (G.1 lands the third one).
 //
 //   1. Test seam: `OPENSQUID_TEST_PACK`     (inline JSON pack object)

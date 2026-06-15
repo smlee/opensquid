@@ -28,7 +28,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { discoverActivePacks } from '../packs/discovery.js';
 import { sortPacksByScope } from '../packs/load_order.js';
 
-import { buildRegistry } from './bootstrap.js';
+import { buildRegistry, buildValidationRegistry } from './bootstrap.js';
 
 import type { RagBackend } from '../rag/types.js';
 import type { WedgeLessonStore } from '../rag/wedge/store.js';
@@ -42,6 +42,19 @@ function stubBackend(): RagBackend {
     deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
   };
 }
+
+describe('buildValidationRegistry (PV.1) — names-complete, no I/O', () => {
+  it('registers the FULL name set incl. RAG + lesson names (no lessonStore:null drop)', async () => {
+    const registry = await buildValidationRegistry();
+    // RAG names (need a backend) AND lesson names (need a non-null lessonStore) must BOTH be present,
+    // or validatePackFunctions false-fails a pack that calls them. This is the no-false-positive guard.
+    expect(registry.has('recall')).toBe(true);
+    expect(registry.has('embed')).toBe(true);
+    expect(registry.has('promote_lesson')).toBe(true);
+    expect(registry.has('propose_lesson')).toBe(true);
+    expect(registry.has('verdict')).toBe(true);
+  });
+});
 
 describe('buildRegistry — T.3 RAG wiring', () => {
   it('registers recall, embed, store_lesson primitives', async () => {
