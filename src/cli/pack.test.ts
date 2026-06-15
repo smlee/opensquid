@@ -10,7 +10,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Command } from 'commander';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// PV.2: validate_functions is a leaf module → auto-spy keeps the real impl but lets the fail-open
+// test force a validator throw.
+vi.mock('../packs/validate_functions.js', { spy: true });
+
+import { validatePackFunctions } from '../packs/validate_functions.js';
 
 import {
   buildExportCommand,
@@ -18,6 +24,30 @@ import {
   buildListCommand,
   buildRemoveCommand,
 } from './pack.js';
+
+/** Write a pack dir with a manifest + one skill whose single rule calls `call`. */
+async function writePackWithCall(packDir: string, name: string, call: string): Promise<void> {
+  await mkdir(join(packDir, 'skills', 's'), { recursive: true });
+  await writeFile(
+    join(packDir, 'manifest.yaml'),
+    [`name: ${name}`, 'version: 1.0.0', 'scope: workflow', `goal: fixture ${name}`].join('\n') +
+      '\n',
+    'utf8',
+  );
+  await writeFile(
+    join(packDir, 'skills', 's', 'skill.yaml'),
+    [
+      'name: s',
+      'triggers:',
+      '  - kind: tool_call',
+      'rules:',
+      '  - id: r1',
+      '    process:',
+      `      - call: ${call}`,
+    ].join('\n') + '\n',
+    'utf8',
+  );
+}
 
 let tempHome: string;
 let priorHome: string | undefined;
@@ -72,6 +102,47 @@ describe('pack install', () => {
     ) as { base_version: string };
     expect(version.base_version).toBe('1.0.0');
     expect(cap.lines.some((l) => l.includes('Installed my-pack@1.0.0'))).toBe(true);
+  });
+
+  it('PV.2: blocks a pack whose rule references an unknown primitive (with a suggestion) — no state written', async () => {
+    const source = join(tempHome, 'bad-pack');
+    await writePackWithCall(source, 'bad-pack', 'verdcit'); // typo of `verdict`
+    await expect(run(buildInstallCommand(captureOut()), [source])).rejects.toThrow(
+      /unknown primitives|verdcit/,
+    );
+    // validation precedes the copy → the state dir is NOT created.
+    await expect(
+      readFile(join(tempHome, 'packs', 'bad-pack', 'personal_revision', 'version.json'), 'utf8'),
+    ).rejects.toThrow();
+  });
+
+  it('PV.2: a clean pack (real primitive) installs', async () => {
+    const source = join(tempHome, 'good-pack');
+    await writePackWithCall(source, 'good-pack', 'verdict');
+    await run(buildInstallCommand(captureOut()), [source]); // does not throw
+    const v = JSON.parse(
+      await readFile(
+        join(tempHome, 'packs', 'good-pack', 'personal_revision', 'version.json'),
+        'utf8',
+      ),
+    ) as { base_version: string };
+    expect(v.base_version).toBe('1.0.0');
+  });
+
+  it('PV.2: FAIL-OPEN — a validator throw does NOT block a clean install (only a genuine issue does)', async () => {
+    const source = join(tempHome, 'fo-pack');
+    await writePackWithCall(source, 'fo-pack', 'verdict');
+    vi.mocked(validatePackFunctions).mockImplementationOnce(() => {
+      throw new Error('validator bug');
+    });
+    await run(buildInstallCommand(captureOut()), [source]); // must NOT throw
+    const v = JSON.parse(
+      await readFile(
+        join(tempHome, 'packs', 'fo-pack', 'personal_revision', 'version.json'),
+        'utf8',
+      ),
+    ) as { base_version: string };
+    expect(v.base_version).toBe('1.0.0');
   });
 
   it('upgrade triggers 3-way merge + logs disposition counts', async () => {

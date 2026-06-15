@@ -23,6 +23,7 @@ import { Command } from 'commander';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { resolvePackStateDir, validatePackId } from '../packs/discovery.js';
+import { loadPack } from '../packs/loader.js';
 import {
   initPersonalRevision,
   readLessonFiles,
@@ -30,6 +31,8 @@ import {
   type LessonFile,
 } from '../packs/personal_revision.js';
 import { Manifest } from '../packs/schemas/manifest.js';
+import { validatePackFunctions, type ValidationIssue } from '../packs/validate_functions.js';
+import { buildValidationRegistry } from '../runtime/bootstrap.js';
 import { runThreeWayMerge } from '../runtime/versioning.js';
 
 export type ExportMode = 'lessons-only' | 'raw';
@@ -97,6 +100,35 @@ export function buildInstallCommand(deps: PackCliDeps = {}): Command {
     .action(async (source: string, opts: InstallOpts) => {
       const manifest = await readAndValidateManifest(source);
       validatePackId(manifest.name);
+
+      // PV.2 (T-wire-pack-validators): block a pack whose rules reference an unregistered primitive —
+      // otherwise it installs, loads, and the bad rule SILENTLY fails to enforce at runtime. Validate
+      // against the full primitive-name set (no backend I/O via buildValidationRegistry), BEFORE any
+      // copy/merge. Fail-OPEN on a VALIDATOR BUG (a thrown error), block only on a GENUINE PACK ISSUE
+      // (a clean, non-throwing nonempty `issues[]`) — never break a clean install on our own bug.
+      let issues: ValidationIssue[] = [];
+      try {
+        const sourcePack = await loadPack(source);
+        issues = validatePackFunctions(sourcePack, await buildValidationRegistry());
+      } catch (e) {
+        print(
+          `[opensquid pack install] WARN: function-ref validation skipped (${e instanceof Error ? e.message : String(e)}); ` +
+            `installing anyway — the pack is re-checked at session start.`,
+        );
+      }
+      if (issues.length > 0) {
+        throw new Error(
+          `[opensquid pack install] ${manifest.name} references unknown primitives — fix before install:\n` +
+            issues
+              .map(
+                (i) =>
+                  `  - ${i.skill}/${i.ruleId} step ${String(i.step)}: "${i.missing}"` +
+                  (i.suggestion !== undefined ? ` (did you mean "${i.suggestion}"?)` : ''),
+              )
+              .join('\n'),
+        );
+      }
+
       const stateDir = resolvePackStateDir(manifest.name, opts.scope ?? 'user', opts.projectCwd);
       const existing = await readVersionJson(stateDir);
 

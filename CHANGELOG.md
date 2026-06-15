@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.456] - 2026-06-15
+
+### Added — `opensquid pack install` blocks a pack with an unknown `call:` (PV.2, T-wire-pack-validators)
+
+- The install action now loads the source pack and validates its function references against
+  `buildValidationRegistry()` BEFORE any copy/merge. A `call:` to an unregistered primitive throws
+  (blocks the install) with the offending rule + a Levenshtein suggestion — so a silently
+  non-enforcing pack never lands. Validation is try/catch-wrapped: a VALIDATOR bug (a thrown error)
+  fails OPEN (warn + install anyway); only a GENUINE pack issue (a clean nonempty `issues[]`) blocks.
+  Cross-pack uniqueness stays a session-start concern (install has only the source pack).
+- Completes T-wire-pack-validators: prevention at install (PV.2) + session-start (PV.1) + runtime
+  visibility (PV.3). The previously-orphaned validator layer is now fully wired. wg-5eedceaaa19f.
+
 ## [0.5.455] - 2026-06-15
 
 ### Fixed — the dispatcher no longer silently swallows a rule's `error` result (PV.3, T-wire-pack-validators)
