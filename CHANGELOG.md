@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.449] - 2026-06-15
+
+### Added — git-versioned memory store: a session-boundary snapshot is the forensic archive (GVM.1, wg-7f4df49787cb)
+
+- `~/.opensquid/store/` (the per-file truth — `lessons/*.md` + the work-graph `issues/*.json`) is now
+  committed to a local git repo at session-end, after compression. Its history is the forensic
+  archive and the rollback floor that retention's hard-delete sweep (wg-9e4f4eb2a40f slice-3) depends
+  on: a memory demoted (`retired_at`) this session is committed BEFORE any future-session sweep can
+  delete it, so its content is always recoverable from history.
+- The store is git-versioned in place (git's commit history is the event log) — memory is NOT
+  re-architected to an append-only op-log. The repo is machine-local: a fixed `opensquid` identity (no
+  global git config needed), no remote, isolated from any project repo, and `rag.sqlite` (the
+  rebuildable index, a sibling of `store/`) is not tracked. Idempotent (inits once, skips empty
+  commits) and fail-soft (a git failure never blocks session-end).
+
 ## [0.5.448] - 2026-06-14
 
 ### Fixed — recall no longer fires on harness control-messages (wg-4f91e0b5cb8c, cause #2)

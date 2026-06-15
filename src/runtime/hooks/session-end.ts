@@ -22,6 +22,7 @@ import { exitIfSubagent } from './subagent_guard.js';
 import { clearFsmState } from '../fsm_state.js';
 import { runCompression } from '../compression_orchestrator.js';
 import { makeConsolidateRunner } from '../wedge/compression_deps.js';
+import { commitMemoryStore } from '../../rag/store_git.js';
 import { emitProbe, groupFromTask } from '../satisfaction_probe.js';
 import { archiveActiveTask, readActiveTask } from '../session_state.js';
 import { Event } from '../types.js';
@@ -121,6 +122,15 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     process.stderr.write(`opensquid: compression skipped — ${String(e)}\n`);
+  }
+
+  // GVM.1 (wg-7f4df49787cb) — snapshot the per-file memory+op store to git AFTER compression, so the
+  // forensic archive + retention rollback floor captures this session's writes + retired_at demotes.
+  try {
+    const sha = await commitMemoryStore(`memory snapshot: session ${sessionId.slice(0, 8)}`);
+    if (sha !== null) process.stderr.write(`opensquid: memory-store snapshot ${sha}\n`);
+  } catch {
+    /* fail-soft: a snapshot failure must never block session-end */
   }
 
   // T-AUTO-HANDOFF — the SessionEnd BACKUP writer. MUST run BEFORE
