@@ -64,6 +64,44 @@ describe('libsqlLexicalBackend', () => {
     expect(ids).toEqual(['b']); // 'a' demoted (retired_at set) → out of the injectable surface
   });
 
+  it('sweepRetired returns only aged non-user retired ids (RSW.1)', async () => {
+    const backend = libsqlLexicalBackend({ dbUrl: ':memory:' });
+    await backend.init();
+    const OLD = '2026-06-01T00:00:00.000Z';
+    const RECENT = '2026-06-14T00:00:00.000Z';
+    await backend.storeLesson({ ...mkLesson('agent-old', 'workflow a'), retired_at: OLD });
+    await backend.storeLesson({ ...mkLesson('agent-recent', 'workflow b'), retired_at: RECENT });
+    await backend.storeLesson(mkLesson('agent-live', 'workflow c')); // not retired
+    await backend.storeLesson({
+      ...mkLesson('user-old', 'workflow d'),
+      author: 'user',
+      retired_at: OLD,
+    });
+    const deleted = await backend.sweepRetired!('2026-06-10T00:00:00.000Z');
+    expect(deleted).toEqual(['agent-old']); // recent/live/user excluded
+  });
+
+  it('repromoteRetiredUserMemories restores user rows to recall, idempotent (RSW.1)', async () => {
+    const backend = libsqlLexicalBackend({ dbUrl: ':memory:' });
+    await backend.init();
+    const OLD = '2026-06-01T00:00:00.000Z';
+    await backend.storeLesson({
+      ...mkLesson('u', 'workflow restored phrase'),
+      author: 'user',
+      retired_at: OLD,
+    });
+    await backend.storeLesson({ ...mkLesson('a', 'workflow agent phrase'), retired_at: OLD });
+    // Before: the demoted user row is out of recall.
+    expect((await backend.recall('restored', 10, { namespace: null })).length).toBe(0);
+    const restored = await backend.repromoteRetiredUserMemories!();
+    expect(restored).toEqual(['u']);
+    // After: recallable again; the agent retired row stays out.
+    expect(
+      (await backend.recall('restored', 10, { namespace: null })).map((h) => h.lesson.id),
+    ).toEqual(['u']);
+    expect(await backend.repromoteRetiredUserMemories!()).toEqual([]); // idempotent
+  });
+
   it('returns [] for an empty query', async () => {
     const backend = libsqlLexicalBackend({ dbUrl: ':memory:' });
     await backend.init();

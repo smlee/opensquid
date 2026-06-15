@@ -84,8 +84,12 @@ export async function consolidate(
   const keptImmune: string[] = [];
   for (const pid of unique) {
     const reloaded = await deps.getMemoryById(pid);
-    // Absent/unreadable → treat as immune-safe (never touch the unconfirmable). Citation-only immunity.
-    const immune = reloaded === null ? true : reloaded.consumedByUserLessons > 0;
+    // Absent/unreadable → treat as immune-safe (never touch the unconfirmable). Immunity =
+    // user-authored OR citation-counted: user memory is NEVER demoted (the locked "long-term/user
+    // memory is never auto-removed" principle holds at the causal site — RSW.1, wg-9e4f4eb2a40f),
+    // and a cited memory stays live as before.
+    const immune =
+      reloaded === null ? true : reloaded.author === 'user' || reloaded.consumedByUserLessons > 0;
     if (immune) {
       keptImmune.push(pid);
       continue;

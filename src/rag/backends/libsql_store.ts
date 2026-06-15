@@ -84,6 +84,11 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       } catch {
         // index is optional; ordering by vector_distance_cos still works.
       }
+      // RSW.1 (wg-9e4f4eb2a40f): partial index so the retention sweep scans only the retired subset,
+      // independent of total table size.
+      await client.execute(
+        `CREATE INDEX IF NOT EXISTS idx_lessons_retired ON lessons (retired_at) WHERE retired_at IS NOT NULL`,
+      );
     },
 
     embed: (text) => embedder.embed(text),
@@ -235,6 +240,44 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       const lesson = rowToLesson(row);
       if (lesson.retired_at) return; // already retired — idempotent
       await this.storeLesson({ ...lesson, retired_at: new Date().toISOString() });
+    },
+
+    // RSW.1: hard-delete retired AGENT rows past the cutoff. Reuses deleteLesson(force) so DB + FTS +
+    // per-file source go together (no second durable path; rebuild can't resurrect). author!='user'
+    // is the deletion floor (deleteLesson(force) bypasses user immunity); consumed=0 is defense-in-
+    // depth (consolidate never demotes a cited row). Cutoff is an injected ISO string (no clock here).
+    async sweepRetired(cutoffIso: string): Promise<string[]> {
+      if (!client) throw new Error('libsql-store: not initialized');
+      const rs = await client.execute({
+        sql: `SELECT id FROM lessons
+              WHERE retired_at IS NOT NULL AND retired_at < ?
+              AND author != 'user' AND consumed_by_user_lessons = 0`,
+        args: [cutoffIso],
+      });
+      const ids = rs.rows.map((r) => s(r, 'id'));
+      for (const id of ids) await this.deleteLesson(id, { force: true });
+      return ids;
+    },
+
+    // RSW.1: restore any already-demoted USER memory to recall (inverse of demoteLesson). Re-uses
+    // storeLesson with retired_at omitted so the per-file `<id>.md` drops the field and a rebuild
+    // keeps it live. Idempotent — a no-op once no user row is retired.
+    async repromoteRetiredUserMemories(): Promise<string[]> {
+      if (!client) throw new Error('libsql-store: not initialized');
+      const rs = await client.execute({
+        sql: `SELECT id, content, tags, source, author, created_at, derived_from,
+              consumed_by_user_lessons, tier, namespace, retired_at, durability
+              FROM lessons WHERE author = 'user' AND retired_at IS NOT NULL`,
+        args: [],
+      });
+      const ids: string[] = [];
+      for (const row of rs.rows) {
+        const cleared = rowToLesson(row);
+        delete cleared.retired_at; // omitted from the per-file source too → rebuild keeps it live
+        await this.storeLesson(cleared);
+        ids.push(cleared.id);
+      }
+      return ids;
     },
   };
 }

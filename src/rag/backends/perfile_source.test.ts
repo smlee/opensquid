@@ -192,3 +192,58 @@ describe('libsql store: deleteLesson (explicit-only, user-immune)', () => {
     expect(await backend.deleteLesson('nope')).toEqual({ deleted: false, forced: false });
   });
 });
+
+describe('libsql store: retention sweep + re-promote (RSW.1, wg-9e4f4eb2a40f)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'pfs-rsw-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const mk = () =>
+    libsqlStoreBackend({
+      dbUrl: `file:${join(dir, 'r.db')}`,
+      embedder: fakeEmbedder,
+      sourceDir: dir,
+    });
+
+  const CUTOFF = '2026-06-10T00:00:00.000Z';
+  const OLD = '2026-06-01T00:00:00.000Z'; // before cutoff
+  const RECENT = '2026-06-14T00:00:00.000Z'; // after cutoff
+
+  it('sweepRetired deletes only aged non-immune AGENT rows; user/cited/recent/live kept', async () => {
+    const backend = mk();
+    await backend.init();
+    await backend.storeLesson(lesson({ id: 'agent-old', author: 'agent', retired_at: OLD }));
+    await backend.storeLesson(lesson({ id: 'agent-recent', author: 'agent', retired_at: RECENT }));
+    await backend.storeLesson(lesson({ id: 'agent-live', author: 'agent' })); // not retired
+    await backend.storeLesson(lesson({ id: 'user-old', author: 'user', retired_at: OLD }));
+    await backend.storeLesson(
+      lesson({ id: 'cited-old', author: 'agent', retired_at: OLD, consumedByUserLessons: 3 }),
+    );
+
+    const deleted = await backend.sweepRetired!(CUTOFF);
+    expect(deleted).toEqual(['agent-old']);
+    const ids = (await readRecords(dir)).map((l) => l.id).sort();
+    expect(ids).toEqual(['agent-live', 'agent-recent', 'cited-old', 'user-old']); // agent-old gone
+  });
+
+  it('repromoteRetiredUserMemories clears retired_at on user rows (per-file too), idempotent; agents untouched', async () => {
+    const backend = mk();
+    await backend.init();
+    await backend.storeLesson(lesson({ id: 'u-demoted', author: 'user', retired_at: OLD }));
+    await backend.storeLesson(lesson({ id: 'a-demoted', author: 'agent', retired_at: OLD }));
+
+    const restored = await backend.repromoteRetiredUserMemories!();
+    expect(restored).toEqual(['u-demoted']);
+    // per-file source dropped retired_at → a rebuild keeps it live
+    expect(
+      await readRecords(dir).then((rs) => rs.find((l) => l.id === 'u-demoted')),
+    ).not.toHaveProperty('retired_at');
+    // agent retired row untouched
+    expect((await readRecords(dir)).find((l) => l.id === 'a-demoted')?.retired_at).toBe(OLD);
+    // idempotent
+    expect(await backend.repromoteRetiredUserMemories!()).toEqual([]);
+  });
+});

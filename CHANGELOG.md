@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.458] - 2026-06-15
+
+### Added — retention sweeper closes the 30-day memory-reclaim loop; user memory is never demoted (RSW.1, wg-9e4f4eb2a40f)
+
+- Completes the locked retention model (slice 1 shipped demotion at 0.5.412). Demoted (`retired_at`)
+  AGENT memories are now hard-deleted after a 30-day quiet window via a new `RagBackend.sweepRetired`
+  (both libSQL backends), the ONLY hard-delete path — it reuses `deleteLesson(force)` so the DB row,
+  FTS index, and per-file source go together (a rebuild can't resurrect a swept row). A partial index
+  `idx_lessons_retired … WHERE retired_at IS NOT NULL` keeps the sweep's cost independent of table size.
+- **User memory is never auto-removed.** Consolidation's immunity now includes `author === 'user'`
+  (the causal fix at `consolidate.ts`), so a user-authored memory is never demoted. A new
+  `repromoteRetiredUserMemories` restores any user row demoted before this fix back into recall
+  (idempotent), and the sweep's eligibility additionally excludes `author = 'user'` as a deletion
+  floor. Two independent guards plus a remediation pass.
+- Wired unconditionally + fail-open at session-end (re-promote → sweep), positioned AFTER compression
+  and BEFORE the GVM.1 git snapshot so deletions land in the forensic archive. Slice-2's
+  `last_touched_at` touch-clock is dropped — no runtime path can cite a retired memory, so the clock
+  is `retired_at` directly (Simplicity / no dead state).
+
 ## [0.5.457] - 2026-06-15
 
 ### Fixed — inbox transport bridge self-heals on a periodic reconcile, closing the post-ready flake (TBR.1, wg-4d2bc0929a32)

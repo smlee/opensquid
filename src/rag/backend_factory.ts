@@ -164,5 +164,13 @@ export function libsqlQwen3WithLexicalFallback(opts: QwenWithFallbackOpts): RagB
     async demoteLesson(id) {
       return active.demoteLesson?.(id);
     },
+    // RSW.1: delegate the retention sweep + user-memory re-promotion; `?? []` = a non-consolidating
+    // backend (e.g. claude-auto-memory) reclaims/restores nothing, never throws.
+    async sweepRetired(cutoffIso) {
+      return (await active.sweepRetired?.(cutoffIso)) ?? [];
+    },
+    async repromoteRetiredUserMemories() {
+      return (await active.repromoteRetiredUserMemories?.()) ?? [];
+    },
   };
 }

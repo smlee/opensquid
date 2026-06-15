@@ -132,6 +132,18 @@ describe('consolidate', () => {
     expect(out.deleted).toEqual(['m-b']);
   });
 
+  it('RSW.1: keeps a user-authored predecessor (never demotes user memory), deletes the rest', async () => {
+    const { deps, captured } = makeDeps([
+      mem({ id: 'm-a', author: 'user', consumedByUserLessons: 0 }), // user → immune even uncited
+      mem({ id: 'm-b', author: 'agent', consumedByUserLessons: 0 }),
+    ]);
+    const out = await consolidate(deps, ['m-a', 'm-b']);
+    expect(out.verified).toBe(true);
+    expect(out.keptImmune).toContain('m-a');
+    expect(out.deleted).toEqual(['m-b']);
+    expect(captured.deleted).toEqual(['m-b']); // the user memory is never demoted
+  });
+
   it('a compress error propagates and deletes nothing', async () => {
     const { deps, captured } = makeDeps([
       mem({ id: 'm-a', tags: ['scope:user'] }),

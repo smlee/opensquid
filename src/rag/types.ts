@@ -111,4 +111,12 @@ export interface RagBackend {
   // Demote (retire) a memory: leaves it queryable by id (rollback floor) but OUT of the injectable
   // recall surface (wg-9e4f4eb2a40f). OPTIONAL — only consolidation-capable backends implement it.
   demoteLesson?(id: string): Promise<void>;
+  // RSW.1 (wg-9e4f4eb2a40f): hard-delete retired AGENT rows older than the cutoff that are not immune
+  // (author!='user' [+ consumed=0 where tracked]) — the ONLY hard-delete path for demoted memory;
+  // reuses deleteLesson(force) so DB + FTS + per-file source go together. Returns deleted ids.
+  // OPTIONAL — mirrors demoteLesson (consolidation-capable backends only).
+  sweepRetired?(cutoffIso: string): Promise<string[]>;
+  // RSW.1: restore any already-demoted USER memory to recall (the inverse of demoteLesson) — closes
+  // the gap where a user row was demoted before the author-immunity fix. Idempotent. Returns ids.
+  repromoteRetiredUserMemories?(): Promise<string[]>;
 }

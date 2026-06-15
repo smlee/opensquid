@@ -23,12 +23,17 @@ import { clearFsmState } from '../fsm_state.js';
 import { runCompression } from '../compression_orchestrator.js';
 import { makeConsolidateRunner } from '../wedge/compression_deps.js';
 import { commitMemoryStore } from '../../rag/store_git.js';
+import { createBackend } from '../../rag/backend_factory.js';
+import { resolveBackendConfig } from '../../rag/config.js';
 import { emitProbe, groupFromTask } from '../satisfaction_probe.js';
 import { archiveActiveTask, readActiveTask } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
 import { reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
+
+/** RSW.1 (wg-9e4f4eb2a40f): demoted memory is hard-deleted after this quiet window. */
+const RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface SessionEndPayload {
   sessionId?: string;
@@ -122,6 +127,27 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     process.stderr.write(`opensquid: compression skipped — ${String(e)}\n`);
+  }
+
+  // RSW.1 (wg-9e4f4eb2a40f) — close the retention loop. Restore any already-demoted USER memory to
+  // recall (Part 1b), then hard-delete retired AGENT rows past the 30-day window (Part 2). Runs AFTER
+  // compression (this session's demotes become eligible next time) and BEFORE the GVM.1 snapshot
+  // (deletions land in the same forensic commit). Unconditional (NOT satisfaction-gated like
+  // compression) + fail-open; the constructed libSQL client is reclaimed by the process.exit below.
+  try {
+    const backend = createBackend(await resolveBackendConfig());
+    await backend.init();
+    const restored = (await backend.repromoteRetiredUserMemories?.()) ?? [];
+    if (restored.length > 0)
+      process.stderr.write(
+        `opensquid: retention — ${String(restored.length)} user mem(s) restored\n`,
+      );
+    const cutoff = new Date(Date.now() - RETENTION_WINDOW_MS).toISOString();
+    const swept = (await backend.sweepRetired?.(cutoff)) ?? [];
+    if (swept.length > 0)
+      process.stderr.write(`opensquid: retention sweep — ${String(swept.length)} reclaimed\n`);
+  } catch (e) {
+    process.stderr.write(`opensquid: retention sweep skipped — ${String(e)}\n`);
   }
 
   // GVM.1 (wg-7f4df49787cb) — snapshot the per-file memory+op store to git AFTER compression, so the

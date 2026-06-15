@@ -74,6 +74,10 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
         CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts
         USING fts5(id UNINDEXED, content, tags, source, tokenize='unicode61');
       `);
+      // RSW.1 (wg-9e4f4eb2a40f): partial index so the retention sweep scans only the retired subset.
+      await client.execute(
+        `CREATE INDEX IF NOT EXISTS idx_lessons_retired ON lessons (retired_at) WHERE retired_at IS NOT NULL`,
+      );
     },
 
     // eslint-disable-next-line @typescript-eslint/require-await
@@ -155,6 +159,36 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
         sql: `UPDATE lessons SET retired_at = ? WHERE id = ?`,
         args: [new Date().toISOString(), id],
       });
+    },
+
+    // RSW.1: hard-delete retired AGENT rows past the cutoff via deleteLesson(force). No consumed
+    // column on this backend, so author!='user' is the sole (sufficient) immunity floor. DB-only.
+    async sweepRetired(cutoffIso: string): Promise<string[]> {
+      if (!client) throw new Error('libsql-lexical: not initialized');
+      const rs = await client.execute({
+        sql: `SELECT id FROM lessons
+              WHERE retired_at IS NOT NULL AND retired_at < ? AND author != 'user'`,
+        args: [cutoffIso],
+      });
+      const ids = rs.rows.map((r) => s(r, 'id'));
+      for (const id of ids) await this.deleteLesson(id, { force: true });
+      return ids;
+    },
+
+    // RSW.1: restore any already-demoted USER memory to recall. DB-only UPDATE (no per-file source).
+    async repromoteRetiredUserMemories(): Promise<string[]> {
+      if (!client) throw new Error('libsql-lexical: not initialized');
+      const rs = await client.execute({
+        sql: `SELECT id FROM lessons WHERE author = 'user' AND retired_at IS NOT NULL`,
+        args: [],
+      });
+      const ids = rs.rows.map((r) => s(r, 'id'));
+      if (ids.length > 0)
+        await client.execute({
+          sql: `UPDATE lessons SET retired_at = NULL WHERE author = 'user' AND retired_at IS NOT NULL`,
+          args: [],
+        });
+      return ids;
     },
   };
 }
