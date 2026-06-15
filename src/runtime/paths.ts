@@ -148,24 +148,36 @@ export function resolveProjectUuidFromEnv(env: NodeJS.ProcessEnv = process.env):
 }
 
 /**
- * Walks up from `startDir` looking for `.opensquid/project.json`. Returns
- * the parsed `uuid` on first hit (strict schema check: `version === 1 &&
- * uuid && id`), or `null` when the walk exhausts the 64-level cap or
- * reaches the filesystem root without a valid card.
- *
- * Malformed JSON, missing fields, and version mismatches all silently
- * continue the walk — a bad ancestor card must not mask a good descendant
- * one, and the same file might be valid under a different `version`-future
- * revision that this consumer doesn't recognize.
+ * A resolved project marker: the directory CONTAINING the `.opensquid/project.json`
+ * (the project root) plus its `uuid`. Both come from the SAME card, so the process
+ * layer's two scope surfaces (recall → `uuid`, handoff → `root`) cannot diverge
+ * (T-umbrella-confine-to-chat UCC.1).
  */
-export async function walkForProjectUuid(startDir: string): Promise<string | null> {
+export interface ProjectMarker {
+  root: string;
+  uuid: string;
+}
+
+/**
+ * Walks up from `startDir` looking for `.opensquid/project.json`. Returns the
+ * containing directory as `root` AND the parsed `uuid` on first hit (strict schema
+ * check: `version === 1 && uuid && id`), or `null` when the walk exhausts the
+ * 64-level cap or reaches the filesystem root without a valid card.
+ *
+ * Malformed JSON, missing fields, and version mismatches all silently continue the
+ * walk — a bad ancestor card must not mask a good descendant one, and the same file
+ * might be valid under a different `version`-future revision this consumer doesn't
+ * recognize. This is the SINGLE marker walk; `walkForProjectUuid` delegates to it.
+ */
+export async function resolveProjectMarker(startDir: string): Promise<ProjectMarker | null> {
   let dir = resolve(startDir);
   for (let i = 0; i < 64; i++) {
     const candidate = join(dir, '.opensquid', 'project.json');
     try {
       const raw = await readFile(candidate, 'utf8');
       const parsed = JSON.parse(raw) as ProjectCard;
-      if (parsed?.version === 1 && parsed.uuid && parsed.id) return parsed.uuid;
+      if (parsed?.version === 1 && parsed.uuid && parsed.id)
+        return { root: dir, uuid: parsed.uuid };
     } catch {
       /* keep walking */
     }
@@ -174,6 +186,14 @@ export async function walkForProjectUuid(startDir: string): Promise<string | nul
     dir = parent;
   }
   return null;
+}
+
+/**
+ * Back-compat wrapper over {@link resolveProjectMarker} — returns just the `uuid`.
+ * Existing callers (chat watch, daemon binding) are unaffected by the consolidation.
+ */
+export async function walkForProjectUuid(startDir: string): Promise<string | null> {
+  return (await resolveProjectMarker(startDir))?.uuid ?? null;
 }
 
 /**

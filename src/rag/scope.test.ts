@@ -8,13 +8,16 @@
  *     umbrella share a namespace (the umbrella-collapse). This test FAILS the instant cross-project
  *     leak returns — the regression firewall.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { resolveProjectMarker } from '../runtime/paths.js';
+
 import { libsqlStoreBackend } from './backends/libsql_store.js';
+import { resolveRecallScope } from './scope.js';
 import { inScope } from './types.js';
 
 import type { Embedder } from './embedders/types.js';
@@ -85,13 +88,72 @@ describe('libsql store scope isolation (the regression firewall)', () => {
     expect(ids).toEqual(['sh']);
   });
 
-  it('umbrella-collapse: two cwds in the same umbrella share a namespace', async () => {
-    // loop + opensquid resolve to the SAME umbrella id → a memory written under one is recallable
-    // from the other (this is why the namespace key is the umbrella, not the raw project UUID).
+  it('a project row is recallable only under its own namespace (per-repo, UCC.1)', async () => {
+    // De-umbrella'd: the namespace key is the per-repo project UUID, NOT a chat umbrella id.
     const b = libsqlStoreBackend({ dbUrl, embedder: fakeEmbedder });
     await b.init();
-    await b.storeLesson(mem({ id: 'loop-mem', tier: 'project', namespace: 'loop' }));
-    const ids = (await b.recall('needle', 10, { namespace: 'loop' })).map((h) => h.lesson.id);
-    expect(ids).toContain('loop-mem');
+    await b.storeLesson(mem({ id: 'proj-mem', tier: 'project', namespace: 'uuid-X' }));
+    expect(
+      (await b.recall('needle', 10, { namespace: 'uuid-X' })).map((h) => h.lesson.id),
+    ).toContain('proj-mem');
+    expect(
+      (await b.recall('needle', 10, { namespace: 'uuid-Y' })).map((h) => h.lesson.id),
+    ).not.toContain('proj-mem');
+  });
+});
+
+describe('resolveRecallScope — per-repo marker resolution (UCC.1 de-umbrella)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'marker-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const writeMarker = async (at: string, uuid: string): Promise<void> => {
+    await mkdir(join(at, '.opensquid'), { recursive: true });
+    await writeFile(
+      join(at, '.opensquid', 'project.json'),
+      JSON.stringify({ version: 1, id: uuid, uuid }),
+      'utf8',
+    );
+  };
+
+  it('nested markers resolve PER-REPO: a sub-repo cwd → its own UUID, not the parent', async () => {
+    await writeMarker(dir, 'uuid-parent');
+    const sub = join(dir, 'sub');
+    await writeMarker(sub, 'uuid-sub');
+    expect(await resolveProjectMarker(sub)).toEqual({ root: sub, uuid: 'uuid-sub' });
+    expect(await resolveRecallScope(sub)).toEqual({ namespace: 'uuid-sub' });
+    // and the parent still resolves to itself
+    expect(await resolveRecallScope(dir)).toEqual({ namespace: 'uuid-parent' });
+  });
+
+  it('a fully markerless cwd → null marker → env-or-null namespace', async () => {
+    const prev = process.env.OPENSQUID_PROJECT_UUID;
+    delete process.env.OPENSQUID_PROJECT_UUID;
+    try {
+      expect(await resolveProjectMarker(dir)).toBeNull();
+      expect(await resolveRecallScope(dir)).toEqual({ namespace: null });
+    } finally {
+      if (prev !== undefined) process.env.OPENSQUID_PROJECT_UUID = prev;
+    }
+  });
+
+  it('NO-DIVERGENCE: a `.opensquid/` dir WITHOUT project.json → null (the (A)-over-(D) guarantee)', async () => {
+    // The divergence-critical path: an .opensquid/ DIRECTORY exists but has no project.json.
+    // resolveProjectMarker keeps walking (readFile ENOENT) → null, so recall fails closed. The SAME
+    // resolver feeds handoff (UCC.2), so both process-scope surfaces fall back identically — neither
+    // ever resolves to the bare .opensquid/ dir. This is exactly the case (D) would have diverged on.
+    await mkdir(join(dir, '.opensquid'), { recursive: true }); // dir but NO project.json
+    const prev = process.env.OPENSQUID_PROJECT_UUID;
+    delete process.env.OPENSQUID_PROJECT_UUID;
+    try {
+      expect(await resolveProjectMarker(dir)).toBeNull();
+      expect(await resolveRecallScope(dir)).toEqual({ namespace: null });
+    } finally {
+      if (prev !== undefined) process.env.OPENSQUID_PROJECT_UUID = prev;
+    }
   });
 });

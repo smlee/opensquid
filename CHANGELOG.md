@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.450] - 2026-06-15
+
+### Changed — recall scope is umbrella-AGNOSTIC: per-repo `.opensquid/project.json` marker (UCC.1, wg-57a17b52853d)
+
+- `resolveRecallScope` (`src/rag/scope.ts`) no longer reads `channels.json` / the chat umbrella. The
+  memory namespace is now the project UUID from the nearest `.opensquid/project.json` marker walking
+  up from cwd (per-repo: opensquid resolves to opensquid, loop to loop), falling back to the
+  `OPENSQUID_PROJECT_UUID` env override, else null (fail-closed → shared-only). Umbrella is a
+  chat-routing concern only; a session's working repo determines its memory scope.
+- New `resolveProjectMarker(cwd) → {root, uuid} | null` in `src/runtime/paths.ts` is the single
+  `.opensquid/project.json` walk; `walkForProjectUuid` now delegates to it (no caller impact). Both
+  process-scope surfaces (recall → uuid; handoff → root, UCC.2) consume the same walk, so they cannot
+  diverge — incl. the `.opensquid/`-dir-without-`project.json` case (regression-locked).
+- First slice of T-umbrella-confine-to-chat (the user lock: "the existence of umbrella should be
+  irrelevant to the process of opensquid"). Existing umbrella-namespaced rows are re-keyed by UCC.3.
+
 ## [0.5.449] - 2026-06-15
 
 ### Added — git-versioned memory store: a session-boundary snapshot is the forensic archive (GVM.1, wg-7f4df49787cb)

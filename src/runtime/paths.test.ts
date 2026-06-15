@@ -26,6 +26,7 @@ import {
   resolveProjectUuidFromEnv,
   resolveUserScopeRoot,
   walkForProjectUuid,
+  resolveProjectMarker,
 } from './paths.js';
 
 let priorHome: string | undefined;
@@ -267,6 +268,36 @@ describe('walkForProjectUuid', () => {
     const result = await walkForProjectUuid(empty);
     if (result !== null) expect(result.startsWith(root)).toBe(false);
     else expect(result).toBeNull();
+  });
+});
+
+describe('resolveProjectMarker (the single marker walk; walkForProjectUuid delegates)', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'opensquid-marker-'));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('returns BOTH the containing root dir AND the uuid from the same card', async () => {
+    const proj = join(root, 'proj');
+    await mkdir(join(proj, '.opensquid'), { recursive: true });
+    await writeFile(
+      join(proj, '.opensquid', 'project.json'),
+      JSON.stringify({ version: 1, id: 'p', uuid: 'uuid-1' }),
+      'utf8',
+    );
+    await expect(resolveProjectMarker(proj)).resolves.toEqual({ root: proj, uuid: 'uuid-1' });
+    // delegation: walkForProjectUuid returns just the uuid half
+    await expect(walkForProjectUuid(proj)).resolves.toBe('uuid-1');
+  });
+
+  it('returns null for an .opensquid/ dir WITHOUT project.json (no-divergence critical path)', async () => {
+    const proj = join(root, 'proj');
+    await mkdir(join(proj, '.opensquid'), { recursive: true }); // dir but no project.json
+    await expect(resolveProjectMarker(proj)).resolves.toBeNull();
   });
 });
 
