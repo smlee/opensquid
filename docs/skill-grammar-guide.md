@@ -1,5 +1,7 @@
 # opensquid `if:` grammar — author's guide
 
+> **Canonical pack-authoring reference: [`pack-system-guide.md`](./pack-system-guide.md).** This document is now a focused sub-reference for the `if:` expression grammar; the guide is the single source of truth for the whole pack system (lifecycle, manifest, FSM, skills, the primitive vocabulary, teams, models, drift, procedure/rubric, scope/detection). Start there.
+
 Version: 0.5.149 · Last updated: 2026-05-26 · Spec: H.1.x + H.2 + H.3
 
 This guide is the reference for pack authors writing `if:` clauses

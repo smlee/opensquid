@@ -1,5 +1,7 @@
 # Pack runtime — authoritative reference
 
+> **Canonical pack-authoring reference: [`pack-system-guide.md`](./pack-system-guide.md).** That guide is the single, code-derived, drift-guarded source of truth for authoring a pack end-to-end. This document remains the deeper primitive/runtime reference it cites; read the guide first for the whole-system model.
+
 Version: 0.5.435 · Last updated: 2026-06-14 · Spec: T-IDENTITY-FOUNDATION (IDF.1–IDF.5) + T-PACK-FSM-STANDARDIZATION (FSM engine, `fsm.yaml`, `guards:`, `read_fsm_state`/`advance_fsm`) + T-per-pack-workflow-instructions (`procedure.md`, `procedure_pre_inject`)
 
 This document is the authoritative reference for the opensquid pack
