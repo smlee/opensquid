@@ -86,6 +86,7 @@ import { SessionToolHistory } from '../functions/session_tool_history.js';
 import { registerStateFunctions } from '../functions/state.js';
 import { registerStagedDocsOnlyFunction } from '../functions/staged_docs_only.js';
 import { registerResetScopeTrackStateFunction } from '../functions/reset_scope_track_state.js';
+import { registerArmScopeFunction } from '../functions/arm_scope.js';
 import { registerFsmFunctions } from '../functions/fsm.js';
 import { registerReadRubric } from '../functions/read_rubric.js';
 import { registerRubricPreInject } from '../functions/rubric_pre_inject.js';
@@ -130,6 +131,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerStateFunctions(r);
   registerStagedDocsOnlyFunction(r);
   registerResetScopeTrackStateFunction(r);
+  registerArmScopeFunction(r);
   registerFsmFunctions(r);
   registerVerdictFunctions(r);
   registerLlmFunctions(r);

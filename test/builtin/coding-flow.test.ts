@@ -18,6 +18,7 @@ import { registerReadRubric } from '../../src/functions/read_rubric.js';
 import { registerRubricPreInject } from '../../src/functions/rubric_pre_inject.js';
 import { registerProcedurePreInject } from '../../src/functions/procedure_pre_inject.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
+import { registerArmScopeFunction } from '../../src/functions/arm_scope.js';
 import { FunctionRegistry } from '../../src/functions/registry.js';
 import { registerStateFunctions } from '../../src/functions/state.js';
 import { registerResetScopeTrackStateFunction } from '../../src/functions/reset_scope_track_state.js';
@@ -45,6 +46,7 @@ function registry(): FunctionRegistry {
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerFsmFunctions(r);
+  registerArmScopeFunction(r);
   registerStateFunctions(r);
   registerResetScopeTrackStateFunction(r); // wg-4c48ef1b9969: the re-arm rule clears per-track state
   registerVerdictFunctions(r);
@@ -375,6 +377,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerFsmFunctions(r);
+  registerArmScopeFunction(r);
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
@@ -475,6 +478,7 @@ function registryWithAuditOutcomes(scopeOut: string, specOut: string): FunctionR
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerFsmFunctions(r);
+  registerArmScopeFunction(r);
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
@@ -671,6 +675,7 @@ describe('builtin coding-flow pack — SCOPE gating: advance coupled to content 
     const r = new FunctionRegistry();
     registerEventFunctions(r);
     registerFsmFunctions(r);
+    registerArmScopeFunction(r);
     registerStateFunctions(r);
     registerVerdictFunctions(r);
     registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
@@ -938,6 +943,47 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     // still phases_complete (NOT re-armed) → AskUserQuestion stays blocked.
     expect((await dispatchEvent(askQuestion, [pack], reg, sid)).exitCode).toBe(2);
   });
+
+  // RTC.6 (wg-649d80e78e64): the rearm-on-depletion arm now routes through the arm_scope
+  // chokepoint, so a RESEARCH-classified turn at a depleted phases_complete must NOT re-arm
+  // scoping (the gate-fighting class); a WORK-classified turn still re-arms.
+  const rtRec = (type: 'research' | 'work') => ({
+    type,
+    confidence: 'high' as const,
+    source: 'deterministic' as const,
+    prompt_hash: 'x',
+    at: '2026-06-14T00:00:00.000Z',
+  });
+
+  it('RTC.6: a RESEARCH turn at depleted phases_complete does NOT re-arm (no spurious scoping)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-rtc6-research';
+    const reg = registry();
+    await drivePhasesComplete(pack, sid); // → phases_complete, 0 open
+    await writeRequestType(sid, rtRec('research')); // this turn is a question
+    await dispatchEvent(
+      { kind: 'prompt_submit', prompt: 'why is the null handling structured this way?' },
+      [pack],
+      reg,
+      sid,
+    );
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('phases_complete');
+  });
+
+  it('RTC.6: a WORK turn at depleted phases_complete DOES re-arm scoping', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-rtc6-work';
+    const reg = registry();
+    await drivePhasesComplete(pack, sid); // → phases_complete, 0 open
+    await writeRequestType(sid, rtRec('work'));
+    await dispatchEvent(
+      { kind: 'prompt_submit', prompt: 'the null handling is broken — make it robust' },
+      [pack],
+      reg,
+      sid,
+    );
+    expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('scoping');
+  });
 });
 
 const gitCommit: ToolCallEvent = {
@@ -950,6 +996,7 @@ function registryExec(): FunctionRegistry {
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerFsmFunctions(r); // FU.1: the commit gate consults read_fsm_state (mid-flow → not ad-hoc)
+  registerArmScopeFunction(r);
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   registerStagedDocsOnlyFunction(r); // wg-3dcca3b29ed1: the gate now checks docs-only parity
@@ -1091,6 +1138,7 @@ function registryTaskStart(): FunctionRegistry {
   const r = new FunctionRegistry();
   registerEventFunctions(r);
   registerFsmFunctions(r);
+  registerArmScopeFunction(r);
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   r.register(HasGeneratedSpec);

@@ -24,20 +24,14 @@ rules:
             - '\bdesign\b'
             - '\bplan\b'
         as: intent
-      # RTC.2 (wg-3d175ec06767): consult the persistent request-type record. A research-classified
-      # prompt (understand-only / a question) must NOT arm scope even if it matches a scope keyword
-      # ("what's the plan here?" matches \bplan\b but is a question) — that arm-on-question is cause-3
-      # of the codex-pause-wedge. Null-safe: an absent record → rt.type is undefined → `undefined !=
-      # "research"` is true → arms as before (backward-compat; member access on null short-circuits to
-      # undefined, interpreter.ts:177-187).
-      - call: read_state
-        args:
-          key: request-type
-        as: rt
-      - call: advance_fsm
-        if: 'len(intent.matched) > 0 && rt.type != "research"'
-        args:
-          event: scope_start
+      # RTC (wg-649d80e78e64): the request-type veto now lives in the arm_scope CHOKEPOINT — the
+      # single owner shared by BOTH arm producers (this rule + rearm-on-depletion), so a research-
+      # classified prompt (understand-only / a question — "what's the plan here?" matches \bplan\b but
+      # is a question) can never arm scope and no producer can reintroduce the bypass. enter-scoping
+      # just supplies its keyword-intent condition; arm_scope reads request-type and vetoes research.
+      # (Supersedes the inline RTC.2 gate, wg-3d175ec06767.)
+      - call: arm_scope
+        if: 'len(intent.matched) > 0'
       # FU.3: record the track-type so the AUTHOR gate can consult it. RESET to the
       # strict default (feature) on every scope entry FIRST — so a stale fix/doc/
       # trivial value from a prior track can never under-gate a later feature task —
@@ -270,10 +264,12 @@ rules:
         as: st
       - call: open_task_count
         as: open
-      - call: advance_fsm
+      # RTC (wg-649d80e78e64): the SECOND arm producer routes through the SAME arm_scope chokepoint,
+      # so a research/docs turn after a completed track can no longer spuriously re-arm scoping (the
+      # gate-fighting class). arm_scope owns the research veto; this rule supplies only the structural
+      # depletion condition.
+      - call: arm_scope
         if: 'st == "phases_complete" && open.count == 0'
-        args:
-          event: scope_start
       # Strict default for the re-armed track: a plain-language track can't be classified,
       # so gate it at the strictest profile (feature). Mirrors enter-scoping's reset.
       - call: write_state

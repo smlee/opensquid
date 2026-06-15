@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.445] - 2026-06-14
+
+### Fixed — a research/docs turn after a completed track no longer spuriously re-arms SCOPE (wg-649d80e78e64)
+
+- The coding-flow has TWO producers of the `scope_start` arm — `enter-scoping` (keyword intent)
+  and `rearm-on-depletion` (the structural re-arm after a track completes). RTC.2 gated only the
+  first, so after a track reached `phases_complete` with an empty backlog, the NEXT prompt — even a
+  pure research/docs question — re-armed `scoping`, which flipped the flow back to "run-active" and
+  fired the pause/commit gates on non-coding work (the gate-fighting class).
+- Root cause was the per-producer duplication of the veto, so the fix centralizes rather than
+  copies: a new `arm_scope` primitive owns the request-type veto (research turn → no-op; otherwise
+  fire `scope_start`), and BOTH producers route their arm through it. `enter-scoping` drops its
+  inline `rt.type != "research"` clause; the veto now lives in ONE place, so no future producer can
+  reintroduce the bypass. Null-safe (absent record → arms; the deterministic classifier always
+  writes one in production). The generic, deliberately domain-general FSM is untouched — the veto
+  is a coding-flow primitive, not an FSM-transition guard.
+- `enter-scoping`'s observable behavior is unchanged (its RTC.2 regression tests pass untouched);
+  `rearm-on-depletion` gains the veto.
+
 ## [0.5.444] - 2026-06-14
 
 ### Fixed — one malformed pack no longer crashes `schedule list` / `triggers list` (wg-a3e928b8255b)
