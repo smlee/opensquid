@@ -32,10 +32,10 @@ The built-in `workflow` skill ships this rule in
 ```yaml
 - id: phase-logged-before-commit
   process:
-    - call: match_command
-      args:
-        pattern: 'git\s+commit\b'
-        target: tool_args.command
+    - call: command_invokes # STRUCTURAL: matches a REAL `git commit` invocation
+      args: #               (program+subcommand parsed from the shell), NOT a regex on
+        program: git #      the command string — so `echo "git commit"` / a prose mention
+        subcommand: commit #  never false-fires, while `cd … && git commit` still matches.
       as: committing
     - call: read_state
       if: committing

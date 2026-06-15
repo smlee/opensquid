@@ -631,12 +631,14 @@ rules:
     kind: track_check
     requires: [] # rule-local preconditions (peer to Skill.requires)
     process:
-      - call: tool_name
-        as: tool
-      - call: match_command
-        as: m
+      - call: command_invokes # structural — a real `git commit --amend`, not a regex on the string
+        args:
+          program: git
+          subcommand: commit
+          flag_any: ['--amend']
+        as: amending
       - call: verdict
-        if: 'tool == "Bash" && m.matched == true'
+        if: 'amending'
         args:
           level: warn
           message: 'avoid git commit --amend in shared branches'
@@ -926,13 +928,14 @@ shipped primitive by category.
 
 ### 5.1 Event inspection (`src/functions/event.ts`)
 
-| Primitive                | Returns                       | Use                                             |
-| ------------------------ | ----------------------------- | ----------------------------------------------- |
-| `tool_name`              | `{value: string}`             | The tool being called (`Bash`, `Write`, etc.)   |
-| `tool_args`              | object                        | The tool's parsed args                          |
-| `cwd`                    | `{value: string}`             | Current working directory                       |
-| `last_assistant_message` | `{value: string}`             | Most recent assistant output                    |
-| `match_command`          | `{matched: bool, groups?: …}` | Regex-match against bash command (args.pattern) |
+| Primitive                | Returns                       | Use                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tool_name`              | `{value: string}`             | The tool being called (`Bash`, `Write`, etc.)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `tool_args`              | object                        | The tool's parsed args                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `cwd`                    | `{value: string}`             | Current working directory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `last_assistant_message` | `{value: string}`             | Most recent assistant output                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `command_invokes`        | `bool`                        | **STRUCTURAL** match of a real shell command invocation — args `{program, subcommand?, flag_any?, arg_any?}`. Parses the command into shell segments and matches a GENUINE invocation: `program` (basename), optional `subcommand`, `flag_any` (any listed flag present), `arg_any` (a non-flag positional whose refspec TARGET — `src:dst`→`dst`, `+`-stripped, basename — is in the list; conjunctive with `flag_any`). Ignores prose/`echo`/`grep` mentions; compounds (`cd … && git commit`) still match. **PREFER this for command gates.** (`shell_parse.ts`, `event.ts`) |
+| `match_command`          | `{matched: bool, groups?: …}` | Regex-match against the bash command string (`args.pattern`). EVADABLE — a quoted/echoed mention false-fires and boundary-anchoring is brittle. Reserve for LOOSE / non-command string matching; for git/npm-style **command gates use `command_invokes`** (the built-in git/version gates were migrated off this in GM.1–4; `command_boundary.skill.test` guards against reverting to regex).                                                                                                                                                                                  |
 
 ### 5.2 State + FSM (`src/functions/state.ts`, `fsm.ts`, `session_tool_history.ts`)
 
