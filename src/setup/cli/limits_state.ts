@@ -30,12 +30,13 @@
  * Imported by: src/setup/cli/limits.ts + src/setup/cli/limits.test.ts.
  */
 
-import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Manifest } from '../../packs/schemas/manifest.js';
 import { parseYamlFile } from '../../packs/yaml.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+
+import { walkPacksDir } from './pack_walk.js';
 
 import type { Client } from '@libsql/client';
 import type { RateLimits as RateLimitsType } from '../../packs/schemas/manifest.js';
@@ -53,39 +54,11 @@ export interface PackRateLimitDecl {
 
 /** Walk packs/ and pull each pack's `rate_limits:` block. Packs without
  *  a manifest.yaml are skipped (matches `triggers_state` posture). */
-export async function enumeratePackRateLimits(packsDir: string): Promise<PackRateLimitDecl[]> {
-  let entries: string[];
-  try {
-    entries = await readdir(packsDir);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
-  entries.sort();
-  const out: PackRateLimitDecl[] = [];
-  for (const e of entries) {
-    if (e.startsWith('.')) continue;
-    const dir = join(packsDir, e);
-    let st;
-    try {
-      st = await stat(dir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-    const manifestPath = join(dir, 'manifest.yaml');
-    let parsed;
-    try {
-      parsed = await parseYamlFile(manifestPath, Manifest);
-    } catch {
-      continue;
-    }
-    out.push({
-      packId: parsed.data.name,
-      rateLimits: parsed.data.rate_limits ?? {},
-    });
-  }
-  return out;
+export function enumeratePackRateLimits(packsDir: string): Promise<PackRateLimitDecl[]> {
+  return walkPacksDir(packsDir, async (dir) => {
+    const { data } = await parseYamlFile(join(dir, 'manifest.yaml'), Manifest);
+    return { packId: data.name, rateLimits: data.rate_limits ?? {} };
+  });
 }
 
 /** One row from `rate_limit_buckets`. `tokens` is the current refilled

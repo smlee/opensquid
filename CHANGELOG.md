@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.444] - 2026-06-14
+
+### Fixed — one malformed pack no longer crashes `schedule list` / `triggers list` (wg-a3e928b8255b)
+
+- Three CLI enumerators (`enumeratePacks`, `enumeratePackRateLimits`, `enumerateManifests`) each
+  re-implemented the same `packs/` walk and DIVERGED: `enumeratePacks` (triggers/schedule) called
+  `loadPack` UNGUARDED, so a single malformed or backup pack under `~/.opensquid/packs/` (e.g. a
+  `*.dpc6-backup` dir never opted into `active.json`) crashed the whole command with a Zod
+  validation error. The other two already skipped — but SILENTLY.
+- Root cause was the triplication itself, so the fix re-architects rather than patches: a new
+  `walkPacksDir` helper owns the walk + per-pack guard ONCE; the three enumerators are thin
+  callers. A dir with no `manifest.yaml` is silently skipped ("not a pack"); a manifest-bearing
+  dir that fails to load — for ANY reason (Zod, YAML, or an ENOENT from a deeper read such as a
+  missing `skill.yaml`) — is skipped with one stderr warning, never a crash. The is-a-pack test
+  is a manifest probe, not the thrown error code, because a missing manifest and a missing
+  `skill.yaml` both surface as the same ENOENT.
+- The installed-set scan is fail-SOFT; `discoverActivePacks` (the user-opted-in `active.json`
+  set) stays fail-LOUD, unchanged. Note: `limits list` / `permissions list` now emit a stderr
+  warning for a malformed pack they previously skipped silently (stdout/table output unchanged).
+
 ## [0.5.443] - 2026-06-14
 
 ### Changed — the handover doc is a gitignored projection; the generator stops manufacturing a commit obligation (HDP.1)

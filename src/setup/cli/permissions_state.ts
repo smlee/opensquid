@@ -47,7 +47,6 @@
  *   src/setup/cli/permissions_actions.ts.
  */
 
-import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -65,6 +64,8 @@ import {
 } from '../../runtime/builtin_denylist.js';
 import type { UserOverride } from '../../runtime/capability_gate.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+
+import { walkPacksDir } from './pack_walk.js';
 
 import {
   appendJsonlEntry,
@@ -162,36 +163,11 @@ export interface ManifestRow {
   manifest: ManifestType;
 }
 
-export async function enumerateManifests(packsDir: string): Promise<ManifestRow[]> {
-  let entries: string[];
-  try {
-    entries = await readdir(packsDir);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
-  entries.sort();
-  const out: ManifestRow[] = [];
-  for (const e of entries) {
-    if (e.startsWith('.')) continue;
-    const dir = join(packsDir, e);
-    let st;
-    try {
-      st = await stat(dir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-    const manifestPath = join(dir, 'manifest.yaml');
-    try {
-      const { data } = await parseYamlFile(manifestPath, Manifest);
-      out.push({ packId: e, manifest: data as ManifestType });
-    } catch {
-      // Pack with a malformed manifest is invisible to `list`; the
-      // setup wizard surfaces those at install time. Skip-silent here.
-    }
-  }
-  return out;
+export function enumerateManifests(packsDir: string): Promise<ManifestRow[]> {
+  return walkPacksDir(packsDir, async (dir, name) => {
+    const { data } = await parseYamlFile(join(dir, 'manifest.yaml'), Manifest);
+    return { packId: name, manifest: data as ManifestType };
+  });
 }
 
 // ---------------------------------------------------------------------------

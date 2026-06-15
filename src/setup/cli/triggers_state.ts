@@ -19,12 +19,12 @@
  * Imported by: src/setup/cli/triggers.ts.
  */
 
-import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { loadPack } from '../../packs/loader.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 
+import { walkPacksDir } from './pack_walk.js';
 import { readKeyedYamlList, writeKeyedYamlList } from './state_io.js';
 
 import type { Pack, Trigger } from '../../runtime/types.js';
@@ -54,29 +54,8 @@ export async function writeDisabledSet(statePath: string, disabled: Set<string>)
   return writeKeyedYamlList(statePath, 'disabled', [...disabled].sort());
 }
 
-export async function enumeratePacks(packsDir: string): Promise<Pack[]> {
-  let entries: string[];
-  try {
-    entries = await readdir(packsDir);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
-  entries.sort();
-  const packs: Pack[] = [];
-  for (const e of entries) {
-    if (e.startsWith('.')) continue;
-    const dir = join(packsDir, e);
-    let st;
-    try {
-      st = await stat(dir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-    packs.push(await loadPack(dir));
-  }
-  return packs;
+export function enumeratePacks(packsDir: string): Promise<Pack[]> {
+  return walkPacksDir(packsDir, (dir) => loadPack(dir));
 }
 
 function filterSummary(t: Trigger): string {
