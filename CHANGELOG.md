@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.447] - 2026-06-14
+
+### Fixed — removed the `hooks.bin.integration` "compiled bin missing" flake (wg-b7ebe4bd74ce)
+
+- The test asserted bin existence with three per-test `existsSync(...)` checks. `existsSync` returns
+  `false` on ANY stat error — not only `ENOENT` (truly missing) but also transient FS / file-
+  descriptor pressure under heavy concurrent load — so a bin that genuinely existed could be
+  misreported as "compiled bin missing", failing the pre-push gate (which tempts `--no-verify`).
+- Those asserts were doubly redundant — `beforeAll`'s `ensureFreshDist` already rebuilds-or-throws
+  for every bin, and `runBin`'s exit-code assertion already fails clearly on a genuinely missing bin
+  (`node <missing>.js` exits non-zero). So the fix is deletion, no replacement. The dominant flake
+  vectors (pre-push running test before build; concurrent `dist/` wipe) were already fixed in
+  0.5.442.
+
 ## [0.5.446] - 2026-06-14
 
 ### Fixed — `resolveParked` releases the lap claim so an un-wedged item re-surfaces immediately (wg-8e1104f1934b)

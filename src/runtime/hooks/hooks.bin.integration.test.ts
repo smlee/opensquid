@@ -125,7 +125,6 @@ describe('G.2: hook bins do not silent no-op', () => {
   for (const spec of BIN_SPECS) {
     it(`${spec.bin} emits [opensquid-dispatch] marker on stderr`, async () => {
       const binPath = resolve(DIST_HOOKS, spec.bin);
-      expect(existsSync(binPath), `compiled bin missing: ${binPath}`).toBe(true);
       const r = await runBin(binPath, spec.stdin);
       // exit 0 = allow (no packs active in the stub loader path; OK).
       expect(r.exitCode, `hook ${spec.bin} non-zero exit (stderr: ${r.stderr})`).toBe(0);
@@ -151,7 +150,6 @@ describe('G.2: hook bins do not silent no-op', () => {
     const before = existsSync(livePath) ? await readFile(livePath, 'utf8') : null;
 
     const upsPath = resolve(DIST_HOOKS, 'user-prompt-submit.js');
-    expect(existsSync(upsPath), `compiled bin missing: ${upsPath}`).toBe(true);
     await runBin(upsPath, JSON.stringify({ prompt: 'hello', session_id: 'test' }));
 
     const after = existsSync(livePath) ? await readFile(livePath, 'utf8') : null;
@@ -164,7 +162,6 @@ describe('G.2: hook bins do not silent no-op', () => {
   for (const source of ['compact', 'clear'] as const) {
     it(`session-start.js skips dispatch on source=${source} (exit 0, no marker)`, async () => {
       const binPath = resolve(DIST_HOOKS, 'session-start.js');
-      expect(existsSync(binPath), `compiled bin missing: ${binPath}`).toBe(true);
       const r = await runBin(binPath, JSON.stringify({ session_id: 'test', source }));
       expect(r.exitCode, `stderr: ${r.stderr}`).toBe(0);
       expect(r.stderr).not.toContain('[opensquid-dispatch]');
