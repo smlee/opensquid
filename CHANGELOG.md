@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.452] - 2026-06-15
+
+### Added — `migrate-umbrella-ns`: re-key project memory from the umbrella id to the per-repo UUID (UCC.3, wg-57a17b52853d)
+
+- `opensquid migrate-umbrella-ns` (dry-run unless `--apply`) re-namespaces project-tier memory rows
+  from the legacy chat-umbrella id (`"loop"`, `"raumpilates"`) to the per-repo
+  `.opensquid/project.json` UUID that recall keys on after UCC.1. The umbrella→UUID map is built from
+  `channels.json` (umbrella → shortest-member root → its marker UUID) inside the tool only — the
+  runtime never reads `channels.json`. Idempotent, never deletes a row (count-conserving).
+- Ran on the live store: 39 project rows re-keyed (21 → loop's UUID, 18 → raumpilates'), 138 shared
+  rows untouched. Completes T-umbrella-confine-to-chat: umbrella is now confined to chat; the process
+  layer (recall + handoff scope) is umbrella-agnostic.
+- Known limitation (documented): the umbrella string did not encode member origin, so all `"loop"`
+  rows map to loop's UUID — consistent with the user lock "all planning is in loop".
+
 ## [0.5.451] - 2026-06-15
 
 ### Changed — handoff scope is per-repo `.opensquid` marker, not the chat umbrella (UCC.2, wg-57a17b52853d)

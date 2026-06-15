@@ -27,6 +27,7 @@ import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { resolveBackendConfig } from './rag/config.js';
 import { fastembedEmbedder } from './rag/embedders/fastembed.js';
 import { migrateMemories } from './rag/migrate_memories.js';
+import { migrateUmbrellaNs } from './setup/migrate/migrate-umbrella-ns.js';
 import { migrateWedgeLessons } from './rag/wedge/migrate.js';
 import { wedgeLessonsDbUrl, wedgeLessonsDir } from './rag/wedge/paths.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
@@ -387,6 +388,32 @@ function runCli(): void {
         sourceDir: wedgeLessonsDir(),
       });
       process.stdout.write(`migrated ${migrated} lessons into the wg_lessons index\n`);
+    });
+
+  // UCC.3 (T-umbrella-confine-to-chat) — `opensquid migrate-umbrella-ns`. Re-namespace project memory
+  // rows from the legacy chat-umbrella id (e.g. `loop`) to the per-repo `.opensquid/project.json` UUID
+  // that recall now keys on (UCC.1). Dry-run unless --apply; never deletes a row.
+  program
+    .command('migrate-umbrella-ns')
+    .description(
+      'Re-namespace project memory rows from the legacy umbrella id to the per-repo project UUID (UCC.3; dry-run unless --apply).',
+    )
+    .option('--apply', 'apply the changes (default: dry-run, mutates nothing)', false)
+    .action(async (opts: { apply?: boolean }) => {
+      const cfg = await resolveBackendConfig();
+      if (cfg.kind !== 'libsql-fastembed') {
+        process.stderr.write(
+          `migrate-umbrella-ns requires the libsql-fastembed backend (got ${cfg.kind}).\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const res = await migrateUmbrellaNs({ dbUrl: cfg.dbUrl, apply: opts.apply === true });
+      process.stdout.write(
+        `migrate-umbrella-ns: ${String(res.changed)}/${String(res.total)} project rows ${
+          res.applied ? 'updated' : 'would change (dry-run; pass --apply)'
+        }\n`,
+      );
     });
 
   // T-AUTO-HANDOFF — the PRIMARY trigger: deterministic 4-surface handoff
