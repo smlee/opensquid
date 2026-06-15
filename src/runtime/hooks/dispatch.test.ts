@@ -99,6 +99,40 @@ const verdictRule: Rule = {
   process: [{ call: 'verdict' }],
 };
 
+describe('dispatchEvent — PV.3 error RuleResult visibility', () => {
+  it('an error RuleResult (unknown call:) surfaces a warn naming the rule (was silently swallowed)', async () => {
+    const registry = buildRegistryWithVerdict({ level: 'pass', message: 'x' }); // only `verdict` is registered
+    const pack = makePack('perr', [
+      {
+        id: 'err-rule',
+        kind: 'track_check',
+        requires: [],
+        process: [{ call: 'no_such_primitive_xyz' }],
+      },
+    ]);
+    const result = await dispatchEvent(event, [pack], registry, 'sess-pv3');
+    expect(result.stderr).toMatch(/errored:/);
+    expect(result.stderr).toMatch(/err-rule/);
+    expect(result.stderr).toMatch(/no_such_primitive_xyz/);
+    expect(result.exitCode).toBe(0); // a skipped (errored) rule does not change the exit code
+  });
+
+  it('a no-verdict rule produces NO errored: warn (the normal case is never spammed)', async () => {
+    const registry = buildRegistryWithVerdict({ level: 'pass', message: 'x' });
+    // `if: 'false'` skips the only step → the rule produces no verdict → kind:'no_verdict'.
+    const pack = makePack('pnv', [
+      {
+        id: 'nv-rule',
+        kind: 'track_check',
+        requires: [],
+        process: [{ call: 'verdict', if: 'false' }],
+      },
+    ]);
+    const result = await dispatchEvent(event, [pack], registry, 'sess-pv3b');
+    expect(result.stderr).not.toMatch(/errored:/);
+  });
+});
+
 describe('dispatchEvent', () => {
   // CU.2 added a persisted-tick advance to the dispatch path. Isolate that
   // disk I/O in a tmp OPENSQUID_HOME so dispatch tests never write tick files

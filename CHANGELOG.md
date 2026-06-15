@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.455] - 2026-06-15
+
+### Fixed — the dispatcher no longer silently swallows a rule's `error` result (PV.3, T-wire-pack-validators)
+
+- When a rule's `process` step fails under the default `on_error:'abort'` (e.g. an unknown `call:` →
+  registry `not_found`), the evaluator returns a `kind:'error'` RuleResult. The dispatcher previously
+  hit `if (result.kind !== 'verdict') continue;` and dropped it with ZERO signal — a gate that does
+  NOT enforce, invisibly. It now appends a `warnBuf` line (pack/skill/rule/step + the error, flushed
+  to stderr) so the dead gate is visible. Keyed STRICTLY on `kind:'error'`; `no_verdict` (the common
+  normal case) keeps its silent continue — verified by test (error → exactly one warn; no_verdict →
+  zero). Additive (a stderr warn), never alters enforcement or exit codes.
+- Layer-2 of T-wire-pack-validators (the runtime half; PV.1 was the session-start prevention).
+  Together they close the silent-non-enforcing-gate class.
+
 ## [0.5.454] - 2026-06-15
 
 ### Added — pack validation activated at session start; a bad `call:` is no longer a silent dead gate (PV.1, T-wire-pack-validators)

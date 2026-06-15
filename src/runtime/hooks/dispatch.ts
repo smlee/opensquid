@@ -462,6 +462,18 @@ export async function dispatchEvent(
           continue;
         }
 
+        // PV.3 (T-wire-pack-validators): an `error` RuleResult — a primitive failed under the
+        // default `on_error:'abort'` (e.g. an unknown `call:` → registry not_found) — was previously
+        // dropped SILENTLY here, leaving a gate that does NOT enforce with ZERO signal. Surface it on
+        // stderr via warnBuf. Keyed STRICTLY on `kind === 'error'`; `no_verdict` (the common normal
+        // "rule produced no verdict" case) keeps its silent continue below.
+        if (result.kind === 'error') {
+          warnBuf +=
+            `[opensquid] ${pack.name}/${skill.name} rule "${rule.id}" step ${String(result.step)} ` +
+            `errored: ${result.error} — rule SKIPPED (gate did not enforce)\n`;
+          continue;
+        }
+
         if (result.kind !== 'verdict') continue;
 
         // Resolve drift-response policy from the pack's `drift_response.yaml`
