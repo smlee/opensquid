@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.448] - 2026-06-14
+
+### Fixed — recall no longer fires on harness control-messages (wg-4f91e0b5cb8c, cause #2)
+
+- `recall_pre_inject` ran on EVERY `prompt_submit`, including harness control-messages (a background
+  `<task-notification>`) that are not user intent — injecting semantically-adjacent-but-useless
+  memories. It now skips recall when the prompt is a control-message (a leading `<task-notification>`
+  tag, from a single bounded constant), completing the existing "is this prompt recall-worthy?" guard
+  that previously only checked length.
+- A relevance/score floor was considered and EMPIRICALLY REFUTED: an embedding spike against the live
+  index showed the control-message markup scores cosine 0.70–0.74 — ABOVE genuinely-relevant queries
+  (it's dense with task/CI/automation tokens) — so no floor can separate the noise from the signal;
+  the input itself must be gated.
+- NOTE: this is one slice. The DOMINANT stale-recall cause — superseded/point-in-time memories
+  (executed handoffs, old state) that surface because nothing RETIRES them, and which score high
+  cosine so no gate catches them — is the retention/consolidation track (separate), not this change.
+
 ## [0.5.447] - 2026-06-14
 
 ### Fixed — removed the `hooks.bin.integration` "compiled bin missing" flake (wg-b7ebe4bd74ce)

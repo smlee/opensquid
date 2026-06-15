@@ -103,6 +103,17 @@ function selectHitsForInjection(
  * the goal-bias gain since it's already the workflow gate's source of
  * truth.
  */
+// The harness control-message vocabulary (one home; extend ONLY as observed). A prompt that IS one
+// of these is a harness event (a background task-notification), NOT user intent → recall is noise.
+// Grounded: `<task-notification>` is the marker observed firing recall; a relevance floor can't
+// catch it (its markup scores cosine 0.70–0.74, above genuine queries — wg-4f91e0b5cb8c).
+const HARNESS_CONTROL_PREFIXES = ['<task-notification'] as const;
+
+function isHarnessControlMessage(prompt: string): boolean {
+  const p = prompt.trimStart();
+  return HARNESS_CONTROL_PREFIXES.some((m) => p.startsWith(m));
+}
+
 async function composeRecallQuery(prompt: string, sessionId: string): Promise<string> {
   try {
     const active = await readActiveTask(sessionId);
@@ -170,6 +181,8 @@ export function registerRecallPreInjectFunction(
       // The min-prompt-chars gate runs against the RAW prompt — the
       // goal-token doesn't artificially satisfy a short-prompt skip.
       if (rawPrompt.length < minPromptChars) return ok(null);
+      // A harness control-message (a task-notification) is not user intent → recall is noise.
+      if (isHarnessControlMessage(rawPrompt)) return ok(null);
       // T-CTX-LOOP CTX.3 — bias query toward the current goal when
       // active-task is seeded. Falls back to raw prompt when no signal.
       const query = await composeRecallQuery(rawPrompt, ctx.sessionId);

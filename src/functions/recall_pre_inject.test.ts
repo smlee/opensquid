@@ -111,6 +111,32 @@ describe('recall_pre_inject', () => {
     expect(recall).not.toHaveBeenCalled();
   });
 
+  it('returns null on a harness control-message (task-notification) without calling recall (wg-4f91e0b5cb8c)', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
+    const registry = buildRegistry(makeBackend(recall));
+    const markup =
+      '<task-notification>\n<task-id>bw15z8xxr</task-id>\n<status>completed</status>\n</task-notification>';
+    const result = await registry.call('recall_pre_inject', {}, makeCtx(promptEvent(markup)));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value).toBeNull();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
+  it('skips a control-message even with leading whitespace (trimStart)', async () => {
+    const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
+    const registry = buildRegistry(makeBackend(recall));
+    const result = await registry.call(
+      'recall_pre_inject',
+      {},
+      makeCtx(promptEvent('\n  <task-notification><task-id>x</task-id></task-notification>')),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.value).toBeNull();
+    expect(recall).not.toHaveBeenCalled();
+  });
+
   it('returns null on a non-prompt_submit event (defensive guard)', async () => {
     const recall = vi.fn<RagBackend['recall']>().mockResolvedValue([]);
     const registry = buildRegistry(makeBackend(recall));
