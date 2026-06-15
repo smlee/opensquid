@@ -8,8 +8,8 @@
  * `<unreadable: …>` marker instead of aborting — totality over completeness.
  *
  * Imports from: node:crypto, node:fs/promises, node:child_process,
- *   ../paths.js, ../session_state.js, ../phase_ledger.js,
- *   ../../channels/routing.js, ../../workgraph/store.js.
+ *   ../paths.js, ../session_state.js, ../phase_ledger.js, ../../workgraph/store.js.
+ *   (UCC.2: no longer reads ../../channels/routing.js — scope is the .opensquid marker, not umbrella.)
  * Imported by: handoff/index.ts, handoff/render.ts (types).
  */
 
@@ -19,11 +19,11 @@ import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { loadChannelsConfig } from '../../channels/routing.js';
 import { workGraphStore } from '../../workgraph/store.js';
 import { readPhaseLedger } from '../phase_ledger.js';
 import {
   OPENSQUID_HOME,
+  resolveProjectMarker,
   resolveProjectScopeRoot,
   sessionLogFile,
   sessionStateFile,
@@ -48,7 +48,9 @@ export interface HandoffState {
   sessionId: string;
   generatedAt: string;
   cwd: string;
-  umbrellaRoot: string;
+  /** The project root = the dir containing the nearest `.opensquid/project.json` (or cwd).
+   *  De-umbrella'd (UCC.2): derived from the marker, NOT the chat umbrella config. */
+  root: string;
   fsm: Record<string, unknown> | string;
   activeTask: ActiveTask | null | string;
   phaseSet: Record<string, unknown> | string;
@@ -128,41 +130,6 @@ async function artifactOf(
   }
 }
 
-/** The umbrella ROOT for a cwd: pick the umbrella ROW by longest member
- *  prefix (correct row when rows nest), then return that row's SHORTEST
- *  member containing the cwd — the umbrella root, not the sub-repo (live
- *  spike finding: loop lists both `…/loop` and `…/loop/opensquid` as
- *  members; docs + MEMORY.md belong at the loop root). Falls back to cwd. */
-export async function umbrellaRootFor(cwd: string): Promise<string> {
-  try {
-    const cfg = await loadChannelsConfig();
-    if (cfg !== null) {
-      let bestRow: { members: string[] } | null = null;
-      let bestLen = -1;
-      for (const u of cfg.umbrellas) {
-        for (const m of u.members) {
-          if ((cwd === m || cwd.startsWith(`${m}/`)) && m.length > bestLen) {
-            bestRow = u;
-            bestLen = m.length;
-          }
-        }
-      }
-      if (bestRow !== null) {
-        let root: string | null = null;
-        for (const m of bestRow.members) {
-          if ((cwd === m || cwd.startsWith(`${m}/`)) && (root === null || m.length < root.length)) {
-            root = m;
-          }
-        }
-        if (root !== null) return root;
-      }
-    }
-  } catch {
-    /* fall through */
-  }
-  return cwd;
-}
-
 async function gitRepo(dir: string): Promise<HandoffGitRepo | null> {
   try {
     const { stdout: status } = await execFileP('git', ['status', '--short'], {
@@ -186,7 +153,7 @@ async function gitRepo(dir: string): Promise<HandoffGitRepo | null> {
 }
 
 export async function collectHandoffState(sessionId: string, cwd: string): Promise<HandoffState> {
-  const umbrellaRoot = await umbrellaRootFor(cwd);
+  const root = (await resolveProjectMarker(cwd))?.root ?? cwd;
 
   const activeRaw = await bounded(async () => readActiveTask(sessionId));
   const activeTask = activeRaw;
@@ -211,23 +178,9 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
     ])
   ).filter((a): a is HandoffArtifact => a !== null);
 
-  // Git sweep: umbrella members (when channels.json names them) else just cwd.
-  const memberDirs = new Set<string>([umbrellaRoot]);
-  try {
-    const cfg = await loadChannelsConfig();
-    for (const u of cfg?.umbrellas ?? []) {
-      for (const m of u.members) {
-        if (m === umbrellaRoot || m.startsWith(`${umbrellaRoot}/`)) memberDirs.add(m);
-      }
-    }
-  } catch {
-    /* cwd-only sweep */
-  }
-  // Known sub-repos: direct children of the umbrella root that are git repos
-  // are NOT auto-discovered (bounded sweep) — members + root only.
-  const git = (await Promise.all([...memberDirs].map(gitRepo))).filter(
-    (g): g is HandoffGitRepo => g !== null,
-  );
+  // Git sweep: the single project root only (UCC.2 — de-umbrella'd). No member
+  // discovery: umbrella grouping is a chat concern, not a process-scope one.
+  const git = (await Promise.all([gitRepo(root)])).filter((g): g is HandoffGitRepo => g !== null);
 
   const scopeRoot = await resolveProjectScopeRoot(cwd);
   const attestationsTail =
@@ -247,7 +200,7 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
     sessionId,
     generatedAt: new Date().toISOString(),
     cwd,
-    umbrellaRoot,
+    root,
     fsm: await readJsonState(sessionId, 'fsm-coding-flow'),
     activeTask,
     phaseSet: await readJsonState(sessionId, 'workflow.phases_logged'),
@@ -265,8 +218,8 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
 /** Stable doc path for a session's handover — keyed on sid ONLY (AHO.3:
  *  date-keying minted a second doc for the same session across midnight and
  *  broke the tier-3 staleness probe; generatedAt rides inside the doc). */
-export function handoverDocPath(umbrellaRoot: string, sessionId: string): string {
-  return join(umbrellaRoot, 'docs', `handover-session-${sessionId.slice(0, 8)}-auto.md`);
+export function handoverDocPath(root: string, sessionId: string): string {
+  return join(root, 'docs', `handover-session-${sessionId.slice(0, 8)}-auto.md`);
 }
 
 /** Re-export for callers building ids/labels. */

@@ -13,7 +13,7 @@ const base: HandoffState = {
   sessionId: 'abcdefgh-1234',
   generatedAt: '2026-06-10T20:00:00.000Z',
   cwd: '/u/proj',
-  umbrellaRoot: '/u',
+  root: '/u',
   fsm: {
     state: 'spec_complete',
     history: [

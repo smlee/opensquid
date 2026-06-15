@@ -56,15 +56,8 @@ export function encodeProjectPath(projectPath: string): string {
   return projectPath.replace(/\//g, '-');
 }
 
-export function memoryMdPathFor(umbrellaRoot: string): string {
-  return join(
-    homedir(),
-    '.claude',
-    'projects',
-    encodeProjectPath(umbrellaRoot),
-    'memory',
-    'MEMORY.md',
-  );
+export function memoryMdPathFor(root: string): string {
+  return join(homedir(), '.claude', 'projects', encodeProjectPath(root), 'memory', 'MEMORY.md');
 }
 
 /** Replace the managed region; insert after the first H1 when absent; prepend
@@ -92,14 +85,14 @@ async function atomicWrite(path: string, content: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// HRA.1 (wg-c34349377f81) — the umbrella-scoped in-flight guard for surface
-// (b). MEMORY.md is per-umbrella, so ONLY a same-umbrella sibling session
+// HRA.1 (wg-c34349377f81) — the project-root-scoped in-flight guard for surface
+// (b). MEMORY.md is per-project-root, so ONLY a same-root sibling session
 // with a fresh tool-ledger may suppress the resume-block splice (a global
 // scan would let any other project's live session silently stale this
 // project's block — the spec-review correction). Doc/wg/chat are NEVER
 // guarded: their redundancy is what makes the skip safe. Fail direction is
 // always OPEN (write the block) — unattributable/absent facts never count
-// as in-flight.
+// as in-flight. (UCC.2: "root" is the .opensquid marker root, not the chat umbrella.)
 // ---------------------------------------------------------------------------
 
 export interface SiblingFact {
@@ -110,29 +103,29 @@ export interface SiblingFact {
   ledgerMtimeMs: number | null;
 }
 
-/** The first OTHER session of THIS umbrella with a fresh ledger, or null.
+/** The first OTHER session under THIS project root with a fresh ledger, or null.
  *  freshMs default 10min = the FXK.2 live-session quiet-gap bound (the 340s
  *  audit wait + margin). Pure — all facts injected. */
 export function inFlightSibling(args: {
   siblings: SiblingFact[];
-  umbrellaRoot: string;
+  root: string;
   dyingSid: string;
   nowMs: number;
   freshMs?: number;
 }): string | null {
   const fresh = args.freshMs ?? 10 * 60_000;
-  const root = args.umbrellaRoot.endsWith('/') ? args.umbrellaRoot : `${args.umbrellaRoot}/`;
+  const root = args.root.endsWith('/') ? args.root : `${args.root}/`;
   for (const s of args.siblings) {
     if (s.sid === args.dyingSid) continue;
     if (s.cwd === null || s.ledgerMtimeMs === null) continue; // unattributable → fail-open
     const cwd = s.cwd.endsWith('/') ? s.cwd : `${s.cwd}/`;
-    if (!cwd.startsWith(root)) continue; // other umbrella → never suppresses
+    if (!cwd.startsWith(root)) continue; // other project root → never suppresses
     if (args.nowMs - s.ledgerMtimeMs <= fresh) return s.sid;
   }
   return null;
 }
 
-/** realpath-or-identity: a symlink-alias cwd of the umbrella root must still
+/** realpath-or-identity: a symlink-alias cwd of the project root must still
  *  match the prefix test; unresolvable paths return as-is (fail-open at the
  *  comparison). */
 async function canonical(p: string): Promise<string> {
@@ -182,7 +175,7 @@ export async function writeHandoffSurfaces(
   opts: { narrative?: string } = {},
 ): Promise<WriteHandoffResult> {
   const outcomes: SurfaceOutcome[] = [];
-  const docPath = handoverDocPath(state.umbrellaRoot, state.sessionId);
+  const docPath = handoverDocPath(state.root, state.sessionId);
 
   // (a) the doc — the load-bearing record; a failure here IS a handoff failure.
   const docBody = renderHandoverDoc(state);
@@ -193,12 +186,12 @@ export async function writeHandoffSurfaces(
   outcomes.push({ surface: 'doc', ok: true, detail: docPath });
 
   // (b) MEMORY.md managed region — absent file → skip (not all hosts run
-  // auto-memory). HRA.1: a fresh same-umbrella sibling owns the resume
+  // auto-memory). HRA.1: a fresh same-project-root sibling owns the resume
   // block — a dying nested/sibling session must not overwrite the live
   // session's resume surface (observed twice on 2026-06-11 pre-fix).
   const sibling = inFlightSibling({
     siblings: await gatherSiblingFacts(),
-    umbrellaRoot: await canonical(state.umbrellaRoot),
+    root: await canonical(state.root),
     dyingSid: state.sessionId,
     nowMs: Date.now(),
   });
@@ -209,7 +202,7 @@ export async function writeHandoffSurfaces(
       detail: `skipped: in-flight sibling ${sibling.slice(0, 8)} owns this umbrella's resume block`,
     });
   } else {
-    const memPath = memoryMdPathFor(state.umbrellaRoot);
+    const memPath = memoryMdPathFor(state.root);
     try {
       const current = await readFile(memPath, 'utf8');
       await atomicWrite(memPath, spliceResumeBlock(current, renderResumeBlock(state)));

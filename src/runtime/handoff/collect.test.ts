@@ -9,7 +9,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { collectHandoffState, handoverDocPath, umbrellaRootFor } from './collect.js';
+import { collectHandoffState, handoverDocPath } from './collect.js';
 import { sessionLogFile, sessionStateFile } from '../paths.js';
 
 let home: string;
@@ -118,8 +118,11 @@ describe('collectHandoffState — populated home (real shapes)', () => {
 });
 
 describe('helpers', () => {
-  it('umbrellaRootFor falls back to cwd without channels.json', async () => {
-    expect(await umbrellaRootFor(cwd)).toBe(cwd);
+  it('root falls back to cwd when there is no .opensquid/project.json marker (UCC.2)', async () => {
+    // The tmp cwd has no marker → root = cwd, and the git sweep is single-repo (no umbrella members).
+    const state = await collectHandoffState(SID, cwd);
+    expect(state.root).toBe(cwd);
+    expect(state.git.length).toBeLessThanOrEqual(1); // one repo (cwd) or none — never an umbrella set
   });
   it('handoverDocPath is keyed on sid ONLY (one doc per session — AHO.3)', () => {
     expect(handoverDocPath('/u', 'abcdefgh-rest')).toBe(

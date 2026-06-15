@@ -131,7 +131,7 @@ let the successor verify disk truth directly.
 
 ## The handoff lives on 4 surfaces
 
-1. THIS doc (\`${state.umbrellaRoot}/docs/\` — a gitignored on-disk projection, regenerated each handoff; read it, never commit it).
+1. THIS doc (\`${state.root}/docs/\` — a gitignored on-disk projection, regenerated each handoff; read it, never commit it).
 2. The auto-memory MEMORY.md managed resume block (\`opensquid:handoff\` markers).
 3. Work-graph issue \`handoff-${sid8}\`.
 4. The umbrella chat topic (best-effort digest).

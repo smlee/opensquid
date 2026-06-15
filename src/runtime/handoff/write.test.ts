@@ -61,7 +61,7 @@ describe('memoryMdPathFor (path resolution pinned — the encodeProjectPath conv
 });
 
 // ---------------------------------------------------------------------------
-// HRA.1 (wg-c34349377f81) — the umbrella-scoped in-flight guard.
+// HRA.1 (wg-c34349377f81) — the project-root-scoped in-flight guard (UCC.2: root = .opensquid marker).
 // ---------------------------------------------------------------------------
 
 describe('inFlightSibling — truth table (pure core)', () => {
@@ -73,17 +73,17 @@ describe('inFlightSibling — truth table (pure core)', () => {
     ledgerMtimeMs: ageMs === null ? null : NOW - ageMs,
   });
   const run = (siblings: SiblingFact[]): string | null =>
-    inFlightSibling({ siblings, umbrellaRoot: ROOT, dyingSid: 'dying', nowMs: NOW });
+    inFlightSibling({ siblings, root: ROOT, dyingSid: 'dying', nowMs: NOW });
 
-  it('same-umbrella fresh sibling → its sid', () => {
+  it('same-root fresh sibling → its sid', () => {
     expect(run([mk('other', `${ROOT}/opensquid`, 60_000)])).toBe('other');
   });
 
-  it('same-umbrella STALE sibling (11min) → null', () => {
+  it('same-root STALE sibling (11min) → null', () => {
     expect(run([mk('other', ROOT, 11 * 60_000)])).toBeNull();
   });
 
-  it('OTHER-umbrella fresh session → null (the cross-project pin)', () => {
+  it('other-root fresh session → null (the cross-project pin)', () => {
     expect(run([mk('other', '/Users/u/projects/RaumPilates', 60_000)])).toBeNull();
   });
 
@@ -150,7 +150,7 @@ describe('gatherSiblingFacts — impure shell (tmp OPENSQUID_HOME)', () => {
     expect(
       inFlightSibling({
         siblings: facts,
-        umbrellaRoot: realpathSync(realRoot),
+        root: realpathSync(realRoot),
         dyingSid: 'dying',
         nowMs: Date.now(),
       }),
@@ -167,7 +167,7 @@ describe('gatherSiblingFacts — impure shell (tmp OPENSQUID_HOME)', () => {
     expect(
       inFlightSibling({
         siblings: facts,
-        umbrellaRoot: '/p',
+        root: '/p',
         dyingSid: 'dying',
         nowMs: Date.now(),
       }),

@@ -17,7 +17,7 @@ import { narrateHandoff } from './narrate.js';
 import { renderHandoverDoc } from './render.js';
 import { type WriteHandoffResult, writeHandoffSurfaces } from './write.js';
 
-export { handoverDocPath, umbrellaRootFor } from './collect.js';
+export { handoverDocPath } from './collect.js';
 export { renderInjection } from './render.js';
 export type { WriteHandoffResult } from './write.js';
 

@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.451] - 2026-06-15
+
+### Changed — handoff scope is per-repo `.opensquid` marker, not the chat umbrella (UCC.2, wg-57a17b52853d)
+
+- The auto-handover doc path + git-status sweep now derive from the nearest `.opensquid/project.json`
+  marker root (`resolveProjectMarker`), NOT `channels.json`/umbrella members. The git sweep covers
+  exactly that one repo — no umbrella-member discovery. `umbrellaRootFor` is deleted;
+  `HandoffState.umbrellaRoot` → `root`; `handoff_session_start` (auto-resume) resolves the same root.
+  Both process-scope surfaces (recall, handoff) now share the one marker walk, so they cannot diverge.
+- The handoff's chat-digest notification (`write.ts` `sendChat` to the telegram topic) is UNCHANGED —
+  that is delivery and correctly keeps its umbrella routing.
+- Added `docs/handover-session-*-auto.md` to `opensquid/.gitignore` so a sub-repo-launched handoff
+  cannot publish the private projection into the public repo.
+- Second slice of T-umbrella-confine-to-chat. Memory-row migration (UCC.3) follows.
+
 ## [0.5.450] - 2026-06-15
 
 ### Changed — recall scope is umbrella-AGNOSTIC: per-repo `.opensquid/project.json` marker (UCC.1, wg-57a17b52853d)

@@ -21,16 +21,11 @@ import { dirname } from 'node:path';
 
 import { z } from 'zod';
 
-import {
-  handoverDocPath,
-  renderInjection,
-  runHandoff,
-  umbrellaRootFor,
-} from '../runtime/handoff/index.js';
+import { handoverDocPath, renderInjection, runHandoff } from '../runtime/handoff/index.js';
 import { hasResumableState } from '../runtime/handoff/substance.js';
 import { isSessionPlausible } from '../runtime/hooks/session_liveness.js';
 import { readSessionPointer } from '../runtime/hooks/session_id.js';
-import { sessionStateFile } from '../runtime/paths.js';
+import { resolveProjectMarker, sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
 
 import type { FunctionDef } from './registry.js';
@@ -68,7 +63,7 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
       const stamp = sessionStateFile(ctx.sessionId, 'handoff-read');
       if ((await mtimeOf(stamp)) !== null) return ok(null);
 
-      const umbrellaRoot = await umbrellaRootFor(cwd);
+      const root = (await resolveProjectMarker(cwd))?.root ?? cwd;
       const fsmPath = sessionStateFile(deadSid, 'fsm-coding-flow');
       const fsmM = await mtimeOf(fsmPath);
       // AHO.4: the shared substance predicate (an FSM at bare scoping with no
@@ -77,7 +72,7 @@ export const HandoffSessionStart: FunctionDef<z.input<typeof NoArgs>, InjectResu
       if (await hasResumableState(deadSid)) {
         // AHO.3: sid-only key — the probe now finds the doc regardless of
         // which day it was generated (the date-keyed path missed yesterday's).
-        docPath = handoverDocPath(umbrellaRoot, deadSid);
+        docPath = handoverDocPath(root, deadSid);
         const docM = await mtimeOf(docPath);
         const docCurrent = docM !== null && fsmM !== null && docM >= fsmM;
         if (!docCurrent) {

@@ -25,6 +25,10 @@ test/e2e/e2e-drift-prevention-report.md
 docs/research/
 docs/tasks/
 
+# Auto-handover docs are rebuildable on-disk projections (regenerated each handoff) — never commit
+# (UCC.2: a sub-repo-launched handoff may write the projection under this repo's docs/).
+docs/handover-session-*-auto.md
+
 # fastembed model cache (downloaded artifacts)
 local_cache/
 package-lock.json
