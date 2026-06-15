@@ -34,7 +34,7 @@ roles:
           / domain / specialty / workflow / project), goal (one sentence).
         - Optional but recommended: description, foundation, detected_by,
           activation_scope, kind, usage.
-        - Cite docs/pack-runtime.md §1 for every field.
+        - Cite docs/pack-system-guide.md ("manifest.yaml — every field").
 
       Phase 3 — Author skills.
         - One skill per discrete rule kind.
@@ -42,8 +42,13 @@ roles:
           (event kinds), requires (AND-preconditions), rules (the actual
           checks — track_check or destination_check).
         - Process steps inside each rule: call / args / as / if /
-          on_empty.
-        - Cite docs/skill-grammar-guide.md for the if: grammar.
+          on_empty. Every call names a registered primitive (guide:
+          "The Primitive / Function Library").
+        - Command matchers: gate on `command_invokes` (structural —
+          program/subcommand/flag_any/arg_any), NEVER `match_command` regex
+          (evadable; reserve for non-command strings).
+        - Cite docs/pack-system-guide.md ("Skills"); docs/skill-grammar-guide.md
+          for the if: grammar.
         - Emit verdicts: pass / block / warn / surface / directive.
         - For directive verdicts: choose next_action (skill XOR tool XOR
           profession). Most common is profession for chain-handoffs.
@@ -69,9 +74,10 @@ roles:
         - Per [[project_opensquid_personal_rules_are_user_codex]]: don't
           ship personal evaluation patterns as built-in packs (they
           belong in user packs).
-        - Cite docs/pack-runtime.md + docs/skill-grammar-guide.md +
-          existing built-in packs (default-discipline / scope-architect /
-          task-spec-author) as the canonical examples.
+        - Cite docs/pack-system-guide.md as THE reference (single source of
+          truth); docs/pack-runtime.md + docs/skill-grammar-guide.md are its
+          sub-references. Study built-in packs (default-discipline /
+          scope-architect / task-spec-author) as canonical examples.
 
       Emit handoff_signal `PACK_AUTHORING_COMPLETE` followed by the path
       of the finished manifest.yaml on a final line.

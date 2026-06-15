@@ -30,7 +30,8 @@ rules:
           level: surface
           message: |
             📋 Authoring a pack manifest. Quick checklist (cite
-            docs/pack-runtime.md §1 for field details):
+            docs/pack-system-guide.md "manifest.yaml — every field" — the
+            canonical reference):
               [ ] name (kebab-case, no leading digit)
               [ ] version (semver, e.g. 0.1.0)
               [ ] scope (universal / domain / specialty / workflow / project)
@@ -45,6 +46,9 @@ rules:
                   range per entry)
               [ ] guards (reusable detect→verdict gate templates — for FSM-gated packs)
               [ ] verify_gates (declarative author gates)
-            If usage is profession or both, you ALSO need team.yaml. If the pack has a
-            stateful lifecycle, ALSO author fsm.yaml (a side-file, auto-loaded by name) —
-            see the fsm-author-walkthrough checklist.
+            Side-files are auto-loaded by filename into the Pack object — author as
+            needed: fsm.yaml (stateful lifecycle), models.yaml (model aliases),
+            drift_response.yaml (verdict→action policy), procedure.md (the agent
+            METHOD), team.yaml (REQUIRED for usage profession/both). See
+            docs/pack-system-guide.md (the manifest, Models, Drift Response, and
+            PROCEDURE/RUBRIC sections) for each; fsm.yaml has its own walkthrough.

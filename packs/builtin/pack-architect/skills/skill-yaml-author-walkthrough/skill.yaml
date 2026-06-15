@@ -30,7 +30,8 @@ rules:
           level: surface
           message: |
             🧩 Authoring a skill.yaml. Quick checklist (cite
-            docs/pack-runtime.md §2 + docs/skill-grammar-guide.md):
+            docs/pack-system-guide.md "Skills" — the canonical reference; +
+            docs/skill-grammar-guide.md for the if: grammar):
               [ ] name (kebab-case)
               [ ] load (preload | lazy)
               [ ] when_to_load (load triggers — event_type / tool_match /
@@ -43,6 +44,15 @@ rules:
                   docs/pack-fsm-architecture.md)
               [ ] if: grammar uses the documented operator set + helper
                   functions per skill-grammar-guide.md
+              [ ] Command matchers: gate on `command_invokes` (structural —
+                  program / subcommand / flag_any / arg_any), NEVER
+                  `match_command` (evadable regex; reserve it for non-command
+                  string matching). See the guide's "The Primitive / Function
+                  Library" section. (`command_match` above is the SEPARATE
+                  when_to_load matcher, NOT the rule-level command matcher.)
+              [ ] Primitives: every `call:` step names a registered primitive —
+                  see the guide's "The Primitive / Function Library" section for
+                  the full vocabulary + signatures.
               [ ] Final step emits a verdict
                   (pass / block / warn / surface / directive)
               [ ] GATES TEACH (TR.C, wg-2d1d8698f563): if a rule emits a
@@ -59,7 +69,8 @@ rules:
                   rubric (the BAR). Deliver it with an unconditional rule calling
                   `procedure_pre_inject` (it self-gates on the pack's FSM:
                   engaged = state != initial). Keep it METHOD not CRITERIA — it
-                  references the rubric, never restates it. See pack-runtime.md §1.5.
+                  references the rubric, never restates it. See the guide's
+                  "Pack authoring surfaces: the PROCEDURE (METHOD) and the RUBRIC (BAR)".
               [ ] For directive verdict: next_action is skill XOR tool
                   XOR profession (exactly one)
               [ ] No vendor model names anywhere (use model_alias)

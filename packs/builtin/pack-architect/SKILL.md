@@ -28,12 +28,12 @@ but the chain-handoff stalls.
 
 ## The 4 skills
 
-| Skill                           | When it fires                                                                       | What it does                                                                                    |
-| ------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `pack-scope-elicit`             | UserPromptSubmit matches pack-authoring intent + the coding-flow FSM is null/`idle` | Emits directive `next_action.profession: scope-architect` for prework                           |
-| `manifest-author-walkthrough`   | PreToolUse Edit/Write of `packs/*/manifest.yaml`                                    | Surface verdict with manifest-field checklist (cites pack-runtime.md §1; incl. guards/fsm.yaml) |
-| `skill-yaml-author-walkthrough` | PreToolUse Edit/Write of `packs/*/skills/*/skill.yaml`                              | Surface verdict with skill-field checklist (cites pack-runtime.md §2 + skill-grammar-guide.md)  |
-| `fsm-author-walkthrough`        | PreToolUse Edit/Write of `packs/*/fsm.yaml`                                         | Surface verdict with FSM checklist (cites pack-fsm-architecture.md; coding-flow example)        |
+| Skill                           | When it fires                                                                       | What it does                                                                                        |
+| ------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `pack-scope-elicit`             | UserPromptSubmit matches pack-authoring intent + the coding-flow FSM is null/`idle` | Emits directive `next_action.profession: scope-architect` for prework                               |
+| `manifest-author-walkthrough`   | PreToolUse Edit/Write of `packs/*/manifest.yaml`                                    | Surface verdict with manifest-field checklist (cites pack-system-guide.md; full side-file set)      |
+| `skill-yaml-author-walkthrough` | PreToolUse Edit/Write of `packs/*/skills/*/skill.yaml`                              | Surface verdict with skill-field checklist (cites pack-system-guide.md; command_invokes discipline) |
+| `fsm-author-walkthrough`        | PreToolUse Edit/Write of `packs/*/fsm.yaml`                                         | Surface verdict with FSM checklist (cites pack-system-guide.md FSM section; coding-flow example)    |
 
 ### Discipline: gates teach their rubric (TR.C, wg-2d1d8698f563)
 
@@ -49,17 +49,26 @@ reference implementation.
 
 1. **Identify scope + persona** — kind/usage decisions, detected_by
    choice, activation_scope.
-2. **Write manifest.yaml** — required + recommended fields per pack-runtime.md §1.
+2. **Write manifest.yaml** — required + recommended fields per the guide's
+   "manifest.yaml — every field" section.
 3. **Author skills** — one skill per rule kind; when_to_load + triggers
-   - rules + process steps; verdict choice; if: grammar discipline.
-4. **Side-files** — `fsm.yaml` if the pack has a stateful lifecycle (initial +
-   states + TOTAL transitions; auto-loaded by name → `pack.fsm`; pair with
-   `guards:`); team.yaml only if profession-mode; other side files as needed.
+   - rules + process steps; verdict choice; if: grammar discipline. Command
+     matchers use `command_invokes` (structural), never `match_command` regex
+     (guide: "The Primitive / Function Library").
+4. **Side-files** (auto-loaded by filename → the `Pack` object) — `fsm.yaml`
+   (stateful lifecycle, pair with `guards:`), `models.yaml` (aliases),
+   `drift_response.yaml` (verdict→action policy), `procedure.md` (the agent
+   METHOD), `team.yaml` (profession-mode only). See the guide's Models, Drift
+   Response, and PROCEDURE/RUBRIC sections.
 
 ## References
 
-- `docs/pack-runtime.md` — the authoritative reference pack-architect
-  cites throughout.
+- `docs/pack-system-guide.md` — **THE canonical, code-derived author's guide and
+  single source of truth**: the pack lifecycle, every manifest field,
+  scope/detection/activation, FSM + flow templates, skills, the full `call:`
+  primitive vocabulary, teams, models, drift-response, and procedure/rubric.
+  **Start here.** The docs below are its sub-references (it cites them for depth).
+- `docs/pack-runtime.md` — deeper primitive/runtime reference.
 - `docs/pack-fsm-architecture.md` — the all-levels FSM walkthrough (the
   `fsm.yaml` lifecycle, the total-transition engine, `read_fsm_state`/`advance_fsm`,
   and `guards:`); the companion for stateful/behavior packs.

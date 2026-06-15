@@ -30,7 +30,8 @@ rules:
           level: surface
           message: |
             🔄 Authoring a pack FSM (fsm.yaml — the behavior lifecycle). Quick checklist
-            (cite docs/pack-fsm-architecture.md; canonical example: coding-flow/fsm.yaml):
+            (cite docs/pack-system-guide.md "Pack Lifecycle FSMs + Flow Templates" — the
+            canonical reference; deeper: docs/pack-fsm-architecture.md; example: coding-flow/fsm.yaml):
               [ ] initial (the start state)
               [ ] states (every lifecycle state, explicitly listed)
               [ ] transitions (each `{ from, on, to }`); the machine must be TOTAL —

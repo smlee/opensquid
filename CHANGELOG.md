@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.453] - 2026-06-15
+
+### Changed — pack-architect (the pack builder) cites the canonical guide + teaches the matcher discipline (PB.1, wg-45e284212c84)
+
+- `pack-architect` now leads every reference with `docs/pack-system-guide.md` (the canonical,
+  code-derived source of truth); `pack-runtime.md` / `skill-grammar-guide.md` / `pack-fsm-architecture.md`
+  are its sub-references. Updated: `SKILL.md` (References + 4-phase workflow), the
+  manifest/skill-yaml/fsm author-walkthrough checklists, and the `team.yaml` profession instructions.
+- The skill-yaml checklist + the profession instructions now teach the structural-matcher discipline:
+  **command matchers use `command_invokes` (program/subcommand/flag_any/arg_any), never `match_command`
+  regex** (evadable; reserve for non-command strings) — closing the teacher-vs-mechanism gap from the
+  GM matcher migration. Plus a pointer to the guide's primitive vocabulary.
+- The manifest checklist + side-files phase now name the full side-file set (`models.yaml`,
+  `drift_response.yaml`, `procedure.md` alongside `fsm.yaml`/`team.yaml`), each pointing to its guide
+  section. Single-source: the builder POINTS to the guide, never inlines its parity-tested tables.
+- Part 2 of T-pack-builder-proper-state. The per-case `match_command` audit of OTHER builtin packs
+  (Part 3) is deferred to the final-audit-flow (wg-54eef8b4927c).
+
 ## [0.5.452] - 2026-06-15
 
 ### Added — `migrate-umbrella-ns`: re-key project memory from the umbrella id to the per-repo UUID (UCC.3, wg-57a17b52853d)
