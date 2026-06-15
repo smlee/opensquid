@@ -129,5 +129,15 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
         args: [s(p.ts), op.issueId],
       });
       return;
+    case 'claim_released':
+      // wg-8e1104f1934b — drop a live claim so an un-wedged item is IMMEDIATELY re-claimable
+      // (resolveParked's snappy-retry intent), not stuck until the TTL expires.
+      await client.execute({
+        sql: `UPDATE wg_issues
+              SET claim_token = NULL, claim_audience = NULL, claim_expires_at = NULL, updated_at = ?
+              WHERE id = ?`,
+        args: [s(p.ts), op.issueId],
+      });
+      return;
   }
 }

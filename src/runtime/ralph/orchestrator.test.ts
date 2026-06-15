@@ -50,6 +50,10 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphStore
       rows.get(id)!.wedged = false;
       return P(undefined);
     },
+    releaseClaim: (id: string) => {
+      rows.get(id)!.claimed = false;
+      return P(undefined);
+    },
     // unused by the loop — present to satisfy the interface
     init: () => P(undefined),
     createIssue: () => P(issue(ids[0] ?? 'x')),
@@ -165,6 +169,16 @@ describe('resolveParked (human-override residual-shrink path)', () => {
     await resolveParked('a', { wg, recordMisclassification: rec, sessionId: 's1', nowIso: 'now' });
     expect(rec).toHaveBeenCalledWith('s1', 'DECIDE', 'ESCALATE', 'a', 'now'); // expected vs got
     expect((await wg.listReady()).map((i) => i.id)).toEqual(['a']); // un-wedged → back in ready
+  });
+
+  it('also RELEASES the lap claim → un-wedged item re-surfaces NOW, not at TTL (wg-8e1104f1934b)', async () => {
+    const wg = mockStore(['a']);
+    await wg.claimIssue('a', { source: 'claudecode', version: '1.2.3' }, 1800); // the lap claimed it
+    await wg.wedgeMark('a', 'UNRECOVERABLE_WEDGE'); // then parked it
+    expect((await wg.listReady()).map((i) => i.id)).not.toContain('a'); // wedged + claimed → excluded
+    const rec = vi.fn(() => P(undefined));
+    await resolveParked('a', { wg, recordMisclassification: rec, sessionId: 's1', nowIso: 'now' });
+    expect((await wg.listReady()).map((i) => i.id)).toContain('a'); // claim released → ready WITHOUT TTL wait
   });
 
   it('on a NON-parked item (no wedgeReason) → throws, no misclassification recorded', async () => {

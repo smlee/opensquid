@@ -149,5 +149,6 @@ export async function resolveParked(
   if (item?.wedgeReason === undefined)
     throw new Error(`resolveParked: not a parked item: ${itemId}`);
   await deps.recordMisclassification(deps.sessionId, 'DECIDE', 'ESCALATE', item.title, deps.nowIso);
-  await deps.wg.clearWedge(itemId); // un-wedge → re-enters listReady
+  await deps.wg.clearWedge(itemId); // un-wedge
+  await deps.wg.releaseClaim(itemId); // wg-8e1104f1934b: drop the lap's claim → re-surfaces NOW, not at TTL
 }

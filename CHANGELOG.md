@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.446] - 2026-06-14
+
+### Fixed — `resolveParked` releases the lap claim so an un-wedged item re-surfaces immediately (wg-8e1104f1934b)
+
+- When a human resolved a parked escalation via `opensquid loop resolve <id> --misclassified`,
+  `resolveParked` cleared the wedge but left the escalating lap's LIVE claim on the item — so
+  `listReady` kept excluding it (claim-not-expired) until the claim TTL ran out (the scaffold
+  default is 1h). The override's "retry this now" intent was delayed by up to an hour.
+- Added a `claim_released` op (event-sourced, symmetric with `claim_acquired`) whose fold nulls
+  `claim_token`/`claim_audience`/`claim_expires_at`, plus a `releaseClaim` store method;
+  `resolveParked` now calls it after `clearWedge`. The un-wedged item is immediately re-claimable —
+  no TTL wait. (A dedicated op rather than folding the release into `wedge_cleared`, which would
+  retroactively re-project historical ops and conflate two facts in one event.)
+
 ## [0.5.445] - 2026-06-14
 
 ### Fixed — a research/docs turn after a completed track no longer spuriously re-arms SCOPE (wg-649d80e78e64)

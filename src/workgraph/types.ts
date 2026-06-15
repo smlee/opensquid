@@ -45,7 +45,8 @@ export type WgOpType =
   | 'dep_removed'
   | 'claim_acquired'
   | 'wedge_marked'
-  | 'wedge_cleared';
+  | 'wedge_cleared'
+  | 'claim_released';
 
 export interface WgOp {
   id: string;
@@ -85,6 +86,7 @@ export interface WorkGraphStore {
   /** Clear a wedge-mark (GR.4 human-override resolution): `wedge_reason` → null → the item re-enters
    * `listReady` for another lap. The residual-shrink path's un-wedge. */
   clearWedge(id: string): Promise<void>;
+  releaseClaim(id: string): Promise<void>;
   /** The append-only op-log for an issue, in (lamport, id) order. */
   listEvents(issueId: string): Promise<WgOp[]>;
 }

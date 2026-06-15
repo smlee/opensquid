@@ -143,6 +143,23 @@ describe('workGraphStore claim + audience (GR.1)', () => {
     ]);
   });
 
+  it('releaseClaim drops the claim → item re-surfaces in ready without a TTL wait (wg-8e1104f1934b)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'release me' });
+    await wg.claimIssue(a.id, claude, 86400); // live claim, 1-day TTL → excluded from ready
+    expect((await wg.listReady()).map((i) => i.id)).not.toContain(a.id);
+    await wg.releaseClaim(a.id);
+    // all claim fields nulled — no time advance needed
+    expect((await wg.getIssue(a.id))?.claimToken).toBeUndefined();
+    expect((await wg.getIssue(a.id))?.claimAudience).toBeUndefined();
+    expect((await wg.listReady()).map((i) => i.id)).toContain(a.id);
+    expect((await wg.listEvents(a.id)).map((o) => o.type)).toEqual([
+      'issue_created',
+      'claim_acquired',
+      'claim_released',
+    ]);
+  });
+
   it('a second concurrent claim loses (exactly-once CAS)', async () => {
     const wg = await fresh();
     const a = await wg.createIssue({ title: 'contended' });
