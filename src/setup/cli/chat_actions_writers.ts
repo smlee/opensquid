@@ -109,6 +109,41 @@ export function buildActiveJson(existing: string[], packId: string): string {
 }
 
 /**
+ * PT.1 — reciprocal of `buildActiveJson`: serialize `existing` minus `packId`.
+ * Pure; same "ONE owner of serialize" role. No-op (identity, minus the entry)
+ * when `packId` is absent.
+ */
+export function removeFromActiveJson(existing: string[], packId: string): string {
+  return `${JSON.stringify({ packs: existing.filter((p) => p !== packId) }, null, 2)}\n`;
+}
+
+/**
+ * PT.1 — tolerant read of a scope root's `active.json` pack-name list. ENOENT →
+ * `[]` (absent scope is empty, mirrors `discoverActivePacks` discovery.ts:218);
+ * a JSON PARSE error THROWS with the path (never silently overwrite a file we
+ * couldn't parse — it may hold packs we'd drop, discovery.ts:213-214); a parsed
+ * object with a non-array `packs` → `[]`.
+ */
+export async function readActivePackNames(scopeRoot: string): Promise<string[]> {
+  const path = join(scopeRoot, 'active.json');
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf-8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`opensquid: failed to parse ${path} as JSON: ${(e as Error).message}`);
+  }
+  const packs = (parsed as { packs?: unknown }).packs;
+  return Array.isArray(packs) ? packs.filter((p): p is string => typeof p === 'string') : [];
+}
+
+/**
  * The `.opensquid/project.json` card (paths.ts ProjectCard schema).
  * GENUINELY pure — deterministic in its inputs, byte-pinnable in tests; the
  * uuid is minted at the ORCHESTRATOR (which owns create-if-absent), not here.

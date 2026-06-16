@@ -219,6 +219,23 @@ Packs are the unit of behavior. A pack can contain:
 
 This matters because OpenSquid is not a bundle of one user's personal workflow. The product is the runtime and format. Your rules, gates, and agent personality live in packs you can inspect, edit, version, and move.
 
+### Turning packs on and off
+
+Every pack has one of three states, set with a single command:
+
+```text
+opensquid pack set <name> off      # not active anywhere
+opensquid pack set <name> local    # active only in this project (the directory you started in)
+opensquid pack set <name> global   # active in every repo, across every harness
+opensquid pack list                # every known pack and its current state
+```
+
+`local` writes the project's `.opensquid/active.json`; `global` writes your user-level
+`~/.opensquid/active.json`. A change takes effect on the **next tool call** — no need to restart
+Claude (or any harness). Because activation lives in OpenSquid's own `active.json`, a `global` pack is
+active in **every** harness OpenSquid runs under (Claude Code, Codex, …), not just one. The interactive
+`/packs` command is the Claude Code front-end over these same verbs.
+
 ## Workflow Gates
 
 OpenSquid's gates exist because agents are good at saying a process happened and bad at proving it happened.

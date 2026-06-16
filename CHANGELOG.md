@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.459] - 2026-06-16
+
+### Added — tri-state pack control {off · local · global} (PT.1)
+
+- `opensquid pack set <name> off|local|global` turns any pack on/off and re-scopes it between
+  **global** (user-level `~/.opensquid/active.json`) and **local** (the project's `.opensquid/active.json`,
+  bound to the directory the agent was started in), creating the project file on demand. Idempotent;
+  rejects an unknown name fail-closed (a dead name in `active.json` would otherwise brick every hook);
+  aborts without overwriting a garbled `active.json`. Effective on the **next tool call** — no Claude
+  restart — and, because activation lives in OpenSquid's own cross-harness `active.json`, a `global`
+  pack applies in every harness OpenSquid runs under, not just Claude Code.
+- `opensquid pack list [--json]` now reports **every** known pack (built-ins ∪ installed) with its
+  configured state + origin (was install-only, single-scope, stateless).
+
+### Fixed — a pack declared active in both scopes double-loaded
+
+- `loadActivePacks` composed `[...user, ...project]` without de-duping (`bootstrap.ts`), so a pack
+  present in both scopes loaded twice and `validateUniqueSkillNames` flagged every one of its skills as
+  self-colliding. A new pure `dedupePacksByName` (user-wins) at the composition choke-point makes such a
+  pack load exactly once — fixing a latent defect reachable today via chat-setup, independent of the new
+  verbs.
+
 ## [0.5.458] - 2026-06-15
 
 ### Added — retention sweeper closes the 30-day memory-reclaim loop; user memory is never demoted (RSW.1, wg-9e4f4eb2a40f)

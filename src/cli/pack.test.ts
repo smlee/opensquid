@@ -23,6 +23,7 @@ import {
   buildInstallCommand,
   buildListCommand,
   buildRemoveCommand,
+  buildSetCommand,
 } from './pack.js';
 
 /** Write a pack dir with a manifest + one skill whose single rule calls `call`. */
@@ -194,13 +195,31 @@ describe('pack install', () => {
 });
 
 describe('pack list', () => {
-  it('empty state → "No packs installed" message', async () => {
-    const cap = captureOut();
-    await run(buildListCommand(cap), []);
-    expect(cap.lines.some((l) => l.includes('No packs installed'))).toBe(true);
+  // PT.1: `list` now enumerates builtins ∪ user ∪ project + state. Isolate the
+  // built-in root + project cwd so the test sees only its own fixtures.
+  let emptyBuiltin: string;
+  let isolatedProj: string;
+  let priorBuiltin: string | undefined;
+  beforeEach(async () => {
+    priorBuiltin = process.env.OPENSQUID_BUILTIN_PACKS_ROOT;
+    emptyBuiltin = await mkdtemp(join(tmpdir(), 'opensquid-builtin-empty-'));
+    process.env.OPENSQUID_BUILTIN_PACKS_ROOT = emptyBuiltin;
+    isolatedProj = await mkdtemp(join(tmpdir(), 'opensquid-proj-iso-'));
+  });
+  afterEach(async () => {
+    if (priorBuiltin === undefined) delete process.env.OPENSQUID_BUILTIN_PACKS_ROOT;
+    else process.env.OPENSQUID_BUILTIN_PACKS_ROOT = priorBuiltin;
+    await rm(emptyBuiltin, { recursive: true, force: true });
+    await rm(isolatedProj, { recursive: true, force: true });
   });
 
-  it('lists 2 installed packs with base_version + revision_id', async () => {
+  it('empty state → "No packs found" message', async () => {
+    const cap = captureOut();
+    await run(buildListCommand(cap), ['--project-cwd', isolatedProj]);
+    expect(cap.lines.some((l) => l.includes('No packs found'))).toBe(true);
+  });
+
+  it('lists installed packs with their configured state (off) + origin (user)', async () => {
     const s1 = join(tempHome, 'src1');
     const s2 = join(tempHome, 'src2');
     await writePack(s1, 'pack-a', '1.0.0');
@@ -208,12 +227,10 @@ describe('pack list', () => {
     await run(buildInstallCommand(captureOut()), [s1]);
     await run(buildInstallCommand(captureOut()), [s2]);
     const cap = captureOut();
-    await run(buildListCommand(cap), []);
-    const joined = cap.lines.join('\n');
-    expect(joined).toContain('pack-a');
-    expect(joined).toContain('base=1.0.0');
-    expect(joined).toContain('pack-b');
-    expect(joined).toContain('base=2.5.0');
+    await run(buildListCommand(cap), ['--json', '--project-cwd', isolatedProj]);
+    const rows = JSON.parse(cap.lines[0]!) as { name: string; state: string; origin: string }[];
+    expect(rows).toContainEqual({ name: 'pack-a', state: 'off', origin: 'user' });
+    expect(rows).toContainEqual({ name: 'pack-b', state: 'off', origin: 'user' });
   });
 });
 
@@ -287,5 +304,103 @@ describe('pack remove', () => {
     const cap = captureOut();
     await run(buildRemoveCommand(cap), ['ghost', '--yes']);
     expect(cap.lines.some((l) => l.includes('not installed'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PT.1 — tri-state pack control (`pack set` + state-aware `pack list`).
+// ---------------------------------------------------------------------------
+describe('pack set / list (PT.1 tri-state)', () => {
+  let builtinRoot: string;
+  let projectCwd: string;
+  let priorBuiltin: string | undefined;
+
+  // A scope root's active.json pack-name list ([] when absent).
+  async function activeNames(scopeRoot: string): Promise<string[]> {
+    try {
+      const raw = await readFile(join(scopeRoot, 'active.json'), 'utf8');
+      return (JSON.parse(raw) as { packs: string[] }).packs;
+    } catch {
+      return [];
+    }
+  }
+
+  beforeEach(async () => {
+    priorBuiltin = process.env.OPENSQUID_BUILTIN_PACKS_ROOT;
+    builtinRoot = await mkdtemp(join(tmpdir(), 'opensquid-builtin-'));
+    process.env.OPENSQUID_BUILTIN_PACKS_ROOT = builtinRoot;
+    // a built-in pack named `gate` (manifest only — built-ins carry no version.json).
+    await writePack(join(builtinRoot, 'gate'), 'gate', '1.0.0');
+    projectCwd = await mkdtemp(join(tmpdir(), 'opensquid-proj-'));
+  });
+  afterEach(async () => {
+    if (priorBuiltin === undefined) delete process.env.OPENSQUID_BUILTIN_PACKS_ROOT;
+    else process.env.OPENSQUID_BUILTIN_PACKS_ROOT = priorBuiltin;
+    await rm(builtinRoot, { recursive: true, force: true });
+    await rm(projectCwd, { recursive: true, force: true });
+  });
+
+  it('set global writes the user active.json + prints the no-restart note', async () => {
+    const cap = captureOut();
+    await run(buildSetCommand(cap), ['gate', 'global']);
+    expect(await activeNames(tempHome)).toEqual(['gate']);
+    expect(cap.lines.some((l) => l.includes('next tool call'))).toBe(true);
+  });
+
+  it('set local writes the project active.json (creating .opensquid/) and removes from user (mutual exclusion)', async () => {
+    await run(buildSetCommand(captureOut()), ['gate', 'global']);
+    await run(buildSetCommand(captureOut()), ['gate', 'local', '--project-cwd', projectCwd]);
+    expect(await activeNames(tempHome)).toEqual([]); // dropped from user
+    expect(await activeNames(join(projectCwd, '.opensquid'))).toEqual(['gate']); // now project
+  });
+
+  it('set off removes from both scopes; idempotent re-run', async () => {
+    await run(buildSetCommand(captureOut()), ['gate', 'global']);
+    await run(buildSetCommand(captureOut()), ['gate', 'off']);
+    expect(await activeNames(tempHome)).toEqual([]);
+    await run(buildSetCommand(captureOut()), ['gate', 'off']); // no-op, no throw
+    expect(await activeNames(tempHome)).toEqual([]);
+  });
+
+  it('set rejects an unknown pack fail-closed; no active.json written', async () => {
+    await expect(run(buildSetCommand(captureOut()), ['bogus', 'global'])).rejects.toThrow(
+      /no such pack/,
+    );
+    expect(await activeNames(tempHome)).toEqual([]);
+  });
+
+  it('set rejects an invalid state', async () => {
+    await expect(run(buildSetCommand(captureOut()), ['gate', 'sideways'])).rejects.toThrow(
+      /off\|local\|global/,
+    );
+  });
+
+  it('set ABORTS on a garbled user active.json (no overwrite)', async () => {
+    await writeFile(join(tempHome, 'active.json'), '{ not json');
+    await expect(run(buildSetCommand(captureOut()), ['gate', 'global'])).rejects.toThrow(
+      /active\.json/,
+    );
+    // untouched
+    expect(await readFile(join(tempHome, 'active.json'), 'utf8')).toBe('{ not json');
+  });
+
+  it('list --json reports the built-in pack with its configured state + origin', async () => {
+    await run(buildSetCommand(captureOut()), ['gate', 'global']);
+    const cap = captureOut();
+    await run(buildListCommand(cap), ['--json', '--project-cwd', projectCwd]);
+    const rows = JSON.parse(cap.lines[0]!) as {
+      name: string;
+      state: string;
+      origin: string;
+    }[];
+    expect(rows).toContainEqual({ name: 'gate', state: 'global', origin: 'builtin' });
+  });
+
+  it('list shows local state for a project-scoped pack', async () => {
+    await run(buildSetCommand(captureOut()), ['gate', 'local', '--project-cwd', projectCwd]);
+    const cap = captureOut();
+    await run(buildListCommand(cap), ['--json', '--project-cwd', projectCwd]);
+    const rows = JSON.parse(cap.lines[0]!) as { name: string; state: string }[];
+    expect(rows.find((r) => r.name === 'gate')?.state).toBe('local');
   });
 });

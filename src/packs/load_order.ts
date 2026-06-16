@@ -51,3 +51,22 @@ export function sortPacksByScope(packs: Pack[]): Pack[] {
     return a.name.localeCompare(b.name);
   });
 }
+
+// PT.1 — de-duplicate a composed pack list by `name`, keeping the FIRST
+// occurrence. `loadActivePacks` composes `[...user, ...project]`, so a pack
+// declared active in BOTH scopes (the tri-state model's illegal "in both"
+// state — reachable via chat-setup's user-list write, a manual edit, or a
+// `pack set` mid-crash) would otherwise appear twice: it would load twice and
+// `validateUniqueSkillNames` would flag every one of its skills as
+// "claimed by multiple packs" (the pack colliding with its own duplicate).
+// First-occurrence-wins + the user→project compose order = USER WINS ("global
+// dominates": a pack active at user scope loads everywhere; a redundant
+// project entry is dropped, never double-loaded). Pure: never mutates input.
+export function dedupePacksByName(packs: Pack[]): Pack[] {
+  const seen = new Set<string>();
+  return packs.filter((p) => {
+    if (seen.has(p.name)) return false;
+    seen.add(p.name);
+    return true;
+  });
+}

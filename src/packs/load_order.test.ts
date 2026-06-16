@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Pack, Scope } from '../runtime/types.js';
 
-import { sortPacksByScope } from './load_order.js';
+import { dedupePacksByName, sortPacksByScope } from './load_order.js';
 
 // Minimal pack factory — only fields used by the sort. Required fields
 // (name/version/scope/goal) carry placeholder values; defaults from the Zod
@@ -105,5 +105,45 @@ describe('sortPacksByScope', () => {
 
     // Input order must be byte-identical to its pre-call snapshot.
     expect(input.map((p) => `${p.scope}:${p.name}`)).toEqual(snapshot);
+  });
+});
+
+describe('dedupePacksByName (PT.1 — load-once for in-both packs)', () => {
+  it('keeps the FIRST occurrence on a name clash (user-wins, given user→project order)', () => {
+    // `loadActivePacks` composes [...user, ...project]; a pack active in both
+    // scopes appears twice. The USER copy (first, scope=workflow here) must win.
+    const userCopy = mkPack('coding-flow', 'workflow');
+    const projectCopy = { ...mkPack('coding-flow', 'project'), goal: 'project-copy' };
+    const deduped = dedupePacksByName([userCopy, projectCopy]);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]).toBe(userCopy); // identity — the first occurrence
+    expect(deduped[0]!.scope).toBe('workflow');
+  });
+
+  it('preserves order of the surviving packs', () => {
+    const input = [
+      mkPack('a', 'universal'),
+      mkPack('b', 'workflow'),
+      mkPack('a', 'project'), // dup of a
+      mkPack('c', 'domain'),
+    ];
+    expect(dedupePacksByName(input).map((p) => p.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('is identity (by name) when there are no duplicates', () => {
+    const input = [mkPack('a', 'universal'), mkPack('b', 'workflow')];
+    expect(dedupePacksByName(input).map((p) => p.name)).toEqual(['a', 'b']);
+  });
+
+  it('does not mutate the input array', () => {
+    const input = [mkPack('a', 'universal'), mkPack('a', 'project')];
+    const snapshot = input.map((p) => `${p.scope}:${p.name}`);
+    dedupePacksByName(input);
+    expect(input.map((p) => `${p.scope}:${p.name}`)).toEqual(snapshot);
+  });
+
+  it('returns an empty array for empty input', () => {
+    expect(dedupePacksByName([])).toEqual([]);
   });
 });

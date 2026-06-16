@@ -99,7 +99,7 @@ import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { discoverActivePacks } from '../packs/discovery.js';
 import { type DetectionContext } from './detection.js';
-import { sortPacksByScope } from '../packs/load_order.js';
+import { dedupePacksByName, sortPacksByScope } from '../packs/load_order.js';
 import { loadPack } from '../packs/loader.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
@@ -388,7 +388,9 @@ const realPacksPromise: Promise<Pack[]> = (async () => {
     const user = await discoverActivePacks(resolveUserScopeRoot(), ctx, builtinRoot);
     const projectRoot = await resolveProjectScopeRoot(cwd);
     const project = await discoverActivePacks(projectRoot, ctx, builtinRoot);
-    return sortPacksByScope([...user, ...project]);
+    // PT.1 — dedupe by name (user-wins) BEFORE sort: a pack declared active in
+    // both scopes must load exactly once, not double-register + self-collide.
+    return sortPacksByScope(dedupePacksByName([...user, ...project]));
   } catch (e) {
     // Surface the path-bearing error to stderr so the user can act on it,
     // then rethrow. The hook binary's top-level `main().catch(...)` is

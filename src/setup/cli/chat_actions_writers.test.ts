@@ -6,9 +6,11 @@
  * pure layer: builder bytes + buildPlan's iff-supplied emission.
  */
 
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ChannelsConfig } from '../../channels/routing.js';
 import type { ChatAgentConfig } from '../../packs/schemas/chat_agent.js';
@@ -19,6 +21,8 @@ import {
   buildChannelsSeedJson,
   buildPlan,
   buildProjectCardJson,
+  readActivePackNames,
+  removeFromActiveJson,
   type PlanInput,
 } from './chat_actions_writers.js';
 
@@ -127,5 +131,58 @@ describe('buildPlan — channelsSeed emission (FRS.C)', () => {
     });
     expect(withIt.actions.filter((a) => a.path.endsWith('channels.json'))).toHaveLength(1);
     expect(buildPlan(baseInput).actions.some((a) => a.path.endsWith('channels.json'))).toBe(false);
+  });
+});
+
+describe('removeFromActiveJson (PT.1 — reciprocal of buildActiveJson)', () => {
+  it('removes the named pack, preserving the rest in order', () => {
+    expect(JSON.parse(removeFromActiveJson(['a', 'b', 'c'], 'b')) as { packs: string[] }).toEqual({
+      packs: ['a', 'c'],
+    });
+  });
+  it('is a no-op (minus nothing) when the name is absent', () => {
+    expect(removeFromActiveJson(['a', 'b'], 'z')).toBe(buildActiveJsonList(['a', 'b']));
+  });
+  it('round-trips with buildActiveJson (add then remove → original set)', () => {
+    const added = JSON.parse(buildActiveJson(['a'], 'b')) as { packs: string[] };
+    expect(JSON.parse(removeFromActiveJson(added.packs, 'b')) as { packs: string[] }).toEqual({
+      packs: ['a'],
+    });
+  });
+});
+
+// local helper mirroring removeFromActiveJson's serializer for the no-op assertion.
+function buildActiveJsonList(packs: string[]): string {
+  return `${JSON.stringify({ packs }, null, 2)}\n`;
+}
+
+describe('readActivePackNames (PT.1 — tolerant scope read)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'opensquid-active-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('returns [] when active.json is absent (ENOENT)', async () => {
+    await expect(readActivePackNames(dir)).resolves.toEqual([]);
+  });
+  it('returns the pack names from a valid file', async () => {
+    await writeFile(join(dir, 'active.json'), JSON.stringify({ packs: ['x', 'y'] }));
+    await expect(readActivePackNames(dir)).resolves.toEqual(['x', 'y']);
+  });
+  it('returns [] when packs is missing / not an array', async () => {
+    await writeFile(join(dir, 'active.json'), JSON.stringify({ notPacks: 1 }));
+    await expect(readActivePackNames(dir)).resolves.toEqual([]);
+  });
+  it('THROWS (no silent []) on a garbled JSON file, citing the path', async () => {
+    await writeFile(join(dir, 'active.json'), '{ this is not json');
+    await expect(readActivePackNames(dir)).rejects.toThrow(/active\.json/);
+  });
+  it('creates a fresh scope dir on demand (mkdir parent then read)', async () => {
+    const nested = join(dir, 'sub', '.opensquid');
+    await mkdir(nested, { recursive: true });
+    await expect(readActivePackNames(nested)).resolves.toEqual([]);
   });
 });

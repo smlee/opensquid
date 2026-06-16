@@ -1,5 +1,8 @@
 /**
- * LP.4 — `opensquid pack` CLI surface: install / list / export / remove.
+ * LP.4 — `opensquid pack` CLI surface: install / list / set / export / remove.
+ * PT.1 — `set <name> off|local|global` is the tri-state scope control (writes the
+ * user/project `active.json`; effective next tool call, no restart); `list` reports
+ * every known pack's configured state. See docs/tasks/T-pack-scope-control.md.
  *
  * v1 minimum-viable per pragmatic scope:
  *   - install: local directory only (tarball + URL deferred to v1.5)
@@ -14,8 +17,7 @@
  * Imports: commander, node:fs/promises, node:os, node:path, yaml,
  *   LP.1 personal_revision + LP.2 versioning + LP.3 discovery helpers.
  */
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { join } from 'node:path';
 
@@ -23,6 +25,16 @@ import { Command } from 'commander';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { resolvePackStateDir, validatePackId } from '../packs/discovery.js';
+import {
+  resolveBuiltinScopeRoot,
+  resolveProjectScopeRoot,
+  resolveUserScopeRoot,
+} from '../runtime/paths.js';
+import {
+  buildActiveJson,
+  readActivePackNames,
+  removeFromActiveJson,
+} from '../setup/cli/chat_actions_writers.js';
 import { loadPack } from '../packs/loader.js';
 import {
   initPersonalRevision,
@@ -175,37 +187,193 @@ export function buildInstallCommand(deps: PackCliDeps = {}): Command {
     });
 }
 
+// PT.1 — tri-state pack control. A pack's CONFIGURED state is exactly one of
+// off (in neither active.json), local (project active.json only), or global
+// (user active.json only). This reports DECLARED scope — orthogonal to the
+// per-session `detected_by[]` gating `discoverActivePacks` also applies (a pack
+// configured `global` may still be detection-gated off this session).
+export type PackState = 'off' | 'local' | 'global';
+type PackOrigin = 'builtin' | 'user' | 'project';
+interface PackListRow {
+  name: string;
+  state: PackState;
+  origin: PackOrigin;
+}
+interface ListOpts {
+  projectCwd?: string;
+  json?: boolean;
+}
+interface SetOpts {
+  projectCwd?: string;
+}
+
+async function readdirSafe(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** Built-in pack names = `packs/builtin/<name>/manifest.yaml` (excludes non-pack
+ *  dirs like `examples/`). */
+async function listBuiltinPackNames(builtinRoot: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of await readdirSafe(builtinRoot)) {
+    try {
+      await stat(join(builtinRoot, name, 'manifest.yaml'));
+      out.push(name);
+    } catch {
+      /* not a pack dir */
+    }
+  }
+  return out;
+}
+
+/** Installed pack names under a `<scope>/packs/` dir = those carrying a
+ *  `version.json` (the install marker, via `readVersionJson`). */
+async function listInstalledPackNames(packsDir: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of await readdirSafe(packsDir)) {
+    if ((await readVersionJson(join(packsDir, name)).catch(() => null)) !== null) out.push(name);
+  }
+  return out;
+}
+
+/** A pack is REAL if it is a built-in OR installed at user / project scope. The
+ *  existence check guards `set` against writing a dead name into `active.json`
+ *  (a name `discoverActivePacks` can't resolve THROWS and bricks every hook). */
+async function packExists(name: string, projectRoot: string | null): Promise<boolean> {
+  try {
+    await stat(join(resolveBuiltinScopeRoot(), name, 'manifest.yaml'));
+    return true;
+  } catch {
+    /* not built-in */
+  }
+  if ((await readVersionJson(resolvePackStateDir(name, 'user')).catch(() => null)) !== null) {
+    return true;
+  }
+  if (
+    projectRoot !== null &&
+    (await readVersionJson(join(projectRoot, 'packs', name)).catch(() => null)) !== null
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Add `name` to `<scopeRoot>/active.json` (create the dir/file if absent). */
+async function addToActive(scopeRoot: string, name: string): Promise<void> {
+  await mkdir(scopeRoot, { recursive: true });
+  const existing = await readActivePackNames(scopeRoot);
+  await writeFile(join(scopeRoot, 'active.json'), buildActiveJson(existing, name));
+}
+
+/** Remove `name` from `<scopeRoot>/active.json`; no-op (no write) when the file
+ *  is absent or the name isn't present, so we never create an empty active.json
+ *  just to remove. A garbled file throws (readActivePackNames) → abort, no overwrite. */
+async function removeFromActive(scopeRoot: string, name: string): Promise<void> {
+  const existing = await readActivePackNames(scopeRoot);
+  if (!existing.includes(name)) return;
+  await writeFile(join(scopeRoot, 'active.json'), removeFromActiveJson(existing, name));
+}
+
 export function buildListCommand(deps: PackCliDeps = {}): Command {
   const print = emit(deps);
   return new Command('list')
-    .description('List installed packs')
-    .option('--scope <scope>', 'user | project', 'user')
-    .option('--project-cwd <path>', 'Project root (required for --scope project)')
-    .action(async (opts: CommonOpts) => {
-      const baseDir =
-        opts.scope === 'project'
-          ? join(opts.projectCwd ?? process.cwd(), '.opensquid', 'packs')
-          : join(process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid'), 'packs');
-      let entries: string[];
-      try {
-        entries = await readdir(baseDir);
-      } catch {
-        print(`[opensquid pack list] No packs installed in ${baseDir}`);
+    .description('List every known pack with its configured state (off | local | global)')
+    .option('--project-cwd <path>', 'Project root (default: cwd walk-up)')
+    .option('--json', 'Emit machine-readable JSON rows', false)
+    .action(async (opts: ListOpts) => {
+      const cwd = opts.projectCwd ?? process.cwd();
+      const userRoot = resolveUserScopeRoot();
+      const projectRoot = await resolveProjectScopeRoot(cwd);
+
+      const builtin = new Set(await listBuiltinPackNames(resolveBuiltinScopeRoot()));
+      const userInstalled = new Set(await listInstalledPackNames(join(userRoot, 'packs')));
+      const projectInstalled = new Set(
+        projectRoot !== null ? await listInstalledPackNames(join(projectRoot, 'packs')) : [],
+      );
+      const userActive = new Set(await readActivePackNames(userRoot));
+      const projectActive = new Set(
+        projectRoot !== null ? await readActivePackNames(projectRoot) : [],
+      );
+
+      const names = [
+        ...new Set([
+          ...builtin,
+          ...userInstalled,
+          ...projectInstalled,
+          ...userActive,
+          ...projectActive,
+        ]),
+      ].sort();
+
+      const rows: PackListRow[] = names.map((name) => ({
+        name,
+        // user-wins precedence — matches the loader's dedupe (global dominates).
+        state: userActive.has(name) ? 'global' : projectActive.has(name) ? 'local' : 'off',
+        origin: builtin.has(name)
+          ? 'builtin'
+          : userInstalled.has(name)
+            ? 'user'
+            : projectInstalled.has(name)
+              ? 'project'
+              : 'builtin',
+      }));
+
+      if (opts.json === true) {
+        print(JSON.stringify(rows));
         return;
       }
-      let listed = 0;
-      for (const name of entries) {
-        const stateDir = join(baseDir, name);
-        const version = await readVersionJson(stateDir).catch(() => null);
-        if (version === null) continue;
-        const lastMerged =
-          version.last_merged_vanilla !== null ? ` lastMerged=${version.last_merged_vanilla}` : '';
-        print(
-          `${name.padEnd(40)} base=${version.base_version} revision=${String(version.personal_revision_id)}${lastMerged}`,
-        );
-        listed++;
+      if (rows.length === 0) {
+        print('[opensquid pack list] No packs found');
+        return;
       }
-      if (listed === 0) print(`[opensquid pack list] No installed packs in ${baseDir}`);
+      for (const r of rows) {
+        print(`${r.name.padEnd(40)} ${r.state.padEnd(7)} ${r.origin}`);
+      }
+    });
+}
+
+export function buildSetCommand(deps: PackCliDeps = {}): Command {
+  const print = emit(deps);
+  return new Command('set')
+    .description('Set a pack to off | local | global (effective next tool call; no restart)')
+    .argument('<name>', 'Pack name')
+    .argument('<state>', 'off | local | global')
+    .option('--project-cwd <path>', 'Project root (default: cwd walk-up)')
+    .action(async (name: string, state: string, opts: SetOpts) => {
+      validatePackId(name);
+      if (state !== 'off' && state !== 'local' && state !== 'global') {
+        throw new Error(`opensquid pack set: state must be off|local|global, got "${state}"`);
+      }
+      const cwd = opts.projectCwd ?? process.cwd();
+      const userRoot = resolveUserScopeRoot();
+      // Local = the project Claude was started in (cwd walk-up to an existing
+      // `.opensquid/`); create `<cwd>/.opensquid/` when none exists.
+      const projectRoot = (await resolveProjectScopeRoot(cwd)) ?? join(cwd, '.opensquid');
+
+      if (!(await packExists(name, projectRoot))) {
+        throw new Error(`opensquid pack set: no such pack (installed or built-in): ${name}`);
+      }
+
+      // add-before-remove: a crash between the two writes leaves the pack active
+      // in both scopes, which the loader's dedupe collapses to a single load —
+      // never a window where the pack vanishes from both. Idempotent → re-run converges.
+      if (state === 'global') {
+        await addToActive(userRoot, name);
+        await removeFromActive(projectRoot, name);
+      } else if (state === 'local') {
+        await addToActive(projectRoot, name);
+        await removeFromActive(userRoot, name);
+      } else {
+        await removeFromActive(userRoot, name);
+        await removeFromActive(projectRoot, name);
+      }
+      print(
+        `pack ${name}: ${state} — takes effect on the next tool call (no Claude restart needed)`,
+      );
     });
 }
 
@@ -314,9 +482,10 @@ export function buildRemoveCommand(deps: PackCliDeps = {}): Command {
 export function registerPackCli(program: Command, deps: PackCliDeps = {}): Command {
   const pack = program
     .command('pack')
-    .description('Manage installed opensquid packs (install / list / export / remove)');
+    .description('Manage opensquid packs (install / list / set / export / remove)');
   pack.addCommand(buildInstallCommand(deps));
   pack.addCommand(buildListCommand(deps));
+  pack.addCommand(buildSetCommand(deps));
   pack.addCommand(buildExportCommand(deps));
   pack.addCommand(buildRemoveCommand(deps));
   return pack;
