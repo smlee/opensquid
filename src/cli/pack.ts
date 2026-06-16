@@ -2,7 +2,7 @@
  * LP.4 — `opensquid pack` CLI surface: install / list / set / export / remove.
  * PT.1 — `set <name> off|local|global` is the tri-state scope control (writes the
  * user/project `active.json`; effective next tool call, no restart); `list` reports
- * every known pack's configured state. See docs/tasks/T-pack-scope-control.md.
+ * every known pack's configured state.
  *
  * v1 minimum-viable per pragmatic scope:
  *   - install: local directory only (tarball + URL deferred to v1.5)
