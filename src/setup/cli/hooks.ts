@@ -38,6 +38,7 @@ import {
   writeOpensquidHooks,
   type WriteResult,
 } from '../wizard/settings-writer.js';
+import { installPacksSkill } from '../wizard/skill-installer.js';
 
 import type { Command } from 'commander';
 
@@ -128,6 +129,9 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
         )} hook group(s)\n`,
       );
     }
+    r.out(
+      `  would install the /packs skill → ${join(r.home(), '.claude', 'skills', 'packs', 'SKILL.md')}\n`,
+    );
     return;
   }
 
@@ -140,6 +144,15 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
       )} hook group(s) (backup: ${result.backupPath})\n`,
     );
   }
+
+  // PT.2 — install the /packs slash command (one bounded ~/.claude/skills write).
+  const skill = await installPacksSkill(r.home());
+  r.out(
+    `  installed /packs skill → ${skill.written}` +
+      (skill.backupPath !== undefined ? ` (backup: ${skill.backupPath})` : '') +
+      (skill.createdSkillsDir ? ' — restart Claude once so it watches the new skills dir' : '') +
+      '\n',
+  );
 }
 
 /**

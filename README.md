@@ -233,8 +233,14 @@ opensquid pack list                # every known pack and its current state
 `local` writes the project's `.opensquid/active.json`; `global` writes your user-level
 `~/.opensquid/active.json`. A change takes effect on the **next tool call** — no need to restart
 Claude (or any harness). Because activation lives in OpenSquid's own `active.json`, a `global` pack is
-active in **every** harness OpenSquid runs under (Claude Code, Codex, …), not just one. The interactive
-`/packs` command is the Claude Code front-end over these same verbs.
+active in **every** harness OpenSquid runs under (Claude Code, Codex, …), not just one.
+
+In Claude Code, `opensquid setup wizard hooks` also installs a **`/packs`** slash command — an
+interactive front-end over the same verbs (list the packs, pick new states, applied via the CLI). It
+appears immediately if you already have a `~/.claude/skills/` directory; if the wizard had to create
+that directory, restart Claude once so it starts watching. (If you'd rather not run the wizard, copy
+`claude-skills/packs/SKILL.md` from the package into `~/.claude/skills/packs/SKILL.md`.) The `opensquid
+pack` CLI remains the path for every other harness.
 
 ## Workflow Gates
 

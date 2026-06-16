@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.460] - 2026-06-16
+
+### Added — `/packs` interactive slash command (PT.2)
+
+- `opensquid setup wizard hooks` now installs a `/packs` Claude Code skill to
+  `~/.claude/skills/packs/SKILL.md` — an interactive front-end over PT.1's CLI that lists every pack
+  with its state and lets you set each Off / Local / Global. Idempotent, backs up any existing file,
+  creates the skills dir if absent (one restart only in that case — Claude Code otherwise picks up the
+  command live). Bounded to that one file; no other skill is touched. The shipped artifact
+  `claude-skills/packs/SKILL.md` is also installable by hand. The `opensquid pack` CLI stays the
+  cross-harness path.
+
 ## [0.5.459] - 2026-06-16
 
 ### Added — tri-state pack control {off · local · global} (PT.1)
