@@ -31,7 +31,7 @@
  * Imported by: src/channels config loader (config.ts).
  */
 
-import { access, chmod, copyFile, mkdir, readFile } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdir, readFile, rm, rmdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -105,24 +105,37 @@ export async function resolveToken(
 export async function migrateLegacyEnvFile(
   legacyPath: string = join(homedir(), '.loop', '.env'),
 ): Promise<void> {
-  const canonical = join(OPENSQUID_HOME(), '.env');
-  try {
-    await access(canonical);
-    return; // canonical already present → nothing to migrate
-  } catch {
-    /* canonical absent — check the legacy location */
-  }
+  // Nothing to end if there's no legacy file.
   try {
     await access(legacyPath);
   } catch {
-    return; // no legacy file either → nothing to do
+    return;
   }
+  const canonical = join(OPENSQUID_HOME(), '.env');
+  let canonicalReady = false;
   try {
-    await mkdir(dirname(canonical), { recursive: true });
-    await copyFile(legacyPath, canonical);
-    await chmod(canonical, 0o600);
+    await access(canonical);
+    canonicalReady = true; // canonical is authoritative; the legacy is now redundant
   } catch {
-    /* fail-soft: a migration hiccup must never break token resolution */
+    /* canonical absent — migrate the legacy across */
+  }
+  if (!canonicalReady) {
+    try {
+      await mkdir(dirname(canonical), { recursive: true });
+      await copyFile(legacyPath, canonical);
+      await chmod(canonical, 0o600);
+      canonicalReady = true;
+    } catch {
+      return; // copy failed → leave the legacy intact (fail-soft); never delete unmigrated
+    }
+  }
+  // Canonical now holds the token → END the legacy: delete `~/.loop/.env`, and remove the
+  // `~/.loop` dir itself IFF it's now empty (rmdir fails harmlessly when other legacy data remains).
+  try {
+    await rm(legacyPath, { force: true });
+    await rmdir(dirname(legacyPath)).catch(() => undefined);
+  } catch {
+    /* fail-soft */
   }
 }
 

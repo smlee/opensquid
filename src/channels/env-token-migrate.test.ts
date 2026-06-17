@@ -30,20 +30,30 @@ afterEach(async () => {
 const canonical = (): string => join(home, '.env');
 
 describe('migrateLegacyEnvFile (PATH.2)', () => {
-  it('copies legacy → canonical (chmod 600) when canonical is absent', async () => {
+  it('migrates legacy → canonical (chmod 600) AND ends the legacy file when canonical is absent', async () => {
     const legacy = join(legacyDir, '.env');
     await writeFile(legacy, 'OPENSQUID_TELEGRAM_BOT_TOKEN=abc123\n');
     await migrateLegacyEnvFile(legacy);
     expect(await readFile(canonical(), 'utf8')).toBe('OPENSQUID_TELEGRAM_BOT_TOKEN=abc123\n');
     expect((await stat(canonical())).mode & 0o777).toBe(0o600);
+    await expect(stat(legacy)).rejects.toThrow(); // legacy ENDED (deleted after migration)
   });
 
-  it('is a no-op when canonical already exists (never overwrites)', async () => {
+  it('never overwrites an existing canonical, but ENDS the now-redundant legacy', async () => {
     await writeFile(canonical(), 'OPENSQUID_TELEGRAM_BOT_TOKEN=current\n');
     const legacy = join(legacyDir, '.env');
     await writeFile(legacy, 'OPENSQUID_TELEGRAM_BOT_TOKEN=stale\n');
     await migrateLegacyEnvFile(legacy);
-    expect(await readFile(canonical(), 'utf8')).toBe('OPENSQUID_TELEGRAM_BOT_TOKEN=current\n');
+    expect(await readFile(canonical(), 'utf8')).toBe('OPENSQUID_TELEGRAM_BOT_TOKEN=current\n'); // unchanged
+    await expect(stat(legacy)).rejects.toThrow(); // redundant legacy removed
+  });
+
+  it('removes the legacy DIR when it becomes empty (rmdir-if-empty)', async () => {
+    // legacyDir holds ONLY the .env → after ending the file, the dir is empty → removed.
+    const legacy = join(legacyDir, '.env');
+    await writeFile(legacy, 'tok\n');
+    await migrateLegacyEnvFile(legacy);
+    await expect(stat(legacyDir)).rejects.toThrow(); // empty legacy dir cleaned up
   });
 
   it('is a no-op (no canonical created) when there is no legacy file', async () => {
@@ -51,11 +61,12 @@ describe('migrateLegacyEnvFile (PATH.2)', () => {
     await expect(stat(canonical())).rejects.toThrow();
   });
 
-  it('creates the canonical home dir if absent (and is fail-soft)', async () => {
+  it('creates the canonical home dir if absent, migrates, and ends the legacy (fail-soft)', async () => {
     await rm(home, { recursive: true, force: true }); // home dir gone
     const legacy = join(legacyDir, '.env');
     await writeFile(legacy, 'tok\n');
     await migrateLegacyEnvFile(legacy); // must not throw
     expect(await readFile(canonical(), 'utf8')).toBe('tok\n');
+    await expect(stat(legacy)).rejects.toThrow();
   });
 });

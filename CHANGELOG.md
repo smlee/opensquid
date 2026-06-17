@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.464] - 2026-06-17
+
+### Changed — actually END `~/.loop`: the env migration now deletes the legacy, not just copies it (PATH.2 completion)
+
+- `migrateLegacyEnvFile` now removes `~/.loop/.env` after the canonical `~/.opensquid/.env` holds the
+  token (and `rmdir`s `~/.loop` itself iff it's then empty — harmless when other legacy data remains),
+  and it cleans up a redundant legacy file even when the canonical already exists. Copy/verify still
+  precedes any delete (fail-soft — an unmigrated legacy is never deleted). This closes the `~/.loop`
+  retirement that PATH.2 left half-done (it had kept the legacy as a safety copy). The 0.6.x path-layer
+  cleanup no longer leaves a `~/.loop` dependency or residue.
+
 ## [0.5.463] - 2026-06-17
 
 ### Added — `opensquid pack migrate` (move a pack user-global → project-local) (PATH.3, wg-61fe416b3006)
