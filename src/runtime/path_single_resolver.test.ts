@@ -21,16 +21,14 @@ const DEFAULT_HOME = join(homedir(), '.opensquid');
 
 describe('opensquidHomeFrom / OPENSQUID_HOME (PATH.1 single resolver)', () => {
   it('returns the OPENSQUID_HOME override when set', () => {
-    expect(opensquidHomeFrom({ OPENSQUID_HOME: '/tmp/oshome' } as NodeJS.ProcessEnv)).toBe(
-      '/tmp/oshome',
-    );
+    expect(opensquidHomeFrom({ OPENSQUID_HOME: '/tmp/oshome' })).toBe('/tmp/oshome');
   });
   it('treats empty / whitespace OPENSQUID_HOME as unset (→ ~/.opensquid)', () => {
-    expect(opensquidHomeFrom({ OPENSQUID_HOME: '   ' } as NodeJS.ProcessEnv)).toBe(DEFAULT_HOME);
-    expect(opensquidHomeFrom({ OPENSQUID_HOME: '' } as NodeJS.ProcessEnv)).toBe(DEFAULT_HOME);
+    expect(opensquidHomeFrom({ OPENSQUID_HOME: '   ' })).toBe(DEFAULT_HOME);
+    expect(opensquidHomeFrom({ OPENSQUID_HOME: '' })).toBe(DEFAULT_HOME);
   });
   it('defaults to ~/.opensquid when unset', () => {
-    expect(opensquidHomeFrom({} as NodeJS.ProcessEnv)).toBe(DEFAULT_HOME);
+    expect(opensquidHomeFrom({})).toBe(DEFAULT_HOME);
   });
   it('OPENSQUID_HOME() resolves against process.env', () => {
     const prior = process.env.OPENSQUID_HOME;
