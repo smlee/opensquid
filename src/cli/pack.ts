@@ -1,5 +1,6 @@
 /**
- * LP.4 — `opensquid pack` CLI surface: install / list / set / export / remove.
+ * LP.4 — `opensquid pack` CLI surface: install / list / set / migrate / export / remove.
+ * PATH.3 — `migrate <name> --to-project` moves an installed pack user-global → project-local.
  * PT.1 — `set <name> off|local|global` is the tri-state scope control (writes the
  * user/project `active.json`; effective next tool call, no restart); `list` reports
  * every known pack's configured state.
@@ -479,13 +480,67 @@ export function buildRemoveCommand(deps: PackCliDeps = {}): Command {
     });
 }
 
+interface MigrateOpts {
+  projectCwd?: string;
+  keep?: boolean;
+}
+
+export function buildMigrateCommand(deps: PackCliDeps = {}): Command {
+  const print = emit(deps);
+  return new Command('migrate')
+    .description(
+      'Move an installed pack from user-global to project-local scope (copy→verify→remove)',
+    )
+    .argument('<name>', 'Pack name')
+    .option('--to-project', 'Migrate to the project-local scope (the supported direction)', false)
+    .option('--project-cwd <path>', 'Project root (default: cwd walk-up)')
+    .option('--keep', 'Keep the user-global copy (default: remove after a verified copy)', false)
+    .action(async (name: string, opts: MigrateOpts) => {
+      validatePackId(name);
+      const sourceDir = resolvePackStateDir(name, 'user');
+      if ((await readVersionJson(sourceDir).catch(() => null)) === null) {
+        throw new Error(
+          `opensquid pack migrate: ${name} is not installed at user scope (${sourceDir})`,
+        );
+      }
+      const cwd = opts.projectCwd ?? process.cwd();
+      const projectRoot = (await resolveProjectScopeRoot(cwd)) ?? join(cwd, '.opensquid');
+      const destDir = join(projectRoot, 'packs', name);
+      if (
+        await stat(destDir).then(
+          () => true,
+          () => false,
+        )
+      ) {
+        throw new Error(
+          `opensquid pack migrate: ${name} already exists at ${destDir} — refusing to clobber`,
+        );
+      }
+      // Copy → verify → remove-source: a copy/verify failure aborts BEFORE the source is touched.
+      await mkdir(join(projectRoot, 'packs'), { recursive: true });
+      await cp(sourceDir, destDir, { recursive: true });
+      if ((await readVersionJson(destDir).catch(() => null)) === null) {
+        throw new Error(
+          `opensquid pack migrate: copy verification failed for ${name} (no version.json at ${destDir})`,
+        );
+      }
+      if (opts.keep !== true) await rm(sourceDir, { recursive: true, force: true });
+      print(
+        `[opensquid pack migrate] moved ${name}: ${sourceDir} → ${destDir}` +
+          (opts.keep === true ? ' (kept the user-global copy)' : '') +
+          `\n  run \`opensquid pack set ${name} local\` to activate it in this project.`,
+      );
+    });
+}
+
 export function registerPackCli(program: Command, deps: PackCliDeps = {}): Command {
   const pack = program
     .command('pack')
-    .description('Manage opensquid packs (install / list / set / export / remove)');
+    .description('Manage opensquid packs (install / list / set / migrate / export / remove)');
   pack.addCommand(buildInstallCommand(deps));
   pack.addCommand(buildListCommand(deps));
   pack.addCommand(buildSetCommand(deps));
+  pack.addCommand(buildMigrateCommand(deps));
   pack.addCommand(buildExportCommand(deps));
   pack.addCommand(buildRemoveCommand(deps));
   return pack;

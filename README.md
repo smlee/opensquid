@@ -230,6 +230,14 @@ opensquid pack set <name> global   # active in every repo, across every harness
 opensquid pack list                # every known pack and its current state
 ```
 
+To move an installed pack's files from your user-global install (`~/.opensquid/packs`) into a project so
+it lives with that project, use `migrate` (copy → verify → remove the source; `--keep` to leave a copy):
+
+```text
+opensquid pack migrate <name> --to-project [--project-cwd <path>] [--keep]
+opensquid pack set <name> local    # then activate it there
+```
+
 `local` writes the project's `.opensquid/active.json`; `global` writes your user-level
 `~/.opensquid/active.json`. A change takes effect on the **next tool call** — no need to restart
 Claude (or any harness). Because activation lives in OpenSquid's own `active.json`, a `global` pack is

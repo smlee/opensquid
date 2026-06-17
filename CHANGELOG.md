@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.463] - 2026-06-17
+
+### Added — `opensquid pack migrate` (move a pack user-global → project-local) (PATH.3, wg-61fe416b3006)
+
+- `opensquid pack migrate <name> --to-project [--project-cwd <path>] [--keep]` relocates an installed
+  pack's state dir from `~/.opensquid/packs` to a project's `.opensquid/packs` — copy → verify the
+  destination → remove the source (a copy/verify failure aborts before the source is touched; `--keep`
+  leaves a copy). Refuses to clobber an existing project pack; rejects a pack not installed at user
+  scope; activation is left to `pack set <name> local` (byte-move and activation stay orthogonal). This
+  is the safe, user-driven way to honor "private packs live with their project" — existing working packs
+  aren't auto-relocated to guessed locations. (Path-layer PATH.3; the legacy-layout deletion is PATH.4.)
+
 ## [0.5.462] - 2026-06-17
 
 ### Changed — retire the legacy `~/.loop` env home, with a safe auto-migration (PATH.2, wg-61fe416b3006)

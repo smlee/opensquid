@@ -22,6 +22,7 @@ import {
   buildExportCommand,
   buildInstallCommand,
   buildListCommand,
+  buildMigrateCommand,
   buildRemoveCommand,
   buildSetCommand,
 } from './pack.js';
@@ -402,5 +403,82 @@ describe('pack set / list (PT.1 tri-state)', () => {
     await run(buildListCommand(cap), ['--json', '--project-cwd', projectCwd]);
     const rows = JSON.parse(cap.lines[0]!) as { name: string; state: string }[];
     expect(rows.find((r) => r.name === 'gate')?.state).toBe('local');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATH.3 — `pack migrate` (user-global → project-local, copy→verify→remove).
+// ---------------------------------------------------------------------------
+describe('pack migrate (PATH.3)', () => {
+  let projectCwd: string;
+  const installedVersion = (stateDir: string): Promise<unknown> =>
+    readFile(join(stateDir, 'personal_revision', 'version.json'), 'utf8');
+
+  beforeEach(async () => {
+    projectCwd = await mkdtemp(join(tmpdir(), 'opensquid-migproj-'));
+  });
+  afterEach(async () => {
+    await rm(projectCwd, { recursive: true, force: true });
+  });
+
+  async function installUserPack(name: string): Promise<void> {
+    const src = join(tempHome, `src-${name}`);
+    await writePack(src, name, '1.0.0');
+    await run(buildInstallCommand(captureOut()), [src]); // installs to user scope (tempHome)
+  }
+
+  it('moves the pack user→project (copy→verify→remove); source gone, dest has version.json', async () => {
+    await installUserPack('mover');
+    const cap = captureOut();
+    await run(buildMigrateCommand(cap), ['mover', '--to-project', '--project-cwd', projectCwd]);
+    await expect(
+      installedVersion(join(projectCwd, '.opensquid', 'packs', 'mover')),
+    ).resolves.toContain('1.0.0'); // dest installed
+    await expect(installedVersion(join(tempHome, 'packs', 'mover'))).rejects.toThrow(); // source removed
+    expect(cap.lines.some((l) => l.includes('pack set mover local'))).toBe(true); // activation nudge
+  });
+
+  it('--keep preserves the user-global copy', async () => {
+    await installUserPack('keeper');
+    await run(buildMigrateCommand(captureOut()), [
+      'keeper',
+      '--to-project',
+      '--project-cwd',
+      projectCwd,
+      '--keep',
+    ]);
+    await expect(installedVersion(join(tempHome, 'packs', 'keeper'))).resolves.toContain('1.0.0'); // source kept
+    await expect(
+      installedVersion(join(projectCwd, '.opensquid', 'packs', 'keeper')),
+    ).resolves.toContain('1.0.0'); // dest also present
+  });
+
+  it('refuses to clobber an existing project pack (source untouched)', async () => {
+    await installUserPack('dup');
+    await run(buildMigrateCommand(captureOut()), [
+      'dup',
+      '--to-project',
+      '--project-cwd',
+      projectCwd,
+      '--keep',
+    ]);
+    await expect(
+      run(buildMigrateCommand(captureOut()), ['dup', '--to-project', '--project-cwd', projectCwd]),
+    ).rejects.toThrow(/refusing to clobber/);
+    await expect(installedVersion(join(tempHome, 'packs', 'dup'))).resolves.toContain('1.0.0'); // source intact
+  });
+
+  it('rejects a pack not installed at user scope; nothing written', async () => {
+    await expect(
+      run(buildMigrateCommand(captureOut()), [
+        'ghost',
+        '--to-project',
+        '--project-cwd',
+        projectCwd,
+      ]),
+    ).rejects.toThrow(/not installed at user scope/);
+    await expect(
+      installedVersion(join(projectCwd, '.opensquid', 'packs', 'ghost')),
+    ).rejects.toThrow();
   });
 });
