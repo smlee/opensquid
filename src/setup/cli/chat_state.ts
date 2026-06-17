@@ -258,9 +258,9 @@ export async function detectChatDaemonRunning(opts?: {
 // ---------------------------------------------------------------------------
 // detectSecretsBackend — env + op CLI + macOS keychain
 //
-// `env` backend: read `~/.loop/.env` line-by-line, scan for `^KEY=` prefixes.
-// Per `[[reference_user_telegram_config]]` + `[[project_opensquid_file_
-// organization]]` the canonical home is `~/.loop/.env` (chmod 600). We
+// `env` backend: read the canonical `<OPENSQUID_HOME>/.env` (~/.opensquid/.env)
+// line-by-line, scan for `^KEY=` prefixes. (PATH.2: the pre-rename `~/.loop/.env`
+// is auto-migrated to this path; it is no longer the home, chmod 600.) We
 // do NOT parse values — just the presence of the key on a non-comment,
 // non-blank line. The value is left in the file's memory (Node strings)
 // only for the duration of the scan; we never copy it into our return.

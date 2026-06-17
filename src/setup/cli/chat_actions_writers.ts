@@ -19,8 +19,8 @@
  *   - Rollback: on first write failure, copy each backed-up file BACK to
  *     its original location and rethrow. Files that hadn't been written
  *     yet need no rollback (their target is unchanged from the start).
- *   - chmod 0600 on `~/.loop/.env` ALWAYS — even when we appended a single
- *     line, the goal is to enforce the secrets-backend invariant.
+ *   - chmod 0600 on `<OPENSQUID_HOME>/.env` ALWAYS — even when we appended a
+ *     single line, the goal is to enforce the secrets-backend invariant.
  *   - YAML serialization via `yaml.stringify` (yaml@2). The schema's Zod
  *     defaults are written explicitly so the file is self-documenting; we
  *     don't omit a key just because it equals its default. Comments are
@@ -153,7 +153,7 @@ export function buildProjectCardJson(id: string, uuid: string): string {
 }
 
 /**
- * Build the `KEY=value` line(s) appended to ~/.loop/.env. We trim trailing
+ * Build the `KEY=value` line(s) appended to ~/.opensquid/.env. We trim trailing
  * whitespace on the prior file (if any) and prepend a newline so the new
  * block is line-separated from prior content.
  */

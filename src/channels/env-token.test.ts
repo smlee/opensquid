@@ -191,12 +191,14 @@ describe('resolveToken — priority order', () => {
 
 describe('locateEnvFile — read-both migration (wg-45512ec39739)', () => {
   // canonical = <OPENSQUID_HOME>/.env = tmpDir/.env ; legacy = ~/.loop/.env = tmpDir/.loop/.env
-  it('finds a legacy ~/.loop/.env when the canonical is absent (no token loss)', async () => {
+  it('migrates a legacy ~/.loop/.env to canonical when canonical is absent (no token loss, PATH.2)', async () => {
     const legacyDir = join(tmpDir, '.loop');
     await mkdir(legacyDir, { recursive: true });
     await writeFile(join(legacyDir, '.env'), 'OPENSQUID_TELEGRAM_BOT_TOKEN=legacy\n');
     _clearEnvFileCache();
-    expect(await locateEnvFile()).toBe(join(legacyDir, '.env'));
+    // PATH.2: ~/.loop/.env is auto-migrated to the canonical path; locateEnvFile
+    // returns CANONICAL (<OPENSQUID_HOME>/.env), NOT the legacy ~/.loop path.
+    expect(await locateEnvFile()).toBe(join(tmpDir, '.env'));
   });
 
   it('prefers the canonical ~/.opensquid/.env when both exist', async () => {

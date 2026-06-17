@@ -78,8 +78,8 @@ import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscribe
 // ---------------------------------------------------------------------------
 
 function resolveDataRoot(): string {
-  // PATH.2 will drop the LOOP_HOME legacy fallback; PATH.1 only removes the homedir literal.
-  return process.env.OPENSQUID_HOME ?? process.env.LOOP_HOME ?? OPENSQUID_HOME();
+  // PATH.2: the legacy LOOP_HOME env home is gone — the data root is OPENSQUID_HOME().
+  return OPENSQUID_HOME();
 }
 
 function umbrellaInboxDir(umbrellaId: string): string {

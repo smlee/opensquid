@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.462] - 2026-06-17
+
+### Changed — retire the legacy `~/.loop` env home, with a safe auto-migration (PATH.2, wg-61fe416b3006)
+
+- The bot-token `.env` is canonically `~/.opensquid/.env`. `locateEnvFile` now **auto-migrates** a
+  pre-rename `~/.loop/.env` to the canonical path (copy + chmod 600, idempotent, fail-soft) on first
+  resolution, then **drops `~/.loop/.env` as a read fallback** — so no caller depends on `~/.loop`
+  anymore (no token loss; the one remaining reference exists only to *move* the file away). Also removed
+  the legacy `LOOP_HOME` env home (the chat-bridge data root is `OPENSQUID_HOME()`), and corrected three
+  stale comments that wrongly named `~/.loop/.env` as canonical. Second of the path-layer cleanup
+  (PATH.1–4); private-pack relocation (PATH.3) + legacy-layout deletion (PATH.4) follow.
+
 ## [0.5.461] - 2026-06-17
 
 ### Fixed — one canonical `~/.opensquid` resolver (PATH.1, wg-61fe416b3006)

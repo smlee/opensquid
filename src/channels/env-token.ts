@@ -6,9 +6,10 @@
  *   1. process.env.OPENSQUID_TELEGRAM_BOT_TOKEN (or _DISCORD_, _SLACK_)
  *   2. .env file (first match wins):
  *      - $OPENSQUID_ENV_FILE
- *      - ~/.loop/.env
- *      - <OPENSQUID_HOME>/.env   (~/.opensquid/.env by default)
+ *      - <OPENSQUID_HOME>/.env   (~/.opensquid/.env by default — the canonical home)
  *      - <cwd>/.env
+ *      (PATH.2: a pre-rename `~/.loop/.env` is auto-migrated to the canonical
+ *       path on first resolution — it is no longer a read fallback.)
  *   3. <OPENSQUID_HOME>/config.json chat_connections.<platform>.bot_token
  *      (caller-supplied via `configJsonFallback`)
  *
@@ -24,17 +25,15 @@
  * The `~/.opensquid` candidate is rooted at `OPENSQUID_HOME()` (not raw
  * `os.homedir()`) so the env-var override that the rest of `src/`
  * honors — tests point it at an `mkdtemp` for isolation — extends to
- * token resolution too. `~/.loop/.env` and `<cwd>/.env` stay anchored
- * to `homedir()` / `process.cwd()` respectively: those are not part of
- * the opensquid data root.
+ * token resolution too. `<cwd>/.env` stays anchored to `process.cwd()`.
  *
  * Imports from: node:fs/promises, node:os, node:path, ../runtime/paths.
  * Imported by: src/channels config loader (config.ts).
  */
 
-import { access, readFile } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { OPENSQUID_HOME } from '../runtime/paths.js';
 
@@ -94,13 +93,47 @@ export async function resolveToken(
  * Find the first existing .env file in the search order. Returns null
  * if none exist.
  */
+/**
+ * PATH.2 (wg-61fe416b3006) — one-time legacy env migration. If the token still
+ * lives ONLY at the pre-rename `~/.loop/.env` and the canonical
+ * `<OPENSQUID_HOME>/.env` is absent, copy it across (chmod 600) so NO caller
+ * depends on `~/.loop` anymore. Idempotent (no-op once canonical exists) and
+ * fail-SOFT — a copy hiccup must never break token resolution. This is the
+ * ONLY remaining reference to `~/.loop`: it exists to MOVE the file away, not to
+ * read from it as a fallback.
+ */
+export async function migrateLegacyEnvFile(
+  legacyPath: string = join(homedir(), '.loop', '.env'),
+): Promise<void> {
+  const canonical = join(OPENSQUID_HOME(), '.env');
+  try {
+    await access(canonical);
+    return; // canonical already present → nothing to migrate
+  } catch {
+    /* canonical absent — check the legacy location */
+  }
+  try {
+    await access(legacyPath);
+  } catch {
+    return; // no legacy file either → nothing to do
+  }
+  try {
+    await mkdir(dirname(canonical), { recursive: true });
+    await copyFile(legacyPath, canonical);
+    await chmod(canonical, 0o600);
+  } catch {
+    /* fail-soft: a migration hiccup must never break token resolution */
+  }
+}
+
 export async function locateEnvFile(): Promise<string | null> {
+  await migrateLegacyEnvFile(); // PATH.2: self-heal ~/.loop/.env → canonical before searching
   const candidates: string[] = [];
   const fromEnv = process.env.OPENSQUID_ENV_FILE;
   if (fromEnv !== undefined && fromEnv.length > 0) candidates.push(fromEnv);
-  candidates.push(join(OPENSQUID_HOME(), '.env')); // canonical (read-both: preferred)
-  candidates.push(join(homedir(), '.loop', '.env')); // legacy fallback (loop→opensquid rename; no token loss)
+  candidates.push(join(OPENSQUID_HOME(), '.env')); // canonical (~/.opensquid/.env)
   candidates.push(join(process.cwd(), '.env'));
+  // ~/.loop/.env is NO LONGER a fallback — migrateLegacyEnvFile() moved it to canonical.
 
   for (const c of candidates) {
     try {
