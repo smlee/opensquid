@@ -48,8 +48,9 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { OPENSQUID_HOME } from '../paths.js';
 
 import { type ChatHistoryEntry, chatHistoryEntrySchema } from './types.js';
 
@@ -101,7 +102,7 @@ export class SessionPersistence {
   private readonly dirsEnsured = new Set<string>();
 
   constructor(opts: SessionPersistenceOptions = {}) {
-    this.root = opts.root ?? join(homedir(), '.opensquid', SESSIONS_SUBDIR);
+    this.root = opts.root ?? join(OPENSQUID_HOME(), SESSIONS_SUBDIR);
     this.warn = opts.onWarn ?? noopWarn;
   }
 

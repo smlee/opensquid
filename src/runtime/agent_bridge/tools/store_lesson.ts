@@ -33,8 +33,9 @@
  */
 
 import { appendFile, mkdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+
+import { OPENSQUID_HOME } from '../../paths.js';
 
 import { z } from 'zod';
 
@@ -89,8 +90,7 @@ export const storeLessonSpec: ToolSpec = {
 // ---------------------------------------------------------------------------
 
 export function bufferPath(): string {
-  const root = process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
-  return join(root, 'agent-bridge', 'captured-lessons.jsonl');
+  return join(OPENSQUID_HOME(), 'agent-bridge', 'captured-lessons.jsonl');
 }
 
 // ---------------------------------------------------------------------------

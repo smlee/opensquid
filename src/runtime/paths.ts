@@ -29,8 +29,18 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const OPENSQUID_HOME = (): string =>
-  process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
+/** PATH.1 — the ONE canonical user-home resolver. `opensquidHomeFrom(env)` is the
+ *  env-parameterized form (for callers that resolve against a forwarded child env,
+ *  e.g. the agent-bridge daemon); `OPENSQUID_HOME()` is the `process.env` default.
+ *  An empty/whitespace `OPENSQUID_HOME` is treated as unset (→ `~/.opensquid`), so a
+ *  blank override never yields a blank home. No other module may reimplement
+ *  `join(homedir(), '.opensquid')` — a grep-guard test enforces this. */
+export const opensquidHomeFrom = (env: NodeJS.ProcessEnv): string => {
+  const h = env.OPENSQUID_HOME?.trim();
+  return h !== undefined && h.length > 0 ? h : join(homedir(), '.opensquid');
+};
+
+export const OPENSQUID_HOME = (): string => opensquidHomeFrom(process.env);
 
 // ---------------------------------------------------------------------------
 // Scope-root resolvers (G.1)

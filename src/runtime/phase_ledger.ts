@@ -24,8 +24,9 @@
  */
 
 import { mkdir, readdir, readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { OPENSQUID_HOME } from './paths.js';
 
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
 
@@ -51,8 +52,7 @@ export interface PhaseLedger {
  * (same rooting pattern as `session_state` + `store_lesson`).
  */
 export function phaseLedgerDir(taskId: string): string {
-  const root = process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
-  return join(root, 'phase_ledger', taskId);
+  return join(OPENSQUID_HOME(), 'phase_ledger', taskId);
 }
 
 /**

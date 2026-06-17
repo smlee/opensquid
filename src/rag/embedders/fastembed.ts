@@ -10,8 +10,9 @@
  *
  * Imported by: src/rag/backend_factory.ts (the `libsql-fastembed` arm).
  */
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { OPENSQUID_HOME } from '../../runtime/paths.js';
 
 import type { Embedder } from './types.js';
 
@@ -22,8 +23,7 @@ interface FastembedModel {
 // Cache the downloaded model under opensquid's home, NOT the process CWD (fastembed's default
 // `local_cache/` would otherwise dump model files into the user's project tree).
 function modelCacheDir(): string {
-  const home = process.env.OPENSQUID_HOME?.trim();
-  return join(home && home.length > 0 ? home : join(homedir(), '.opensquid'), 'models');
+  return join(OPENSQUID_HOME(), 'models');
 }
 
 export function fastembedEmbedder(): Embedder {

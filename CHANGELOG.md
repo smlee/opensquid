@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.461] - 2026-06-17
+
+### Fixed — one canonical `~/.opensquid` resolver (PATH.1, wg-61fe416b3006)
+
+- Collapsed 9 sites that reimplemented or hardcoded the user-home path onto the single
+  `OPENSQUID_HOME()` resolver (+ a new env-parameterized `opensquidHomeFrom(env)` for the agent-bridge
+  daemon's forwarded child env). **Two of those sites (`transport_bridge.ts`, `session_persistence.ts`)
+  hardcoded `homedir()` and silently ignored an `OPENSQUID_HOME` override — breaking test isolation;
+  they now honor it.** The resolver also treats an empty/whitespace `OPENSQUID_HOME` as unset, so a
+  blank override never yields a blank home. A grep-guard test fails if any non-test source outside
+  `paths.ts` reimplements `join(homedir(), '.opensquid')` again. First of the path-layer cleanup
+  (PATH.1–4); `~/.loop`/`LOOP_HOME` removal + legacy-layout deletion follow in PATH.2/PATH.4.
+
 ## [0.5.460] - 2026-06-16
 
 ### Added — `/packs` interactive slash command (PT.2)

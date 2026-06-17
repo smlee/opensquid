@@ -33,7 +33,7 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
+import { OPENSQUID_HOME } from '../runtime/paths.js';
 import { join } from 'node:path';
 
 import { matchesDetectedBy, type DetectionContext } from '../runtime/detection.js';
@@ -173,7 +173,7 @@ export function resolvePackStateDir(
     }
     return join(projectCwd, '.opensquid', 'packs', packId);
   }
-  const home = process.env.OPENSQUID_HOME ?? join(homedir(), '.opensquid');
+  const home = OPENSQUID_HOME();
   return join(home, 'packs', packId);
 }
 

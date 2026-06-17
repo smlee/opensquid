@@ -43,9 +43,10 @@
  */
 
 import { promises as fs, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { connect, type Socket } from 'node:net';
+
+import { OPENSQUID_HOME } from '../runtime/paths.js';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -77,7 +78,8 @@ import { ChatBridgeSubscriber, generateSessionId } from './chat_bridge_subscribe
 // ---------------------------------------------------------------------------
 
 function resolveDataRoot(): string {
-  return process.env.OPENSQUID_HOME ?? process.env.LOOP_HOME ?? join(homedir(), '.opensquid');
+  // PATH.2 will drop the LOOP_HOME legacy fallback; PATH.1 only removes the homedir literal.
+  return process.env.OPENSQUID_HOME ?? process.env.LOOP_HOME ?? OPENSQUID_HOME();
 }
 
 function umbrellaInboxDir(umbrellaId: string): string {

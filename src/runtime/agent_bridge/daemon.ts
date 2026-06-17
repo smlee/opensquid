@@ -50,7 +50,6 @@
  */
 
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { lock as acquireLock } from 'proper-lockfile';
@@ -64,7 +63,7 @@ import { libsqlQwen3WithLexicalFallback } from '../../rag/backend_factory.js';
 import type { RagBackend } from '../../rag/types.js';
 import { createResolver, dotenvBackend } from '../../secrets/index.js';
 import type { SecretResolver } from '../../secrets/types.js';
-import { OPENSQUID_HOME, resolveBuiltinScopeRoot } from '../paths.js';
+import { OPENSQUID_HOME, opensquidHomeFrom, resolveBuiltinScopeRoot } from '../paths.js';
 
 import type { AnthropicMessageClient } from './agent_loop.js';
 import { ChatDispatcher, type DispatcherAgentLoopOptions } from './dispatcher.js';
@@ -561,7 +560,7 @@ async function defaultSecretResolver(): Promise<SecretResolver> {
 export function resolvePackRootFromEnv(env: NodeJS.ProcessEnv = process.env): string {
   const fromEnv = env.OPENSQUID_PACK_ROOT;
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
-  return join(env.OPENSQUID_HOME ?? join(homedir(), '.opensquid'), 'packs', 'default');
+  return join(opensquidHomeFrom(env), 'packs', 'default');
 }
 
 /**

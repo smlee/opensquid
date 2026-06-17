@@ -29,16 +29,16 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { OPENSQUID_HOME } from '../runtime/paths.js';
 
 import type { BackendConfig } from './backend_factory.js';
 
 const RAG_CONFIG_FILENAME = 'rag-config.json';
 
 function opensquidHome(): string {
-  const env = process.env.OPENSQUID_HOME?.trim();
-  return env && env.length > 0 ? env : join(homedir(), '.opensquid');
+  return OPENSQUID_HOME();
 }
 
 function ragConfigPath(): string {

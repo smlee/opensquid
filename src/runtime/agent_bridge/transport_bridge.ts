@@ -44,12 +44,11 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { type FSWatcher, watch } from 'chokidar';
 
-import { umbrellaInboxDir } from '../paths.js';
+import { OPENSQUID_HOME, umbrellaInboxDir } from '../paths.js';
 
 import type { AgentEventBus } from './event_bus.js';
 import { type InboundChatEvent, inboundChatEventSchema, type SessionKey } from './types.js';
@@ -178,7 +177,7 @@ export class InboxTransportBridge {
       opts.inboxRoot ??
       (opts.umbrellaId !== undefined
         ? umbrellaInboxDir(opts.umbrellaId)
-        : join(homedir(), '.opensquid', 'projects', opts.projectUuid, 'inbox'));
+        : join(OPENSQUID_HOME(), 'projects', opts.projectUuid, 'inbox'));
     this.fileGlob = opts.fileGlob ?? '*.jsonl';
     this.rescanIntervalMs = opts.rescanIntervalMs ?? DEFAULT_RESCAN_INTERVAL_MS;
   }
