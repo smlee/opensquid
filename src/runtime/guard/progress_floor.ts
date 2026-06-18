@@ -46,10 +46,36 @@ const inc = (m: Map<string, number>, k: string): number => {
   return n;
 };
 
+/**
+ * The EFSM's serialized counters — a plain-object snapshot so the floor can persist across
+ * short-lived hook subprocesses (P0.3) and rehydrate. Keyed exactly like the internal Maps.
+ */
+export interface FloorCounters {
+  exact: Record<string, number>; // argsHash → consecutive exact failures
+  sameTool: Record<string, number>; // tool → failures
+  noProgress: Record<string, number>; // argsHash → idempotent repeats
+}
+
 export class ProgressFloor {
-  private readonly exact = new Map<string, number>(); // argsHash → consecutive exact failures
-  private readonly sameTool = new Map<string, number>(); // tool → failures this turn
-  private readonly noProgress = new Map<string, number>(); // argsHash → idempotent repeats
+  private readonly exact: Map<string, number>;
+  private readonly sameTool: Map<string, number>;
+  private readonly noProgress: Map<string, number>;
+
+  /** Seed from a persisted snapshot (default empty) — lets the EFSM survive a process boundary (P0.3). */
+  constructor(seed?: FloorCounters) {
+    this.exact = new Map(Object.entries(seed?.exact ?? {}));
+    this.sameTool = new Map(Object.entries(seed?.sameTool ?? {}));
+    this.noProgress = new Map(Object.entries(seed?.noProgress ?? {}));
+  }
+
+  /** Read the full counters back out (the inverse of the seed constructor). */
+  snapshot(): FloorCounters {
+    return {
+      exact: Object.fromEntries(this.exact),
+      sameTool: Object.fromEntries(this.sameTool),
+      noProgress: Object.fromEntries(this.noProgress),
+    };
+  }
 
   /**
    * Observe one tool call and return the floor's gate Action. SEVERITY-MAX: when several

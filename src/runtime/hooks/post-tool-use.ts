@@ -32,6 +32,7 @@ import { exitIfSubagent } from './subagent_guard.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { floorMessage, observeCall } from '../guard/floor_hook.js';
 import { extractSessionId } from './session_id.js';
 
 interface PostToolUsePayload {
@@ -109,7 +110,25 @@ async function main(): Promise<void> {
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
-  if (stderr) process.stderr.write(stderr + '\n');
+  // P0.3 — the live Progress-floor failure-loop detector. Observe the call against the persisted
+  // floor; a non-`pass` action surfaces on the same drift-stderr channel. Fail-open: a floor error
+  // never breaks the hook.
+  let floorMsg = '';
+  try {
+    const ev = parsed.data;
+    if (ev.kind === 'post_tool_call') {
+      const action = await observeCall(sessionId, {
+        tool: ev.tool,
+        args: ev.args,
+        exitCode: ev.exit_code,
+      });
+      if (action !== 'pass') floorMsg = floorMessage(action, ev.tool);
+    }
+  } catch {
+    /* the Progress floor never breaks the hook */
+  }
+  const combined = [stderr, floorMsg].filter(Boolean).join('\n');
+  if (combined) process.stderr.write(combined + '\n');
   // PostToolUse is too late to block the tool call (already ran). Treat any
   // non-zero exit as informational stderr only.
   process.exit(exitCode === 2 ? 0 : exitCode);
