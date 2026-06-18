@@ -23,37 +23,58 @@ const SHAPE_KIND: Record<string, StateV2['kind']> = {
   oval: 'terminal',
 };
 
-/** A valid placeholder state per kind (the author edits the `TODO`s). */
-function stub(kind: StateV2['kind'], next: string): StateV2 {
+/** One recovered out-edge: the routed target + the named event the source emits to reach it. */
+interface OutEdge {
+  to: string;
+  on: string;
+}
+
+/** A synthesized, collision-free event name for a sketched edge (consistent between emit + routing). */
+const evName = (from: string, to: string): string => `${from}__${to}`;
+
+/** A valid placeholder state per kind, emitting the named event(s) the skeleton routes (author edits TODOs). */
+function stub(kind: StateV2['kind'], out: OutEdge[]): StateV2 {
+  const first = out[0]?.on ?? 'TODO_emit';
   switch (kind) {
     case 'executor':
-      return { kind, skills: [], directive: 'TODO', completion: 'TODO', next };
+      return { kind, skills: [], directive: 'TODO', completion: 'TODO', emits: first };
     case 'gate':
       return {
         kind,
         guard: 'TODO',
-        on_pass: { to: next },
+        on_pass_emits: first,
         on_fail: { action: 'block', message: 'TODO' },
       };
-    case 'decision':
-      return { kind, branches: [{ else: true, to: next }] };
+    case 'decision': {
+      if (out.length === 0) return { kind, branches: [{ else: true, emits: 'TODO_emit' }] };
+      // one branch per out-edge; the LAST is the total `else` (the totality refine requires exactly one, last).
+      const branches = out.map((o, i) =>
+        i === out.length - 1
+          ? { else: true as const, emits: o.on }
+          : { guard: 'TODO', emits: o.on },
+      );
+      return { kind, branches };
+    }
     case 'sub_flow':
-      return { kind, flow: 'TODO', on_complete: { to: next } };
+      return { kind, flow: 'TODO', emits: first };
     case 'terminal':
       return { kind, outcome: 'shipped' };
   }
 }
 
-/** Reconstruct a stub PackV2 from a comment-less DOT graph (nodes shape→kind, first out-edge → target). */
+/** Reconstruct a stub PackV2 from a comment-less DOT graph (nodes shape→kind, edges → named-event transitions). */
 export function skeletonFromGraph(dot: string): PackV2 {
-  const out: Record<string, string[]> = {};
+  const out: Record<string, OutEdge[]> = {};
+  const transitions: { from: string; on: string; to: string }[] = [];
   const kinds: Record<string, StateV2['kind']> = {};
   let initial = '';
   for (const raw of dot.split('\n')) {
     const line = raw.trim();
     const e = /^"([^"]+)"\s*->\s*"([^"]+)"/.exec(line);
     if (e?.[1] !== undefined && e[2] !== undefined) {
-      (out[e[1]] ??= []).push(e[2]);
+      const on = evName(e[1], e[2]);
+      (out[e[1]] ??= []).push({ to: e[2], on });
+      transitions.push({ from: e[1], on, to: e[2] });
       continue;
     }
     const n = /^"([^"]+)"\s*\[([^\]]*)\]/.exec(line);
@@ -67,14 +88,13 @@ export function skeletonFromGraph(dot: string): PackV2 {
     if (initial === '') initial = n[1];
   }
   const states: Record<string, StateV2> = {};
-  for (const [name, kind] of Object.entries(kinds))
-    states[name] = stub(kind, out[name]?.[0] ?? name);
+  for (const [name, kind] of Object.entries(kinds)) states[name] = stub(kind, out[name] ?? []);
   return {
     name: 'sketch',
     version: '0.0.0',
     scope: 'project',
     detected_by: [],
-    fsm: { initial, states },
+    fsm: { initial, states, transitions },
     guards: {},
     messages: {},
   };

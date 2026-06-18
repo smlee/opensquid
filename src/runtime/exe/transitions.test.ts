@@ -18,14 +18,14 @@ function compile(name: string): CompiledPack {
           g: {
             kind: 'gate',
             guard: 'ok',
-            on_pass: { to: 'd' },
+            on_pass_emits: 'g_pass',
             on_fail: { action: 'block', message: `${name}: blocked` },
           },
           d: {
             kind: 'decision',
             branches: [
-              { guard: 'hot', to: 'work' },
-              { else: true, to: 'done' },
+              { guard: 'hot', emits: 'd_hot' },
+              { else: true, emits: 'd_else' },
             ],
           },
           work: {
@@ -33,10 +33,16 @@ function compile(name: string): CompiledPack {
             executor: 'codex',
             directive: 'do it',
             completion: 'c',
-            next: 'done',
+            emits: 'work_done',
           },
           done: { kind: 'terminal', outcome: 'shipped' },
         },
+        transitions: [
+          { from: 'g', on: 'g_pass', to: 'd' },
+          { from: 'd', on: 'd_hot', to: 'work' },
+          { from: 'd', on: 'd_else', to: 'done' },
+          { from: 'work', on: 'work_done', to: 'done' },
+        ],
       },
     }),
   );
@@ -70,9 +76,9 @@ describe('evaluateTransition (EXE.1) — only the current state, no global walk'
     });
   });
 
-  it('executor transitions on the synthetic __complete event (behavior is the driver’s job)', async () => {
+  it('executor transitions on the NAMED completion event the driver emits (behavior is the driver’s job)', async () => {
     expect(
-      await evaluateTransition(PACK, 'work', '__complete:work', undefined, guardsReturning(true)),
+      await evaluateTransition(PACK, 'work', 'work_done', undefined, guardsReturning(true)),
     ).toEqual({ next: 'done' });
   });
 

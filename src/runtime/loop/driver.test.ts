@@ -26,32 +26,40 @@ const PACK = PackV2.parse({
         skills: ['spec'],
         directive: 'review the spec',
         completion: 'spec_ok',
-        next: 'gate_size',
+        emits: 'review_done',
       },
       gate_size: {
         kind: 'gate',
         guard: 'size_ok',
-        on_pass: { to: 'decide' },
+        on_pass_emits: 'size_passed',
         on_fail: { action: 'block', message: 'spec too big — split it' },
       },
       decide: {
         kind: 'decision',
         branches: [
-          { guard: 'holdout_ok', to: 'done' },
-          { else: true, to: 'build' },
+          { guard: 'holdout_ok', emits: 'holdout_pass' },
+          { else: true, emits: 'holdout_fail' },
         ],
       },
-      build: { kind: 'sub_flow', flow: 'build_impl', on_complete: { to: 'done' } },
+      build: { kind: 'sub_flow', flow: 'build_impl', emits: 'build_done' },
       build_impl: {
         kind: 'executor',
         executor: 'codex',
         directive: 'build it',
         completion: 'built',
-        next: 'build_done',
+        emits: 'impl_done',
       },
       build_done: { kind: 'terminal', outcome: 'shipped' },
       done: { kind: 'terminal', outcome: 'shipped' },
     },
+    transitions: [
+      { from: 'review', on: 'review_done', to: 'gate_size' },
+      { from: 'gate_size', on: 'size_passed', to: 'decide' },
+      { from: 'decide', on: 'holdout_pass', to: 'done' },
+      { from: 'decide', on: 'holdout_fail', to: 'build' },
+      { from: 'build', on: 'build_done', to: 'done' },
+      { from: 'build_impl', on: 'impl_done', to: 'build_done' },
+    ],
   },
 });
 const COMPILED = compilePackV2(PACK);
@@ -82,7 +90,7 @@ const failClosedRegistry: ExecutorRegistry = {
 const guardsReturning = (val: boolean): GuardEvaluator => ({ eval: () => val });
 
 describe('LoopDriver (LOOP.1)', () => {
-  it('executor: completion guard holds → advances on __complete to `next`', async () => {
+  it('executor: completion guard holds → advances on its emit event to the routed target', async () => {
     const exec = makeExecutor([{ observation: ok('edit', 'a'), completionGuardHeld: true }]);
     const d = new LoopDriver(COMPILED, {
       registry: registryOf(exec),
@@ -125,7 +133,7 @@ describe('LoopDriver (LOOP.1)', () => {
     await expect(d.step('review')).rejects.toThrow(/cannot connect executor 'codex'/);
   });
 
-  it('gate: guard passes → advances on __pass to on_pass.to', async () => {
+  it('gate: guard passes → emits on_pass_emits → advances to the routed target', async () => {
     const d = new LoopDriver(COMPILED, {
       registry: failClosedRegistry,
       guards: guardsReturning(true),
@@ -161,7 +169,7 @@ describe('LoopDriver (LOOP.1)', () => {
     expect(await d.step('decide')).toEqual({ kind: 'advance', next: 'build' });
   });
 
-  it('sub_flow: recurses to its terminal (shipped), then parent advances on __subflow_done', async () => {
+  it('sub_flow: recurses to its terminal (shipped), then parent emits its event → advances', async () => {
     // build → runs build_impl (executor, guard holds) → build_done (terminal shipped) → parent → done
     const exec = makeExecutor([{ observation: ok('write', 'b'), completionGuardHeld: true }]);
     const d = new LoopDriver(COMPILED, {

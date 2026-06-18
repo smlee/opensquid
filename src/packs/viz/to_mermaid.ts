@@ -29,28 +29,9 @@ interface Edge {
   label?: string;
 }
 
+/** The edges ARE the explicit named-event transitions, labelled with the event name. */
 function edgesOf(pack: PackV2): Edge[] {
-  const edges: Edge[] = [];
-  for (const [name, s] of Object.entries(pack.fsm.states)) {
-    switch (s.kind) {
-      case 'executor':
-        edges.push({ from: name, to: s.next, label: s.completion });
-        break;
-      case 'gate':
-        edges.push({ from: name, to: s.on_pass.to, label: s.guard });
-        break;
-      case 'decision':
-        for (const b of s.branches)
-          edges.push({ from: name, to: b.to, label: 'else' in b ? 'else' : b.guard });
-        break;
-      case 'sub_flow':
-        edges.push({ from: name, to: s.on_complete.to, label: s.flow });
-        break;
-      case 'terminal':
-        break;
-    }
-  }
-  return edges;
+  return pack.fsm.transitions.map((t) => ({ from: t.from, to: t.to, label: t.on }));
 }
 
 export function emitMermaid(pack: PackV2): string {

@@ -28,24 +28,31 @@ const FIXTURE = PackV2.parse({
         skills: ['spec'],
         directive: 'review',
         completion: 'ok',
-        next: 'size',
+        emits: 'reviewed',
       },
       size: {
         kind: 'gate',
         guard: 'size_ok',
-        on_pass: { to: 'decide' },
+        on_pass_emits: 'size_passed',
         on_fail: { action: 'block', message: 'too big' },
       },
       decide: {
         kind: 'decision',
         branches: [
-          { guard: 'hot', to: 'build' },
-          { else: true, to: 'done' },
+          { guard: 'hot', emits: 'is_hot' },
+          { else: true, emits: 'not_hot' },
         ],
       },
-      build: { kind: 'sub_flow', flow: 'build_impl', on_complete: { to: 'done' } },
+      build: { kind: 'sub_flow', flow: 'build_impl', emits: 'built' },
       done: { kind: 'terminal', outcome: 'shipped' },
     },
+    transitions: [
+      { from: 'review', on: 'reviewed', to: 'size' },
+      { from: 'size', on: 'size_passed', to: 'decide' },
+      { from: 'decide', on: 'is_hot', to: 'build' },
+      { from: 'decide', on: 'not_hot', to: 'done' },
+      { from: 'build', on: 'built', to: 'done' },
+    ],
   },
 });
 
@@ -65,8 +72,8 @@ describe('toDot / fromDot (PV.1)', () => {
     expect(dot).toMatch(/"review" \[shape=box/); // executor
     expect(dot).toMatch(/"size" \[shape=diamond/); // gate
     expect(dot).toMatch(/"done" \[shape=oval/); // terminal
-    expect(dot).toContain('"review" -> "size" [label="ok"]'); // executor completion edge
-    expect(dot).toContain('"decide" -> "done" [label="else"]'); // decision else branch
+    expect(dot).toContain('"review" -> "size" [label="reviewed"]'); // edge labelled with the named event
+    expect(dot).toContain('"decide" -> "done" [label="not_hot"]'); // decision else-branch event
   });
 
   it('a comment-less (hand-sketched) DOT graph → a valid stub skeleton', () => {
@@ -75,8 +82,9 @@ describe('toDot / fromDot (PV.1)', () => {
     expect(pack.fsm.initial).toBe('a');
     expect(pack.fsm.states.a?.kind).toBe('executor');
     expect(pack.fsm.states.b?.kind).toBe('terminal');
-    // the stub is a VALID PackV2 (compiles): the executor's `next` points at its out-edge
-    expect(pack.fsm.states.a).toMatchObject({ kind: 'executor', next: 'b' });
+    // the stub is a VALID PackV2: the executor emits a named event routed to its out-edge target
+    expect(pack.fsm.states.a).toMatchObject({ kind: 'executor', emits: 'a__b' });
+    expect(pack.fsm.transitions).toContainEqual({ from: 'a', on: 'a__b', to: 'b' });
   });
 });
 
@@ -106,7 +114,8 @@ describe('compile-first (PV.1)', () => {
       scope: 'project',
       fsm: {
         initial: 's',
-        states: { s: { kind: 'decision', branches: [{ else: true, to: 'nowhere' }] } },
+        states: { s: { kind: 'decision', branches: [{ else: true, emits: 'go' }] } },
+        transitions: [{ from: 's', on: 'go', to: 'nowhere' }],
       },
     });
     expect(() => toDot(bad)).toThrow(); // validateFsm: `nowhere` is not a declared state

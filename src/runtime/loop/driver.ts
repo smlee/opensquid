@@ -9,16 +9,17 @@
  *              never a wrong-fallback), run the inner tool-loop under the Progress floor
  *              (GUARD.1) + the completion guard; transition only when the guard HOLDS
  *              (agent-claims-done-but-guard-fails ⇒ keep looping — anti-self-grading).
- *   gate     → evaluate the guard: pass ⇒ advance (`__pass`), fail ⇒ the `on_fail` ACTION
+ *   gate     → evaluate the guard: pass ⇒ emit `on_pass_emits` (advance), fail ⇒ the `on_fail` ACTION
  *              (block/halt + self-continue; KERN.1 owns the message).
- *   decision → first-match branch by declared order (guarded, with a total `else`).
+ *   decision → first-match branch by declared order emits that branch's event (guarded, total `else`).
  *   sub_flow → recurse into the nested FSM (ISOLATED — no parent-state bleed); on its
- *              terminal, the parent transitions (`__subflow_done`).
+ *              terminal, the parent emits its event (advance).
  *   terminal → SHIPPED / WEDGE.
  *
  * Generalizes the ralph per-item lap (`ralph/orchestrator.ts:64`) into a per-state step;
  * the work-item source is the work-graph (wired at the outer loop). Transitions use the
- * reused `fsm.ts` `step` over the synthetic `__*` events the compiler emits.
+ * reused `fsm.ts` `step` over the NAMED event each state emits (`meta[state].emits` /
+ * a decision branch's `emits`) — the same author-named vocabulary as the live `advance_fsm`.
  */
 import { step } from '../fsm.js';
 import type { CompiledPack, StateMeta } from '../../packs/compile_v2.js';
@@ -79,7 +80,7 @@ export class LoopDriver {
       case 'gate':
         return this.runGate(state, m, ctx);
       case 'decision':
-        return this.runDecision(m, ctx);
+        return this.runDecision(state, m, ctx);
       case 'sub_flow':
         return this.runSubFlow(state, m, ctx);
       case 'terminal':
@@ -107,7 +108,7 @@ export class LoopDriver {
         floorAction,
       });
       if (verdict.kind === 'release')
-        return { kind: 'advance', next: this.transitionOn(state, `__complete:${state}`) };
+        return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
       if (verdict.kind === 'break')
         return { kind: 'outcome', outcome: 'wedge', reason: verdict.reason };
       // continue: the completion guard hasn't held yet (incl. claims-done-but-guard-fails) — keep looping
@@ -116,16 +117,18 @@ export class LoopDriver {
 
   private async runGate(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
     const ok = await this.deps.guards.eval(m.guard ?? '', ctx);
-    if (ok) return { kind: 'advance', next: this.transitionOn(state, `__pass:${state}`) };
+    if (ok) return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
     const onFail = m.onFail ?? { action: 'block' as const, message: `gate '${state}' failed` };
     return { kind: 'action', action: onFail.action, message: onFail.message };
   }
 
-  private async runDecision(m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
+  private async runDecision(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
     const branches = m.branches ?? [];
     for (const b of branches) {
-      if ('else' in b) return { kind: 'advance', next: b.to }; // total fallback (compiler guarantees one, last)
-      if (await this.deps.guards.eval(b.guard, ctx)) return { kind: 'advance', next: b.to }; // first-match
+      // first-match by declared order → emit that branch's NAMED event; the transitions list routes it.
+      if ('else' in b) return { kind: 'advance', next: this.transitionOn(state, b.emits) }; // total fallback
+      if (await this.deps.guards.eval(b.guard, ctx))
+        return { kind: 'advance', next: this.transitionOn(state, b.emits) };
     }
     // unreachable: StateV2.refine() guarantees exactly one `else` (last). Fail loud if a malformed pack slips through.
     throw new Error(
@@ -139,7 +142,7 @@ export class LoopDriver {
     // flow ref names a sub-region whose terminal returns control to the parent — no parent-state bleed.)
     const outcome = await this.runFlowToTerminal(m.flow ?? '', ctx);
     if (outcome === 'shipped') {
-      return { kind: 'advance', next: this.transitionOn(state, `__subflow_done:${state}`) };
+      return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
     }
     return { kind: 'outcome', outcome: 'wedge', reason: `sub_flow '${m.flow ?? state}' wedged` };
   }
@@ -160,7 +163,17 @@ export class LoopDriver {
     return 'wedge'; // backstop: a non-terminating sub-flow is a wedge, never an infinite loop
   }
 
-  /** Compute the next state for a synthetic event via the reused engine; a missing transition is a bug. */
+  /** The NAMED event an executor/gate/sub_flow state emits to advance; the compiler guarantees it is set. */
+  private emitOf(state: string, m: StateMeta): string {
+    if (m.emits === undefined) {
+      throw new Error(
+        `LOOP.1: state '${state}' (kind '${m.kind}') has no emit event (compiler invariant)`,
+      );
+    }
+    return m.emits;
+  }
+
+  /** Compute the next state for a named event via the reused engine; a missing transition is a bug. */
   private transitionOn(state: string, event: string): string {
     const r = step(this.compiled.fsm, state, event);
     if (!r.transitioned) {

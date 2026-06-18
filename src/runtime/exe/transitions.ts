@@ -16,10 +16,10 @@
  * wins); non-blocking advances accumulate. This is the orthogonal-region
  * composition that replaces the V1 walk's pack/skill precedence loop.
  *
- * Reuses `fsm.ts` `step` (the synthetic `__*` events the compiler emits) and the
- * injected `GuardEvaluator` (the same guard-eval LOOP.1 uses; at integration this
- * is `evaluator.ts` with its dead durable/memo branches pruned — those are
- * EVALUATOR branches, the `durable/` store itself is reused).
+ * Reuses `fsm.ts` `step` over the NAMED events each state emits (`meta[state].emits` /
+ * a decision branch's `emits`) and the injected `GuardEvaluator` (the same guard-eval
+ * LOOP.1 uses; at integration this is `evaluator.ts` with its dead durable/memo branches
+ * pruned — those are EVALUATOR branches, the `durable/` store itself is reused).
  */
 import { step } from '../fsm.js';
 import type { CompiledPack } from '../../packs/compile_v2.js';
@@ -37,7 +37,7 @@ export interface TransitionResult {
   action?: TransitionAction;
 }
 
-/** Compute the next state for a synthetic event; a missing transition is a compiler-invariant bug. */
+/** Compute the next state for a named event; a missing transition is a compiler-invariant bug. */
 function stepTo(compiled: CompiledPack, state: string, event: string): string {
   const r = step(compiled.fsm, state, event);
   if (!r.transitioned) {
@@ -48,12 +48,22 @@ function stepTo(compiled: CompiledPack, state: string, event: string): string {
   return r.next;
 }
 
+/** The NAMED event a gate/executor/sub_flow state emits; the compiler guarantees it is set. */
+function emitOf(state: string, kind: string, emits: string | undefined): string {
+  if (emits === undefined) {
+    throw new Error(
+      `EXE.1: state '${state}' (kind '${kind}') has no emit event (compiler invariant)`,
+    );
+  }
+  return emits;
+}
+
 /**
  * Evaluate ONLY the current state's outgoing transitions (no global walk).
- * - gate: eval the guard → pass advances (`__pass`), fail yields the `on_fail` action.
- * - decision: first-match by declared order, with the total `else` fallback.
- * - executor / sub_flow: the loop driver runs the behavior, then the transition fires on
- *   the behavior's synthetic completion event (`__complete` / `__subflow_done`).
+ * - gate: eval the guard → pass emits `on_pass_emits` (routed), fail yields the `on_fail` action.
+ * - decision: first-match by declared order emits that branch's event (routed), with the total `else`.
+ * - executor / sub_flow: the loop driver runs the behavior, then the transition fires on the NAMED
+ *   completion `event` the driver emits.
  * - terminal: no outgoing transition.
  */
 export async function evaluateTransition(
@@ -68,13 +78,13 @@ export async function evaluateTransition(
   switch (m.kind) {
     case 'gate': {
       const ok = await guards.eval(m.guard ?? '', ctx);
-      if (ok) return { next: stepTo(compiled, state, `__pass:${state}`) };
+      if (ok) return { next: stepTo(compiled, state, emitOf(state, m.kind, m.emits)) };
       return { action: m.onFail ?? { action: 'block', message: `gate '${state}' failed` } };
     }
     case 'decision': {
       for (const b of m.branches ?? []) {
-        if ('else' in b) return { next: b.to }; // total fallback (compiler guarantees one, last)
-        if (await guards.eval(b.guard, ctx)) return { next: b.to }; // first-match
+        if ('else' in b) return { next: stepTo(compiled, state, b.emits) }; // total fallback (one, last)
+        if (await guards.eval(b.guard, ctx)) return { next: stepTo(compiled, state, b.emits) }; // first-match
       }
       throw new Error(
         `EXE.1: decision '${state}' had no matching branch and no else (totality violated)`,
@@ -84,7 +94,7 @@ export async function evaluateTransition(
       return {}; // no outgoing transition
     case 'executor':
     case 'sub_flow':
-      // the loop driver runs the behavior; the transition fires on its synthetic completion event
+      // the loop driver runs the behavior; the transition fires on the NAMED completion event it emits
       return { next: stepTo(compiled, state, event) };
   }
 }

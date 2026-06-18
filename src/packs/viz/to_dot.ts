@@ -26,30 +26,10 @@ interface Edge {
   label?: string;
 }
 
-/** The visible transitions per kind (gate's on_fail is an action, not an edge — it rides in the JSON). */
+/** The visible edges ARE the explicit named-event transitions (labelled with the event); gate's on_fail
+ *  is an action, not a transition, so it rides in the JSON comment, not the graph. */
 function edgesOf(pack: PackV2): Edge[] {
-  const edges: Edge[] = [];
-  for (const [name, s] of Object.entries(pack.fsm.states)) {
-    switch (s.kind) {
-      case 'executor':
-        edges.push({ from: name, to: s.next, label: s.completion });
-        break;
-      case 'gate':
-        edges.push({ from: name, to: s.on_pass.to, label: s.guard });
-        break;
-      case 'decision':
-        for (const b of s.branches) {
-          edges.push({ from: name, to: b.to, label: 'else' in b ? 'else' : b.guard });
-        }
-        break;
-      case 'sub_flow':
-        edges.push({ from: name, to: s.on_complete.to, label: s.flow });
-        break;
-      case 'terminal':
-        break; // no outgoing transition
-    }
-  }
-  return edges;
+  return pack.fsm.transitions.map((t) => ({ from: t.from, to: t.to, label: t.on }));
 }
 
 export function emitDot(pack: PackV2): string {

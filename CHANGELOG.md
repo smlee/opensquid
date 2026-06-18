@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.479] - 2026-06-18
+
+### Changed — pack FSM control model is now EVENT-DRIVEN (T1, the keystone drift-fix)
+
+- **Separated STRUCTURE from BEHAVIOR in pack-format-v2.** `PackV2.fsm` now carries an explicit
+  `transitions: { from, on, to }[]` list (the reused `fsm.ts` shape, incl. `from: '*'` wildcard); each
+  state keeps its kind + bindings but DROPS its embedded transition target and instead declares the NAMED
+  event it emits — `executor.emits`, `gate.on_pass_emits` (+ optional `trigger` for observed/conformance
+  gates), `decision.branches[].emits`, `sub_flow.emits`. This replaces the embedded targets `executor.next`
+  / `gate.on_pass.to` / `branches[].to` / `sub_flow.on_complete.to`.
+- **`compile_v2` no longer synthesizes events.** The retired model fabricated `__complete:`/`__pass:`/
+  `__branch:`/`__subflow_done:` events from the embedded targets — a completion-driven shape that could not
+  reproduce the real EVENT-DRIVEN packs (no multi-out-per-state, no wildcard). The compiler now reuses the
+  authored transitions verbatim, and verifies every driver-emitted event is routed (unrouted emit → throw)
+  and that a decision's branch emits are distinct (no unreachable branch).
+- `LoopDriver` + `evaluateTransition` advance on the state's named `emits` event (the same vocabulary as the
+  live `advance_fsm`), not synthetic `__*` events. The pack-viz module (DOT/Mermaid) now derives edges
+  straight from `fsm.transitions` and round-trips named events.
+- A keystone fixture proves the model reproduces coding-flow's transition shape: multi-out `idle` on two
+  different events + a `from: '*'` reset + all 5 state kinds compile with ZERO synthetic events and step
+  correctly. Why it matters: the FSM-actor substrate was built ungated and drifted to a completion model
+  the design never specified; this re-grounds it on the real packs. Full suite green (3789 tests).
+
 ## [0.5.464] - 2026-06-17
 
 ### Changed — actually END `~/.loop`: the env migration now deletes the legacy, not just copies it (PATH.2 completion)

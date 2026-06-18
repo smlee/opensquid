@@ -20,15 +20,18 @@ fsm:
       kind: executor
       directive: do the thing
       completion: done_ok
-      next: check
+      emits: work_done
     check:
       kind: gate
       guard: looks_ok
-      on_pass: { to: shipped }
+      on_pass_emits: check_passed
       on_fail: { action: block, message: not_ok }
     shipped:
       kind: terminal
       outcome: shipped
+  transitions:
+    - { from: work, on: work_done, to: check }
+    - { from: check, on: check_passed, to: shipped }
 messages:
   not_ok: "Fix it and re-run."
 `;
@@ -64,7 +67,7 @@ scope: workflow
 fsm:
   initial: a
   states:
-    a: { kind: executor, directive: d, next: b }
+    a: { kind: executor, directive: d, emits: go }
     b: { kind: terminal, outcome: shipped }
 `,
     );
@@ -80,7 +83,9 @@ scope: workflow
 fsm:
   initial: a
   states:
-    a: { kind: executor, directive: d, completion: c, next: NOPE }
+    a: { kind: executor, directive: d, completion: c, emits: go }
+  transitions:
+    - { from: a, on: go, to: NOPE }
 `,
     );
     await expect(loadPackV2(dir)).rejects.toThrow(/invalid FSM/);
