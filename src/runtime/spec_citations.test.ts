@@ -32,6 +32,9 @@ const KNOWN_UMBRELLA_DOCS = [
   // repo (loop/docs/tasks); cited by the runtime/packs source headers. Existence-verified by the
   // second test whenever the umbrella is available (local dev + pre-push).
   'T-fsm-actor-runtime.md',
+  // The FSM-actor RE-SCOPE track (T1+, the event-driven drift fix) — same umbrella planning repo,
+  // cited by compile_v2.ts. Existence-verified locally; pinned by name for the CI checkout.
+  'T-fsm-actor-rescope.md',
 ];
 
 describe('spec-citation integrity (FAC.1)', () => {
