@@ -20,6 +20,7 @@ export type Effect =
 export interface ActorState {
   current: string;
   history: string[];
+  wedged?: string; // set by toWedge(reason) when the supervisor exhausts restarts (SUP.1)
 }
 
 export interface ActorPort {
@@ -28,6 +29,10 @@ export interface ActorPort {
   state: ActorState;
   receive(env: Envelope): Effect[] | Promise<Effect[]>;
   subscribe(): MessageKind[]; // which message kinds this actor consumes
+  /** Re-entrant reset to the initial state (the supervisor restarts a crashed actor — SUP.1). */
+  restart(): void;
+  /** Park the actor (supervisor calls this on restart-exhaustion — SUP.1). */
+  toWedge(reason: string): void;
   // Optional lifecycle hooks (property-fn types) — the host calls `actor.onConnect?.()`. Most actors
   // have no connect/disconnect logic, so these are optional rather than forced empty overrides.
   onConnect?: () => void;
@@ -66,6 +71,16 @@ export abstract class BaseActor implements ActorPort {
         payload: { from, to: result.next, on: event },
       },
     ];
+  }
+
+  /** Re-entrant: reset to the initial state (never throws — the supervisor relies on it). */
+  restart(): void {
+    this.state = { current: this.fsm.initial, history: [] };
+  }
+
+  /** Park the actor as wedged (supervisor calls this on restart-exhaustion). */
+  toWedge(reason: string): void {
+    this.state.wedged = reason;
   }
   // onConnect / onDisconnect are optional hooks (ActorPort) — a subclass implements them only if needed.
 }
