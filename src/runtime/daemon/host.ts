@@ -14,16 +14,18 @@
  *   idle → starting → running → draining → stopped   (starting → stopped on boot failure)
  *
  * Borrows gstack's proven daemon shape (`browse/src/server.ts`: localhost HTTP ·
- * random port via net.createServer probe · token auth · idle-shutdown · state file)
- * re-implemented for Node ≥ 20 (built-in `node:http`, global `fetch`) — NO bun.
+ * ephemeral port · token auth · idle-shutdown · state file) re-implemented for Node ≥ 20
+ * (built-in `node:http`, global `fetch`) — NO bun. Port binding uses `listen(0)` (OS-atomic
+ * free-port assignment) rather than gstack's probe-then-listen, which has a TOCTOU race the
+ * Bun-era code tolerated; on Node the atomic bind is both simpler and race-free.
  *
  * `startHost` returns a HANDLE ({ port, token, stop }); `stop()` performs the graceful
  * shutdown WITHOUT `process.exit` (testable). The CLI entry + signal handlers call
  * `stop()` then exit — keeping the core pure of process-killing side effects.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
-import { randomBytes, randomInt } from 'node:crypto';
+import type { AddressInfo } from 'node:net';
+import { randomBytes } from 'node:crypto';
 
 import lockfile from 'proper-lockfile';
 
@@ -64,23 +66,6 @@ export interface StartHostOpts {
   staleMs?: number;
   /** how the host snapshots actor state for resume (GR.1); defaults to a topology digest. */
   digest?: () => string;
-}
-
-/** gstack-style free-port probe: bind+close on 127.0.0.1 to confirm availability. */
-function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = createNetServer();
-    srv.once('error', () => resolve(false));
-    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
-  });
-}
-
-async function findFreePort(): Promise<number> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const port = randomInt(10000, 60000); // crypto.randomInt — uniform, no Math.random
-    if (await isPortAvailable(port)) return port;
-  }
-  throw new Error('[opensquid] no free port after 5 attempts in 10000–60000');
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -132,7 +117,6 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
 
   // 3) token-authed localhost server. Bind 127.0.0.1 ONLY — never reachable by other users.
   const token = randomBytes(24).toString('base64url');
-  const port = await findFreePort();
   let idleTimer: NodeJS.Timeout;
   const resetIdle = (): void => {
     clearTimeout(idleTimer);
@@ -165,12 +149,24 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', resolve);
-  });
-
-  await writeRuntimeState({ port, token, pid: process.pid, startedAt: Date.now() }, home);
+  // Bind port 0: the OS atomically assigns a free ephemeral port (random, localhost-only) — no
+  // probe-then-listen TOCTOU race. Read the actual port back from the bound socket. Any failure
+  // AFTER the lock is held (listen, state write) must RELEASE the lock — else a boot-time throw
+  // leaks the lock and wedges the next boot until the stale window. So bind+write inside try.
+  let port: number;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    port = (server.address() as AddressInfo).port;
+    await writeRuntimeState({ port, token, pid: process.pid, startedAt: Date.now() }, home);
+  } catch (err) {
+    await new Promise<void>((resolve) => server.close(() => resolve())); // drop the listener if bound
+    await release(); // never leak the boot lock on a partial boot
+    advance('fail'); // starting → stopped
+    throw err;
+  }
   advance('ready'); // starting → running
   resetIdle();
 
