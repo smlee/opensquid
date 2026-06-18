@@ -1,5 +1,5 @@
 /** DAEMON.1 — the runtime host (lifecycle FSM, localhost+token, single-instance, graceful shutdown). */
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { validateFsm } from '../fsm.js';
 import { readShutdownMarker } from '../genesis/shutdown_marker.js';
 import { HOST_FSM, startHost, type HostHandle } from './host.js';
-import { readRuntimeState } from './state_file.js';
+import { readRuntimeState, runtimeStatePath } from './state_file.js';
 
 let home: string;
 const live: HostHandle[] = [];
@@ -93,5 +93,41 @@ describe('host single-instance + graceful shutdown (DAEMON.1)', () => {
     // lock was released exactly once → a fresh host can boot
     const h2 = await boot();
     expect(h2.state()).toBe('running');
+  });
+
+  // Audit fix (HIGH): the load-bearing crash-recovery guarantee — a dead host's orphaned lock
+  // must expire (stale window) so the next boot is never wedged by a lock no one will release.
+  it("a dead host's stale boot lock expires → the next boot acquires it (crash never wedges next boot)", async () => {
+    // simulate a crashed host: an orphaned `<runtime.json>.lock` dir with NO clean release,
+    // back-dated past the stale window (2s minimum in proper-lockfile).
+    const lockDir = `${runtimeStatePath(home)}.lock`;
+    await mkdir(lockDir, { recursive: true });
+    const past = new Date(Date.now() - 10_000); // older than the 2s stale window
+    await utimes(lockDir, past, past);
+    // a fresh boot with a 2s stale window must compromise the orphan and come up `running`.
+    const h = await startHost({ home, staleMs: 2000 });
+    live.push(h);
+    expect(h.state()).toBe('running');
+    expect(await readRuntimeState(home)).toMatchObject({ port: h.port });
+  });
+
+  // Audit fix (MED): thundering-herd — N simultaneous boots (the hook fan-out) must collapse to
+  // exactly one host via the boot lock; the losers reject (first-owns-topology, Q1).
+  it('concurrent boots collapse to exactly one host (thundering-herd / first-owns-topology)', async () => {
+    const settled = await Promise.allSettled([
+      startHost({ home }),
+      startHost({ home }),
+      startHost({ home }),
+      startHost({ home }),
+    ]);
+    for (const s of settled) if (s.status === 'fulfilled') live.push(s.value);
+    const fulfilled = settled.filter(
+      (s): s is PromiseFulfilledResult<HostHandle> => s.status === 'fulfilled',
+    );
+    expect(fulfilled).toHaveLength(1); // exactly one acquired the boot lock
+    expect(fulfilled[0]!.value.state()).toBe('running');
+    // the losers rejected with the boot-lock contention error (no second topology owner)
+    const rejected = settled.filter((s) => s.status === 'rejected');
+    expect(rejected).toHaveLength(3);
   });
 });

@@ -60,6 +60,8 @@ export interface HostHandle {
 export interface StartHostOpts {
   idleMs?: number;
   home?: string;
+  /** boot-lock stale window: a lock older than this (a dead host's orphan) is compromised. */
+  staleMs?: number;
   /** how the host snapshots actor state for resume (GR.1); defaults to a topology digest. */
   digest?: () => string;
 }
@@ -111,7 +113,10 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
   //    so a crash never wedges the next boot; `realpath:false` because the lock target may not exist.
   let release: () => Promise<void>;
   try {
-    release = await lockfile.lock(runtimeStatePath(home), { realpath: false, stale: 15_000 });
+    release = await lockfile.lock(runtimeStatePath(home), {
+      realpath: false,
+      stale: opts.staleMs ?? 15_000,
+    });
   } catch (err) {
     advance('fail'); // starting → stopped
     throw new Error(
