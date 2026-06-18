@@ -21,6 +21,7 @@ import { readFile, unlink } from 'node:fs/promises';
 
 import { atomicWriteFile } from './atomic_write.js';
 import { type Fsm, type StepResult, step } from './fsm.js';
+import { appendTransition } from './observe/transition_log.js';
 import { sessionStateFile } from './paths.js';
 
 export interface FsmHistoryEntry {
@@ -104,6 +105,21 @@ export async function advanceFsmState(
       sessionStateFile(sessionId, fsmKey(packName)),
       JSON.stringify(next, null, 2),
     );
+    // P0.2 — observability seed: one record per ACTUAL advance, downstream of persistence.
+    // Wrapped: an observe failure must NEVER break an advance (the return + state write stand).
+    try {
+      await appendTransition({
+        session: sessionId,
+        pack: packName,
+        from: current,
+        to: result.next,
+        on: event,
+        at: now,
+        via: result.via ?? -1, // StepResult.via is number|null; stays never reach here (defensive)
+      });
+    } catch {
+      /* observe never breaks an advance */
+    }
   }
   return result;
 }
