@@ -59,9 +59,9 @@ import { Fsm } from './fsm.js';
 // a discriminated union on `level` so the runtime narrows precisely — a
 // directive verdict has no `message`, a message-bearing verdict has no
 // `next_action`, and TypeScript enforces the right access at compile time.
-// `MessageVerdict` is the narrowed alias drift-path consumers (drift_response,
-// escalate, auto_correct) take; `DirectiveVerdict` is the alias the
-// dispatcher's directive-aggregation path consumes.
+// `MessageVerdict` is the narrowed alias the drift-response path (`drift_response`)
+// takes; `DirectiveVerdict` is the alias the dispatcher's directive-aggregation
+// path consumes.
 // ---------------------------------------------------------------------------
 
 export const VerdictLevel = z.enum(['pass', 'block', 'warn', 'surface', 'directive']);
@@ -505,24 +505,3 @@ export type RuntimeAction =
   | { kind: 'notify_pause'; reason: string; severity: 'critical' | 'error' | 'warning' }
   | { kind: 'auto_correct'; correctiveSkill: string; verdict: Verdict }
   | { kind: 'escalate'; reroutedSeverity: 'critical'; verdict: Verdict };
-
-// ---------------------------------------------------------------------------
-// PauseState — persisted session-level halt marker (Task 1.18)
-//
-// Written atomically to `sessionStateFile(sessionId, 'pause')` by
-// `notifyAndPause` whenever the runtime must halt the session for user
-// intervention. Hooks (Task 1.7+) read this file on every event so that a
-// paused session short-circuits before any rule evaluation runs.
-//
-// TS-only — the file content is opensquid-owned, never authored by users
-// or pack YAML, so no Zod schema is needed at the read boundary. The
-// `triggeredAt` field is an ISO-8601 string (set by `notifyAndPause`).
-// `ruleId` / `packId` are optional context for the eventual unpause UX.
-// ---------------------------------------------------------------------------
-
-export interface PauseState {
-  reason: string;
-  triggeredAt: string;
-  ruleId?: string;
-  packId?: string;
-}

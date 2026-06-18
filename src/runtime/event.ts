@@ -23,8 +23,7 @@
  * What does NOT live here:
  *   - Verdict / Rule / Skill / Pack schemas → `types.ts` (the cross-process
  *     contract for the rest of the runtime).
- *   - DriftPolicy / RuntimeAction / PauseState → `types.ts` (drift-response
- *     and pause-state machinery).
+ *   - DriftPolicy / RuntimeAction → `types.ts` (drift-response machinery).
  *
  * Naming: `event.ts` (sibling) rather than `types/event.ts` (subdir) to
  * avoid the NodeNext name collision between a sibling file `types.ts` and a
