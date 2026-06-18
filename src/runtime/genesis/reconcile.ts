@@ -24,17 +24,18 @@ export interface EntryPlan {
 }
 
 export interface ReconcileDescriptor<S> {
+  // Property function types (not method shorthand) — these are pure/injected fns, not `this`-bound methods.
   actor: ActorId;
-  read(): Promise<S | null>;
-  classify(p: S | null): Classification; // null→new · valid non-terminal→resume · inconsistent→wedge
+  read: () => Promise<S | null>;
+  classify: (p: S | null) => Classification; // null→new · valid non-terminal→resume · inconsistent→wedge
   /** CONNECTED packs only — never the universe. Presence of `validate` marks an actor as a pack. */
-  validate?(p: S): { ok: true } | { ok: false; reason: string };
-  entry(c: Classification, p: S | null): EntryPlan;
+  validate?: (p: S) => { ok: true } | { ok: false; reason: string };
+  entry: (c: Classification, p: S | null) => EntryPlan;
 }
 
 export interface GenesisClassifier {
   /** present → clean resume; null → crash → recovery (user-confirmed). */
-  shutdownMarker(): Promise<{ status: 'clean'; digest: string; ts: number } | null>;
+  shutdownMarker: () => Promise<{ status: 'clean'; digest: string; ts: number } | null>;
 }
 
 export interface Failure {

@@ -13,15 +13,15 @@ import {
 } from './shutdown_marker.js';
 
 const cleanMarker: GenesisClassifier = {
-  shutdownMarker: async () => ({ status: 'clean', digest: 'd', ts: 1 }),
+  shutdownMarker: () => Promise.resolve({ status: 'clean' as const, digest: 'd', ts: 1 }),
 };
-const crashMarker: GenesisClassifier = { shutdownMarker: async () => null };
+const crashMarker: GenesisClassifier = { shutdownMarker: () => Promise.resolve(null) };
 
 function desc(
   over: Partial<ReconcileDescriptor<unknown>> & { actor: string },
 ): ReconcileDescriptor<unknown> {
   return {
-    read: async () => null,
+    read: () => Promise.resolve(null),
     classify: () => 'new_start',
     entry: (c) => ({ mode: c }),
     ...over,
@@ -35,7 +35,7 @@ describe('reconcile (GR.1)', () => {
         desc({ actor: 'a', classify: () => 'new_start', entry: () => ({ mode: 'new_start' }) }),
         desc({
           actor: 'b',
-          read: async () => ({ current: 's' }),
+          read: () => Promise.resolve({ current: 's' }),
           classify: () => 'resume',
           entry: () => ({ mode: 'resume', state: 'build/backend_api' }),
         }),
@@ -57,7 +57,7 @@ describe('reconcile (GR.1)', () => {
       [
         desc({
           actor: 'p',
-          read: async () => ({ v: 1 }),
+          read: () => Promise.resolve({ v: 1 }),
           classify: () => 'resume',
           validate: () => ({ ok: false, reason: 'version mismatch' }),
           entry: () => ({ mode: 'resume' }),
@@ -75,7 +75,7 @@ describe('reconcile (GR.1)', () => {
       [
         desc({
           actor: 'p',
-          read: async () => ({ v: 1 }),
+          read: () => Promise.resolve({ v: 1 }),
           classify: () => 'resume',
           validate: () => ({ ok: true }),
           entry: () => ({ mode: 'resume' }),
