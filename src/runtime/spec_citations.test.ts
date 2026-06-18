@@ -28,6 +28,10 @@ const KNOWN_UMBRELLA_DOCS = [
   'WIZ.1-flow.md',
   'T-telegram-realtime.md',
   'T-compression.md',
+  // The FSM-actor runtime spec (substrate + loop-driver tiers) lives in the umbrella planning
+  // repo (loop/docs/tasks); cited by the runtime/packs source headers. Existence-verified by the
+  // second test whenever the umbrella is available (local dev + pre-push).
+  'T-fsm-actor-runtime.md',
 ];
 
 describe('spec-citation integrity (FAC.1)', () => {
