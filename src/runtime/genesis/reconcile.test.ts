@@ -85,6 +85,43 @@ describe('reconcile (GR.1)', () => {
     );
     expect(report.packs.p).toBe('connected');
   });
+
+  it('CRASH downgrade: a resume under a crash is parked as wedge — never auto-resumed', async () => {
+    const { plan, report } = await reconcile(
+      [
+        desc({
+          actor: 'a',
+          read: () => Promise.resolve({ current: 'build/backend_api' }),
+          classify: () => 'resume',
+          entry: () => ({ mode: 'resume', state: 'build/backend_api' }),
+        }),
+      ],
+      crashMarker,
+    );
+    expect(plan.a?.mode).toBe('wedge'); // NOT 'resume'
+    expect(plan.a?.state).toBeUndefined(); // carries no live state
+    expect(plan.a?.reason).toMatch(/crash recovery/);
+    expect(report.actors.a).toBe('wedge');
+  });
+
+  it('a classify-wedge pushes a failures[] entry (not just packs status)', async () => {
+    const { plan, report } = await reconcile(
+      [
+        desc({
+          actor: 'p',
+          read: () => Promise.resolve({ v: 1 }),
+          classify: () => 'wedge',
+          validate: () => ({ ok: true }),
+          entry: () => ({ mode: 'wedge', reason: 'orphaned state' }),
+        }),
+      ],
+      cleanMarker,
+    );
+    expect(plan.p?.mode).toBe('wedge');
+    expect(report.actors.p).toBe('wedge');
+    expect(report.failures).toContainEqual({ actor: 'p', reason: 'orphaned state' });
+    expect(report.packs.p).toEqual({ wedged: 'orphaned state' });
+  });
 });
 
 describe('shutdown marker (GR.1)', () => {

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 
 import { validateFsm } from '../runtime/fsm.js';
 import { loadPackV2 } from './loader_v2.js';
@@ -66,6 +67,29 @@ fsm:
     a: { kind: executor, directive: d, next: b }
     b: { kind: terminal, outcome: shipped }
 `,
+    );
+    await expect(loadPackV2(dir)).rejects.toThrow(ZodError);
+  });
+
+  it('rejects a dangling transition target (validateFsm enforced via the compiler)', async () => {
+    await writeFile(
+      join(dir, 'pack.yaml'),
+      `name: dangle
+version: 1.0.0
+scope: workflow
+fsm:
+  initial: a
+  states:
+    a: { kind: executor, directive: d, completion: c, next: NOPE }
+`,
+    );
+    await expect(loadPackV2(dir)).rejects.toThrow(/invalid FSM/);
+  });
+
+  it('rejects a malformed YAML scalar with a parse error', async () => {
+    await writeFile(
+      join(dir, 'pack.yaml'),
+      'name: x\nversion: 1\nscope: workflow\nfsm: [unbalanced',
     );
     await expect(loadPackV2(dir)).rejects.toThrow();
   });

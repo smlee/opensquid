@@ -8,7 +8,7 @@
  *
  * Spec: loop/docs/tasks/T-fsm-actor-runtime.md §GR.1.
  */
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { atomicWriteFile } from '../atomic_write.js';
@@ -45,13 +45,30 @@ export async function readShutdownMarker(
   }
 }
 
-/** Read-and-CONSUME (one-shot): genesis uses this so a stale marker can't mask a crash. */
+/**
+ * Read-and-CONSUME (one-shot). RENAME-FIRST (atomic claim): the marker is moved out of the way
+ * BEFORE its contents are read, so a crash at any point after the rename leaves no marker at the
+ * canonical path → the next boot classifies a crash (never masks one). A racing second boot whose
+ * rename loses gets `null` (crash) — correct, since the other instance owns the clean resume.
+ */
 export async function consumeShutdownMarker(
   home: string = OPENSQUID_HOME(),
 ): Promise<ShutdownMarker | null> {
-  const marker = await readShutdownMarker(home);
-  if (marker) await rm(shutdownMarkerPath(home), { force: true });
-  return marker;
+  const path = shutdownMarkerPath(home);
+  const claimed = `${path}.consuming`;
+  try {
+    await rename(path, claimed); // atomic claim; throws if absent (crash) or lost to a racing boot
+  } catch {
+    return null;
+  }
+  try {
+    const marker = JSON.parse(await readFile(claimed, 'utf8')) as ShutdownMarker;
+    await rm(claimed, { force: true });
+    return marker.status === 'clean' ? marker : null;
+  } catch {
+    await rm(claimed, { force: true });
+    return null;
+  }
 }
 
 /** The reconcile `GenesisClassifier` backed by the on-disk marker (consuming). */

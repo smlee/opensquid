@@ -59,6 +59,12 @@ export interface ReconcileResult {
   recovery: boolean;
 }
 
+/** Crash downgrade: a crash (no marker) NEVER auto-resumes — a would-be resume is parked as a wedge
+ *  pending user-confirm. Kept fail-closed INSIDE the total function, not delegated to a caller. */
+function forceRecovery(c: Classification): Classification {
+  return c === 'resume' ? 'wedge' : c;
+}
+
 export async function reconcile(
   descriptors: ReconcileDescriptor<unknown>[],
   classifier: GenesisClassifier,
@@ -69,7 +75,9 @@ export async function reconcile(
 
   for (const d of descriptors) {
     const p = await d.read();
-    const c = d.classify(p);
+    const raw = d.classify(p);
+    const crashParked = recovery && raw === 'resume';
+    const c = recovery ? forceRecovery(raw) : raw; // downgrade resume→wedge on a crash
     const isPack = Boolean(d.validate);
 
     if (isPack && p !== null && c !== 'new_start') {
@@ -83,10 +91,21 @@ export async function reconcile(
       }
     }
 
-    plan[d.actor] = d.entry(c, p);
+    const entry: EntryPlan = crashParked
+      ? { mode: 'wedge', reason: 'crash recovery — user must confirm before resume' }
+      : d.entry(c, p);
+    plan[d.actor] = entry;
     report.actors[d.actor] = c;
-    if (isPack)
-      report.packs[d.actor] = c === 'wedge' ? { wedged: 'classified inconsistent' } : 'connected';
+    if (c === 'wedge') {
+      const reason = entry.reason ?? 'classified inconsistent';
+      // every wedge — classify-wedge or crash-park — is an authoritative failure the remediation UI reads
+      if (!report.failures.some((f) => f.actor === d.actor)) {
+        report.failures.push({ actor: d.actor, reason });
+      }
+      if (isPack) report.packs[d.actor] = { wedged: reason };
+    } else if (isPack) {
+      report.packs[d.actor] = 'connected';
+    }
   }
 
   return { plan, report, recovery };

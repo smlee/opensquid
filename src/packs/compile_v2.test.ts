@@ -110,4 +110,17 @@ describe('compilePackV2 (PFV2.1)', () => {
   it('reserves `__`-prefixed events (no author event collides)', () => {
     expect(fsm.transitions.every((t) => t.on.startsWith('__'))).toBe(true);
   });
+
+  it('THROWS at compile on a dangling transition target (validateFsm enforced, not deferred)', () => {
+    const bad = PackV2.parse({
+      name: 'bad',
+      version: '1.0.0',
+      scope: 'workflow',
+      fsm: {
+        initial: 'a',
+        states: { a: { kind: 'executor', directive: 'd', completion: 'c', next: 'NOPE' } },
+      },
+    });
+    expect(() => compilePackV2(bad)).toThrow(/invalid FSM/);
+  });
 });

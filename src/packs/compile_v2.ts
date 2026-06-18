@@ -15,7 +15,7 @@
  *
  * Spec: loop/docs/tasks/T-fsm-actor-runtime.md §PFV2.1.
  */
-import type { Fsm } from '../runtime/fsm.js';
+import { validateFsm, type Fsm } from '../runtime/fsm.js';
 import type { PackV2, StateKind, DecisionBranch } from './schemas/pack_v2.js';
 
 export interface StateMeta {
@@ -78,8 +78,12 @@ export function compilePackV2(pack: PackV2): CompiledPack {
         break;
     }
   }
-  return {
-    fsm: { initial: pack.fsm.initial, states: Object.keys(pack.fsm.states), transitions },
-    meta,
-  };
+  const fsm: Fsm = { initial: pack.fsm.initial, states: Object.keys(pack.fsm.states), transitions };
+  // ENFORCE totality at compile (mirrors the v1 loader.ts:374): a dangling `next`/`to`/`initial`
+  // fails LOUD here, not silently deferred to a consumer that may never call validateFsm.
+  const errors = validateFsm(fsm);
+  if (errors.length > 0) {
+    throw new Error(`pack ${pack.name}: invalid FSM — ${errors.join('; ')}`);
+  }
+  return { fsm, meta };
 }

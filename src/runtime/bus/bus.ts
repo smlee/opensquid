@@ -48,8 +48,16 @@ export class Bus {
     };
     this.ring.push(full);
     for (const s of this.subs) {
-      if (s.filter(full)) {
-        // async + isolated: a slow/throwing subscriber never blocks or aborts the publish path (gstack pattern)
+      // Isolate BOTH the filter and the handler: neither a throwing filter nor a throwing fn may
+      // abort the publish or skip the remaining subscribers (a filter is part of the subscriber).
+      let match = false;
+      try {
+        match = s.filter(full);
+      } catch {
+        match = false; // a broken filter simply doesn't match — never aborts publish
+      }
+      if (match) {
+        // async + isolated: a slow/throwing handler never blocks or aborts the publish path (gstack pattern)
         queueMicrotask(() => {
           try {
             s.fn(full);

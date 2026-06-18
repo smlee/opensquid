@@ -47,6 +47,25 @@ describe('Bus (BUS.1)', () => {
     expect(got).toEqual([1]); // the good subscriber still received it
   });
 
+  it('isolates a throwing FILTER — publish returns and later subscribers still fire', async () => {
+    const bus = new Bus();
+    const got: number[] = [];
+    bus.subscribe(
+      () => {
+        throw new Error('bad filter');
+      },
+      () => got.push(-1),
+    );
+    bus.subscribe(
+      () => true,
+      (e) => got.push(e.seq),
+    );
+    const env = bus.publish({ from: 'x', to: 'topic:t', kind: 'lap', payload: 0 });
+    expect(env.seq).toBe(1); // a throwing filter did NOT abort publish
+    await flush();
+    expect(got).toEqual([1]); // the bad-filter subscriber didn't match; the good one still fired
+  });
+
   it('replays via since(seq) with gap-detection', () => {
     const bus = new Bus(2); // tiny window to force a gap
     bus.publish({ from: 'x', to: 'topic:t', kind: 'lap', payload: 1 });

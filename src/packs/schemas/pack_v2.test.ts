@@ -53,4 +53,34 @@ describe('PackV2 schema (PFV2.1)', () => {
   it('rejects an unknown kind', () => {
     expect(() => StateV2.parse({ kind: 'nope' })).toThrow();
   });
+
+  it('rejects a cross-kind field (.strict) — a guard on an executor state fails loud, not silently dropped', () => {
+    expect(() =>
+      StateV2.parse({
+        kind: 'executor',
+        directive: 'd',
+        completion: 'c',
+        next: 'n',
+        guard: 'OOPS',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a decision with no `else` (totality)', () => {
+    expect(() =>
+      StateV2.parse({ kind: 'decision', branches: [{ guard: 'g', to: 'a' }] }),
+    ).toThrow();
+  });
+
+  it('rejects a decision whose `else` is not last (totality)', () => {
+    expect(() =>
+      StateV2.parse({
+        kind: 'decision',
+        branches: [
+          { else: true, to: 'a' },
+          { guard: 'g', to: 'b' },
+        ],
+      }),
+    ).toThrow();
+  });
 });
