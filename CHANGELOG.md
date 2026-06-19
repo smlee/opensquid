@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.483] - 2026-06-19
+
+### Added — genesis now RUNS at boot (T3c; completes T3, the genesis-registries re-scope)
+
+- `src/runtime/genesis/boot.ts` — `buildGenesisWorld` populates the three `ReconcileDescriptor`s from the real
+  world-state (projects WHERE, the live `Topology.connected()` WHAT, the seeded `AgentRegistry` WHO); `runGenesis`
+  runs the total `reconcile` with the shutdown-marker classifier (keyed to the host's home).
+- `src/runtime/daemon/host.ts` — the daemon now `await`s `runGenesis` BEFORE `advance('ready')`, inside the boot
+  try (a genesis throw releases the boot lock). The host never reaches `running` until genesis resolved the three
+  registries; a crash (no shutdown marker) parks would-be resumes as wedges (enforced inside `reconcile`, not
+  re-implemented). A new `onStartupReport` opt surfaces the `StartupReport` (its CLI surface is T4).
+- This closes the last of the three genesis gaps (H4/H5/H6): the WHO registry is built (T3a), the
+  `ExecutorRegistry` interface is backed (T3b), and `reconcile()` — which previously had no caller — finally runs
+  at every boot. The design's "genesis resolves three registries before system_ready" invariant is now enforced.
+  The agent registry is empty at boot (agents register via the connect channel, a later track) — a correct fresh
+  `new_start`. Full suite green (3834).
+
 ## [0.5.482] - 2026-06-19
 
 ### Added — concrete fail-closed `ExecutorRegistry` (T3b)

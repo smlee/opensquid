@@ -38,6 +38,16 @@ describe('host lifecycle FSM (DAEMON.1)', () => {
     const st = await readRuntimeState(home);
     expect(st).toMatchObject({ port: h.port, token: h.token, pid: process.pid });
   });
+
+  it('T3c — GENESIS runs (resolving the three registries) before the host reaches `running`', async () => {
+    let report: { actors: Record<string, string> } | undefined;
+    const h = await startHost({ home, onStartupReport: (r) => (report = r) });
+    live.push(h);
+    expect(h.state()).toBe('running');
+    // genesis ran during boot and surfaced its StartupReport with all three registries resolved.
+    expect(report).toBeDefined();
+    expect(Object.keys(report?.actors ?? {}).sort()).toEqual(['agent', 'topology', 'workspace']);
+  });
 });
 
 describe('host server: localhost + token auth (DAEMON.1)', () => {

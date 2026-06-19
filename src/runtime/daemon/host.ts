@@ -35,6 +35,11 @@ import { step, validateFsm, type Fsm } from '../fsm.js';
 import { Topology } from '../topology/topology.js';
 import { OPENSQUID_HOME } from '../paths.js';
 import { writeShutdownMarker } from '../genesis/shutdown_marker.js';
+import { buildGenesisWorld, runGenesis } from '../genesis/boot.js';
+import { AgentRegistry } from '../registry/agent_registry.js';
+import type { StartupReport } from '../genesis/reconcile.js';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { runtimeStatePath, unlinkRuntimeState, writeRuntimeState } from './state_file.js';
 
 /** The host lifecycle FSM (reused `fsm.ts`, total transitions — not booleans). */
@@ -66,6 +71,17 @@ export interface StartHostOpts {
   staleMs?: number;
   /** how the host snapshots actor state for resume (GR.1); defaults to a topology digest. */
   digest?: () => string;
+  /** T3c — surface the genesis `StartupReport` (its CLI surface is T4). Default: no-op. */
+  onStartupReport?: (report: StartupReport) => void;
+}
+
+/** Read the persisted workspace (projects) state; absent/corrupt ⇒ null (a fresh workspace = new_start). */
+async function readProjectsState(home: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(join(home, 'projects.json'), 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -161,6 +177,20 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
     });
     port = (server.address() as AddressInfo).port;
     await writeRuntimeState({ port, token, pid: process.pid, startedAt: Date.now() }, home);
+    // T3c — GENESIS runs HERE, before `advance('ready')`: resolve the three registries (workspace × topology
+    // × agent) via the total `reconcile`. The host never reaches `running` until genesis resolved them; a crash
+    // (no shutdown marker) parks resumes as wedges (inside `reconcile`). Inside the boot try, so a genesis throw
+    // releases the lock + fails the boot (the catch below). The agent registry is empty at boot — agents
+    // register via the connect channel (a later track); an empty WHO registry is a correct fresh `new_start`.
+    const genesis = await runGenesis(
+      buildGenesisWorld({
+        readProjects: () => readProjectsState(home),
+        topologyConnected: () => topology.connected(),
+        agents: new AgentRegistry(),
+      }),
+      home, // key the shutdown-marker classifier to the HOST's home
+    );
+    opts.onStartupReport?.(genesis.report);
   } catch (err) {
     await new Promise<void>((resolve) => server.close(() => resolve())); // drop the listener if bound
     await release(); // never leak the boot lock on a partial boot
