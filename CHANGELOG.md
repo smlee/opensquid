@@ -7,6 +7,16 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.482] - 2026-06-19
+
+### Added — concrete fail-closed `ExecutorRegistry` (T3b)
+
+- `src/runtime/registry/executor_registry.ts` — `RegistryBackedExecutors implements ExecutorRegistry`, the first
+  production backing for the interface the LoopDriver consumes. `ensureExecutor(name)` resolves the live agent
+  providing `name` via the agent registry (T3a), returns the executor its registered factory produces, or THROWS
+  (fail-closed — never a wrong-fallback). A disk STUB (liveness, no factory) is not connectable → excluded → throw
+  (liveness ≠ connectability). The live turn-runner→step-puller adapter remains the FSM-actor cutover. 5 tests.
+
 ## [0.5.481] - 2026-06-19
 
 ### Added — the model-agnostic agent registry (T3a; the genesis WHO registry, keystone of 3)
