@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.486] - 2026-06-19
+
+### Added — `migrateV1` re-homes a v1 pack into v2 BY FORM, proven behaviorally-equivalent (M.2)
+
+- New `src/packs/migrate_v1_to_v2.ts` — `migrateV1(v1: Pack, table: MigrationTable): PackV2`, a TOTAL, fail-loud,
+  BY-FORM mapper. `behavior` → an FSM (from the v1 `fsm.yaml` side-file, supplied as `table.fsm` — never
+  synthesized); `conformance` → `gates[]` (each v1 rule RE-HOMES into the matching `ConformanceGate` kind,
+  `track_check`→`track_check` / `destination_check`→`destination_check`, fields VERBATIM); `foundation` → the v1
+  `foundation` block passes through, neither fsm nor gates. THROWS on an unmapped rule kind, a behavior pack with no
+  `table.fsm`, or a conformance pack that yields zero gates.
+- The migration RE-SHAPES the schema only — it adds NO evaluation logic; each kind keeps its proven runtime
+  (`track_check`→`evaluateProcess`, `destination_check`→the scheduler). The anti-bug guarantee is the per-path
+  BEHAVIORAL-EQUIVALENCE harness: a migrated `track_check` gate's `process` and the v1 rule's `process` run through
+  the SAME `evaluateProcess` over a representative event → an IDENTICAL `RuleResult` (structural + behavioral
+  identity; `PackV2.parse` re-validates the steps into a faithful copy). The `destination_check` path is asserted
+  field-verbatim (it never touches `evaluateProcess`).
+
 ## [0.5.485] - 2026-06-19
 
 ### Added — pack-format-v2 admits all THREE pack forms (M.1; `fsm` | `gates` | foundation)
