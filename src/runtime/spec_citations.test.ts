@@ -35,6 +35,9 @@ const KNOWN_UMBRELLA_DOCS = [
   // The FSM-actor RE-SCOPE track (T1+, the event-driven drift fix) — same umbrella planning repo,
   // cited by compile_v2.ts. Existence-verified locally; pinned by name for the CI checkout.
   'T-fsm-actor-rescope.md',
+  // The pack v1→v2 migration track (M.1+) — same umbrella planning repo, cited by
+  // migrate_v1_to_v2.ts. Existence-verified locally; pinned by name for the CI checkout.
+  'T-pack-migrate-v2.md',
 ];
 
 describe('spec-citation integrity (FAC.1)', () => {
