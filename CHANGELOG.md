@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.487] - 2026-06-19
+
+### Fixed — Safety floor no longer false-blocks benign reads of substrate state (global hotfix)
+
+- The Safety floor's `delete_verb` redirect heuristic matched ANY redirect (including fd/stderr redirects that
+  merely discard output) whenever a command referenced the substrate state dir — so a harmless diagnostic read
+  loop was halted as "deleting substrate state," and because the floor is non-composable substrate running from
+  `dist/`, it enforced that false-positive across EVERY agent session globally. Re-anchored the detector on the
+  redirect TARGET (operator-agnostic): a redirect is destructive only when its target token is a substrate path.
+  Benign reads (`… 2>/dev/null`, `… >/dev/null`, `… 2>&1`) pass; genuine deletes and substrate-targeted overwrites
+  — at any spacing or fd prefix, closing a no-space-overwrite hole an intermediate patch had opened — still halt.
+  16 regression tests. The broader content-vs-action question (a Bash command's quoted args are matched as content)
+  is scoped to a follow-up track.
+
 ## [0.5.486] - 2026-06-19
 
 ### Added — `migrateV1` re-homes a v1 pack into v2 BY FORM, proven behaviorally-equivalent (M.2)

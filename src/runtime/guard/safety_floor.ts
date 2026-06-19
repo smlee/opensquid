@@ -61,11 +61,14 @@ export function checkSafety(call: SafetyCall, policy: SafetyPolicy): SafetyResul
     if (
       r.match === 'delete_verb' &&
       !/\b(rm|unlink|shred|truncate)\b/.test(hay) &&
-      // a SHELL REDIRECT to a path (`> ~/…`, `>/dev/…`) — NOT a `->` arrow (which prose/code uses):
-      // require `>` reached after a space/word-char and pointing at a path, so `-> halt` does not match.
-      !/(^|[\s\w])>\s*[~/.]/.test(hay)
+      // a redirect whose TARGET is a substrate path. The load-bearing condition is the TARGET, not what
+      // precedes `>`: any redirect (`>`, `>>`, or fd-prefixed `2>`/`2>>`) that truncates a `.opensquid`
+      // file is destructive, while `2>/dev/null`, `>/dev/null`, and `2>&1` target non-substrate and never
+      // match. Requiring the target excludes the benign-read false-positive WITHOUT the previous
+      // `(^|\s)` anchor, which wrongly let a no-space overwrite (`cmd>~/.opensquid/x`) slip past.
+      !/>>?\s*[^\s|;&<>]*\.opensquid/.test(hay)
     )
-      continue; // needs a delete verb or a real path-redirect
+      continue; // needs a delete verb or a substrate-TARGETED redirect
     return { action: r.tier === 'hardline' ? 'halt' : 'block', message: r.message };
   }
   return { action: 'pass' }; // FAIL OPEN — an unmatched call is never denied
