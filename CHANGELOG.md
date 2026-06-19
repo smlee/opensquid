@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.481] - 2026-06-19
+
+### Added — the model-agnostic agent registry (T3a; the genesis WHO registry, keystone of 3)
+
+- `src/runtime/registry/agent_registry.ts` — the substrate WHO registry: one `AgentEntry` per connected agent,
+  with a **free-form `executor` backend id** (`'claude' | 'gpt' | 'codex' | …`) so any subscription model is
+  first-class — adding a model needs no schema change. This is the substrate that makes a per-state `executor(S)`
+  reference resolve to a live agent, i.e. Claude handing a state to GPT (and back) within one flow.
+- Agents `register()` while live and self-declare executor/capabilities/scope/role; `resolve(name)` returns only
+  lease-FRESH providers (self-first, then most-recent `refreshed_at`); `liveness` is `isLeaseFresh` over the real
+  `live_session_lease` — a total FSM, never "assume up".
+- Seeding is built, not assumed: `buildSelfEntry` assembles the host's own entry (harness/id from `claimAudience`
+  - the lease, the four fields from the register payload); `discoverLiveStubs` enumerates fresh on-disk leases into
+    id+liveness STUBS (visible but not executor-resolvable until the remote agent registers a backend).
+- Next: T3b (concrete fail-closed `ExecutorRegistry` over this) + T3c (genesis boot caller wiring it before
+  `running`). Full suite green (3824).
+
 ## [0.5.480] - 2026-06-18
 
 ### Added — the Safety + Resource substrate floors (T2; completes "1 of 4 floors" → 3 of 4)
