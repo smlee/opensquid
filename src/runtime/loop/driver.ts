@@ -21,7 +21,7 @@
  * reused `fsm.ts` `step` over the NAMED event each state emits (`meta[state].emits` /
  * a decision branch's `emits`) — the same author-named vocabulary as the live `advance_fsm`.
  */
-import { step } from '../fsm.js';
+import { step, type Fsm } from '../fsm.js';
 import type { CompiledPack, StateMeta } from '../../packs/compile_v2.js';
 import { ProgressFloor, type ToolObservation } from '../guard/progress_floor.js';
 import { evaluateCompletion } from '../guard/connector.js';
@@ -69,6 +69,15 @@ export class LoopDriver {
     private readonly compiled: CompiledPack,
     private readonly deps: LoopDeps,
   ) {}
+
+  /** The behavior FSM — present by construction (the driver only ever runs a behavior pack;
+   *  a conformance/foundation pack compiles with no `fsm` and never reaches the driver). */
+  private get fsm(): Fsm {
+    if (this.compiled.fsm === undefined) {
+      throw new Error('LOOP.1: driver requires a behavior pack (compiled pack has no fsm)');
+    }
+    return this.compiled.fsm;
+  }
 
   /** Advance one state. The state's `meta.kind` selects the dispatch; the driver adds no behavior. */
   async step(state: string, ctx: GuardCtx = undefined): Promise<DriverStep> {
@@ -152,7 +161,7 @@ export class LoopDriver {
     flowInitial: string,
     ctx: GuardCtx,
   ): Promise<'shipped' | 'wedge'> {
-    let cur = flowInitial.length > 0 ? flowInitial : this.compiled.fsm.initial;
+    let cur = flowInitial.length > 0 ? flowInitial : this.fsm.initial;
     // a bounded walk: the FSM is finite + acyclic-to-terminal by construction; the cap is a backstop.
     for (let guardCount = 0; guardCount < 10_000; guardCount++) {
       const r = await this.step(cur, ctx);
@@ -175,7 +184,7 @@ export class LoopDriver {
 
   /** Compute the next state for a named event via the reused engine; a missing transition is a bug. */
   private transitionOn(state: string, event: string): string {
-    const r = step(this.compiled.fsm, state, event);
+    const r = step(this.fsm, state, event);
     if (!r.transitioned) {
       throw new Error(
         `LOOP.1: no '${event}' transition from '${state}' (compiler invariant violated)`,

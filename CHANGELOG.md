@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.485] - 2026-06-19
+
+### Added — pack-format-v2 admits all THREE pack forms (M.1; `fsm` | `gates` | foundation)
+
+- `PackV2.fsm` is now **optional**: a pack is a behavior FSM **XOR** a conformance gate-set **XOR** foundation-only
+  (pure expertise). A `.refine` rejects an `fsm`+`gates` pack loud (no two behaviors), and `PackV2` is now `.strict()`
+  — an unknown top-level key fails at parse instead of being silently dropped.
+- New `gates: ConformanceGate[]` — a discriminated union over the **two** existing V1 rule kinds (`runtime/types.ts`
+  `RuleKind`), each RE-HOMING its V1 shape so the eventual migration keeps its existing evaluator: `track_check`
+  (carries `trigger` + a `process` of `ProcessStep`s, reused VERBATIM → `evaluateProcess`) and `destination_check`
+  (`prompt_template` + `every_n_tool_calls` + optional `model_alias` → the destination scheduler). `process` stays a
+  FIELD on `track_check`, not a third kind.
+- `compile_v2` lowers each gate to the descriptor its existing evaluator consumes (adds NO evaluation logic); the T1
+  behavior path runs unchanged when `fsm` is present, and a foundation pack compiles to empty `meta` + no `gates`.
+  `CompiledPack.fsm` is optional — the loop driver / `exe` transitions narrow it (a non-behavior pack never reaches
+  them), and the viz emitters are total over an absent `fsm`.
+
 ## [0.5.484] - 2026-06-19
 
 ### Added — the genesis StartupReport is now surfaced (T4; `opensquid daemon report`)

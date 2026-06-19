@@ -39,6 +39,10 @@ export interface TransitionResult {
 
 /** Compute the next state for a named event; a missing transition is a compiler-invariant bug. */
 function stepTo(compiled: CompiledPack, state: string, event: string): string {
+  if (compiled.fsm === undefined) {
+    // EXE.1 only evaluates a behavior pack's transitions; a conformance/foundation pack has no fsm.
+    throw new Error(`EXE.1: cannot step a non-behavior pack (no fsm) from '${state}'`);
+  }
   const r = step(compiled.fsm, state, event);
   if (!r.transitioned) {
     throw new Error(

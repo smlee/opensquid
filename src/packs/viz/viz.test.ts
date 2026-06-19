@@ -79,6 +79,8 @@ describe('toDot / fromDot (PV.1)', () => {
   it('a comment-less (hand-sketched) DOT graph → a valid stub skeleton', () => {
     const sketch = 'digraph g {\n  "a" [shape=box];\n  "b" [shape=oval];\n  "a" -> "b";\n}';
     const pack = fromDot(sketch);
+    if (pack.fsm === undefined)
+      throw new Error('a hand-sketched DOT graph must yield a behavior fsm');
     expect(pack.fsm.initial).toBe('a');
     expect(pack.fsm.states.a?.kind).toBe('executor');
     expect(pack.fsm.states.b?.kind).toBe('terminal');

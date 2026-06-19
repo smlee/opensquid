@@ -58,7 +58,10 @@ const amazonClone = PackV2.parse({
 });
 
 describe('compilePackV2 (T1)', () => {
-  const { fsm, meta } = compilePackV2(amazonClone);
+  const compiled = compilePackV2(amazonClone);
+  const { meta } = compiled;
+  const fsm = compiled.fsm;
+  if (fsm === undefined) throw new Error('amazonClone must compile a behavior fsm');
 
   it('reuses the AUTHORED explicit transitions (no synthesis) and validates them', () => {
     expect(validateFsm(fsm)).toEqual([]);
@@ -213,7 +216,8 @@ describe('compilePackV2 (T1) — coding-flow-shaped fixture: multi-out + wildcar
     },
   });
 
-  const { fsm } = compilePackV2(fixture);
+  const fsm = compilePackV2(fixture).fsm;
+  if (fsm === undefined) throw new Error('fixture must compile a behavior fsm');
 
   it('compiles with NO synthetic events', () => {
     expect(validateFsm(fsm)).toEqual([]);
@@ -235,5 +239,73 @@ describe('compilePackV2 (T1) — coding-flow-shaped fixture: multi-out + wildcar
     const r = step(fsm, 'scoping', 'nonsense');
     expect(r.transitioned).toBe(false);
     expect(r.next).toBe('scoping');
+  });
+});
+
+// M.1 — the CONFORMANCE form: a pack of always-active `gates` (the two V1 rule kinds), NO fsm. Each lowers
+// to the descriptor its EXISTING evaluator consumes (track_check→evaluateProcess, destination_check→scheduler).
+describe('compilePackV2 (M.1) — conformance form (gates, no fsm)', () => {
+  const conformance = PackV2.parse({
+    name: 'discipline',
+    version: '1.0.0',
+    scope: 'universal',
+    gates: [
+      {
+        kind: 'track_check',
+        trigger: ['tool_call'],
+        process: [{ call: 'check_something', args: { x: 1 } }],
+        on_fail: { action: 'warn', message: 'drifting' },
+      },
+      {
+        kind: 'destination_check',
+        prompt_template: 'Are we on track?',
+        every_n_tool_calls: 10,
+        model_alias: 'reasoning',
+      },
+    ],
+  });
+
+  const compiled = compilePackV2(conformance);
+
+  it('compiles WITHOUT an fsm and with empty meta', () => {
+    expect(compiled.fsm).toBeUndefined();
+    expect(compiled.meta).toEqual({});
+  });
+
+  it('lowers track_check to its {trigger, process} evaluator descriptor (process reused verbatim)', () => {
+    const g = compiled.gates?.[0];
+    expect(g).toMatchObject({
+      kind: 'track_check',
+      trigger: ['tool_call'],
+      process: [{ call: 'check_something', args: { x: 1 } }],
+      onFail: { action: 'warn', message: 'drifting' },
+    });
+  });
+
+  it('lowers destination_check to its {promptTemplate, everyN} scheduler descriptor', () => {
+    const g = compiled.gates?.[1];
+    expect(g).toMatchObject({
+      kind: 'destination_check',
+      promptTemplate: 'Are we on track?',
+      everyN: 10,
+      modelAlias: 'reasoning',
+    });
+  });
+});
+
+// M.1 — the FOUNDATION form: neither fsm nor gates → pure expertise. Compiles to empty meta + no gates.
+describe('compilePackV2 (M.1) — foundation form (no fsm, no gates)', () => {
+  const foundation = PackV2.parse({
+    name: 'focused-typescript-strict',
+    version: '1.0.0',
+    scope: 'specialty',
+    foundation: { manifest: 'strict-ts', lessons: [] },
+  });
+
+  it('compiles to a pack with no fsm, no gates, and empty meta', () => {
+    const compiled = compilePackV2(foundation);
+    expect(compiled.fsm).toBeUndefined();
+    expect(compiled.gates).toBeUndefined();
+    expect(compiled.meta).toEqual({});
   });
 });

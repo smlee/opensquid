@@ -49,7 +49,8 @@ describe('loadPackV2 (PFV2.2)', () => {
     await writeFile(join(dir, 'pack.yaml'), PACK_YAML);
     const loaded = await loadPackV2(dir);
     expect(loaded.pack.name).toBe('tiny');
-    expect(validateFsm(loaded.compiled.fsm)).toEqual([]);
+    expect(loaded.compiled.fsm).toBeDefined();
+    expect(validateFsm(loaded.compiled.fsm!)).toEqual([]);
     expect(loaded.compiled.meta.work).toMatchObject({ kind: 'executor', completion: 'done_ok' });
     expect(loaded.messages.not_ok).toBe('Fix it and re-run.');
   });

@@ -31,12 +31,14 @@ interface Edge {
 
 /** The edges ARE the explicit named-event transitions, labelled with the event name. */
 function edgesOf(pack: PackV2): Edge[] {
-  return pack.fsm.transitions.map((t) => ({ from: t.from, to: t.to, label: t.on }));
+  // a conformance/foundation pack has no fsm → no flowchart edges.
+  return (pack.fsm?.transitions ?? []).map((t) => ({ from: t.from, to: t.to, label: t.on }));
 }
 
 export function emitMermaid(pack: PackV2): string {
   const lines: string[] = ['flowchart TD'];
-  for (const [name, s] of Object.entries(pack.fsm.states)) lines.push(`  ${node(name, s.kind)}`);
+  for (const [name, s] of Object.entries(pack.fsm?.states ?? {}))
+    lines.push(`  ${node(name, s.kind)}`);
   for (const e of edgesOf(pack)) {
     const label = e.label !== undefined ? `|${e.label.replace(/"/g, '&quot;')}|` : '';
     lines.push(`  ${e.from} -->${label} ${e.to}`);

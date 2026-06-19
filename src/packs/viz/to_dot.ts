@@ -29,12 +29,13 @@ interface Edge {
 /** The visible edges ARE the explicit named-event transitions (labelled with the event); gate's on_fail
  *  is an action, not a transition, so it rides in the JSON comment, not the graph. */
 function edgesOf(pack: PackV2): Edge[] {
-  return pack.fsm.transitions.map((t) => ({ from: t.from, to: t.to, label: t.on }));
+  // a conformance/foundation pack has no fsm → no visible flowchart edges (the round-trip comment is lossless).
+  return (pack.fsm?.transitions ?? []).map((t) => ({ from: t.from, to: t.to, label: t.on }));
 }
 
 export function emitDot(pack: PackV2): string {
   const lines: string[] = ['digraph pack {', `  // __osq_pack: ${JSON.stringify(pack)}`];
-  for (const [name, s] of Object.entries(pack.fsm.states)) {
+  for (const [name, s] of Object.entries(pack.fsm?.states ?? {})) {
     lines.push(`  "${esc(name)}" [${KIND_STYLE[s.kind]}];`);
   }
   for (const e of edgesOf(pack)) {

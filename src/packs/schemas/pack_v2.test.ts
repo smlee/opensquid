@@ -18,7 +18,7 @@ describe('PackV2 schema (PFV2.1)', () => {
     expect(p.detected_by).toEqual([]);
     expect(p.guards).toEqual({});
     expect(p.messages).toEqual({});
-    expect(p.fsm.states.a?.kind).toBe('executor');
+    expect(p.fsm?.states.a?.kind).toBe('executor');
   });
 
   it('rejects an executor state missing `completion`', () => {
@@ -92,6 +92,77 @@ describe('PackV2 schema (PFV2.1)', () => {
           { else: true, emits: 'a' },
           { guard: 'g', emits: 'b' },
         ],
+      }),
+    ).toThrow();
+  });
+});
+
+// M.1 — the 3-form pack: a behavior FSM XOR a conformance gate-set XOR foundation-only.
+describe('PackV2 schema (M.1) — fsm | gates | foundation', () => {
+  const gatesPack = {
+    name: 'discipline',
+    version: '1.0.0',
+    scope: 'universal',
+    gates: [
+      { kind: 'track_check', trigger: ['tool_call'], process: [{ call: 'c' }] },
+      { kind: 'destination_check', prompt_template: 'ok?', every_n_tool_calls: 5 },
+    ],
+  };
+
+  it('parses a CONFORMANCE pack (gates, no fsm) — the two rule kinds', () => {
+    const p = PackV2.parse(gatesPack);
+    expect(p.fsm).toBeUndefined();
+    expect(p.gates).toHaveLength(2);
+    expect(p.gates?.[0]?.kind).toBe('track_check');
+    expect(p.gates?.[1]?.kind).toBe('destination_check');
+  });
+
+  it('parses a FOUNDATION pack (no fsm, no gates) — pure expertise', () => {
+    const p = PackV2.parse({
+      name: 'focused-typescript-strict',
+      version: '1.0.0',
+      scope: 'specialty',
+      foundation: { manifest: 'strict-ts' },
+    });
+    expect(p.fsm).toBeUndefined();
+    expect(p.gates).toBeUndefined();
+  });
+
+  it('REJECTS a pack carrying BOTH fsm and gates (never two behaviors)', () => {
+    expect(() => PackV2.parse({ ...gatesPack, fsm: baseFsm })).toThrow(
+      /`fsm` \(behavior\) OR `gates` \(conformance\), not both/,
+    );
+  });
+
+  it('rejects a destination_check with every_n_tool_calls = 0 (positive int)', () => {
+    expect(() =>
+      PackV2.parse({
+        name: 'bad',
+        version: '1.0.0',
+        scope: 'universal',
+        gates: [{ kind: 'destination_check', prompt_template: 'p', every_n_tool_calls: 0 }],
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a track_check gate with an empty process (min 1)', () => {
+    expect(() =>
+      PackV2.parse({
+        name: 'bad',
+        version: '1.0.0',
+        scope: 'universal',
+        gates: [{ kind: 'track_check', trigger: ['tool_call'], process: [] }],
+      }),
+    ).toThrow();
+  });
+
+  it('rejects an unknown conformance gate kind (discriminated union is total)', () => {
+    expect(() =>
+      PackV2.parse({
+        name: 'bad',
+        version: '1.0.0',
+        scope: 'universal',
+        gates: [{ kind: 'nope', trigger: ['x'], process: [{ call: 'c' }] }],
       }),
     ).toThrow();
   });
