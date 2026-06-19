@@ -85,39 +85,52 @@ describe('checkSafety (T2) — default policy seed', () => {
     // state with stderr discarded. `2>/dev/null` is a benign fd redirect, NOT a destructive overwrite.
     expect(
       checkSafety(
-        { tool: 'Bash', args: 'for d in ~/.opensquid/sessions/*/state/cwd.json; do cat "$d" 2>/dev/null; done' },
+        {
+          tool: 'Bash',
+          args: 'for d in ~/.opensquid/sessions/*/state/cwd.json; do cat "$d" 2>/dev/null; done',
+        },
         P,
       ).action,
     ).toBe('pass');
-    expect(checkSafety({ tool: 'Bash', args: 'cat ~/.opensquid/active.json 2>/dev/null' }, P).action).toBe(
+    expect(
+      checkSafety({ tool: 'Bash', args: 'cat ~/.opensquid/active.json 2>/dev/null' }, P).action,
+    ).toBe('pass');
+    // a stdout redirect to /dev/null (not a substrate target) is also benign:
+    expect(checkSafety({ tool: 'Bash', args: 'ls ~/.opensquid/ >/dev/null' }, P).action).toBe(
       'pass',
     );
-    // a stdout redirect to /dev/null (not a substrate target) is also benign:
-    expect(checkSafety({ tool: 'Bash', args: 'ls ~/.opensquid/ >/dev/null' }, P).action).toBe('pass');
     // and `2>&1` (fd dup) near the path must not trip it:
-    expect(checkSafety({ tool: 'Bash', args: 'cat ~/.opensquid/x.json 2>&1' }, P).action).toBe('pass');
+    expect(checkSafety({ tool: 'Bash', args: 'cat ~/.opensquid/x.json 2>&1' }, P).action).toBe(
+      'pass',
+    );
   });
 
   it('still blocks the REAL destructive cases (no regression in protection)', () => {
-    expect(checkSafety({ tool: 'Bash', args: 'rm -rf ~/.opensquid/sessions' }, P).action).toBe('halt');
-    expect(checkSafety({ tool: 'Bash', args: 'echo {} > ~/.opensquid/safety-policy.json' }, P).action).toBe(
+    expect(checkSafety({ tool: 'Bash', args: 'rm -rf ~/.opensquid/sessions' }, P).action).toBe(
       'halt',
     );
-    expect(checkSafety({ tool: 'Bash', args: 'truncate -s0 ~/.opensquid/rag.sqlite' }, P).action).toBe(
-      'halt',
-    );
+    expect(
+      checkSafety({ tool: 'Bash', args: 'echo {} > ~/.opensquid/safety-policy.json' }, P).action,
+    ).toBe('halt');
+    expect(
+      checkSafety({ tool: 'Bash', args: 'truncate -s0 ~/.opensquid/rag.sqlite' }, P).action,
+    ).toBe('halt');
   });
 
   it('blocks substrate-TARGETED redirects regardless of spacing or fd prefix (the guess-audit hole)', () => {
     // a NO-SPACE overwrite must still halt — the bug where `(^|\s)` anchoring let it slip past:
-    expect(checkSafety({ tool: 'Bash', args: 'echo {}>~/.opensquid/safety-policy.json' }, P).action).toBe(
+    expect(
+      checkSafety({ tool: 'Bash', args: 'echo {}>~/.opensquid/safety-policy.json' }, P).action,
+    ).toBe('halt');
+    expect(checkSafety({ tool: 'Bash', args: 'cmd>~/.opensquid/rag.sqlite' }, P).action).toBe(
       'halt',
     );
-    expect(checkSafety({ tool: 'Bash', args: 'cmd>~/.opensquid/rag.sqlite' }, P).action).toBe('halt');
     // an fd-prefixed redirect that TARGETS substrate truncates it too → halt:
     expect(checkSafety({ tool: 'Bash', args: 'foo 2>~/.opensquid/log' }, P).action).toBe('halt');
     // append-to-substrate:
-    expect(checkSafety({ tool: 'Bash', args: 'echo x >>~/.opensquid/state.json' }, P).action).toBe('halt');
+    expect(checkSafety({ tool: 'Bash', args: 'echo x >>~/.opensquid/state.json' }, P).action).toBe(
+      'halt',
+    );
   });
 
   it('FAIL-OPEN: an unmatched call → pass (no message)', () => {
