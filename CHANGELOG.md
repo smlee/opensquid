@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.484] - 2026-06-19
+
+### Added — the genesis StartupReport is now surfaced (T4; `opensquid daemon report`)
+
+- The daemon PERSISTS the genesis `StartupReport` at boot to `startup-report.json` (`startup_report_file.ts`,
+  mirroring `state_file.ts`; best-effort so a write failure never wedges boot), carrying the boot `startedAt` + the
+  `recovery` flag (which lives on `ReconcileResult`, not the report).
+- New `opensquid daemon report` — renders which packs connected / are off (with the failure reason), the actor
+  classifications, the boot timestamp, and the crash-recovery flag; `--json` for raw. Freshness is labelled
+  ("current boot" / "last boot — daemon not running") by reusing `OpenSquidDaemon.status()` — the SAME oracle
+  `daemon status` uses, so the two never disagree.
+- `--show failed (default) | all | connected | <pack,pack…>` is a READ-ONLY display filter — it writes nothing and
+  changes genesis nothing. Remediation is advisory: fix the cause, restart, and genesis re-runs (idempotent). The
+  dead `remediation` enum is left unused-but-typed (an active live re-reconcile is a separate track) — deliberately
+  NOT wired to a write nothing reads, the dead-field defect this surfacing exists to avoid. Full suite green (3849).
+
 ## [0.5.483] - 2026-06-19
 
 ### Added — genesis now RUNS at boot (T3c; completes T3, the genesis-registries re-scope)

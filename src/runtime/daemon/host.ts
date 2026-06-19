@@ -36,6 +36,7 @@ import { Topology } from '../topology/topology.js';
 import { OPENSQUID_HOME } from '../paths.js';
 import { writeShutdownMarker } from '../genesis/shutdown_marker.js';
 import { buildGenesisWorld, runGenesis } from '../genesis/boot.js';
+import { writeStartupReport } from '../genesis/startup_report_file.js';
 import { AgentRegistry } from '../registry/agent_registry.js';
 import type { StartupReport } from '../genesis/reconcile.js';
 import { readFile } from 'node:fs/promises';
@@ -190,7 +191,12 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
       }),
       home, // key the shutdown-marker classifier to the HOST's home
     );
-    opts.onStartupReport?.(genesis.report);
+    // T4 — PERSIST the report so `opensquid daemon report` can surface it on demand. Best-effort: the report is
+    // informational, so a write failure must NOT wedge the boot.
+    await writeStartupReport(genesis.report, genesis.recovery, Date.now(), home).catch(
+      () => undefined,
+    );
+    opts.onStartupReport?.(genesis.report); // optional observer/override (test injection) still fires
   } catch (err) {
     await new Promise<void>((resolve) => server.close(() => resolve())); // drop the listener if bound
     await release(); // never leak the boot lock on a partial boot

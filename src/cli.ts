@@ -32,6 +32,7 @@ import { migrateWedgeLessons } from './rag/wedge/migrate.js';
 import { wedgeLessonsDbUrl, wedgeLessonsDir } from './rag/wedge/paths.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
 import { daemonPidPath, OPENSQUID_HOME } from './runtime/paths.js';
+import { parseShow, runDaemonReport } from './setup/cli/daemon_report.js';
 import { registerAudit } from './setup/cli/audit.js';
 import { registerAutomation } from './setup/cli/automation.js';
 import { registerCache } from './setup/cli/cache.js';
@@ -147,6 +148,17 @@ function runCli(): void {
       } else {
         process.stdout.write(`daemon: not running (no pid file at ${daemonPidPath()})\n`);
       }
+    });
+
+  daemon
+    .command('report')
+    .description('Show the last genesis startup report (which packs connected / are off, and why).')
+    .option('--json', 'emit the raw StartupReport JSON')
+    .option('--show <what>', 'failed (default) | all | connected | <pack,pack…>')
+    .action(async (o: { json?: boolean; show?: string }) => {
+      process.stdout.write(
+        (await runDaemonReport({ json: o.json === true, show: parseShow(o.show) })) + '\n',
+      );
     });
 
   daemon
