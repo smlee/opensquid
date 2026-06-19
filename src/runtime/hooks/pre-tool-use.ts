@@ -29,6 +29,8 @@ import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
 import { buildPreToolUseDeny, emitDriftStderrAndExit } from './hook_output.js';
 import { extractSessionId } from './session_id.js';
+import { checkSafety } from '../guard/safety_floor.js';
+import { loadSafetyPolicy } from '../guard/safety_policy.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -132,6 +134,25 @@ async function main(): Promise<void> {
     // through the dispatcher and advances its lifecycle FSM. See
     // T-FSM-UNIFY.
   }
+  // T2 — the Safety FLOOR: an absolute, always-on forbidden-action policy checked BEFORE the tool runs
+  // (a SECOND blocking check beside the coding-flow gate below — deny if EITHER blocks). Substrate, not
+  // a pack: it fires under every agent regardless of pack. FAIL-OPEN: any error here must NEVER block.
+  if (parsed.data.kind === 'tool_call') {
+    try {
+      const verdict = checkSafety(
+        { tool: parsed.data.tool, args: parsed.data.args },
+        await loadSafetyPolicy(),
+      );
+      if (verdict.action === 'block' || verdict.action === 'halt') {
+        const msg = `🦑 [safety floor] ${verdict.message ?? 'forbidden action'}`;
+        process.stdout.write(JSON.stringify(buildPreToolUseDeny(msg, '')));
+        process.exit(0);
+      }
+    } catch {
+      /* fail-open: a Safety-floor error never blocks the call (the hook's fail-open contract) */
+    }
+  }
+
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
 

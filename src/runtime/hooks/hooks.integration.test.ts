@@ -122,6 +122,28 @@ describe('hook subprocess integration', () => {
     expect(r.stderr.toLowerCase()).toContain('empty');
   }, 15000);
 
+  it('pre-tool-use: the Safety FLOOR denies a forbidden Bash action before execution (T2)', async () => {
+    const stdin = JSON.stringify({
+      tool: 'Bash',
+      args: { command: 'rm -rf / --no-preserve-root' },
+    });
+    const r = await runHook('pre-tool-use.ts', stdin);
+    expect(r.exitCode).toBe(0); // the deny rides the JSON envelope (exit 0), not a bare exit 2
+    expect(r.stdout).toContain('deny');
+    expect(r.stdout.toLowerCase()).toContain('safety floor');
+  }, 15000);
+
+  it('pre-tool-use: the Safety floor is TOOL-SCOPED — a Write that merely mentions a pattern is allowed', async () => {
+    // action ≠ content: writing a file whose text contains the dangerous pattern is NOT a Bash execution.
+    const stdin = JSON.stringify({
+      tool: 'Write',
+      args: { file_path: '/tmp/notes.txt', content: 'reminder: never run rm -rf / on prod' },
+    });
+    const r = await runHook('pre-tool-use.ts', stdin);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toLowerCase()).not.toContain('safety floor'); // not denied — content, not action
+  }, 15000);
+
   it('stop: valid payload → exit 0 (no packs active)', async () => {
     const stdin = JSON.stringify({ assistantText: 'task done' });
     const r = await runHook('stop.ts', stdin);

@@ -61,6 +61,8 @@
  *   agent_loop.test.ts.
  */
 
+import { DEFAULT_WARN_OFFSET, ResourceFloor } from '../guard/resource_floor.js';
+
 import type {
   ChatHistoryContentBlock,
   ChatHistoryEntry,
@@ -187,6 +189,8 @@ export interface RunAgentTurnOptions {
   maxTokens?: number;
   /** Override `MAX_TOOL_ITERATIONS`. */
   maxToolIterations?: number;
+  /** Resource-floor warn offset (iterations before the cap at which `warn` fires; default 1 ⇒ cap-1). */
+  warnOffset?: number;
   /** Injected clock (tests). Defaults to `() => new Date().toISOString()`. */
   nowIso?: () => string;
 }
@@ -201,6 +205,9 @@ export interface RunAgentTurnResult {
   assistantEntries: ChatHistoryEntry[];
   /** Final text reply (concatenated text blocks from the terminal assistant message). */
   replyText: string;
+  /** Set ⟺ the Resource floor halted the turn at the iteration cap (T2). The sole caller
+   *  (`dispatcher.ts`) branches on this to surface the halt — it is NOT a normal reply. */
+  halted?: { floor: 'resource'; reason: string };
 }
 
 export async function runAgentTurn(
@@ -237,7 +244,26 @@ export async function runAgentTurn(
   const newEntries: ChatHistoryEntry[] = [inboundEntry];
   let lastResponse: AnthropicMessageResponse | undefined;
 
-  for (let iter = 0; iter < maxIter; iter++) {
+  // T2 — the Resource floor: the iteration budget is a floor EMISSION, not a raw throw. `observe()` at
+  // the top of each lap returns `halt` AT the cap (⇒ a typed `halted` return the sole caller surfaces),
+  // or `warn` approaching it. In-memory: one runAgentTurn = one process, nothing to persist.
+  const resourceFloor = new ResourceFloor({
+    cap: maxIter,
+    warnOffset: opts.warnOffset ?? DEFAULT_WARN_OFFSET,
+  });
+
+  for (;;) {
+    if (resourceFloor.observe() === 'halt') {
+      // budget reached — END the turn with a typed halt (no `throw`; the caller branches on `halted`).
+      const reason = `resource floor: reached MAX_TOOL_ITERATIONS=${maxIter} (last stop_reason=${
+        lastResponse?.stop_reason ?? 'never-called'
+      })`;
+      return {
+        assistantEntries: newEntries,
+        replyText: `Stopped: ${reason}.`,
+        halted: { floor: 'resource', reason },
+      };
+    }
     const cacheTargets = pickCacheTargets(working);
     const request: AnthropicMessageCreateParams = {
       model: opts.model,
@@ -298,15 +324,8 @@ export async function runAgentTurn(
     working.push(toolResultEntry);
     newEntries.push(toolResultEntry);
   }
-
-  // Iteration cap exhausted. Spec says: throw — better than returning
-  // a partial reply that the user has no way to know is incomplete.
-  // Caller's onFlush catches + logs; the user gets an error reply
-  // (WAB.5 dispatcher decides how to surface).
-  throw new Error(
-    `runAgentTurn: exceeded MAX_TOOL_ITERATIONS=${maxIter} ` +
-      `(last stop_reason=${lastResponse?.stop_reason ?? 'never-called'})`,
-  );
+  // unreachable: the `for (;;)` only exits via a `return` (a terminal stop_reason or the Resource-floor
+  // halt). The iteration cap is now the floor's typed `halted` return above, not a throw.
 }
 
 // ---------------------------------------------------------------------------

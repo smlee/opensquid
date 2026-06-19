@@ -334,6 +334,13 @@ export class ChatDispatcher {
         resumeSessionId,
       );
       await this.opts.sessionManager.appendTurn(key, result.assistantEntries);
+      if (result.halted !== undefined) {
+        // T2 — surface the Resource-floor halt EXPLICITLY (not a silent partial reply): the turn ended
+        // by hitting the iteration budget, and `replyText` already carries the halt message.
+        this.warn(
+          `[agent_bridge.dispatcher] turn halted by ${result.halted.floor} floor ${slug}: ${result.halted.reason}`,
+        );
+      }
       this.onReply(key, result.replyText, state.projectUuid);
     } catch (err) {
       // Clear turnInFlight by hand — appendTurn would normally do it.
@@ -375,6 +382,9 @@ export class ChatDispatcher {
 interface ResolvedTurnResult {
   assistantEntries: ChatHistoryEntry[];
   replyText: string;
+  /** Set ⟺ the api-mode Resource floor halted the turn at the cap (T2). Subscription mode never sets
+   *  it (the external `claude -p` subprocess owns its own loop — no opensquid iteration budget). */
+  halted?: { floor: 'resource'; reason: string };
 }
 
 async function runResolvedTurn(

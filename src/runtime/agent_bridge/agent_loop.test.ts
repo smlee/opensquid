@@ -7,7 +7,7 @@
  *      back → terminal response returned
  *   3. cache_control markers present on system + last 2 user messages,
  *      NOT on older ones
- *   4. MAX_TOOL_ITERATIONS exceeded → throws explicit error
+ *   4. MAX_TOOL_ITERATIONS exceeded → a typed Resource-floor `halted` return (T2; was a throw)
  *   5-6. (covered in tool_dispatcher.test.ts: unknown name + invalid args)
  *   7. LIVE (gated by WAB_AGENT_LOOP_LIVE=1 + ANTHROPIC_API_KEY): real
  *      Anthropic call with `claude-haiku-4-5-...` + no-op tool — skipped
@@ -317,12 +317,11 @@ describe('runAgentTurn — cache_control marker placement', () => {
 // Iteration cap
 // ---------------------------------------------------------------------------
 
-describe('runAgentTurn — MAX_TOOL_ITERATIONS guard', () => {
-  it('throws explicit error when the model loops past the cap', async () => {
-    // Build N+1 responses that all stay in tool_use; the loop should
-    // throw on iteration N.
+describe('runAgentTurn — Resource floor (T2: iteration budget is a typed halt, NOT a throw)', () => {
+  it('a model that loops past the cap → a typed `halted` return (no throw, no silent partial reply)', async () => {
+    // Build many responses that all stay in tool_use; the Resource floor halts AT the cap.
     const cap = 3;
-    const responses: AnthropicMessageResponse[] = Array.from({ length: cap + 2 }, (_, i) => ({
+    const responses: AnthropicMessageResponse[] = Array.from({ length: cap + 4 }, (_, i) => ({
       content: [{ type: 'tool_use', id: `tu_${i}`, name: 'echo', input: { i } }],
       stop_reason: 'tool_use' as const,
     }));
@@ -331,16 +330,39 @@ describe('runAgentTurn — MAX_TOOL_ITERATIONS guard', () => {
       { spec: echoSpec('echo'), handler: ECHO_HANDLER },
     ]);
 
-    await expect(
-      runAgentTurn(freshState(), 'loop forever', {
-        client,
-        model: 'm',
-        systemPrompt: 's',
-        tools: dispatcher.list(),
-        dispatcher,
-        maxToolIterations: cap,
-      }),
-    ).rejects.toThrow(/exceeded MAX_TOOL_ITERATIONS=3/);
+    const result = await runAgentTurn(freshState(), 'loop forever', {
+      client,
+      model: 'm',
+      systemPrompt: 's',
+      tools: dispatcher.list(),
+      dispatcher,
+      maxToolIterations: cap,
+    });
+    // no throw; the turn ENDS with the Resource-floor halt explicitly marked.
+    expect(result.halted?.floor).toBe('resource');
+    expect(result.halted?.reason).toContain('reached MAX_TOOL_ITERATIONS=3');
+    expect(result.replyText).toMatch(/Stopped: resource floor/);
+    // the assistant entries accumulated so far are still returned (caller persists them).
+    expect(result.assistantEntries.length).toBeGreaterThan(0);
+  });
+
+  it('a turn that terminates normally before the cap carries NO `halted`', async () => {
+    const { client } = stubClient([
+      { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' as const },
+    ]);
+    const dispatcher = new SimpleToolDispatcher([
+      { spec: echoSpec('echo'), handler: ECHO_HANDLER },
+    ]);
+    const result = await runAgentTurn(freshState(), 'hi', {
+      client,
+      model: 'm',
+      systemPrompt: 's',
+      tools: dispatcher.list(),
+      dispatcher,
+      maxToolIterations: 8,
+    });
+    expect(result.halted).toBeUndefined();
+    expect(result.replyText).toBe('done');
   });
 });
 

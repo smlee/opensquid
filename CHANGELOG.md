@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.480] - 2026-06-18
+
+### Added — the Safety + Resource substrate floors (T2; completes "1 of 4 floors" → 3 of 4)
+
+- **Resource floor** (`resource_floor.ts`) — an in-memory iteration-budget EFSM. The api-mode agent loop's
+  raw `throw` on `MAX_TOOL_ITERATIONS` overflow is now a typed `RunAgentTurnResult.halted` RETURN
+  (`{ floor: 'resource', reason }`); the sole caller (`dispatcher.ts`) branches on it and surfaces the halt
+  explicitly (no silent partial reply). The warn point is config-driven (`warnOffset`, default 1 ⇒ `cap-1`),
+  not a literal. Subscription mode is exempt by nature (its external `claude -p` subprocess owns its own loop).
+- **Safety floor** (`safety_floor.ts` + `safety_policy.ts`) — a stateless forbidden-action policy checked in
+  `pre-tool-use.ts` so a match DENIES before execution (a second always-on check beside the coding-flow gate;
+  deny-if-either). The policy is config-driven (`~/.opensquid/safety-policy.json`, fail-open to a shipped seed —
+  "the config IS the security policy"), borrowing the dangerous-command model (recursive delete, `chmod 777`,
+  `curl | sh`) + substrate self-protection, with NO framework branding in code. HARDLINE→halt, dangerous→block.
+- **Tool-scoping (caught live by the floor on itself):** every dangerous rule is `tool`-scoped so the floor
+  matches the ACTION (Bash executing `rm -rf /`), NOT mere CONTENT (a file/test that mentions it) — an un-scoped
+  rule false-denies `Write`/`Edit` of any file containing the pattern. `match: 'pipe_to_shell' | 'delete_verb'`
+  refinements keep `curl`/`.opensquid` substrings from firing on benign forms (a plain `curl url`, an `ls`).
+- Full suite green (3811). No cross-floor combinator added (the three floors live in three distinct sites).
+
 ## [0.5.479] - 2026-06-18
 
 ### Changed — pack FSM control model is now EVENT-DRIVEN (T1, the keystone drift-fix)
