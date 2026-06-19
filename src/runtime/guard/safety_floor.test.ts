@@ -46,6 +46,27 @@ describe('checkSafety (T2) — default policy seed', () => {
     expect(checkSafety({ tool: 'Read', args: 'safety_policy.ts' }, P).action).toBe('pass');
   });
 
+  it('action ≠ content: a Write whose CONTENT names ~/.opensquid/ but whose TARGET is elsewhere → pass', () => {
+    // the dangerous action is writing INTO the substrate path, not authoring a doc that mentions it.
+    expect(
+      checkSafety(
+        {
+          tool: 'Write',
+          args: {
+            file_path: '/Users/x/notes/memory.md',
+            content: 'recovery: tee ~/.opensquid/safety-policy.json',
+          },
+        },
+        P,
+      ).action,
+    ).toBe('pass');
+    // but a Write whose TARGET is the substrate path is still denied:
+    expect(
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/rag.sqlite' } }, P)
+        .action,
+    ).toBe('halt');
+  });
+
   it('delete_verb redirect: a real `> ~/.opensquid/…` truncation → halt', () => {
     expect(checkSafety({ tool: 'Bash', args: 'echo x > ~/.opensquid/rag.sqlite' }, P).action).toBe(
       'halt',
