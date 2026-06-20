@@ -700,17 +700,29 @@ describe('dispatchEvent', () => {
       expect(result.contextInjections).toEqual(['inject before block']);
     });
 
-    it('emits stderr warning + discards inject when fired on a non-prompt_submit event', async () => {
-      // Skill subscribes to tool_call but emits inject_context anyway —
-      // misconfiguration. The dispatcher drops the payload (empty array)
-      // and writes a stderr warning so the pack author can fix the trigger.
-      const registry = buildRegistryWithInject('should be dropped');
+    it('GI.5: aggregates an inject_context fired on a tool_call event (the channel-b surfacing path)', async () => {
+      // tool_call is now a SURFACING kind (the PreToolUse bin emits the channel-b additionalContext
+      // envelope). A tool_call inject_context aggregates into contextInjections, NOT warn-dropped.
+      const registry = buildRegistryWithInject('mid-turn phase bundle');
       const pack = makePack('p1', [injectRule], [{ kind: 'tool_call' }]);
       const toolEvent: ToolCallEvent = { kind: 'tool_call', tool: 'Bash', args: {} };
       const result = await dispatchEvent(toolEvent, [pack], registry, 'sess-1');
       expect(result.exitCode).toBe(0);
+      expect(result.contextInjections).toEqual(['mid-turn phase bundle']);
+      expect(result.stderr).toBe('');
+    });
+
+    it('emits stderr warning + discards inject when fired on a genuinely-unsurfaced event (stop)', async () => {
+      // A skill that emits inject_context on an event kind NO hook bin surfaces (here: stop) is
+      // misconfiguration. The dispatcher drops the payload (empty array) and writes a stderr warning so
+      // the pack author can fix the trigger. The surfacing set is {prompt_submit, session_start, tool_call}.
+      const registry = buildRegistryWithInject('should be dropped');
+      const pack = makePack('p1', [injectRule], [{ kind: 'stop' }]);
+      const stopEvent: StopEvent = { kind: 'stop', assistantText: '' };
+      const result = await dispatchEvent(stopEvent, [pack], registry, 'sess-1');
+      expect(result.exitCode).toBe(0);
       expect(result.contextInjections).toEqual([]);
-      expect(result.stderr).toContain('inject_context on event kind "tool_call"');
+      expect(result.stderr).toContain('inject_context on event kind "stop"');
       expect(result.stderr).toContain('fake-inject-rule');
     });
   });
@@ -1394,6 +1406,7 @@ describe('dispatchEvent — inject_context surfacing on session_start (HH6.1)', 
     const pack = makePack('p1', [injectRule], [{ kind: 'stop' }]);
     const result = await dispatchEvent(stopEvent, [pack], registry, 'sess-ss-3');
     expect(result.contextInjections).toEqual([]);
-    expect(result.stderr).toContain('only "prompt_submit" / "session_start" surface');
+    expect(result.stderr).toContain('emitted inject_context on event kind "stop"');
+    expect(result.stderr).toContain('surface injections (drop)');
   });
 });

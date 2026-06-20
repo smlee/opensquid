@@ -27,7 +27,11 @@ import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
-import { buildPreToolUseDeny, emitDriftStderrAndExit } from './hook_output.js';
+import {
+  buildPreToolUseContext,
+  buildPreToolUseDeny,
+  emitDriftStderrAndExit,
+} from './hook_output.js';
 import { extractSessionId } from './session_id.js';
 import { checkSafety } from '../guard/safety_floor.js';
 import { loadSafetyPolicy } from '../guard/safety_policy.js';
@@ -186,7 +190,12 @@ async function main(): Promise<void> {
     }
   }
 
-  const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
+  const { exitCode, stderr, contextInjections } = await dispatchEvent(
+    parsed.data,
+    packs,
+    registry,
+    sessionId,
+  );
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
   // under `--dangerously-skip-permissions` (= bypassPermissions) Claude Code
@@ -201,6 +210,13 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify(buildPreToolUseDeny(stderr, guidance)));
     process.exit(0);
   }
+  // GI.5 channel (b): on the NON-deny path, surface any phase bundle the dispatch collected (the
+  // coding-flow gate's `phase_inject` mid-turn catch) as a non-blocking PreToolUse `additionalContext`
+  // envelope (`permissionDecision:"defer"` → the tool's permission outcome is untouched). Empty → null →
+  // nothing emitted, so the common no-injection path is byte-for-byte unchanged. Stdout (the envelope)
+  // and stderr (drift, via the tail below) are independent streams, so both can be delivered.
+  const ctxOut = buildPreToolUseContext(contextInjections.join('\n\n'));
+  if (ctxOut !== null) process.stdout.write(JSON.stringify(ctxOut));
   emitDriftStderrAndExit(exitCode, stderr);
 }
 

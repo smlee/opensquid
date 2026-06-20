@@ -1,7 +1,8 @@
 /**
- * Tests for `phase_inject` (GI.4) — channel (a): the merged turn-boundary injector. Emits the CURRENT
- * phase's bundle EVERY turn (refresh; idle→SCOPE — the lifted suppression) + writes the dedup phase key.
- * Uses a temp OPENSQUID_HOME + advanceFsmState; rubrics resolve from the real pack location (GI.1).
+ * Tests for `phase_inject` (GI.4 channel a + GI.5 channel b). Channel (a): the merged turn-boundary
+ * injector (prompt_submit/session_start) emits the CURRENT phase's bundle every turn + writes the dedup
+ * phase key. Channel (b): tool_call mid-turn catch — injects ONLY on a phase change (dedup vs the key),
+ * ENGAGED-gated. Uses a temp OPENSQUID_HOME + advanceFsmState; rubrics resolve from the real pack (GI.1).
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,6 +10,7 @@ import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { atomicWriteFile } from '../runtime/atomic_write.js';
 import { advanceFsmState } from '../runtime/fsm_state.js';
 import { sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
@@ -35,6 +37,12 @@ const PROC = [
   'do the named step.',
 ].join('\n');
 const prompt: Event = { kind: 'prompt_submit', prompt: 'go' };
+const toolCall: Event = { kind: 'tool_call', tool: 'Write', args: {} };
+
+/** Seed the shared dedup key the way either channel writes it (so channel-b dedup tests are isolated). */
+async function seedPhaseKey(phase: string): Promise<void> {
+  await atomicWriteFile(sessionStateFile(SID, PHASE_KEY), JSON.stringify({ phase }));
+}
 
 function reg(): FunctionRegistry {
   const r = new FunctionRegistry();
@@ -65,10 +73,15 @@ describe('phase_inject (channel a)', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('returns null on a non-prompt/session event', async () => {
+  it('returns null on an event kind neither channel handles (e.g. stop)', async () => {
     expect(
-      await reg().call('phase_inject', {}, ctx({ kind: 'tool_call', tool: 'Write', args: {} }, PROC)),
+      await reg().call('phase_inject', {}, ctx({ kind: 'stop', assistantText: '' }, PROC)),
     ).toEqual(ok(null));
+  });
+
+  it('returns null on a tool_call at idle/unstarted (channel b — not engaged)', async () => {
+    // No advance → st null → not in a track. Channel (b) stays silent off-track (no non-work noise).
+    expect(await reg().call('phase_inject', {}, ctx(toolCall, PROC))).toEqual(ok(null));
   });
 
   it('returns null when the pack ships no procedure', async () => {
@@ -94,7 +107,9 @@ describe('phase_inject (channel a)', () => {
     expect(content).toContain('do the named step'); // §On-a-BLOCK
     expect(content).toContain('NEVER-GUESS'); // the real scope rubric (pack location)
     expect(content).not.toContain('write the 11-field'); // NOT §2
-    const key = JSON.parse(await readFile(sessionStateFile(SID, PHASE_KEY), 'utf8')) as { phase: string };
+    const key = JSON.parse(await readFile(sessionStateFile(SID, PHASE_KEY), 'utf8')) as {
+      phase: string;
+    };
     expect(key.phase).toBe('SCOPE');
   });
 
@@ -109,7 +124,50 @@ describe('phase_inject (channel a)', () => {
     expect(content).toContain('write the 11-field'); // §2 AUTHOR
     expect(content).toContain('11-FIELD'); // the real author rubric
     expect(content).not.toContain('write the pre-research'); // NOT §1
-    const key = JSON.parse(await readFile(sessionStateFile(SID, PHASE_KEY), 'utf8')) as { phase: string };
+    const key = JSON.parse(await readFile(sessionStateFile(SID, PHASE_KEY), 'utf8')) as {
+      phase: string;
+    };
     expect(key.phase).toBe('AUTHOR');
+  });
+
+  describe('channel (b) — tool_call mid-turn catch', () => {
+    it('injects the current bundle on a tool_call when ENGAGED + no prior inject (phase ≠ last)', async () => {
+      const pack = await loadPack(resolve('packs/builtin/coding-flow'));
+      await advanceFsmState(SID, 'coding-flow', pack.fsm!, 'scope_start', TS); // idle → scoping
+      const r = await reg().call('phase_inject', {}, ctx(toolCall, PROC));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.value).toMatchObject({ kind: 'inject_context' });
+      const { content } = r.value as { content: string };
+      expect(content).toContain('write the pre-research'); // §1 SCOPE
+      const key = JSON.parse(await readFile(sessionStateFile(SID, PHASE_KEY), 'utf8')) as {
+        phase: string;
+      };
+      expect(key.phase).toBe('SCOPE');
+    });
+
+    it('dedups — a tool_call at the SAME phase as the last inject returns null (no re-inject)', async () => {
+      const pack = await loadPack(resolve('packs/builtin/coding-flow'));
+      await advanceFsmState(SID, 'coding-flow', pack.fsm!, 'scope_start', TS); // idle → scoping (SCOPE)
+      await seedPhaseKey('SCOPE'); // last inject was already SCOPE
+      expect(await reg().call('phase_inject', {}, ctx(toolCall, PROC))).toEqual(ok(null));
+    });
+
+    it('catches a mid-turn phase change — last=SCOPE but the FSM advanced to AUTHOR → injects AUTHOR', async () => {
+      const pack = await loadPack(resolve('packs/builtin/coding-flow'));
+      await advanceFsmState(SID, 'coding-flow', pack.fsm!, 'scope_start', TS); // idle → scoping
+      await advanceFsmState(SID, 'coding-flow', pack.fsm!, 'research_done', TS); // scoping → researched (AUTHOR)
+      await seedPhaseKey('SCOPE'); // the last inject this turn was SCOPE; the FSM has since crossed into AUTHOR
+      const r = await reg().call('phase_inject', {}, ctx(toolCall, PROC));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const { content } = r.value as { content: string };
+      expect(content).toContain('write the 11-field'); // §2 AUTHOR
+      expect(content).not.toContain('write the pre-research'); // NOT §1
+      const key = JSON.parse(await readFile(sessionStateFile(SID, PHASE_KEY), 'utf8')) as {
+        phase: string;
+      };
+      expect(key.phase).toBe('AUTHOR'); // dedup key advanced
+    });
   });
 });

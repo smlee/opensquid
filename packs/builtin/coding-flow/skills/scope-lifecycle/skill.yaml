@@ -374,6 +374,15 @@ rules:
         if: '(tool == "TaskCreate" || tool == "TaskUpdate") && len(targs.metadata.taskId) > 0'
         args:
           event: tasks_loaded
+  # GI.5 (wg-b7a87452152b) — channel (b): the INSTANT mid-turn push. Placed LAST so it reads the FSM
+  # state AFTER every advance above has persisted — a tool call that crossed a gate boundary (e.g. a
+  # research write that fired research_done) re-orients the agent to the NEW phase on this very call.
+  # phase_inject self-gates (ENGAGED + dedup vs last-injected-phase): same-phase tool calls inject
+  # nothing. The PreToolUse bin emits the result as a non-blocking defer+additionalContext envelope;
+  # inject_context never blocks, so this rule's position cannot affect the gate/audit precedence above.
+  - id: inject-phase-mid-turn
+    process:
+      - call: phase_inject
 prose: |
   The full tool_call lifecycle in one ordered skill: each region's advance is
   immediately followed by its content audit (guess-audit after the research advance,

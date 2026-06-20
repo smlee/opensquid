@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildPreToolUseDeny, squidPrefix } from './hook_output.js';
+import { buildPreToolUseContext, buildPreToolUseDeny, squidPrefix } from './hook_output.js';
 
 describe('squidPrefix', () => {
   it('prefixes a drift message with the squid marker', () => {
@@ -51,5 +51,26 @@ describe('buildPreToolUseDeny', () => {
     expect(buildPreToolUseDeny('BLOCKED: x', '').hookSpecificOutput.permissionDecisionReason).toBe(
       '🦑 BLOCKED: x',
     );
+  });
+});
+
+describe('buildPreToolUseContext (GI.5 — channel b non-blocking push)', () => {
+  it('builds a defer + additionalContext envelope (permission outcome untouched, NOT squid-prefixed)', () => {
+    expect(buildPreToolUseContext('SCOPE: write the pre-research')).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'defer',
+        additionalContext: 'SCOPE: write the pre-research',
+      },
+    });
+  });
+
+  it('uses "defer" (abstain), never "allow" — so it cannot auto-approve / suppress the user prompt', () => {
+    const env = buildPreToolUseContext('x');
+    expect(env?.hookSpecificOutput.permissionDecision).toBe('defer');
+  });
+
+  it('returns null for an empty context (nothing to surface → caller falls through, no envelope)', () => {
+    expect(buildPreToolUseContext('')).toBeNull();
   });
 });

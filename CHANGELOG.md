@@ -7,6 +7,43 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.492] - 2026-06-20
+
+### Added — coding-flow per-gate injection, channel (b): the instant mid-turn PreToolUse push (GI.5)
+
+- A tool call that crosses a gate boundary now re-orients the agent to the NEW phase BEFORE its next action,
+  not just at the next prompt. `phase_inject` gains a `tool_call` branch (wired as `inject-phase-mid-turn` in
+  `scope-lifecycle`, placed LAST so it reads the post-advance FSM state); it fires ONLY on a phase change
+  (dedup vs `last-injected-phase-coding-flow`), so same-phase tool calls inject nothing and skip the rubric
+  reads on the hot path.
+- The dispatcher now surfaces `inject_context` on `tool_call` (additive to `prompt_submit`/`session_start`),
+  and the `PreToolUse` hook bin emits it as `hook_output.buildPreToolUseContext` — a non-blocking
+  `permissionDecision:"defer"` + `additionalContext` envelope. **`defer`, not `allow`**: `allow` would
+  auto-approve the tool and suppress the user's manual permission prompt; `defer` abstains so the normal
+  permission flow is untouched while the context still reaches the model (verified orthogonal in the Claude
+  Code hooks docs). The common no-injection path is byte-for-byte unchanged.
+- Bounded omission (recorded, not silent): the codex `apply_patch` branch exits before the main dispatch, so
+  channel (b) does not fire for `apply_patch` edits — channel (a) still orients those at the prompt boundary.
+
+## [0.5.491] - 2026-06-20
+
+### Changed — coding-flow per-gate injection, channel (a): one phase-selected turn-boundary injector (GI.4)
+
+- `procedure_pre_inject` + `rubric_pre_inject` are retired and merged into `phase_inject`: on
+  `prompt_submit`/`session_start` it injects ONLY the current FSM phase's bundle (§0 flow-picker + the matched
+  §1|§2|§3 + §On-a-BLOCK + the phase's audit rubric) and refreshes it every turn (survives compaction; orients
+  before the first tool). It self-gates on the coding-flow FSM (ENGAGED states only — a non-work prompt stays
+  idle → no coding-flow noise) and writes `last-injected-phase-coding-flow` so channel (b) can dedup.
+
+## [0.5.490] - 2026-06-20
+
+### Added — the shared `selectPhaseBundle` phase selector (GI.3)
+
+- `src/functions/select_phase_bundle.ts`: a pure function mapping the coding-flow FSM state → the phase
+  (`SCOPE|AUTHOR|CODE`) + the instruction bundle, used by both injection channels. Always-on §0 + §On-a-BLOCK
+  are keyed by heading identity (so the numbered §0 is never routed); the state→phase map is total over the
+  nine declared states.
+
 ## [0.5.489] - 2026-06-20
 
 ### Changed — the coding-flow gate criteria are stronger (GI.2; coverage + reliability + technical-correctness)

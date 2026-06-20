@@ -48,6 +48,39 @@ export function buildPreToolUseDeny(reason: string, guidance?: string): PreToolU
   };
 }
 
+export interface PreToolUseContext {
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse';
+    permissionDecision: 'defer';
+    additionalContext: string;
+  };
+}
+
+/**
+ * GI.5 — build the PreToolUse NON-BLOCKING context envelope (channel b of the per-gate push). Surfaces
+ * `context` to the model as a system reminder BEFORE the tool runs, WITHOUT touching the permission
+ * outcome: `permissionDecision: "defer"` ABSTAINS so the normal permission flow proceeds unchanged.
+ *
+ * Deliberately NOT `"allow"` (which the spec/work-graph first sketched): `allow` AUTO-APPROVES the tool
+ * and bypasses the user's manual approval prompt, so emitting it on every non-deny tool call would
+ * silently suppress all approvals for users not in bypassPermissions mode. `additionalContext` is
+ * orthogonal to the decision, so `defer` carries the same context with zero permission side-effect.
+ *
+ * Returns null when there is nothing to surface (empty context) so the caller falls through to its
+ * normal exit path (no spurious envelope). The injected bundle is NOT squid-prefixed — it is
+ * instructional gate context, not a drift/block message (the 🦑 marker is reserved for those).
+ */
+export function buildPreToolUseContext(context: string): PreToolUseContext | null {
+  if (context.length === 0) return null;
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'defer',
+      additionalContext: context,
+    },
+  };
+}
+
 /**
  * The shared bin tail: surface a dispatch result's drift message on stderr
  * (squid-prefixed) and exit with its code. Used by stop + user-prompt-submit

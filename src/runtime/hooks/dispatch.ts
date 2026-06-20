@@ -83,11 +83,13 @@ export interface DispatchResult {
    * G.4 — aggregated `inject_context` payloads from every skill that fired
    * during this dispatch. Empty array on the common (no-injection) path.
    *
-   * Only the `UserPromptSubmit` hook bin actually emits these as host
+   * The `UserPromptSubmit` + `SessionStart` hook bins emit these as host
    * context (Claude Code's `hookSpecificOutput.additionalContext` JSON
+   * envelope); GI.5 adds the `PreToolUse` bin (the channel-b mid-turn push,
+   * a non-blocking `permissionDecision:"defer"` + `additionalContext`
    * envelope). Other hook bins ignore the array (the dispatcher writes a
-   * stderr warning when an `inject_context` fires on a non-`prompt_submit`
-   * event so misconfiguration is visible).
+   * stderr warning when an `inject_context` fires on an event kind none of
+   * those bins surface, so misconfiguration is visible).
    *
    * Block-verdict + inject_context COEXIST: the block wins on `exitCode`,
    * but the injections are still aggregated and returned so the user sees
@@ -416,13 +418,19 @@ export async function dispatchEvent(
           // `additionalContext` envelope. Any OTHER event kind still drops
           // with a warning (no bin surfaces it). The set of surfacing kinds
           // is intentionally explicit so a misrouted trigger stays visible.
-          if (event.kind === 'prompt_submit' || event.kind === 'session_start') {
+          if (
+            event.kind === 'prompt_submit' ||
+            event.kind === 'session_start' ||
+            event.kind === 'tool_call'
+          ) {
+            // GI.5: tool_call joins the surfacing set — the PreToolUse hook bin emits the collected
+            // injections as a non-blocking `additionalContext` envelope (channel b mid-turn push).
             contextInjections.push(result.content);
           } else {
             warnBuf +=
               `[opensquid] WARN: rule "${rule.id}" in skill "${skill.name}" (pack "${pack.name}") ` +
               `emitted inject_context on event kind "${event.kind}"; only "prompt_submit" / ` +
-              `"session_start" surface injections (drop). Update the skill's triggers: block.\n`;
+              `"session_start" / "tool_call" surface injections (drop). Update the skill's triggers: block.\n`;
           }
           continue;
         }

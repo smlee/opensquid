@@ -34,6 +34,13 @@ export interface PhaseBundle {
   text: string;
 }
 
+/** The phase the agent is about to act in for an FSM `state`, WITHOUT building the bundle. `null`/unknown/
+ *  initial coalesces to `idle` → SCOPE. The cheap discriminator channel (b) uses to dedup a tool_call
+ *  against `last-injected-phase` before paying the procedure-split + rubric reads. */
+export function phaseForState(state: string | null): Phase {
+  return STATE_PHASE[state ?? 'idle'] ?? 'SCOPE';
+}
+
 /** Key a `## ` heading: a numbered heading `## N. …` → the digit `N`; any other heading → its text after
  *  `## ` (e.g. `## On a BLOCK` → `On a BLOCK`). This is the explicit always-on-vs-routed discriminator —
  *  §0 is numbered yet always-on, so we key by identity, never by "is-numbered". */
@@ -75,7 +82,7 @@ export function selectPhaseBundle(
   procedureMd: string,
   rubrics: { scope: string | null; author: string | null },
 ): PhaseBundle {
-  const phase: Phase = STATE_PHASE[state ?? 'idle'] ?? 'SCOPE';
+  const phase = phaseForState(state);
   const sections = splitByHeading(procedureMd);
   const numbered = phase === 'SCOPE' ? '1' : phase === 'AUTHOR' ? '2' : '3';
   const rubric = phase === 'SCOPE' ? rubrics.scope : phase === 'AUTHOR' ? rubrics.author : null;
