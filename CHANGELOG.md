@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.489] - 2026-06-20
+
+### Changed — the coding-flow gate criteria are stronger (GI.2; coverage + reliability + technical-correctness)
+
+- The AUTHOR rubric goes 3 → 5 criteria: 100% SCOPE COVERAGE (vs the full cited design, no silent deferral — a
+  scoped element absent with no tracked owner is INCOMPLETE), WIRED/END-TO-END RELIABILITY (a Deliverable's
+  acceptance must prove it works in its live path, not just module-exists+unit-tests — built-but-dormant fails),
+  and TECHNICAL-CORRECTNESS-vs-design-SEMANTICS (every acceptance criterion rests on a cited fact or a test, not an
+  assumption). The SCOPE rubric goes 3 → 4: FULL-SCOPE CAPTURE (the pre-research must enumerate the complete scope,
+  so a silent narrowing fails NEVER-GUESS). These target the exact built-but-not-wired / scope-narrowed /
+  semantics-diverged gap class the FSM-actor scoped-vs-built audit surfaced. Rubrics are read from source, so the
+  stronger bar is live immediately.
+
 ## [0.5.488] - 2026-06-20
 
 ### Changed — the coding-flow gate's rubrics now live IN the pack (GI.1; the cartridge owns its gate)
