@@ -1,6 +1,6 @@
 /**
  * Tests for `read_rubric` / `readRubricContent` (TR.A, wg-2d1d8698f563). Runs against the REAL shipped
- * fragments (docs/rubric/{scope,author}.md) — no fs mock — so the happy + real-ENOENT (fail-loud null) paths
+ * fragments (packs/builtin/coding-flow/rubric/{scope,author}.md — the pack owns its gate) — no fs mock — so the happy + real-ENOENT (fail-loud null) paths
  * are exercised faithfully. (The over-cap branch is a trivial `length > MAX_RUBRIC ? null` guard; the
  * shipped-from-the-tarball resolve is covered by the TR.A cold-install check.)
  */

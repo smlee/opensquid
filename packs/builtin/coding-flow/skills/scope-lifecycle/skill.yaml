@@ -96,21 +96,21 @@ rules:
       # latency (268s worst observed under subscription contention, 2026-06-10)
       # and 20s under the 360s outer hook cap the setup wizard writes — the
       # inner timer must die first so the gate fails with a readable error.
-      # TR.A (wg-2d1d8698f563): the rubric is single-sourced to docs/rubric/scope.md and interpolated as
+      # TR.A (wg-2d1d8698f563): the rubric is single-sourced to packs/builtin/coding-flow/rubric/scope.md and interpolated as
       # {{rubric}} below — NOT hardcoded here. read_rubric returns null on a missing/unreadable fragment.
       - call: read_rubric
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
         args: { name: scope }
         as: rubric
       # FAIL-LOUD: never run the audit rubric-less (a rubric-less verdict would be a silent fallback worse
-      # than fail-open). docs/rubric/scope.md MUST ship (package.json files[]).
+      # than fail-open). packs/builtin/coding-flow/rubric/scope.md MUST ship (package.json files[]).
       - call: verdict
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && rubric == null'
         args:
           level: block
           message: >-
-            SCOPE audit cannot run: the canonical rubric (docs/rubric/scope.md) is unreadable — a
-            packaging/install fault, NOT a content failure. Verify the opensquid package ships docs/rubric/.
+            SCOPE audit cannot run: the canonical rubric (packs/builtin/coding-flow/rubric/scope.md) is unreadable — a
+            packaging/install fault, NOT a content failure. Verify the opensquid package ships packs/builtin/coding-flow/rubric/.
       - call: cached_audit
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && rubric != null'
         on_error: continue
@@ -121,7 +121,7 @@ rules:
           prompt: >-
             You are an adversarial reviewer enforcing the lexicon's Research/Audit flow
             principles on a pre-research / scope artifact. Apply EXACTLY this rubric (the single
-            canonical source, docs/rubric/scope.md):\n\n{{rubric}}\n\n
+            canonical source, packs/builtin/coding-flow/rubric/scope.md):\n\n{{rubric}}\n\n
             Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every
             claim is cited-or-flagged-open AND the simplest-correct solution is justified
             against alternatives AND is a full fix, not a patch around a design that should be
@@ -225,7 +225,7 @@ rules:
       # SCOPE audit — a re-fire on an UNCHANGED spec reuses the verdict, no spawn.
       # timeout_ms (T-AUDIT-SPAWN-FIX): 340s, same measured sizing as the SCOPE
       # audit above (268s worst observed; 20s under the 360s outer hook cap).
-      # TR.A (wg-2d1d8698f563): the AUTHOR rubric is single-sourced to docs/rubric/author.md,
+      # TR.A (wg-2d1d8698f563): the AUTHOR rubric is single-sourced to packs/builtin/coding-flow/rubric/author.md,
       # interpolated as {{rubric}} below — NOT hardcoded. Fail-loud on a missing fragment (below).
       - call: read_rubric
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
@@ -236,8 +236,8 @@ rules:
         args:
           level: block
           message: >-
-            AUTHOR audit cannot run: the canonical rubric (docs/rubric/author.md) is unreadable — a
-            packaging/install fault, NOT a content failure. Verify the opensquid package ships docs/rubric/.
+            AUTHOR audit cannot run: the canonical rubric (packs/builtin/coding-flow/rubric/author.md) is unreadable — a
+            packaging/install fault, NOT a content failure. Verify the opensquid package ships packs/builtin/coding-flow/rubric/.
       - call: cached_audit
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && rubric != null'
         on_error: continue
@@ -247,7 +247,7 @@ rules:
           timeout_ms: 340000
           prompt: >-
             You are an adversarial reviewer enforcing THREE author-completeness rules. Apply EXACTLY
-            this rubric (the single canonical source, docs/rubric/author.md):\n\n{{rubric}}\n\n
+            this rubric (the single canonical source, packs/builtin/coding-flow/rubric/author.md):\n\n{{rubric}}\n\n
             Begin your response with EXACTLY one line — `VERDICT: SPEC_COMPLETE` ONLY if
             ALL THREE hold; otherwise `VERDICT: INCOMPLETE` + one bullet per offending
             block, uncovered design element, OR over-complected smell. Never say

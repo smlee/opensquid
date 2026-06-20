@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.488] - 2026-06-20
+
+### Changed — the coding-flow gate's rubrics now live IN the pack (GI.1; the cartridge owns its gate)
+
+- The SCOPE/AUTHOR audit rubrics moved from repo-level `docs/rubric/{scope,author}.md` into the coding-flow pack at
+  `packs/builtin/coding-flow/rubric/{scope,author}.md` — so a pack's own gate criteria live inside the pack (the
+  "a pack is the total, self-contained definition" principle), not floating in `docs/`. `read_rubric` resolves the
+  pack path (still module-relative, cwd-independent); `package.json` `files[]` drops the now-stale `docs/rubric`
+  entry (`packs/builtin` already ships it). Landed via the anti-catch-22 safe sequence (add-new → repoint → rebuild
+  → verify the live audit reads the new location → delete-old) so the live gate never lost its rubric. First slice
+  of the per-gate push-injection track (wg-b7a87452152b).
+
 ## [0.5.487] - 2026-06-19
 
 ### Fixed — Safety floor no longer false-blocks benign reads of substrate state (global hotfix)
