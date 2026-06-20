@@ -15,8 +15,7 @@ import { z } from 'zod';
 import { registerEventFunctions } from '../../src/functions/event.js';
 import { registerStagedDocsOnlyFunction } from '../../src/functions/staged_docs_only.js';
 import { registerReadRubric } from '../../src/functions/read_rubric.js';
-import { registerRubricPreInject } from '../../src/functions/rubric_pre_inject.js';
-import { registerProcedurePreInject } from '../../src/functions/procedure_pre_inject.js';
+import { registerPhaseInject } from '../../src/functions/phase_inject.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
 import { registerArmScopeFunction } from '../../src/functions/arm_scope.js';
 import { FunctionRegistry } from '../../src/functions/registry.js';
@@ -51,8 +50,7 @@ function registry(): FunctionRegistry {
   registerResetScopeTrackStateFunction(r); // wg-4c48ef1b9969: the re-arm rule clears per-track state
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
-  registerRubricPreInject(r); // TR.B: entry-and-handoffs inject-rubric rule
-  registerProcedurePreInject(r); // wg-7f6225238a27: entry-and-handoffs inject-procedure rule
+  registerPhaseInject(r); // GI.4: channel (a) — entry-and-handoffs inject-phase rule (per-gate bundle)
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
@@ -72,10 +70,13 @@ describe('scope-audit ↔ lexicon consistency (Full-fix-over-patch drift guard)'
       .map((p) => (p.args as { prompt?: string }).prompt ?? '')
       .find((p) => p.includes('adversarial reviewer'));
     expect(auditPrompt).toBeDefined();
-    // TR.A (wg-2d1d8698f563): the criteria are single-sourced in docs/rubric/scope.md and interpolated as
+    // TR.A (wg-2d1d8698f563) + GI.1: the criteria are single-sourced in the PACK rubric and interpolated as
     // {{rubric}} — they no longer live hardcoded in the prompt (the de-dup the rearchitecture delivers).
     expect(auditPrompt).toMatch(/\{\{rubric\}\}/);
-    const scopeRubric = await readFile(resolve('docs/rubric/scope.md'), 'utf8');
+    const scopeRubric = await readFile(
+      resolve('packs/builtin/coding-flow/rubric/scope.md'),
+      'utf8',
+    );
     expect(scopeRubric).toMatch(/NEVER-GUESS/);
     expect(scopeRubric).toMatch(/BEST-SOLUTION/);
     expect(scopeRubric).toMatch(/FULL-FIX/);
@@ -303,10 +304,11 @@ describe('builtin coding-flow pack — track-type region profiles (FU.3)', () =>
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // feature → AUTHOR fires
   });
 
-  // TR.B (wg-2d1d8698f563): the rubric reaches the agent BEFORE it authors. The inject-rubric rule is
-  // ordered AFTER enter-scoping, so on the cold kickoff turn enter-scoping arms `scoping` and inject-rubric
-  // reads the just-armed state in the same dispatch → injects the FULL rubric (both phases).
-  it('TR.B: a scope-authoring prompt injects the full rubric (after enter-scoping arms scoping)', async () => {
+  // TR.B (wg-2d1d8698f563) + GI.4: the per-gate bundle reaches the agent BEFORE it authors. inject-phase is
+  // ordered AFTER enter-scoping, so on the cold kickoff turn enter-scoping arms `scoping` and inject-phase
+  // reads the just-armed state → injects the SCOPE-phase bundle. PER-GATE: the AUTHOR rubric is NOT delivered
+  // in the SCOPE phase (the blob is gone).
+  it('GI.4: a scope-authoring prompt injects the SCOPE-phase bundle (after enter-scoping arms scoping)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
     const armed = await dispatchEvent(
@@ -316,17 +318,16 @@ describe('builtin coding-flow pack — track-type region profiles (FU.3)', () =>
       'cf-inject-on',
     );
     const injected = armed.contextInjections.join('\n');
-    expect(injected).toMatch(/Coding-flow quality rubric/i);
-    expect(injected).toContain('NEVER-GUESS'); // SCOPE rubric delivered
-    expect(injected).toContain('11-FIELD'); // AUTHOR rubric delivered too (full rubric, both phases)
-    // A non-coding prompt leaves the FSM idle → no injection (and no audit is owed).
+    expect(injected).toContain('NEVER-GUESS'); // the SCOPE rubric delivered
+    expect(injected).not.toContain('11-FIELD'); // per-gate: the AUTHOR rubric is NOT delivered in SCOPE
+    // A non-coding prompt leaves the FSM idle (NOT engaged) → no injection (and no audit is owed).
     const idle = await dispatchEvent(
       prompt('what is the weather today'),
       [pack],
       reg,
       'cf-inject-off',
     );
-    expect(idle.contextInjections.join('\n')).not.toMatch(/Coding-flow quality rubric/i);
+    expect(idle.contextInjections.join('\n')).not.toContain('NEVER-GUESS');
   });
 
   it('fix track → AUTHOR gate SKIPS (TaskCreate allowed at spec_authored)', async () => {
@@ -1456,7 +1457,7 @@ describe('builtin coding-flow pack — operating-procedure injection (PPW.2, wg-
     await rm(tempHome, { recursive: true, force: true });
   });
 
-  const HEADER = 'operating procedure (follow this to pass the gates first-try)';
+  const MARK = 'Pick the flow by request type'; // procedure.md §0 — always-on in the engaged bundle
   const promptEv = (text: string): PromptSubmitEvent => ({ kind: 'prompt_submit', prompt: text });
 
   it('ships procedure.md (loaded into Pack.procedure)', async () => {
@@ -1465,19 +1466,19 @@ describe('builtin coding-flow pack — operating-procedure injection (PPW.2, wg-
     expect(pack.procedure).toContain('operating procedure');
   });
 
-  it('injects the procedure on a scope-authoring prompt (FSM armed to scoping); silent from idle', async () => {
+  it('injects the SCOPE-phase bundle when ENGAGED (scoping); silent from idle (GI.4)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
-    const reg = registry(); // includes procedure_pre_inject + enter-scoping deps
+    const reg = registry(); // includes phase_inject + enter-scoping deps
     const sid = 'cf-procedure-inject';
 
-    // idle: a plain (non-scope) prompt does NOT arm scoping → procedure NOT injected.
+    // idle: a plain (non-scope) prompt does NOT arm scoping → not engaged → nothing injected.
     const idle = await dispatchEvent(promptEv('hello there'), [pack], reg, sid);
-    expect(idle.contextInjections.join('\n')).not.toContain(HEADER);
+    expect(idle.contextInjections.join('\n')).not.toContain(MARK);
 
-    // scope-authoring prompt: enter-scoping arms idle→scoping; inject-procedure (later in
-    // file order) sees the just-armed non-idle state and injects coding-flow's procedure.md.
+    // scope-authoring prompt: enter-scoping arms idle→scoping; inject-phase (later in file order) sees the
+    // just-armed scoping state → injects the SCOPE-phase bundle (§0 + §1 + §On-a-BLOCK + scope rubric).
     const scoping = await dispatchEvent(promptEv('scope the new feature'), [pack], reg, sid);
-    expect(scoping.contextInjections.join('\n')).toContain(HEADER);
+    expect(scoping.contextInjections.join('\n')).toContain(MARK);
   });
 });
 

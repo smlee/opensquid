@@ -93,12 +93,10 @@ rules:
         args:
           key: coding-flow-track
           value: trivial
-  # TR.B (wg-2d1d8698f563): deliver the coding-flow quality rubric to the agent BEFORE it authors — the
-  # fix for the blind-first-draft root cause. Placed AFTER enter-scoping so the cold kickoff turn's
-  # just-armed `scoping` is visible (rules walk file-order; handoff-rescope-nudge below relies on the same
-  # ordering). rubric_pre_inject reads the coding-flow FSM and, when in an active SCOPE/AUTHOR phase, returns
-  # an inject_context payload carrying the FULL rubric (scope + author — prompt_submit can't track mid-turn
-  # phase advances, so one injection must cover the whole uninterrupted turn). Inject-only; never blocks.
+  # TR.B (wg-2d1d8698f563) + GI.4 (wg-b7a87452152b): deliver the coding-flow gate instructions to the agent
+  # BEFORE it authors — the fix for the blind-first-draft root cause. Placed AFTER enter-scoping so the cold
+  # kickoff turn's just-armed `scoping` is visible (rules walk file-order; handoff-rescope-nudge below relies
+  # on the same ordering). The injection is the `inject-phase` rule below (channel a, phase_inject).
   # RTC.5 (wg-3d175ec06767): when the deterministic classifier was UNCERTAIN (confidence:low), a fast
   # llm_classify decides research-vs-work and refines the persisted record (source:llm) — the "ACCURATE"
   # half of the lock. Gated strictly on confidence==low (the clear-cut majority never pays the llm cost).
@@ -128,17 +126,15 @@ rules:
         if: 'rt.confidence == "low" && (refined == "research" || refined == "work")'
         args:
           type: '{{refined}}'
-  - id: inject-rubric
+  # GI.4 (wg-b7a87452152b) — channel (a): deliver ONLY the CURRENT phase's bundle (procedure §N + the
+  # phase rubric + the always-on §0 flow-picker + §On-a-BLOCK protocol), refreshed EVERY turn so it
+  # survives compaction and orients before the first tool. phase_inject self-gates on the coding-flow FSM
+  # state via selectPhaseBundle (idle/phases_complete→SCOPE — the lifted suppression) and writes
+  # last-injected-phase-coding-flow so channel (b) (the PreToolUse mid-turn catch) can dedup. Inject-only;
+  # never blocks. Replaces the former blob injectors (inject-rubric + inject-procedure).
+  - id: inject-phase
     process:
-      - call: rubric_pre_inject
-  # wg-7f6225238a27 — deliver coding-flow's OPERATING PROCEDURE (the METHOD: how to run a track so
-  # the gates pass first-try) alongside the rubric (the BAR). Unconditional like inject-rubric;
-  # procedure_pre_inject self-gates on coding-flow's own FSM (engaged = state != idle), so the whole
-  # active lifecycle (SCOPE→AUTHOR→EXECUTE) is covered — gate-fighting happens in EXECUTE too. The
-  # content is packs/builtin/coding-flow/procedure.md, threaded via Pack.procedure → ctx.packProcedure.
-  - id: inject-procedure
-    process:
-      - call: procedure_pre_inject
+      - call: phase_inject
   # GF.1 (F9) — the re-scope NUDGE, surfaced on prompt_submit (where directives are
   # delivered) for the `scoping` state. Fires after `enter-scoping` advanced idle→scoping
   # (or after task-start's task_unscoped reset, or GF.7's phases_complete re-arm landed

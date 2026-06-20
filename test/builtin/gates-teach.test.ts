@@ -22,9 +22,9 @@ describe('gates teach their rubric (TR.C, wg-2d1d8698f563)', () => {
     const auditReadsRubric = (lifecycle?.rules ?? []).some(
       (r) => 'process' in r && r.process.some((p) => p.call === 'read_rubric'),
     );
-    // …and a paired rule delivers it to the agent before authoring (TR.B).
+    // …and a paired rule delivers it to the agent before authoring (TR.B + GI.4: phase_inject, channel a).
     const transferDelivers = (entry?.rules ?? []).some(
-      (r) => 'process' in r && r.process.some((p) => p.call === 'rubric_pre_inject'),
+      (r) => 'process' in r && r.process.some((p) => p.call === 'phase_inject'),
     );
     expect(auditReadsRubric).toBe(true);
     expect(transferDelivers).toBe(true);
