@@ -22,6 +22,7 @@ import { readFile, unlink } from 'node:fs/promises';
 import { atomicWriteFile } from './atomic_write.js';
 import { type Fsm, type FlatStepResult, stepFlat } from './fsm.js';
 import { appendTransition } from './observe/transition_log.js';
+import { observeGoalTransition } from './goal_map/observe.js';
 import { sessionStateFile } from './paths.js';
 
 export interface FsmHistoryEntry {
@@ -118,6 +119,13 @@ export async function advanceFsmState(
         at: now,
         via: result.via ?? -1, // StepResult.via is number|null; stays never reach here (defensive)
       });
+    } catch {
+      /* observe never breaks an advance */
+    }
+    // GOAL-MAPPER.2 — a second wrapped observe: start/link the per-slice worksheet (observe-don't-control).
+    // The goal_map module owns the 'scoping'/'tasks_loaded' rules; this stays generic.
+    try {
+      await observeGoalTransition({ session: sessionId, to: toState, now });
     } catch {
       /* observe never breaks an advance */
     }

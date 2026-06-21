@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.493] - 2026-06-21
+
+### Added — GOAL-MAPPER.2: the per-slice worksheet trigger + `set_goal` MCP tool
+
+- **Worksheets now open automatically, once per slice.** Every advance INTO a worksheet-bearing
+  state (`scoping`, including the `task_unscoped` re-arm path) appends exactly one goal-anchored
+  worksheet `{ sliceId, startedAt, goalRef }`; `tasks_loaded` links the active `metadata.taskId`
+  onto the open worksheet. The hook fires from `advanceFsmState` — the single transition
+  choke-point — so it cannot be bypassed by any individual caller (`arm_scope`, `functions/fsm`).
+- **Observe-don't-control.** `observeGoalTransition` is a pure observer: it reads FSM `to`-state +
+  session cwd and writes only the goal-map; it never calls `advanceFsmState`, never `bus.publish`,
+  never `process.cwd()`. It runs WRAPPED next to the P0.2 `appendTransition` seed — an observe
+  failure can never break an advance (the state write + return stand).
+- **`set_goal` MCP tool** — declare/update the project GOAL (the single source of truth worksheets
+  anchor to); session-derived cwd (like `log_phase`), claims the goal-map for the session, preserves
+  existing worksheets.
+
 ## [0.5.492] - 2026-06-20
 
 ### Added — coding-flow per-gate injection, channel (b): the instant mid-turn PreToolUse push (GI.5)
