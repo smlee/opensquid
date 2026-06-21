@@ -12,6 +12,7 @@ function compile(name: string): CompiledPack {
       name,
       version: '0.0.1',
       scope: 'project',
+      guards: { ok: 'true', hot: 'true' }, // FAC-CUT.2: gate/decision guard refs
       fsm: {
         initial: 'g',
         states: {

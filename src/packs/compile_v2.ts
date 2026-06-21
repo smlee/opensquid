@@ -66,6 +66,7 @@ export interface CompiledPack {
   meta: Record<string, StateMeta>; // per-state behavior for the loop driver (empty for non-fsm forms)
   gates?: CompiledGate[]; // conformance form: each lowered to its evaluator's descriptor
   flows?: Record<string, CompiledPack>; // HAR.1: compiled ISOLATED nested machines (sub_flow targets)
+  guardExprs?: Map<string, string>; // FAC-CUT.2: guard ref → `if:`-expression (behavior form); the RegistryGuardEvaluator's source
 }
 
 /** Compile ONE machine (fsm + meta + gates) — does NOT touch `flows` (no recursion). The HAR.1 wrapper
@@ -74,6 +75,7 @@ function compileMachine(pack: PackV2): CompiledPack {
   // BEHAVIOR form: present only when the pack carries an `fsm` (a conformance/foundation pack does not).
   const meta: Record<string, StateMeta> = {};
   let fsm: Fsm | undefined;
+  let guardExprs: Map<string, string> | undefined;
   if (pack.fsm !== undefined) {
     const fsmDef = pack.fsm;
     // STRUCTURE: the transitions are AUTHORED, not synthesized. Reuse them verbatim.
@@ -141,6 +143,23 @@ function compileMachine(pack: PackV2): CompiledPack {
     if (unrouted.length > 0) {
       throw new Error(`pack ${pack.name}: emitted but unrouted events — ${unrouted.join(', ')}`);
     }
+
+    // FAC-CUT.2: every gate/decision guard ref must resolve in the pack's `guards` registry (an
+    // `if:`-expression). Fail LOUD here (mirrors validateFsm) — a dangling ref is a pack bug, never a
+    // silent skip. This runs inside compileMachine, so each `flows` machine is covered too (compilePackV2
+    // calls compileMachine per flow with the same pack.guards).
+    guardExprs = new Map<string, string>(Object.entries(pack.guards));
+    const guardRefs: string[] = [];
+    for (const s of Object.values(fsmDef.states)) {
+      if (s.kind === 'gate') guardRefs.push(s.guard);
+      else if (s.kind === 'decision')
+        for (const b of s.branches) if ('guard' in b) guardRefs.push(b.guard);
+    }
+    for (const ref of guardRefs) {
+      if (!guardExprs.has(ref)) {
+        throw new Error(`pack ${pack.name}: guard ref '${ref}' not in the guards registry`);
+      }
+    }
   }
 
   // CONFORMANCE form: lower each gate to its EXISTING evaluator's descriptor (re-shape only, no new logic).
@@ -162,7 +181,12 @@ function compileMachine(pack: PackV2): CompiledPack {
   );
 
   // FOUNDATION form: neither fsm nor gates → a CompiledPack with empty meta + no gates (pure expertise).
-  return { ...(fsm !== undefined ? { fsm } : {}), meta, ...(gates !== undefined ? { gates } : {}) };
+  return {
+    ...(fsm !== undefined ? { fsm } : {}),
+    meta,
+    ...(gates !== undefined ? { gates } : {}),
+    ...(guardExprs !== undefined ? { guardExprs } : {}),
+  };
 }
 
 /**

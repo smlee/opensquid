@@ -159,7 +159,8 @@ export const PackV2 = z
     // HAR.1: a FLAT registry of named ISOLATED nested machines; a `sub_flow.flow` is a key into this.
     flows: z.record(z.string(), FsmV2).optional(),
     gates: z.array(ConformanceGate).optional(), // ← conformance form: always-active gates, fsm-less
-    guards: z.record(z.string(), z.unknown()).default({}), // guard defs — compiled by the guard subsystem (GUARD.1/EXE.1)
+    guards: z.record(z.string(), z.string()).default({}), // FAC-CUT.2: guard ref → an `if:`-expression (boolean predicate); the gate's block/halt action is on the state's on_fail
+
     messages: z.record(z.string(), z.string()).default({}), // self-continue store: failure_type → instruction
     foundation: z.unknown().optional(), // pure expertise (manifest/lessons) — neither fsm nor gates
   })

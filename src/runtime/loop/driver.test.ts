@@ -17,6 +17,7 @@ const PACK = PackV2.parse({
   name: 'demo',
   version: '0.0.1',
   scope: 'project',
+  guards: { size_ok: 'true', holdout_ok: 'true' }, // FAC-CUT.2: gate/decision guard refs
   fsm: {
     initial: 'review',
     states: {

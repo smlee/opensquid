@@ -11,6 +11,7 @@ const amazonClone = PackV2.parse({
   name: 'amazon-clone',
   version: '1.0.0',
   scope: 'workflow',
+  guards: { bundle_size_ok: 'true', holdout_passes: 'true' }, // FAC-CUT.2: gate/decision guard refs
   fsm: {
     initial: 'spec_review',
     states: {
@@ -199,6 +200,7 @@ describe('compilePackV2 (T1) — coding-flow-shaped fixture: multi-out + wildcar
     name: 'codingflow-fixture',
     version: '0.0.1',
     scope: 'workflow',
+    guards: { always: 'true' }, // FAC-CUT.2: the `idle` gate's guard ref
     fsm: {
       initial: 'idle',
       states: {

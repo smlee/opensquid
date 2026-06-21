@@ -13,6 +13,8 @@ const PACK_YAML = `
 name: tiny
 version: 1.0.0
 scope: workflow
+guards:
+  looks_ok: "true"
 fsm:
   initial: work
   states:

@@ -12,11 +12,10 @@ const FIXTURE = PackV2.parse({
   scope: 'project',
   detected_by: [{ kind: 'file_exists', path: 'package.json' }],
   guards: {
-    size_ok: {
-      expr: 'lines < 500',
-      note: 'a "tricky" value with // and\na newline',
-      nested: { a: [1, 2] },
-    },
+    // FAC-CUT.2: guard refs are `if:`-expression strings. Keep a "tricky" value (quotes // and a
+    // newline) so the viz escaping round-trip is still exercised.
+    size_ok: 'lines < 500 /* a "tricky" value with // and\na newline */',
+    hot: 'true',
   },
   messages: { too_big: 'split it' },
   fsm: {
