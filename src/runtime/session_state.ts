@@ -259,6 +259,15 @@ export async function readSessionStateValue(sessionId: string, key: string): Pro
   }
 }
 
+/** Write a session-state value (JSON-encoded, matching the `write_state` primitive's format). */
+export async function writeSessionStateValue(
+  sessionId: string,
+  key: string,
+  value: unknown,
+): Promise<void> {
+  await atomicWriteFile(sessionStateFile(sessionId, key), JSON.stringify(value, null, 2));
+}
+
 /**
  * Reset the current-turn list on `UserPromptSubmit`. The session-wide list
  * carries forward across turn boundaries — only the turn slice resets.

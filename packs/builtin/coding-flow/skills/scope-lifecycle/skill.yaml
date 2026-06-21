@@ -39,6 +39,35 @@ rules:
         args:
           key: coding-flow-track
           value: feature
+  # ── WORKSHEET soft gate (T-scope-worksheet / wg-7d649d90f26a). A write to a *-worksheet.md file
+  #    (a USER-authored batch worksheet, or any hand-edit) is validated against the Worksheet schema
+  #    BEFORE it lands. Validate the EFFECTIVE post-write content — at PreToolUse the on-disk file is
+  #    still the pre-write version. An invalid worksheet BLOCKS: the soft gate is ENFORCED (an
+  #    unparseable plan can't seed the projection the whole batch reads). Machine-born SINGLE
+  #    worksheets bypass this — birth_or_repoint writes them directly (valid by construction; they
+  #    never pass through a Write/Edit tool call).
+  - id: worksheet-soft-gate
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: effective_content
+        if: '(tool == "Write" || tool == "Edit") && endsWith(targs.file_path, "-worksheet.md")'
+        as: effective
+      - call: validate_worksheet
+        if: '(tool == "Write" || tool == "Edit") && endsWith(targs.file_path, "-worksheet.md")'
+        args: { content: '{{effective}}' }
+        as: wsv
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && endsWith(targs.file_path, "-worksheet.md") && wsv.valid == false'
+        args:
+          level: block
+          message: >-
+            BLOCKED: the worksheet does not satisfy the Worksheet schema — it cannot seed the batch
+            projection. Fix the authored ```yaml block: a `single` needs exactly one scope and
+            `order: [<that id>]`; a `batch` needs >=2 scopes, every scope a work-graph `issue`, and
+            `order` a permutation of the scope ids. Error:\n\n{{wsv.error}}
   # ── SCOPE: the GATING advance (AF.1). The content audit + depth + open-question
   #    checks run BEFORE the advance, and research_done is COUPLED to them — no
   #    advisory pass. The advance fires ONLY when SCOPE content is complete:
@@ -159,6 +188,16 @@ rules:
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && contains(audit, "VERDICT: GUESS_FREE")'
         args:
           event: research_done
+      # T-scope-worksheet: birth-or-repoint the active worksheet — ONLY when the pre-research PASSED
+      # (same GUESS_FREE+depth+no-open-question guard as the advance), so a blocked write leaves no
+      # orphan worksheet. INTER-SCOPE keeps an in-flight batch worksheet (the user authored it, its
+      # soft gate already ran); a NEW TRACK auto-births a valid `single`. The repoint is what stops a
+      # stale prior-track path leaking into this track.
+      - call: birth_or_repoint_worksheet
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && contains(audit, "VERDICT: GUESS_FREE")'
+        args:
+          file_path: '{{targs.file_path}}'
+          effective: '{{effective}}'
       # CONTENT-FAIL → loop-back + warn (keyed POSITIVELY on UNRESOLVED, not !GUESS_FREE — so an
       # audit that could not run no longer masquerades as "guesses found").
       - call: advance_fsm

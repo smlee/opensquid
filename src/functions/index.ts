@@ -43,3 +43,5 @@ export { registerHttpRequestFunction } from './http_request.js';
 export { registerStagedDocsOnlyFunction } from './staged_docs_only.js';
 export { registerResetScopeTrackStateFunction } from './reset_scope_track_state.js';
 export { registerArmScopeFunction } from './arm_scope.js';
+export { registerValidateWorksheetFunction } from './validate_worksheet.js';
+export { registerBirthOrRepointWorksheetFunction } from './birth_or_repoint_worksheet.js';

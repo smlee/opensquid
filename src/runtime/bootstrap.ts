@@ -61,6 +61,8 @@ import { wedgeLessonStore, type WedgeLessonStore } from '../rag/wedge/store.js';
 import { wedgeLessonsDbUrl, wedgeLessonsDir } from '../rag/wedge/paths.js';
 import { registerDestinationCheckFunction } from '../functions/destination_check.js';
 import { registerCachedAuditFunction } from '../functions/cached_audit.js';
+import { registerValidateWorksheetFunction } from '../functions/validate_worksheet.js';
+import { registerBirthOrRepointWorksheetFunction } from '../functions/birth_or_repoint_worksheet.js';
 import { registerEventFunctions } from '../functions/event.js';
 import { IsAutomationMode } from '../functions/is_automation_mode.js';
 import { registerLessonFunctions } from '../functions/lessons.js';
@@ -135,6 +137,8 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerVerdictFunctions(r);
   registerLlmFunctions(r);
   registerCachedAuditFunction(r);
+  registerValidateWorksheetFunction(r); // T-scope-worksheet: soft-gate checker for user-authored worksheets
+  registerBirthOrRepointWorksheetFunction(r); // T-scope-worksheet: pre-research-write birth/repoint of the active worksheet
   registerReadRubric(r); // TR.A: the audits interpolate {{rubric}} from this; phase_inject reuses it
   registerPhaseInject(r); // GI.4: channel (a) — per-gate phase bundle (procedure §N + rubric) at the turn boundary
   registerSetRequestType(r); // wg-3d175ec06767: RTC.5 llm refinement writes the refined request-type

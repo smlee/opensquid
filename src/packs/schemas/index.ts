@@ -115,3 +115,7 @@ export type {
   BuiltinToolName as BuiltinToolNameType,
   ChatAgentConfig as ChatAgentConfigType,
 } from './chat_agent.js';
+
+// worksheet.md authored block (T-scope-worksheet — the anti-drift checkpoint artifact)
+export { Worksheet, WorksheetScope } from './worksheet.js';
+export type { Worksheet as WorksheetType, WorksheetScope as WorksheetScopeType } from './worksheet.js';

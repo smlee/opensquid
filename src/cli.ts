@@ -467,6 +467,25 @@ function runCli(): void {
       process.stdout.write(`handover doc: ${result.docPath}\n`);
     });
 
+  // T-scope-worksheet: the read-only worksheet view (authored plan + live-projected log).
+  program
+    .command('worksheet')
+    .description('Show the active scope-worksheet (authored plan + live-projected 7-phase log)')
+    .option('--session <id>', 'session id (default: the project-scoped current-session pointer)')
+    .option('--path <file>', 'render a specific worksheet file instead of the active one')
+    .action(async (opts: { session?: string; path?: string }) => {
+      const { runWorksheetShow } = await import('./runtime/worksheet/cli.js');
+      const { readSessionPointer } = await import('./runtime/hooks/session_id.js');
+      const cwd = process.cwd();
+      let sid = opts.session ?? process.env.CLAUDE_CODE_SESSION_ID ?? null;
+      if (sid === null || sid === undefined || sid === '') {
+        sid = await readSessionPointer(cwd, process.env);
+      }
+      const result = await runWorksheetShow(sid ?? '', opts.path);
+      process.stdout.write(`${result.text}\n`);
+      if (!result.ok) process.exitCode = 1;
+    });
+
   program.parseAsync(process.argv).catch((err: unknown) => {
     process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);

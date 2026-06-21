@@ -12,6 +12,10 @@
  *                                      miss, so staleness is self-correcting. Blanket-wiping them
  *                                      just discards valid cache.
  *  - `coding-flow-scope-dwell`      — self-resets on scope-region exit (scope_dwell.ts).
+ *  - `coding-flow-worksheet-path`   — `birth_or_repoint_worksheet` REPOINTS it on each new-track
+ *                                      pre-research write (not if-absent-only). Wiping it on
+ *                                      scope_start would orphan an IN-FLIGHT batch worksheet when the
+ *                                      next scope within that batch arms (T-scope-worksheet).
  */
 export const SCOPE_TRACK_STATE_KEYS = [
   'coding-flow-pre-research-path',
