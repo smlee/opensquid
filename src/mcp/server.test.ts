@@ -206,6 +206,7 @@ describe('opensquid-mcp subprocess', () => {
     expect(names).toEqual([
       'decision_classify',
       'forget',
+      'get_goal',
       'inspect_skill',
       'list_drift_events',
       'list_packs',
@@ -215,6 +216,7 @@ describe('opensquid-mcp subprocess', () => {
       'read_state',
       'read_violations',
       'recall',
+      'set_goal',
       'store_lesson',
       'workgraph_add_edge',
       'workgraph_claim',

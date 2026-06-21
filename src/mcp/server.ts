@@ -57,6 +57,7 @@ import type { RagBackend } from '../rag/types.js';
 
 import { anchorProcessToProjectDir } from './anchor.js';
 import { handleForget, ForgetSchema, type ForgetArgs } from './tools/forget.js';
+import { handleGetGoal } from './tools/get_goal.js';
 import { handleInspectSkill } from './tools/inspect-skill.js';
 import { handleListDriftEvents } from './tools/list-drift-events.js';
 import { handleListPacks } from './tools/list-packs.js';
@@ -66,6 +67,7 @@ import { handleMemorize, MemorizeSchema, type MemorizeArgs } from './tools/memor
 import { handleReadState } from './tools/read-state.js';
 import { handleReadViolations } from './tools/read-violations.js';
 import { handleRecall } from './tools/recall.js';
+import { handleSetGoal, SetGoalSchema, type SetGoalArgs } from './tools/set_goal.js';
 import {
   handleStoreLesson,
   StoreLessonSchema,
@@ -191,6 +193,14 @@ const ToolHandlers = {
     schema: LogPhaseSchema,
     handle: (args: LogPhaseArgs) => handleLogPhase(args).then((r) => JSON.stringify(r)),
   },
+  set_goal: {
+    schema: SetGoalSchema,
+    handle: (args: SetGoalArgs) => handleSetGoal(args).then((r) => JSON.stringify(r)),
+  },
+  get_goal: {
+    schema: z.object({}),
+    handle: () => handleGetGoal().then((r) => JSON.stringify(r)),
+  },
   workgraph_create_issue: {
     schema: WgCreateSchema,
     handle: async (a: z.infer<typeof WgCreateSchema>) => handleWgCreate(a, await getWorkGraph()),
@@ -262,6 +272,8 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   memorize: LOCAL_WRITE,
   store_lesson: LOCAL_WRITE,
   log_phase: LOCAL_WRITE,
+  set_goal: LOCAL_WRITE,
+  get_goal: READ_ONLY,
   workgraph_create_issue: LOCAL_WRITE,
   workgraph_update_issue: LOCAL_WRITE,
   workgraph_add_edge: LOCAL_WRITE,
@@ -290,6 +302,11 @@ const descriptions: Record<ToolName, string> = {
   log_phase:
     'Log a completed workflow phase (pre_research|learn|code|test|audit|post_research|fix) ' +
     'for the active task. Writes the engine ledger + the gate state; the commit gate unblocks once all 7 are logged.',
+  set_goal:
+    "Set or update this session's goal (what must be completed before the work is done). " +
+    'Persists across turns; omitting status preserves the existing status. ' +
+    'Returns {id, text, status, createdAt, updatedAt}.',
+  get_goal: "Get this session's current goal, or null if unset.",
   workgraph_create_issue:
     'Create a work-graph issue {title, body?}. Returns the issue (with its hash id). The work-graph is the agent’s structured, dependency-aware task store.',
   workgraph_update_issue:

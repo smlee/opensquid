@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.493] - 2026-06-20
+
+### Added — goal-subsystem GS.1: persistent per-session goal + MCP set_goal/get_goal floor
+
+- New `set_goal` / `get_goal` MCP tools — the goal-subsystem's guaranteed MCP floor (works on every harness,
+  because opensquid is an MCP server). `set_goal(text, status?)` records or updates this session's goal:
+  it mints `goal-<hex>` + `createdAt` on first set, then updates in place (id/createdAt kept, `updatedAt`
+  bumped). `get_goal()` returns the current goal or `null`.
+- Goal state persists at `sessions/<id>/state/goal.json` via the new `runtime/goal_state.ts`, mirroring the
+  `phase_ledger`/`read_state` pattern: atomic writes (tmp + rename), fault-tolerant reads (missing or
+  malformed → `null`, never throws). Session resolved via `resolveMcpSessionId` (null session → loud error
+  on `set_goal`, graceful `null` on `get_goal`).
+- Scope: GS.1 only (persistence + the MCP floor). The coding-pack scanner (GS.4) and completion semantics
+  (GS.5) are later layers that build on this state. Part of T-goal-subsystem (wg-7e0290084eff).
+
 ## [0.5.492] - 2026-06-20
 
 ### Added — coding-flow per-gate injection, channel (b): the instant mid-turn PreToolUse push (GI.5)
