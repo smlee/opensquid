@@ -268,11 +268,11 @@ describe('HAR.2 — orthogonality: final regions + eventless join (settle)', () 
 
   it('settle is a NO-OP on a partial-final config (independence preserved)', () => {
     const partial = new Set(['par/A/aF', 'par/B/b1']);
-    expect([...settle(PAR2, partial)]).toEqual([...partial]);
+    expect([...settle(PAR2, partial).config]).toEqual([...partial]);
   });
 
   it('settle JOINS when ALL regions are final → exits the parallel, enters the target', () => {
-    expect([...settle(PAR2, new Set(['par/A/aF', 'par/B/bF']))]).toEqual(['done']);
+    expect([...settle(PAR2, new Set(['par/A/aF', 'par/B/bF'])).config]).toEqual(['done']);
   });
 
   it('a region that IS a `final` node counts as done (atomic-final region)', () => {
@@ -289,7 +289,7 @@ describe('HAR.2 — orthogonality: final regions + eventless join (settle)', () 
     };
     expect(validateStatechart(sc)).toEqual([]);
     expect([...initialConfig(sc)].sort()).toEqual(['par/A', 'par/B/b1']); // region A is the final leaf itself
-    expect([...settle(sc, new Set(['par/A', 'par/B/bF']))]).toEqual(['done']);
+    expect([...settle(sc, new Set(['par/A', 'par/B/bF'])).config]).toEqual(['done']);
   });
 
   it('NESTED parallels join INNERMOST-FIRST (confluent), regardless of traversal order', () => {
@@ -323,7 +323,7 @@ describe('HAR.2 — orthogonality: final regions + eventless join (settle)', () 
     expect(validateStatechart(nest)).toEqual([]);
     // inner X,Y final + outer B final, but A still inside par2 → settle joins par2→aF first, THEN par→done
     const allInnerFinal = new Set(['par/A/par2/X/xF', 'par/A/par2/Y/yF', 'par/B/bF']);
-    expect([...settle(nest, allInnerFinal)]).toEqual(['done']);
+    expect([...settle(nest, allInnerFinal).config]).toEqual(['done']);
   });
 
   it('validateStatechart REJECTS a finalizable parallel with NO eventless join edge', () => {
@@ -365,6 +365,160 @@ describe('HAR.2 — orthogonality: final regions + eventless join (settle)', () 
     };
     expect(validateStatechart(bad)).toContainEqual(
       expect.stringContaining('eventless from "a" is not a parallel'),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HAR.3 — history pseudostates: shallow/deep re-entry via the shared lastActive cell.
+// ─────────────────────────────────────────────────────────────────────────────
+/** A `build{backend,frontend}` compound + a sibling `idle`, with a configurable-depth history. */
+const histChart = (depth: 'shallow' | 'deep', dflt?: string): Statechart => ({
+  initial: 'build',
+  root: {
+    build: {
+      kind: 'compound',
+      initial: 'backend',
+      states: {
+        backend: { kind: 'leaf' },
+        frontend: { kind: 'leaf' },
+        hist: { kind: 'history', depth, ...(dflt !== undefined ? { default: dflt } : {}) },
+      },
+    },
+    idle: { kind: 'leaf' },
+  },
+  transitions: [
+    { from: 'build/backend', on: 'next', to: 'build/frontend' },
+    { from: 'build', on: 'pause', to: 'idle' },
+    { from: 'idle', on: 'resume', to: 'build/hist' },
+  ],
+});
+
+describe('HAR.3 — history pseudostates (lastActive shared through step & settle)', () => {
+  it('validateStatechart accepts a well-formed history chart; history is never auto-entered', () => {
+    const sc = histChart('shallow');
+    expect(validateStatechart(sc)).toEqual([]);
+    expect([...initialConfig(sc)]).toEqual(['build/backend']); // initial=backend, not the history node
+  });
+
+  it('SHALLOW history re-enters the remembered DIRECT child (threaded through three steps)', () => {
+    const sc = histChart('shallow');
+    let r = step(sc, initialConfig(sc), 'next'); // → build/frontend
+    expect([...r.next]).toEqual(['build/frontend']);
+    r = step(sc, r.next, 'pause', { lastActive: r.lastActive }); // exit build → idle, remember frontend
+    expect([...r.next]).toEqual(['idle']);
+    expect(r.lastActive).toEqual({ build: 'build/frontend' });
+    r = step(sc, r.next, 'resume', { lastActive: r.lastActive }); // → build's history → frontend
+    expect([...r.next]).toEqual(['build/frontend']);
+  });
+
+  it('DEEP history restores the FULL nested leaf path; SHALLOW restores only the direct child', () => {
+    const nested = (depth: 'shallow' | 'deep'): Statechart => ({
+      initial: 'build',
+      root: {
+        build: {
+          kind: 'compound',
+          initial: 'backend',
+          states: {
+            backend: {
+              kind: 'compound',
+              initial: 'api',
+              states: { api: { kind: 'leaf' }, worker: { kind: 'leaf' } },
+            },
+            frontend: { kind: 'leaf' },
+            hist: { kind: 'history', depth },
+          },
+        },
+        idle: { kind: 'leaf' },
+      },
+      transitions: [
+        { from: 'build/backend/api', on: 'w', to: 'build/backend/worker' },
+        { from: 'build', on: 'pause', to: 'idle' },
+        { from: 'idle', on: 'resume', to: 'build/hist' },
+      ],
+    });
+    const run = (depth: 'shallow' | 'deep'): string[] => {
+      const sc = nested(depth);
+      let r = step(sc, initialConfig(sc), 'w'); // → build/backend/worker
+      r = step(sc, r.next, 'pause', { lastActive: r.lastActive }); // exit build → idle
+      r = step(sc, r.next, 'resume', { lastActive: r.lastActive }); // → build's history
+      return [...r.next];
+    };
+    expect(run('deep')).toEqual(['build/backend/worker']); // full remembered leaf
+    expect(run('shallow')).toEqual(['build/backend/api']); // direct child `backend`, down to its initial
+  });
+
+  it('FIRST entry (empty lastActive) falls to composite.initial, or to default when present', () => {
+    expect([...step(histChart('shallow'), new Set(['idle']), 'resume').next]).toEqual([
+      'build/backend', // no memory, no default → compound initial
+    ]);
+    expect([...step(histChart('shallow', 'frontend'), new Set(['idle']), 'resume').next]).toEqual([
+      'build/frontend', // no memory → declared default
+    ]);
+  });
+
+  it('a fresh (empty) lastActive RESETS history to the initial (machine-restart semantics)', () => {
+    const sc = histChart('shallow');
+    // even with a prior memory available, passing {} re-enters at initial
+    expect([...step(sc, new Set(['idle']), 'resume', { lastActive: {} }).next]).toEqual([
+      'build/backend',
+    ]);
+  });
+
+  it('via===null STAY carries lastActive forward unchanged (no aliasing with the audit log)', () => {
+    const sc = histChart('shallow');
+    const r = step(sc, new Set(['build/backend']), 'no-such-event', {
+      lastActive: { build: 'build/frontend' },
+    });
+    expect(r.transitioned).toBe(false);
+    expect(r.via).toBeNull();
+    expect(r.lastActive).toEqual({ build: 'build/frontend' });
+    // the StepResult has NO `history` field — lastActive is its own cell, distinct from the audit log
+    expect('history' in r).toBe(false);
+  });
+
+  it('settle records lastActive for compound regions exited by a parallel JOIN (shared recordExits)', () => {
+    const sc: Statechart = {
+      initial: 'par',
+      root: {
+        par: { kind: 'parallel', regions: { A: region('a1', 'aF'), B: region('b1', 'bF') } },
+        done: { kind: 'leaf' },
+      },
+      transitions: [{ from: 'par', to: 'done' }],
+    };
+    const out = settle(sc, new Set(['par/A/aF', 'par/B/bF']));
+    expect([...out.config]).toEqual(['done']);
+    expect(out.lastActive).toEqual({ 'par/A': 'par/A/aF', 'par/B': 'par/B/bF' });
+  });
+
+  it('validateStatechart REJECTS a history not directly inside a compound', () => {
+    const sc: Statechart = {
+      initial: 'a',
+      root: { a: { kind: 'leaf' }, h: { kind: 'history', depth: 'shallow' } },
+      transitions: [],
+    };
+    expect(validateStatechart(sc)).toContainEqual(
+      expect.stringContaining('is not a direct child of a compound'),
+    );
+  });
+
+  it('validateStatechart REJECTS a history whose default does not resolve in its compound', () => {
+    const sc: Statechart = {
+      initial: 'c',
+      root: {
+        c: {
+          kind: 'compound',
+          initial: 'x',
+          states: {
+            x: { kind: 'leaf' },
+            h: { kind: 'history', depth: 'shallow', default: 'nope' },
+          },
+        },
+      },
+      transitions: [],
+    };
+    expect(validateStatechart(sc)).toContainEqual(
+      expect.stringContaining('default "nope" is not a state'),
     );
   });
 });

@@ -89,8 +89,13 @@ export const PATH_SEP = '/' as const;
 export type StateNode =
   | { kind: 'leaf' }
   | { kind: 'final' } // HAR.2 — a region's terminal marker (atomic, like leaf); drives the parallel join
+  | { kind: 'history'; depth: 'shallow' | 'deep'; default?: string } // HAR.3 — pseudostate target; resolved, never active
   | { kind: 'compound'; initial: string; states: Record<string, StateNode> }
   | { kind: 'parallel'; regions: Record<string, StateNode> };
+
+/** HAR.3 — the history memory: compositePath → its remembered active-leaf path. DISTINCT from the
+ *  `history` AUDIT LOG (`actor/port.ts`, `fsm_state.ts`); this is the read-at-re-entry pseudostate cell. */
+export type LastActive = Readonly<Record<string, string>>;
 
 /** The executable statechart: top-level states + the cross-tree transition list. */
 export interface Statechart {
@@ -107,8 +112,10 @@ export interface StepResult {
   next: Configuration;
   /** True iff a transition actually changed the configuration. */
   transitioned: boolean;
-  /** The id (index) of the transition taken, or null for the stay default. */
+  /** The id (index) of the transition taken, or null for the stay default. (Invariant: null ⟺ stay.) */
   via: number | null;
+  /** HAR.3 — the history memory after this step (recorded on compound exit; carried forward on a stay). */
+  lastActive: LastActive;
 }
 
 const segs = (path: string): string[] => path.split(PATH_SEP);
@@ -136,6 +143,7 @@ export function enterLeaves(sc: Statechart, path: string): string[] {
   const node = resolveNode(sc, path);
   if (node === undefined) return [];
   if (node.kind === 'leaf' || node.kind === 'final') return [path]; // both atomic
+  if (node.kind === 'history') return []; // HAR.3 — a pseudostate is no active leaf; `enterTarget` resolves it first
   if (node.kind === 'compound') return enterLeaves(sc, joinPath(path, node.initial));
   return Object.keys(node.regions).flatMap((r) => enterLeaves(sc, joinPath(path, r)));
 }
@@ -215,6 +223,24 @@ export function validateStatechart(sc: Statechart): string[] {
   };
   checkInitials(sc.root, '');
 
+  // HAR.3 — a `history` pseudostate MUST be a direct child of a `compound`, and its `default` (if
+  // present) MUST resolve to a path within that compound. Fail-loud (HAR.1/HAR.2 precedent).
+  const checkHistory = (node: StateNode, path: string, parent: StateNode | undefined): void => {
+    if (node.kind === 'history') {
+      if (parent?.kind !== 'compound') {
+        errors.push(`history "${path}" is not a direct child of a compound`);
+      } else if (node.default !== undefined && !(node.default in parent.states)) {
+        errors.push(`history "${path}" default "${node.default}" is not a state of its compound`);
+      }
+      return;
+    }
+    if (node.kind === 'compound')
+      for (const [n, c] of Object.entries(node.states)) checkHistory(c, joinPath(path, n), node);
+    else if (node.kind === 'parallel')
+      for (const [n, c] of Object.entries(node.regions)) checkHistory(c, joinPath(path, n), node);
+  };
+  for (const [n, c] of Object.entries(sc.root)) checkHistory(c, n, undefined);
+
   sc.transitions.forEach((t, i) => {
     if (t.from !== ANY_STATE && !paths.has(t.from)) {
       errors.push(`transition[${String(i)}] from "${t.from}" is not a declared state path`);
@@ -245,34 +271,117 @@ export function validateStatechart(sc: Statechart): string[] {
   return errors;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HAR.3 — history pseudostates: the `lastActive` memory + SHARED entry/exit helpers.
+// `enterTarget`/`recordExits` are used by BOTH `step` and `settle` so the two
+// configuration-computing sites resolve history + record exits identically.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The path of `path`'s parent node ('' at the root). */
+const parentOf = (path: string): string => segs(path).slice(0, -1).join(PATH_SEP);
+
+/** Every `compound` node path in the chart (the exit sites `recordExits` may remember). */
+function compoundPaths(sc: Statechart): string[] {
+  const out: string[] = [];
+  const walk = (level: Record<string, StateNode>, base: string): void => {
+    for (const [name, node] of Object.entries(level)) {
+      const p = joinPath(base, name);
+      if (node.kind === 'compound') {
+        out.push(p);
+        walk(node.states, p);
+      } else if (node.kind === 'parallel') {
+        walk(node.regions, p);
+      }
+    }
+  };
+  walk(sc.root, '');
+  return out;
+}
+
+/**
+ * SHARED history-aware ENTRY. If `to` resolves to a `history` pseudostate, re-enter its parent
+ * compound at the remembered child (shallow = remembered direct child down to its initial; deep =
+ * the full remembered leaf path); first entry (no memory) falls to `default ?? compound.initial`.
+ * Otherwise it is a plain `enterLeaves(to)`. Used by step AND settle for every entry. PURE.
+ */
+function enterTarget(sc: Statechart, to: string, lastActive: LastActive): string[] {
+  const node = resolveNode(sc, to);
+  if (node?.kind !== 'history') return enterLeaves(sc, to);
+  const composite = parentOf(to); // the history pseudostate lives inside its compound
+  const remembered = lastActive[composite];
+  if (remembered === undefined) {
+    return enterLeaves(
+      sc,
+      node.default !== undefined ? joinPath(composite, node.default) : composite,
+    );
+  }
+  if (node.depth === 'deep') return [remembered]; // restore the full remembered leaf path
+  const directChild = segs(remembered)
+    .slice(0, segs(composite).length + 1)
+    .join(PATH_SEP);
+  return enterLeaves(sc, directChild); // shallow → remembered direct child, down to its initial
+}
+
+/**
+ * SHARED EXIT recording. For every compound whose currently-active leaf is in `exit`, remember that
+ * leaf path under the compound; all other entries carry forward unchanged. Used by step AND settle
+ * for every exit. PURE — returns a fresh `LastActive`.
+ */
+function recordExits(
+  sc: Statechart,
+  config: Configuration,
+  exit: ReadonlySet<string>,
+  lastActive: LastActive,
+): LastActive {
+  const next: Record<string, string> = { ...lastActive };
+  for (const c of compoundPaths(sc)) {
+    const prefix = c + PATH_SEP;
+    const active = [...config].find((leaf) => leaf.startsWith(prefix) && exit.has(leaf));
+    if (active !== undefined) next[c] = active;
+  }
+  return next;
+}
+
 /**
  * The TOTAL transition function over configurations. Resolves the FIRST enabled transition for
  * `event` (document order): `from` is `*` or active, `on` equals `event`, `when` guard (if any)
  * holds. The enabled transition exits the active descendants of the LCCA(from,to) and enters `to`
  * down to its leaves. No enabled transition → explicit stay (whole config, transitioned:false). PURE.
+ *
+ * HAR.3 — threads `lastActive` (opts in, `StepResult.lastActive` out): entry resolves history via
+ * `enterTarget`, exit is remembered via `recordExits`; a stay carries `lastActive` forward unchanged
+ * (`via===null ⟺ stay` preserved — `via` tracks the event transition, `lastActive` is independent).
  */
 export function step(
   sc: Statechart,
   config: Configuration,
   event: string,
-  evalWhen?: (expr: string) => boolean,
+  opts?: { evalWhen?: (expr: string) => boolean; lastActive?: LastActive },
 ): StepResult {
+  const lastActive = opts?.lastActive ?? {};
   for (let i = 0; i < sc.transitions.length; i++) {
     const t = sc.transitions[i]!;
     if (t.on !== event) continue;
     if (!(t.from === ANY_STATE || isActive(config, t.from))) continue;
-    if (t.when !== undefined && evalWhen !== undefined && !evalWhen(t.when)) continue;
+    if (t.when !== undefined && opts?.evalWhen !== undefined && !opts.evalWhen(t.when)) continue;
 
-    const scope = t.from === ANY_STATE ? '' : lcca(t.from, t.to);
+    // A history target's exit scope is its COMPOSITE, not the (never-active) pseudostate path.
+    const effectiveTo = resolveNode(sc, t.to)?.kind === 'history' ? parentOf(t.to) : t.to;
+    const scope = t.from === ANY_STATE ? '' : lcca(t.from, effectiveTo);
     const exit = new Set(descendantsOf(config, scope));
     const next = new Set<string>();
     for (const leaf of config) if (!exit.has(leaf)) next.add(leaf);
-    for (const leaf of enterLeaves(sc, t.to)) next.add(leaf);
+    for (const leaf of enterTarget(sc, t.to, lastActive)) next.add(leaf);
 
     const changed = next.size !== config.size || [...next].some((p) => !config.has(p));
-    return { next, transitioned: changed, via: i };
+    return {
+      next,
+      transitioned: changed,
+      via: i,
+      lastActive: recordExits(sc, config, exit, lastActive),
+    };
   }
-  return { next: config, transitioned: false, via: null };
+  return { next: config, transitioned: false, via: null, lastActive }; // stay: lastActive carried forward
 }
 
 /** Lift a flat wire `Fsm` (all states leaves at the root) into the degenerate-tree `Statechart`. */
@@ -300,7 +409,12 @@ export function stepFlat(
   event: string,
   evalWhen?: (expr: string) => boolean,
 ): FlatStepResult {
-  const r = step(fromFlat(fsm), new Set([current]), event, evalWhen);
+  const r = step(
+    fromFlat(fsm),
+    new Set([current]),
+    event,
+    evalWhen !== undefined ? { evalWhen } : undefined,
+  );
   return { next: soleState(r.next), transitioned: r.transitioned, via: r.via };
 }
 
@@ -363,32 +477,38 @@ function allRegionsFinal(sc: Statechart, parallelPath: string, config: Configura
  * all-regions-final parallel with an eventless `from: parallelPath` edge, exit the whole parallel subtree
  * and enter the join target. PURE (config + static transitions), no event queue (the D1/OQ-4 law).
  * Compose: a tree run is `step` (event microstep) then `settle` (eventless macrostep).
+ *
+ * HAR.3 — `settle` is the SECOND entry/exit site, so it resolves history (`enterTarget`) + records
+ * exits (`recordExits`) via the SAME shared helpers as `step` (no divergence). Returns `{config,
+ * lastActive}`; `lastActive` is threaded in via opts and out in the result.
  */
 export function settle(
   sc: Statechart,
   config: Configuration,
-  evalWhen?: (expr: string) => boolean,
-): Configuration {
+  opts?: { evalWhen?: (expr: string) => boolean; lastActive?: LastActive },
+): { config: Configuration; lastActive: LastActive } {
   const joinEdge = (p: string): Transition | undefined =>
     sc.transitions.find(
       (t) =>
         t.from === p &&
         t.on === undefined &&
-        (t.when === undefined || evalWhen === undefined || evalWhen(t.when)),
+        (t.when === undefined || opts?.evalWhen === undefined || opts.evalWhen(t.when)),
     );
   let cur = config;
+  let lastActive = opts?.lastActive ?? {};
   for (let i = 0; i < 10_000; i++) {
     // parallelPaths is deepest-first → the first eligible is the INNERMOST all-final parallel.
     const pPath = parallelPaths(sc).find(
       (p) => isActive(cur, p) && allRegionsFinal(sc, p, cur) && joinEdge(p) !== undefined,
     );
-    if (pPath === undefined) return cur; // fixpoint
+    if (pPath === undefined) return { config: cur, lastActive }; // fixpoint
     const join = joinEdge(pPath)!;
     const exit = new Set(descendantsOf(cur, pPath)); // exit the whole parallel subtree
+    lastActive = recordExits(sc, cur, exit, lastActive); // remember any exited compound's active leaf
     const next = new Set<string>();
     for (const leaf of cur) if (!exit.has(leaf)) next.add(leaf);
-    for (const leaf of enterLeaves(sc, join.to)) next.add(leaf);
+    for (const leaf of enterTarget(sc, join.to, lastActive)) next.add(leaf);
     cur = next;
   }
-  return cur; // depth backstop
+  return { config: cur, lastActive }; // depth backstop
 }
