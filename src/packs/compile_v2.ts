@@ -65,9 +65,12 @@ export interface CompiledPack {
   fsm?: Fsm; // states + transitions in the reused engine's format (present only for the behavior form)
   meta: Record<string, StateMeta>; // per-state behavior for the loop driver (empty for non-fsm forms)
   gates?: CompiledGate[]; // conformance form: each lowered to its evaluator's descriptor
+  flows?: Record<string, CompiledPack>; // HAR.1: compiled ISOLATED nested machines (sub_flow targets)
 }
 
-export function compilePackV2(pack: PackV2): CompiledPack {
+/** Compile ONE machine (fsm + meta + gates) — does NOT touch `flows` (no recursion). The HAR.1 wrapper
+ *  `compilePackV2` compiles each flow via this + shares the flat registry. */
+function compileMachine(pack: PackV2): CompiledPack {
   // BEHAVIOR form: present only when the pack carries an `fsm` (a conformance/foundation pack does not).
   const meta: Record<string, StateMeta> = {};
   let fsm: Fsm | undefined;
@@ -160,6 +163,38 @@ export function compilePackV2(pack: PackV2): CompiledPack {
 
   // FOUNDATION form: neither fsm nor gates → a CompiledPack with empty meta + no gates (pure expertise).
   return { ...(fsm !== undefined ? { fsm } : {}), meta, ...(gates !== undefined ? { gates } : {}) };
+}
+
+/**
+ * HAR.1 — compile a pack + its FLAT `flows` registry of isolated nested machines. Each flow is compiled
+ * via `compileMachine` (NON-recursive — no re-entry into `flows`); a fail-loud sweep checks every
+ * `sub_flow.flow` (parent + each flow) resolves to a registered flow; the flat registry is SHARED onto
+ * every compiled machine so a child driver can resolve sibling flows.
+ */
+export function compilePackV2(pack: PackV2): CompiledPack {
+  const compiled = compileMachine(pack);
+  if (pack.flows !== undefined) {
+    const flows: Record<string, CompiledPack> = {};
+    for (const [name, f] of Object.entries(pack.flows))
+      flows[name] = compileMachine({ ...pack, fsm: f });
+    // fail-loud (FLAT, non-recursive sweep): when a registry is declared, every sub_flow.flow across the
+    // parent + each flow must resolve to a registered flow. (A sub_flow with NO registry at all is caught
+    // at RUNTIME by the driver's fail-loud — `runSubFlow` throws on an unresolved child — so a registry-
+    // less pack still graphs/round-trips in tools like viz without a compile error.)
+    const registered = new Set(Object.keys(pack.flows));
+    for (const machine of [pack.fsm, ...Object.values(pack.flows)]) {
+      for (const [st, s] of Object.entries(machine?.states ?? {})) {
+        if (s.kind === 'sub_flow' && !registered.has(s.flow)) {
+          throw new Error(
+            `pack ${pack.name}: sub_flow '${st}' -> flow '${s.flow}' resolves to no registered nested machine`,
+          );
+        }
+      }
+    }
+    compiled.flows = flows;
+    for (const child of Object.values(flows)) child.flows = flows; // share the flat registry (sibling resolution)
+  }
+  return compiled;
 }
 
 /** Fail LOUD if a decision's branches emit a duplicate event (would make a branch unreachable via routing). */

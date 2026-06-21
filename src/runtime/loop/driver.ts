@@ -146,22 +146,26 @@ export class LoopDriver {
   }
 
   private async runSubFlow(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
-    // ISOLATED recursion: the sub-flow runs to its own terminal on a fresh driver over the same
-    // compiled pack's nested FSM ref. (The nested-FSM resolution is wired at integration; here the
-    // flow ref names a sub-region whose terminal returns control to the parent — no parent-state bleed.)
-    const outcome = await this.runFlowToTerminal(m.flow ?? '', ctx);
+    // HAR.1 — ISOLATION BY CONSTRUCTION: resolve the named child machine from the FLAT `flows` registry
+    // and run it on a FRESH LoopDriver whose `this.compiled`/`this.fsm`/`this.meta` ARE the child — so
+    // step/transitionOn/meta-dispatch resolve only the child's states (no parent-state bleed).
+    const child = this.compiled.flows?.[m.flow ?? ''];
+    if (child === undefined) {
+      throw new Error(
+        `LOOP.1: sub_flow '${state}' -> flow '${m.flow ?? ''}' has no compiled nested machine`,
+      );
+    }
+    const outcome = await new LoopDriver(child, this.deps).runToTerminal(ctx);
     if (outcome === 'shipped') {
       return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
     }
     return { kind: 'outcome', outcome: 'wedge', reason: `sub_flow '${m.flow ?? state}' wedged` };
   }
 
-  /** Run a (sub-)flow from its initial state to a terminal, returning the terminal outcome. */
-  private async runFlowToTerminal(
-    flowInitial: string,
-    ctx: GuardCtx,
-  ): Promise<'shipped' | 'wedge'> {
-    let cur = flowInitial.length > 0 ? flowInitial : this.fsm.initial;
+  /** Run THIS driver's machine from its OWN initial state to a terminal, returning the outcome.
+   *  (A child sub-flow runs on its own LoopDriver, so `this.fsm`/`this.step` are the child's — HAR.1.) */
+  async runToTerminal(ctx: GuardCtx): Promise<'shipped' | 'wedge'> {
+    let cur = this.fsm.initial;
     // a bounded walk: the FSM is finite + acyclic-to-terminal by construction; the cap is a backstop.
     for (let guardCount = 0; guardCount < 10_000; guardCount++) {
       const r = await this.step(cur, ctx);

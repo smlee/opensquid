@@ -54,6 +54,23 @@ const amazonClone = PackV2.parse({
       { from: 'build', on: 'build_done', to: 'es_gate' },
     ],
   },
+  // HAR.1 — `build_pipeline` is an ISOLATED nested machine (flows registry), not a parent state.
+  flows: {
+    build_pipeline: {
+      initial: 'impl',
+      states: {
+        impl: {
+          kind: 'executor',
+          executor: 'codex',
+          directive: 'build',
+          completion: 'ok',
+          emits: 'impl_done',
+        },
+        impl_term: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: 'impl', on: 'impl_done', to: 'impl_term' }],
+    },
+  },
   messages: { size_too_big: 'Bundle exceeds budget; code-split, re-run.' },
 });
 
@@ -213,6 +230,22 @@ describe('compilePackV2 (T1) — coding-flow-shaped fixture: multi-out + wildcar
         // WILDCARD: a task-reset from ANY state (the coding-flow `from:'*'` shape).
         { from: '*', on: 'task_unscoped', to: 'scoping' },
       ],
+    },
+    // HAR.1 — `author_impl` is an ISOLATED nested machine (flows registry), not a parent state.
+    flows: {
+      author_impl: {
+        initial: 'draft',
+        states: {
+          draft: {
+            kind: 'executor',
+            directive: 'author',
+            completion: 'authored',
+            emits: 'authored_done',
+          },
+          author_term: { kind: 'terminal', outcome: 'shipped' },
+        },
+        transitions: [{ from: 'draft', on: 'authored_done', to: 'author_term' }],
+      },
     },
   });
 

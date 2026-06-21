@@ -140,6 +140,14 @@ const DestinationCheckGate = z
 export const ConformanceGate = z.discriminatedUnion('kind', [TrackCheckGate, DestinationCheckGate]);
 export type ConformanceGate = z.infer<typeof ConformanceGate>;
 
+/** HAR.1: the named pack-`fsm` wire shape — reused for the `flows` registry of isolated nested machines. */
+export const FsmV2 = z.object({
+  initial: z.string().min(1),
+  states: z.record(z.string(), StateV2),
+  transitions: z.array(Transition).default([]), // EXPLICIT named-event edges — the fsm.yaml shape
+});
+export type FsmV2 = z.infer<typeof FsmV2>;
+
 export const PackV2 = z
   .object({
     name: z.string().min(1),
@@ -147,13 +155,9 @@ export const PackV2 = z
     scope: PackScope,
     detected_by: z.array(z.unknown()).default([]),
     // ← NOW OPTIONAL: a behavior pack has `fsm`; a conformance/foundation pack does not (M.1).
-    fsm: z
-      .object({
-        initial: z.string().min(1),
-        states: z.record(z.string(), StateV2),
-        transitions: z.array(Transition).default([]), // EXPLICIT named-event edges — the fsm.yaml shape
-      })
-      .optional(),
+    fsm: FsmV2.optional(),
+    // HAR.1: a FLAT registry of named ISOLATED nested machines; a `sub_flow.flow` is a key into this.
+    flows: z.record(z.string(), FsmV2).optional(),
     gates: z.array(ConformanceGate).optional(), // ← conformance form: always-active gates, fsm-less
     guards: z.record(z.string(), z.unknown()).default({}), // guard defs — compiled by the guard subsystem (GUARD.1/EXE.1)
     messages: z.record(z.string(), z.string()).default({}), // self-continue store: failure_type → instruction

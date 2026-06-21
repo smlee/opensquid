@@ -42,13 +42,6 @@ const PACK = PackV2.parse({
         ],
       },
       build: { kind: 'sub_flow', flow: 'build_impl', emits: 'build_done' },
-      build_impl: {
-        kind: 'executor',
-        executor: 'codex',
-        directive: 'build it',
-        completion: 'built',
-        emits: 'impl_done',
-      },
       build_done: { kind: 'terminal', outcome: 'shipped' },
       done: { kind: 'terminal', outcome: 'shipped' },
     },
@@ -58,8 +51,24 @@ const PACK = PackV2.parse({
       { from: 'decide', on: 'holdout_pass', to: 'done' },
       { from: 'decide', on: 'holdout_fail', to: 'build' },
       { from: 'build', on: 'build_done', to: 'done' },
-      { from: 'build_impl', on: 'impl_done', to: 'build_done' },
     ],
+  },
+  // HAR.1 — `build_impl` is now an ISOLATED nested machine in the flows registry (was a parent state).
+  flows: {
+    build_impl: {
+      initial: 'impl',
+      states: {
+        impl: {
+          kind: 'executor',
+          executor: 'codex',
+          directive: 'build it',
+          completion: 'built',
+          emits: 'impl_done',
+        },
+        impl_term: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: 'impl', on: 'impl_done', to: 'impl_term' }],
+    },
   },
 });
 const COMPILED = compilePackV2(PACK);
@@ -193,5 +202,73 @@ describe('LoopDriver (LOOP.1)', () => {
       guards: guardsReturning(true),
     });
     await expect(d.step('nope')).rejects.toThrow(/no meta for state/);
+  });
+
+  it('HAR.1 — sub_flow runs an ISOLATED nested machine (a colliding state name resolves the CHILD, not the parent)', async () => {
+    // The parent `review` is an EXECUTOR (needs a connectable executor); the child flow's `review` is a TERMINAL.
+    // Running the child on a FAIL-CLOSED registry proves it used ITS OWN `review` (terminal) — if isolation were
+    // broken (child ran on parent meta), the parent's executor `review` would demand an executor → throw.
+    const iso = compilePackV2(
+      PackV2.parse({
+        name: 'iso',
+        version: '0',
+        scope: 'project',
+        fsm: {
+          initial: 'go',
+          states: {
+            go: { kind: 'sub_flow', flow: 'inner', emits: 'inner_done' },
+            shipped: { kind: 'terminal', outcome: 'shipped' },
+            review: {
+              kind: 'executor',
+              executor: 'x',
+              directive: 'd',
+              completion: 'c',
+              emits: 'rdone',
+            },
+          },
+          transitions: [
+            { from: 'go', on: 'inner_done', to: 'shipped' },
+            { from: 'review', on: 'rdone', to: 'shipped' },
+          ],
+        },
+        flows: {
+          inner: {
+            initial: 'review',
+            states: { review: { kind: 'terminal', outcome: 'shipped' } },
+            transitions: [],
+          },
+        },
+      }),
+    );
+    const d = new LoopDriver(iso, { registry: failClosedRegistry, guards: guardsReturning(true) });
+    expect(await d.step('go')).toEqual({ kind: 'advance', next: 'shipped' });
+  });
+
+  it('HAR.1 — a sub_flow referencing an unregistered flow fails LOUD at compile', () => {
+    expect(() =>
+      compilePackV2(
+        PackV2.parse({
+          name: 'dangle',
+          version: '0',
+          scope: 'project',
+          fsm: {
+            initial: 's',
+            states: {
+              s: { kind: 'sub_flow', flow: 'ghost', emits: 'e' },
+              t: { kind: 'terminal', outcome: 'shipped' },
+            },
+            transitions: [{ from: 's', on: 'e', to: 't' }],
+          },
+          // a registry IS declared (so the compile-time sweep runs), but `ghost` isn't in it.
+          flows: {
+            real: {
+              initial: 'a',
+              states: { a: { kind: 'terminal', outcome: 'shipped' } },
+              transitions: [],
+            },
+          },
+        }),
+      ),
+    ).toThrow(/sub_flow 's' -> flow 'ghost' resolves to no registered/);
   });
 });
