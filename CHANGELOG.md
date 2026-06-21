@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.494] - 2026-06-21
+
+### Added — FAC-CUT.5a: single-pass partition of active packs into v1 + v2 (the v2 LOAD seam)
+
+- **Discovery now partitions active packs by format** — `partitionActivePacks` resolves+loads each active
+  pack ONCE via `loadActiveEntry` (an open-and-catch resolver where the successful load IS the format
+  classification: a dir's `pack.yaml` ⇒ v2, else its `manifest.yaml` ⇒ v1; scope-first then builtin; only an
+  ENOENT advances the search, a malformed pack fails LOUD). Returns `{ v1: Pack[]; v2: LoadedPackV2[] }`.
+- **Zero churn to the v1 pipeline** — `discoverActivePacks` is now a thin wrapper over
+  `partitionActivePacks(...).v1` with the SAME signature/return type, so `realPacksPromise` + the entire
+  `Pack[]` consumer graph (dispatch, `partitionSkills`, the MCP/list tools, the runtime stages) are untouched
+  and run through the new partition unchanged (the full existing suite stays green with no fixture changes).
+- **`loadActiveV2Cartridges`** (bootstrap) aggregates the v2 cartridges across user+project scopes — exported,
+  UNCONSUMED in this slice; its live consumer is the v2 actor runtime (FAC-CUT.5b).
+- Deleted the now-dead private `loadPackWithBuiltinFallback` (its sole caller is subsumed by the new
+  resolver) — a single resolution mechanism, the full fix.
+- Internal only (v2 is an internal format that subsumes v1 — user decision); no user-facing config change.
+  Makes v2 cartridges LOADABLE in place; making them RUN is FAC-CUT.5b.
+
 ## [0.5.493] - 2026-06-21
 
 ### Added — GOAL-MAPPER.2: the per-slice worksheet trigger + `set_goal` MCP tool

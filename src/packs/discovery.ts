@@ -42,6 +42,7 @@ import { runThreeWayMerge, type MergeResult } from '../runtime/versioning.js';
 
 import { expandComposites } from './composite_resolver.js';
 import { loadPack } from './loader.js';
+import { loadPackV2, type LoadedPackV2 } from './loader_v2.js';
 import { readVersionJson } from './personal_revision.js';
 
 /**
@@ -196,12 +197,58 @@ export interface ActiveJson {
  * NOT listed in `active.json` is never loaded by this fn, regardless of
  * what its `detectedBy` would say.
  */
-export async function discoverActivePacks(
+/** One active pack resolved+loaded by FORMAT. FAC-CUT.5a: v2 subsumes v1 (user decision); the format is
+ *  the file present in the resolved dir — `pack.yaml` (v2) vs `manifest.yaml` (v1). */
+type ActiveEntry = { format: 'v1'; pack: Pack } | { format: 'v2'; loaded: LoadedPackV2 };
+
+/**
+ * FAC-CUT.5a — resolve+load ONE active pack by name, scope-first then builtin, by an open-and-catch where
+ * the successful LOAD is the format classification (mirrors the prior fallback loader's
+ * open-and-catch-ENOENT, which this replaces): a dir's `pack.yaml` ⇒ v2; else its `manifest.yaml` ⇒ v1; neither at
+ * a base ⇒ next base; none ⇒ throw. Only an ENOENT advances the search — a MALFORMED pack (non-ENOENT, e.g.
+ * a bad YAML or a failed `PackV2.parse`) propagates (fail-loud, never silently skipped).
+ */
+async function loadActiveEntry(
+  name: string,
+  scopePacksDir: string,
+  builtinRoot: string | null,
+): Promise<ActiveEntry> {
+  const bases = builtinRoot === null ? [scopePacksDir] : [scopePacksDir, builtinRoot];
+  for (const base of bases) {
+    const dir = join(base, name);
+    try {
+      return { format: 'v2', loaded: await loadPackV2(dir) }; // reads pack.yaml; ENOENT → try v1
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; // malformed v2 → fail loud
+    }
+    try {
+      return { format: 'v1', pack: await loadPack(dir) }; // reads manifest.yaml; ENOENT → next base
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; // malformed v1 → fail loud
+    }
+  }
+  const tried =
+    builtinRoot === null
+      ? join(scopePacksDir, name)
+      : `${join(scopePacksDir, name)} OR built-in (${join(builtinRoot, name)})`;
+  throw new Error(
+    `opensquid: pack "${name}" listed in active.json was not found (v2 pack.yaml or v1 manifest.yaml) at ` +
+      `${tried}. Either install the pack via \`opensquid pack install\` or drop the entry from active.json.`,
+  );
+}
+
+/**
+ * FAC-CUT.5a — single-pass partition of the active packs into v1 + v2 by `pack.yaml` presence. Every active
+ * name is resolved+loaded ONCE via `loadActiveEntry`; v1 entries keep the `detectedBy` gate + composite
+ * expansion (unchanged), v2 entries are collected raw (their `detected_by`/composite parity is FAC-CUT.5b).
+ * `discoverActivePacks` is the thin `.v1` wrapper below, so the v1 `Pack[]` consumer graph is untouched.
+ */
+export async function partitionActivePacks(
   scopeRoot: string | null,
   ctx: DetectionContext | null = null,
   builtinRoot: string | null = null,
-): Promise<Pack[]> {
-  if (scopeRoot === null) return [];
+): Promise<{ v1: Pack[]; v2: LoadedPackV2[] }> {
+  if (scopeRoot === null) return { v1: [], v2: [] };
 
   const activePath = join(scopeRoot, 'active.json');
   let active: ActiveJson;
@@ -215,7 +262,7 @@ export async function discoverActivePacks(
     }
     active = parsed as ActiveJson;
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { v1: [], v2: [] };
     throw e;
   }
 
@@ -235,11 +282,14 @@ export async function discoverActivePacks(
   // fallback was removed in T-CHAT-AS-TERMINAL's codex→pack standardization —
   // `packs/` is the sole, standard layout.)
   const packsDir = join(scopeRoot, 'packs');
-  const packs: Pack[] = [];
+  const v1: Pack[] = [];
+  const v2: LoadedPackV2[] = [];
   for (const name of active.packs) {
-    const pack = await loadPackWithBuiltinFallback(name, packsDir, builtinRoot);
-    if (ctx === null || matchesDetectedBy(pack.detectedBy ?? [], ctx)) {
-      packs.push(pack);
+    const entry = await loadActiveEntry(name, packsDir, builtinRoot);
+    if (entry.format === 'v2') {
+      v2.push(entry.loaded);
+    } else if (ctx === null || matchesDetectedBy(entry.pack.detectedBy ?? [], ctx)) {
+      v1.push(entry.pack);
     }
   }
   // MM.1 (2026-05-30) — expand composite packs into their includes after
@@ -247,7 +297,21 @@ export async function discoverActivePacks(
   // composite stays in the list for audit); its included focused packs are
   // appended (deduped first-occurrence-wins). Errors throw
   // CompositeResolutionError with the composite name + cause.
-  return expandComposites(packs);
+  return { v1: expandComposites(v1), v2 };
+}
+
+/**
+ * The active v1 packs in this scope. UNCHANGED public contract (`Pack[]`, same signature) — a thin wrapper
+ * over `partitionActivePacks(...).v1`, so every caller (`realPacksPromise` + the ~13 `Pack[]` consumers) is
+ * untouched while the single-pass partition runs underneath (FAC-CUT.5a). See the module header for the
+ * behavior contract (still exact for the v1 path).
+ */
+export async function discoverActivePacks(
+  scopeRoot: string | null,
+  ctx: DetectionContext | null = null,
+  builtinRoot: string | null = null,
+): Promise<Pack[]> {
+  return (await partitionActivePacks(scopeRoot, ctx, builtinRoot)).v1;
 }
 
 /**
@@ -261,27 +325,3 @@ export async function discoverActivePacks(
  * explicit (user-installed wins over built-in even when names collide),
  * matching the layering contract in pack-runtime.md §1.6.
  */
-async function loadPackWithBuiltinFallback(
-  name: string,
-  scopePacksDir: string,
-  builtinRoot: string | null,
-): Promise<Pack> {
-  const userPath = join(scopePacksDir, name);
-  try {
-    return await loadPack(userPath);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT' || builtinRoot === null) throw e;
-    try {
-      return await loadPack(join(builtinRoot, name));
-    } catch (fallbackErr) {
-      const fbCode = (fallbackErr as NodeJS.ErrnoException).code;
-      if (fbCode === 'ENOENT') {
-        throw new Error(
-          `opensquid: pack "${name}" listed in active.json was not found at user-scope (${userPath}) OR built-in (${join(builtinRoot, name)}). Either install the pack via \`opensquid pack install\` or drop the entry from active.json.`,
-        );
-      }
-      throw fallbackErr;
-    }
-  }
-}

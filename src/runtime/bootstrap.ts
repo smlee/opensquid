@@ -96,7 +96,8 @@ import { registerCheckChatConnectionFunction } from '../functions/check_chat_con
 import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
-import { discoverActivePacks } from '../packs/discovery.js';
+import { discoverActivePacks, partitionActivePacks } from '../packs/discovery.js';
+import type { LoadedPackV2 } from '../packs/loader_v2.js';
 import { type DetectionContext } from './detection.js';
 import { dedupePacksByName, sortPacksByScope } from '../packs/load_order.js';
 import { loadPack } from '../packs/loader.js';
@@ -462,4 +463,21 @@ export function setActivePacks(packs: Pack[]): void {
 export async function loadActivePacks(_sessionId: string): Promise<Pack[]> {
   const [disk, real] = await Promise.all([diskPacksPromise, realPacksPromise]);
   return [...activePacks, ...disk, ...real];
+}
+
+/**
+ * FAC-CUT.5a — the active v2 CARTRIDGES (packs whose dir carries a `pack.yaml`), aggregated across user +
+ * project scopes. Mirrors `realPacksPromise`'s scope walk but keeps the `.v2` side of the single-pass
+ * partition. UNCONSUMED in .5a: its live consumer is the v2 actor host built in FAC-CUT.5b (which must then
+ * SHARE one `partitionActivePacks` call per scope with the v1 path to avoid double-loading — a .5b
+ * obligation). v2 subsumes v1 (user decision); when all packs are `pack.yaml`, the v1 path empties and is
+ * retired.
+ */
+export async function loadActiveV2Cartridges(_sessionId: string): Promise<LoadedPackV2[]> {
+  const cwd = process.cwd();
+  const ctx = await buildDetectionContext(cwd);
+  const builtinRoot = resolveBuiltinScopeRoot();
+  const user = await partitionActivePacks(resolveUserScopeRoot(), ctx, builtinRoot);
+  const project = await partitionActivePacks(await resolveProjectScopeRoot(cwd), ctx, builtinRoot);
+  return [...user.v2, ...project.v2];
 }
