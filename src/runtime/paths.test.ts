@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   OPENSQUID_HOME,
+  discoverLeasePaths,
   inboxAckedPath,
   inboxDir,
   packLogFile,
@@ -386,5 +387,40 @@ describe('LL.1 inbox path helpers', () => {
     expect(inboxAckedPath('uuid-x')).toBe(
       join(tempHome, 'projects', 'uuid-x', 'inbox', 'acked.jsonl'),
     );
+  });
+});
+
+describe('discoverLeasePaths (FAC-CUT.1)', () => {
+  let home: string;
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'opensquid-leasepaths-'));
+  });
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('enumerates a candidate lease path per subdir across BOTH nested trees', async () => {
+    await mkdir(join(home, 'umbrellas', 'loop'), { recursive: true });
+    await mkdir(join(home, 'umbrellas', 'general'), { recursive: true });
+    await mkdir(join(home, 'projects', 'uuid-1'), { recursive: true });
+    const paths = await discoverLeasePaths(home);
+    expect(paths.sort()).toEqual(
+      [
+        join(home, 'umbrellas', 'general', 'live-session.lease'),
+        join(home, 'umbrellas', 'loop', 'live-session.lease'),
+        join(home, 'projects', 'uuid-1', 'live-session.lease'),
+      ].sort(),
+    );
+  });
+
+  it('returns candidate paths even when the lease FILE is absent (existence is the reader’s call)', async () => {
+    await mkdir(join(home, 'umbrellas', 'loop'), { recursive: true }); // subdir, no lease file
+    expect(await discoverLeasePaths(home)).toEqual([
+      join(home, 'umbrellas', 'loop', 'live-session.lease'),
+    ]);
+  });
+
+  it('missing parent dirs → [] (fresh install, no sessions yet)', async () => {
+    expect(await discoverLeasePaths(join(home, 'nonexistent-home'))).toEqual([]);
   });
 });

@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { validateFsm } from '../fsm.js';
-import { readShutdownMarker } from '../genesis/shutdown_marker.js';
+import { readShutdownMarker, writeShutdownMarker } from '../genesis/shutdown_marker.js';
+import { writeLease } from '../chat/live_session_lease.js';
 import { HOST_FSM, startHost, type HostHandle } from './host.js';
 import { readRuntimeState, runtimeStatePath } from './state_file.js';
 
@@ -47,6 +48,34 @@ describe('host lifecycle FSM (DAEMON.1)', () => {
     // genesis ran during boot and surfaced its StartupReport with all three registries resolved.
     expect(report).toBeDefined();
     expect(Object.keys(report?.actors ?? {}).sort()).toEqual(['agent', 'topology', 'workspace']);
+  });
+});
+
+describe('genesis agent-registry seeding from live leases (FAC-CUT.1)', () => {
+  it('no live lease → the agent dimension classifies `new_start`', async () => {
+    let report: { actors: Record<string, string> } | undefined;
+    const h = await startHost({ home, onStartupReport: (r) => (report = r) });
+    live.push(h);
+    expect(report?.actors.agent).toBe('new_start'); // empty seeded registry
+  });
+
+  it('a FRESH live-session lease (clean boot) → the agent dimension classifies `resume`', async () => {
+    // a live session under the host's home (umbrella tree); the daemon seeds it as a stub (self=null).
+    await writeLease(join(home, 'umbrellas', 'loop', 'live-session.lease'), 'sess-live');
+    await writeShutdownMarker('digest', home); // clean marker → recovery=false (so resume is not downgraded to wedge)
+    let report: { actors: Record<string, string> } | undefined;
+    const h = await startHost({ home, onStartupReport: (r) => (report = r) });
+    live.push(h);
+    expect(report?.actors.agent).toBe('resume'); // non-empty registry, classified resume
+  });
+
+  it('only a STALE lease → still `new_start` (stale excluded by lease-freshness)', async () => {
+    const stalePath = join(home, 'projects', 'p1', 'live-session.lease');
+    await writeLease(stalePath, 'sess-stale', new Date(Date.now() - 10 * 60_000)); // 10m old ≫ STALE_MS
+    let report: { actors: Record<string, string> } | undefined;
+    const h = await startHost({ home, onStartupReport: (r) => (report = r) });
+    live.push(h);
+    expect(report?.actors.agent).toBe('new_start');
   });
 });
 

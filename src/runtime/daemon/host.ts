@@ -33,11 +33,11 @@ import { Bus } from '../bus/bus.js';
 import type { Envelope } from '../bus/types.js';
 import { fromFlat, soleState, step, validateFsm, type Fsm } from '../fsm.js';
 import { Topology } from '../topology/topology.js';
-import { OPENSQUID_HOME } from '../paths.js';
+import { OPENSQUID_HOME, discoverLeasePaths } from '../paths.js';
 import { writeShutdownMarker } from '../genesis/shutdown_marker.js';
 import { buildGenesisWorld, runGenesis } from '../genesis/boot.js';
 import { writeStartupReport } from '../genesis/startup_report_file.js';
-import { AgentRegistry } from '../registry/agent_registry.js';
+import { discoverLiveStubs, seedAgentRegistry } from '../registry/agent_registry.js';
 import type { StartupReport } from '../genesis/reconcile.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -181,13 +181,16 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
     // T3c — GENESIS runs HERE, before `advance('ready')`: resolve the three registries (workspace × topology
     // × agent) via the total `reconcile`. The host never reaches `running` until genesis resolved them; a crash
     // (no shutdown marker) parks resumes as wedges (inside `reconcile`). Inside the boot try, so a genesis throw
-    // releases the lock + fails the boot (the catch below). The agent registry is empty at boot — agents
-    // register via the connect channel (a later track); an empty WHO registry is a correct fresh `new_start`.
+    // releases the lock + fails the boot (the catch below).
+    // FAC-CUT.1 — seed the WHO registry from the live-session leases on disk (stubs only: this per-MACHINE
+    // daemon has no agent identity, so `self = null`; per-session self-registration is FAC-CUT.1b). Now the
+    // agent dimension classifies `resume` when a live session is present, `new_start` only when none is.
+    const stubs = await discoverLiveStubs(await discoverLeasePaths(home), '', new Date()); // no self → '' excludes nothing
     const genesis = await runGenesis(
       buildGenesisWorld({
         readProjects: () => readProjectsState(home),
         topologyConnected: () => topology.connected(),
-        agents: new AgentRegistry(),
+        agents: seedAgentRegistry(null, stubs),
       }),
       home, // key the shutdown-marker classifier to the HOST's home
     );

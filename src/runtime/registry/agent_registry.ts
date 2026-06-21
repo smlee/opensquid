@@ -11,9 +11,6 @@
  * (fresh ⇒ connected, stale ⇒ disconnected). No "assume up". Identity (harness/id) is seeded from `claimAudience`
  * + the lease; the four self-declared fields come from the agent's own `register()` payload.
  */
-import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
-
 import { isLeaseFresh, readLease } from '../chat/live_session_lease.js';
 import type { ClaimAudience } from '../../workgraph/types.js';
 
@@ -79,18 +76,21 @@ export function buildSelfEntry(
 }
 
 /**
- * Discover OTHER live agents from fresh leases in `leaseDir` → id+liveness STUBS (`executor: ''`). A stub is
- * liveness-VISIBLE but NOT executor-resolvable (its `executor` is empty until the remote agent registers its
- * backend via the cross-process channel — a future track). Excludes the self lease + stale leases.
+ * Discover OTHER live agents from fresh leases at the given `leasePaths` → id+liveness STUBS (`executor: ''`).
+ * A stub is liveness-VISIBLE but NOT executor-resolvable (its `executor` is empty until the remote agent
+ * registers its backend via the cross-process channel — a future track). Excludes the self lease + stale leases.
+ *
+ * PATH-LIST driven (not a flat dir): leases are NESTED on disk (`umbrellas/<id>/live-session.lease`,
+ * `projects/<uuid>/live-session.lease`), so the CALLER resolves the lease-file paths (`paths.discoverLeasePaths`)
+ * and this module owns only the envelope→stub map — mirroring `live_session_lease.ts`'s key-agnostic split.
  */
 export async function discoverLiveStubs(
-  leaseDir: string,
+  leasePaths: string[],
   selfId: string,
   now: Date = new Date(),
 ): Promise<AgentEntry[]> {
   const out: AgentEntry[] = [];
-  for (const file of await readdir(leaseDir).catch(() => [])) {
-    const leasePath = join(leaseDir, file);
+  for (const leasePath of leasePaths) {
     const lease = await readLease(leasePath);
     if (lease === null || lease.session_id === selfId || !isLeaseFresh(lease, now)) continue;
     out.push({
@@ -107,10 +107,17 @@ export async function discoverLiveStubs(
   return out;
 }
 
-/** Seed the registry: the host's own register()ed entry + the discovered live stubs. */
-export function seedAgentRegistry(self: AgentEntry, otherLiveStubs: AgentEntry[]): AgentRegistry {
+/**
+ * Seed the registry: the host's own register()ed entry (when it has one) + the discovered live stubs.
+ * `self` is NULLABLE — the per-machine daemon host has no agent identity (no claim/lease/sessionId), so it
+ * seeds stubs only; a per-session surface (hook bin / MCP server) passes a real self via `buildSelfEntry`.
+ */
+export function seedAgentRegistry(
+  self: AgentEntry | null,
+  otherLiveStubs: AgentEntry[],
+): AgentRegistry {
   const r = new AgentRegistry();
-  r.register(self);
+  if (self !== null) r.register(self);
   for (const s of otherLiveStubs) r.register(s); // stubs (executor:'') are liveness-visible, not executor-resolvable
   return r;
 }

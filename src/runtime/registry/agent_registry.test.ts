@@ -119,25 +119,56 @@ describe('buildSelfEntry (T3a)', () => {
   });
 });
 
-describe('discoverLiveStubs (T3a)', () => {
+describe('discoverLiveStubs (T3a) — path-list driven', () => {
+  const leasePath = (id: string): string => join(dir, `${id}.json`);
+
   it('enumerates fresh leases → id+liveness stubs (executor:""); excludes self + stale', async () => {
-    await writeLease(join(dir, 'a.json'), 'a', NOW); // fresh
-    await writeLease(join(dir, 'b.json'), 'b', NOW); // fresh
-    await writeLease(join(dir, 'self.json'), 'self', NOW); // self → excluded
-    await writeLease(join(dir, 'old.json'), 'old', STALE); // stale → excluded
-    const stubs = await discoverLiveStubs(dir, 'self', NOW);
+    await writeLease(leasePath('a'), 'a', NOW); // fresh
+    await writeLease(leasePath('b'), 'b', NOW); // fresh
+    await writeLease(leasePath('self'), 'self', NOW); // self → excluded
+    await writeLease(leasePath('old'), 'old', STALE); // stale → excluded
+    const stubs = await discoverLiveStubs(['a', 'b', 'self', 'old'].map(leasePath), 'self', NOW);
     expect(stubs.map((s) => s.id).sort()).toEqual(['a', 'b']);
     expect(stubs.every((s) => s.executor === '')).toBe(true); // stubs are not executor-resolvable
   });
 
+  it('selfId "" excludes nothing (the daemon has no self lease)', async () => {
+    await writeLease(leasePath('a'), 'a', NOW);
+    await writeLease(leasePath('b'), 'b', NOW);
+    const stubs = await discoverLiveStubs(['a', 'b'].map(leasePath), '', NOW);
+    expect(stubs.map((s) => s.id).sort()).toEqual(['a', 'b']);
+  });
+
   it('a stub is NOT returned by resolve() (executor "" ≠ a real backend name)', async () => {
-    const stubs = await discoverLiveStubs(dir, 'self', NOW); // empty dir → []
+    const stubs = await discoverLiveStubs([], 'self', NOW); // empty list → []
     const r = seedAgentRegistry(await liveEntry('self', 'claude'), stubs);
     expect((await r.resolve('claude', 'self', NOW)).map((e) => e.id)).toEqual(['self']);
     expect(await r.resolve('', 'self', NOW)).toEqual([]); // an empty backend never resolves
   });
 
-  it('a missing lease dir → [] (fail-soft, never throws)', async () => {
-    expect(await discoverLiveStubs(join(dir, 'nope'), 'self', NOW)).toEqual([]);
+  it('a missing / absent lease path → [] (fail-soft, never throws)', async () => {
+    expect(await discoverLiveStubs([join(dir, 'nope.json')], 'self', NOW)).toEqual([]);
+    expect(await discoverLiveStubs([], 'self', NOW)).toEqual([]);
+  });
+});
+
+describe('seedAgentRegistry — nullable self (FAC-CUT.1)', () => {
+  it('self=null seeds stubs only (the per-machine daemon has no agent identity)', () => {
+    const stub: AgentEntry = {
+      id: 'peer',
+      harness: 'unknown',
+      executor: '',
+      auth: 'host-inherited',
+      capabilities: [],
+      scope: 'user',
+      role: '',
+      leasePath: join(dir, 'peer.json'),
+    };
+    const r = seedAgentRegistry(null, [stub]);
+    expect(r.snapshot().map((e) => e.id)).toEqual(['peer']);
+  });
+
+  it('self=null + no stubs → empty registry → genesis classifies new_start', () => {
+    expect(seedAgentRegistry(null, []).snapshot()).toEqual([]);
   });
 });

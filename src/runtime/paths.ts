@@ -24,7 +24,7 @@
  * Imported by: src/functions/state.ts, src/runtime/drift_catalog.ts.
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -385,6 +385,22 @@ export const umbrellaLiveSessionLease = (umbrellaId: string): string =>
 
 export const umbrellaCurrentSessionPath = (umbrellaId: string): string =>
   join(OPENSQUID_HOME(), 'umbrellas', umbrellaId, '.current-session');
+
+// FAC-CUT.1 — enumerate every live-session lease FILE path across the two nested trees
+// (`umbrellas/<id>/live-session.lease` + `projects/<uuid>/live-session.lease`). Path-layout
+// knowledge lives HERE (not in the key-agnostic agent_registry / live_session_lease modules);
+// `agent_registry.discoverLiveStubs` consumes the returned paths. Candidate paths only —
+// existence/freshness is the reader's call (`readLease`/`isLeaseFresh`), so a missing lease
+// file in a present subdir is fine. Missing parent dirs ⇒ [] (fresh install, no sessions yet).
+export const discoverLeasePaths = async (home: string = OPENSQUID_HOME()): Promise<string[]> => {
+  const out: string[] = [];
+  for (const parent of ['umbrellas', 'projects'] as const) {
+    const dir = join(home, parent);
+    for (const entry of await readdir(dir).catch(() => [] as string[]))
+      out.push(join(dir, entry, 'live-session.lease'));
+  }
+  return out;
+};
 
 // CAT.3 — chat-driven-turn marker. Written (with the driving session id) when the
 // Stop hook DRIVES a turn from an inbound chat message (CAT.2); consumed (the
