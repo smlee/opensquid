@@ -5,9 +5,16 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { parseWorksheet, parseWorksheetContent, titleOf, worksheetPath, writeWorksheetFile } from './parse.js';
+import {
+  parseWorksheet,
+  parseWorksheetContent,
+  titleOf,
+  worksheetPath,
+  writeWorksheetFile,
+} from './parse.js';
 
-const single = '# Worksheet — T-foo\n\n```yaml\nmode: single\nscopes:\n  - id: T-foo\n    summary: do foo\norder:\n  - T-foo\n```\n';
+const single =
+  '# Worksheet — T-foo\n\n```yaml\nmode: single\nscopes:\n  - id: T-foo\n    summary: do foo\norder:\n  - T-foo\n```\n';
 
 describe('parseWorksheetContent', () => {
   it('a valid single worksheet → parsed Worksheet', () => {
@@ -27,14 +34,16 @@ describe('parseWorksheetContent', () => {
   });
 
   it('schema-invalid (batch scope missing issue) → error', () => {
-    const md = '```yaml\nmode: batch\nscopes:\n  - id: a\n    summary: sa\n  - id: b\n    summary: sb\norder: [a, b]\n```';
+    const md =
+      '```yaml\nmode: batch\nscopes:\n  - id: a\n    summary: sa\n  - id: b\n    summary: sb\norder: [a, b]\n```';
     expect('error' in parseWorksheetContent(md)).toBe(true);
   });
 });
 
 describe('titleOf', () => {
   it('extracts the first H1', () => expect(titleOf('# My Title\n\nbody')).toBe('My Title'));
-  it('falls back to the slug when no H1', () => expect(titleOf('no heading', 'T-foo')).toBe('T-foo'));
+  it('falls back to the slug when no H1', () =>
+    expect(titleOf('no heading', 'T-foo')).toBe('T-foo'));
 });
 
 describe('writeWorksheetFile + parseWorksheet round-trip', () => {

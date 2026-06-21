@@ -13,7 +13,10 @@ let home: string;
 const saved = process.env.OPENSQUID_HOME;
 
 function homeStore(h: string): ReturnType<typeof workGraphStore> {
-  return workGraphStore({ dbUrl: `file:${join(h, 'workgraph.db')}`, sourceDir: join(h, 'store', 'issues') });
+  return workGraphStore({
+    dbUrl: `file:${join(h, 'workgraph.db')}`,
+    sourceDir: join(h, 'store', 'issues'),
+  });
 }
 
 beforeEach(async () => {

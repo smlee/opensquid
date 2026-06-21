@@ -51,7 +51,8 @@ export const Worksheet = z
   .refine(
     (w) => {
       const ids = w.scopes.map((s) => s.id);
-      if (w.mode === 'single') return ids.length === 1 && w.order.length === 1 && w.order[0] === ids[0];
+      if (w.mode === 'single')
+        return ids.length === 1 && w.order.length === 1 && w.order[0] === ids[0];
       return (
         ids.length >= 2 &&
         w.scopes.every((s) => !!s.issue) &&

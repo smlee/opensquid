@@ -55,14 +55,21 @@ describe('birth_or_repoint_worksheet', () => {
   });
 
   it('repoints away from a STALE prior single path (no leak into a new track)', async () => {
-    const stale = writeWorksheetFile('T-old', { mode: 'single', scopes: [{ id: 'T-old', summary: 's' }], order: ['T-old'] });
+    const stale = writeWorksheetFile('T-old', {
+      mode: 'single',
+      scopes: [{ id: 'T-old', summary: 's' }],
+      order: ['T-old'],
+    });
     await writeSessionStateValue(SID, KEY, stale);
     await birth('docs/research/T-new-pre-research-2026-06-20.md');
     expect(await readSessionStateValue(SID, KEY)).toBe(worksheetPath('T-new'));
   });
 
   it('INTER-SCOPE: an in-flight batch containing this scope → keeps the batch path', async () => {
-    const wg = workGraphStore({ dbUrl: `file:${join(home, 'workgraph.db')}`, sourceDir: join(home, 'store', 'issues') });
+    const wg = workGraphStore({
+      dbUrl: `file:${join(home, 'workgraph.db')}`,
+      sourceDir: join(home, 'store', 'issues'),
+    });
     await wg.init();
     const a = await wg.createIssue({ title: 'scope a' }); // both left OPEN → batch in-flight
     const b = await wg.createIssue({ title: 'scope b' });

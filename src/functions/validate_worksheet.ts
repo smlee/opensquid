@@ -28,7 +28,9 @@ export function registerValidateWorksheetFunction(registry: FunctionRegistry): v
     costEstimateMs: 3,
     execute: (args) => {
       const r = parseWorksheetContent(args.content);
-      return Promise.resolve('error' in r ? ok({ valid: false, error: r.error }) : ok({ valid: true }));
+      return Promise.resolve(
+        'error' in r ? ok({ valid: false, error: r.error }) : ok({ valid: true }),
+      );
     },
   });
 }

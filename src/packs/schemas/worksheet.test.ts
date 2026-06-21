@@ -16,14 +16,21 @@ describe('Worksheet schema — single mode', () => {
   it('2 scopes in single → invalid', () => {
     const r = Worksheet.safeParse({
       mode: 'single',
-      scopes: [{ id: 'a', summary: 's' }, { id: 'b', summary: 's' }],
+      scopes: [
+        { id: 'a', summary: 's' },
+        { id: 'b', summary: 's' },
+      ],
       order: ['a', 'b'],
     });
     expect(r.success).toBe(false);
   });
 
   it('single with order not covering its one scope → invalid', () => {
-    const r = Worksheet.safeParse({ mode: 'single', scopes: [{ id: 'a', summary: 's' }], order: [] });
+    const r = Worksheet.safeParse({
+      mode: 'single',
+      scopes: [{ id: 'a', summary: 's' }],
+      order: [],
+    });
     expect(r.success).toBe(false);
   });
 });
@@ -45,7 +52,13 @@ describe('Worksheet schema — batch mode', () => {
   });
 
   it('a batch scope WITHOUT an issue → invalid', () => {
-    const r = Worksheet.safeParse({ ...ok, scopes: [{ id: 'a', issue: 'wg-a', summary: 'sa' }, { id: 'b', summary: 'sb' }] });
+    const r = Worksheet.safeParse({
+      ...ok,
+      scopes: [
+        { id: 'a', issue: 'wg-a', summary: 'sa' },
+        { id: 'b', summary: 'sb' },
+      ],
+    });
     expect(r.success).toBe(false);
   });
 
@@ -55,14 +68,22 @@ describe('Worksheet schema — batch mode', () => {
   });
 
   it('only 1 scope in batch → invalid', () => {
-    const r = Worksheet.safeParse({ mode: 'batch', scopes: [{ id: 'a', issue: 'wg-a', summary: 's' }], order: ['a'] });
+    const r = Worksheet.safeParse({
+      mode: 'batch',
+      scopes: [{ id: 'a', issue: 'wg-a', summary: 's' }],
+      order: ['a'],
+    });
     expect(r.success).toBe(false);
   });
 });
 
 describe('Worksheet schema — strictness + defaults', () => {
   it('.strict() rejects an unknown key (e.g. typo modee)', () => {
-    const r = Worksheet.safeParse({ modee: 'single', scopes: [{ id: 'a', summary: 's' }], order: ['a'] });
+    const r = Worksheet.safeParse({
+      modee: 'single',
+      scopes: [{ id: 'a', summary: 's' }],
+      order: ['a'],
+    });
     expect(r.success).toBe(false);
   });
 
