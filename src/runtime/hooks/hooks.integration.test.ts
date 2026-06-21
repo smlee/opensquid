@@ -33,6 +33,8 @@ import { dirname, join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { writeActiveTask } from '../session_state.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, '../../..');
@@ -165,6 +167,22 @@ describe('hook subprocess integration', () => {
     // AHO.3: trivial sessions must produce NO surfaces — just the skip note.
     expect(r.stderr).toContain('auto-handoff skipped — no resumable state');
     expect(r.stderr).not.toContain('auto-handoff written');
+    // T-session-end-indication: even a bare session names which session ended.
+    expect(r.stderr).toContain('[opensquid] session bare-gat ended — no active task');
+  }, 15000);
+
+  it('session-end: active task → emits the session-end indication naming id + subject', async () => {
+    // T-session-end-indication (wg-a9af600828fe): PROVE the live path — main() reads the active
+    // task, builds the line, and writes it to stderr before archiveActiveTask.
+    const sid = 'ind-test-sid-0001';
+    await writeActiveTask(sid, {
+      id: '1',
+      subject: 'demo task',
+      started_at: '2026-06-21T00:00:00.000Z',
+    });
+    const r = await runHook('session-end.ts', JSON.stringify({ sessionId: sid }));
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain('[opensquid] session ind-test ended — task "demo task"');
   }, 15000);
 
   it('pre-tool-use: snake_case payload normalized to camelCase', async () => {

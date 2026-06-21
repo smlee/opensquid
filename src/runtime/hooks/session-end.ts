@@ -54,6 +54,19 @@ async function readStdin(): Promise<string> {
   return data;
 }
 
+/**
+ * T-session-end-indication (wg-a9af600828fe) — the line `/exit` prints so the user can tell WHICH
+ * session ended (esp. two sessions sharing one project). Pure + total: no throw path, so the hook's
+ * fail-open contract holds. Names the 8-char id slug + the active-task subject (or "no active task").
+ */
+export function buildSessionEndIndication(
+  sessionId: string,
+  active: { subject: string } | null,
+): string {
+  const label = active ? `task "${active.subject}"` : 'no active task';
+  return `[opensquid] session ${sessionId.slice(0, 8)} ended — ${label}`;
+}
+
 async function main(): Promise<void> {
   exitIfSubagent('session-end'); // SUB.1: before stdin read / any state write
   const raw = await readStdin();
@@ -87,6 +100,11 @@ async function main(): Promise<void> {
   // MAU.3 — flush authored memories to the long-term RAG at the session boundary.
   await reconcileMemoryOnSessionEnd(sessionId);
 
+  // T-session-end-indication: ONE active-task read, reused by the probe, the compression block, and
+  // the session-end indication below. readActiveTask already returns null on any error
+  // (session_state.ts), the explicit .catch keeps the fail-open contract local and honest.
+  const active = await readActiveTask(sessionId).catch(() => null);
+
   // CMP.2 — emit a satisfaction probe for the just-closed task's feature
   // group (async, append-only, deduped per group). The user answers at a
   // natural boundary; a "satisfied" answer later gates the compression
@@ -94,7 +112,6 @@ async function main(): Promise<void> {
   // Best-effort + fail-open: a probe-emit failure must never affect the
   // session-end exit code.
   try {
-    const active = await readActiveTask(sessionId);
     const group = groupFromTask(active);
     if (group) await emitProbe(sessionId, group);
   } catch (e) {
@@ -110,7 +127,6 @@ async function main(): Promise<void> {
   // user-cited memories — opensquid is pure policy. Fail-open per the hook contract;
   // a compression failure must not block session-end.
   try {
-    const active = await readActiveTask(sessionId);
     const group = groupFromTask(active);
     if (group) {
       const runner = await makeConsolidateRunner();
@@ -183,6 +199,11 @@ async function main(): Promise<void> {
   } catch (e) {
     process.stderr.write(`opensquid: auto-handoff skipped — ${String(e)}\n`);
   }
+
+  // T-session-end-indication: name the session that ended (the user must be able to tell WHICH
+  // session terminated — esp. two sessions sharing one project). Reuses the hoisted `active`,
+  // emitted BEFORE archiveActiveTask clears the signal. Pure builder + plain write = fail-open.
+  process.stderr.write(buildSessionEndIndication(sessionId, active) + '\n');
 
   // AP.2 / rule #16 — archive (not delete) the active-task signal at session
   // close, so an abandoned in-progress task leaves a trace. Best-effort.
