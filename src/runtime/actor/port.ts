@@ -10,7 +10,7 @@
  * subclass supplies `addr`/`fsm`/`subscribe`/`eventFor`.
  */
 import type { ActorAddr, Envelope, MessageKind } from '../bus/types.js';
-import { step, type Fsm } from '../fsm.js';
+import { fromFlat, soleState, step, type Fsm } from '../fsm.js';
 
 export type Effect =
   | { kind: 'emit'; to: string; messageKind: MessageKind; payload: unknown }
@@ -58,17 +58,18 @@ export abstract class BaseActor implements ActorPort {
     const event = this.eventFor(env);
     if (event === null) return [];
     const from = this.state.current;
-    const result = step(this.fsm, from, event);
+    const result = step(fromFlat(this.fsm), new Set([from]), event);
     if (!result.transitioned) return []; // total: a non-matching event is an explicit stay (no effects)
+    const to = soleState(result.next); // flat actor FSM → singleton configuration
     this.state.history.push(from);
-    this.state.current = result.next;
+    this.state.current = to;
     return [
-      { kind: 'write_state', state: result.next },
+      { kind: 'write_state', state: to },
       {
         kind: 'emit',
         to: 'topic:transition',
         messageKind: 'transition',
-        payload: { from, to: result.next, on: event },
+        payload: { from, to, on: event },
       },
     ];
   }

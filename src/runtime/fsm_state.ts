@@ -20,7 +20,7 @@
 import { readFile, unlink } from 'node:fs/promises';
 
 import { atomicWriteFile } from './atomic_write.js';
-import { type Fsm, type StepResult, step } from './fsm.js';
+import { type Fsm, type FlatStepResult, stepFlat } from './fsm.js';
 import { appendTransition } from './observe/transition_log.js';
 import { sessionStateFile } from './paths.js';
 
@@ -84,9 +84,10 @@ export async function advanceFsmState(
   event: string,
   now: string,
   evalWhen?: (expr: string) => boolean,
-): Promise<StepResult> {
+): Promise<FlatStepResult> {
   const current = await readFsmState(sessionId, packName, fsm);
-  const result = step(fsm, current, event, evalWhen);
+  const result = stepFlat(fsm, current, event, evalWhen); // flat pack FSM → string next-state
+  const toState = result.next;
   if (result.transitioned) {
     let history: FsmHistoryEntry[] = [];
     try {
@@ -97,9 +98,9 @@ export async function advanceFsmState(
       // no prior file — fresh history.
     }
     const next: FsmStateFile = {
-      state: result.next,
+      state: toState,
       started_at: now,
-      history: [...history, { state: result.next, at: now }],
+      history: [...history, { state: toState, at: now }],
     };
     await atomicWriteFile(
       sessionStateFile(sessionId, fsmKey(packName)),
@@ -112,7 +113,7 @@ export async function advanceFsmState(
         session: sessionId,
         pack: packName,
         from: current,
-        to: result.next,
+        to: toState,
         on: event,
         at: now,
         via: result.via ?? -1, // StepResult.via is number|null; stays never reach here (defensive)

@@ -21,7 +21,7 @@
  * LOOP.1 uses; at integration this is `evaluator.ts` with its dead durable/memo branches
  * pruned — those are EVALUATOR branches, the `durable/` store itself is reused).
  */
-import { step } from '../fsm.js';
+import { fromFlat, soleState, step } from '../fsm.js';
 import type { CompiledPack } from '../../packs/compile_v2.js';
 import type { GuardCtx, GuardEvaluator } from '../loop/driver.js';
 
@@ -43,13 +43,13 @@ function stepTo(compiled: CompiledPack, state: string, event: string): string {
     // EXE.1 only evaluates a behavior pack's transitions; a conformance/foundation pack has no fsm.
     throw new Error(`EXE.1: cannot step a non-behavior pack (no fsm) from '${state}'`);
   }
-  const r = step(compiled.fsm, state, event);
+  const r = step(fromFlat(compiled.fsm), new Set([state]), event);
   if (!r.transitioned) {
     throw new Error(
       `EXE.1: no '${event}' transition from '${state}' (compiler invariant violated)`,
     );
   }
-  return r.next;
+  return soleState(r.next);
 }
 
 /** The NAMED event a gate/executor/sub_flow state emits; the compiler guarantees it is set. */

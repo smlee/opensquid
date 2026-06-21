@@ -1,7 +1,7 @@
 /** T1 — compile_v2: lower PackV2 → engine machine (explicit named-event transitions) + state-metadata. */
 import { describe, expect, it } from 'vitest';
 
-import { step, validateFsm } from '../runtime/fsm.js';
+import { stepFlat as step, validateFsm } from '../runtime/fsm.js';
 import { compilePackV2 } from './compile_v2.js';
 import { PackV2 } from './schemas/pack_v2.js';
 

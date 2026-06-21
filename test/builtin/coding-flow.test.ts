@@ -23,7 +23,7 @@ import { registerStateFunctions } from '../../src/functions/state.js';
 import { registerResetScopeTrackStateFunction } from '../../src/functions/reset_scope_track_state.js';
 import { registerVerdictFunctions } from '../../src/functions/verdict.js';
 import { loadPack } from '../../src/packs/loader.js';
-import { step, validateFsm } from '../../src/runtime/fsm.js';
+import { stepFlat as step, validateFsm } from '../../src/runtime/fsm.js';
 import { advanceFsmState, readFsmState } from '../../src/runtime/fsm_state.js';
 import { dispatchEvent } from '../../src/runtime/hooks/dispatch.js';
 import { err, ok } from '../../src/runtime/result.js';

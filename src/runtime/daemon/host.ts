@@ -31,7 +31,7 @@ import lockfile from 'proper-lockfile';
 
 import { Bus } from '../bus/bus.js';
 import type { Envelope } from '../bus/types.js';
-import { step, validateFsm, type Fsm } from '../fsm.js';
+import { fromFlat, soleState, step, validateFsm, type Fsm } from '../fsm.js';
 import { Topology } from '../topology/topology.js';
 import { OPENSQUID_HOME } from '../paths.js';
 import { writeShutdownMarker } from '../genesis/shutdown_marker.js';
@@ -106,8 +106,8 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
   if (validateFsm(HOST_FSM).length > 0) throw new Error('[opensquid] HOST_FSM invalid'); // fail-loud
   let lifecycle = HOST_FSM.initial;
   const advance = (event: string): void => {
-    const r = step(HOST_FSM, lifecycle, event);
-    lifecycle = r.next;
+    const r = step(fromFlat(HOST_FSM), new Set([lifecycle]), event);
+    lifecycle = soleState(r.next);
   };
   advance('start'); // idle → starting
 

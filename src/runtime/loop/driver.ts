@@ -21,7 +21,7 @@
  * reused `fsm.ts` `step` over the NAMED event each state emits (`meta[state].emits` /
  * a decision branch's `emits`) — the same author-named vocabulary as the live `advance_fsm`.
  */
-import { step, type Fsm } from '../fsm.js';
+import { fromFlat, soleState, step, type Fsm } from '../fsm.js';
 import type { CompiledPack, StateMeta } from '../../packs/compile_v2.js';
 import { ProgressFloor, type ToolObservation } from '../guard/progress_floor.js';
 import { evaluateCompletion } from '../guard/connector.js';
@@ -184,12 +184,12 @@ export class LoopDriver {
 
   /** Compute the next state for a named event via the reused engine; a missing transition is a bug. */
   private transitionOn(state: string, event: string): string {
-    const r = step(this.fsm, state, event);
+    const r = step(fromFlat(this.fsm), new Set([state]), event);
     if (!r.transitioned) {
       throw new Error(
         `LOOP.1: no '${event}' transition from '${state}' (compiler invariant violated)`,
       );
     }
-    return r.next;
+    return soleState(r.next);
   }
 }

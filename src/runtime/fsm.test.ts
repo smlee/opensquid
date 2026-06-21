@@ -1,14 +1,24 @@
 /**
- * T-PACK-FSM-STANDARDIZATION slice A — FSM engine tests.
+ * FSM engine tests — T-PACK-FSM-STANDARDIZATION slice A (flat wire) + T-harel-full HAR.0 (tree).
  *
- * Covers the generic engine: load-time validation (totality) and the total
- * `step` transition function (matching transition / `*` wildcard / `when`
- * guard / self-loop / explicit stay). The concrete 7-phase workflow FSM is
- * exercised end-to-end by the `coding-flow` pack test.
+ * Two layers:
+ *  - WIRE (flat): validateFsm + stepFlat — the degenerate-tree path; every pre-HAR.0 case
+ *    behaves byte-identically (parity).
+ *  - RUNTIME (tree): validateStatechart + step over a Configuration — compound/LCCA/parallel,
+ *    totality over configurations.
  */
 import { describe, expect, it } from 'vitest';
 
-import { Fsm, validateFsm, step, ANY_STATE } from './fsm.js';
+import {
+  Fsm,
+  validateFsm,
+  stepFlat,
+  step,
+  validateStatechart,
+  initialConfig,
+  ANY_STATE,
+  type Statechart,
+} from './fsm.js';
 
 const TRAFFIC: Fsm = {
   initial: 'red',
@@ -20,7 +30,7 @@ const TRAFFIC: Fsm = {
   ],
 };
 
-describe('validateFsm', () => {
+describe('validateFsm (flat wire)', () => {
   it('accepts a well-formed machine', () => {
     expect(validateFsm(TRAFFIC)).toEqual([]);
   });
@@ -58,13 +68,13 @@ describe('validateFsm', () => {
   });
 });
 
-describe('step (total transition function)', () => {
+describe('stepFlat (degenerate-tree parity — the pre-HAR.0 contract)', () => {
   it('takes a matching transition', () => {
-    expect(step(TRAFFIC, 'red', 'go')).toEqual({ next: 'green', transitioned: true, via: 0 });
+    expect(stepFlat(TRAFFIC, 'red', 'go')).toEqual({ next: 'green', transitioned: true, via: 0 });
   });
 
   it('is TOTAL: an unknown event stays in the current state (explicit default)', () => {
-    expect(step(TRAFFIC, 'red', 'caution')).toEqual({
+    expect(stepFlat(TRAFFIC, 'red', 'caution')).toEqual({
       next: 'red',
       transitioned: false,
       via: null,
@@ -77,8 +87,14 @@ describe('step (total transition function)', () => {
       states: ['a', 'b'],
       transitions: [{ from: 'a', on: 'maybe', to: 'b', when: 'ready' }],
     };
-    expect(step(fsm, 'a', 'maybe', () => false)).toMatchObject({ next: 'a', transitioned: false });
-    expect(step(fsm, 'a', 'maybe', () => true)).toMatchObject({ next: 'b', transitioned: true });
+    expect(stepFlat(fsm, 'a', 'maybe', () => false)).toMatchObject({
+      next: 'a',
+      transitioned: false,
+    });
+    expect(stepFlat(fsm, 'a', 'maybe', () => true)).toMatchObject({
+      next: 'b',
+      transitioned: true,
+    });
   });
 
   it('a `*` (any) transition fires from any state', () => {
@@ -87,8 +103,8 @@ describe('step (total transition function)', () => {
       states: ['a', 'b', 'done'],
       transitions: [{ from: ANY_STATE, on: 'abort', to: 'done' }],
     };
-    expect(step(fsm, 'a', 'abort').next).toBe('done');
-    expect(step(fsm, 'b', 'abort').next).toBe('done');
+    expect(stepFlat(fsm, 'a', 'abort').next).toBe('done');
+    expect(stepFlat(fsm, 'b', 'abort').next).toBe('done');
   });
 
   it('a self-loop transition stays but is reported as not-transitioned', () => {
@@ -97,6 +113,118 @@ describe('step (total transition function)', () => {
       states: ['r'],
       transitions: [{ from: 'r', on: 'again', to: 'r' }],
     };
-    expect(step(fsm, 'r', 'again')).toEqual({ next: 'r', transitioned: false, via: 0 });
+    expect(stepFlat(fsm, 'r', 'again')).toEqual({ next: 'r', transitioned: false, via: 0 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HAR.0 — the tree-aware Harel engine.
+// ─────────────────────────────────────────────────────────────────────────────
+const HIER: Statechart = {
+  initial: 'idle',
+  root: {
+    idle: { kind: 'leaf' },
+    build: {
+      kind: 'compound',
+      initial: 'backend',
+      states: { backend: { kind: 'leaf' }, frontend: { kind: 'leaf' } },
+    },
+    done: { kind: 'leaf' },
+  },
+  transitions: [
+    { from: 'idle', on: 'start', to: 'build' }, // enter compound → its initial child
+    { from: 'build/backend', on: 'next', to: 'build/frontend' }, // intra-compound, LCCA = build
+    { from: 'build', on: 'finish', to: 'done' }, // leave compound, LCCA = root
+  ],
+};
+
+describe('validateStatechart (recursive tree validation)', () => {
+  it('accepts a well-formed hierarchical machine', () => {
+    expect(validateStatechart(HIER)).toEqual([]);
+  });
+
+  it('rejects a compound whose initial child is undeclared', () => {
+    const bad: Statechart = {
+      initial: 'c',
+      root: { c: { kind: 'compound', initial: 'ghost', states: { a: { kind: 'leaf' } } } },
+      transitions: [],
+    };
+    expect(validateStatechart(bad)).toContainEqual(
+      expect.stringContaining('compound "c" initial "ghost"'),
+    );
+  });
+
+  it('rejects a transition to an undeclared path', () => {
+    const bad: Statechart = {
+      initial: 'a',
+      root: { a: { kind: 'leaf' } },
+      transitions: [{ from: 'a', on: 'x', to: 'build/ghost' }],
+    };
+    expect(validateStatechart(bad)).toContainEqual(
+      expect.stringContaining('to "build/ghost" is not a declared'),
+    );
+  });
+});
+
+describe('step (tree, over configurations)', () => {
+  it('initialConfig enters the initial leaf', () => {
+    expect([...initialConfig(HIER)]).toEqual(['idle']);
+  });
+
+  it('entering a compound activates its initial child (down to a leaf)', () => {
+    const r = step(HIER, new Set(['idle']), 'start');
+    expect([...r.next]).toEqual(['build/backend']);
+    expect(r.transitioned).toBe(true);
+  });
+
+  it('an intra-compound transition resolves up to the LCCA (build) and swaps the child', () => {
+    const r = step(HIER, new Set(['build/backend']), 'next');
+    expect([...r.next]).toEqual(['build/frontend']);
+    expect(r.transitioned).toBe(true);
+  });
+
+  it('a transition whose `from` is the compound fires from any descendant (leave to root)', () => {
+    const r = step(HIER, new Set(['build/frontend']), 'finish');
+    expect([...r.next]).toEqual(['done']);
+  });
+
+  it('is TOTAL over configurations: no enabled transition → explicit stay', () => {
+    const r = step(HIER, new Set(['idle']), 'nope');
+    expect([...r.next]).toEqual(['idle']);
+    expect(r).toMatchObject({ transitioned: false, via: null });
+  });
+});
+
+describe('step (parallel / orthogonal regions — the configuration model)', () => {
+  const PAR: Statechart = {
+    initial: 'par',
+    root: {
+      par: {
+        kind: 'parallel',
+        regions: {
+          A: {
+            kind: 'compound',
+            initial: 'a1',
+            states: { a1: { kind: 'leaf' }, a2: { kind: 'leaf' } },
+          },
+          B: {
+            kind: 'compound',
+            initial: 'b1',
+            states: { b1: { kind: 'leaf' }, b2: { kind: 'leaf' } },
+          },
+        },
+      },
+    },
+    transitions: [{ from: 'par/A/a1', on: 'x', to: 'par/A/a2' }],
+  };
+
+  it('entering a parallel node forks into ALL regions (configuration = union)', () => {
+    expect([...initialConfig(PAR)].sort()).toEqual(['par/A/a1', 'par/B/b1']);
+  });
+
+  it('a transition in one region leaves the other region untouched (independence)', () => {
+    const r = step(PAR, new Set(['par/A/a1', 'par/B/b1']), 'x');
+    expect([...r.next].sort()).toEqual(['par/A/a2', 'par/B/b1']);
+    expect(r.transitioned).toBe(true);
   });
 });
