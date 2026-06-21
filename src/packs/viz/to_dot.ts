@@ -30,7 +30,8 @@ interface Edge {
  *  is an action, not a transition, so it rides in the JSON comment, not the graph. */
 function edgesOf(pack: PackV2): Edge[] {
   // a conformance/foundation pack has no fsm → no visible flowchart edges (the round-trip comment is lossless).
-  return (pack.fsm?.transitions ?? []).map((t) => ({ from: t.from, to: t.to, label: t.on }));
+  // HAR.2: an eventless transition (no `on`, e.g. a parallel join) is labelled ε (epsilon).
+  return (pack.fsm?.transitions ?? []).map((t) => ({ from: t.from, to: t.to, label: t.on ?? 'ε' }));
 }
 
 export function emitDot(pack: PackV2): string {

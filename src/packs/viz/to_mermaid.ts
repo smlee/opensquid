@@ -32,7 +32,8 @@ interface Edge {
 /** The edges ARE the explicit named-event transitions, labelled with the event name. */
 function edgesOf(pack: PackV2): Edge[] {
   // a conformance/foundation pack has no fsm → no flowchart edges.
-  return (pack.fsm?.transitions ?? []).map((t) => ({ from: t.from, to: t.to, label: t.on }));
+  // HAR.2: an eventless transition (no `on`, e.g. a parallel join) is labelled ε (epsilon).
+  return (pack.fsm?.transitions ?? []).map((t) => ({ from: t.from, to: t.to, label: t.on ?? 'ε' }));
 }
 
 export function emitMermaid(pack: PackV2): string {

@@ -37,8 +37,9 @@ export const Transition = z
   .object({
     /** Source state (a wire state name, or a runtime path for a tree); `*` matches any. */
     from: z.string().min(1),
-    /** Event name that fires this transition. */
-    on: z.string().min(1),
+    /** Event name that fires this transition. ABSENT = an EVENTLESS transition (HAR.2 parallel join):
+     *  `step`'s event-loop skips it (`t.on !== event` when undefined); only `settle` fires it. */
+    on: z.string().min(1).optional(),
     /** Target state — MUST be a declared state (validateFsm / validateStatechart enforce). */
     to: z.string().min(1),
     /** Optional `if:`-expression guard; evaluated via the injected evalWhen. */
@@ -87,6 +88,7 @@ export const PATH_SEP = '/' as const;
 /** A node in the state tree. `leaf` atomic; `compound` one active child; `parallel` all regions active. */
 export type StateNode =
   | { kind: 'leaf' }
+  | { kind: 'final' } // HAR.2 — a region's terminal marker (atomic, like leaf); drives the parallel join
   | { kind: 'compound'; initial: string; states: Record<string, StateNode> }
   | { kind: 'parallel'; regions: Record<string, StateNode> };
 
@@ -133,7 +135,7 @@ export function resolveNode(sc: Statechart, path: string): StateNode | undefined
 export function enterLeaves(sc: Statechart, path: string): string[] {
   const node = resolveNode(sc, path);
   if (node === undefined) return [];
-  if (node.kind === 'leaf') return [path];
+  if (node.kind === 'leaf' || node.kind === 'final') return [path]; // both atomic
   if (node.kind === 'compound') return enterLeaves(sc, joinPath(path, node.initial));
   return Object.keys(node.regions).flatMap((r) => enterLeaves(sc, joinPath(path, r)));
 }
@@ -220,7 +222,26 @@ export function validateStatechart(sc: Statechart): string[] {
     if (!paths.has(t.to)) {
       errors.push(`transition[${String(i)}] to "${t.to}" is not a declared state path`);
     }
+    // HAR.2 — an eventless edge (no `on`) may ONLY originate from a parallel (the join construct).
+    if (
+      t.on === undefined &&
+      t.from !== ANY_STATE &&
+      resolveNode(sc, t.from)?.kind !== 'parallel'
+    ) {
+      errors.push(
+        `transition[${String(i)}] eventless from "${t.from}" is not a parallel (only a parallel join may be eventless)`,
+      );
+    }
   });
+  // HAR.2 — a FINALIZABLE parallel (its subtree contains a `final`) MUST have an eventless join edge,
+  // else an all-regions-final config silently deadlocks.
+  for (const p of parallelPaths(sc)) {
+    if (subtreeHasFinal(sc, p) && !sc.transitions.some((t) => t.from === p && t.on === undefined)) {
+      errors.push(
+        `finalizable parallel "${p}" has no eventless join transition (would deadlock on all-regions-final)`,
+      );
+    }
+  }
   return errors;
 }
 
@@ -281,4 +302,93 @@ export function stepFlat(
 ): FlatStepResult {
   const r = step(fromFlat(fsm), new Set([current]), event, evalWhen);
   return { next: soleState(r.next), transitioned: r.transitioned, via: r.via };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HAR.2 — orthogonality: `final` regions + the eventless JOIN macrostep (`settle`).
+// ─────────────────────────────────────────────────────────────────────────────
+/** Is the node at `leaf` a `final` node? */
+const isFinal = (sc: Statechart, leaf: string): boolean => resolveNode(sc, leaf)?.kind === 'final';
+
+/** All `parallel` node paths, DEEPEST-FIRST (so `settle` joins inner parallels before outer → confluent). */
+function parallelPaths(sc: Statechart): string[] {
+  const out: string[] = [];
+  const walk = (level: Record<string, StateNode>, base: string): void => {
+    for (const [name, node] of Object.entries(level)) {
+      const p = joinPath(base, name);
+      if (node.kind === 'compound') walk(node.states, p);
+      else if (node.kind === 'parallel') {
+        out.push(p);
+        walk(node.regions, p);
+      }
+    }
+  };
+  walk(sc.root, '');
+  return out.sort((a, b) => segs(b).length - segs(a).length);
+}
+
+/** Does the subtree at `path` contain a `final` node? (a parallel is FINALIZABLE iff this holds). */
+function subtreeHasFinal(sc: Statechart, path: string): boolean {
+  const node = resolveNode(sc, path);
+  if (node === undefined) return false;
+  if (node.kind === 'final') return true;
+  if (node.kind === 'compound')
+    return Object.keys(node.states).some((k) => subtreeHasFinal(sc, joinPath(path, k)));
+  if (node.kind === 'parallel')
+    return Object.keys(node.regions).some((k) => subtreeHasFinal(sc, joinPath(path, k)));
+  return false;
+}
+
+/**
+ * Every region of the parallel at `parallelPath` is DONE — its active leaf is a `final` node that is the
+ * region ITSELF (an atomic-`final` region) OR a DIRECT child of the region (NOT a deeper descendant; SCXML).
+ * A region whose active state is deeper (e.g. an inner parallel not yet joined) is NOT done.
+ */
+function allRegionsFinal(sc: Statechart, parallelPath: string, config: Configuration): boolean {
+  const node = resolveNode(sc, parallelPath);
+  if (node?.kind !== 'parallel') return false;
+  return Object.keys(node.regions).every((r) => {
+    const rp = joinPath(parallelPath, r);
+    const rpDepth = segs(rp).length;
+    return [...config].some(
+      (leaf) =>
+        isFinal(sc, leaf) &&
+        (leaf === rp || (leaf.startsWith(rp + PATH_SEP) && segs(leaf).length === rpDepth + 1)),
+    );
+  });
+}
+
+/**
+ * MACROSTEP — fire EVENTLESS parallel-joins to a fixpoint, INNERMOST-FIRST (confluent). For any active,
+ * all-regions-final parallel with an eventless `from: parallelPath` edge, exit the whole parallel subtree
+ * and enter the join target. PURE (config + static transitions), no event queue (the D1/OQ-4 law).
+ * Compose: a tree run is `step` (event microstep) then `settle` (eventless macrostep).
+ */
+export function settle(
+  sc: Statechart,
+  config: Configuration,
+  evalWhen?: (expr: string) => boolean,
+): Configuration {
+  const joinEdge = (p: string): Transition | undefined =>
+    sc.transitions.find(
+      (t) =>
+        t.from === p &&
+        t.on === undefined &&
+        (t.when === undefined || evalWhen === undefined || evalWhen(t.when)),
+    );
+  let cur = config;
+  for (let i = 0; i < 10_000; i++) {
+    // parallelPaths is deepest-first → the first eligible is the INNERMOST all-final parallel.
+    const pPath = parallelPaths(sc).find(
+      (p) => isActive(cur, p) && allRegionsFinal(sc, p, cur) && joinEdge(p) !== undefined,
+    );
+    if (pPath === undefined) return cur; // fixpoint
+    const join = joinEdge(pPath)!;
+    const exit = new Set(descendantsOf(cur, pPath)); // exit the whole parallel subtree
+    const next = new Set<string>();
+    for (const leaf of cur) if (!exit.has(leaf)) next.add(leaf);
+    for (const leaf of enterLeaves(sc, join.to)) next.add(leaf);
+    cur = next;
+  }
+  return cur; // depth backstop
 }

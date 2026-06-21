@@ -105,7 +105,7 @@ describe('compilePackV2 (T1)', () => {
       on: 'size_passed',
       to: 'es_gate',
     });
-    expect(fsm.transitions.some((t) => t.on.startsWith('__'))).toBe(false); // no reserved synthesis
+    expect(fsm.transitions.some((t) => (t.on ?? '').startsWith('__'))).toBe(false); // no reserved synthesis
   });
 
   it('carries per-state bindings + the NAMED emit event in meta', () => {
@@ -254,7 +254,7 @@ describe('compilePackV2 (T1) — coding-flow-shaped fixture: multi-out + wildcar
 
   it('compiles with NO synthetic events', () => {
     expect(validateFsm(fsm)).toEqual([]);
-    expect(fsm.transitions.some((t) => t.on.startsWith('__'))).toBe(false);
+    expect(fsm.transitions.some((t) => (t.on ?? '').startsWith('__'))).toBe(false);
   });
 
   it('reproduces MULTI-OUT: `idle` routes two different events to two different targets', () => {
