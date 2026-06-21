@@ -60,8 +60,8 @@ export interface LoopDeps {
 
 /** The total result of one `step` — a discriminated union (no implicit `{next?, outcome?}` ambiguity). */
 export type DriverStep =
-  | { kind: 'advance'; next: string }
-  | { kind: 'action'; action: 'block' | 'halt'; message: string } // gate fail → self-continue/halt
+  | { kind: 'advance'; next: string; notice?: string } // notice = a non-blocking `warn` surfaced on proceed (kernel.ts:36)
+  | { kind: 'action'; action: 'block' | 'halt'; message: string } // gate fail → self-continue/halt (ENFORCE, stop)
   | { kind: 'outcome'; outcome: 'shipped' | 'wedge'; reason?: string };
 
 export class LoopDriver {
@@ -128,7 +128,15 @@ export class LoopDriver {
     const ok = await this.deps.guards.eval(m.guard ?? '', ctx);
     if (ok) return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
     const onFail = m.onFail ?? { action: 'block' as const, message: `gate '${state}' failed` };
-    return { kind: 'action', action: onFail.action, message: onFail.message };
+    if (onFail.action === 'warn') {
+      // warn = proceed + nudge (kernel.ts:36): advance the gate's ONLY forward edge, carry the notice.
+      return {
+        kind: 'advance',
+        next: this.transitionOn(state, this.emitOf(state, m)),
+        notice: onFail.message,
+      };
+    }
+    return { kind: 'action', action: onFail.action, message: onFail.message }; // block | halt — ENFORCE
   }
 
   private async runDecision(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {

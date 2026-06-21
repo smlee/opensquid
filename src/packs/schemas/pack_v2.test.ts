@@ -25,13 +25,23 @@ describe('PackV2 schema (PFV2.1)', () => {
     expect(() => StateV2.parse({ kind: 'executor', directive: 'do', emits: 'b' })).toThrow();
   });
 
-  it('rejects a gate `on_fail.action` that is not block|halt (warn/pass are not on_fail)', () => {
+  it('accepts a gate `on_fail.action: warn` (the 4-action model: warn = proceed+nudge)', () => {
+    const s = StateV2.parse({
+      kind: 'gate',
+      guard: 'g',
+      on_pass_emits: 'passed',
+      on_fail: { action: 'warn', message: 'm' },
+    });
+    expect(s.kind === 'gate' && s.on_fail.action).toBe('warn');
+  });
+
+  it('rejects a gate `on_fail.action` outside warn|block|halt (e.g. pass/bogus)', () => {
     expect(() =>
       StateV2.parse({
         kind: 'gate',
         guard: 'g',
         on_pass_emits: 'passed',
-        on_fail: { action: 'warn', message: 'm' },
+        on_fail: { action: 'pass', message: 'm' },
       }),
     ).toThrow();
   });

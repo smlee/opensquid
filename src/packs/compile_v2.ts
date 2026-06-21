@@ -34,7 +34,7 @@ export interface StateMeta {
   // gate
   guard?: string;
   trigger?: string[]; // observed events that evaluate the gate (conformance); absent = driver-evaluated
-  onFail?: { action: 'block' | 'halt'; message: string };
+  onFail?: { action: 'warn' | 'block' | 'halt'; message: string };
   // decision
   branches?: DecisionBranch[];
   // sub_flow

@@ -125,3 +125,55 @@ describe('arbitrate (EXE.1) — orthogonal-region composition (scope-precedence,
     ]);
   });
 });
+
+// WARN-GATE-COMPLETION — warn = a NON-blocking advance + notice; arbitrate must NOT short-circuit on it.
+function compileWarn(name: string): CompiledPack {
+  return compilePackV2(
+    PackV2.parse({
+      name,
+      version: '0.0.1',
+      scope: 'project',
+      guards: { ok: 'true' },
+      fsm: {
+        initial: 'g',
+        states: {
+          g: {
+            kind: 'gate',
+            guard: 'ok',
+            on_pass_emits: 'g_pass',
+            on_fail: { action: 'warn', message: `${name}: nudge` },
+          },
+          done: { kind: 'terminal', outcome: 'shipped' },
+        },
+        transitions: [{ from: 'g', on: 'g_pass', to: 'done' }],
+      },
+    }),
+  );
+}
+
+describe('WARN-GATE-COMPLETION — warn advances + surfaces a notice (non-blocking)', () => {
+  it('evaluateTransition: gate guard fails + on_fail=warn → {next, notice} (no action)', async () => {
+    const out = await evaluateTransition(
+      compileWarn('w'),
+      'g',
+      'x',
+      undefined,
+      guardsReturning(false),
+    );
+    expect(out).toEqual({ next: 'done', notice: 'w: nudge' });
+    expect(out.action).toBeUndefined();
+  });
+
+  it('arbitrate: a warn region does NOT short-circuit — a later region still advances', async () => {
+    const regions: Region[] = [
+      { compiled: compileWarn('w1'), state: 'g' },
+      { compiled: compileWarn('w2'), state: 'g' },
+    ];
+    const out = await arbitrate(regions, 'x', undefined, guardsReturning(false)); // both warn (guards fail)
+    expect(out.blocked).toBeUndefined();
+    expect(out.advances).toEqual([
+      { region: regions[0], next: 'done', notice: 'w1: nudge' },
+      { region: regions[1], next: 'done', notice: 'w2: nudge' },
+    ]);
+  });
+});

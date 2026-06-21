@@ -273,3 +273,44 @@ describe('LoopDriver (LOOP.1)', () => {
     ).toThrow(/sub_flow 's' -> flow 'ghost' resolves to no registered/);
   });
 });
+
+// WARN-GATE-COMPLETION — warn = a NON-blocking advance + notice (the kernel's proceed+nudge).
+describe('LoopDriver (WARN-GATE-COMPLETION) — warn on_fail advances + surfaces a notice', () => {
+  const WARN_PACK = compilePackV2(
+    PackV2.parse({
+      name: 'warn-demo',
+      version: '0.0.1',
+      scope: 'project',
+      guards: { ok: 'true' },
+      fsm: {
+        initial: 'g',
+        states: {
+          g: {
+            kind: 'gate',
+            guard: 'ok',
+            on_pass_emits: 'passed',
+            on_fail: { action: 'warn', message: 'heads up' },
+          },
+          done: { kind: 'terminal', outcome: 'shipped' },
+        },
+        transitions: [{ from: 'g', on: 'passed', to: 'done' }],
+      },
+    }),
+  );
+
+  it('guard FAILS but on_fail=warn → ADVANCES to on_pass_emits target + carries the notice (non-blocking)', async () => {
+    const d = new LoopDriver(WARN_PACK, {
+      registry: failClosedRegistry,
+      guards: guardsReturning(false),
+    });
+    expect(await d.step('g')).toEqual({ kind: 'advance', next: 'done', notice: 'heads up' });
+  });
+
+  it('guard PASSES → plain advance (no notice)', async () => {
+    const d = new LoopDriver(WARN_PACK, {
+      registry: failClosedRegistry,
+      guards: guardsReturning(true),
+    });
+    expect(await d.step('g')).toEqual({ kind: 'advance', next: 'done' });
+  });
+});

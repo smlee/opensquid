@@ -48,7 +48,9 @@ const GateState = z
     guard: z.string().min(1),
     trigger: z.array(z.string().min(1)).min(1).optional(), // observed event names this gate reacts to
     on_pass_emits: z.string().min(1), // NAMED pass event (routed by fsm.transitions) — was on_pass.to
-    on_fail: z.object({ action: z.enum(['block', 'halt']), message: z.string().min(1) }).strict(),
+    on_fail: z
+      .object({ action: z.enum(['warn', 'block', 'halt']), message: z.string().min(1) })
+      .strict(), // 4-action model (kernel.ts:17): warn = proceed+nudge (advance+notice); block/halt = stop
   })
   .strict();
 

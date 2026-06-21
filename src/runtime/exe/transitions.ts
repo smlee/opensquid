@@ -31,10 +31,12 @@ export interface TransitionAction {
   message: string;
 }
 
-/** The transition decision for ONE state: advance to `next`, OR emit a gate action, OR neither (terminal). */
+/** The transition decision for ONE state: advance to `next`, OR emit a gate action, OR neither (terminal).
+ *  `notice` = a non-blocking `warn` message surfaced alongside an advance (kernel.ts:36). */
 export interface TransitionResult {
   next?: string;
   action?: TransitionAction;
+  notice?: string;
 }
 
 /** Compute the next state for a named event; a missing transition is a compiler-invariant bug. */
@@ -83,7 +85,15 @@ export async function evaluateTransition(
     case 'gate': {
       const ok = await guards.eval(m.guard ?? '', ctx);
       if (ok) return { next: stepTo(compiled, state, emitOf(state, m.kind, m.emits)) };
-      return { action: m.onFail ?? { action: 'block', message: `gate '${state}' failed` } };
+      const onFail = m.onFail ?? { action: 'block' as const, message: `gate '${state}' failed` };
+      if (onFail.action === 'warn') {
+        // warn = proceed + nudge (kernel.ts:36): advance the gate's only forward edge, carry the notice.
+        return {
+          next: stepTo(compiled, state, emitOf(state, m.kind, m.emits)),
+          notice: onFail.message,
+        };
+      }
+      return { action: { action: onFail.action, message: onFail.message } }; // block | halt — ENFORCE
     }
     case 'decision': {
       for (const b of m.branches ?? []) {
@@ -113,8 +123,9 @@ export interface Region {
 export interface Arbitration {
   /** the first blocking region's action (precedence-ordered, first-blocking-wins) — short-circuits. */
   blocked?: TransitionAction;
-  /** non-blocking advances, in region precedence order (applied as orthogonal-region transitions). */
-  advances: { region: Region; next: string }[];
+  /** non-blocking advances, in region precedence order (applied as orthogonal-region transitions).
+   *  `notice` carries a `warn` message (non-blocking) surfaced alongside the advance. */
+  advances: { region: Region; next: string; notice?: string }[];
 }
 
 /**
@@ -128,12 +139,18 @@ export async function arbitrate(
   ctx: GuardCtx,
   guards: GuardEvaluator,
 ): Promise<Arbitration> {
-  const advances: { region: Region; next: string }[] = [];
+  const advances: { region: Region; next: string; notice?: string }[] = [];
   for (const region of regions) {
     // precedence = declared order
     const res = await evaluateTransition(region.compiled, region.state, event, ctx, guards);
-    if (res.action) return { blocked: res.action, advances }; // first-blocking-wins → short-circuit
-    if (res.next !== undefined) advances.push({ region, next: res.next });
+    if (res.action) return { blocked: res.action, advances }; // first-blocking-wins → short-circuit (block|halt ONLY)
+    // a `warn` is a NON-blocking advance-with-notice → it accumulates, never short-circuits.
+    if (res.next !== undefined)
+      advances.push({
+        region,
+        next: res.next,
+        ...(res.notice !== undefined ? { notice: res.notice } : {}),
+      });
   }
   return { advances };
 }
