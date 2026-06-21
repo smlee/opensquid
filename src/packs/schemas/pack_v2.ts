@@ -15,7 +15,6 @@
 import { z } from 'zod';
 
 import { Transition } from '../../runtime/fsm.js';
-import { ProcessStep } from '../../runtime/types.js';
 
 export const StateKind = z.enum(['executor', 'gate', 'decision', 'sub_flow', 'terminal']);
 export type StateKind = z.infer<typeof StateKind>;
@@ -108,37 +107,9 @@ export type DecisionBranch = z.infer<typeof DecisionBranch>;
 export const PackScope = z.enum(['universal', 'domain', 'specialty', 'workflow', 'project']);
 export type PackScope = z.infer<typeof PackScope>;
 
-// CONFORMANCE vocabulary (M.1): a conformance pack is an always-active set of `gates`, NOT a behavior FSM.
-// The union has EXACTLY the two V1 rule kinds (`runtime/types.ts:225` `RuleKind = ['track_check','destination_check']`),
-// each RE-HOMING its V1 rule shape so the migration keeps its EXISTING evaluator (M.1 adds NO evaluation logic):
-//   track_check       → walked by `evaluateProcess` (`runtime/evaluator.ts:153`)
-//   destination_check → fired by `destination_scheduler.ts` + the `check_destination` primitive
-// `process` is a FIELD on a track_check (its `ProcessStep[]`, reused VERBATIM from `runtime/types.ts`) — NOT a third kind.
-const ConformanceFail = z
-  .object({ action: z.enum(['warn', 'block', 'halt']), message: z.string().min(1) })
-  .strict();
-
-const TrackCheckGate = z
-  .object({
-    kind: z.literal('track_check'),
-    trigger: z.array(z.string().min(1)).min(1), // the OBSERVED event(s) that evaluate this gate
-    process: z.array(ProcessStep).min(1), // runs via evaluateProcess — the V1 ProcessStep shape, UNCHANGED
-    on_fail: ConformanceFail.optional(),
-  })
-  .strict();
-
-const DestinationCheckGate = z
-  .object({
-    kind: z.literal('destination_check'),
-    prompt_template: z.string().min(1), // runs via the scheduler + check_destination — UNCHANGED
-    every_n_tool_calls: z.number().int().positive(),
-    model_alias: z.string().min(1).optional(),
-    on_fail: ConformanceFail.optional(),
-  })
-  .strict();
-
-export const ConformanceGate = z.discriminatedUnion('kind', [TrackCheckGate, DestinationCheckGate]);
-export type ConformanceGate = z.infer<typeof ConformanceGate>;
+// CONFORMANCE-RECONCILE: the fsm-less `gates` form is GONE. Gates belong IN the execution FSM as
+// `GateState` nodes (a gate on a transition — the `trigger`=conformance / no-trigger=execution contract
+// above); a separate always-active gate-LIST is the v1 rule-list model the flowchart design replaces.
 
 /** HAR.1: the named pack-`fsm` wire shape — reused for the `flows` registry of isolated nested machines. */
 export const FsmV2 = z.object({
@@ -158,16 +129,10 @@ export const PackV2 = z
     fsm: FsmV2.optional(),
     // HAR.1: a FLAT registry of named ISOLATED nested machines; a `sub_flow.flow` is a key into this.
     flows: z.record(z.string(), FsmV2).optional(),
-    gates: z.array(ConformanceGate).optional(), // ← conformance form: always-active gates, fsm-less
     guards: z.record(z.string(), z.string()).default({}), // FAC-CUT.2: guard ref → an `if:`-expression (boolean predicate); the gate's block/halt action is on the state's on_fail
-
     messages: z.record(z.string(), z.string()).default({}), // self-continue store: failure_type → instruction
     foundation: z.unknown().optional(), // pure expertise (manifest/lessons) — neither fsm nor gates
   })
-  .strict()
-  // 3-form totality: a pack is a behavior FSM XOR a conformance gate-set XOR foundation-only — never two
-  // behaviors. The refine rejects an fsm+gates pack LOUD (the architecture's no-implicit-state principle).
-  .refine((p) => !(p.fsm !== undefined && p.gates !== undefined), {
-    message: 'a pack has `fsm` (behavior) OR `gates` (conformance), not both',
-  });
+  .strict(); // CONFORMANCE-RECONCILE: no `.refine` — it only guarded `fsm`+`gates`; with `gates` gone,
+// `fsm`/`foundation`/`flows` are independent optionals (a pack is a behavior FSM, or foundation, or neither).
 export type PackV2 = z.infer<typeof PackV2>;

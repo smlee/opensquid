@@ -19,7 +19,6 @@
  *
  * Spec: loop/docs/tasks/T-fsm-actor-rescope.md §T1.
  */
-import type { ProcessStep } from '../runtime/types.js';
 import { validateFsm, type Fsm } from '../runtime/fsm.js';
 import type { PackV2, StateKind, DecisionBranch } from './schemas/pack_v2.js';
 
@@ -44,27 +43,9 @@ export interface StateMeta {
   outcome?: 'shipped' | 'wedge';
 }
 
-/** A conformance gate lowered to the descriptor its EXISTING evaluator consumes (M.1 adds NO new logic):
- *  track_check → `evaluateProcess`; destination_check → the scheduler + `check_destination`. */
-export type CompiledGate =
-  | {
-      kind: 'track_check';
-      trigger: string[];
-      process: ProcessStep[];
-      onFail?: { action: 'warn' | 'block' | 'halt'; message: string };
-    }
-  | {
-      kind: 'destination_check';
-      promptTemplate: string;
-      everyN: number;
-      modelAlias?: string;
-      onFail?: { action: 'warn' | 'block' | 'halt'; message: string };
-    };
-
 export interface CompiledPack {
   fsm?: Fsm; // states + transitions in the reused engine's format (present only for the behavior form)
   meta: Record<string, StateMeta>; // per-state behavior for the loop driver (empty for non-fsm forms)
-  gates?: CompiledGate[]; // conformance form: each lowered to its evaluator's descriptor
   flows?: Record<string, CompiledPack>; // HAR.1: compiled ISOLATED nested machines (sub_flow targets)
   guardExprs?: Map<string, string>; // FAC-CUT.2: guard ref → `if:`-expression (behavior form); the RegistryGuardEvaluator's source
 }
@@ -162,29 +143,10 @@ function compileMachine(pack: PackV2): CompiledPack {
     }
   }
 
-  // CONFORMANCE form: lower each gate to its EXISTING evaluator's descriptor (re-shape only, no new logic).
-  const gates: CompiledGate[] | undefined = pack.gates?.map((g) =>
-    g.kind === 'track_check'
-      ? {
-          kind: g.kind,
-          trigger: g.trigger,
-          process: g.process,
-          ...(g.on_fail !== undefined ? { onFail: g.on_fail } : {}),
-        }
-      : {
-          kind: g.kind,
-          promptTemplate: g.prompt_template,
-          everyN: g.every_n_tool_calls,
-          ...(g.model_alias !== undefined ? { modelAlias: g.model_alias } : {}),
-          ...(g.on_fail !== undefined ? { onFail: g.on_fail } : {}),
-        },
-  );
-
-  // FOUNDATION form: neither fsm nor gates → a CompiledPack with empty meta + no gates (pure expertise).
+  // FOUNDATION form: neither fsm nor gates → a CompiledPack with empty meta (pure expertise).
   return {
     ...(fsm !== undefined ? { fsm } : {}),
     meta,
-    ...(gates !== undefined ? { gates } : {}),
     ...(guardExprs !== undefined ? { guardExprs } : {}),
   };
 }
