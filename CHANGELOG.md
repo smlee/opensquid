@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.503] - 2026-06-22
+
+### Added — ORCH.3: `matchPacks` (the catalog matcher)
+
+- **`src/packs/match.ts`** — `matchPacks(facets, packs) → { pack?, candidates }`: subset-match each pack's
+  `serves` block against the turn's facets, specificity = matched-key count, most-specific wins; a
+  same-specificity tie surfaces all candidates (length>1 ⇒ the caller — ORCH.5 — resolves via
+  `orchestrator.json` / asks). PURE.
+- A qualifier (e.g. `lang`) on a pack raises specificity ONLY when the turn carries it, so a turn without it
+  matches the broader pack (proven: a no-`lang` produce/coding turn → `coding-flow`, not `rust-flow`).
+- **Tests:** most-specific-only-when-qualifier-present, domain-wildcard match, no-match, tie surfaced,
+  list-`serves` best-block. Full suite 4037 green.
+
 ## [0.5.502] - 2026-06-22
 
 ### Added — ORCH.2: `classify(prompt, ctx) → facets` (the router's classification step)
