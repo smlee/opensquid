@@ -32,6 +32,7 @@ import { exitIfSubagent } from './subagent_guard.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { runV2Cartridges } from '../loop/v2_supply.js';
 import { floorMessage, observeCall } from '../guard/floor_hook.js';
 import { extractSessionId } from './session_id.js';
 
@@ -110,6 +111,10 @@ async function main(): Promise<void> {
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
+  // FAC-CUT.5b.2: run the v2 cartridges so an observed actor advances on `post_tool_call` (state-write +
+  // transition log) + surfaces warn/block as informational stderr. PostToolUse can't block (exits 0 below),
+  // so v2 messages/injections are surfaced, not enforced. ADDITIVE — ZERO (no-op) until an active v2 pack exists.
+  const v2 = await runV2Cartridges(sessionId, parsed.data, new Date().toISOString());
   // P0.3 — the live Progress-floor failure-loop detector. Observe the call against the persisted
   // floor; a non-`pass` action surfaces on the same drift-stderr channel. Fail-open: a floor error
   // never breaks the hook.
@@ -127,7 +132,7 @@ async function main(): Promise<void> {
   } catch {
     /* the Progress floor never breaks the hook */
   }
-  const combined = [stderr, floorMsg].filter(Boolean).join('\n');
+  const combined = [stderr, floorMsg, ...v2.messages, ...v2.injections].filter(Boolean).join('\n');
   if (combined) process.stderr.write(combined + '\n');
   // PostToolUse is too late to block the tool call (already ran). Treat any
   // non-zero exit as informational stderr only.

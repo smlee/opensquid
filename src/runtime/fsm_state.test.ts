@@ -11,7 +11,14 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Fsm } from './fsm.js';
-import { readFsmState, advanceFsmState, clearFsmState } from './fsm_state.js';
+import {
+  readFsmState,
+  advanceFsmState,
+  clearFsmState,
+  persistActorState,
+  readFsmStateRaw,
+  readFsmStateFile,
+} from './fsm_state.js';
 import { recordSessionCwd, writeActiveTask } from './session_state.js';
 import { readGoalMap, writeGoalMap } from './goal_map/goal_map.js';
 
@@ -33,6 +40,17 @@ const NOW = '2026-06-02T00:00:00.000Z';
 describe('fsm_state', () => {
   it('reads the initial state when nothing is persisted', async () => {
     expect(await readFsmState(sid(), 'p', FSM)).toBe('idle');
+  });
+
+  it('persistActorState (FAC-CUT.5b.2) writes the current state + appends history (round-trip)', async () => {
+    const s = sid();
+    await persistActorState(s, 'v2pack', 'g0', NOW);
+    expect(await readFsmStateRaw(s, 'v2pack')).toBe('g0');
+    await persistActorState(s, 'v2pack', 'shipped', NOW);
+    expect(await readFsmStateRaw(s, 'v2pack')).toBe('shipped');
+    const file = await readFsmStateFile(s, 'v2pack');
+    expect(file?.state).toBe('shipped');
+    expect(file?.history.map((h) => h.state)).toEqual(['g0', 'shipped']); // append-only
   });
 
   it('advances on a matching event and persists the new state', async () => {

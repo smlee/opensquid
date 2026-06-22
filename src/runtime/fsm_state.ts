@@ -170,6 +170,31 @@ export async function readFsmStateFile(
   }
 }
 
+/**
+ * FAC-CUT.5b.2 — persist an ALREADY-STEPPED actor's current state, in the `FsmStateFile` format keyed
+ * `fsm-<pack>` (so v2 actor state coexists with v1 pack FSMs + is readable by `readFsmState`/the handoff).
+ * Unlike `advanceFsmState`, this does NOT step — the v2 `V2ObservedActor` already ran the transition; this
+ * only writes the new `current` + appends history. Reuses the same atomic I/O.
+ */
+export async function persistActorState(
+  sessionId: string,
+  packName: string,
+  current: string,
+  now: string,
+): Promise<void> {
+  const prior = await readFsmStateFile(sessionId, packName);
+  const history: FsmHistoryEntry[] = prior ? prior.history : [];
+  const next: FsmStateFile = {
+    state: current,
+    started_at: now,
+    history: [...history, { state: current, at: now }],
+  };
+  await atomicWriteFile(
+    sessionStateFile(sessionId, fsmKey(packName)),
+    JSON.stringify(next, null, 2),
+  );
+}
+
 /** Remove a pack's FSM-state file (SessionEnd cleanup). ENOENT swallowed. */
 export async function clearFsmState(sessionId: string, packName: string): Promise<void> {
   try {

@@ -7,6 +7,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.500] - 2026-06-22
+
+### Added — FAC-CUT.5b.2: wire the v2 runtime LIVE (in-process host supply), additive + inert-safe
+
+- **`src/runtime/loop/v2_supply.ts`** — `runV2Cartridges(sessionId, event, now)`: the missing HOST that makes a
+  v2 cartridge actually run. Loads the active v2 cartridges, seeds each pure `V2ObservedActor` from its
+  persisted `fsm-<pack>` state, `receive`s the hook event, and applies the returned effects — `write_state` →
+  `persistActorState`; `transition` → `appendTransition` (INV2 observability, the v1 durable equivalent of the
+  bus transition); `gate_action` → the hook decision (block/halt → exit 2; warn → a nudge). Each cartridge runs
+  **fail-open** (a v2 bug can never break the hook).
+- **In-process seam (the FAC-CUT.4 answer)** — runs inside the hook, NOT via the daemon bus (there is no `Bus`
+  in a hook subprocess); v1 and v2 stay separate types, converging only at the decision (most-severe wins).
+- **Wired into `pre-tool-use.ts` (enforces) + `post-tool-use.ts` (advances/observes, never blocks)** — merged
+  after the existing `dispatchEvent` call.
+- **Additive + provably inert** — `runV2Cartridges` returns a zero decision when no active v2 cartridge exists
+  (true today: zero `pack.yaml`, active packs all v1), so the merged hook decision is byte-identical to v1.
+  `src/runtime/fsm_state.ts` gains `persistActorState` (reuses the existing atomic `fsm-<pack>` I/O). The
+  consumed v2 modules (`v2_observed_actor`, `gate_dispatch`, `gate/kernel`, `src/packs/*`) are unchanged.
+- **Tests:** inert (no-op), gate fail+block (exit 2, no advance), warn (advance+nudge+persist), non-trigger
+  (await-point no-op), fail-open (throwing cartridge swallowed), `persistActorState` round-trip. Full suite
+  4011 green; the hook integration tests pass unchanged (v1 untouched). v2 can now RUN once a `pack.yaml`
+  exists — next is authoring the new v2 packs, then the user-gated v1 deletion (wg-e4c69fd98945).
+
+---
+
 ## [0.5.499] - 2026-06-22
 
 ### Added — KANBAN.5: the kanban "story" schema as the non-stale resume checkpoint

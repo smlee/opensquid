@@ -27,6 +27,7 @@ import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
+import { runV2Cartridges } from '../loop/v2_supply.js';
 import {
   buildPreToolUseContext,
   buildPreToolUseDeny,
@@ -190,12 +191,13 @@ async function main(): Promise<void> {
     }
   }
 
-  const { exitCode, stderr, contextInjections } = await dispatchEvent(
-    parsed.data,
-    packs,
-    registry,
-    sessionId,
-  );
+  const v1 = await dispatchEvent(parsed.data, packs, registry, sessionId);
+  // FAC-CUT.5b.2: run the v2 cartridges in-process + merge most-severe. ADDITIVE — ZERO (no-op) until an
+  // active v2 pack exists, so v1 behavior is unchanged today. Fail-open inside runV2Cartridges.
+  const v2 = await runV2Cartridges(sessionId, parsed.data, new Date().toISOString());
+  const exitCode: 0 | 2 = v1.exitCode === 2 || v2.exitCode === 2 ? 2 : 0;
+  const stderr = [v1.stderr, ...v2.messages].filter(Boolean).join('\n');
+  const contextInjections = [...v1.contextInjections, ...v2.injections];
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
   // under `--dangerously-skip-permissions` (= bypassPermissions) Claude Code
