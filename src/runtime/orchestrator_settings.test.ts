@@ -9,6 +9,9 @@ import {
   readSettings,
   recordRoute,
   resolveRoute,
+  setProjectDomain,
+  pinRoute,
+  forgetRoute,
   type Settings,
   type Route,
 } from './orchestrator_settings.js';
@@ -135,5 +138,42 @@ describe('recordRoute (ORCH.4)', () => {
     const raw = await readFile(join(proj, '.opensquid', 'orchestrator.json'), 'utf8');
     const parsed = JSON.parse(raw) as { routes: { pack: string }[] };
     expect(parsed.routes[0]?.pack).toBe('coding-flow');
+  });
+});
+
+describe('control writers (ORCH.9)', () => {
+  const now = '2026-06-22T07:00:00Z';
+  let p: string; // a dir local to each writer test (defensive isolation)
+  beforeEach(async () => {
+    p = await mkdtemp(join(tmpdir(), 'osq-orch9-'));
+  });
+  afterEach(async () => {
+    await rm(p, { recursive: true, force: true });
+  });
+
+  it('setProjectDomain round-trips a dictionary domain', async () => {
+    await setProjectDomain(p, 'coding');
+    expect((await readSettings(p)).domain).toBe('coding');
+  });
+
+  it('pinRoute writes a pinned route that resolveRoute prefers; replacing a same-match pin does not duplicate', async () => {
+    await pinRoute(p, { intent: 'produce', domain: 'coding' }, 'pack-a', now);
+    await pinRoute(p, { intent: 'produce', domain: 'coding' }, 'pack-b', now); // same match → replace
+    const s = await readSettings(p);
+    const pins = s.routes.filter((r) => r.source === 'pinned');
+    expect(pins).toHaveLength(1);
+    expect(
+      resolveRoute(s, { intent: 'produce', domain: 'coding' }, new Set(['pack-a', 'pack-b'])),
+    ).toBe('pack-b');
+  });
+
+  it('forgetRoute removes all routes for a pack', async () => {
+    expect((await readSettings(p)).routes).toEqual([]); // fresh dir — proves isolation
+    await recordRoute(p, { intent: 'produce' }, 'gone', now);
+    await pinRoute(p, { intent: 'inform' }, 'gone', now);
+    await recordRoute(p, { intent: 'decide' }, 'keep', now);
+    await forgetRoute(p, 'gone');
+    const s = await readSettings(p);
+    expect(s.routes.map((r) => r.pack)).toEqual(['keep']);
   });
 });

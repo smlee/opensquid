@@ -42,18 +42,19 @@ const Settings = z.object({
 });
 export type Settings = z.infer<typeof Settings>;
 
-/** The hard-coded immutable global default (the only "global" — code, not a mutable file). */
-const DEFAULTS: Settings = Settings.parse({});
-
 const settingsFile = (projectDir: string): string =>
   join(projectDir, '.opensquid', 'orchestrator.json');
 
-/** Read the project's settings; absent/corrupt/over-schema → DEFAULTS (no throw). NO user-scope file exists. */
+/**
+ * Read the project's settings; absent/corrupt/over-schema → a FRESH default (no throw). NO user-scope file exists.
+ * MUST return a fresh object each call (`Settings.parse({})`, not a shared const) — callers mutate `s.routes`, so a
+ * shared default reference would accumulate routes across reads (the only "global" is the immutable code default).
+ */
 export async function readSettings(projectDir: string): Promise<Settings> {
   try {
     return Settings.parse(JSON.parse(await readFile(settingsFile(projectDir), 'utf8')));
   } catch {
-    return DEFAULTS;
+    return Settings.parse({});
   }
 }
 
@@ -79,7 +80,22 @@ export function resolveRoute(
   return ok[0]?.pack ?? null;
 }
 
-/** Append a learned (`asked`) route and atomically persist (tmp+rename). */
+/** Atomically persist the settings (tmp+rename) — the shared writer for record/pin/set/forget. */
+async function writeSettings(projectDir: string, s: Settings): Promise<void> {
+  const p = settingsFile(projectDir);
+  await mkdir(dirname(p), { recursive: true });
+  const tmp = `${p}.tmp`;
+  await writeFile(tmp, JSON.stringify(s, null, 2));
+  await rename(tmp, p);
+}
+
+const sameMatch = (a: Record<string, string>, b: Record<string, string>): boolean => {
+  const ak = Object.keys(a);
+  const bk = Object.keys(b);
+  return ak.length === bk.length && ak.every((k) => a[k] === b[k]);
+};
+
+/** Append a learned (`asked`) route and atomically persist. */
 export async function recordRoute(
   projectDir: string,
   match: Record<string, string>,
@@ -88,9 +104,34 @@ export async function recordRoute(
 ): Promise<void> {
   const s = await readSettings(projectDir);
   s.routes.push({ match, pack, source: 'asked', at: now });
-  const p = settingsFile(projectDir);
-  await mkdir(dirname(p), { recursive: true });
-  const tmp = `${p}.tmp`;
-  await writeFile(tmp, JSON.stringify(s, null, 2));
-  await rename(tmp, p);
+  await writeSettings(projectDir, s);
+}
+
+// ORCH.9 — the `control` writers (the deterministic surface behind `opensquid orchestrator …`).
+
+/** Set the project's declared domain (a dictionary value the classifier ctx reads). */
+export async function setProjectDomain(projectDir: string, domain: DomainDict): Promise<void> {
+  const s = await readSettings(projectDir);
+  s.domain = domain;
+  await writeSettings(projectDir, s);
+}
+
+/** Pin a route (`source:'pinned'`, beats `asked`); replaces any existing pinned route with the same match. */
+export async function pinRoute(
+  projectDir: string,
+  match: Record<string, string>,
+  pack: string,
+  now: string,
+): Promise<void> {
+  const s = await readSettings(projectDir);
+  s.routes = s.routes.filter((r) => !(r.source === 'pinned' && sameMatch(r.match, match)));
+  s.routes.push({ match, pack, source: 'pinned', at: now });
+  await writeSettings(projectDir, s);
+}
+
+/** Remove ALL routes (asked or pinned) that point at `pack`. */
+export async function forgetRoute(projectDir: string, pack: string): Promise<void> {
+  const s = await readSettings(projectDir);
+  s.routes = s.routes.filter((r) => r.pack !== pack);
+  await writeSettings(projectDir, s);
 }

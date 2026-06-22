@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.509] - 2026-06-22
+
+### Added — ORCH.9: `control` writers (set-domain / pin / forget) + CLI surface
+
+- **`src/runtime/orchestrator_settings.ts`** — `setProjectDomain`, `pinRoute` (writes a `source:'pinned'` route,
+  replacing any same-match pin so it can't duplicate), `forgetRoute` (removes all routes for a pack), over a shared
+  atomic `writeSettings`. These make `resolveRoute`'s `pinned > asked` precedence and the project-declared `domain`
+  non-dead.
+- **`src/cli.ts`** — an `opensquid orchestrator` command group (`domain <d>` / `pin <intent> <pack> [-d domain]` /
+  `forget <pack>`) — the deterministic surface; `intent`/`domain` are validated against the frozen dictionaries
+  (`MacroIntent`/`DomainDict.parse` reject an invented word). `orchestrate`'s `control` branch nudges toward it.
+
+### Fixed
+
+- **`readSettings` returned the shared module-level default by reference** on a cache-miss, so `recordRoute`/
+  `pinRoute` mutating `s.routes` accumulated routes into the global default across reads (masked in production by
+  process-per-hook, but a real latent bug). Now returns a fresh `Settings.parse({})` each call.
+
+Completes the orchestrator mechanics (ORCH.1–9). Full suite 4066 green.
+
 ## [0.5.508] - 2026-06-22
 
 ### Added — ORCH.8: the pack entry-guard contract (propose/dispose safety)

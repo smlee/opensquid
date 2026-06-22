@@ -51,7 +51,9 @@ describe('orchestrate (ORCH.5)', () => {
       [pack('cf', { intent: 'produce' })],
       NOW,
     );
-    expect(r).toEqual({ injections: [], ground: false, control: true });
+    expect(r.control).toBe(true);
+    expect(r.ground).toBe(false);
+    expect(r.injections[0]).toMatch(/orchestrator/i); // nudge → the deterministic CLI surface
     expect(await activeJson()).toBeNull();
   });
 

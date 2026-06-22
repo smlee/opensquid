@@ -75,7 +75,14 @@ export async function orchestrate(
       isProject ? { project: true, ...(s.domain ? { domain: s.domain } : {}) } : { project: false },
     );
     if (f.intent === 'converse') return { injections: [], ground: false }; // converse → BARE (never grounded)
-    if (f.intent === 'control') return { injections: [], ground: false, control: true }; // meta; actions = ORCH.9
+    if (f.intent === 'control')
+      return {
+        injections: [
+          'ℹ control — to change routing use `opensquid orchestrator domain|pin|forget` (deterministic, project-local).',
+        ],
+        ground: false,
+        control: true,
+      };
 
     const fm: Record<string, string> = { intent: f.intent };
     if (f.domain !== undefined) fm.domain = f.domain;

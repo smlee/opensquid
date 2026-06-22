@@ -31,6 +31,8 @@ import { migrateUmbrellaNs } from './setup/migrate/migrate-umbrella-ns.js';
 import { migrateWedgeLessons } from './rag/wedge/migrate.js';
 import { wedgeLessonsDbUrl, wedgeLessonsDir } from './rag/wedge/paths.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
+import { setProjectDomain, pinRoute, forgetRoute } from './runtime/orchestrator_settings.js';
+import { MacroIntent, DomainDict } from './packs/schemas/pack_v2.js';
 import { daemonPidPath, OPENSQUID_HOME } from './runtime/paths.js';
 import { parseShow, runDaemonReport } from './setup/cli/daemon_report.js';
 import { registerAudit } from './setup/cli/audit.js';
@@ -122,6 +124,37 @@ function runCli(): void {
     .description('Tracks for your AI agent — destination-first.')
     // wg-798ce60dbb13: bind the conventional lowercase `-v` (commander's default is `-V` only).
     .version(readPackageVersion(), '-v, --version');
+
+  // ORCH.9 — orchestrator routing (project-local .opensquid/orchestrator.json). The deterministic surface for the
+  // `control` intent: set the project domain, pin a route, forget a pack's routes. intent/domain validated against
+  // the frozen dictionaries (rejects an invented word).
+  const orch = program
+    .command('orchestrator')
+    .description('Orchestrator routing (project-local .opensquid/orchestrator.json)');
+  orch
+    .command('domain <domain>')
+    .description('set the project domain (from the frozen dictionary)')
+    .action(async (domain: string) => {
+      await setProjectDomain(process.cwd(), DomainDict.parse(domain));
+      process.stdout.write(`orchestrator: project domain = ${domain}\n`);
+    });
+  orch
+    .command('pin <intent> <pack>')
+    .option('-d, --domain <domain>', 'narrow the pin to a domain')
+    .description('pin intent[:domain] → pack (beats learned routes)')
+    .action(async (intent: string, pack: string, o: { domain?: string }) => {
+      const match: Record<string, string> = { intent: MacroIntent.parse(intent) };
+      if (o.domain !== undefined) match.domain = DomainDict.parse(o.domain);
+      await pinRoute(process.cwd(), match, pack, new Date().toISOString());
+      process.stdout.write(`orchestrator: pinned ${JSON.stringify(match)} → ${pack}\n`);
+    });
+  orch
+    .command('forget <pack>')
+    .description('remove all routes for a pack')
+    .action(async (pack: string) => {
+      await forgetRoute(process.cwd(), pack);
+      process.stdout.write(`orchestrator: forgot routes for ${pack}\n`);
+    });
 
   const daemon = program.command('daemon').description('Background daemon lifecycle');
 
