@@ -21,13 +21,23 @@
  * reused `fsm.ts` `step` over the NAMED event each state emits (`meta[state].emits` /
  * a decision branch's `emits`) — the same author-named vocabulary as the live `advance_fsm`.
  */
-import { fromFlat, soleState, step, type Fsm } from '../fsm.js';
+import { type Fsm } from '../fsm.js';
 import type { CompiledPack, StateMeta } from '../../packs/compile_v2.js';
 import { ProgressFloor, type ToolObservation } from '../guard/progress_floor.js';
 import { evaluateCompletion } from '../guard/connector.js';
-
-/** Opaque guard-evaluation context, threaded through to the injected evaluator. */
-export type GuardCtx = unknown;
+// FAC-CUT.5b.1: the sound per-state guard dispatch is extracted to gate_dispatch.ts (registry-free, reused
+// by V2ObservedActor too). The OUTER completion-pull (runExecutor/runToTerminal) stays here (retire-candidate).
+import {
+  evalGate,
+  evalDecision,
+  transitionOn,
+  emitOf,
+  type GuardCtx,
+  type GuardEvaluator,
+  type DriverStep,
+} from './gate_dispatch.js';
+// Re-export for the driver's existing importers (back-compat — these moved to gate_dispatch.ts).
+export type { GuardCtx, GuardEvaluator, DriverStep };
 
 /** One observable step the executor's inner tool-loop produced. */
 export interface InnerStep {
@@ -46,23 +56,12 @@ export interface ExecutorRegistry {
   ensureExecutor(name: string): Promise<Executor>;
 }
 
-/** Injected guard evaluator (reuses `evaluator.ts` at integration; pure boolean here). */
-export interface GuardEvaluator {
-  eval(guardRef: string, ctx: GuardCtx): boolean | Promise<boolean>;
-}
-
 export interface LoopDeps {
   registry: ExecutorRegistry;
   guards: GuardEvaluator;
   /** factory so each executor inner-loop gets its OWN Progress floor (counters are per-run). */
   makeFloor?: () => ProgressFloor;
 }
-
-/** The total result of one `step` — a discriminated union (no implicit `{next?, outcome?}` ambiguity). */
-export type DriverStep =
-  | { kind: 'advance'; next: string; notice?: string } // notice = a non-blocking `warn` surfaced on proceed (kernel.ts:36)
-  | { kind: 'action'; action: 'block' | 'halt'; message: string } // gate fail → self-continue/halt (ENFORCE, stop)
-  | { kind: 'outcome'; outcome: 'shipped' | 'wedge'; reason?: string };
 
 export class LoopDriver {
   constructor(
@@ -117,40 +116,21 @@ export class LoopDriver {
         floorAction,
       });
       if (verdict.kind === 'release')
-        return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
+        return { kind: 'advance', next: transitionOn(this.fsm, state, emitOf(state, m)) };
       if (verdict.kind === 'break')
         return { kind: 'outcome', outcome: 'wedge', reason: verdict.reason };
       // continue: the completion guard hasn't held yet (incl. claims-done-but-guard-fails) — keep looping
     }
   }
 
-  private async runGate(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
-    const ok = await this.deps.guards.eval(m.guard ?? '', ctx);
-    if (ok) return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
-    const onFail = m.onFail ?? { action: 'block' as const, message: `gate '${state}' failed` };
-    if (onFail.action === 'warn') {
-      // warn = proceed + nudge (kernel.ts:36): advance the gate's ONLY forward edge, carry the notice.
-      return {
-        kind: 'advance',
-        next: this.transitionOn(state, this.emitOf(state, m)),
-        notice: onFail.message,
-      };
-    }
-    return { kind: 'action', action: onFail.action, message: onFail.message }; // block | halt — ENFORCE
+  // FAC-CUT.5b.1: the gate/decision dispatch is extracted to gate_dispatch.ts (registry-free, reused by
+  // V2ObservedActor). These delegate — same logic, one source.
+  private runGate(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
+    return evalGate(this.fsm, state, m, this.deps.guards, ctx);
   }
 
-  private async runDecision(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
-    const branches = m.branches ?? [];
-    for (const b of branches) {
-      // first-match by declared order → emit that branch's NAMED event; the transitions list routes it.
-      if ('else' in b) return { kind: 'advance', next: this.transitionOn(state, b.emits) }; // total fallback
-      if (await this.deps.guards.eval(b.guard, ctx))
-        return { kind: 'advance', next: this.transitionOn(state, b.emits) };
-    }
-    // unreachable: StateV2.refine() guarantees exactly one `else` (last). Fail loud if a malformed pack slips through.
-    throw new Error(
-      'LOOP.1: decision state had no matching branch and no else (totality violated)',
-    );
+  private runDecision(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
+    return evalDecision(this.fsm, state, m, this.deps.guards, ctx);
   }
 
   private async runSubFlow(state: string, m: StateMeta, ctx: GuardCtx): Promise<DriverStep> {
@@ -165,7 +145,7 @@ export class LoopDriver {
     }
     const outcome = await new LoopDriver(child, this.deps).runToTerminal(ctx);
     if (outcome === 'shipped') {
-      return { kind: 'advance', next: this.transitionOn(state, this.emitOf(state, m)) };
+      return { kind: 'advance', next: transitionOn(this.fsm, state, emitOf(state, m)) };
     }
     return { kind: 'outcome', outcome: 'wedge', reason: `sub_flow '${m.flow ?? state}' wedged` };
   }
@@ -183,25 +163,5 @@ export class LoopDriver {
     }
     return 'wedge'; // backstop: a non-terminating sub-flow is a wedge, never an infinite loop
   }
-
-  /** The NAMED event an executor/gate/sub_flow state emits to advance; the compiler guarantees it is set. */
-  private emitOf(state: string, m: StateMeta): string {
-    if (m.emits === undefined) {
-      throw new Error(
-        `LOOP.1: state '${state}' (kind '${m.kind}') has no emit event (compiler invariant)`,
-      );
-    }
-    return m.emits;
-  }
-
-  /** Compute the next state for a named event via the reused engine; a missing transition is a bug. */
-  private transitionOn(state: string, event: string): string {
-    const r = step(fromFlat(this.fsm), new Set([state]), event);
-    if (!r.transitioned) {
-      throw new Error(
-        `LOOP.1: no '${event}' transition from '${state}' (compiler invariant violated)`,
-      );
-    }
-    return soleState(r.next);
-  }
+  // emitOf / transitionOn moved to gate_dispatch.ts (FAC-CUT.5b.1) — imported above + called with this.fsm.
 }

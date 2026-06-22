@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.495] - 2026-06-21
+
+### Added — FAC-CUT.5b.1: the event-driven observed v2 actor + `gate_dispatch` extraction
+
+- **`gate_dispatch.ts`** — the SOUND, registry-free per-state guard dispatch (`evalGate`/`evalDecision`/
+  `transitionOn`/`emitOf` + the `GuardEvaluator`/`GuardCtx`/`DriverStep` types), extracted verbatim from
+  `LoopDriver`. `driver.ts`'s `runGate`/`runDecision` now delegate to it (one implementation, no
+  duplication); `driver.test.ts` stays green unchanged (the behavior-preserving-extraction proof).
+- **`V2ObservedActor`** — the EVENT-DRIVEN runtime for an OBSERVED v2 cartridge (coding-flow's model): on a
+  trigger-matching hook event it runs the current state through the reused dispatch, chaining auto
+  `decision`s to the next gate await-point, and returns `Effect[]` (`write_state` / `transition` /
+  `gate_action`). PURE — no bus, no registry, no I/O (the actor-port contract); the host applies the effects.
+- **Corrects a documented drift:** `LoopDriver`'s OUTER completion-pull (`runExecutor`/`runToTerminal`) is
+  the inverted, completion-driven model built ungated on 2026-06-18 and is NOT used here (retire-candidate);
+  only its sound guard-driven dispatch is reused. The observed runtime is event-driven (observed event →
+  `fsm.ts step`), matching the design + the live v1 path.
+- Internal: makes a v2 cartridge's observed lifecycle step on events. The host supply (run audits, bind ctx,
+  apply effects via `kernel.applyAction`, register the actor) + halt/wedge parking are FAC-CUT.5b.2.
+
 ## [0.5.494] - 2026-06-21
 
 ### Added — FAC-CUT.5a: single-pass partition of active packs into v1 + v2 (the v2 LOAD seam)
