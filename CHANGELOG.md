@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.496] - 2026-06-22
+
+### Added — KANBAN.1: a kanban overlay DB that MAPS the work-graph (does not replace it)
+
+- **`src/kanban/map_store.ts`** — a thin libSQL overlay (`kanban_boards` + `kanban_cards`) that MAPS the
+  existing work-graph into a kanban board, per the user's direction ("use the db to map the work-graph, NOT
+  replace it"). It stores ONLY board membership + an explicit `position`; the work-graph (`src/workgraph/`,
+  the deliberate event-sourced op-log) is **untouched**.
+- **Deterministic by design** — board order is `ORDER BY position, card_id` (the `card_id` PK is the
+  tiebreak), so it's reproducible even under concurrent `place` with no serialization assumption — the
+  deterministic order the work-graph's wall-clock listing lacked, owned by the overlay.
+- **Lanes derived live, never stored** — `deriveLane` (pure, first-match: done→wedged→active→backlog→blocked)
+  reads only `status` + `wedgeReason` + `listReady`-membership from an injected `WorkGraphReader`; it
+  re-derives no claim-expiry or blocked-by-edge logic (`listReady` already encapsulates both) — one source
+  of truth, no drift.
+- `place` is idempotent (`ON CONFLICT DO NOTHING`); a placed card whose work-graph issue is gone is skipped.
+  The store depends only on the `Issue` type + an injected reader (no `workgraph/store` coupling).
+- Tracked follow-ons: the MCP tools + auto-placement + real-reader wiring (KANBAN.2), and goal-map worksheet
+  ("checkpoint") cards (KANBAN.3).
+
 ## [0.5.495] - 2026-06-21
 
 ### Added — FAC-CUT.5b.1: the event-driven observed v2 actor + `gate_dispatch` extraction
