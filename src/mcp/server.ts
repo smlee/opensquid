@@ -50,6 +50,7 @@ import { wedgeLessonStore, type WedgeLessonStore } from '../rag/wedge/store.js';
 import { wedgeLessonsDbUrl, wedgeLessonsDir } from '../rag/wedge/paths.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
+import { kanbanMapStore, type KanbanMapStore } from '../kanban/map_store.js';
 import { OPENSQUID_HOME } from '../runtime/paths.js';
 import { workGraphStore } from '../workgraph/store.js';
 
@@ -90,6 +91,18 @@ import {
   handleWgUpdate,
 } from './tools/workgraph.js';
 import { DecisionClassifySchema, handleDecisionClassify } from './tools/ralph.js';
+import {
+  KanbanBoardSchema,
+  KanbanCreateBoardSchema,
+  KanbanPlaceSchema,
+  KanbanRemoveSchema,
+  KanbanSyncSchema,
+  handleKanbanBoard,
+  handleKanbanCreateBoard,
+  handleKanbanPlace,
+  handleKanbanRemove,
+  handleKanbanSync,
+} from './tools/kanban.js';
 
 import type { WorkGraphStore } from '../workgraph/types.js';
 
@@ -135,6 +148,21 @@ function getWorkGraph(): Promise<WorkGraphStore> {
     return store;
   })();
   return workGraphPromise;
+}
+
+/**
+ * Lazy kanban overlay store singleton (KANBAN.2). Promise-memoized like getWorkGraph — one `init()`
+ * (schema creation) amortized across calls. Dedicated `~/.opensquid/kanban.db`; MAPS the work-graph,
+ * never replaces it (the overlay reads the work-graph through the injected reader only).
+ */
+let kanbanPromise: Promise<KanbanMapStore> | null = null;
+function getKanban(): Promise<KanbanMapStore> {
+  kanbanPromise ??= (async () => {
+    const store = kanbanMapStore(`file:${join(OPENSQUID_HOME(), 'kanban.db')}`);
+    await store.init();
+    return store;
+  })();
+  return kanbanPromise;
 }
 
 // Each entry binds an args Zod schema to a handler that already accepts the
@@ -233,6 +261,30 @@ const ToolHandlers = {
     handle: (a: z.infer<typeof DecisionClassifySchema>) =>
       Promise.resolve(handleDecisionClassify(a)),
   },
+  kanban_create_board: {
+    schema: KanbanCreateBoardSchema,
+    handle: async (a: z.infer<typeof KanbanCreateBoardSchema>) =>
+      handleKanbanCreateBoard(a, await getKanban()),
+  },
+  kanban_place: {
+    schema: KanbanPlaceSchema,
+    handle: async (a: z.infer<typeof KanbanPlaceSchema>) => handleKanbanPlace(a, await getKanban()),
+  },
+  kanban_remove: {
+    schema: KanbanRemoveSchema,
+    handle: async (a: z.infer<typeof KanbanRemoveSchema>) =>
+      handleKanbanRemove(a, await getKanban()),
+  },
+  kanban_sync: {
+    schema: KanbanSyncSchema,
+    handle: async (a: z.infer<typeof KanbanSyncSchema>) =>
+      handleKanbanSync(a, await getKanban(), await getWorkGraph()),
+  },
+  kanban_board: {
+    schema: KanbanBoardSchema,
+    handle: async (a: z.infer<typeof KanbanBoardSchema>) =>
+      handleKanbanBoard(a, await getKanban(), await getWorkGraph()),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -273,6 +325,12 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   workgraph_add_edge: LOCAL_WRITE,
   workgraph_claim: LOCAL_WRITE,
   decision_classify: READ_ONLY,
+  // Kanban overlay (KANBAN.2): sync MAPS the work-graph onto a board (a write); board is a pure read.
+  kanban_create_board: LOCAL_WRITE,
+  kanban_place: LOCAL_WRITE,
+  kanban_remove: LOCAL_WRITE,
+  kanban_sync: LOCAL_WRITE,
+  kanban_board: READ_ONLY,
   // The one genuinely destructive tool: deletes a memory (tools/forget.ts).
   forget: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 };
@@ -314,6 +372,15 @@ const descriptions: Record<ToolName, string> = {
     'Atomically claim a work-graph issue {id, ttlSec?} for exclusive work (exactly-once). Stamps the calling harness as audience. Returns {won, expiresAt}; won:false means another runner holds it. An expired claim is reclaimable.',
   decision_classify:
     'Classify an in-lap decision {decision} as DECIDE / ESCALATE / DEFER (gated-ralph, deterministic-first). DECIDE = settle by principles and proceed; ESCALATE = irreversible/outward boundary or genuine fork (emit HUMAN_REQUIRED, stamping this verdict in the payload); DEFER = no signal, the agent decides (Inv 3 → DECIDE). Returns {verdict, confidence, source, matched}.',
+  kanban_create_board:
+    'Create a kanban board {name, goal} that MAPS work-graph issues into lanes (re-create updates the goal). The board is an overlay — the work-graph is never modified.',
+  kanban_place:
+    'Place a work-graph issue {board, cardId} onto a board (idempotent; cardId = a work-graph issue id). For manual/curated boards; use kanban_sync to map the whole work-graph.',
+  kanban_remove: 'Remove a card {board, cardId} from a board (the work-graph issue is untouched).',
+  kanban_sync:
+    'Map the WHOLE work-graph onto a board {board}: place every issue as a card (idempotent — adds only new issues). Returns {ok, synced}. Run before kanban_board to mirror the current work-graph.',
+  kanban_board:
+    'Read a board {board}: the derived kanban lanes (backlog/active/blocked/wedged/done) over its cards, each lane ordered deterministically. Lanes are derived live from the work-graph (pure read).',
 };
 
 /**

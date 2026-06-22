@@ -7,6 +7,27 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.497] - 2026-06-22
+
+### Added — KANBAN.2: wire the kanban overlay LIVE (MCP tools over the real work-graph)
+
+- **`src/mcp/tools/kanban.ts`** — 5 MCP tools that make KANBAN.1's overlay usable by the agent, registered in
+  `src/mcp/server.ts` (a memoized `getKanban()` store + dispatch + auth + tool-list, mirroring the work-graph
+  tools). The real `workGraphStore` is passed directly as the `WorkGraphReader` (no adapter — `WorkGraphStore`
+  already has `listIssues`+`listReady`).
+- **The mapping is split for honest auth** (a SCOPE-audit-driven decomposition): `kanban_sync` is a **write**
+  (`LOCAL_WRITE`) that maps the WHOLE work-graph onto a board by placing every issue via KANBAN.1's idempotent
+  `place`; `kanban_board` is a **pure read** (`READ_ONLY`) that returns the derived lane view. Folding sync
+  into the board read would have forced a read-shaped tool to be classed `LOCAL_WRITE` — the split keeps every
+  tool's auth class matching its real effect.
+- **Tools:** `kanban_create_board {name, goal}`, `kanban_place {board, cardId}`,
+  `kanban_remove {board, cardId}`, `kanban_sync {board}` → `{ok, synced}`, `kanban_board {board}` → the lanes.
+- **Additive** — no change to `src/kanban/map_store.ts` or `src/workgraph/` (handler wiring only; `git diff` of
+  both is empty). The kanban is now LIVE: `kanban_sync` mirrors the work-graph onto a board, `kanban_board`
+  reads it. Tracked follow-on: KANBAN.3 (goal-map worksheet "checkpoint" cards).
+
+---
+
 ## [0.5.496] - 2026-06-22
 
 ### Added — KANBAN.1: a kanban overlay DB that MAPS the work-graph (does not replace it)

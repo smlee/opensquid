@@ -198,7 +198,7 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 20 tools (+ decision_classify, gated-ralph) with JSON Schema', async () => {
+  it('tools/list returns the 26 tools (+ kanban overlay, KANBAN.2) with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
@@ -207,6 +207,11 @@ describe('opensquid-mcp subprocess', () => {
       'decision_classify',
       'forget',
       'inspect_skill',
+      'kanban_board',
+      'kanban_create_board',
+      'kanban_place',
+      'kanban_remove',
+      'kanban_sync',
       'list_drift_events',
       'list_packs',
       'list_skills',
@@ -263,6 +268,10 @@ describe('opensquid-mcp subprocess', () => {
     expect(ann('memorize').readOnlyHint).toBe(false);
     expect(ann('memorize').destructiveHint).toBe(false);
     expect(ann('workgraph_update_issue').destructiveHint).toBe(false);
+    // KANBAN.2: honest auth — kanban_board is a pure read, kanban_sync mutates the overlay.
+    expect(ann('kanban_board').readOnlyHint).toBe(true);
+    expect(ann('kanban_sync').readOnlyHint).toBe(false);
+    expect(ann('kanban_sync').destructiveHint).toBe(false);
   }, 15_000);
 
   it('memorize with missing required args yields an error (Zod runs before engine)', async () => {
