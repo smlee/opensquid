@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.505] - 2026-06-22
+
+### Added — ORCH.5: the hard-coded general orchestrator, WIRED LIVE (completes the wired core ORCH.1–5)
+
+- **`src/runtime/loop/orchestrate.ts`** — `orchestrate(projectDir, prompt, isProject, packs, now)`: read the
+  project's declared `domain` → `classify` → `resolveRoute` (pinned/asked) → `matchPacks` → ACTIVATE the chosen
+  pack by idempotently writing `.opensquid/active.json` (consumed by the existing `runV2Cartridges` supply on the
+  next tool-call event — the LIVE path). `converse` → bare; `control` → orchestrator-meta (the pin/forget/set-domain
+  actions are the tracked ORCH.9); a tie → an ask injection. FAIL-OPEN.
+- **Wired into `src/runtime/hooks/user-prompt-submit.ts`** — after the existing dispatch, its injections merge into
+  the same `additionalContext` envelope. ADDITIVE + provably inert today: with zero `serves`-bearing packs in the
+  active catalog it returns the ZERO result, so the merged hook output is byte-identical (317 hook tests unchanged).
+- Catalog source for the core = the ACTIVE v2 packs (`loadActiveV2Cartridges`); widening it to installed-but-inactive
+  packs is the tracked ORCH.7.
+- **Tests:** inert, converse→bare, control→meta, single-match→activate(+record asked route, active.json written),
+  tie→ask, no-match→ground, fail-open. Full suite 4051 green; hook integration unchanged.
+
 ## [0.5.504] - 2026-06-22
 
 ### Added — ORCH.4: project-local orchestrator settings (`orchestrator.json`)

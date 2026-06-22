@@ -16,7 +16,8 @@
  *
  * Fail-open on any internal error.
  */
-import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { buildRegistry, loadActivePacks, loadActiveV2Cartridges } from '../bootstrap.js';
+import { orchestrate } from '../loop/orchestrate.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
@@ -195,9 +196,26 @@ async function main(): Promise<void> {
   // most prominent surface in the agent's next-turn context.
   const inboxEnvelope = await drainUmbrellaInbox(sessionId);
 
+  // ORCH.5 — the hard-coded general orchestrator. Classify the prompt, match a `serves`-bearing pack against the
+  // active v2 catalog, and ACTIVATE it (write active.json → the existing runV2Cartridges runs its FSM next event);
+  // a tie surfaces an ask. ADDITIVE + inert today (zero serves-packs → ZERO result). orchestrate() is fail-open.
+  let orchInjections: string[] = [];
+  if (parsed.data.kind === 'prompt_submit') {
+    const v2packs = (await loadActiveV2Cartridges(sessionId)).map((c) => c.pack);
+    const orch = await orchestrate(
+      process.cwd(),
+      parsed.data.prompt,
+      true,
+      v2packs,
+      new Date().toISOString(),
+    );
+    orchInjections = orch.injections;
+  }
+
   const contextParts: string[] = [];
   if (inboxEnvelope.length > 0) contextParts.push(inboxEnvelope);
   contextParts.push(...contextInjections);
+  contextParts.push(...orchInjections);
   if (newProjectLine !== null) contextParts.push(newProjectLine);
   if (directives.length > 0) {
     const block =
