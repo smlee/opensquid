@@ -7,6 +7,22 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.502] - 2026-06-22
+
+### Added — ORCH.2: `classify(prompt, ctx) → facets` (the router's classification step)
+
+- **`src/runtime/classify.ts`** — `classify(prompt, ctx) → Facets` (`{intent, domain?, stakes?, project,
+  confidence}`), PURE + cheap-first deterministic over the 8 frozen intents. Two anti-drift rules: `domain` is
+  COPIED from `ctx.domain` (the project's declared dictionary value), never coined by the model; `stakes:'high'`
+  is emitted ONLY on a side-effect signal (run/deploy/send/…). Safe default: ambiguous/empty → `inform` + `low`
+  (the grounded floor, never a confident wrong pack).
+- **`request_type.ts` left UNTOUCHED** (deviation from the spec's "derived view"): its `confidence` means
+  research-vs-work, the new one means confidence-in-intent — a bare ack ("ok") is confidently `converse` here but
+  no-signal `research/low` there, so a single engine can't reproduce the legacy confidence. Keeping them
+  independent is the simplest correct choice (guaranteed parity, zero live-gate behavior change).
+- **Tests:** §6 intent mapping, domain-from-ctx (omitted when absent), stakes-on-side-effect-only, safe default,
+  purity; the unchanged `request_type.test.ts` still passes. Full suite 4032 green.
+
 ## [0.5.501] - 2026-06-22
 
 ### Added — ORCH.1: the `serves` contract (frozen facet vocabulary on PackV2)
