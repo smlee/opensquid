@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.504] - 2026-06-22
+
+### Added — ORCH.4: project-local orchestrator settings (`orchestrator.json`)
+
+- **`src/runtime/orchestrator_settings.ts`** — `<project>/.opensquid/orchestrator.json`: the project's declared
+  `domain` (read into the classifier ctx), learned/pinned `routes`, and `policy`. PROJECT-LOCAL ONLY — no
+  `~/.opensquid` variant (routing is project-specific; a global preference would leak the wrong choice across
+  repos — the "cannot be global" decision). The only global is the hard-coded immutable `DEFAULTS`.
+- `readSettings` (absent/corrupt → `DEFAULTS`, never throws) · `resolveRoute` (most-specific → `pinned` > `asked`
+  > newest; SELF-HEALING — a route whose pack left the catalog is skipped, so a stale route never executes a
+  > dangling reference) · `recordRoute` (append an `asked` route, atomic tmp+rename).
+- **Tests:** defaults, corrupt-JSON safety, declared-domain exposure, resolve precedence, self-heal, round-trip.
+  Full suite 4044 green.
+
 ## [0.5.503] - 2026-06-22
 
 ### Added — ORCH.3: `matchPacks` (the catalog matcher)
