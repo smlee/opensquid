@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.508] - 2026-06-22
+
+### Added — ORCH.8: the pack entry-guard contract (propose/dispose safety)
+
+- **`src/packs/schemas/pack_v2.ts`** — a `.superRefine` on `PackV2`: a `serves`-bearing pack that HAS an `fsm`
+  MUST start at a `gate` state (the entry fit-guard). So a routed pack RE-VERIFIES its own fit on entry and a
+  misroute can never run the wrong workflow to completion — the propose/dispose layer that makes router fuzziness
+  provably safe. Fires ONLY when `serves` + `fsm` are both present (fsm-only and serves-only packs unaffected;
+  no existing pack regresses — none use `serves`).
+- **Tests:** serves+gate-start valid; serves+executor-start rejected (cites `fsm.initial`); serves+no-fsm valid;
+  fsm+no-serves valid. Full suite 4063 green.
+
 ## [0.5.507] - 2026-06-22
 
 ### Added — ORCH.7: widen the orchestrator catalog to INSTALLED v2 packs

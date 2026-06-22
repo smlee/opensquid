@@ -179,6 +179,22 @@ export const PackV2 = z
     messages: z.record(z.string(), z.string()).default({}), // self-continue store: failure_type → instruction
     foundation: z.unknown().optional(), // pure expertise (manifest/lessons) — neither fsm nor gates
   })
-  .strict(); // CONFORMANCE-RECONCILE: no `.refine` — it only guarded `fsm`+`gates`; with `gates` gone,
-// `fsm`/`foundation`/`flows` are independent optionals (a pack is a behavior FSM, or foundation, or neither).
+  .strict()
+  // ORCH.8 — propose/dispose entry-guard: a `serves`-bearing pack with an `fsm` MUST start at a `gate` state, so a
+  // routed pack RE-VERIFIES its own fit on entry and a misroute can never run the wrong workflow to completion.
+  // Fires ONLY when `serves` + `fsm` are both present — fsm-only and serves-only (foundation) packs are unaffected.
+  .superRefine((p, ctx) => {
+    if (
+      p.serves !== undefined &&
+      p.fsm !== undefined &&
+      p.fsm.states[p.fsm.initial]?.kind !== 'gate'
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fsm', 'initial'],
+        message:
+          "ORCH.8: a serves-bearing pack's fsm must start at a `gate` state (the entry fit-guard)",
+      });
+    }
+  });
 export type PackV2 = z.infer<typeof PackV2>;
