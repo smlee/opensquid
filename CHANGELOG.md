@@ -12,7 +12,7 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 ### Added — ORCH.2: `classify(prompt, ctx) → facets` (the router's classification step)
 
 - **`src/runtime/classify.ts`** — `classify(prompt, ctx) → Facets` (`{intent, domain?, stakes?, project,
-  confidence}`), PURE + cheap-first deterministic over the 8 frozen intents. Two anti-drift rules: `domain` is
+confidence}`), PURE + cheap-first deterministic over the 8 frozen intents. Two anti-drift rules: `domain` is
   COPIED from `ctx.domain` (the project's declared dictionary value), never coined by the model; `stakes:'high'`
   is emitted ONLY on a side-effect signal (run/deploy/send/…). Safe default: ambiguous/empty → `inform` + `low`
   (the grounded floor, never a confident wrong pack).
