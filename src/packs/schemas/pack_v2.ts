@@ -121,12 +121,56 @@ export const FsmV2 = z.object({
 });
 export type FsmV2 = z.infer<typeof FsmV2>;
 
+// ORCH.1 — the `serves` contract: the FROZEN facet vocabulary a pack declares + the classifier emits, so the
+// hard-coded prompt router can match a task to a pack (loop/docs/opensquid-serves-contract.pdf). Two CLOSED
+// dictionaries (`intent`, `domain`) — extended only by deliberate edit, NEVER by the model — so a domain word
+// can't drift ("webdev" vs "coding"); `stakes` + free qualifiers raise specificity only.
+export const MacroIntent = z.enum([
+  'inform',
+  'decide',
+  'produce',
+  'transform',
+  'act',
+  'locate',
+  'converse',
+  'control',
+]);
+export type MacroIntent = z.infer<typeof MacroIntent>;
+
+// The domain dictionary — seeded from Anthropic Clio's empirical usage clusters; project-declared, never coined.
+export const DomainDict = z.enum([
+  'coding',
+  'writing',
+  'research',
+  'data',
+  'devops',
+  'design',
+  'business',
+]);
+export type DomainDict = z.infer<typeof DomainDict>;
+
+// NOT `.strict()`: `.catchall(z.string())` admits free qualifiers (`lang`, `framework`) as string→string while
+// the two LOAD-BEARING keys (`intent`, `domain`) stay closed enums (cannot typo-drift silently).
+const ServesBlock = z
+  .object({
+    intent: MacroIntent,
+    domain: DomainDict.optional(),
+    stakes: z.enum(['low', 'high']).optional(),
+  })
+  .catchall(z.string());
+export type ServesBlock = z.infer<typeof ServesBlock>;
+
+/** A pack may serve one cell (a block) or several (a non-empty list). */
+export const Serves = z.union([ServesBlock, z.array(ServesBlock).min(1)]);
+
 export const PackV2 = z
   .object({
     name: z.string().min(1),
     version: z.string().min(1),
     scope: PackScope,
     detected_by: z.array(z.unknown()).default([]),
+    // ORCH.1: additive optional — a `serves`-less pack parses byte-identically (only the orchestrator reads it).
+    serves: Serves.optional(),
     // ← NOW OPTIONAL: a behavior pack has `fsm`; a conformance/foundation pack does not (M.1).
     fsm: FsmV2.optional(),
     // HAR.1: a FLAT registry of named ISOLATED nested machines; a `sub_flow.flow` is a key into this.

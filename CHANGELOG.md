@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.501] - 2026-06-22
+
+### Added — ORCH.1: the `serves` contract (frozen facet vocabulary on PackV2)
+
+- **`src/packs/schemas/pack_v2.ts`** — `MacroIntent` (the 8-intent frozen enum) + `DomainDict` (the 7-domain
+  CLOSED dictionary, seeded from Anthropic Clio's empirical usage clusters) + `ServesBlock`
+  (`.catchall(z.string())` admits free qualifiers like `lang`/`framework`, while the two LOAD-BEARING keys
+  `intent`/`domain` stay closed enums so a domain word can't drift — "webdev" vs "coding") + `Serves`
+  (a block, or a non-empty list) + an additive optional `serves?` on `PackV2`. This is the shared vocabulary
+  the hard-coded prompt router (T-orchestrator) will match a task to a pack on
+  (`loop/docs/opensquid-serves-contract.pdf`).
+- **`src/packs/serves.ts`** — `normalizeServes` (the union → a block array) + `servesFacets` (a block → its flat
+  facet map, dropping undefined), the pure helpers the matcher (ORCH.3) consumes.
+- **Additive + inert** — a `serves`-less pack parses byte-identically; only the orchestrator reads `serves`. No
+  existing v2 consumer (`loader_v2`/`compile_v2`/`discovery`/viz) changes.
+- **Tests:** parse single/list/qualifier forms, closed-enum rejects (intent + domain — the anti-invention
+  guarantee), empty-list reject, the additive proof, and the helpers. Full suite 4020 green.
+
 ## [0.5.500] - 2026-06-22
 
 ### Added — FAC-CUT.5b.2: wire the v2 runtime LIVE (in-process host supply), additive + inert-safe
