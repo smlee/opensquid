@@ -80,7 +80,7 @@ describe('orchestrate (ORCH.5)', () => {
     expect(await activeJson()).toBeNull();
   });
 
-  it('no match + project → ground:true (the Tier-1 floor)', async () => {
+  it('no match + project → ground:true with a grounding directive (Tier-1 floor, ORCH.6)', async () => {
     const r = await orchestrate(
       proj,
       'explain why this happens',
@@ -88,7 +88,19 @@ describe('orchestrate (ORCH.5)', () => {
       [pack('cf', { intent: 'produce' })],
       NOW,
     );
-    expect(r).toEqual({ injections: [], ground: true });
+    expect(r.ground).toBe(true);
+    expect(r.injections[0]).toMatch(/GROUNDING/);
+  });
+
+  it('no match + NON-project → bare (ground:false, no directive)', async () => {
+    const r = await orchestrate(
+      proj,
+      'explain why this happens',
+      false,
+      [pack('cf', { intent: 'produce' })],
+      NOW,
+    );
+    expect(r).toEqual({ injections: [], ground: false });
   });
 
   it('FAIL-OPEN: a bad pack object does not throw → INERT-ish zero', async () => {

@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.506] - 2026-06-22
+
+### Added — ORCH.6: the Tier-1 grounded fallback
+
+- **`src/runtime/loop/ground.ts`** — `groundingDirective(facets)`: when a PROJECT task has no matching pack, the
+  floor is not bare-LLM but "answer from LOCAL authoritative sources (memory + code), not web search or
+  assumptions." Emits the behavioral directive (non-duplicative: the existing `recall-pre-inject` supplies the
+  memories; this adds the use-local-not-web instruction). PURE.
+- **`orchestrate` no-match tail** — project → `{ injections: [groundingDirective], ground: true }` (Tier 1);
+  non-project → bare (Tier 0). Wired with NO new code: `user-prompt-submit.ts` already pushes `orch.injections`.
+- **Tests:** directive domain-mention/local-not-web/purity; orchestrate project-grounds vs non-project-bare.
+  Full suite 4056 green.
+
 ## [0.5.505] - 2026-06-22
 
 ### Added — ORCH.5: the hard-coded general orchestrator, WIRED LIVE (completes the wired core ORCH.1–5)

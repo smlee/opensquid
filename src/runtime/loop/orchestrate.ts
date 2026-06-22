@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 import { matchPacks } from '../../packs/match.js';
 import { classify } from '../classify.js';
 import { readSettings, resolveRoute, recordRoute } from '../orchestrator_settings.js';
+import { groundingDirective } from './ground.js';
 
 import type { PackV2 } from '../../packs/schemas/pack_v2.js';
 
@@ -99,7 +100,10 @@ export async function orchestrate(
         ground: false,
       };
     }
-    return { injections: [], ground: isProject }; // no match → ground (project) or bare
+    // no match → Tier 1 (project: grounded floor, local-not-web) or Tier 0 (bare).
+    return isProject
+      ? { injections: [groundingDirective(f)], ground: true }
+      : { injections: [], ground: false };
   } catch (e) {
     process.stderr.write(`[orchestrate] ignored: ${String(e)}\n`); // FAIL-OPEN
     return INERT;
