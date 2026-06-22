@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.507] - 2026-06-22
+
+### Added — ORCH.7: widen the orchestrator catalog to INSTALLED v2 packs
+
+- **`src/packs/installed.ts`** — `listInstalledV2Packs(cwd)`: scans each scope's `packs/` dir + the builtin root
+  for `pack.yaml`, loads each, deduped scope-first. FAIL-OPEN — a dir without `pack.yaml` (ENOENT) or a malformed
+  pack is SKIPPED (a discovery scan must never break the hook, unlike `loadActiveEntry` which fails loud).
+- **`user-prompt-submit.ts`** now sources the orchestrator catalog from the INSTALLED packs (not just
+  `active.json`), so a `serves`-match can ACTIVATE a pack that is dormant. Today returns [] (no `pack.yaml`
+  installed) → orchestrator stays inert (320 hook+installed tests green).
+- **Tests:** valid pack returned, malformed + non-pack dirs skipped, absent base safe, dedup. Full suite 4059 green.
+
 ## [0.5.506] - 2026-06-22
 
 ### Added — ORCH.6: the Tier-1 grounded fallback

@@ -16,7 +16,8 @@
  *
  * Fail-open on any internal error.
  */
-import { buildRegistry, loadActivePacks, loadActiveV2Cartridges } from '../bootstrap.js';
+import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { listInstalledV2Packs } from '../../packs/installed.js';
 import { orchestrate } from '../loop/orchestrate.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
@@ -201,7 +202,7 @@ async function main(): Promise<void> {
   // a tie surfaces an ask. ADDITIVE + inert today (zero serves-packs → ZERO result). orchestrate() is fail-open.
   let orchInjections: string[] = [];
   if (parsed.data.kind === 'prompt_submit') {
-    const v2packs = (await loadActiveV2Cartridges(sessionId)).map((c) => c.pack);
+    const v2packs = (await listInstalledV2Packs(process.cwd())).map((c) => c.pack);
     const orch = await orchestrate(
       process.cwd(),
       parsed.data.prompt,
