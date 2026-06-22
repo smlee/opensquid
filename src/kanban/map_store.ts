@@ -46,10 +46,11 @@ export function deriveLane(issue: Issue, readyIds: ReadonlySet<string>): Lane {
 
 export interface KanbanMapStore {
   init(): Promise<void>;
-  createBoard(name: string, goal: string): Promise<void>;
-  place(board: string, cardId: string): Promise<void>;
-  remove(board: string, cardId: string): Promise<void>;
+  createBoard(project: string, name: string, goal: string): Promise<void>;
+  place(project: string, board: string, cardId: string): Promise<void>;
+  remove(project: string, board: string, cardId: string): Promise<void>;
   board(
+    project: string,
     name: string,
     reader: WorkGraphReader,
   ): Promise<{ goal: string; lanes: Record<Lane, Card[]> }>;
@@ -58,6 +59,41 @@ export interface KanbanMapStore {
 /** libSQL row values are `string | number | bigint | ArrayBuffer | null`; a TEXT column reads back as a
  *  string — coerce defensively (mirrors `workgraph/store.ts`'s `str` helper). */
 const asStr = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/**
+ * KANBAN.4 data-PRESERVING migration. On a FRESH db the scoped `CREATE TABLE IF NOT EXISTS` in `init()` already
+ * made the tables → `hasProject` true → no-op. On an OLD-schema db the `CREATE IF NOT EXISTS` was a no-op (the
+ * table exists BY NAME with the old columns), so `PRAGMA` reads the legacy columns, detects no `project`, and
+ * rename-aside → recreate-scoped → copy → drop, backfilling 'legacy-global' (a project-unknown bucket).
+ * Board curation (removes/subsets/positions) is NOT regenerable, so rows MUST be preserved; SQLite cannot add a
+ * column to a PK in place, so the table-copy is required. Idempotent via the `hasProject` guard.
+ */
+async function migrateAddProject(c: Client): Promise<void> {
+  const tables = [
+    { name: 'kanban_boards', cols: 'name, goal, created_at', pk: 'project, name' },
+    {
+      name: 'kanban_cards',
+      cols: 'board, card_id, position, added_at',
+      pk: 'project, board, card_id',
+    },
+  ] as const;
+  for (const t of tables) {
+    const info = await c.execute(`PRAGMA table_info(${t.name})`);
+    if (info.rows.some((r) => r.name === 'project')) continue; // fresh / already-scoped → no-op
+    const decls = t.cols
+      .split(', ')
+      .map((col) => `${col} ${col === 'position' ? 'INTEGER' : 'TEXT'} NOT NULL`)
+      .join(', ');
+    await c.execute(`ALTER TABLE ${t.name} RENAME TO ${t.name}_legacy`);
+    await c.execute(
+      `CREATE TABLE ${t.name} (project TEXT NOT NULL, ${decls}, PRIMARY KEY (${t.pk}))`,
+    );
+    await c.execute(
+      `INSERT INTO ${t.name} (project, ${t.cols}) SELECT 'legacy-global', ${t.cols} FROM ${t.name}_legacy`,
+    );
+    await c.execute(`DROP TABLE ${t.name}_legacy`);
+  }
+}
 
 export function kanbanMapStore(dbUrl: string): KanbanMapStore {
   let client: Client | null = null;
@@ -71,53 +107,56 @@ export function kanbanMapStore(dbUrl: string): KanbanMapStore {
     async init() {
       const c = createClient({ url: dbUrl });
       await c.execute(
-        'CREATE TABLE IF NOT EXISTS kanban_boards (name TEXT PRIMARY KEY, goal TEXT NOT NULL, created_at TEXT NOT NULL)',
+        `CREATE TABLE IF NOT EXISTS kanban_boards (
+           project TEXT NOT NULL, name TEXT NOT NULL, goal TEXT NOT NULL, created_at TEXT NOT NULL,
+           PRIMARY KEY (project, name))`,
       );
       await c.execute(
         `CREATE TABLE IF NOT EXISTS kanban_cards (
-           board TEXT NOT NULL, card_id TEXT NOT NULL, position INTEGER NOT NULL, added_at TEXT NOT NULL,
-           PRIMARY KEY (board, card_id))`,
+           project TEXT NOT NULL, board TEXT NOT NULL, card_id TEXT NOT NULL, position INTEGER NOT NULL,
+           added_at TEXT NOT NULL, PRIMARY KEY (project, board, card_id))`,
       );
+      await migrateAddProject(c);
       client = c;
     },
 
-    async createBoard(name, goal) {
+    async createBoard(project, name, goal) {
       await db().execute({
-        sql: 'INSERT INTO kanban_boards (name, goal, created_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET goal = excluded.goal',
-        args: [name, goal, nowIso()],
+        sql: 'INSERT INTO kanban_boards (project, name, goal, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(project, name) DO UPDATE SET goal = excluded.goal',
+        args: [project, name, goal, nowIso()],
       });
     },
 
-    async place(board, cardId) {
-      // position = MAX+1 within the board; idempotent — a re-place is a no-op (keeps the existing position).
+    async place(project, board, cardId) {
+      // position = MAX+1 within (project, board); idempotent — a re-place is a no-op (keeps the existing position).
       const rs = await db().execute({
-        sql: 'SELECT COALESCE(MAX(position), 0) AS m FROM kanban_cards WHERE board = ?',
-        args: [board],
+        sql: 'SELECT COALESCE(MAX(position), 0) AS m FROM kanban_cards WHERE project = ? AND board = ?',
+        args: [project, board],
       });
       const next = Number(rs.rows[0]?.m ?? 0) + 1;
       await db().execute({
-        sql: 'INSERT INTO kanban_cards (board, card_id, position, added_at) VALUES (?, ?, ?, ?) ON CONFLICT(board, card_id) DO NOTHING',
-        args: [board, cardId, next, nowIso()],
+        sql: 'INSERT INTO kanban_cards (project, board, card_id, position, added_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(project, board, card_id) DO NOTHING',
+        args: [project, board, cardId, next, nowIso()],
       });
     },
 
-    async remove(board, cardId) {
+    async remove(project, board, cardId) {
       await db().execute({
-        sql: 'DELETE FROM kanban_cards WHERE board = ? AND card_id = ?',
-        args: [board, cardId],
+        sql: 'DELETE FROM kanban_cards WHERE project = ? AND board = ? AND card_id = ?',
+        args: [project, board, cardId],
       });
     },
 
-    async board(name, reader) {
+    async board(project, name, reader) {
       const goalRs = await db().execute({
-        sql: 'SELECT goal FROM kanban_boards WHERE name = ?',
-        args: [name],
+        sql: 'SELECT goal FROM kanban_boards WHERE project = ? AND name = ?',
+        args: [project, name],
       });
       const goal = asStr(goalRs.rows[0]?.goal);
       const placed = await db().execute({
-        // deterministic order: position, then card_id (PK, unique per board) as the tiebreak — no serialization needed.
-        sql: 'SELECT card_id, position FROM kanban_cards WHERE board = ? ORDER BY position, card_id',
-        args: [name],
+        // deterministic order: position, then card_id (PK tiebreak per project+board) — no serialization needed.
+        sql: 'SELECT card_id, position FROM kanban_cards WHERE project = ? AND board = ? ORDER BY position, card_id',
+        args: [project, name],
       });
       const [issues, ready] = await Promise.all([reader.listIssues(), reader.listReady()]);
       const byId = new Map(issues.map((i) => [i.id, i]));

@@ -7,6 +7,29 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.498] - 2026-06-22
+
+### Added — KANBAN.4: project-scope the kanban DB (the `project` field)
+
+- **`src/kanban/map_store.ts`** — the kanban overlay is now **per-project**, per the user's direction ("since
+  the kanban is a db we should have a field so it knows which project it belongs to"). Both tables gain a
+  `project` column with composite primary keys — `kanban_boards (project, name)` and
+  `kanban_cards (project, board, card_id)` — and every store method (`createBoard`/`place`/`remove`/`board`)
+  takes `project` as its first argument and scopes every query by it (incl. `place`'s `MAX(position)`).
+- **Server-side resolution (not a tool arg)** — `src/mcp/server.ts` adds `resolveKanbanProject()`: session→cwd
+  (`set_goal` precedent, throws on a null session) then `resolveProjectMarker(cwd)?.uuid ??
+resolveProjectUuidFromEnv()` (the **same namespace `recall` uses** — one convention across
+  recall/work-graph/kanban), throwing on a null namespace. The 5 kanban handlers receive the resolved project,
+  so an agent cannot target another project's boards.
+- **Data-preserving migration** — `migrateAddProject` rebuilds a pre-`project` table via rename-aside → copy →
+  drop, backfilling `project='legacy-global'` (board curation — removes/subsets/positions — is not regenerable
+  from the work-graph, so rows are preserved, not dropped); idempotent via a `PRAGMA table_info` guard.
+- **Additive** — `src/workgraph/` is unchanged (`git diff` empty). Tests: per-project isolation (same board
+  name in two projects stays separate), scoped positions, data-preserving migration (a curated `position=7`
+  card survives under `legacy-global`), idempotent init. Full suite 3995 green.
+
+---
+
 ## [0.5.497] - 2026-06-22
 
 ### Added — KANBAN.2: wire the kanban overlay LIVE (MCP tools over the real work-graph)

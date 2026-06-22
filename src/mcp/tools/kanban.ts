@@ -29,37 +29,41 @@ export const KanbanBoardSchema = z.object({ board: z.string().min(1) }).strict()
 
 export const handleKanbanCreateBoard = async (
   a: z.infer<typeof KanbanCreateBoardSchema>,
+  project: string,
   k: KanbanMapStore,
 ): Promise<string> => {
-  await k.createBoard(a.name, a.goal);
+  await k.createBoard(project, a.name, a.goal);
   return JSON.stringify({ ok: true, board: a.name });
 };
 
 export const handleKanbanPlace = async (
   a: z.infer<typeof KanbanPlaceSchema>,
+  project: string,
   k: KanbanMapStore,
 ): Promise<string> => {
-  await k.place(a.board, a.cardId);
+  await k.place(project, a.board, a.cardId);
   return JSON.stringify({ ok: true });
 };
 
 export const handleKanbanRemove = async (
   a: z.infer<typeof KanbanRemoveSchema>,
+  project: string,
   k: KanbanMapStore,
 ): Promise<string> => {
-  await k.remove(a.board, a.cardId);
+  await k.remove(project, a.board, a.cardId);
   return JSON.stringify({ ok: true });
 };
 
 /** SYNC (write): map the WHOLE work-graph onto the board — place every issue. `place` is idempotent
- *  (`ON CONFLICT(board,card_id) DO NOTHING`, KANBAN.1), so re-sync adds only new issues and never dups. */
+ *  (`ON CONFLICT(project,board,card_id) DO NOTHING`, KANBAN.1/.4), so re-sync adds only new issues. */
 export const handleKanbanSync = async (
   a: z.infer<typeof KanbanSyncSchema>,
+  project: string,
   k: KanbanMapStore,
   reader: WorkGraphReader,
 ): Promise<string> => {
   const issues = await reader.listIssues();
-  for (const issue of issues) await k.place(a.board, issue.id);
+  for (const issue of issues) await k.place(project, a.board, issue.id);
   return JSON.stringify({ ok: true, synced: issues.length });
 };
 
@@ -67,6 +71,7 @@ export const handleKanbanSync = async (
  *  mutation, KANBAN.1 `map_store.ts`), so this tool is honestly READ_ONLY. */
 export const handleKanbanBoard = async (
   a: z.infer<typeof KanbanBoardSchema>,
+  project: string,
   k: KanbanMapStore,
   reader: WorkGraphReader,
-): Promise<string> => JSON.stringify(await k.board(a.board, reader));
+): Promise<string> => JSON.stringify(await k.board(project, a.board, reader));

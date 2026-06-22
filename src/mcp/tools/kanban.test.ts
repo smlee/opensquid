@@ -68,15 +68,17 @@ describe('kanban MCP handlers (KANBAN.2)', () => {
       ],
       [iss('back1')],
     );
-    expect(JSON.parse(await handleKanbanCreateBoard({ name: 'b', goal: 'ship' }, k))).toEqual({
-      ok: true,
-      board: 'b',
-    });
-    expect(JSON.parse(await handleKanbanSync({ board: 'b' }, k, r))).toEqual({
+    expect(JSON.parse(await handleKanbanCreateBoard({ name: 'b', goal: 'ship' }, 'p1', k))).toEqual(
+      {
+        ok: true,
+        board: 'b',
+      },
+    );
+    expect(JSON.parse(await handleKanbanSync({ board: 'b' }, 'p1', k, r))).toEqual({
       ok: true,
       synced: 4,
     });
-    const view = JSON.parse(await handleKanbanBoard({ board: 'b' }, k, r)) as BoardView;
+    const view = JSON.parse(await handleKanbanBoard({ board: 'b' }, 'p1', k, r)) as BoardView;
     expect(view.goal).toBe('ship');
     expect(view.lanes.done.map((c) => c.cardId)).toEqual(['done1']);
     expect(view.lanes.active.map((c) => c.cardId)).toEqual(['act1']);
@@ -87,39 +89,39 @@ describe('kanban MCP handlers (KANBAN.2)', () => {
   it('board is a PURE read — it places nothing (empty before any sync, even with issues present)', async () => {
     const k = await mk();
     const r = reader([iss('a'), iss('b')], [iss('a'), iss('b')]);
-    await handleKanbanCreateBoard({ name: 'b', goal: 'g' }, k);
-    const view = JSON.parse(await handleKanbanBoard({ board: 'b' }, k, r)) as BoardView;
+    await handleKanbanCreateBoard({ name: 'b', goal: 'g' }, 'p1', k);
+    const view = JSON.parse(await handleKanbanBoard({ board: 'b' }, 'p1', k, r)) as BoardView;
     expect(allCardIds(view)).toEqual([]); // board did NOT auto-place
   });
 
   it('sync is idempotent — re-sync adds no duplicate cards', async () => {
     const k = await mk();
     const r = reader([iss('a'), iss('b')], [iss('a'), iss('b')]);
-    await handleKanbanCreateBoard({ name: 'b', goal: 'g' }, k);
-    await handleKanbanSync({ board: 'b' }, k, r);
-    expect(JSON.parse(await handleKanbanSync({ board: 'b' }, k, r))).toEqual({
+    await handleKanbanCreateBoard({ name: 'b', goal: 'g' }, 'p1', k);
+    await handleKanbanSync({ board: 'b' }, 'p1', k, r);
+    expect(JSON.parse(await handleKanbanSync({ board: 'b' }, 'p1', k, r))).toEqual({
       ok: true,
       synced: 2,
     });
-    const view = JSON.parse(await handleKanbanBoard({ board: 'b' }, k, r)) as BoardView;
+    const view = JSON.parse(await handleKanbanBoard({ board: 'b' }, 'p1', k, r)) as BoardView;
     expect(allCardIds(view)).toEqual(['a', 'b']); // each once
   });
 
   it('place adds a curated card; remove drops it', async () => {
     const k = await mk();
     const r = reader([iss('x'), iss('y')], [iss('x'), iss('y')]);
-    await handleKanbanCreateBoard({ name: 'b', goal: 'g' }, k);
-    expect(JSON.parse(await handleKanbanPlace({ board: 'b', cardId: 'x' }, k))).toEqual({
+    await handleKanbanCreateBoard({ name: 'b', goal: 'g' }, 'p1', k);
+    expect(JSON.parse(await handleKanbanPlace({ board: 'b', cardId: 'x' }, 'p1', k))).toEqual({
       ok: true,
     });
     expect(
-      allCardIds(JSON.parse(await handleKanbanBoard({ board: 'b' }, k, r)) as BoardView),
+      allCardIds(JSON.parse(await handleKanbanBoard({ board: 'b' }, 'p1', k, r)) as BoardView),
     ).toEqual(['x']);
-    expect(JSON.parse(await handleKanbanRemove({ board: 'b', cardId: 'x' }, k))).toEqual({
+    expect(JSON.parse(await handleKanbanRemove({ board: 'b', cardId: 'x' }, 'p1', k))).toEqual({
       ok: true,
     });
     expect(
-      allCardIds(JSON.parse(await handleKanbanBoard({ board: 'b' }, k, r)) as BoardView),
+      allCardIds(JSON.parse(await handleKanbanBoard({ board: 'b' }, 'p1', k, r)) as BoardView),
     ).toEqual([]);
   });
 });

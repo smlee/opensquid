@@ -51,7 +51,14 @@ import { wedgeLessonsDbUrl, wedgeLessonsDir } from '../rag/wedge/paths.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
 import { kanbanMapStore, type KanbanMapStore } from '../kanban/map_store.js';
-import { OPENSQUID_HOME } from '../runtime/paths.js';
+import { resolveProjectNamespace } from '../kanban/project_scope.js';
+import { resolveMcpSessionId } from '../runtime/hooks/session_id.js';
+import {
+  OPENSQUID_HOME,
+  resolveProjectMarker,
+  resolveProjectUuidFromEnv,
+} from '../runtime/paths.js';
+import { readSessionCwd } from '../runtime/session_state.js';
 import { workGraphStore } from '../workgraph/store.js';
 
 import type { RagBackend } from '../rag/types.js';
@@ -165,6 +172,23 @@ function getKanban(): Promise<KanbanMapStore> {
   return kanbanPromise;
 }
 
+/**
+ * Resolve the project namespace for a kanban op SERVER-SIDE (KANBAN.4) — never a tool arg, so the agent
+ * cannot target another project's boards. Composes two cited precedents: session→cwd from `set_goal`
+ * (throw on a null session), then cwd→namespace via the recall chain (`rag/scope.ts`:
+ * `resolveProjectMarker(cwd)?.uuid ?? resolveProjectUuidFromEnv()`). A null namespace THROWS (per-project
+ * isolation: a board write needs a concrete key; degrading to a shared bucket would re-introduce the
+ * cross-project collision this scoping prevents). The id equals recall's namespace → one convention.
+ */
+async function resolveKanbanProject(): Promise<string> {
+  const session = await resolveMcpSessionId();
+  if (session === null) throw new Error('kanban: cannot resolve session');
+  const cwd = await readSessionCwd(session);
+  const markerUuid = cwd === null ? null : ((await resolveProjectMarker(cwd))?.uuid ?? null);
+  // resolveProjectNamespace (PURE, unit-tested) applies the recall chain + the throw-on-null invariant.
+  return resolveProjectNamespace(markerUuid, resolveProjectUuidFromEnv());
+}
+
 // Each entry binds an args Zod schema to a handler that already accepts the
 // inferred shape. `safeParse` runs against `req.params.arguments` before the
 // handler ever sees the request — invalid input becomes a thrown Error which
@@ -264,26 +288,27 @@ const ToolHandlers = {
   kanban_create_board: {
     schema: KanbanCreateBoardSchema,
     handle: async (a: z.infer<typeof KanbanCreateBoardSchema>) =>
-      handleKanbanCreateBoard(a, await getKanban()),
+      handleKanbanCreateBoard(a, await resolveKanbanProject(), await getKanban()),
   },
   kanban_place: {
     schema: KanbanPlaceSchema,
-    handle: async (a: z.infer<typeof KanbanPlaceSchema>) => handleKanbanPlace(a, await getKanban()),
+    handle: async (a: z.infer<typeof KanbanPlaceSchema>) =>
+      handleKanbanPlace(a, await resolveKanbanProject(), await getKanban()),
   },
   kanban_remove: {
     schema: KanbanRemoveSchema,
     handle: async (a: z.infer<typeof KanbanRemoveSchema>) =>
-      handleKanbanRemove(a, await getKanban()),
+      handleKanbanRemove(a, await resolveKanbanProject(), await getKanban()),
   },
   kanban_sync: {
     schema: KanbanSyncSchema,
     handle: async (a: z.infer<typeof KanbanSyncSchema>) =>
-      handleKanbanSync(a, await getKanban(), await getWorkGraph()),
+      handleKanbanSync(a, await resolveKanbanProject(), await getKanban(), await getWorkGraph()),
   },
   kanban_board: {
     schema: KanbanBoardSchema,
     handle: async (a: z.infer<typeof KanbanBoardSchema>) =>
-      handleKanbanBoard(a, await getKanban(), await getWorkGraph()),
+      handleKanbanBoard(a, await resolveKanbanProject(), await getKanban(), await getWorkGraph()),
   },
 } as const;
 
