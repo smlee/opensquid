@@ -17,6 +17,7 @@ import {
   handleKanbanCreateBoard,
   handleKanbanPlace,
   handleKanbanRemove,
+  handleKanbanStory,
   handleKanbanSync,
 } from './kanban.js';
 
@@ -123,5 +124,22 @@ describe('kanban MCP handlers (KANBAN.2)', () => {
     expect(
       allCardIds(JSON.parse(await handleKanbanBoard({ board: 'b' }, 'p1', k, r)) as BoardView),
     ).toEqual([]);
+  });
+});
+
+describe('handleKanbanStory (KANBAN.5) — structured story JSON over the work-graph', () => {
+  it('returns a KanbanStory {goal, lanes} JSON (peer contract); pure read of the work-graph', async () => {
+    const r = reader(
+      [iss('done1', { status: 'closed' }), iss('act1', { status: 'in_progress' }), iss('back1')],
+      [iss('back1')],
+    );
+    const story = JSON.parse(await handleKanbanStory({}, r, 'ship it')) as {
+      goal: string;
+      lanes: Record<Lane, { id: string }[]>;
+    };
+    expect(story.goal).toBe('ship it');
+    expect(story.lanes.done.map((c) => c.id)).toEqual(['done1']);
+    expect(story.lanes.active.map((c) => c.id)).toEqual(['act1']);
+    expect(story.lanes.backlog.map((c) => c.id)).toEqual(['back1']);
   });
 });

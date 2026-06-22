@@ -14,6 +14,9 @@
  * Imported by: handoff/index.ts, handoff/write.ts.
  */
 
+import { buildKanbanStory, renderKanbanStory } from '../../kanban/story.js';
+
+import type { Issue } from '../../workgraph/types.js';
 import type { HandoffState } from './collect.js';
 
 const MID_FLOW = new Set([
@@ -118,10 +121,14 @@ export function renderHandoverDoc(state: HandoffState): string {
         `### ${g.repo}\n\nstatus:\n${codeBlock(g.statusShort ? g.statusShort.split('\n') : [])}\n\nunpushed:\n${codeBlock(g.unpushed ? g.unpushed.split('\n') : [])}`,
     )
     .join('\n\n');
-  const issues =
-    typeof state.openIssues === 'string'
-      ? state.openIssues
-      : state.openIssues.map((i) => `- \`${i.id}\` ${i.title}`).join('\n') || '_(none open)_';
+  // KANBAN.5: the work-graph rendered as a kanban STORY (goal + lanes) — the non-stale resume checkpoint,
+  // in place of the old flat issue list. Built live from disk truth each handoff; unreadable → a marker.
+  const story =
+    typeof state.storyIssues === 'string' || typeof state.readyIds === 'string'
+      ? '_(work-graph unreadable)_'
+      : renderKanbanStory(
+          buildKanbanStory(state.storyGoal, state.storyIssues as Issue[], new Set(state.readyIds)),
+        );
 
   return `# AUTO-HANDOVER — session ${sid8} (${state.generatedAt})
 
@@ -147,7 +154,7 @@ ${section('Spawn-ledger tail', codeBlock(state.spawnLedgerTail))}
 ${section('Attestations tail', codeBlock(state.attestationsTail))}
 ${section('Artifacts (disk truth)', artifacts)}
 ${section('Git', git || '_(no repos swept)_')}
-${section('Open work-graph issues', issues)}
+${section('Kanban story (work-graph)', story)}
 `;
 }
 

@@ -13,6 +13,7 @@
  */
 import { z } from 'zod';
 
+import { buildKanbanStory } from '../../kanban/story.js';
 import type { KanbanMapStore, WorkGraphReader } from '../../kanban/map_store.js';
 
 export const KanbanCreateBoardSchema = z
@@ -26,6 +27,7 @@ export const KanbanRemoveSchema = z
   .strict();
 export const KanbanSyncSchema = z.object({ board: z.string().min(1) }).strict();
 export const KanbanBoardSchema = z.object({ board: z.string().min(1) }).strict();
+export const KanbanStorySchema = z.object({}).strict();
 
 export const handleKanbanCreateBoard = async (
   a: z.infer<typeof KanbanCreateBoardSchema>,
@@ -75,3 +77,15 @@ export const handleKanbanBoard = async (
   k: KanbanMapStore,
   reader: WorkGraphReader,
 ): Promise<string> => JSON.stringify(await k.board(project, a.board, reader));
+
+/** STORY (pure read): the structured `KanbanStory` ({goal, lanes}) over the GLOBAL work-graph — the resume
+ *  checkpoint. Returns JSON (matching the `kanban_board` read contract); `goal` is injected (resolved
+ *  server-side from the goal-map). READ_ONLY — only `listIssues`/`listReady`. */
+export const handleKanbanStory = async (
+  _a: z.infer<typeof KanbanStorySchema>,
+  reader: WorkGraphReader,
+  goal: string,
+): Promise<string> => {
+  const [issues, ready] = await Promise.all([reader.listIssues(), reader.listReady()]);
+  return JSON.stringify(buildKanbanStory(goal, issues, new Set(ready.map((i) => i.id))));
+};

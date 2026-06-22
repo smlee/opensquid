@@ -52,6 +52,7 @@ import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
 import { kanbanMapStore, type KanbanMapStore } from '../kanban/map_store.js';
 import { resolveProjectNamespace } from '../kanban/project_scope.js';
+import { readGoalMap } from '../runtime/goal_map/goal_map.js';
 import { resolveMcpSessionId } from '../runtime/hooks/session_id.js';
 import {
   OPENSQUID_HOME,
@@ -103,11 +104,13 @@ import {
   KanbanCreateBoardSchema,
   KanbanPlaceSchema,
   KanbanRemoveSchema,
+  KanbanStorySchema,
   KanbanSyncSchema,
   handleKanbanBoard,
   handleKanbanCreateBoard,
   handleKanbanPlace,
   handleKanbanRemove,
+  handleKanbanStory,
   handleKanbanSync,
 } from './tools/kanban.js';
 
@@ -187,6 +190,17 @@ async function resolveKanbanProject(): Promise<string> {
   const markerUuid = cwd === null ? null : ((await resolveProjectMarker(cwd))?.uuid ?? null);
   // resolveProjectNamespace (PURE, unit-tested) applies the recall chain + the throw-on-null invariant.
   return resolveProjectNamespace(markerUuid, resolveProjectUuidFromEnv());
+}
+
+/**
+ * Resolve the project GOAL for `kanban_story` (KANBAN.5) — session→cwd→`readGoalMap(cwd)?.goal`. Unlike
+ * `resolveKanbanProject`, this does NOT throw: a story with an empty goal is valid (`'' → '_(none set)_'`);
+ * only a board WRITE needs a concrete key. Returns `''` when the session/cwd/goal can't resolve.
+ */
+async function resolveStoryGoal(): Promise<string> {
+  const session = await resolveMcpSessionId();
+  const cwd = session === null ? null : await readSessionCwd(session);
+  return (cwd === null ? null : (await readGoalMap(cwd))?.goal) ?? '';
 }
 
 // Each entry binds an args Zod schema to a handler that already accepts the
@@ -310,6 +324,11 @@ const ToolHandlers = {
     handle: async (a: z.infer<typeof KanbanBoardSchema>) =>
       handleKanbanBoard(a, await resolveKanbanProject(), await getKanban(), await getWorkGraph()),
   },
+  kanban_story: {
+    schema: KanbanStorySchema,
+    handle: async (a: z.infer<typeof KanbanStorySchema>) =>
+      handleKanbanStory(a, await getWorkGraph(), await resolveStoryGoal()),
+  },
 } as const;
 
 type ToolName = keyof typeof ToolHandlers;
@@ -356,6 +375,7 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   kanban_remove: LOCAL_WRITE,
   kanban_sync: LOCAL_WRITE,
   kanban_board: READ_ONLY,
+  kanban_story: READ_ONLY,
   // The one genuinely destructive tool: deletes a memory (tools/forget.ts).
   forget: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 };
@@ -406,6 +426,8 @@ const descriptions: Record<ToolName, string> = {
     'Map the WHOLE work-graph onto a board {board}: place every issue as a card (idempotent — adds only new issues). Returns {ok, synced}. Run before kanban_board to mirror the current work-graph.',
   kanban_board:
     'Read a board {board}: the derived kanban lanes (backlog/active/blocked/wedged/done) over its cards, each lane ordered deterministically. Lanes are derived live from the work-graph (pure read).',
+  kanban_story:
+    'Render the whole work-graph as a kanban "story" {} — a structured {goal, lanes} JSON checkpoint (the goal-map goal + every issue grouped into lanes), rebuilt live so it never goes stale. The resume "where am I".',
 };
 
 /**

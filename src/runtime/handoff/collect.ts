@@ -29,6 +29,7 @@ import {
   sessionStateFile,
 } from '../paths.js';
 import { type ActiveTask, readActiveTask } from '../session_state.js';
+import { readGoalMap } from '../goal_map/goal_map.js';
 
 const execFileP = promisify(execFile);
 
@@ -61,7 +62,11 @@ export interface HandoffState {
   attestationsTail: string[];
   artifacts: HandoffArtifact[];
   git: HandoffGitRepo[];
-  openIssues: { id: string; title: string }[] | string;
+  // KANBAN.5: the kanban "story" inputs (replaces the flat openIssues — its only reader was the flat
+  // "Open work-graph issues" section, now the kanban story). One store read yields both; goal from the goal-map.
+  storyIssues: { id: string; title: string; status: string; wedgeReason?: string }[] | string;
+  readyIds: string[] | string;
+  storyGoal: string;
 }
 
 async function bounded<T>(probe: () => Promise<T>): Promise<T | string> {
@@ -186,15 +191,27 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
   const attestationsTail =
     scopeRoot === null ? [] : await tailLines(join(scopeRoot, 'attestations.jsonl'), 5);
 
-  const openIssues = await bounded(async () => {
+  // KANBAN.5: ONE store read yields the story inputs — ALL issues (incl. closed → the `done` lane) carrying
+  // status+wedgeReason, plus the ready set. Replaces the old non-closed-only {id,title} `openIssues`.
+  const story = await bounded(async () => {
     const store = workGraphStore({
       dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
       sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
     });
     await store.init();
     const issues = await store.listIssues();
-    return issues.filter((i) => i.status !== 'closed').map((i) => ({ id: i.id, title: i.title }));
+    const ready = await store.listReady();
+    return {
+      storyIssues: issues.map((i) => ({
+        id: i.id,
+        title: i.title,
+        status: i.status,
+        ...(i.wedgeReason === undefined ? {} : { wedgeReason: i.wedgeReason }),
+      })),
+      readyIds: ready.map((i) => i.id),
+    };
   });
+  const storyGoal = (await readGoalMap(cwd))?.goal ?? '';
 
   return {
     sessionId,
@@ -211,7 +228,9 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
     attestationsTail,
     artifacts,
     git,
-    openIssues,
+    storyIssues: typeof story === 'string' ? story : story.storyIssues,
+    readyIds: typeof story === 'string' ? story : story.readyIds,
+    storyGoal,
   };
 }
 

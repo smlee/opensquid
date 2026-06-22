@@ -33,7 +33,13 @@ const base: HandoffState = {
     { kind: 'spec', path: '/u/docs/tasks/spec.md', sha8: null },
   ],
   git: [{ repo: '/u/proj', statusShort: ' M x.ts', unpushed: 'abc123 wip' }],
-  openIssues: [{ id: 'wg-1', title: 'open item' }],
+  storyIssues: [
+    { id: 'wg-done', title: 'shipped', status: 'closed' },
+    { id: 'wg-act', title: 'in flight', status: 'in_progress' },
+    { id: 'wg-1', title: 'open item', status: 'open' },
+  ],
+  readyIds: ['wg-1'],
+  storyGoal: 'ship the kanban story',
 };
 
 describe('renderResumeSteps (the locked rules)', () => {
@@ -90,6 +96,27 @@ describe('renderHandoverDoc', () => {
   it('is deterministic in its input', () => {
     expect(renderHandoverDoc(base)).toBe(renderHandoverDoc(base));
   });
+
+  it('KANBAN.5: renders the kanban STORY (goal + lanes) in place of the flat issue list', () => {
+    const doc = renderHandoverDoc(base);
+    expect(doc).toContain('Kanban story (work-graph)');
+    expect(doc).toContain('ship the kanban story'); // the goal
+    expect(doc).toContain('**Active**');
+    expect(doc).toContain('**Backlog (ready)**');
+    expect(doc).toContain('**Done**');
+    expect(doc).toContain('`wg-1` open item'); // open + in readyIds → Backlog
+    expect(doc).toContain('`wg-done` shipped'); // closed → Done
+    expect(doc).not.toContain('Open work-graph issues'); // the old flat section is gone
+  });
+
+  it('KANBAN.5: an unreadable work-graph degrades to a marker (no throw)', () => {
+    const doc = renderHandoverDoc({
+      ...base,
+      storyIssues: '<unreadable: boom>',
+      readyIds: '<unreadable: boom>',
+    });
+    expect(doc).toContain('work-graph unreadable');
+  });
 });
 
 describe('spliceNarrative (AHO.2 — byte-identity outside the section)', () => {
@@ -144,7 +171,9 @@ describe('renderResumeBlock (pointer-only)', () => {
         },
       ],
       git: [],
-      openIssues: [],
+      storyIssues: [],
+      readyIds: [],
+      storyGoal: '',
     } as never;
 
     const out = renderResumeBlock(state);

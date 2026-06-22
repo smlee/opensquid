@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.499] - 2026-06-22
+
+### Added — KANBAN.5: the kanban "story" schema as the non-stale resume checkpoint
+
+- **`src/kanban/story.ts`** — a structured `KanbanStory` model (`{goal, lanes}`, the user's "story schema")
+  built from the work-graph: `buildKanbanStory(goal, issues, readyIds)` groups every issue by `deriveLane`
+  (KANBAN.1) into the 5 lanes (deterministic id-sort); `renderKanbanStory(story)` renders it to markdown. Both
+  pure. Rebuilt live from append-only truth, so it can't go stale the way a hand-maintained MEMORY.md resume
+  block does.
+- **The auto-handoff renders the story** — `src/runtime/handoff/render.ts` now renders the kanban story (goal
+  - lanes) in place of the flat "Open work-graph issues" list. `collect.ts` REPLACES `openIssues` (whose only
+    reader was that flat section) with `storyIssues`/`readyIds` from the one existing work-graph read + a
+    `storyGoal` from `readGoalMap(cwd)` — no duplicate read, no dead state. An unreadable work-graph degrades to
+    a marker (no throw).
+- **`kanban_story` MCP tool** — READ_ONLY; returns the structured `KanbanStory` as JSON (matching
+  `kanban_board`'s read contract), with the goal resolved server-side from the goal-map (`resolveStoryGoal`,
+  empty-goal-valid, no throw). The agent's on-demand "where am I" checkpoint.
+- **Additive** — `src/workgraph/` unchanged. Tests: build/render schema (lane grouping, id-sort, counts,
+  empties), the handoff rendering the story+goal (not the flat list) + unreadable-marker, the tool's JSON
+  contract, and the tools-list snapshot (27 tools; `kanban_story` READ_ONLY). Full suite 4005 green. Builds the
+  checkpoint replacement; removing recall/memorize + the manual MEMORY.md block is deferred (wg-bc5dc3daaab2).
+
+---
+
 ## [0.5.498] - 2026-06-22
 
 ### Added — KANBAN.4: project-scope the kanban DB (the `project` field)
