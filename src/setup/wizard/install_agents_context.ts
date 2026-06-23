@@ -56,9 +56,11 @@ export interface InstallReport {
 export async function installAgentsContext(
   home: string,
   hasBinary: (name: string) => Promise<boolean>,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<InstallReport> {
   const body = await loadAgentsBaseline();
-  const targets = await detectHarnessTargets(home, hasBinary);
+  const targets = await detectHarnessTargets(home, hasBinary, platform, env);
   const report: InstallReport = { written: [], manual: [] };
   const doneTargets = new Set<string>();
   for (const t of targets) {

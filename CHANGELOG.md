@@ -7,6 +7,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.515] - 2026-06-23
+
+### Fixed/Added — GAC.5 (cont.): source-verified Windows paths + `XDG_CONFIG_HOME` support
+
+Resolved the Windows/XDG path questions from upstream source/docs (no deferral) and corrected two defects shipped in
+0.5.514. Every path now cites the harness's own source:
+
+- **Goose Windows path corrected** — `winTarget` is now `%APPDATA%\Block\goose\config\.goosehints` (was the wrong
+  bare `%APPDATA%\goose\.goosehints`). Source: Goose's `crates/goose/src/config/paths.rs` uses the `etcetera` native
+  app strategy (author `Block`, app `goose`, `/config` suffix); `etcetera@0.11.0` Windows base = `%APPDATA%`.
+- **`XDG_CONFIG_HOME` now honored** for the `.config`-rooted CLIs that read it — **Crush** & **OpenCode** derive their
+  write target via `xdgConfigRoot(home, env) = env.XDG_CONFIG_HOME ?? join(home, '.config')` (source: Crush
+  `internal/home/home.go`; OpenCode `xdg-basedir@5.1.0`). This bites on Linux, where `XDG_CONFIG_HOME` is commonly
+  set — previously the baseline would write to the wrong path there.
+- **Amp stays fixed `$HOME/.config`** — source-verified to IGNORE XDG (manual documents literal per-platform paths,
+  ships `AMP_SETTINGS_FILE` as its only override, and its Windows path is literal `.config`). The path-keyed dedup is
+  unchanged and correct in both states: XDG unset → Amp & Crush coincide → one write; XDG set → they diverge → both
+  written, each correct for its tool.
+- **Confirmed (no change):** Zed `%APPDATA%\Zed\AGENTS.md` (Zed's `crates/paths/src/paths.rs` win32 branch + its own
+  `GLOBAL_AGENTS_FILE_DISPLAY` const); Amp/Crush/OpenCode are `.config`-literal on Windows (`os.homedir()` =
+  `%USERPROFILE%`), so they need no `winTarget` — the earlier "ambiguous/deferred" framing was wrong.
+- **Mechanics:** `HarnessRow.target` widened to `(home, env)`; `installAgentsContext` gains optional `platform`/`env`
+  passthrough (defaults `process.*` — live call unchanged) so the dedup tests pin `env:{}` and don't depend on the
+  runner's `XDG_CONFIG_HOME`. +6 tests (Goose `Block` path; XDG set/unset for Amp/Crush/OpenCode). Suite 4103 green.
+
 ## [0.5.514] - 2026-06-23
 
 ### Added — GAC.5: Windows support for the agent-context installer (cross-platform binary probe + per-row `winTarget`)

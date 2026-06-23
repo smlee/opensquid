@@ -58,7 +58,9 @@ describe('installAgentsContext (GAC.4)', () => {
   it('dedup: Amp + Crush both target ~/.config/AGENTS.md → written ONCE (second is deduped)', async () => {
     await mkdir(join(home, '.config', 'crush'), { recursive: true });
     const ampBin = (n: string): Promise<boolean> => Promise.resolve(n === 'amp');
-    const rep = await installAgentsContext(home, ampBin);
+    // injected env:{} so Crush (XDG-honoring) falls back to ~/.config regardless of the runner's XDG_CONFIG_HOME —
+    // pins the dedup invariant deterministically (GAC.5).
+    const rep = await installAgentsContext(home, ampBin, 'linux', {});
     const cfg = rep.written.filter((w) => w.path === join(home, '.config', 'AGENTS.md'));
     expect(cfg).toHaveLength(2); // amp + crush rows
     expect(cfg.filter((w) => w.result !== 'deduped')).toHaveLength(1); // but only ONE actual write

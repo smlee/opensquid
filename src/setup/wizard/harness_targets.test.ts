@@ -39,7 +39,9 @@ describe('harness registry (GAC.3)', () => {
   it('Amp and Crush resolve to the SAME target (~/.config/AGENTS.md) so GAC.4 can dedupe', async () => {
     await mkdir(join(home, '.config', 'crush'), { recursive: true });
     const has = (n: string): Promise<boolean> => Promise.resolve(n === 'amp');
-    const res = await detectHarnessTargets(home, has);
+    // injected env:{} so the XDG-honoring Crush row falls back to ~/.config regardless of the runner's
+    // XDG_CONFIG_HOME — pins the dedup invariant deterministically (GAC.5).
+    const res = await detectHarnessTargets(home, has, 'linux', {});
     expect(byName(res, 'amp')?.path).toBe(byName(res, 'crush')?.path);
   });
 
@@ -82,9 +84,11 @@ describe('Windows targets (GAC.5)', () => {
     expect(r?.path).toBe(join('C:\\Users\\t\\AppData\\Roaming', 'Zed', 'AGENTS.md'));
   });
 
-  it('on win32, Goose resolves under the injected %APPDATA%', async () => {
+  it('on win32, Goose resolves under %APPDATA%\\Block\\goose\\config (etcetera native strategy)', async () => {
     const r = byName(await detectHarnessTargets(home, hasZed, 'win32', winEnv), 'goose');
-    expect(r?.path).toBe(join('C:\\Users\\t\\AppData\\Roaming', 'goose', '.goosehints'));
+    expect(r?.path).toBe(
+      join('C:\\Users\\t\\AppData\\Roaming', 'Block', 'goose', 'config', '.goosehints'),
+    );
   });
 
   it('Zed is detected via the `zed` binary on a Win home with no ~/.config/zed', async () => {
@@ -97,7 +101,7 @@ describe('Windows targets (GAC.5)', () => {
     expect(r?.path).toBe(join(home, '.config', 'zed', 'AGENTS.md'));
   });
 
-  it('the Amp/Crush/OpenCode trio keeps home-relative DISTINCT targets on win32 (no winTarget)', async () => {
+  it('the Amp/Crush/OpenCode trio is `.config`-literal on win32 (no winTarget; winEnv has no XDG)', async () => {
     await mkdir(join(home, '.config', 'crush'), { recursive: true });
     const has = (n: string): Promise<boolean> => Promise.resolve(n === 'amp' || n === 'opencode');
     const res = await detectHarnessTargets(home, has, 'win32', winEnv);
@@ -105,5 +109,26 @@ describe('Windows targets (GAC.5)', () => {
     expect(byName(res, 'amp')?.path).toBe(join(home, '.config', 'AGENTS.md'));
     expect(byName(res, 'crush')?.path).toBe(join(home, '.config', 'AGENTS.md'));
     expect(byName(res, 'opencode')?.path).toBe(join(home, '.config', 'opencode', 'AGENTS.md'));
+  });
+});
+
+describe('XDG_CONFIG_HOME handling (GAC.5)', () => {
+  const trio = (n: string): Promise<boolean> =>
+    Promise.resolve(n === 'amp' || n === 'crush' || n === 'opencode');
+
+  it('XDG UNSET: Amp & Crush coincide at ~/.config/AGENTS.md (→ dedup); OpenCode is separate', async () => {
+    const res = await detectHarnessTargets(home, trio, 'linux', {});
+    expect(byName(res, 'amp')?.path).toBe(join(home, '.config', 'AGENTS.md'));
+    expect(byName(res, 'crush')?.path).toBe(join(home, '.config', 'AGENTS.md'));
+    expect(byName(res, 'opencode')?.path).toBe(join(home, '.config', 'opencode', 'AGENTS.md'));
+  });
+
+  it('XDG SET: Crush & OpenCode follow $XDG; Amp stays ~/.config (ignores XDG) → Amp & Crush DIVERGE', async () => {
+    const env: NodeJS.ProcessEnv = { XDG_CONFIG_HOME: '/xdg' };
+    const res = await detectHarnessTargets(home, trio, 'linux', env);
+    expect(byName(res, 'crush')?.path).toBe(join('/xdg', 'AGENTS.md'));
+    expect(byName(res, 'opencode')?.path).toBe(join('/xdg', 'opencode', 'AGENTS.md'));
+    expect(byName(res, 'amp')?.path).toBe(join(home, '.config', 'AGENTS.md'));
+    expect(byName(res, 'amp')?.path).not.toBe(byName(res, 'crush')?.path); // diverge → both written
   });
 });
