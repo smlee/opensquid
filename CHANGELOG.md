@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.512] - 2026-06-23
+
+### Added — GAC.3: the 20-harness registry + detection
+
+- **`src/setup/wizard/harness_targets.ts`** — the curated, user-vetted `REGISTRY` of 20 popular/trending harnesses
+  (each target path cited in the pre-research) with three write-kinds (`block`/`file`/`manual`), plus
+  `detectHarnessTargets(home, hasBinary)` resolving installed rows (binary-on-PATH OR config-dir, or `alwaysOffer`
+  for marker-less Trae/Warp) to their write targets. Amp + Crush both resolve to the shared `~/.config/AGENTS.md`
+  (so GAC.4 dedupes them to one write).
+- Harnesses: Claude Code, Codex, Gemini, Windsurf, Amp, Zed, OpenCode, Goose, Pi, Qwen Code, Crush (block); Cline,
+  Roo Code, Kilo Code (file); Cursor, Continue, Aider, Hermes, Trae, Warp (manual).
+- **Tests:** 20 rows; dir/binary/alwaysOffer detection; cited target resolution; Amp+Crush shared target; absent →
+  omitted; file/manual kinds. Suite 4086 green.
+
 ## [0.5.511] - 2026-06-23
 
 ### Added — GAC.2: the managed-block text writer
