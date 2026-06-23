@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.513] - 2026-06-23
+
+### Added — GAC.4: wire the agent-context installer live (completes the global-agent-context installer)
+
+- **`src/setup/wizard/install_agents_context.ts`** — `installAgentsContext(home, hasBinary)`: loads the baseline,
+  detects installed harnesses (GAC.3), and dispatches per write-kind — `block` → `writeManagedBlock` (GAC.2),
+  `file` → a dedicated `opensquid.md`, `manual` → collected for printing — DEDUPED by resolved target (Amp+Crush →
+  one `~/.config/AGENTS.md`). Plus `hasBinaryOnPath` (a PATH probe).
+- **Wired into `src/setup/cli/hooks.ts`** — `opensquid setup wizard hooks` auto-installs the baseline after the
+  `/packs` skill; `--no-agents` suppresses it (commander `agents:false`). The live path for GAC.1–3.
+- **Tests:** block-write (+`.bak`, foreign preserved), file-write, manual-collect, Amp+Crush dedup, idempotent
+  re-run, and the wizard wiring proven BOTH ways (default installs; `--no-agents` leaves targets untouched).
+- This completes the **global-agent-context installer** (GAC.1–4, `docs/tasks/T-global-agent-context.md`): opensquid
+  ships a domain-neutral anti-drift baseline and auto-installs it across the 20-harness registry. Suite 4093 green.
+
 ## [0.5.512] - 2026-06-23
 
 ### Added — GAC.3: the 20-harness registry + detection

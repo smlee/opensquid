@@ -39,6 +39,7 @@ import {
   type WriteResult,
 } from '../wizard/settings-writer.js';
 import { installPacksSkill } from '../wizard/skill-installer.js';
+import { hasBinaryOnPath, installAgentsContext } from '../wizard/install_agents_context.js';
 
 import type { Command } from 'commander';
 
@@ -51,6 +52,8 @@ export interface HooksCliDeps {
   cwd?: () => string;
   /** Test injection — override `homedir()` for ~/.claude resolution. */
   home?: () => string;
+  /** Test injection — override the on-PATH binary probe (GAC.4 harness detection). */
+  hasBinary?: (name: string) => Promise<boolean>;
   stdout?: (s: string) => void;
   stderr?: (s: string) => void;
 }
@@ -58,6 +61,8 @@ export interface HooksCliDeps {
 export interface HooksCliFlags {
   dryRun?: boolean;
   userOnly?: boolean;
+  /** commander maps `--no-agents` → `agents === false` (GAC.4 opt-out). */
+  agents?: boolean;
 }
 
 interface ResolvedDeps {
@@ -65,6 +70,7 @@ interface ResolvedDeps {
   reader: (path: string) => Promise<unknown>;
   cwd: () => string;
   home: () => string;
+  hasBinary: (name: string) => Promise<boolean>;
   out: (s: string) => void;
   err: (s: string) => void;
 }
@@ -75,6 +81,7 @@ function buildDeps(deps: HooksCliDeps): ResolvedDeps {
     reader: deps.reader ?? readSettingsJson,
     cwd: deps.cwd ?? ((): string => process.cwd()),
     home: deps.home ?? homedir,
+    hasBinary: deps.hasBinary ?? hasBinaryOnPath,
     out:
       deps.stdout ??
       ((s: string): void => {
@@ -132,6 +139,10 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
     r.out(
       `  would install the /packs skill → ${join(r.home(), '.claude', 'skills', 'packs', 'SKILL.md')}\n`,
     );
+    if (flags.agents !== false)
+      r.out(
+        '  would install the agent-context baseline into detected harnesses (opt-out: --no-agents)\n',
+      );
     return;
   }
 
@@ -153,6 +164,16 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
       (skill.createdSkillsDir ? ' — restart Claude once so it watches the new skills dir' : '') +
       '\n',
   );
+
+  // GAC.4 — auto-install the global agent-context baseline into every detected harness (opt-out: --no-agents).
+  if (flags.agents !== false) {
+    const rep = await installAgentsContext(r.home(), r.hasBinary);
+    for (const w of rep.written) r.out(`  agents: ${w.result} ${w.harness} (${w.path})\n`);
+    if (rep.manual.length > 0) {
+      r.out('  agents: manual harnesses — paste this into their global rules:\n');
+      for (const m of rep.manual) r.out(`    [${m.harness}]\n${m.block}\n`);
+    }
+  }
 }
 
 /**
@@ -167,6 +188,10 @@ export function registerSetupWizard(setup: Command, deps: HooksCliDeps = {}): Co
     .description("Write opensquid's 4 anti-drift hook entries into Claude Code settings.json")
     .option('--dry-run', 'preview the projected changes without writing any file', false)
     .option('--user-only', 'skip the project-scope settings.json even when one is detected', false)
+    .option(
+      '--no-agents',
+      'skip installing the global agent-context baseline into detected harnesses',
+    )
     .action(async (flags: HooksCliFlags) => {
       await runHooksWizard(flags, deps);
     });
