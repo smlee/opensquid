@@ -16,14 +16,28 @@ import { loadAgentsBaseline } from './agents_context.js';
 import { detectHarnessTargets } from './harness_targets.js';
 import { BLOCK_BEGIN, BLOCK_END, writeManagedBlock } from './managed_block.js';
 
-/** Is `name` an executable on PATH? POSIX scan (macOS/Linux this track; Windows variants deferred). */
-export async function hasBinaryOnPath(name: string): Promise<boolean> {
-  for (const dir of (process.env.PATH ?? '').split(':').filter((d) => d.length > 0)) {
-    try {
-      await access(join(dir, name), constants.X_OK);
-      return true;
-    } catch {
-      /* next dir */
+/**
+ * Is `name` an executable on PATH? Cross-platform (GAC.5). On win32: split PATH on `;`, try each `PATHEXT`
+ * extension, and probe `F_OK` (Windows has no execute bit). On POSIX: split on `:`, probe `X_OK`. `platform`/`env`
+ * are injected for deterministic tests on either host.
+ */
+export async function hasBinaryOnPath(
+  name: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const win = platform === 'win32';
+  const sep = win ? ';' : ':';
+  const exts = win ? (env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
+  const mode = win ? constants.F_OK : constants.X_OK; // Windows has no execute bit
+  for (const dir of (env.PATH ?? '').split(sep).filter((d) => d.length > 0)) {
+    for (const ext of exts) {
+      try {
+        await access(join(dir, name + ext), mode);
+        return true;
+      } catch {
+        /* next */
+      }
     }
   }
   return false;

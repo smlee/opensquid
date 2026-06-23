@@ -72,3 +72,38 @@ describe('harness registry (GAC.3)', () => {
     expect(byName(await detectHarnessTargets(home, noBins), 'aider')?.kind).toBe('manual');
   });
 });
+
+describe('Windows targets (GAC.5)', () => {
+  const hasZed = (n: string): Promise<boolean> => Promise.resolve(n === 'zed' || n === 'goose');
+  const winEnv: NodeJS.ProcessEnv = { APPDATA: 'C:\\Users\\t\\AppData\\Roaming' };
+
+  it('on win32, Zed resolves under the INJECTED %APPDATA% (not the AppData\\Roaming fallback)', async () => {
+    const r = byName(await detectHarnessTargets(home, hasZed, 'win32', winEnv), 'zed');
+    expect(r?.path).toBe(join('C:\\Users\\t\\AppData\\Roaming', 'Zed', 'AGENTS.md'));
+  });
+
+  it('on win32, Goose resolves under the injected %APPDATA%', async () => {
+    const r = byName(await detectHarnessTargets(home, hasZed, 'win32', winEnv), 'goose');
+    expect(r?.path).toBe(join('C:\\Users\\t\\AppData\\Roaming', 'goose', '.goosehints'));
+  });
+
+  it('Zed is detected via the `zed` binary on a Win home with no ~/.config/zed', async () => {
+    const r = byName(await detectHarnessTargets(home, hasZed, 'win32', winEnv), 'zed');
+    expect(r).toBeDefined(); // detected purely by bin:'zed'
+  });
+
+  it('on linux, Zed keeps its default ~/.config/zed/AGENTS.md target', async () => {
+    const r = byName(await detectHarnessTargets(home, hasZed, 'linux', winEnv), 'zed');
+    expect(r?.path).toBe(join(home, '.config', 'zed', 'AGENTS.md'));
+  });
+
+  it('the Amp/Crush/OpenCode trio keeps home-relative DISTINCT targets on win32 (no winTarget)', async () => {
+    await mkdir(join(home, '.config', 'crush'), { recursive: true });
+    const has = (n: string): Promise<boolean> => Promise.resolve(n === 'amp' || n === 'opencode');
+    const res = await detectHarnessTargets(home, has, 'win32', winEnv);
+    // Amp + Crush share one path (deduped at install time); OpenCode is separate.
+    expect(byName(res, 'amp')?.path).toBe(join(home, '.config', 'AGENTS.md'));
+    expect(byName(res, 'crush')?.path).toBe(join(home, '.config', 'AGENTS.md'));
+    expect(byName(res, 'opencode')?.path).toBe(join(home, '.config', 'opencode', 'AGENTS.md'));
+  });
+});

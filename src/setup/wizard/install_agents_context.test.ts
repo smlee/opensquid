@@ -1,5 +1,5 @@
 /** GAC.4 — installAgentsContext (block/file/manual + dedup + idempotent) and the wizard-hooks wiring (--no-agents). */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { runHooksWizard } from '../cli/hooks.js';
 import { BLOCK_BEGIN } from './managed_block.js';
-import { installAgentsContext } from './install_agents_context.js';
+import { hasBinaryOnPath, installAgentsContext } from './install_agents_context.js';
 
 let home: string;
 beforeEach(async () => {
@@ -70,6 +70,38 @@ describe('installAgentsContext (GAC.4)', () => {
     const first = await readFile(join(home, '.claude', 'CLAUDE.md'), 'utf8');
     await installAgentsContext(home, noBins);
     expect(await readFile(join(home, '.claude', 'CLAUDE.md'), 'utf8')).toBe(first);
+  });
+});
+
+describe('hasBinaryOnPath cross-platform (GAC.5)', () => {
+  it('POSIX: finds an executable on PATH (: split, X_OK) and misses a non-exec file', async () => {
+    const bin = join(home, 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'zed'), '#!/bin/sh\n');
+    await chmod(join(bin, 'zed'), 0o755);
+    await writeFile(join(bin, 'notexec'), 'x\n');
+    await chmod(join(bin, 'notexec'), 0o644);
+    const env: NodeJS.ProcessEnv = { PATH: `${bin}:/nope` };
+    expect(await hasBinaryOnPath('zed', 'linux', env)).toBe(true);
+    expect(await hasBinaryOnPath('notexec', 'linux', env)).toBe(false);
+    expect(await hasBinaryOnPath('absent', 'linux', env)).toBe(false);
+  });
+
+  it('win32: finds `name.exe` (; split, PATHEXT, F_OK — no execute bit needed)', async () => {
+    const bin = join(home, 'winbin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'zed.exe'), 'MZ\n'); // no chmod — Windows has no execute bit
+    const env: NodeJS.ProcessEnv = { PATH: `${bin};C:\\nope`, PATHEXT: '.exe' };
+    expect(await hasBinaryOnPath('zed', 'win32', env)).toBe(true);
+    expect(await hasBinaryOnPath('absent', 'win32', env)).toBe(false);
+  });
+
+  it('win32: bare name with no matching extension is NOT found', async () => {
+    const bin = join(home, 'winbin2');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'zed'), 'x\n'); // bare, no .exe
+    const env: NodeJS.ProcessEnv = { PATH: bin, PATHEXT: '.exe' };
+    expect(await hasBinaryOnPath('zed', 'win32', env)).toBe(false);
   });
 });
 

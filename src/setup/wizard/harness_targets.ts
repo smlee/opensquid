@@ -27,9 +27,18 @@ export interface HarnessRow {
   dir?: string;
   /** resolved write path for `block`/`file`; omitted for pure-print `manual`. */
   target?: (home: string) => string;
+  /**
+   * Windows-only write path (GAC.5), used iff `platform === 'win32'`. `env` is THREADED IN (not read from
+   * `process.env` inside the closure) so `%APPDATA%` is injectable for deterministic tests on POSIX CI.
+   */
+  winTarget?: (home: string, env: NodeJS.ProcessEnv) => string;
   /** manual rows with no probe-able marker (Trae/Warp) — always printed. */
   alwaysOffer?: boolean;
 }
+
+/** Windows roaming app-data root — `%APPDATA%`, falling back to its conventional location under `home`. */
+const appData = (home: string, env: NodeJS.ProcessEnv): string =>
+  env.APPDATA ?? join(home, 'AppData', 'Roaming');
 
 /** The 20-row USER-VETTED registry (paths cited in the pre-research). */
 export const REGISTRY: HarnessRow[] = [
@@ -64,8 +73,10 @@ export const REGISTRY: HarnessRow[] = [
   {
     harness: 'zed',
     kind: 'block',
+    bin: 'zed',
     dir: join('.config', 'zed'),
     target: (h) => join(h, '.config', 'zed', 'AGENTS.md'),
+    winTarget: (h, env) => join(appData(h, env), 'Zed', 'AGENTS.md'),
   },
   {
     harness: 'opencode',
@@ -80,6 +91,7 @@ export const REGISTRY: HarnessRow[] = [
     bin: 'goose',
     dir: join('.config', 'goose'),
     target: (h) => join(h, '.config', 'goose', '.goosehints'),
+    winTarget: (h, env) => join(appData(h, env), 'goose', '.goosehints'),
   },
   {
     harness: 'pi',
@@ -148,6 +160,8 @@ const exists = async (p: string): Promise<boolean> =>
 export async function detectHarnessTargets(
   home: string,
   hasBinary: (name: string) => Promise<boolean>,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedTarget[]> {
   const out: ResolvedTarget[] = [];
   for (const r of REGISTRY) {
@@ -156,7 +170,13 @@ export async function detectHarnessTargets(
       (r.bin !== undefined && (await hasBinary(r.bin))) ||
       (r.dir !== undefined && (await exists(join(home, r.dir))));
     if (!installed) continue;
-    out.push({ harness: r.harness, kind: r.kind, ...(r.target ? { path: r.target(home) } : {}) });
+    const path =
+      platform === 'win32' && r.winTarget
+        ? r.winTarget(home, env)
+        : r.target
+          ? r.target(home)
+          : undefined;
+    out.push({ harness: r.harness, kind: r.kind, ...(path ? { path } : {}) });
   }
   return out;
 }

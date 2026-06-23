@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.514] - 2026-06-23
+
+### Added — GAC.5: Windows support for the agent-context installer (cross-platform binary probe + per-row `winTarget`)
+
+- **`src/setup/wizard/harness_targets.ts`** — `HarnessRow` gains `winTarget?(home, env)` (env THREADED IN, not read
+  from `process.env`, so `%APPDATA%` is injectable for deterministic POSIX-CI tests). Zed adds `bin:'zed'` +
+  `winTarget → %APPDATA%\Zed\AGENTS.md`; Goose adds `winTarget → %APPDATA%\goose\.goosehints`. `detectHarnessTargets`
+  gains `(platform = process.platform, env = process.env)` and resolves the Windows path on `win32`.
+- **`src/setup/wizard/install_agents_context.ts`** — `hasBinaryOnPath(name, platform, env)` is now cross-platform:
+  on `win32` it splits `PATH` on `;`, probes each `PATHEXT` extension, and uses `F_OK` (Windows has no execute bit);
+  on POSIX it splits on `:` and uses `X_OK`. The live call-site is unchanged (defaults to `process.platform`/`env`).
+- **Honest deferral:** the Amp/Crush/OpenCode trio keeps its home-relative POSIX target on Windows (no `winTarget`)
+  because their Windows global path is ambiguous in upstream docs — flagged, not guessed. Amp+Crush still dedupe to
+  one `~/.config/AGENTS.md`; OpenCode stays distinct at `~/.config/opencode/AGENTS.md`.
+- **Tests:** +8 — win/linux Zed & Goose target resolution against an injected `%APPDATA%`, the Amp/Crush/OpenCode
+  trio's distinct paths on win32, and `hasBinaryOnPath` proven on POSIX (`:`/`X_OK`) and Windows (`;`/`PATHEXT`/
+  `F_OK`, plus a bare-name miss). Suite 4101 green.
+
 ## [0.5.513] - 2026-06-23
 
 ### Added — GAC.4: wire the agent-context installer live (completes the global-agent-context installer)
