@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.511] - 2026-06-23
+
+### Added — GAC.2: the managed-block text writer
+
+- **`src/setup/wizard/managed_block.ts`** — `projectManagedBlock` (PURE: replace the first opensquid
+  `begin/end`-marked block in place, else append; non-greedy so stray markers aren't merged; a BEGIN-without-END
+  appends fresh, never corrupting foreign text) + `writeManagedBlock` (atomic tmp+rename, `.bak` snapshot,
+  ENOENT→create). The harness-agnostic `block`-kind write primitive; mirrors the `settings-writer.ts:126-204`
+  CONTRACT (replace-owned + preserve-foreign + `.bak`) for TEXT files (works on `.goosehints` — text-opaque).
+- **Tests:** append/replace-in-place/idempotent + marker edge cases (missing END, two blocks → only first replaced,
+  marker substring in foreign prose) + atomic `.bak` (created/added/updated). Suite 4077 green.
+
 ## [0.5.510] - 2026-06-23
 
 ### Added — GAC.1: the shipped global agent-context baseline asset
