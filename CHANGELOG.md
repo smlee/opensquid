@@ -7,6 +7,18 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.510] - 2026-06-23
+
+### Added — GAC.1: the shipped global agent-context baseline asset
+
+- **`context/AGENTS.md`** (new, shipped via `package.json` `files[] += "context"`) — opensquid's domain-neutral
+  anti-drift baseline (the 5 universal guidelines: never-guess · don't-drift · report-faithfully ·
+  quality-over-dev-cost · markdown-one-sentence-per-line). A DEDICATED dir, not `claude-skills/`.
+- **`src/setup/wizard/agents_context.ts`** — `AGENTS_ASSET` + `loadAgentsBaseline()` (the `read_rubric.ts` PKG_ROOT
+  resolution pattern). The single source of truth for the asset the setup wizard auto-installs across harnesses
+  (GAC.2–4, the global-agent-context installer: `docs/tasks/T-global-agent-context.md`, 20-harness registry).
+- **Tests:** the baseline loads with all 5 rule leads; the asset ships under `context/` (in `files[]`). Suite 4068 green.
+
 ## [0.5.509] - 2026-06-22
 
 ### Added — ORCH.9: `control` writers (set-domain / pin / forget) + CLI surface
