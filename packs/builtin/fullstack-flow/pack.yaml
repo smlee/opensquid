@@ -1,0 +1,93 @@
+# fullstack-flow — the v2 rebuild of coding-flow as a single FSM-primary pack.yaml.
+#
+# Slice 1 = the SKELETON: the 5-stage lifecycle (SCOPE → PLAN → AUTHOR → CODE → DEPLOY) modelled as gate
+# checkpoints + an acceptance decision + a terminal, that COMPILES, VALIDATES (validateFsm: every emit routed,
+# decision totality), LOADS, and ADVANCES on hook events through the live (but until-now dormant) v2 runtime
+# (V2ObservedActor / v2_supply). It is ADDITIVE + opt-in: v1 coding-flow stays the live default; fullstack-flow
+# activates ONLY when pinned in active.json.
+#
+# WHY GATES, NOT EXECUTORS: the live observed actor advances only at gate/decision states
+# (v2_observed_actor.ts:74 — an executor state is inert in observed mode). coding-flow is OBSERVED (the agent
+# works in its own harness; opensquid watches hook events), so the faithful translation of v1's pure
+# states+transitions is a gate chain whose triggers are hook events. The stage HANDLERS (PLAN-decompose,
+# plan-audit, the acceptance human-touchpoint, the resets) are explicitly DEFERRED to later slices — the
+# skeleton's gates are non-enforcing pass-throughs (guard `ready` is always-true; on_fail is `warn`, never
+# block/halt) so pinning it can never break a session.
+#
+# Spec: loop/docs/tasks/T-v2-coding-flow-skeleton.md. Design: loop/docs/design/opensquid-v2-coding-flow-design.md.
+name: fullstack-flow
+version: 0.1.0
+scope: workflow
+
+# No detected_by gate — opt-in via active.json IS the pin (mirrors coding-flow; the user_pinned
+# DetectionContext signal is never populated, so a detected_by clause would silently DISABLE the pack).
+detected_by: []
+
+# ORCH.1 serves contract — the orchestrator routes build work (produce × coding) to this pack.
+serves: { intent: produce, domain: coding }
+
+# Guard registry (ref → if:-expression, evaluated by RegistryGuardEvaluator over buildGuardCtx = {event, tool}).
+guards:
+  # Skeleton pass-through: `event` is always bound to a non-empty event-kind string → always truthy. The real
+  # per-stage readiness predicates arrive with the stage handlers (later slices).
+  ready: event
+  # The human-acceptance signal. UNBOUND in the skeleton ctx → the accept decision's `else` branch fires, so
+  # DEPLOY loops back to PLAN (a skeleton must NEVER auto-declare "shipped"). Bound in the acceptance slice.
+  accepted: accepted
+
+fsm:
+  initial: scope
+  states:
+    # ── SCOPE ──────────────────────────────────────────────────────────────
+    scope:
+      kind: gate
+      guard: ready
+      trigger: [prompt_submit]
+      on_pass_emits: scoped
+      on_fail: { action: warn, message: 'SCOPE checkpoint (skeleton — handler deferred)' }
+    # ── PLAN (new top-level region vs v1) ──────────────────────────────────
+    plan:
+      kind: gate
+      guard: ready
+      trigger: [post_tool_call]
+      on_pass_emits: planned
+      on_fail: { action: warn, message: 'PLAN checkpoint (skeleton — handler deferred)' }
+    # ── AUTHOR ─────────────────────────────────────────────────────────────
+    author:
+      kind: gate
+      guard: ready
+      trigger: [post_tool_call]
+      on_pass_emits: authored
+      on_fail: { action: warn, message: 'AUTHOR checkpoint (skeleton — handler deferred)' }
+    # ── CODE ───────────────────────────────────────────────────────────────
+    code:
+      kind: gate
+      guard: ready
+      trigger: [post_tool_call]
+      on_pass_emits: coded
+      on_fail: { action: warn, message: 'CODE checkpoint (skeleton — handler deferred)' }
+    # ── DEPLOY (new top-level region vs v1) ────────────────────────────────
+    deploy:
+      kind: gate
+      guard: ready
+      trigger: [post_tool_call]
+      on_pass_emits: deployed
+      on_fail: { action: warn, message: 'DEPLOY checkpoint (skeleton — handler deferred)' }
+    # ── acceptance (the second/last human touchpoint) ──────────────────────
+    accept:
+      kind: decision
+      branches:
+        - { guard: accepted, emits: accepted } # human said yes → ship
+        - { else: true, emits: rejected } # default / no signal → loop back to PLAN (never auto-ship)
+    # ── terminal ───────────────────────────────────────────────────────────
+    done:
+      kind: terminal
+      outcome: shipped
+  transitions:
+    - { from: scope, on: scoped, to: plan }
+    - { from: plan, on: planned, to: author }
+    - { from: author, on: authored, to: code }
+    - { from: code, on: coded, to: deploy }
+    - { from: deploy, on: deployed, to: accept }
+    - { from: accept, on: accepted, to: done }
+    - { from: accept, on: rejected, to: plan }

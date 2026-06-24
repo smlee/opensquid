@@ -7,6 +7,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.521] - 2026-06-24
+
+### Added — `fullstack-flow` v2 pack skeleton (Slice 1): the first real v2 `pack.yaml`, activating the dormant v2 runtime
+
+The v2 runtime tier (`v2_supply` / `v2_observed_actor` / `gate_dispatch` / `partitionActivePacks`) shipped
+earlier but was a proven no-op: **no v2 `pack.yaml` existed**. This adds the first one — the v2 rebuild of
+`coding-flow` as a single FSM-primary manifest.
+
+- `packs/builtin/fullstack-flow/pack.yaml` — the 5-stage lifecycle `SCOPE → PLAN → AUTHOR → CODE → DEPLOY`
+  (PLAN + DEPLOY are new top-level regions over v1's shape) as **gate checkpoints + an acceptance decision +
+  a terminal**, with a `serves` block (`produce` × `coding`) so the orchestrator can route build work to it.
+- **Additive + opt-in:** v1 `coding-flow` stays the live default; `fullstack-flow` activates only when pinned
+  in `active.json`. Every existing test + the v1 path is byte-unchanged.
+- Modelled as **gates, not executors**: the live observed actor advances only at gate/decision states
+  (`v2_observed_actor.ts:74`), the faithful translation of v1's pure states+transitions. Gates are
+  non-enforcing pass-throughs (`on_fail: warn`) and the stage handlers (PLAN-decompose, plan-audit, the
+  acceptance human-touchpoint, the resets) are explicitly **deferred to later slices** — the skeleton compiles,
+  passes `validateFsm`, and advances on hook events without implementing the new gate logic.
+- `src/packs/fullstack_flow_pack.test.ts` — proves parse + compile + `validateFsm` green, drives the observed
+  actor through the full lifecycle (`prompt_submit → post_tool_call×N`), and confirms a gate at an await-point
+  ignores non-trigger observations.
+
+Spec: `loop/docs/tasks/T-v2-coding-flow-skeleton.md`. Next: README rewrite to the unified pack model, then the
+v2→canonical rename rides v1 retirement (decision B, 2026-06-24).
+
 ## [0.5.520] - 2026-06-24
 
 ### Fixed — memory lifecycle: capture → embed → compress → prune now actually works (live-verified)
