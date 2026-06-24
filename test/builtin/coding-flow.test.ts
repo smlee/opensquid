@@ -529,7 +529,7 @@ describe('builtin coding-flow pack — F0c: audits degrade gracefully on subagen
     // F0c FIX: the audit-unavailable case BLOCKS (exit 2) with recovery text —
     // it no longer aborts silently (the old bug surfaced exit 0 + no message).
     expect(res.exitCode).toBe(2);
-    expect(res.stderr).toContain('audit could not run');
+    expect(res.stderr).toContain('SCOPE audit returned no verdict');
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).not.toBe('researched');
   });
 
@@ -564,7 +564,7 @@ describe('builtin coding-flow pack — F0c: audits degrade gracefully on subagen
     await dispatchEvent(researchWithContent, [pack], reg, sid); // → researched
     const res = await dispatchEvent(specWithContent, [pack], reg, sid); // spec_drafted → audit THROW → block
     expect(res.exitCode).toBe(2);
-    expect(res.stderr).toContain('audit could not run');
+    expect(res.stderr).toContain('AUTHOR audit returned no verdict');
     expect(await readFsmState(sid, 'coding-flow', pack.fsm!)).toBe('spec_authored');
     expect((await dispatchEvent(taskCreate, [pack], reg, sid)).exitCode).toBe(2); // not spec_complete → blocked
   });

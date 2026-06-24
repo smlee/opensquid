@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.518] - 2026-06-24
+
+### Fixed — coding-flow "audit-unavailable" message: accurate cause, not a phantom spawn cap
+
+The SCOPE/AUTHOR audit-unavailable BLOCK message (`coding-flow/skills/scope-lifecycle/skill.yaml`) asserted a
+"per-session spawn cap after many cycles" and advised starting a fresh session. Both were wrong:
+
+- **No spawn cap exists** in the runtime — the audit-spawn ledger this session showed 589 verdicts / 2 timeouts /
+  1 error across 592 spawns, with successful verdicts _immediately after_ a failure. The reviewer is a per-edit
+  `claude` CLI subprocess; "could not run" is a single subprocess **CLI timeout** (340 s, `CliTimeoutError`),
+  normally ~80–155 s — a transient hang, not exhaustion.
+- **A retry clears it**, not a fresh session — re-writing the artifact re-spawns the audit (confirmed live).
+
+Reworded both branches to: "audit returned no verdict — usually a transient CLI timeout; NOT a spawn cap, NOT a
+content failure; re-write to retry; a fresh session only if it persists across several retries." Kept the
+do-not-`--no-verify`/gate-off guidance. Message only — no gate-logic change. Test assertions updated to match.
+
 ## [0.5.517] - 2026-06-24
 
 ### Fixed — memory ingest: the user's own words are eviction-immune (never silently pruned)

@@ -175,16 +175,17 @@ rules:
             question; weigh the alternatives + choose the simplest correct per the lexicon),
             then re-write. Audit:\n\n{{audit}}
       # AUDIT-UNAVAILABLE → terminal BLOCK, NO advance (stays scoping, re-armable). F0c fix:
-      # the audit subagent could not spawn (a no-VERDICT response, incl. the bound err message).
+      # the audit subprocess returned no VERDICT (usually a transient CLI timeout, not a spawn cap).
       - call: verdict
         if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && depth.count >= 3 && !match(effective, "(?im)^\\s*-\\s*\\[ \\]\\s*open[ _-]?question") && rubric != null && !contains(audit, "VERDICT:")'
         args:
           level: block
           message: >-
-            SCOPE audit could not run (the reviewer subagent was unavailable — typically a
-            per-session spawn cap after many cycles). This is NOT a content failure. Re-write the
-            pre-research artifact to re-trigger the audit; if it persists, a FRESH session clears
-            the spawn exhaustion. Do NOT --no-verify or gate-off. Audit error:\n\n{{audit}}
+            SCOPE audit returned no verdict — the reviewer subprocess did not finish in time
+            (usually a transient CLI timeout; NOT a spawn cap, NOT a content failure). Re-write the
+            pre-research artifact to re-trigger the audit — a retry almost always clears it. Only if
+            it persists across several retries is a fresh session worth trying. Do NOT --no-verify
+            or gate-off. Audit error:\n\n{{audit}}
   # ── AUTHOR: advance on the track-spec write (+ capture its path) ─────────────
   - id: advance-on-spec
     process:
@@ -279,10 +280,11 @@ rules:
         args:
           level: block
           message: >-
-            AUTHOR audit could not run (the reviewer subagent was unavailable — typically a
-            per-session spawn cap). This is NOT a content failure. Re-write the spec to re-trigger
-            the audit; if it persists, a FRESH session clears the spawn exhaustion. Do NOT
-            --no-verify or gate-off. Audit error:\n\n{{spec_audit}}
+            AUTHOR audit returned no verdict — the reviewer subprocess did not finish in time
+            (usually a transient CLI timeout; NOT a spawn cap, NOT a content failure). Re-write the
+            spec to re-trigger the audit — a retry almost always clears it. Only if it persists
+            across several retries is a fresh session worth trying. Do NOT --no-verify or gate-off.
+            Audit error:\n\n{{spec_audit}}
   # ── SCOPE nudge: code-before-scope is a best-effort WARN (GF.3) ──────────────
   # GF.3 (F4): demoted from a hard block to a best-effort NUDGE. The completeness
   # burden moved to the OWNED BOUNDARY: GF.2's git pre-commit/pre-push hooks read the
