@@ -10,7 +10,7 @@
  *   ../../rag/memory/{consolidate,compress,store}.js, ../../models/{load_config,dispatcher}.js.
  * Imported by: src/runtime/hooks/session-end.ts.
  */
-import { createClient } from '@libsql/client';
+import { createClient, type Client } from '@libsql/client';
 
 import { createBackend } from '../../rag/backend_factory.js';
 import { resolveBackendConfig } from '../../rag/config.js';
@@ -22,11 +22,20 @@ import {
   type ConsolidateDeps,
   type ConsolidateOutcome,
 } from '../../rag/memory/consolidate.js';
-import type { MemoryRow } from '../../rag/memory/compress.js';
+import { compress, type MemoryRow } from '../../rag/memory/compress.js';
 import { ensureCompressionColumns, getMemoryById, insertMemory } from '../../rag/memory/store.js';
 
 export interface ConsolidateRunner {
   run: (ids: string[]) => Promise<ConsolidateOutcome>;
+  /** The live libSQL client (for session-end turn-row queries like `liveTurnIngestIds`). */
+  client: Client;
+  /**
+   * Gist a window of raw turn ids into ONE embedded gist, then RETIRE the raws — UNCONDITIONALLY (no
+   * recall-replay verify; the transcript is the lossless archive). Guards the null-embed hole: if the gist's
+   * embedding is null (a transient embed failure), it retires the useless gist instead and KEEPS the raws so
+   * they are re-gisted next round (the `liveTurnIngestIds` re-gist guard keys on embedded gists only).
+   */
+  gistAndRetire: (ids: string[]) => Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -82,6 +91,16 @@ export async function makeConsolidateRunner(): Promise<ConsolidateRunner> {
 
   return {
     run: (ids) => consolidate(deps, ids),
+    client,
+    gistAndRetire: async (ids) => {
+      if (ids.length === 0) return;
+      const mc = await compress(deps, ids); // mints + inserts the gist (derived_from = ids), embedded
+      if (mc.embedding != null) {
+        for (const id of ids) await deps.demoteMemory(id); // recallable gist → retire the raws
+      } else {
+        await deps.demoteMemory(mc.id); // null-embed gist is useless → retire it; raws stay for re-gist
+      }
+    },
     close: () => {
       client.close();
       return Promise.resolve();

@@ -28,11 +28,12 @@ function modelCacheDir(): string {
 
 export function fastembedEmbedder(): Embedder {
   let model: FastembedModel | null = null;
-  let up = true;
   return {
     dim: 384, // bge-small-en-v1.5
     async embed(text: string): Promise<number[] | null> {
-      if (!up) return null;
+      // Per-call failure isolation: a transient embed failure returns null for THIS call only — it must NOT
+      // disable subsequent calls (the old one-way `up` latch poisoned whole batches; for in-process fastembed
+      // there is no daemon to protect, so the latch had no upside). The lazy `model` cache is preserved.
       try {
         if (model === null) {
           const { FlagEmbedding, EmbeddingModel } = (await import('fastembed')) as unknown as {
@@ -52,8 +53,7 @@ export function fastembedEmbedder(): Embedder {
         }
         return null;
       } catch {
-        up = false;
-        return null;
+        return null; // this call only — no permanent disable
       }
     },
   };

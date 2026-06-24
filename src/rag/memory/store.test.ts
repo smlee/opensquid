@@ -15,6 +15,8 @@ import {
   insertMemory,
   listMemories,
   updateMemory,
+  liveTurnIngestIds,
+  allTurnIngestIds,
   IMPORT_TAG_PREFIX,
 } from './store.js';
 import type { MemoryRow } from './compress.js';
@@ -172,5 +174,65 @@ describe('memory-compression store', () => {
     await expect(
       updateMemory(client, () => Promise.resolve(null), { id: 'ghost', content: 'x' }),
     ).rejects.toThrow(/not found/);
+  });
+
+  // T-memory-lifecycle — the session-end turn-gist accessors.
+  async function seedTurn(
+    id: string,
+    source: string,
+    author: string,
+    opts: { retired?: boolean; derivedFrom?: string[]; embedded?: boolean } = {},
+  ): Promise<void> {
+    const { retired = false, derivedFrom = [], embedded = false } = opts;
+    await client.execute({
+      sql: `INSERT INTO lessons
+        (id, content, tags, source, author, created_at, derived_from, consumed_by_user_lessons,
+         tier, namespace, retired_at, durability, embedding)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ${embedded ? "vector32('[1,0,0,0,0,0,0,0]')" : 'NULL'})`,
+      args: [
+        id,
+        `c ${id}`,
+        '[]',
+        source,
+        author,
+        '2026-06-24T00:00:00Z',
+        JSON.stringify(derivedFrom),
+        0,
+        'shared',
+        null,
+        retired ? '2026-06-24T01:00:00Z' : null,
+        'durable',
+      ],
+    });
+  }
+
+  it('liveTurnIngestIds: only live agent/tool turns NOT already in an embedded gist', async () => {
+    await ensureCompressionColumns(client);
+    await client.execute('ALTER TABLE lessons ADD COLUMN retired_at TEXT');
+    await seedTurn('a1', 'turn-ingest', 'agent'); // eligible
+    await seedTurn('a2', 'turn-ingest', 'agent'); // captured by an embedded gist below → excluded
+    await seedTurn('u1', 'turn-ingest', 'user'); // user prose → excluded
+    await seedTurn('r1', 'turn-ingest', 'agent', { retired: true }); // retired → excluded
+    await seedTurn('m1', 'memory', 'agent'); // not turn-ingest → excluded
+    await seedTurn('g1', 'memory', 'agent', { derivedFrom: ['a2'], embedded: true }); // embedded gist citing a2
+    expect(await liveTurnIngestIds(client)).toEqual(['a1']);
+  });
+
+  it('liveTurnIngestIds: a NULL-embedding gist does NOT exclude its turns (re-gist next round)', async () => {
+    await ensureCompressionColumns(client);
+    await client.execute('ALTER TABLE lessons ADD COLUMN retired_at TEXT');
+    await seedTurn('a1', 'turn-ingest', 'agent');
+    await seedTurn('gnull', 'memory', 'agent', { derivedFrom: ['a1'], embedded: false }); // null-embed gist
+    expect(await liveTurnIngestIds(client)).toEqual(['a1']); // still eligible
+  });
+
+  it('allTurnIngestIds returns every turn-ingest row incl. user + retired', async () => {
+    await ensureCompressionColumns(client);
+    await client.execute('ALTER TABLE lessons ADD COLUMN retired_at TEXT');
+    await seedTurn('a1', 'turn-ingest', 'agent');
+    await seedTurn('u1', 'turn-ingest', 'user');
+    await seedTurn('r1', 'turn-ingest', 'agent', { retired: true });
+    await seedTurn('m1', 'memory', 'agent');
+    expect((await allTurnIngestIds(client)).sort()).toEqual(['a1', 'r1', 'u1']);
   });
 });

@@ -7,9 +7,9 @@
  * `makeBackend` / `ingest` seams make the live path injectable, so the test here IS the live-path proof.
  */
 import type { RagBackend } from '../../rag/types.js';
-import { defaultRagBackend } from '../../rag/backend_factory.js';
+import { createBackend } from '../../rag/backend_factory.js';
+import { resolveBackendConfig } from '../../rag/config.js';
 import { ingestTurn } from '../../rag/memory/ingest.js';
-import { OPENSQUID_HOME } from '../paths.js';
 
 interface StopIngestPayload {
   transcript_path?: string;
@@ -18,7 +18,7 @@ interface StopIngestPayload {
 }
 
 export interface IngestHookDeps {
-  /** Seam for tests — defaults to the shared `defaultRagBackend(OPENSQUID_HOME())`. */
+  /** Seam for tests — defaults to the configured backend (`createBackend(await resolveBackendConfig())`). */
   makeBackend?: () => RagBackend;
   /** Seam for tests — defaults to the real `ingestTurn`. */
   ingest?: typeof ingestTurn;
@@ -40,7 +40,9 @@ export async function maybeIngestTurn(raw: string, deps: IngestHookDeps = {}): P
   }
   if (transcriptPath === null) return 0;
   try {
-    const backend = (deps.makeBackend ?? (() => defaultRagBackend(OPENSQUID_HOME())))();
+    const backend = deps.makeBackend
+      ? deps.makeBackend()
+      : createBackend(await resolveBackendConfig());
     await backend.init();
     return await (deps.ingest ?? ingestTurn)({
       backend,

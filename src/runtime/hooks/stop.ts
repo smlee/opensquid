@@ -103,8 +103,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // Always-on raw-turn capture into RAG (design §5) — before dispatch, so even a drift-BLOCK turn is
-  // recorded. The helper is itself fail-open (never throws), so it never blocks the turn.
+  // Always-on raw-turn capture into RAG (T-memory-lifecycle) — writes to the CONFIGURED backend
+  // (resolveBackendConfig → fastembed/rag.sqlite, where recall reads), embeds only new rows (storeLesson
+  // short-circuit), user prose immune; session-end gists + retires the agent/tool raws (bounded). Before
+  // dispatch so even a drift-BLOCK turn is captured; fail-open (never blocks the turn).
   await maybeIngestTurn(raw);
 
   const sessionId = extractSessionId(raw);

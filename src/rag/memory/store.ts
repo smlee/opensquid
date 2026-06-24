@@ -69,6 +69,32 @@ export async function getMemoryById(client: Client, id: string): Promise<MemoryR
 }
 
 /**
+ * Raw turn-ingest rows eligible for gisting at session-end: assistant/tool only (user prose `author:'user'`
+ * is verbatim + immune and excluded), live (un-retired), AND not already captured in an EMBEDDED gist's
+ * `derived_from` (the re-gist guard — a turn whose gist embedded is never re-gisted; a turn whose gist
+ * embed FAILED has only a null-embedding gist, so it stays eligible and is re-attempted). `derived_from`
+ * is a JSON-array TEXT column, queried via SQLite `json_each`.
+ */
+export async function liveTurnIngestIds(client: Client): Promise<string[]> {
+  const rs = await client.execute(
+    `SELECT id FROM lessons
+       WHERE source = 'turn-ingest' AND author != 'user' AND retired_at IS NULL
+         AND id NOT IN (
+           SELECT je.value FROM lessons g, json_each(g.derived_from) je
+           WHERE g.embedding IS NOT NULL AND g.derived_from IS NOT NULL AND g.derived_from != '[]'
+         )
+       ORDER BY created_at ASC`,
+  );
+  return rs.rows.map((r) => str(r.id));
+}
+
+/** ALL turn-ingest ids (incl. `author:'user'` + retired) — for the one-time `memory clean-turns` cleanup. */
+export async function allTurnIngestIds(client: Client): Promise<string[]> {
+  const rs = await client.execute(`SELECT id FROM lessons WHERE source = 'turn-ingest'`);
+  return rs.rows.map((r) => str(r.id));
+}
+
+/**
  * Insert a memory carrying the compression columns (+ FTS + optional vector). Idempotent upsert by id.
  * File-first when `sourceDir` is given: writes the per-file source-of-truth (atomic) BEFORE the DB
  * upsert, mirroring `storeLesson` — so a consolidated memory survives a `rebuildLibsqlIndex` (which

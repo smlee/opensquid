@@ -22,6 +22,7 @@ import { exitIfSubagent } from './subagent_guard.js';
 import { clearFsmState } from '../fsm_state.js';
 import { runCompression } from '../compression_orchestrator.js';
 import { makeConsolidateRunner } from '../wedge/compression_deps.js';
+import { liveTurnIngestIds } from '../../rag/memory/store.js';
 import { commitMemoryStore } from '../../rag/store_git.js';
 import { createBackend } from '../../rag/backend_factory.js';
 import { resolveBackendConfig } from '../../rag/config.js';
@@ -127,6 +128,30 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     process.stderr.write(`opensquid: compression skipped — ${String(e)}\n`);
+  }
+
+  // T-memory-lifecycle — bound the always-on raw-turn capture. UNCONDITIONALLY gist this run's live raw turns
+  // (assistant/tool; user prose is verbatim+immune+excluded) into gists and retire the raws — reuses
+  // compress + demote via the runner, NO satisfaction gate and NO recall-replay verify (the transcript JSONL
+  // is the lossless archive, so retiring a gisted raw loses nothing recoverable). The retention sweep below
+  // then reclaims the retired raws. Fail-open.
+  try {
+    const runner = await makeConsolidateRunner();
+    try {
+      const ids = await liveTurnIngestIds(runner.client);
+      const TURN_GIST_WINDOW = 20;
+      for (let i = 0; i < ids.length; i += TURN_GIST_WINDOW) {
+        await runner.gistAndRetire(ids.slice(i, i + TURN_GIST_WINDOW));
+      }
+      if (ids.length > 0)
+        process.stderr.write(
+          `opensquid: turn-gist — ${String(ids.length)} raw turn(s) gisted+retired\n`,
+        );
+    } finally {
+      await runner.close();
+    }
+  } catch (e) {
+    process.stderr.write(`opensquid: turn-gist skipped — ${String(e)}\n`);
   }
 
   // RSW.1 (wg-9e4f4eb2a40f) — close the retention loop. Restore any already-demoted USER memory to

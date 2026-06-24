@@ -7,6 +7,33 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.520] - 2026-06-24
+
+### Fixed — memory lifecycle: capture → embed → compress → prune now actually works (live-verified)
+
+The always-on ingest was non-functional. Root cause was twofold: capture used the hardcoded qwen
+`defaultRagBackend` → `~/.opensquid/opensquid.db`, a **different file** from the configured store
+`~/.opensquid/rag.sqlite` that recall/compression read (so turns never reached recall), **and** that path's
+qwen/Ollama embedder had a batch-poisoning one-way latch → ~99 % null/wrong-dim rows. No compress/prune ran on
+the raw turns either → unbounded.
+
+- **Capture uses the configured backend** (`stop_ingest.ts` → `resolveBackendConfig()`/`createBackend`) — same
+  file + embedder + dimension as recall (fastembed, in-process, ~56 ms, no Ollama).
+- **fastembed per-call failure isolation** — removed the one-way `up` latch (`embedders/fastembed.ts`).
+- **Session-end gist + prune** — new `ConsolidateRunner.gistAndRetire` (`compression_deps.ts`) = `compress`
+  (now returns the embedding) → **retire-once-gisted** (unconditional; the transcript is the lossless archive),
+  guarded on a non-null gist embedding; `liveTurnIngestIds` re-gist guard keys on EMBEDDED gists' `derived_from`
+  (`store.ts`); wired unconditionally in `session-end.ts` (bypasses the satisfaction-gated CMP.3 path). User
+  prose (`role:user && !hasTool`) stays verbatim + immune.
+- **Cleanup** — `opensquid memory clean-turns` deletes `source='turn-ingest'` from BOTH DB files (direct SQL +
+  VACUUM); the orphaned `opensquid.db` was reclaimed 144 MB → 27 MB.
+- **Capture re-enabled** in `stop.ts`.
+
+LIVE-verified on `rag.sqlite` (5/5 embedded, recall found the fact, gist+retire, user prose immune, recall after
+compaction). Full suite 4131 passed; 23 new unit tests. Tracked follow-ups: incremental cursor, qwen
+circuit-breaker, turn-prune cutoff, old-transcript backfill, and the beads/Dolt memory architecture
+(`wg-857a0d798cf3`).
+
 ## [0.5.519] - 2026-06-24
 
 ### Fixed — memory-ingest hardening (independent-audit follow-up)

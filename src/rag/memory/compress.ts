@@ -185,5 +185,5 @@ export async function compress(deps: CompressDeps, ids: string[]): Promise<Memor
   };
   const embedding = await deps.embed(mc.content);
   await deps.insertMemory({ ...mc, embedding }); // ADD only — predecessors untouched
-  return mc;
+  return { ...mc, embedding }; // include the embedding so callers can gate on a recallable (non-null) gist
 }

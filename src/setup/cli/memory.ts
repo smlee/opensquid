@@ -35,8 +35,11 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { createClient } from '@libsql/client';
+
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 import { resolveRecallScope } from '../../rag/scope.js';
+import { resolveBackendConfig } from '../../rag/config.js';
 import { makeMemoryStore, type MemoryStore } from '../migrate/memory_store_handle.js';
 import {
   fetchExistingImportIndex,
@@ -183,6 +186,43 @@ export function registerMemory(parent: Command, deps: MemoryCliDeps = {}): Comma
     .option('--project <path>', 'override which project dir to read (default: cwd)')
     .option('--auto-memory-root <path>', 'override ~/.claude/projects/ root')
     .action((opts: SnapshotAutoOpts) => actSnapshotAuto(r, opts));
+
+  // T-memory-lifecycle — one-time cleanup of the broken `turn-ingest` rows written by the old (paused) ingest
+  // via the hardcoded qwen `defaultRagBackend` (which wrote to `OPENSQUID_HOME/opensquid.db`, a DIFFERENT file
+  // from the configured store `rag.sqlite`). Cleans BOTH candidate paths (deduped) so it works regardless of
+  // which backend is configured. Direct SQL (fast for ~10k rows) + VACUUM. Manual; NOT hook-wired.
+  m.command('clean-turns')
+    .description('Delete broken turn-ingest rows from the memory store(s) (one-time)')
+    .action(async () => {
+      const cfg = await resolveBackendConfig();
+      const paths = new Set<string>();
+      if ('dbUrl' in cfg) paths.add(cfg.dbUrl.replace(/^file:/, ''));
+      paths.add(join(OPENSQUID_HOME(), 'opensquid.db')); // the old hardcoded-qwen path
+      let total = 0;
+      for (const p of paths) {
+        const client = createClient({ url: `file:${p}` });
+        try {
+          const before = Number(
+            (await client.execute(`SELECT count(*) n FROM lessons WHERE source = 'turn-ingest'`))
+              .rows[0]?.n ?? 0,
+          );
+          await client.execute(`DELETE FROM lessons WHERE source = 'turn-ingest'`);
+          try {
+            await client.execute(`DELETE FROM lessons_fts WHERE source = 'turn-ingest'`);
+          } catch {
+            /* fts shape may differ; best-effort */
+          }
+          await client.execute('VACUUM');
+          total += before;
+          process.stdout.write(`memory: cleaned ${String(before)} turn-ingest rows from ${p}\n`);
+        } catch (e) {
+          process.stderr.write(`memory: clean-turns skipped ${p} — ${String(e)}\n`);
+        } finally {
+          client.close();
+        }
+      }
+      process.stdout.write(`memory: cleaned ${String(total)} turn-ingest rows total\n`);
+    });
 
   return m;
 }
