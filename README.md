@@ -206,16 +206,18 @@ The architecture is local-first. The durable truth is an append-only operation l
 
 ## Packs
 
-Packs are the unit of behavior. A pack can contain:
+Packs are the unit of behavior. A pack is a self-contained bundle of:
 
-- `manifest.yaml` for identity and metadata.
-- `models.yaml` for abstract model aliases.
-- `notifications.yaml` for routing.
-- `drift_response.yaml` for drift policy.
-- `fsm.yaml` for workflow state machines.
-- `skills/` for rule and tool definitions.
-- `lessons/` for validated knowledge.
-- `chat_agent.yaml` for always-on chat behavior.
+- **identity** — what it is and when it applies.
+- **a workflow** — its lifecycle as an explicit state machine: the stages it moves through and the gates that
+  guard each transition. This is the core; the workflow is inspectable, not hidden in prose.
+- **skills** — the rules and tools bound to each stage.
+- **memory** — the validated lessons it carries.
+- plus optional model aliases, notification routing, drift policy, and always-on chat behavior.
+
+A pack's files mirror those parts (e.g. identity and metadata, the workflow state machine, a `skills/`
+directory, a `lessons/` directory). The on-disk layout is an implementation detail OpenSquid reads for you;
+what you author and reason about is the pack as one coherent behavior.
 
 This matters because OpenSquid is not a bundle of one user's personal workflow. The product is the runtime and format. Your rules, gates, and agent personality live in packs you can inspect, edit, version, and move.
 
