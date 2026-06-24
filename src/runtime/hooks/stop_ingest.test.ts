@@ -75,7 +75,7 @@ describe('maybeIngestTurn (live wiring)', () => {
     expect(fake.stored).toHaveLength(1);
     expect(fake.stored[0]?.id).toBe('live1');
     expect(fake.stored[0]?.content).toBe('a real captured turn');
-    expect(fake.stored[0]?.author).toBe('agent');
+    expect(fake.stored[0]?.author).toBe('user'); // a genuine user turn ⇒ immune
   });
 
   it('accepts the camelCase transcriptPath key too', async () => {

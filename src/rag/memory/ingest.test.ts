@@ -36,7 +36,7 @@ const reads = (entries: TranscriptMessageEntry[]) => () => Promise.resolve(entri
 const scope = (namespace: string | null) => () => Promise.resolve<RecallScope>({ namespace });
 
 describe('ingestTurn', () => {
-  it('writes one reclaimable project-scoped Lesson per entry, id = uuid', async () => {
+  it('writes one project-scoped Lesson per entry, id = uuid, correct provenance', async () => {
     const { backend, stored } = fakeBackend();
     const entries = [
       entry({ uuid: 'e1', role: 'user', content: 'hello', hasTool: false }),
@@ -50,14 +50,38 @@ describe('ingestTurn', () => {
     });
     expect(n).toBe(2);
     expect(stored.map((l) => l.id)).toEqual(['e1', 'e2']);
+    expect(stored[0]?.author).toBe('user'); // genuine user prose ⇒ eviction-immune
+    expect(stored[1]?.author).toBe('agent'); // assistant output ⇒ reclaimable
     for (const l of stored) {
-      expect(l.author).toBe('agent'); // reclaimable — not the immune 'user' tier
       expect(l.tier).toBe('project');
       expect(l.namespace).toBe('proj-1');
       expect(l.source).toBe('turn-ingest');
     }
     expect(stored[0]?.tags).toEqual(['role:user']);
     expect(stored[1]?.tags).toEqual(['role:assistant', 'role:tool']); // hasTool ⇒ role:tool
+  });
+
+  it("marks the user's own words author:'user' (immune) but tool-result deliveries author:'agent'", async () => {
+    const { backend, stored } = fakeBackend();
+    await ingestTurn({
+      backend,
+      transcriptPath: '/x',
+      readEntries: reads([
+        entry({ uuid: 'prose', role: 'user', content: 'do the thing', hasTool: false }),
+        entry({
+          uuid: 'toolres',
+          role: 'user',
+          content: '[tool_result] big output',
+          hasTool: true,
+        }),
+        entry({ uuid: 'asst', role: 'assistant', content: 'done', hasTool: false }),
+      ]),
+      resolveScope: scope('p'),
+    });
+    // The human's words are immune (never silently pruned); a tool-result delivery (also role:user) is not.
+    expect(stored.find((l) => l.id === 'prose')?.author).toBe('user');
+    expect(stored.find((l) => l.id === 'toolres')?.author).toBe('agent');
+    expect(stored.find((l) => l.id === 'asst')?.author).toBe('agent');
   });
 
   it('does NOT collapse identical-content messages with distinct uuids', async () => {

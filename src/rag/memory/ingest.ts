@@ -24,12 +24,19 @@ export interface IngestDeps {
 function lessonFromEntry(e: TranscriptMessageEntry, namespace: string | null): Lesson {
   const tags = [`role:${e.role}`];
   if (e.hasTool) tags.push('role:tool'); // provenance the two-value `author` can't carry
+  // The user's OWN words are eviction-IMMUNE (design §5:287 "anything you said is immune" + the standing
+  // never-silently-prune axiom): a genuine user-prose turn ⇒ `author:'user'`, which consolidate/sweepRetired/
+  // deleteLesson all already spare. A `role:user` entry that carries tool blocks is a tool-RESULT delivery
+  // (the harness encodes tool results as role:user), NOT the human's words ⇒ it stays `author:'agent'`. So
+  // assistant output + tool I/O (the voluminous part) remain RECLAIMABLE — immunity here does not reintroduce
+  // unbounded growth. (Verified policy via `memorize` is a separate, also-immune tier.)
+  const isUserAuthored = e.role === 'user' && !e.hasTool;
   return {
     id: e.uuid, // per-message-unique + stable ⇒ idempotent upsert AND no identical-text collapse
     content: e.content,
     tags,
     source: 'turn-ingest',
-    author: 'agent', // RECLAIMABLE raw capture — immunity is reserved for verified policy
+    author: isUserAuthored ? 'user' : 'agent',
     createdAt: e.timestamp,
     tier: 'project', // a turn is about the working repo (mirrors memorize)
     namespace,

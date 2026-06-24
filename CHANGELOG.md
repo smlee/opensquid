@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.517] - 2026-06-24
+
+### Fixed — memory ingest: the user's own words are eviction-immune (never silently pruned)
+
+Post-ship correction to 0.5.516. Ingest wrote **every** raw turn `author:'agent'` (reclaimable), so a future
+compress/prune could silently prune the user's words — contradicting design §5:287 ("anything _you_ said is
+immune"). Now `lessonFromEntry` (`src/rag/memory/ingest.ts`) writes a **genuine user-prose turn**
+(`role:user && !hasTool`) as **`author:'user'`** — eviction-immune (`consolidate`/`sweepRetired`/`deleteLesson`
+all spare it). Assistant output + **tool-result deliveries** (the harness encodes tool results as `role:user`
+too — distinguished by `hasTool`) stay `author:'agent'` (reclaimable), so the voluminous part remains compactable:
+no unbounded-growth regression. Spec/pre-research re-aligned (SPEC_COMPLETE, GUESS_FREE); new test asserts
+user-prose ⇒ `author:'user'`, tool-result `role:user` ⇒ `author:'agent'`.
+
 ## [0.5.516] - 2026-06-24
 
 ### Added — T-memory-foundation: always-on RAG ingest (the write leg)
