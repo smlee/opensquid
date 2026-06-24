@@ -24,6 +24,8 @@
  * Imported by: src/runtime/ (Phase 1 wiring), tests.
  */
 
+import { join } from 'node:path';
+
 import { claudeAutoMemoryBackend } from './backends/claude_auto_memory.js';
 import { libsqlLexicalBackend } from './backends/libsql_lexical.js';
 import { libsqlQwen3Backend } from './backends/libsql_qwen3.js';
@@ -173,4 +175,15 @@ export function libsqlQwen3WithLexicalFallback(opts: QwenWithFallbackOpts): RagB
       return (await active.repromoteRetiredUserMemories?.()) ?? [];
     },
   };
+}
+
+/**
+ * The default RAG backend: libsql-qwen3 with lexical fallback on Ollama-down (keeps callers up even when
+ * the local embedder is offline). The SINGLE construction path shared by the agent-bridge daemon and the
+ * always-on ingest hook (`runtime/hooks/stop_ingest.ts`) — one source of truth for the db path + Ollama URL.
+ */
+export function defaultRagBackend(home: string): RagBackend {
+  const dbUrl = `file:${join(home, 'opensquid.db')}`;
+  const ollamaUrl = process.env.OPENSQUID_OLLAMA_URL ?? 'http://127.0.0.1:11434';
+  return libsqlQwen3WithLexicalFallback({ dbUrl, ollamaUrl });
 }

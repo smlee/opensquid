@@ -59,7 +59,7 @@ import { loadModelsConfig } from '../../models/load_config.js';
 import { locateEnvFile } from '../../channels/env-token.js';
 import type { ModelAliasConfig } from '../../models/types.js';
 import { loadPack } from '../../packs/loader.js';
-import { libsqlQwen3WithLexicalFallback } from '../../rag/backend_factory.js';
+import { defaultRagBackend } from '../../rag/backend_factory.js';
 import type { RagBackend } from '../../rag/types.js';
 import { createResolver, dotenvBackend } from '../../secrets/index.js';
 import type { SecretResolver } from '../../secrets/types.js';
@@ -535,14 +535,6 @@ async function constructAnthropicClient(apiKey: string): Promise<AnthropicMessag
     );
   }
   return new mod.default({ apiKey }).messages;
-}
-
-/** libsql-qwen3 with lexical fallback on Ollama-down. Keeps the daemon up
- *  even when the local embedder is offline. */
-function defaultRagBackend(home: string): RagBackend {
-  const dbUrl = `file:${join(home, 'opensquid.db')}`;
-  const ollamaUrl = process.env.OPENSQUID_OLLAMA_URL ?? 'http://127.0.0.1:11434';
-  return libsqlQwen3WithLexicalFallback({ dbUrl, ollamaUrl });
 }
 
 /** Default secret resolver: env-only + the canonical `~/.opensquid/.env` dotenv file (wg-45512ec39739).

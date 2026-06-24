@@ -27,6 +27,7 @@ import { emitDriftStderrAndExit, squidPrefix } from './hook_output.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { maybeDriveInbound, maybePeekInbound, extractCwd } from './stop_drive.js';
 import { maybeStreamOutput } from './stop_stream.js';
+import { maybeIngestTurn } from './stop_ingest.js';
 import { readLastAssistantText } from './transcript.js';
 
 interface StopPayload {
@@ -101,6 +102,10 @@ async function main(): Promise<void> {
       parsed.data.assistantText = await readLastAssistantText(transcriptPath);
     }
   }
+
+  // Always-on raw-turn capture into RAG (design §5) — before dispatch, so even a drift-BLOCK turn is
+  // recorded. The helper is itself fail-open (never throws), so it never blocks the turn.
+  await maybeIngestTurn(raw);
 
   const sessionId = extractSessionId(raw);
   const packs = await loadActivePacks(sessionId);

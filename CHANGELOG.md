@@ -7,6 +7,35 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.516] - 2026-06-24
+
+### Added — T-memory-foundation: always-on RAG ingest (the write leg)
+
+The v2 build's prerequisite slice: every turn is now recorded into the RAG store **automatically on every
+`Stop`** — not agent-discretion, not FSM-gated — captured from the canonical transcript and written through the
+public backend. This is the `[BUILD]` capture hook of the memory-lifecycle design (§5).
+
+- **New per-entry transcript parser** (`src/rag/memory/transcript_entries.ts`) — reads the transcript JSONL into
+  per-message records `{uuid, timestamp, role, content, hasTool}`. Serializes `text` + `tool_use` + `tool_result`
+  verbatim (no capture-time trimming); **excludes `thinking`** (the design captures "everything said — the
+  conversation", not internal reasoning). Skips non-message + malformed lines; fail-soft. The existing
+  `runtime/hooks/transcript.ts` readers (joined-string, text-only, SG.3-sensitive) are left untouched.
+- **`ingestTurn`** (`src/rag/memory/ingest.ts`) — full-transcript idempotent scan: each entry becomes a `Lesson`
+  keyed by its `uuid` (per-message-unique + stable), so re-scans dedupe via `storeLesson`'s upsert AND a `Stop`
+  that failed to fire is backfilled on the next scan. Rows are `author:'agent'` — **reclaimable** raw working
+  memory (eviction-immunity stays reserved for verified policy written via `memorize`), `tier:'project'` scoped
+  via `resolveRecallScope`, durability auto-classified (`HANDOFF/RESUME/TO SHIP` ⇒ `point_in_time`).
+- **Live wiring** — `runtime/hooks/stop_ingest.ts` (`maybeIngestTurn`, mirroring the `stop_drive`/`stop_stream`
+  `maybe*` pattern) is called from `stop.ts` before dispatch, so even a drift-BLOCK turn is captured; fail-open
+  (a capture error never blocks the turn).
+- **Single backend construction path** — `defaultRagBackend(home)` is lifted from the agent-bridge daemon into
+  `rag/backend_factory.ts` and shared by the daemon and the ingest hook (no duplicate db-path/Ollama-URL logic).
+
+`memorize` is unchanged (it is the verify-probe gate, not a capture path). Volume is bounded by the existing
+compress (`compression_orchestrator`) + 30-day prune (`checkpoints clean`); wiring those over raw-turn rows, the
+recall/pull leg, and an incremental cursor optimization are tracked downstream. Spec:
+`docs/tasks/T-memory-foundation.md` (SPEC_COMPLETE); pre-research GUESS_FREE.
+
 ## [0.5.515] - 2026-06-23
 
 ### Fixed/Added — GAC.5 (cont.): source-verified Windows paths + `XDG_CONFIG_HOME` support
