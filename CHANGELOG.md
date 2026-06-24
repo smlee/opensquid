@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.519] - 2026-06-24
+
+### Fixed — memory-ingest hardening (independent-audit follow-up)
+
+- **No per-Stop re-embed of unchanged rows.** `storeLesson` now short-circuits when the row already exists
+  byte-identical on every persisted column AND carries an embedding — skipping the embed + per-file write +
+  delete-insert (`libsql_store.ts`). The always-on capture re-stores the whole transcript every Stop; without
+  this it re-embedded the entire history on the hot turn-boundary path whenever the embedder was up. Gap-recovery
+  is preserved; the **all-columns** compare keeps the demote/retire path (unchanged content + new `retired_at`)
+  from being skipped; the **embedding-presence** guard backfills a row that was stored while the embedder was down.
+- **Project scope from the payload `cwd`.** Ingest threads the Stop payload's `cwd` to `resolveRecallScope`
+  (a hook's own `process.cwd()` is not authoritative — cf. `memory_reconcile.ts`), falling back to `process.cwd()`
+  — preventing mis-scoped turns when hook-cwd ≠ project-dir (`ingest.ts`, `stop_ingest.ts`).
+
+Both verified green (full suite); spec/pre-research re-aligned (SPEC_COMPLETE). Deferred memory-lifecycle wiring is
+now tracked: `wg-525ef84b83be` (compress), `wg-22b4c76d53e5` (prune), `wg-deb55844f6f1` (read leg).
+
 ## [0.5.518] - 2026-06-24
 
 ### Fixed — coding-flow "audit-unavailable" message: accurate cause, not a phantom spawn cap

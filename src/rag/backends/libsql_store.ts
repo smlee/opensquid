@@ -149,11 +149,50 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
 
     async storeLesson(lesson) {
       if (!client) throw new Error('libsql-store: not initialized');
+      const tagsJson = JSON.stringify(lesson.tags);
+      const derivedFromJson = JSON.stringify(lesson.derivedFrom ?? []);
+      const consumed = lesson.consumedByUserLessons ?? 0;
+      const tier: MemoryTier = lesson.tier ?? 'shared';
+      const namespace = lesson.namespace ?? null;
+      const retiredAt = lesson.retired_at ?? null;
+      const durability = lesson.durability ?? null;
+      // No-op short-circuit (T-AUDIT / always-on ingest): if the row already exists byte-identical on EVERY
+      // persisted column AND already carries an embedding, skip the expensive re-embed + per-file write +
+      // delete-insert. The always-on capture re-stores the WHOLE transcript every Stop, so without this each
+      // turn re-embeds the entire history on the hot path; with it, only NEW or CHANGED entries pay the embed.
+      // Gap-recovery is preserved (a missing / changed id still falls through). Correctness guards:
+      //   • compares ALL columns, not just content — so the demote/retire path (storeLesson with unchanged
+      //     content but a new retired_at) is NOT skipped;
+      //   • requires `embedding IS NOT NULL` — a row stored while the embedder was down (null vector) is
+      //     re-embedded (backfilled) on a later store once the embedder is back, never stuck lexical-only.
+      const prior = await client.execute({
+        sql: `SELECT content, tags, source, author, created_at, derived_from, consumed_by_user_lessons,
+              tier, namespace, retired_at, durability, embedding IS NOT NULL AS has_embedding
+              FROM lessons WHERE id = ?`,
+        args: [lesson.id],
+      });
+      const p = prior.rows[0];
+      if (
+        p !== undefined &&
+        Number(p.has_embedding) === 1 &&
+        p.content === lesson.content &&
+        p.tags === tagsJson &&
+        p.source === lesson.source &&
+        p.author === lesson.author &&
+        p.created_at === lesson.createdAt &&
+        p.derived_from === derivedFromJson &&
+        Number(p.consumed_by_user_lessons) === consumed &&
+        p.tier === tier &&
+        (p.namespace ?? null) === namespace &&
+        (p.retired_at ?? null) === retiredAt &&
+        (p.durability ?? null) === durability
+      ) {
+        return; // unchanged + already embedded — persisting again is a no-op
+      }
       // File-first: write the per-file source-of-truth (atomic) before the derived DB index, so a
       // crash leaves the durable git-versionable truth intact and the DB is reconstructable.
       if (opts.sourceDir !== undefined) await writeRecord(opts.sourceDir, lesson);
       const vec = await embedder.embed(lesson.content);
-      const tagsJson = JSON.stringify(lesson.tags);
       // Idempotent upsert by id: re-storing a lesson with the same id (e.g. a
       // re-memorize of the same body — id is the content-hash) REPLACES the prior
       // row instead of raising a PRIMARY KEY conflict. Delete-then-insert covers
@@ -161,12 +200,6 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       // INSERT OR REPLACE to key on), keeping the two in lockstep.
       await client.execute({ sql: `DELETE FROM lessons WHERE id = ?`, args: [lesson.id] });
       await client.execute({ sql: `DELETE FROM lessons_fts WHERE id = ?`, args: [lesson.id] });
-      const derivedFromJson = JSON.stringify(lesson.derivedFrom ?? []);
-      const consumed = lesson.consumedByUserLessons ?? 0;
-      const tier: MemoryTier = lesson.tier ?? 'shared';
-      const namespace = lesson.namespace ?? null;
-      const retiredAt = lesson.retired_at ?? null;
-      const durability = lesson.durability ?? null;
       await client.execute({
         sql: `INSERT INTO lessons (id, content, tags, source, author, created_at, derived_from,
               consumed_by_user_lessons, tier, namespace, retired_at, durability, embedding)

@@ -14,6 +14,7 @@ import { OPENSQUID_HOME } from '../paths.js';
 interface StopIngestPayload {
   transcript_path?: string;
   transcriptPath?: string;
+  cwd?: string;
 }
 
 export interface IngestHookDeps {
@@ -29,9 +30,11 @@ export interface IngestHookDeps {
  */
 export async function maybeIngestTurn(raw: string, deps: IngestHookDeps = {}): Promise<number> {
   let transcriptPath: string | null = null;
+  let cwd: string | undefined;
   try {
     const obj = JSON.parse(raw) as StopIngestPayload;
     transcriptPath = obj.transcript_path ?? obj.transcriptPath ?? null;
+    cwd = obj.cwd; // authoritative for project scope; ingest falls back to process.cwd() if absent
   } catch {
     return 0;
   }
@@ -39,7 +42,11 @@ export async function maybeIngestTurn(raw: string, deps: IngestHookDeps = {}): P
   try {
     const backend = (deps.makeBackend ?? (() => defaultRagBackend(OPENSQUID_HOME())))();
     await backend.init();
-    return await (deps.ingest ?? ingestTurn)({ backend, transcriptPath });
+    return await (deps.ingest ?? ingestTurn)({
+      backend,
+      transcriptPath,
+      ...(cwd === undefined ? {} : { cwd }),
+    });
   } catch (err) {
     process.stderr.write(`opensquid: turn-ingest failed (continuing): ${String(err)}\n`);
     return 0;

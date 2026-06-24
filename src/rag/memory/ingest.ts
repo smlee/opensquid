@@ -16,6 +16,10 @@ export interface IngestDeps {
   /** Already-`init()`'d backend (the caller owns construction + init). */
   backend: RagBackend;
   transcriptPath: string;
+  /** The session's working dir (from the Stop payload) — authoritative for project scope; a hook's own
+   *  `process.cwd()` is not reliable (cf. `memory_reconcile.ts`, `stop_drive.ts`). Falls back to
+   *  `process.cwd()` when absent. */
+  cwd?: string;
   // Seams for tests:
   readEntries?: (path: string) => Promise<TranscriptMessageEntry[]>;
   resolveScope?: () => Promise<RecallScope>;
@@ -50,7 +54,9 @@ function lessonFromEntry(e: TranscriptMessageEntry, namespace: string | null): L
  */
 export async function ingestTurn(deps: IngestDeps): Promise<number> {
   const readEntries = deps.readEntries ?? readTranscriptEntries;
-  const resolveScope = deps.resolveScope ?? resolveRecallScope;
+  // Thread the payload cwd to the scope resolver (project-scope is per working repo); `resolveRecallScope`
+  // falls back to `process.cwd()` when `cwd` is undefined.
+  const resolveScope = deps.resolveScope ?? (() => resolveRecallScope(deps.cwd ?? process.cwd()));
   const entries = await readEntries(deps.transcriptPath);
   if (entries.length === 0) return 0;
   const { namespace } = await resolveScope();

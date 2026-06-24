@@ -109,4 +109,20 @@ describe('maybeIngestTurn (live wiring)', () => {
     });
     expect(n).toBe(0);
   });
+
+  it('threads the payload cwd to ingest (authoritative for project scope)', async () => {
+    const fake = fakeBackend();
+    let receivedCwd: string | undefined;
+    let receivedPath: string | undefined;
+    await maybeIngestTurn(JSON.stringify({ transcript_path: path, cwd: '/some/project' }), {
+      makeBackend: () => fake.backend,
+      ingest: (deps) => {
+        receivedCwd = deps.cwd;
+        receivedPath = deps.transcriptPath;
+        return Promise.resolve(1);
+      },
+    });
+    expect(receivedCwd).toBe('/some/project');
+    expect(receivedPath).toBe(path);
+  });
 });
