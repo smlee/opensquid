@@ -7,6 +7,33 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.522] - 2026-06-24
+
+### Added — deterministic coverage foundation (CFD.1, Track 0 of the 0.6.0 cutover) + removed the umbrella spec-citations test
+
+The 0.6.0 discipline rebuild replaces v1's flaky LLM-judge gates with **deterministic coverage over an in-repo,
+enumerated requirement manifest**. This lands the meta-foundation every later track is verified by.
+
+- `src/runtime/coverage/{schema,check,index_build,run}.ts` — a `Requirement` manifest (zod; `reachable` /
+  `absent` / `binding` / `proof` asserts, snake_case, fail-loud `.strict()` + superRefine) embedded in a
+  design's own in-repo file (`pack.yaml` `foundation.requirements` or a fenced `yaml requirements` block in
+  a git-tracked `.md`); a **pure** `checkCoverage` (no I/O, no LLM, no subprocess → byte-identical re-runs)
+  where the **proof-test is the uniform authority** (static reachability / ctx-key presence are advisory
+  pre-filters, never a veto) and `absent` is exact-token (so `escalate` ≠ `escalateLap`); a single-I/O
+  `buildCodeIndex` over the gated tree (`src/` + `packs/`, per `PROTECTED_PREFIXES`).
+- The seed manifest lives in `docs/ARCHITECTURE.md` §10 (the in-repo architecture home) — the five current,
+  expected-unmet gaps the v2 rebuild closes (state-keyed skills, audit-ctx, the three module deletions).
+- `scripts/coverage.ts` runs it **report-only** (prints the report, exit 0); `ci.test.ts` proves it re-derives
+  the gaps as `unmet` over the live tree, deterministically. The blocking gate + full-tree orphan gate are
+  later tracks.
+- **Removed `src/runtime/spec_citations.test.ts`** — the umbrella test asserted the existence of planning docs
+  in the separate, git-untracked loop workspace, so it could never resolve in opensquid CI (it was red on main)
+  and leaked the personal-workspace layout into the product. This deterministic manifest is its durable,
+  in-repo successor.
+
+Through the full coding-flow gate: GUESS_FREE + SPEC_COMPLETE + 7-phase ledger (task #40). Spec:
+`loop/docs/tasks/T-v2-coverage-foundation.md`; design: `loop/docs/research/T-v2-discipline-rebuild-pre-research-2026-06-24.md`.
+
 ## [0.5.521] - 2026-06-24
 
 ### Added — `fullstack-flow` v2 pack skeleton (Slice 1): the first real v2 `pack.yaml`, activating the dormant v2 runtime

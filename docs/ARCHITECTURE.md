@@ -266,3 +266,35 @@ Found during this mapping; each is a real disconnect to clean (drives the cleanu
 - **Onboarding / "what does what":** §1–§3.
 - **Finding stale/disconnected work:** §8 (kept in sync with the work-graph).
 - **Exact shapes/APIs:** follow the deep-dive links — this doc is the map, not the territory; keep the details single-sourced in those docs, and keep _this_ doc the authoritative map of how they connect.
+
+---
+
+## 10. Requirements manifest (CFD.1 — deterministic coverage)
+
+The 0.6.0 discipline rebuild's **in-repo requirement manifest**, verified deterministically by
+`src/runtime/coverage/` (report-only today). Each entry is checked against the code: `reachable`/`binding` are
+gated by their `proof`-test (the authority; static checks advisory), `absent` is the negative requirement
+(exact-token). The five seeds are the current, expected-unmet gaps Track 1 closes. Spec:
+`loop/docs/tasks/T-v2-coverage-foundation.md`.
+
+```yaml requirements
+requirements:
+  - id: R-SKILLS-PER-STATE
+    intent: 'the FSM state is the router — skills(S) bound on entry, unloaded on leave (SKILL.1)'
+    spec: 'ARCHITECTURE.md#4'
+    assert: { kind: reachable, symbol: onStateEntry, from: [pre-tool-use, post-tool-use] }
+    proof: 'src/runtime/skill/state_skills.live.test.ts'
+  - id: R-AUDIT-CTX
+    intent: 'guards can read guess/spec verdicts + phase state in buildGuardCtx'
+    assert: { kind: binding, ctx_key: 'verdict.guess', in: buildGuardCtx }
+    proof: 'src/runtime/loop/audit_ctx.test.ts'
+  - id: R-DELETE-SKILL-ROUTER
+    intent: 'the relevance-guessing router MODULE is gone (state is the router)'
+    assert: { kind: absent, symbol: skill_router }
+  - id: R-DELETE-SKILL-PREFILTER
+    intent: 'the skill prefilter MODULE is gone'
+    assert: { kind: absent, symbol: skill_prefilter }
+  - id: R-DELETE-DRIFT-RESPONSE
+    intent: 'the v1 6-policy drift_response MODULE is gone (incl. its auto_correct/escalate policies)'
+    assert: { kind: absent, symbol: drift_response }
+```
