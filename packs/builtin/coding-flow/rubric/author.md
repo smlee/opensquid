@@ -10,11 +10,15 @@ A task spec passes (`VERDICT: SPEC_COMPLETE`) ONLY if ALL FIVE hold:
    Files affected, Key code shapes, Test fixtures, Acceptance criteria, Risk callouts, References,
    Verification commands, 7-phase steps); every Key-code-shapes block is REAL code (not pseudocode); every
    7-phase step names concrete files/decisions.
-2. **100% SCOPE COVERAGE — no silent gaps** — the task set covers EVERY scoped element as captured in the
-   pre-research (which the SCOPE gate now requires to be COMPLETE — see SCOPE rubric §4), NOT merely the
-   pre-research's restatement of a slice. Every element maps to a task OR to a NAMED, TRACKED deferral (a
+2. **100% SCOPE COVERAGE — no silent gaps, no drift** — the task set covers EVERY scoped element as captured
+   in the pre-research (which the SCOPE gate now requires to be COMPLETE — see SCOPE rubric §4), NOT merely
+   the pre-research's restatement of a slice. Every element maps to a task OR to a NAMED, TRACKED deferral (a
    referenced open issue / explicit downstream dependency). A scoped element absent with no tracked owner,
    or a prose-only "deferred to a separate track" with no referenced issue, is a SILENT GAP → INCOMPLETE.
+   AND — re-anchoring against drift (SCOPE rubric §5) — every task must TRACE TO THE CAPTURED USER ASK, not
+   merely to the pre-research: a task covering a pre-research element that does not itself trace to the ask is
+   propagated drift → INCOMPLETE. Coverage is measured against the ask AND the pre-research, never the
+   pre-research alone (so a drift that slipped past SCOPE cannot launder itself into the spec).
 3. **WIRED / END-TO-END RELIABILITY** — each Deliverable's Acceptance criteria must prove the artifact works
    IN ITS LIVE PATH: wired into its real caller AND integration- or live-proven — not merely that a module
    exists and unit tests pass. A component that would satisfy its acceptance while having ZERO live callers

@@ -7,6 +7,33 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.523] - 2026-06-25
+
+### Added — anti-drift gate: deterministic core + live rubric criteria (CFD.2, foundational / 0.6.0)
+
+CFD.2 prevents agent-introduced scope from silently entering the coding-flow: an evidence-backed-but-**unasked**
+element is drift, caught by a deterministic predicate over the captured user ask — the **mirror of NEVER-GUESS**
+(§1 rejects the _unsourced_; the new §5 rejects the _unasked_). This slice ships the deterministic substrate +
+the live rubric criteria; the live `skill.yaml` gate wiring is the tracked follow-up.
+
+- `src/runtime/coverage/{captured_ask,anchors,anchor_universe,backlog}.ts` (+ tests, 23 new) — the
+  captured-ask anchor (union-until-freeze, per-task reset on both FSM reset edges); a **pure** `checkAnchors`
+  (the `check.ts` orphan join inverted: an element whose provenance anchor is not in the ask-closure is drift;
+  `ask_span` = whitespace-normalized substring containment, ids = exact membership); the anchor-universe
+  builder that **verifies the root edge** (a design-id is admitted only if its `ask_span` is a verbatim span
+  of the frozen ask — so the drift hole cannot move up a layer); a nice-to-have backlog (jsonl, dedup).
+- `packs/builtin/coding-flow/rubric/{scope,author}.md` — **LIVE**: scope §5 ON-TOPIC / NO UNASKED ADDITION
+  (+ nice-to-have→backlog / complementary→ask / unrelated→reject routing) and author §2 re-anchored to the
+  captured ask. Single-sourced (`read_rubric`), so both the audit AND `phase_inject` deliver them every turn.
+- The deterministic verdict is **derived** from the user's "100% confidence with backed evidence" — no LLM in
+  the anti-drift verdict. Dog-food: the regex-incident element is reported as drift end-to-end through the live
+  builder. Spec: `docs/tasks/T-anti-drift-gate.md`; pre-research: `docs/research/T-anti-drift-gate-pre-research-2026-06-25.md`.
+
+### Follow-up (tracked)
+
+- Live wiring: the captured-ask append/freeze/reset rules + the additive AUTHOR→CODE drift-gate precondition
+  in `scope-lifecycle/skill.yaml`; the backlog boundary-surfacing hook; the `context/AGENTS.md` baseline line.
+
 ## [0.5.522] - 2026-06-24
 
 ### Added — deterministic coverage foundation (CFD.1, Track 0 of the 0.6.0 cutover) + removed the umbrella spec-citations test
