@@ -786,14 +786,13 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
       await advanceFsmState(sid, 'coding-flow', pack.fsm!, ev, now); // → phases_complete
   }
 
-  it('SDG.1: scope stop WITHOUT AskUserQuestion this turn → BLOCK (exit 2)', async () => {
+  it('SIMPLIFY: scope stop (no question) → ALLOWED (scope is free)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
-    const sid = 'cf-sdg-block';
+    const sid = 'cf-scope-free';
     await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping
     const r = await dispatchEvent(stop, [pack], reg, sid);
-    expect(r.exitCode).toBe(2);
-    expect(r.stderr).toMatch(/SCOPE stop without a pending architecture-changing question/);
+    expect(r.exitCode).toBe(0); // scope = free: an in-scope stop is no longer guarded
   });
 
   it('SDG.1: scope stop WITH AskUserQuestion this turn → allowed', async () => {
@@ -833,23 +832,28 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     expect(r.stderr).not.toMatch(/DRIFT/);
   });
 
-  it('GF.6: pause/permission language stays WARN (exit 0, surfaced) — a retrospective detector', async () => {
+  it('SIMPLIFY: pause/permission language POST-SCOPE → WARN; IN-SCOPE → no warn (scope free)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
-    const reg = registry();
-    const sid = 'cf-af6-lang';
-    await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping (run active)
-    const r = await dispatchEvent(
-      { kind: 'prompt_submit', prompt: 'next', priorAssistantText: 'should i continue?' },
-      [pack],
-      reg,
-      sid,
-    );
-    expect(r.exitCode).toBe(0); // not block — blocking the next tool wouldn't undo the pause
-    expect(r.stderr).toMatch(/DRIFT/);
+    const lang = {
+      kind: 'prompt_submit' as const,
+      prompt: 'next',
+      priorAssistantText: 'should i continue?',
+    };
+    // In scope → no warn (scope is free).
+    const regScope = registry();
+    await dispatchEvent(scopePrompt, [pack], regScope, 'cf-lang-scope'); // → scoping
+    const inScope = await dispatchEvent(lang, [pack], regScope, 'cf-lang-scope');
+    expect(inScope.stderr).not.toMatch(/DRIFT/);
+    // Past scope → WARN (exit 0, retrospective; surfaced).
+    const sid = 'cf-lang-post';
+    const regPost = await toSpecAuthored(pack, sid); // → spec_authored (past scope)
+    const post = await dispatchEvent(lang, [pack], regPost, sid);
+    expect(post.exitCode).toBe(0);
+    expect(post.stderr).toMatch(/DRIFT/);
   });
 
-  // G-b (T-FLOW-REARM-GATE-HOLES / RH.2): the decision-deferral class is now caught.
-  it('G-b: decision-deferral language ("your call" / "unless you redirect") → WARN (not block)', async () => {
+  // G-b: the decision-deferral class is caught POST-SCOPE (scope is free; the WARN is retrospective).
+  it('G-b: decision-deferral language POST-SCOPE → WARN (not block)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     for (const prior of [
       'Take any of these into a track? your call.',
@@ -857,9 +861,8 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
       'Let me know which of these you want.',
       'Done — which one of these next, or none of these?',
     ]) {
-      const reg = registry();
       const sid = `cf-gb-${prior.length}`;
-      await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping (run active)
+      const reg = await toSpecAuthored(pack, sid); // → spec_authored (past scope)
       const r = await dispatchEvent(
         { kind: 'prompt_submit', prompt: 'next', priorAssistantText: prior },
         [pack],
@@ -880,21 +883,12 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     expect(r.stderr).toMatch(/DRIFT/);
   });
 
-  it('GF.6: Stop at researched (SCOPE done, AUTHOR owed) → BLOCK (exit 2)', async () => {
+  // SIMPLIFY: `researched` is in the FREE scope region — a researched stop is allowed (with or without a
+  // question; the in-scope guard was removed). Was BLOCK under SDG.1/CFD.3.
+  it('SIMPLIFY: Stop at researched → ALLOWED (researched is in the free scope region)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
-    const sid = 'cf-af6-stop-res';
+    const sid = 'cf-res-free';
     const reg = await toResearched(pack, sid); // → researched
-    const r = await dispatchEvent(stop, [pack], reg, sid);
-    expect(r.exitCode).toBe(2);
-  });
-
-  // CFD.3/PG.1 — the questioning window extends through `researched` ("until scoping ends"): a
-  // researched stop WITH AskUserQuestion this turn is a legitimate scope question → allowed.
-  it('CFD.3/PG.1: Stop at researched WITH AskUserQuestion this turn → allowed (exit 0)', async () => {
-    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
-    const sid = 'cf-pg1-res-ok';
-    const reg = await toResearched(pack, sid); // → researched
-    await appendTool(sid, 'AskUserQuestion'); // a fork is actually awaiting the user
     const r = await dispatchEvent(stop, [pack], reg, sid);
     expect(r.exitCode).toBe(0);
   });
@@ -1587,23 +1581,16 @@ describe('builtin coding-flow pack — request-type stop allow-signal (RTC.3, wg
     await rm(tempHome, { recursive: true, force: true });
   });
 
-  it('research-classified scope stop is ALLOWED with no AskUserQuestion (harness-portable)', async () => {
+  // SIMPLIFY: scope is FREE — a scope stop is allowed regardless of request-type (RTC.3 reverted; the
+  // stop path no longer reads request-type). Both research- and work-classified scope stops pass.
+  it('scope stop is ALLOWED regardless of request-type (scope free; RTC.3 reverted)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
-    const sid = 'rtc3-research';
-    await advanceFsmState(sid, 'coding-flow', pack.fsm!, 'scope_start', NOW); // scoping (armed by prior work)
-    await writeRequestType(sid, rtRec('research')); // current turn is a question
-    const r = await dispatchEvent(stop, [pack], registry(), sid);
-    expect(r.exitCode).toBe(0);
-    expect(r.stderr).not.toMatch(/SCOPE stop without/);
-  });
-
-  it('work-classified scope stop without AskUserQuestion still BLOCKS', async () => {
-    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
-    const sid = 'rtc3-work';
-    await advanceFsmState(sid, 'coding-flow', pack.fsm!, 'scope_start', NOW); // scoping
-    await writeRequestType(sid, rtRec('work'));
-    const r = await dispatchEvent(stop, [pack], registry(), sid);
-    expect(r.exitCode).toBe(2);
-    expect(r.stderr).toMatch(/SCOPE stop without a pending architecture-changing question/);
+    for (const type of ['research', 'work'] as const) {
+      const sid = `rtc3-${type}`;
+      await advanceFsmState(sid, 'coding-flow', pack.fsm!, 'scope_start', NOW); // scoping
+      await writeRequestType(sid, rtRec(type));
+      const r = await dispatchEvent(stop, [pack], registry(), sid);
+      expect(r.exitCode).toBe(0);
+    }
   });
 });

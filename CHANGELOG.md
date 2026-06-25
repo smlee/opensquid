@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.525] - 2026-06-25
+
+### Changed — pause guard simplified to one consistent rule: scope free, post-scope reject all
+
+The pause guard had become inconsistent: it declared "only architecture-changing questions justify a pause"
+but never checked the _kind_ (the tool ledger sees only that `AskUserQuestion` ran, not its content), the
+legitimacy logic was fragmented across rules, and it guarded the SCOPE phase that is meant to be free.
+Collapsed to one phase-only deterministic rule — **scope region (scoping/researching/researched) is free;
+past scope every stop/question is rejected (block + inject the bundle); run to done.** No kind-determination
+anywhere.
+
+- `pause-stop-guard/skill.yaml` — deleted the `scope-stop-needs-a-question` rule (the in-scope guard);
+  `no-stop-mid-run` (post-scope stops) is now the only stop rule; the inline comment + `prose:` block
+  rewritten to the one-boundary model.
+- `pause-prevention/skill.yaml` — phase-gated `no-pause-language` to post-scope (it was run-active-gated, so
+  it fired in the now-free scope region); `no-question-after-scope` unchanged; header + prose corrected.
+- `procedure.md` `## On a BLOCK` — replaced the "architecture-changing question" directive with the simple
+  rule (pauses/questions fine in scope; none past scope).
+- `docs/ARCHITECTURE.md` — corrected four stale claims that the stop guard reads `request-type` (it reads FSM
+  - open-count; only the _arm_ path reads request-type).
+- **Reverts** SDG.1 (in-scope deferral catch), CFD.3's scope-side nuance, and RTC.3 (`request-type` stop
+  allow-signal — moot now that scope is unconditionally free). Tests updated accordingly; full suite 4173
+  green. Spec: `docs/tasks/T-pause-guard-simplify.md`.
+
 ## [0.5.524] - 2026-06-25
 
 ### Changed — pause-guard sharpened: researched boundary + architecture-only + inject-on-pause (CFD.3)

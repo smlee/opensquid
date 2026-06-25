@@ -15,13 +15,12 @@ rules:
         as: st
       - call: open_task_count
         as: open
-      # GF.6 (F8): HARD-BLOCK the stop past SCOPE. CFD.3/PG.1: `researched` is moved OUT of this
-      # unconditional block — it is now governed by `scope-stop-needs-a-question` (a `researched`
-      # stop is allowed iff AskUserQuestion ran this turn; the user's questioning window runs
-      # "until scoping ends" = through researched). Depletion auto-OFF preserved: `idle` and
-      # `phases_complete` with ZERO open tasks are NOT flagged. CFD.3/PG.4: on the pause, inject
-      # the phase bundle (procedure + rubric) via `phase_bundle_text` — GATED by the same
-      # condition so the procedure/rubric I/O only runs when the pause actually fires.
+      # GF.6 (F8): HARD-BLOCK the stop PAST SCOPE only. The whole scope region
+      # (scoping/researching/researched) is FREE — no in-scope pause guard (user 2026-06-25:
+      # "reject all pauses post scoping; no guard needed in scope"). Depletion auto-OFF preserved:
+      # `idle` and `phases_complete` with ZERO open tasks are NOT flagged. On the pause, inject the
+      # phase bundle (procedure + rubric) via `phase_bundle_text` — GATED by the same condition so
+      # the I/O only runs when the pause actually fires.
       - call: phase_bundle_text
         if: 'st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight" || (st == "phases_complete" && open.count > 0)'
         as: bundle
@@ -38,55 +37,9 @@ rules:
 
 
             {{bundle.text}}
-  # SDG.1 (wg-66307bc8af35) — the SCOPE-stop exception was unconditional, so a
-  # decision-DEFERRAL pause ("your call", "say the word") slipped through at
-  # scoping between slices. The precise allow-signal: a SCOPE stop is
-  # legitimate iff a fork is ACTUALLY awaiting the user — AskUserQuestion ran
-  # this turn (the tool ledger is written at PreToolUse, immune to the stop
-  # text's off-by-one that killed the text-match design; see the
-  # pre-research). A prose question gets blocked once and re-posed through
-  # the tool — the structured-fork upgrade is intended.
-  - id: scope-stop-needs-a-question
-    process:
-      - call: read_fsm_state
-        as: st
-      - call: session_tool_history
-        args:
-          scope: current_turn
-          filter_names: [AskUserQuestion]
-        as: asked
-      # RTC.3 (wg-3d175ec06767): a research-classified turn (understand-only / a question) never
-      # armed the flow and owes no structured fork — its stop is legitimate on ANY harness. Reading
-      # the harness-NEUTRAL request-type record (not the Claude-only AskUserQuestion-ran signal) is
-      # the portable allow-signal that fixes cause-2 of the codex-pause-wedge (codex has no
-      # AskUserQuestion). Null-safe: absent record → rt.type undefined → `rt.type != "research"` true
-      # → preserves today's block (AskUserQuestion stays an additional allow-signal via asked.count).
-      - call: read_state
-        args:
-          key: request-type
-        as: rt
-      # CFD.3/PG.1: the questioning window extends through `researched` ("until scoping ends").
-      # CFD.3/PG.4: inject the phase bundle on the pause (gated by the same condition).
-      - call: phase_bundle_text
-        if: '(st == "scoping" || st == "researching" || st == "researched") && asked.count == 0 && rt.type != "research"'
-        as: bundle
-      - call: verdict
-        if: '(st == "scoping" || st == "researching" || st == "researched") && asked.count == 0 && rt.type != "research"'
-        args:
-          level: block
-          message: >-
-            DRIFT: a SCOPE stop without a pending architecture-changing question. A stop during
-            SCOPE is for awaiting a genuine user answer — and only an ARCHITECTURE-CHANGING
-            question justifies it; pose the fork via AskUserQuestion (state the options, ask it),
-            or continue the research. A clarification / permission / deferral ("your call", "say
-            the word") is not a pause ticket.
-
-
-            {{bundle.text}}
 prose: |
-  Stopping during AUTHOR or EXECUTE — or at phases_complete with open tasks remaining — is
-  drift, and is now HARD-BLOCKED (GF.6). The only legitimate pause is a genuine
-  user-question during the interactive SCOPE phase — and SDG.1 makes that literal: a stop at
-  scoping/researching is allowed only when AskUserQuestion ran this turn (a fork is actually
-  awaiting the user); a deferral is not a pause ticket. Everything downstream runs to
-  depletion. A depleted run (idle, or phases_complete with zero open tasks) stops freely.
+  Scope is FREE — no in-scope pause guard (pauses/questions are fine during the interactive SCOPE
+  phase: scoping/researching/researched). PAST SCOPE every stop is HARD-BLOCKED (GF.6) until the
+  backlog is depleted — do not pause, continue to the next phase/task. A depleted run (idle, or
+  phases_complete with zero open tasks) stops freely. On any post-scope pause the phase bundle
+  (procedure + rubric) is injected so the agent resumes with the full how-to-complete context.

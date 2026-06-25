@@ -40,7 +40,6 @@ criteria the audit applies. Follow both: this tells you the steps; the rubric te
 
 Do the block's **named step** (write the pre-research / pass the audit / `TaskCreate`). Never
 narrate-and-stop, never `--no-verify` (a PreToolUse gate ignores it), never permission-fish. If the
-named step errors, fix that and retry **inside** the flow. A pause is justified ONLY by an
-**architecture-changing question during SCOPE** (the _complementary_ class — it changes the
-design/structure); a clarification, a permission/confirm, or a deferral is NOT a pause ticket — fill it
-from the evidence, or it belonged in scope. Past SCOPE, no questions at all.
+named step errors, fix that and retry **inside** the flow. Pauses and questions are fine DURING scope
+(the interactive phase). **Past scope there are none** — no stop, no question — run to done; any pause
+past scope is drift and will be blocked.

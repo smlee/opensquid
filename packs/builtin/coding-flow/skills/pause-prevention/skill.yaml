@@ -1,8 +1,9 @@
 # pause-prevention (AF.6) — the tool_call + prompt_submit pause-gates. Two rules, each
 # naturally event-gated (the AskUserQuestion rule no-ops without a tool; the language rule
-# no-ops without priorAssistantText), so one skill on both triggers is safe. Both fire only
-# during an ACTIVE run — derived: FSM != idle AND (open tasks remain OR FSM != phases_complete).
-# Run-active turns ON at scope-start and OFF when the backlog is depleted (user ruling).
+# no-ops without priorAssistantText), so one skill on both triggers is safe. Both fire ONLY PAST
+# SCOPE — neither touches the FREE scope region (scoping/researching/researched). Post-scope is
+# derived: FSM not in {idle,scoping,researching,researched} AND (open tasks remain OR not
+# phases_complete). Off when the backlog is depleted (user ruling 2026-06-25: scope free).
 name: pause-prevention
 load: preload
 when_to_load: []
@@ -68,10 +69,10 @@ rules:
       # CFD.3/PG.4: inject the phase bundle on this warn too (user's "any type of pause"),
       # GATED by the same condition so the I/O only runs when the warn fires.
       - call: phase_bundle_text
-        if: 'len(paused.matched) > 0 && st != "idle" && (open.count > 0 || st != "phases_complete")'
+        if: 'len(paused.matched) > 0 && st != "idle" && st != "scoping" && st != "researching" && st != "researched" && (open.count > 0 || st != "phases_complete")'
         as: bundle
       - call: verdict
-        if: 'len(paused.matched) > 0 && st != "idle" && (open.count > 0 || st != "phases_complete")'
+        if: 'len(paused.matched) > 0 && st != "idle" && st != "scoping" && st != "researching" && st != "researched" && (open.count > 0 || st != "phases_complete")'
         args:
           level: warn
           message: >-
@@ -83,7 +84,7 @@ rules:
 
             {{bundle.text}}
 prose: |
-  Two pause-gates that fire ONLY during an active run (FSM != idle AND backlog not depleted):
-  an AskUserQuestion past SCOPE (GF.6: HARD-BLOCK — the real-time pause action), and
-  pause/permission LANGUAGE in the settled prior turn (priorAssistantText, kept WARN — a
-  retrospective detector). The automated phases take no pauses; questions live in SCOPE.
+  Two POST-SCOPE pause-gates (scope is FREE; both fire only past the scope region): an
+  AskUserQuestion past SCOPE (GF.6: HARD-BLOCK — the real-time pause action), and pause/permission
+  LANGUAGE in the settled prior turn (priorAssistantText, WARN — a retrospective detector, now
+  post-scope only). The automated phases take no pauses; pauses/questions live in SCOPE.

@@ -52,7 +52,7 @@ The five load-bearing connections (memorize these — they are where disconnecti
 2. **Flows WRITE memory.** `log_phase` writes the phase ledger; audits read the rubric docs; the
    request-type record + FSM state are session memory the gates read.
 3. **Memory FEEDS packs/flows.** `recall` (+ `recall_pre_inject`) is what the agent knows each turn;
-   the request-type + FSM records drive the arm decision and the stop guards.
+   the request-type + FSM records drive the arm decision (the stop guard reads FSM + open-count only).
 4. **Runtime THREADS packs.** dispatch reads each pack's `procedure`/`models`/`fsm` and threads them
    to primitives; the primitives run the gates and inject memory/rubric/procedure.
 5. **Install WIRES all of it.** setup writes the hooks (`~/.claude/settings.json`), the MCP servers
@@ -82,7 +82,7 @@ agent acts (Write/Edit/Bash/git/...)
         └─ git commit → execute-gate (in-session NUDGE)        [git gate.ts = the HARD boundary]
   └─▶ PostToolUse hook → phase-advance (after log_phase)        → STATE (FSM) + MEMORY (phase ledger)
 agent stops
-  └─▶ Stop hook → pause-stop-guard (reads request-type + FSM), maybeDriveInbound/streamOutput (CHAT)
+  └─▶ Stop hook → pause-stop-guard (reads FSM + open-count), maybeDriveInbound/streamOutput (CHAT)
 session ends
   └─▶ SessionEnd hook → reconcile memory, compression, auto-handoff, clearFsmState
 ```
@@ -152,7 +152,7 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 - **Touchpoints:** the FSM IS a PACK side-file; the gates run via RUNTIME primitives (`cached_audit` spawns
   subagents); the audits read the rubric DOCS and write the FSM STATE; `log_phase` writes MEMORY (phase ledger);
   `gate.ts` reads session STATE written by the hooks; the request-type record (written by the UPS hook) is read by
-  enter-scoping + the stop guards. **Two-layer design:** in-session gates = best-effort NUDGE; `gate.ts` = fail-closed.
+  enter-scoping (the arm path). **Two-layer design:** in-session gates = best-effort NUDGE; `gate.ts` = fail-closed.
 
 ### 4.5 Memory
 
@@ -179,14 +179,14 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 
 ## 5. Relationship matrix — "if I change ROW, it affects COLUMN"
 
-| ↓ change / → affects | Install                                                 | Runtime                             | Packs                            | Flows                                | Memory                               | Chat                           |
-| -------------------- | ------------------------------------------------------- | ----------------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------ | ------------------------------ |
-| **Install/Setup**    | —                                                       | hooks must re-register              | pack discovery (`active.json`)   | gate install                         | store/scope paths                    | daemon tokens+routing          |
-| **Runtime**          | hook bin names ↔ `package.json` `bin` + settings-writer | —                                   | dispatch threading of side-files | primitives the gates call            | recall/state primitives              | inbox drain + chat_send        |
-| **Packs**            | —                                                       | new side-file ⇒ thread in dispatch  | —                                | **coding-flow pack = the FSM+gates** | models.yaml ⇒ embedder; recall rules | chat_agent.yaml                |
-| **Flows**            | gate.ts ↔ git hooks                                     | audit primitives, classifier in UPS | the coding-flow pack content     | —                                    | log_phase ⇒ ledger; rubric docs      | stop-guard reads request-type  |
-| **Memory**           | store/db paths                                          | recall/recall_pre_inject shape      | recall hits feed pack rules      | request-type/FSM records drive gates | —                                    | umbrella namespace = scope key |
-| **Chat**             | channels.json/config.json                               | inbound event → hooks               | chat_agent binding               | —                                    | umbrella key = memory namespace      | —                              |
+| ↓ change / → affects | Install                                                 | Runtime                             | Packs                            | Flows                                | Memory                               | Chat                              |
+| -------------------- | ------------------------------------------------------- | ----------------------------------- | -------------------------------- | ------------------------------------ | ------------------------------------ | --------------------------------- |
+| **Install/Setup**    | —                                                       | hooks must re-register              | pack discovery (`active.json`)   | gate install                         | store/scope paths                    | daemon tokens+routing             |
+| **Runtime**          | hook bin names ↔ `package.json` `bin` + settings-writer | —                                   | dispatch threading of side-files | primitives the gates call            | recall/state primitives              | inbox drain + chat_send           |
+| **Packs**            | —                                                       | new side-file ⇒ thread in dispatch  | —                                | **coding-flow pack = the FSM+gates** | models.yaml ⇒ embedder; recall rules | chat_agent.yaml                   |
+| **Flows**            | gate.ts ↔ git hooks                                     | audit primitives, classifier in UPS | the coding-flow pack content     | —                                    | log_phase ⇒ ledger; rubric docs      | stop-guard reads FSM + open-count |
+| **Memory**           | store/db paths                                          | recall/recall_pre_inject shape      | recall hits feed pack rules      | request-type/FSM records drive gates | —                                    | umbrella namespace = scope key    |
+| **Chat**             | channels.json/config.json                               | inbound event → hooks               | chat_agent binding               | —                                    | umbrella key = memory namespace      | —                                 |
 
 Read a row before you change that subsystem. Each non-empty cell is a place that can break.
 
