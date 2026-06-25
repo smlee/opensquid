@@ -14,7 +14,7 @@
  * The S1 spike PROVED spawn-a-lap is safe (a nested `--dangerously-skip-permissions` lap's ungated
  * commit was blocked by the gate), so this loop spawns laps directly rather than via Alternative F.
  */
-import type { Issue, WorkGraphStore, ClaimAudience } from '../../workgraph/types.js';
+import type { Issue, WorkGraphFacade, ClaimAudience } from '../../workgraph/types.js';
 import type { HumanRequiredReason } from './lap_outcome.js';
 import type { LapResult, SuperviseOpts } from './supervisor.js';
 import { superviseLap } from './supervisor.js';
@@ -47,7 +47,7 @@ export interface RalphResult {
 }
 
 export interface RalphDeps {
-  wg: WorkGraphStore;
+  wg: WorkGraphFacade;
   /** Env-derived claim audience (GR.1 — never caller input). */
   claimAudience: () => ClaimAudience;
   /** Run ONE lap for an item → its typed outcome + cost. The CLI wraps `claude -p RALPH.md` + parseLapOutcome. */
@@ -139,7 +139,7 @@ export type RecordMisclassification = (
 export async function resolveParked(
   itemId: string,
   deps: {
-    wg: WorkGraphStore;
+    wg: WorkGraphFacade;
     recordMisclassification: RecordMisclassification;
     sessionId: string;
     nowIso: string;

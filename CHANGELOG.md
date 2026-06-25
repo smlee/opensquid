@@ -7,6 +7,35 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.526] - 2026-06-25
+
+### Changed — work-graph is now per-project (was a single global backlog)
+
+The work-graph was global: one `~/.opensquid/workgraph.db` keyed only on `OPENSQUID_HOME`, so every repo shared
+one backlog. This blocks a guard-visible "done = no ready work" check (it would count issues from every
+project). Project-scoped it the simplest correct way — **one shared store, one global Lamport clock**, with
+`project` threaded as a method parameter and a per-project facade bound at resolution time.
+
+- `workgraph/types.ts` — `WgOp` gains `project`; every `WorkGraphStore` method takes `project` first; new
+  `WorkGraphFacade` (the same surface minus `project`, what handlers call).
+- `workgraph/store.ts` — `project TEXT NOT NULL DEFAULT 'legacy-global'` column on `wg_ops`/`wg_issues`/
+  `wg_edges` (plain column, NOT in any PK — ids are globally unique) via the existing idempotent
+  `ALTER TABLE ADD COLUMN` path; reads filter `WHERE project = ?`, writes stamp it; `bindProject` yields the
+  per-project facade. The single `client` + `hwm` + global `init()` Lamport seed are **unchanged** → op-ids
+  stay unique (`makeOpId` untouched). `rebuildWorkGraph` defaults a missing op-file `project` to
+  `'legacy-global'` (legacy op-files predate the field).
+- `workgraph/events.ts` — `applyOp` stamps `project` on the `issue_created`/`dep_added` INSERTs.
+- `mcp/server.ts` — one shared base store + `resolveWgProject()` (the kanban session→cwd→marker chain, but
+  **degrading** a marker-less session to `'legacy-global'` per the `set_goal.ts:35` precedent, not the kanban
+  throw) + a memoized per-project facade. Handler call-sites unchanged.
+- `runtime/handoff/{collect,write}.ts`, `setup/cli/ralph.ts`, `runtime/ralph/orchestrator.ts` — the other
+  work-graph consumers resolve their cwd's project and operate on the bound facade.
+- `docs/ARCHITECTURE.md` — note the work-graph is per-project.
+
+Migration is transparent: existing rows/op-files fold into the `'legacy-global'` bucket, which a marker-less
+session also resolves to — so prior behavior is preserved. Unblocks the pause-guard "done = no ready work" fix
+(its own follow-on slice).
+
 ## [0.5.525] - 2026-06-25
 
 ### Changed — pause guard simplified to one consistent rule: scope free, post-scope reject all

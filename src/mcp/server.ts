@@ -60,7 +60,7 @@ import {
   resolveProjectUuidFromEnv,
 } from '../runtime/paths.js';
 import { readSessionCwd } from '../runtime/session_state.js';
-import { workGraphStore } from '../workgraph/store.js';
+import { bindProject, workGraphStore } from '../workgraph/store.js';
 
 import type { RagBackend } from '../rag/types.js';
 
@@ -114,7 +114,7 @@ import {
   handleKanbanSync,
 } from './tools/kanban.js';
 
-import type { WorkGraphStore } from '../workgraph/types.js';
+import type { WorkGraphFacade, WorkGraphStore } from '../workgraph/types.js';
 
 /**
  * Lazy wedge lesson-store singleton (retire-Rust RES-3c — store_lesson no longer
@@ -145,10 +145,11 @@ async function ragBackend(): Promise<RagBackend> {
 /**
  * Lazy work-graph store singleton (T-WORKGRAPH-MCP). Promise-memoized so concurrent first-calls
  * await a single `init()` (one schema creation). Dedicated `~/.opensquid/workgraph.db` + per-op
- * git source under `store/issues`.
+ * git source under `store/issues`. T-WORKGRAPH-PROJECT-SCOPE: this is the ONE shared base store (one
+ * client, one global Lamport clock) — handlers reach it through a per-project facade (`getWorkGraph`).
  */
 let workGraphPromise: Promise<WorkGraphStore> | null = null;
-function getWorkGraph(): Promise<WorkGraphStore> {
+function getWorkGraphBase(): Promise<WorkGraphStore> {
   workGraphPromise ??= (async () => {
     const store = workGraphStore({
       dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
@@ -158,6 +159,38 @@ function getWorkGraph(): Promise<WorkGraphStore> {
     return store;
   })();
   return workGraphPromise;
+}
+
+/**
+ * Resolve the workgraph project namespace SERVER-SIDE (T-WORKGRAPH-PROJECT-SCOPE) — same
+ * session→cwd→marker chain as `resolveKanbanProject`, but DEGRADES a null at any step to
+ * `'legacy-global'` (the `set_goal.ts:35` precedent, NOT the kanban throw): the read-heavy workgraph
+ * must not break a marker-less session. The bucket equals the schema/replay DEFAULT, so a degraded
+ * session sees exactly the legacy/un-scoped backlog.
+ */
+async function resolveWgProject(): Promise<string> {
+  const session = await resolveMcpSessionId();
+  if (session === null) return 'legacy-global';
+  const cwd = await readSessionCwd(session);
+  const markerUuid = cwd === null ? null : ((await resolveProjectMarker(cwd))?.uuid ?? null);
+  return markerUuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';
+}
+
+/**
+ * The handler-facing work-graph accessor: resolves the caller's project and returns a per-project
+ * {@link WorkGraphFacade} over the ONE shared base store. Facades are memoized per project (each is a
+ * thin binding of `project` onto the shared store/client/clock). Handler call-sites are unchanged.
+ */
+const wgFacades = new Map<string, WorkGraphFacade>();
+async function getWorkGraph(): Promise<WorkGraphFacade> {
+  const base = await getWorkGraphBase();
+  const project = await resolveWgProject();
+  let facade = wgFacades.get(project);
+  if (facade === undefined) {
+    facade = bindProject(base, project);
+    wgFacades.set(project, facade);
+  }
+  return facade;
 }
 
 /**

@@ -19,7 +19,15 @@ import { atomicWriteFile, safeRecordId } from '../storage/atomic_file.js';
 
 import { applyOp, makeOpId } from './events.js';
 
-import type { ClaimAudience, EdgeType, Issue, IssueStatus, WgOp, WorkGraphStore } from './types.js';
+import type {
+  ClaimAudience,
+  EdgeType,
+  Issue,
+  IssueStatus,
+  WgOp,
+  WorkGraphFacade,
+  WorkGraphStore,
+} from './types.js';
 
 const EDGE_TYPES = new Set<EdgeType>(['blocks', 'parent-child', 'discovered-from', 'related']);
 
@@ -66,22 +74,30 @@ const rowToIssue = (r: Row): Issue => {
 };
 
 async function createSchema(client: Client): Promise<void> {
+  // T-WORKGRAPH-PROJECT-SCOPE: `project` is a plain column (NOT in any PK — ids are globally unique), DEFAULT
+  // 'legacy-global' so pre-existing rows backfill via the idempotent ADD COLUMN below + the rebuild replay.
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_ops (
     id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, lamport INTEGER NOT NULL,
-    type TEXT NOT NULL, payload TEXT NOT NULL, ts TEXT NOT NULL);`);
+    type TEXT NOT NULL, payload TEXT NOT NULL, ts TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT 'legacy-global');`);
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_issues (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     lww INTEGER NOT NULL DEFAULT 0,
-    claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT, wedge_reason TEXT);`);
+    claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT, wedge_reason TEXT,
+    project TEXT NOT NULL DEFAULT 'legacy-global');`);
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_edges (
-    edge_key TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL);`);
-  // GR.1/GR.3 — additive claim + wedge columns for a pre-existing wg_issues (idempotent; already-migrated throws).
+    edge_key TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT 'legacy-global');`);
+  // GR.1/GR.3 + project — additive columns for a pre-existing schema (idempotent; already-migrated throws).
   for (const ddl of [
     `ALTER TABLE wg_issues ADD COLUMN claim_token TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN claim_audience TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN claim_expires_at TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN wedge_reason TEXT`,
+    `ALTER TABLE wg_ops ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
+    `ALTER TABLE wg_issues ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
+    `ALTER TABLE wg_edges ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
   ]) {
     try {
       await client.execute(ddl);
@@ -100,14 +116,20 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
     return client;
   };
 
-  const getIssue = async (id: string): Promise<Issue | null> => {
-    const rs = await db().execute({ sql: 'SELECT * FROM wg_issues WHERE id = ?', args: [id] });
+  // project-scoped: reads filter by it. (id is globally unique, so the filter is also an isolation guard.)
+  const getIssue = async (project: string, id: string): Promise<Issue | null> => {
+    const rs = await db().execute({
+      sql: 'SELECT * FROM wg_issues WHERE id = ? AND project = ?',
+      args: [id, project],
+    });
     const row = rs.rows[0];
     return row ? rowToIssue(row) : null;
   };
 
-  // Append one op: file-first (git truth) when sourceDir set, then wg_ops, then fold the projection.
+  // Append one op: file-first (git truth) when sourceDir set, then wg_ops, then fold the projection. The
+  // single `hwm` stays GLOBAL (one clock) → distinct lamports → unique op-ids; `project` is stamped on the op.
   async function appendOp(
+    project: string,
     issueId: string,
     type: WgOp['type'],
     payload: Record<string, unknown>,
@@ -121,6 +143,7 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       lamport,
       type,
       payload: fullPayload,
+      project,
     };
     if (opts.sourceDir !== undefined) {
       await atomicWriteFile(
@@ -129,8 +152,8 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       );
     }
     await db().execute({
-      sql: 'INSERT INTO wg_ops (id, issue_id, lamport, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
-      args: [op.id, op.issueId, op.lamport, op.type, JSON.stringify(op.payload), ts],
+      sql: 'INSERT INTO wg_ops (id, issue_id, lamport, type, payload, ts, project) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      args: [op.id, op.issueId, op.lamport, op.type, JSON.stringify(op.payload), ts, op.project],
     });
     await applyOp(db(), op);
   }
@@ -145,80 +168,85 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
 
     getIssue,
 
-    async createIssue({ title, body = '' }) {
+    async createIssue(project, { title, body = '' }) {
       const id = newIssueId(title);
-      await appendOp(id, 'issue_created', { title, body });
-      const issue = await getIssue(id);
+      await appendOp(project, id, 'issue_created', { title, body });
+      const issue = await getIssue(project, id);
       if (issue === null) throw new Error('workgraph: createIssue failed to project');
       return issue;
     },
 
-    async listIssues(filter) {
+    async listIssues(project, filter) {
       const rs =
         filter?.status !== undefined
           ? await db().execute({
-              sql: 'SELECT * FROM wg_issues WHERE status = ? ORDER BY created_at',
-              args: [filter.status],
+              sql: 'SELECT * FROM wg_issues WHERE project = ? AND status = ? ORDER BY created_at',
+              args: [project, filter.status],
             })
-          : await db().execute('SELECT * FROM wg_issues ORDER BY created_at');
+          : await db().execute({
+              sql: 'SELECT * FROM wg_issues WHERE project = ? ORDER BY created_at',
+              args: [project],
+            });
       return rs.rows.map(rowToIssue);
     },
 
-    async updateIssue(id, patch) {
-      const cur = await getIssue(id);
+    async updateIssue(project, id, patch) {
+      const cur = await getIssue(project, id);
       if (cur === null) throw new Error(`workgraph: no issue ${id}`);
       const payload: Record<string, unknown> = {};
       if (patch.title !== undefined) payload.title = patch.title;
       if (patch.body !== undefined) payload.body = patch.body;
       if (patch.status !== undefined) payload.status = patch.status;
-      await appendOp(id, 'issue_set', payload);
-      const next = await getIssue(id);
+      await appendOp(project, id, 'issue_set', payload);
+      const next = await getIssue(project, id);
       if (next === null) throw new Error('workgraph: updateIssue lost the issue');
       return next;
     },
 
-    async addEdge(fromId, toId, type) {
+    async addEdge(project, fromId, toId, type) {
       if (!EDGE_TYPES.has(type)) throw new Error(`workgraph: bad edge type ${type}`);
       if (fromId === toId) throw new Error('workgraph: self-edge rejected');
-      if ((await getIssue(fromId)) === null || (await getIssue(toId)) === null) {
+      if ((await getIssue(project, fromId)) === null || (await getIssue(project, toId)) === null) {
         throw new Error('workgraph: edge endpoint missing');
       }
-      await appendOp(fromId, 'dep_added', { from: fromId, to: toId, type });
+      await appendOp(project, fromId, 'dep_added', { from: fromId, to: toId, type });
     },
 
-    async listReady() {
+    async listReady(project) {
       // Open, unblocked, AND not live-claimed. A claim with claim_expires_at <= now is treated as
-      // unclaimed (query-time expiry — no reaper). ISO-8601 UTC sorts lexically == chronologically.
+      // unclaimed (query-time expiry — no reaper). ISO-8601 UTC sorts lexically == chronologically. The
+      // outer query is project-scoped; the NOT-IN subquery stays unscoped — edge endpoints are same-project
+      // (addEdge's getIssue check) and ids are globally unique, so it's correct without a filter.
       const now = new Date().toISOString();
       const rs = await db().execute({
-        sql: `SELECT * FROM wg_issues WHERE status = 'open'
+        sql: `SELECT * FROM wg_issues WHERE project = ? AND status = 'open'
           AND (claim_token IS NULL OR claim_expires_at <= ?)
           AND wedge_reason IS NULL
           AND id NOT IN (
             SELECT e.to_id FROM wg_edges e JOIN wg_issues x ON x.id = e.from_id
             WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_at`,
-        args: [now],
+        args: [project, now],
       });
       return rs.rows.map(rowToIssue);
     },
 
-    async wedgeMark(id, reason: string) {
-      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      await appendOp(id, 'wedge_marked', { reason });
+    async wedgeMark(project, id, reason: string) {
+      if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(project, id, 'wedge_marked', { reason });
     },
 
-    async clearWedge(id) {
-      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      await appendOp(id, 'wedge_cleared', {});
+    async clearWedge(project, id) {
+      if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(project, id, 'wedge_cleared', {});
     },
 
-    async releaseClaim(id) {
-      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      await appendOp(id, 'claim_released', {});
+    async releaseClaim(project, id) {
+      if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(project, id, 'claim_released', {});
     },
 
-    async claimIssue(id, audience: ClaimAudience, ttlSec) {
-      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+    async claimIssue(project, id, audience: ClaimAudience, ttlSec) {
+      if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
       const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
       // Unique per attempt → robust read-back (no two claims collide even at the same ms/expiry).
       const claimToken =
@@ -227,16 +255,16 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
           .update(`${id}\n${String(Date.now())}\n${String(Math.random())}`)
           .digest('hex')
           .slice(0, 16);
-      await appendOp(id, 'claim_acquired', { claimToken, audience, expiresAt });
+      await appendOp(project, id, 'claim_acquired', { claimToken, audience, expiresAt });
       // applyOp ran the conditional CAS; we won iff OUR token is the one that landed.
-      const cur = await getIssue(id);
+      const cur = await getIssue(project, id);
       return { won: cur?.claimToken === claimToken, expiresAt };
     },
 
-    async listEvents(issueId) {
+    async listEvents(project, issueId) {
       const rs = await db().execute({
-        sql: 'SELECT id, issue_id, lamport, type, payload FROM wg_ops WHERE issue_id = ? ORDER BY lamport, id',
-        args: [issueId],
+        sql: 'SELECT id, issue_id, lamport, type, payload, project FROM wg_ops WHERE issue_id = ? AND project = ? ORDER BY lamport, id',
+        args: [issueId, project],
       });
       return rs.rows.map(
         (r): WgOp => ({
@@ -245,9 +273,31 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
           lamport: num(r.lamport),
           type: str(r, 'type') as WgOp['type'],
           payload: JSON.parse(str(r, 'payload') || '{}') as Record<string, unknown>,
+          project: str(r, 'project'),
         }),
       );
     },
+  };
+}
+
+/**
+ * T-WORKGRAPH-PROJECT-SCOPE — bind a `project` to the single shared store, yielding the per-project
+ * {@link WorkGraphFacade} the MCP handlers call (same signatures, `project` injected). `init` is omitted —
+ * the base store is initialized once by the caller (`getWorkGraph`).
+ */
+export function bindProject(base: WorkGraphStore, project: string): WorkGraphFacade {
+  return {
+    createIssue: (input) => base.createIssue(project, input),
+    getIssue: (id) => base.getIssue(project, id),
+    listIssues: (filter) => base.listIssues(project, filter),
+    updateIssue: (id, patch) => base.updateIssue(project, id, patch),
+    addEdge: (fromId, toId, type) => base.addEdge(project, fromId, toId, type),
+    listReady: () => base.listReady(project),
+    claimIssue: (id, audience, ttlSec) => base.claimIssue(project, id, audience, ttlSec),
+    wedgeMark: (id, reason) => base.wedgeMark(project, id, reason),
+    clearWedge: (id) => base.clearWedge(project, id),
+    releaseClaim: (id) => base.releaseClaim(project, id),
+    listEvents: (issueId) => base.listEvents(project, issueId),
   };
 }
 
@@ -275,13 +325,17 @@ export async function rebuildWorkGraph(opts: {
   }
   const ops: WgOp[] = [];
   for (const f of files) {
-    ops.push(JSON.parse(await readFile(join(opts.sourceDir, f), 'utf8')) as WgOp);
+    const op = JSON.parse(await readFile(join(opts.sourceDir, f), 'utf8')) as WgOp;
+    // Legacy op-files predate `project` (T-WORKGRAPH-PROJECT-SCOPE): default a missing one to 'legacy-global'
+    // so the replay folds them into the global bucket (mirrors the schema DEFAULT + the resolution degrade).
+    if (typeof op.project !== 'string' || op.project === '') op.project = 'legacy-global';
+    ops.push(op);
   }
   ops.sort((a, b) => a.lamport - b.lamport || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   for (const op of ops) {
     await client.execute({
-      sql: 'INSERT OR IGNORE INTO wg_ops (id, issue_id, lamport, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      sql: 'INSERT OR IGNORE INTO wg_ops (id, issue_id, lamport, type, payload, ts, project) VALUES (?, ?, ?, ?, ?, ?, ?)',
       args: [
         op.id,
         op.issueId,
@@ -289,6 +343,7 @@ export async function rebuildWorkGraph(opts: {
         op.type,
         JSON.stringify(op.payload),
         (op.payload as { ts?: string }).ts ?? '',
+        op.project,
       ],
     });
     await applyOp(client, op);

@@ -57,9 +57,9 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
     case 'issue_created':
       // created_at/updated_at = ISO ts (display); lww = lamport (the LWW stamp for issue_set).
       await client.execute({
-        sql: `INSERT OR IGNORE INTO wg_issues (id, title, body, status, created_at, updated_at, lww)
-              VALUES (?, ?, ?, 'open', ?, ?, ?)`,
-        args: [op.issueId, s(p.title), s(p.body), s(p.ts), s(p.ts), op.lamport],
+        sql: `INSERT OR IGNORE INTO wg_issues (id, title, body, status, created_at, updated_at, lww, project)
+              VALUES (?, ?, ?, 'open', ?, ?, ?, ?)`,
+        args: [op.issueId, s(p.title), s(p.body), s(p.ts), s(p.ts), op.lamport, op.project],
       });
       return;
     case 'issue_set':
@@ -84,9 +84,9 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
       // type is excluded from edge identity → a re-typed (from,to) edge UPDATES its type
       // (last writer in replay order wins), so the upsert, not INSERT OR IGNORE.
       await client.execute({
-        sql: `INSERT INTO wg_edges (edge_key, from_id, to_id, type) VALUES (?, ?, ?, ?)
+        sql: `INSERT INTO wg_edges (edge_key, from_id, to_id, type, project) VALUES (?, ?, ?, ?, ?)
               ON CONFLICT(edge_key) DO UPDATE SET type = excluded.type`,
-        args: [edgeKey(s(p.from), s(p.to)), s(p.from), s(p.to), s(p.type)],
+        args: [edgeKey(s(p.from), s(p.to)), s(p.from), s(p.to), s(p.type), op.project],
       });
       return;
     case 'dep_removed':

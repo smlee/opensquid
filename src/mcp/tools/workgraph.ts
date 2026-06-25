@@ -12,7 +12,7 @@ import { z } from 'zod';
 
 import { claimAudience } from '../../workgraph/audience.js';
 
-import type { WorkGraphStore } from '../../workgraph/types.js';
+import type { WorkGraphFacade } from '../../workgraph/types.js';
 
 const Status = z.enum(['open', 'in_progress', 'closed']);
 const EdgeT = z.enum(['blocks', 'parent-child', 'discovered-from', 'related']);
@@ -39,7 +39,7 @@ export const WgClaimSchema = z.object({
 
 export const handleWgCreate = async (
   a: z.infer<typeof WgCreateSchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> =>
   JSON.stringify(
     await s.createIssue({ title: a.title, ...(a.body === undefined ? {} : { body: a.body }) }),
@@ -47,7 +47,7 @@ export const handleWgCreate = async (
 
 export const handleWgUpdate = async (
   a: z.infer<typeof WgUpdateSchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> =>
   JSON.stringify(
     await s.updateIssue(a.id, {
@@ -59,7 +59,7 @@ export const handleWgUpdate = async (
 
 export const handleWgAddEdge = async (
   a: z.infer<typeof WgAddEdgeSchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> => {
   await s.addEdge(a.from, a.to, a.type);
   return JSON.stringify({ ok: true });
@@ -67,27 +67,27 @@ export const handleWgAddEdge = async (
 
 export const handleWgReady = async (
   _a: z.infer<typeof WgReadySchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> => JSON.stringify(await s.listReady());
 
 export const handleWgGet = async (
   a: z.infer<typeof WgIdSchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> => JSON.stringify(await s.getIssue(a.id));
 
 export const handleWgList = async (
   a: z.infer<typeof WgListSchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> =>
   JSON.stringify(await s.listIssues(a.status === undefined ? undefined : { status: a.status }));
 
 export const handleWgEvents = async (
   a: z.infer<typeof WgIdSchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> => JSON.stringify(await s.listEvents(a.id));
 
 // GR.1 — atomic claim. Audience is stamped from the trusted env markers, NEVER from caller args.
 export const handleWgClaim = async (
   a: z.infer<typeof WgClaimSchema>,
-  s: WorkGraphStore,
+  s: WorkGraphFacade,
 ): Promise<string> => JSON.stringify(await s.claimIssue(a.id, claimAudience(), a.ttlSec));

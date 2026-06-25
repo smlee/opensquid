@@ -159,7 +159,8 @@ Every arrow crosses a subsystem boundary. That is the point: a change to any nod
 - **Owns:** the RAG store (`libsql-fastembed` default; per-file `store/lessons/<id>.md` = git-versionable truth;
   lexical + claude-auto-memory backends); the Lesson type (durability, retired_at, tier/namespace); recall/memorize/forget;
   the **wedge gate** (anti-self-grading lesson promotion); the **work-graph** (event-sourced op-log + libSQL projection,
-  claim/audience); compression + 30-day retention/demote.
+  claim/audience; **per-project** — one shared store/clock with a `project` column, resolved server-side like the
+  kanban namespace, degrading a marker-less session to `'legacy-global'`); compression + 30-day retention/demote.
 - **Touchpoints:** recall is CALLED by pack rules + injected by RUNTIME (`recall_pre_inject`); the scope **namespace**
   comes from the active umbrella (SHARED with CHAT); `models.yaml` (PACKS) picks the embedder; `log_phase` (FLOWS)
   writes the ledger; memorize writes are scoped by the umbrella resolved from cwd/channels.json (SETUP/CHAT).

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { workGraphStore } from '../../workgraph/store.js';
+import { bindProject, workGraphStore } from '../../workgraph/store.js';
 
 import {
   handleWgAddEdge,
@@ -17,10 +17,11 @@ import {
   handleWgUpdate,
 } from './workgraph.js';
 
+// The handlers take a per-project WorkGraphFacade (T-WORKGRAPH-PROJECT-SCOPE); bind one for the tests.
 const fresh = async () => {
-  const s = workGraphStore({ dbUrl: ':memory:' });
-  await s.init();
-  return s;
+  const base = workGraphStore({ dbUrl: ':memory:' });
+  await base.init();
+  return bindProject(base, 'test-project');
 };
 
 describe('workgraph MCP handlers', () => {

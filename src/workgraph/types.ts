@@ -54,26 +54,35 @@ export interface WgOp {
   lamport: number;
   type: WgOpType;
   payload: Record<string, unknown>;
+  project: string; // T-WORKGRAPH-PROJECT-SCOPE: namespace ('legacy-global' for legacy/un-scoped ops)
 }
 
+/**
+ * The project-scoped store. ONE instance (one client, one global Lamport clock) backs every project;
+ * `project` is threaded as the first arg of each method so reads filter and writes stamp it. Handlers do
+ * NOT call this directly — they call a per-project {@link WorkGraphFacade} (which binds `project`).
+ * Spec: docs/tasks/T-workgraph-project-scope.md.
+ */
 export interface WorkGraphStore {
   init(): Promise<void>;
-  createIssue(input: { title: string; body?: string }): Promise<Issue>;
-  getIssue(id: string): Promise<Issue | null>;
-  listIssues(filter?: { status?: IssueStatus }): Promise<Issue[]>;
+  createIssue(project: string, input: { title: string; body?: string }): Promise<Issue>;
+  getIssue(project: string, id: string): Promise<Issue | null>;
+  listIssues(project: string, filter?: { status?: IssueStatus }): Promise<Issue[]>;
   updateIssue(
+    project: string,
     id: string,
     patch: { status?: IssueStatus; title?: string; body?: string },
   ): Promise<Issue>;
-  addEdge(fromId: string, toId: string, type: EdgeType): Promise<void>;
+  addEdge(project: string, fromId: string, toId: string, type: EdgeType): Promise<void>;
   /** Open issues with no un-closed `blocks` blocker AND no live claim, oldest-first. */
-  listReady(): Promise<Issue[]>;
+  listReady(project: string): Promise<Issue[]>;
   /**
    * Atomically claim an item for `ttlSec` (exactly-once CAS via a unique claim token). Returns
    * `won:true` only for the single winner; concurrent/duplicate claims get `won:false`. An item
    * whose prior claim has expired is claimable again (query-time staleness). (GR.1.)
    */
   claimIssue(
+    project: string,
     id: string,
     audience: ClaimAudience,
     ttlSec: number,
@@ -82,11 +91,37 @@ export interface WorkGraphStore {
    * Mark an item as wedged (GR.3): a re-attempt SKIPS it (it's escalated, not retried) so the
    * supervisor can't crash-loop the same wall. Excluded from `listReady` until the reason is cleared.
    */
-  wedgeMark(id: string, reason: string): Promise<void>;
+  wedgeMark(project: string, id: string, reason: string): Promise<void>;
   /** Clear a wedge-mark (GR.4 human-override resolution): `wedge_reason` → null → the item re-enters
    * `listReady` for another lap. The residual-shrink path's un-wedge. */
+  clearWedge(project: string, id: string): Promise<void>;
+  releaseClaim(project: string, id: string): Promise<void>;
+  /** The append-only op-log for an issue, in (lamport, id) order. */
+  listEvents(project: string, issueId: string): Promise<WgOp[]>;
+}
+
+/**
+ * A per-project view over the single {@link WorkGraphStore}: the SAME methods minus the leading `project`
+ * arg (it's bound by `bindProject`). This is what `getWorkGraph()` returns, so the MCP handlers keep their
+ * existing call signatures while operating on one project.
+ */
+export interface WorkGraphFacade {
+  createIssue(input: { title: string; body?: string }): Promise<Issue>;
+  getIssue(id: string): Promise<Issue | null>;
+  listIssues(filter?: { status?: IssueStatus }): Promise<Issue[]>;
+  updateIssue(
+    id: string,
+    patch: { status?: IssueStatus; title?: string; body?: string },
+  ): Promise<Issue>;
+  addEdge(fromId: string, toId: string, type: EdgeType): Promise<void>;
+  listReady(): Promise<Issue[]>;
+  claimIssue(
+    id: string,
+    audience: ClaimAudience,
+    ttlSec: number,
+  ): Promise<{ won: boolean; expiresAt: string }>;
+  wedgeMark(id: string, reason: string): Promise<void>;
   clearWedge(id: string): Promise<void>;
   releaseClaim(id: string): Promise<void>;
-  /** The append-only op-log for an issue, in (lamport, id) order. */
   listEvents(issueId: string): Promise<WgOp[]>;
 }

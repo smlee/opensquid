@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runRalphLoop, resolveParked, type RalphConfig, type RalphDeps } from './orchestrator.js';
-import type { Issue, WorkGraphStore } from '../../workgraph/types.js';
+import type { Issue, WorkGraphFacade } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
 
 const P = <T>(v: T): Promise<T> => Promise.resolve(v);
@@ -8,7 +8,7 @@ const P = <T>(v: T): Promise<T> => Promise.resolve(v);
 // ---- minimal in-memory work-graph: just the surface runRalphLoop touches ----
 // listReady returns open, non-wedged, non-live-claimed items oldest-first; claim/close/wedge mutate
 // state so the loop terminates naturally (the real store's invariants, in miniature).
-function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphStore {
+function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphFacade {
   const rows = new Map<string, { status: 'open' | 'closed'; wedged: boolean; claimed: boolean }>();
   ids.forEach((id) => rows.set(id, { status: 'open', wedged: false, claimed: false }));
   const issue = (id: string): Issue => ({
@@ -20,7 +20,7 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphStore
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...(rows.get(id)!.wedged ? { wedgeReason: 'UNRECOVERABLE_WEDGE' } : {}),
   });
-  const store: WorkGraphStore = {
+  const store: WorkGraphFacade = {
     listReady: () =>
       P(
         ids
@@ -54,8 +54,7 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphStore
       rows.get(id)!.claimed = false;
       return P(undefined);
     },
-    // unused by the loop — present to satisfy the interface
-    init: () => P(undefined),
+    // unused by the loop — present to satisfy the facade interface
     createIssue: () => P(issue(ids[0] ?? 'x')),
     getIssue: (id: string) => P(rows.has(id) ? issue(id) : null),
     listIssues: () => P(ids.map(issue)),
@@ -80,7 +79,7 @@ const cfg = (over: Partial<RalphConfig> = {}): RalphConfig => ({
 });
 
 const deps = (
-  wg: WorkGraphStore,
+  wg: WorkGraphFacade,
   runLap: RalphDeps['runLap'],
   escalate: RalphDeps['escalate'] = vi.fn(() => P({ escalated: true })),
 ): RalphDeps => ({ wg, claimAudience: () => ({ source: 'unknown' }), runLap, escalate });

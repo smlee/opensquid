@@ -15,9 +15,14 @@ import { readFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import type { Command } from 'commander';
-import { OPENSQUID_HOME, chatDaemonSockPath } from '../../runtime/paths.js';
+import {
+  OPENSQUID_HOME,
+  chatDaemonSockPath,
+  resolveProjectMarker,
+  resolveProjectUuidFromEnv,
+} from '../../runtime/paths.js';
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
-import { workGraphStore } from '../../workgraph/store.js';
+import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
@@ -26,6 +31,23 @@ import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
 import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
+
+/**
+ * T-WORKGRAPH-PROJECT-SCOPE: the ralph loop drains THIS project's ready queue. Init the shared base store,
+ * resolve the cwd's namespace (degrade marker-less → 'legacy-global', mirroring the server's resolveWgProject),
+ * and return a per-project facade so runRalphLoop/resolveParked operate on one project.
+ */
+async function openRalphWorkGraph() {
+  const base = workGraphStore({
+    dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
+    sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+  });
+  await base.init();
+  const cwd = process.cwd();
+  const project =
+    (await resolveProjectMarker(cwd))?.uuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';
+  return bindProject(base, project);
+}
 
 /** Hydrate the persisted scalar config into the orchestrator's runtime `RalphConfig` (closures rebuilt). */
 export function buildRalphConfig(
@@ -162,11 +184,7 @@ export function registerRalph(program: Command): Command {
         once: opts.once === true,
         ...(opts.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: Number(opts.maxBudgetUsd) }),
       });
-      const wg = workGraphStore({
-        dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-        sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
-      });
-      await wg.init();
+      const wg = await openRalphWorkGraph();
       const result = await runRalphLoop(cfg, {
         wg,
         claimAudience,
@@ -191,11 +209,7 @@ export function registerRalph(program: Command): Command {
         );
         return;
       }
-      const wg = workGraphStore({
-        dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-        sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
-      });
-      await wg.init();
+      const wg = await openRalphWorkGraph();
       await resolveParked(itemId, {
         wg,
         recordMisclassification,

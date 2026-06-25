@@ -25,6 +25,7 @@ import {
   OPENSQUID_HOME,
   resolveProjectMarker,
   resolveProjectScopeRoot,
+  resolveProjectUuidFromEnv,
   sessionLogFile,
   sessionStateFile,
 } from '../paths.js';
@@ -193,14 +194,19 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
 
   // KANBAN.5: ONE store read yields the story inputs — ALL issues (incl. closed → the `done` lane) carrying
   // status+wedgeReason, plus the ready set. Replaces the old non-closed-only {id,title} `openIssues`.
+  // T-WORKGRAPH-PROJECT-SCOPE: the workgraph is per-project — resolve this cwd's namespace (degrade a
+  // marker-less cwd to 'legacy-global', mirroring the server's resolveWgProject) so the story reflects THIS
+  // project's backlog, not the global union.
+  const wgProject =
+    (await resolveProjectMarker(cwd))?.uuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';
   const story = await bounded(async () => {
     const store = workGraphStore({
       dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
       sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
     });
     await store.init();
-    const issues = await store.listIssues();
-    const ready = await store.listReady();
+    const issues = await store.listIssues(wgProject);
+    const ready = await store.listReady(wgProject);
     return {
       storyIssues: issues.map((i) => ({
         id: i.id,

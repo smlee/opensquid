@@ -30,7 +30,7 @@ import {
   resolveUmbrellaForCwd,
 } from '../../channels/routing.js';
 import { workGraphStore } from '../../workgraph/store.js';
-import { OPENSQUID_HOME } from '../paths.js';
+import { OPENSQUID_HOME, resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
 
 import { handoverDocPath, type HandoffState } from './collect.js';
 import {
@@ -223,12 +223,17 @@ export async function writeHandoffSurfaces(
       sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
     });
     await store.init();
+    // T-WORKGRAPH-PROJECT-SCOPE: upsert into THIS project's namespace (degrade marker-less → 'legacy-global').
+    const wgProject =
+      (await resolveProjectMarker(state.cwd))?.uuid ??
+      resolveProjectUuidFromEnv() ??
+      'legacy-global';
     const title = `handoff-${state.sessionId.slice(0, 8)}`;
-    const existing = (await store.listIssues()).find((i) => i.title === title);
+    const existing = (await store.listIssues(wgProject)).find((i) => i.title === title);
     if (existing !== undefined) {
-      await store.updateIssue(existing.id, { body: renderWgDigest(state) });
+      await store.updateIssue(wgProject, existing.id, { body: renderWgDigest(state) });
     } else {
-      await store.createIssue({ title, body: renderWgDigest(state) });
+      await store.createIssue(wgProject, { title, body: renderWgDigest(state) });
     }
     outcomes.push({ surface: 'workgraph', ok: true, detail: title });
   } catch (e) {
