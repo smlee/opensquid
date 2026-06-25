@@ -90,6 +90,7 @@ import { registerArmScopeFunction } from '../functions/arm_scope.js';
 import { registerFsmFunctions } from '../functions/fsm.js';
 import { registerReadRubric } from '../functions/read_rubric.js';
 import { registerPhaseInject } from '../functions/phase_inject.js';
+import { registerPhaseBundleText } from '../functions/phase_bundle_text.js';
 import { registerSetRequestType } from '../functions/set_request_type.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
@@ -138,6 +139,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerCachedAuditFunction(r);
   registerReadRubric(r); // TR.A: the audits interpolate {{rubric}} from this; phase_inject reuses it
   registerPhaseInject(r); // GI.4: channel (a) — per-gate phase bundle (procedure §N + rubric) at the turn boundary
+  registerPhaseBundleText(r); // CFD.3 PG.3: bindable phase bundle for inject-on-pause (pause guards interpolate {{bundle.text}})
   registerSetRequestType(r); // wg-3d175ec06767: RTC.5 llm refinement writes the refined request-type
   // Phase 4: `check_destination` is the destination-side anti-drift
   // primitive. It composes `llm_classify` (registered just above) so the

@@ -7,6 +7,31 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.524] - 2026-06-25
+
+### Changed — pause-guard sharpened: researched boundary + architecture-only + inject-on-pause (CFD.3)
+
+CFD.3 extends the shipped pause subsystem (`pause-stop-guard` + `pause-prevention`) — the deterministic
+mirror of CFD.2 (CFD.2 gates over-reach; CFD.3 gates under-reach/pausing). A pause is legitimate ONLY as an
+architecture-changing question during the SCOPE region; every other stop/question is drift; on ANY pause the
+guard now injects the completion bundle (procedure + rubric). All deterministic — no LLM in the verdict.
+
+- **Questioning boundary extended through `researched`** ("until scoping ends") — both stop-guards now share
+  one window: `scope-stop-needs-a-question` covers `{scoping, researching, researched}`, and `researched` is
+  moved out of `no-stop-mid-run`'s unconditional block, so a `researched` ask-and-await stop is allowed iff
+  `AskUserQuestion` ran this turn (and still blocked without one).
+- **Architecture-only directive** — `procedure.md`'s always-on `## On a BLOCK` section now states a pause is
+  justified ONLY by an architecture-changing question (CFD.2 §5's _complementary_ class); a
+  clarification/permission/deferral is drift. Reaches every phase's bundle.
+- **Inject-on-pause** — new registered primitive `phase_bundle_text` (`src/functions/phase_bundle_text.ts`,
+  +test) returns the current-phase bundle (procedure + rubric, via the pure `selectPhaseBundle`) as a bindable
+  value; all four pause verdicts (`no-stop-mid-run`, `scope-stop-needs-a-question`, `no-question-after-scope`,
+  `no-pause-language`) bind it (gated by the pause condition — no hot-path I/O) and interpolate
+  `{{bundle.text}}` into their message. CODE phases carry procedure-only (CODE has no rubric).
+- Tests: `phase_bundle_text` (3) + coding-flow integration (researched ask-and-await allowed; bundle injected
+  on a blocked mid-run stop). Full suite 4175 green. Spec: `docs/tasks/T-pause-guard.md`.
+  Out of scope (tracked): retire `check_destination`; `no-pause-language` warn→block; a CODE-phase rubric.
+
 ## [0.5.523] - 2026-06-25
 
 ### Added — anti-drift gate: deterministic core + live rubric criteria (CFD.2, foundational / 0.6.0)

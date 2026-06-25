@@ -16,6 +16,7 @@ export { registerRagFunctions } from './rag.js';
 export { registerRecallPreInjectFunction } from './recall_pre_inject.js';
 export { registerReadRubric, readRubricContent } from './read_rubric.js';
 export { registerPhaseInject } from './phase_inject.js';
+export { registerPhaseBundleText } from './phase_bundle_text.js';
 export { registerSetRequestType } from './set_request_type.js';
 export { buildInjectContext } from './inject_context.js';
 export { registerStateFunctions } from './state.js';

@@ -16,6 +16,7 @@ import { registerEventFunctions } from '../../src/functions/event.js';
 import { registerStagedDocsOnlyFunction } from '../../src/functions/staged_docs_only.js';
 import { registerReadRubric } from '../../src/functions/read_rubric.js';
 import { registerPhaseInject } from '../../src/functions/phase_inject.js';
+import { registerPhaseBundleText } from '../../src/functions/phase_bundle_text.js';
 import { registerFsmFunctions } from '../../src/functions/fsm.js';
 import { registerArmScopeFunction } from '../../src/functions/arm_scope.js';
 import { FunctionRegistry } from '../../src/functions/registry.js';
@@ -51,6 +52,7 @@ function registry(): FunctionRegistry {
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
   registerPhaseInject(r); // GI.4: channel (a) — entry-and-handoffs inject-phase rule (per-gate bundle)
+  registerPhaseBundleText(r); // CFD.3 PG.4: pause guards bind phase_bundle_text to inject the bundle
   r.register(HasGeneratedSpec); // FU.12: scope-before-code now consults the active task's spec
   r.register(TextPatternMatch); // FU.3: enter-scoping classifies the track via text_pattern_match
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
@@ -382,6 +384,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
+  registerPhaseBundleText(r); // CFD.3 PG.4: pause guards bind phase_bundle_text
   r.register({
     name: 'cached_audit',
     argSchema: z.object({
@@ -483,6 +486,7 @@ function registryWithAuditOutcomes(scopeOut: string, specOut: string): FunctionR
   registerStateFunctions(r);
   registerVerdictFunctions(r);
   registerReadRubric(r); // TR.A: the guess/spec audits call read_rubric before cached_audit
+  registerPhaseBundleText(r); // CFD.3 PG.4: pause guards bind phase_bundle_text
   r.register({
     name: 'cached_audit',
     argSchema: z.object({
@@ -789,7 +793,7 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     await dispatchEvent(scopePrompt, [pack], reg, sid); // → scoping
     const r = await dispatchEvent(stop, [pack], reg, sid);
     expect(r.exitCode).toBe(2);
-    expect(r.stderr).toMatch(/SCOPE stop without a pending question/);
+    expect(r.stderr).toMatch(/SCOPE stop without a pending architecture-changing question/);
   });
 
   it('SDG.1: scope stop WITH AskUserQuestion this turn → allowed', async () => {
@@ -882,6 +886,28 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     const reg = await toResearched(pack, sid); // → researched
     const r = await dispatchEvent(stop, [pack], reg, sid);
     expect(r.exitCode).toBe(2);
+  });
+
+  // CFD.3/PG.1 — the questioning window extends through `researched` ("until scoping ends"): a
+  // researched stop WITH AskUserQuestion this turn is a legitimate scope question → allowed.
+  it('CFD.3/PG.1: Stop at researched WITH AskUserQuestion this turn → allowed (exit 0)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-pg1-res-ok';
+    const reg = await toResearched(pack, sid); // → researched
+    await appendTool(sid, 'AskUserQuestion'); // a fork is actually awaiting the user
+    const r = await dispatchEvent(stop, [pack], reg, sid);
+    expect(r.exitCode).toBe(0);
+  });
+
+  // CFD.3/PG.4 — on ANY pause, inject the completion bundle (procedure + rubric). A blocked mid-run
+  // (AUTHOR) stop's message carries the author rubric, interpolated via {{bundle.text}}.
+  it('CFD.3/PG.4: a blocked mid-run stop injects the phase bundle (procedure + rubric)', async () => {
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-pg4-inject';
+    const reg = await toSpecAuthored(pack, sid); // → spec_authored (AUTHOR phase)
+    const r = await dispatchEvent(stop, [pack], reg, sid);
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toMatch(/11-FIELD CONTRACT/); // the AUTHOR rubric, injected on the pause
   });
 
   it('GF.6: Stop at idle → allowed (run not started)', async () => {
@@ -1578,6 +1604,6 @@ describe('builtin coding-flow pack — request-type stop allow-signal (RTC.3, wg
     await writeRequestType(sid, rtRec('work'));
     const r = await dispatchEvent(stop, [pack], registry(), sid);
     expect(r.exitCode).toBe(2);
-    expect(r.stderr).toMatch(/SCOPE stop without a pending question/);
+    expect(r.stderr).toMatch(/SCOPE stop without a pending architecture-changing question/);
   });
 });

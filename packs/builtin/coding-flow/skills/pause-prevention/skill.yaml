@@ -20,6 +20,11 @@ rules:
         as: st
       # GF.6 (F8): HARD-BLOCK the question — it's a real-time pause ACTION, so exit-2 deny
       # actually prevents it (the agent must answer from the principles, not stall).
+      # CFD.3/PG.4: inject the phase bundle (procedure + rubric) on this hard-blocked pause,
+      # GATED by the same condition so the I/O only runs when the block fires.
+      - call: phase_bundle_text
+        if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
+        as: bundle
       - call: verdict
         if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
         args:
@@ -29,6 +34,9 @@ rules:
             phase — fill every gap there. Past scope the run is automated; do not pause for a
             question that should have been asked during scoping (if a real gap surfaced, the
             SCOPE was incomplete — re-scope it, do not stall the run).
+
+
+            {{bundle.text}}
   # Pause / permission LANGUAGE in the just-settled prior turn during an active run → drift.
   # text_pattern_match on priorAssistantText (like honesty-ledger), gated on run-active.
   # GF.6: stays WARN (not block) — it's a RETROSPECTIVE detector of an already-emitted
@@ -57,6 +65,11 @@ rules:
         as: st
       - call: open_task_count
         as: open
+      # CFD.3/PG.4: inject the phase bundle on this warn too (user's "any type of pause"),
+      # GATED by the same condition so the I/O only runs when the warn fires.
+      - call: phase_bundle_text
+        if: 'len(paused.matched) > 0 && st != "idle" && (open.count > 0 || st != "phases_complete")'
+        as: bundle
       - call: verdict
         if: 'len(paused.matched) > 0 && st != "idle" && (open.count > 0 || st != "phases_complete")'
         args:
@@ -66,6 +79,9 @@ rules:
             is automated until the backlog is depleted. No "should I continue / is this ok /
             at a context limit / let me pause": continue straight to the next task. The only
             valid interrupt is a genuine user-question during SCOPE — and you are past it.
+
+
+            {{bundle.text}}
 prose: |
   Two pause-gates that fire ONLY during an active run (FSM != idle AND backlog not depleted):
   an AskUserQuestion past SCOPE (GF.6: HARD-BLOCK — the real-time pause action), and
