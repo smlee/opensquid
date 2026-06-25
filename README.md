@@ -13,7 +13,7 @@ It is an MCP operating layer that adds durable memory, dependency-aware task sta
 
 `opensquid` is the package, CLI, MCP server name, and `~/.opensquid/` data root. OpenSquid is the human-facing wordmark.
 
-> **Status, June 12, 2026.** Pre-1.0 and moving fast (`0.5.x`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
+> **Status, June 25, 2026.** Pre-1.0 and moving fast (`0.5.522`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
 
 ## Quickstart
 
