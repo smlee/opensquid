@@ -54,7 +54,7 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
   it('INERT: no active v2 cartridges → ZERO decision (the nothing-breaks path)', async () => {
     mockLoad.mockResolvedValue([]);
     const d = await runV2Cartridges('sess-inert', bashCall(), NOW);
-    expect(d).toEqual({ exitCode: 0, messages: [], injections: [] });
+    expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] });
   });
 
   it('gate FAIL + block → exitCode 2 + message; no advance (state stays at the gate)', async () => {
@@ -79,7 +79,7 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
     mockLoad.mockResolvedValue([gatePack('block')]);
     const promptEvent = { kind: 'prompt_submit' } as unknown as Event;
     const d = await runV2Cartridges('sess-nt', promptEvent, NOW);
-    expect(d).toEqual({ exitCode: 0, messages: [], injections: [] });
+    expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] });
     expect(await readFsmStateRaw('sess-nt', 'observed-gate')).toBeNull();
   });
 
@@ -97,6 +97,6 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
     } as unknown as LoadedPackV2;
     mockLoad.mockResolvedValue([broken]);
     const d = await runV2Cartridges('sess-fo', bashCall(), NOW);
-    expect(d).toEqual({ exitCode: 0, messages: [], injections: [] }); // swallowed, fail-open
+    expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] }); // swallowed, fail-open
   });
 });

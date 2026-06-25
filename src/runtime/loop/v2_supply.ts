@@ -15,9 +15,13 @@
  * Imports from: ../bootstrap (loadActiveV2Cartridges), ./v2_observed_actor, ../fsm_state, ../observe/transition_log.
  * Imported by: src/runtime/hooks/pre-tool-use.ts + post-tool-use.ts (merged after dispatchEvent).
  */
+import { readFile } from 'node:fs/promises';
+
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
+import { sessionStateFile } from '../paths.js';
+import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
 
 import type { Envelope } from '../bus/types.js';
@@ -29,15 +33,45 @@ export interface V2Decision {
   messages: string[];
   /** warn nudges → additionalContext. */
   injections: string[];
+  /**
+   * SKILL.1 (R-SKILLS-PER-STATE) — the skills bound for the cartridge's CURRENT state this event (state IS the
+   * router). A DEDICATED channel, distinct from `injections` (warn nudges). Delivering this set's CONTENT into
+   * the agent context is the Track-2 skill-loader host; this field is the binding's observable.
+   */
+  boundSkills: string[];
 }
 
-const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [] };
+const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkills: [] };
 
-/** Guard ctx from the event (MINIMAL — audit-backed bindings are a tracked follow-on, wg-e4c69fd98945). */
-export function buildGuardCtx(event: Event): Map<string, unknown> {
+/** FAIL-OPEN read of a coding-flow audit-cache verdict (mirrors handoff/collect.ts readJsonState+auditHead):
+ *  the flat `{ verdict: string }` shape; ANY error → undefined (observe-never-breaks). */
+async function readVerdict(sessionId: string, key: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(sessionStateFile(sessionId, key), 'utf8')) as {
+      verdict?: unknown;
+    };
+    return typeof parsed.verdict === 'string' ? parsed.verdict : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Guard ctx for a v2 cartridge event (R-AUDIT-CTX) — binds the THREE pieces a discipline guard reads: the
+ * `event`/`tool`, the guess/spec audit verdicts (FAIL-OPEN), and the `phase` (the cartridge's current FSM
+ * state). Literal `.set` keys so the coverage binding-extractor sees them (coverage/index_build.ts).
+ */
+export async function buildGuardCtx(
+  event: Event,
+  sessionId: string,
+  phase: string,
+): Promise<Map<string, unknown>> {
   const m = new Map<string, unknown>();
   m.set('event', event.kind);
   if ('tool' in event) m.set('tool', event.tool);
+  m.set('verdict.guess', await readVerdict(sessionId, 'coding-flow-guess-audit-cache'));
+  m.set('verdict.spec', await readVerdict(sessionId, 'coding-flow-spec-audit-cache'));
+  m.set('phase', phase);
   return m;
 }
 
@@ -55,6 +89,7 @@ export async function runV2Cartridges(
   let exitCode: 0 | 2 = 0;
   const messages: string[] = [];
   const injections: string[] = [];
+  const boundSkills: string[] = [];
   for (const loaded of cartridges) {
     try {
       if (loaded.compiled.fsm === undefined) continue; // foundation cartridge → not an observed actor
@@ -66,9 +101,13 @@ export async function runV2Cartridges(
         from: `pack:${name}`,
         to: `pack:${name}`,
         kind: event.kind,
-        payload: { ctx: buildGuardCtx(event) },
+        // R-AUDIT-CTX: phase = the cartridge's current FSM state (pre-receive); verdicts read fail-open.
+        payload: { ctx: await buildGuardCtx(event, sessionId, actor.state.current) },
         ts: Date.parse(now),
       };
+      // SKILL.1 (R-SKILLS-PER-STATE): one runtime per cartridge; `onStateLeave` on each transition, then bind
+      // the CURRENT (post-receive) state on EVERY event — the state IS the router (not only on transitions).
+      const skillRuntime = new InMemorySkillRuntime();
       for (const e of await actor.receive(env)) {
         if (e.kind === 'write_state') {
           await persistActorState(sessionId, name, e.state, now);
@@ -84,6 +123,7 @@ export async function runV2Cartridges(
             at: now,
             via: -1,
           });
+          onStateLeave(p.from, skillRuntime); // SKILL.1: unloaded on leave
         } else if (e.kind === 'emit' && e.messageKind === 'gate_action') {
           const p = e.payload as { action: 'warn' | 'block' | 'halt'; message: string };
           if (p.action === 'warn') injections.push(p.message);
@@ -93,10 +133,13 @@ export async function runV2Cartridges(
           }
         }
       }
+      // actor.state.current is the final (post-event) state (v2_observed_actor.ts:97) → bind skills(S) every event.
+      onStateEntry(actor.state.current, loaded.compiled.meta, skillRuntime);
+      boundSkills.push(...skillRuntime.current().skills);
     } catch (err) {
       // FAIL-OPEN: a v2 cartridge bug must NEVER break the hook (observe-never-breaks discipline).
       process.stderr.write(`[v2-supply] cartridge error (ignored): ${String(err)}\n`);
     }
   }
-  return { exitCode, messages, injections };
+  return { exitCode, messages, injections, boundSkills };
 }

@@ -7,6 +7,28 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.527] - 2026-06-25
+
+### Changed — v2 discipline Track 1: finish v2 to spec (SKILL.1 live binding + audit-backed guard ctx)
+
+Two of the five seeded coverage requirements (`docs/ARCHITECTURE.md:281-301`) were UNMET because the v2 FSM
+runtime, though it already runs on every hook event (`runV2Cartridges`), had a hollow enforcement substrate.
+Both now MET via the live path (`scripts/coverage.ts`); the 3 `R-DELETE-*` seeds stay UNMET (their deletions
+land in Track 4 — v1 stays the live router/fallback until v2 is proven in Track 3).
+
+- **`R-SKILLS-PER-STATE`** — wired SKILL.1 into the live host: `runV2Cartridges` now binds the CURRENT FSM
+  state's skills on EVERY event (reusing `InMemorySkillRuntime`; `onStateEntry(actor.state.current, …)` after the
+  effect loop, `onStateLeave` on each transition) and surfaces them on a dedicated `V2Decision.boundSkills`
+  field (NOT the warn-nudge `injections` channel). Proof: `src/runtime/skill/state_skills.live.test.ts`
+  (fails-on-dormancy). Skill-CONTENT delivery (consuming `boundSkills`) is a named Track-2 deferral.
+- **`R-AUDIT-CTX`** — `buildGuardCtx` is now async and binds all three pieces the intent names: the guess/spec
+  audit verdicts (fail-open reads of the `coding-flow-*-audit-cache` session state) and `phase` (the cartridge's
+  current FSM state), via literal `.set(...)` keys. Proof: `src/runtime/loop/audit_ctx.test.ts`.
+
+v1 router untouched; v2 still inert in production (no active v2 pack) — the wiring is exercised only by the new
+fixture-driven proof-tests. Spec/scope (local, gitignored): `docs/tasks/T-v2-track1-finish.md` +
+`docs/research/T-v2-track1-finish-pre-research-2026-06-25.md`.
+
 ## [0.5.526] - 2026-06-25
 
 ### Changed — work-graph is now per-project (was a single global backlog)
