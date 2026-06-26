@@ -40,6 +40,7 @@ const base: HandoffState = {
   ],
   readyIds: ['wg-1'],
   storyGoal: 'ship the kanban story',
+  waitingAcceptance: [],
 };
 
 describe('renderResumeSteps (the locked rules)', () => {
@@ -116,6 +117,19 @@ describe('renderHandoverDoc', () => {
       readyIds: '<unreadable: boom>',
     });
     expect(doc).toContain('work-graph unreadable');
+  });
+
+  it('T2.8: surfaces durable waiting-for-OK items at start-up (a closed-session acceptance is not lost)', () => {
+    const doc = renderHandoverDoc({ ...base, waitingAcceptance: ['T2.8', 'T-other'] });
+    expect(doc).toContain('Waiting for your OK (durable acceptance)');
+    expect(doc).toContain('- waiting for your OK: T2.8');
+    expect(doc).toContain('- waiting for your OK: T-other');
+  });
+
+  it('T2.8: no waiting items → an explicit none marker (totality)', () => {
+    const doc = renderHandoverDoc(base); // waitingAcceptance: []
+    expect(doc).toContain('Waiting for your OK (durable acceptance)');
+    expect(doc).not.toContain('- waiting for your OK:');
   });
 });
 

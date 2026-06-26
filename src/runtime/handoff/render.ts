@@ -98,6 +98,14 @@ function section(title: string, body: string): string {
   return `## ${title}\n\n${body}\n`;
 }
 
+/** T2.8 — the start-up surface for DURABLE acceptance items still awaiting a human OK. A closed-session
+ *  acceptance is NOT lost (design §6.2-6.3): each waiting taskId renders `- waiting for your OK: <taskId>` so
+ *  the successor re-asks the user. Empty → an explicit "_(none)_" marker (totality). */
+export function renderWaitingAcceptance(state: HandoffState): string {
+  if (state.waitingAcceptance.length === 0) return '_(none)_';
+  return state.waitingAcceptance.map((taskId) => `- waiting for your OK: ${taskId}`).join('\n');
+}
+
 function codeBlock(lines: string[]): string {
   return lines.length === 0 ? '_(empty)_' : `\`\`\`\n${lines.join('\n')}\n\`\`\``;
 }
@@ -145,6 +153,7 @@ let the successor verify disk truth directly.
 
 ${section('RESUME steps (mechanical)', resume)}
 ${section('FSM', `state: **${fsmStateOf(state)}**\n\nlast transitions:\n${codeBlock(fsmHistoryTail(state))}`)}
+${section('Waiting for your OK (durable acceptance)', renderWaitingAcceptance(state))}
 ${section('Active task', codeBlock([JSON.stringify(state.activeTask, null, 2)]))}
 ${section('Phase set (session)', codeBlock([JSON.stringify(state.phaseSet)]))}
 ${section('Phase ledger (durable, active task)', phaseLedger)}

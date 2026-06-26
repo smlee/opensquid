@@ -50,12 +50,14 @@ guards:
   # NO known-deprecated call — the BLOCKING result: a deprecated hit BLOCKS, not merely "the surfacer ran").
   # Bound dual-shape by buildGuardCtx; FAIL-CLOSED (never-run readiness / no active task → blocks).
   code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean'
-  # Skeleton pass-through for the not-yet-built stages: `event` is always bound to a non-empty event-kind
-  # string → always truthy. The real per-stage readiness predicates arrive with T2.8.
-  ready: event
-  # The human-acceptance signal. UNBOUND in the skeleton ctx → the accept decision's `else` branch fires, so
-  # DEPLOY loops back to PLAN (a skeleton must NEVER auto-declare "shipped"). Bound in the acceptance slice.
-  accepted: accepted
+  # T2.8 — the DEPLOY gate: a deterministic, zero-LLM predicate. `deploy.capability_ok` = the shipped
+  # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
+  # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.
+  deploy_ready: 'deploy.capability_ok'
+  # T2.8 — the DURABLE human-acceptance signal (`deploy.accepted` = the active task's acceptance item is
+  # `accepted`, acceptance.ts — survives a closed session, re-surfaces at start-up). UNACCEPTED/absent → the
+  # accept decision's `else` branch fires → DEPLOY loops back to PLAN (NEVER auto-declare "shipped").
+  accepted: 'deploy.accepted'
 
 fsm:
   initial: scope
@@ -93,13 +95,13 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: coded
       on_fail: { action: block, message: 'CODE: log all 7 phases + readiness clean' }
-    # ── DEPLOY (new top-level region vs v1) ────────────────────────────────
+    # ── DEPLOY (T2.8 — the ENFORCING capability gate) ──────────────────────
     deploy:
       kind: gate
-      guard: ready
+      guard: deploy_ready
       trigger: [post_tool_call]
       on_pass_emits: deployed
-      on_fail: { action: warn, message: 'DEPLOY checkpoint (skeleton — handler deferred)' }
+      on_fail: { action: block, message: 'DEPLOY: capability gate' }
     # ── acceptance (the second/last human touchpoint) ──────────────────────
     accept:
       kind: decision

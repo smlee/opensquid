@@ -7,6 +7,30 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.533] - 2026-06-26
+
+### Added — v2 fullstack-flow DEPLOY gate + durable acceptance (Track 2, T2.8)
+
+The fifth and final deterministic gate. `deploy.capability_ok` reuses the shipped
+`CapabilityGate` (skipped → true when there is no deploy env, so a flow with nothing
+to deploy is never blocked by the gate). The human-accept is the `accept` decision:
+`deploy.accepted` is the active task's **durable** acceptance item (`acceptance.ts` —
+append-only jsonl, last-writer-wins, survives a closed session). An unaccepted/absent
+item fires the decision's `else` branch → DEPLOY loops back to PLAN (never auto-ships).
+A waiting-for-OK item is re-surfaced at session start-up via the handoff doc so a
+closed-session acceptance is not lost. All five gates (SCOPE/PLAN/AUTHOR/CODE/DEPLOY)
+now enforce deterministically (zero-LLM).
+
+- `src/runtime/loop/acceptance.ts` — `AcceptanceItem` + `appendAcceptance`/`readAcceptance`
+  (last-writer-wins by id)/`markAccepted`/`waitingItems`; durable append-only jsonl.
+- `src/runtime/loop/deploy_evidence.ts` — runtime bridge: `capabilityOk` (CapabilityGate,
+  null→skip→true) ∧ `accepted` (active task's item is `accepted`); injectable, fail-closed.
+- `src/runtime/loop/v2_supply.ts` — `buildGuardCtx` binds `deploy.capability_ok`/`deploy.accepted`
+  dual-shape (flat + nested), matching scope/plan/author/code.
+- `packs/builtin/fullstack-flow/pack.yaml` — `deploy` is now an enforcing gate
+  (`guard: deploy_ready`, `on_fail: block`); the `accept` decision never auto-ships.
+- `src/runtime/handoff/{collect,render}.ts` — `waitingAcceptance` surfaced at start-up.
+
 ## [0.5.532] - 2026-06-26
 
 ### Added — v2 fullstack-flow CODE gate enforces deterministically (Track 2, T2.7)

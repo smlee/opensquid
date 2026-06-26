@@ -31,6 +31,7 @@ import {
 } from '../paths.js';
 import { type ActiveTask, readActiveTask } from '../session_state.js';
 import { readGoalMap } from '../goal_map/goal_map.js';
+import { waitingItems } from '../loop/acceptance.js';
 
 const execFileP = promisify(execFile);
 
@@ -68,6 +69,9 @@ export interface HandoffState {
   storyIssues: { id: string; title: string; status: string; wedgeReason?: string }[] | string;
   readyIds: string[] | string;
   storyGoal: string;
+  /** T2.8 — durable acceptance items still awaiting a human OK (re-surfaced at start-up so a closed-session
+   *  acceptance is NOT lost, design §6.2-6.3). The taskIds the successor must re-ask the user about. */
+  waitingAcceptance: string[];
 }
 
 async function bounded<T>(probe: () => Promise<T>): Promise<T | string> {
@@ -219,6 +223,13 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
   });
   const storyGoal = (await readGoalMap(cwd))?.goal ?? '';
 
+  // T2.8 — durable acceptance items still waiting for a human OK. Re-surfaced at start-up (render.ts) so a
+  // closed-session acceptance is NOT lost (design §6.2-6.3). Bounded: an unreadable jsonl → no waiting items
+  // (totality over completeness, like every other probe here).
+  const waitingAcceptance = await waitingItems(sessionId)
+    .then((items) => items.map((i) => i.taskId))
+    .catch(() => [] as string[]);
+
   return {
     sessionId,
     generatedAt: new Date().toISOString(),
@@ -237,6 +248,7 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
     storyIssues: typeof story === 'string' ? story : story.storyIssues,
     readyIds: typeof story === 'string' ? story : story.readyIds,
     storyGoal,
+    waitingAcceptance,
   };
 }
 

@@ -26,6 +26,7 @@ import { sessionStateFile } from '../paths.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
+import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evidence.js';
 import { planEvidence } from './plan_evidence.js';
 import { scopeEvidence } from './scope_evidence.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
@@ -78,6 +79,7 @@ export async function buildGuardCtx(
   phase: string,
   authorInputs?: AuthorInputs,
   codeDeps?: CodeEvidenceDeps,
+  deployDeps?: DeployEvidenceDeps,
 ): Promise<Map<string, unknown>> {
   const m = new Map<string, unknown>();
   m.set('event', event.kind);
@@ -176,6 +178,20 @@ export async function buildGuardCtx(
     readiness_ran: co.readinessRan,
     deprecated_clean: co.deprecatedClean,
   });
+
+  // T2.8 — DEPLOY gate evidence. TWO facets: `capability_ok` (the shipped CapabilityGate ALLOWS the deploy
+  // capability — SKIPPED→true when no deploy env, so a flow with nothing to deploy is not blocked by the gate)
+  // ∧ `accepted` (the ACTIVE task's DURABLE acceptance item, acceptance.ts, is `accepted` — the 2nd/last human
+  // touchpoint, design §6.2). DUAL-SHAPE like T2.4–T2.7: a nested `deploy` object (the path the guards
+  // `deploy.capability_ok` / `deploy.accepted` resolve) PLUS flat `deploy.*` Map keys (the coverage
+  // binding-extractor sees the literal `.set` keys; unit asserts hold). `deployDeps` is injectable (tests pass
+  // pure readers); the default skips the capability gate (no deploy env wired) + reads the durable acceptance
+  // jsonl. FAIL-CLOSED on `accepted`: no active task / unaccepted item → false → the `accept` decision loops to
+  // PLAN (NEVER auto-ship).
+  const dep = await deployEvidenceForSession(sessionId, deployDeps);
+  m.set('deploy.capability_ok', dep.capabilityOk);
+  m.set('deploy.accepted', dep.accepted);
+  m.set('deploy', { capability_ok: dep.capabilityOk, accepted: dep.accepted });
   return m;
 }
 

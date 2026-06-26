@@ -23,6 +23,7 @@ import { buildGuardCtx, runV2Cartridges } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
 import type { AuthorInputs } from './author_evidence.js';
 import type { CodeEvidenceDeps } from './code_evidence.js';
+import type { DeployEvidenceDeps } from './deploy_evidence.js';
 import type { CodeIndex } from '../coverage/check.js';
 import { Requirement } from '../coverage/schema.js';
 
@@ -472,5 +473,95 @@ describe('buildGuardCtx — T2.7 CODE binding', () => {
     expect(ctx.get('code.readiness_ran')).toBe(false);
     expect(ctx.get('code.deprecated_clean')).toBe(false);
     expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+});
+
+// ── T2.8 — the DEPLOY gate binding over buildGuardCtx (capability_ok ∧ the durable accept decision) ──────────
+
+const deployEv = {
+  kind: 'post_tool_call',
+  tool: 'Bash',
+  args: {},
+  exit_code: 0,
+} as unknown as Event;
+
+/** Injectable pure DEPLOY deps — a fixed task + a capability verdict (null=skip→true) + an acceptance set. */
+const deployDeps = (
+  capabilityCheck: boolean | null,
+  acceptance: { taskId: string; status: string }[],
+): DeployEvidenceDeps => ({
+  activeTaskId: () => Promise.resolve('T2.8'),
+  capabilityCheck: () => Promise.resolve(capabilityCheck),
+  acceptance: () => Promise.resolve(acceptance),
+});
+
+// The real `deploy_ready` + `accepted` guard expressions, evaluated over the nested `deploy` object.
+const DEPLOY_GUARD = new RegistryGuardEvaluator(
+  new Map([
+    ['deploy_ready', 'deploy.capability_ok'],
+    ['accepted', 'deploy.accepted'],
+  ]),
+);
+
+describe('buildGuardCtx — T2.8 DEPLOY binding', () => {
+  it('binds deploy.capability_ok/deploy.accepted dual-shape (flat + nested)', async () => {
+    const ctx = await buildGuardCtx(
+      deployEv,
+      'sess-deploy-shape',
+      'deploy',
+      undefined,
+      undefined,
+      deployDeps(null, []),
+    );
+    expect(ctx.has('deploy.capability_ok')).toBe(true);
+    expect(ctx.has('deploy.accepted')).toBe(true);
+    const nested = ctx.get('deploy') as { capability_ok: boolean; accepted: boolean };
+    expect(typeof nested.capability_ok).toBe('boolean');
+    expect(typeof nested.accepted).toBe('boolean');
+  });
+
+  it('no deploy env (skip) → capability_ok:true → deploy_ready PASSES (gate advances)', async () => {
+    const ctx = await buildGuardCtx(
+      deployEv,
+      'sess-deploy-skip',
+      'deploy',
+      undefined,
+      undefined,
+      deployDeps(null, []),
+    );
+    expect(ctx.get('deploy.capability_ok')).toBe(true);
+    expect(DEPLOY_GUARD.eval('deploy_ready', ctx)).toBe(true);
+  });
+
+  it('a waiting (unaccepted) item → accepted:false → the accept decision LOOPS to plan (never ships)', async () => {
+    const ctx = await buildGuardCtx(
+      deployEv,
+      'sess-deploy-waiting',
+      'accept',
+      undefined,
+      undefined,
+      deployDeps(null, [{ taskId: 'T2.8', status: 'waiting' }]),
+    );
+    expect(ctx.get('deploy.accepted')).toBe(false);
+    expect(DEPLOY_GUARD.eval('accepted', ctx)).toBe(false); // else branch → rejected → plan
+  });
+
+  it('a marked-accepted item → accepted:true → the accept decision SHIPS to done', async () => {
+    const ctx = await buildGuardCtx(
+      deployEv,
+      'sess-deploy-accepted',
+      'accept',
+      undefined,
+      undefined,
+      deployDeps(null, [{ taskId: 'T2.8', status: 'accepted' }]),
+    );
+    expect(ctx.get('deploy.accepted')).toBe(true);
+    expect(DEPLOY_GUARD.eval('accepted', ctx)).toBe(true);
+  });
+
+  it('FAIL-CLOSED: default deps (no deploy env, no acceptance) → capability_ok:true, accepted:false', async () => {
+    const ctx = await buildGuardCtx(deployEv, 'sess-deploy-default-xyz', 'deploy');
+    expect(ctx.get('deploy.capability_ok')).toBe(true); // no deploy env wired → skip
+    expect(ctx.get('deploy.accepted')).toBe(false); // no accepted item → never auto-ship
   });
 });

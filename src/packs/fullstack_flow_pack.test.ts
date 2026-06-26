@@ -227,4 +227,59 @@ describe('fullstack-flow pack skeleton (Slice 1)', () => {
     await a.receive(env('post_tool_call', { scope: { is_advance: false } }));
     expect(a.state.current).toBe('plan');
   });
+
+  // ── T2.8 — the DEPLOY capability gate + the durable acceptance decision (never auto-ship) ──────────────────
+
+  /** Seed the top-level actor at a given state (the observed sub_flow at CODE is inert, so deploy/accept are
+   *  driven from a seeded state — mirrors v2_supply's `actor.state.current = …` resume seam). */
+  function seedAt(loaded: LoadedPackV2, state: string): V2ObservedActor {
+    const a = new V2ObservedActor('pack:fullstack-flow', loaded);
+    a.state.current = state;
+    return a;
+  }
+
+  it('T2.8: the DEPLOY gate uses `deploy_ready` (deploy.capability_ok), on_fail block', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const deploy = loaded.compiled.meta.deploy;
+    expect(deploy?.kind).toBe('gate');
+    expect(deploy?.guard).toBe('deploy_ready');
+    expect(deploy?.onFail?.action).toBe('block'); // never a warn pass-through
+    expect(loaded.compiled.guardExprs?.get('deploy_ready')).toBe('deploy.capability_ok');
+    expect(loaded.compiled.guardExprs?.get('accepted')).toBe('deploy.accepted');
+  });
+
+  it('T2.8: capability_ok PASSES the DEPLOY gate (does not block; the accept decision then decides)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'deploy');
+    // capability_ok true → the gate passes (no block). The `accept` decision evaluates on entry in the SAME
+    // event: accepted:true → ships to done (proving the gate did NOT block at deploy).
+    await a.receive(env('post_tool_call', { deploy: { capability_ok: true, accepted: true } }));
+    expect(a.state.current).toBe('done');
+  });
+
+  it('T2.8: capability_ok:false BLOCKS the DEPLOY gate (stays at deploy)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'deploy');
+    const effects = await a.receive(
+      env('post_tool_call', { deploy: { capability_ok: false, accepted: false } }),
+    );
+    expect(a.state.current).toBe('deploy'); // blocked → stayed
+    expect(blockedIn(effects)).toBe(true);
+  });
+
+  it('T2.8: a waiting (unaccepted) item → accept decision LOOPS to plan (never auto-ships)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'accept');
+    // deploy.accepted false (the waiting/absent default) → the `else` branch fires → rejected → plan.
+    await a.receive(env('post_tool_call', { deploy: { capability_ok: true, accepted: false } }));
+    expect(a.state.current).toBe('plan'); // looped back — NOT done
+  });
+
+  it('T2.8: a marked-accepted item → accept decision SHIPS to done', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'accept');
+    // deploy.accepted true (the human marked the durable item accepted) → the `accepted` branch → done.
+    await a.receive(env('post_tool_call', { deploy: { capability_ok: true, accepted: true } }));
+    expect(a.state.current).toBe('done');
+  });
 });
