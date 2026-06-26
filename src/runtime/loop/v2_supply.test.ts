@@ -620,3 +620,31 @@ describe('runV2Cartridges — T2.2 per-task FSM key', () => {
     await clearActiveTask(sid);
   });
 });
+
+// ── T2.3 — buildGuardCtx binds the nested `verdict` object beside the shipped flat `verdict.guess` ───────────
+// R-AUDIT-CTX (ARCHITECTURE.md:290) requires the FLAT `verdict.guess` key stays bound; T2.3 ADDS a nested
+// `verdict` object so `verdict.guess` path-resolves both ways (dual-shape, additive — pre-research §6).
+describe('buildGuardCtx — T2.3 verdict dual-shape', () => {
+  const ev = { kind: 'post_tool_call', tool: 'Bash', args: {}, exit_code: 0 } as unknown as Event;
+
+  it('binds the flat verdict.guess/verdict.spec keys (R-AUDIT-CTX stays MET)', async () => {
+    const ctx = await buildGuardCtx(ev, 'sess-verdict-flat-xyz', 'scope');
+    expect(ctx.has('verdict.guess')).toBe(true);
+    expect(ctx.has('verdict.spec')).toBe(true);
+  });
+
+  it('also binds a nested verdict object whose .guess/.spec equal the flat keys', async () => {
+    const ctx = await buildGuardCtx(ev, 'sess-verdict-nested-xyz', 'scope');
+    const nested = ctx.get('verdict') as { guess: unknown; spec: unknown };
+    expect(nested).toBeTypeOf('object');
+    expect(nested.guess).toBe(ctx.get('verdict.guess'));
+    expect(nested.spec).toBe(ctx.get('verdict.spec'));
+  });
+
+  it('a guard expression resolves verdict.guess via the nested path', async () => {
+    const ctx = await buildGuardCtx(ev, 'sess-verdict-guard-xyz', 'scope');
+    // no audit-cache for this fresh session → fail-open undefined → the guard is falsy, but it RESOLVES (no throw).
+    const guard = new RegistryGuardEvaluator(new Map([['has_guess', 'verdict.guess == "PASS"']]));
+    expect(() => guard.eval('has_guess', ctx)).not.toThrow();
+  });
+});

@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.535] - 2026-06-26
+
+### Added — v2 fullstack-flow guardCtx nested verdict (Track 2, T2.3)
+
+`buildGuardCtx` now binds a nested `verdict` `{guess, spec}` object alongside the shipped
+flat `verdict.guess`/`verdict.spec` keys (dual-shape, additive — `verdict.guess`
+path-resolves both ways). The flat keys stay bound so R-AUDIT-CTX
+(`ARCHITECTURE.md:290`) remains MET. The per-gate evidence binds (T2.4–T2.8) were
+already dual-shape; this completes the verdict dual-shape — every gate's guard ctx is
+now resolvable both flat and nested.
+
+- `src/runtime/loop/v2_supply.ts` — `m.set('verdict', { guess, spec })` beside the flat sets.
+
 ## [0.5.534] - 2026-06-26
 
 ### Added — v2 fullstack-flow per-task FSM key (Track 2, T2.2)

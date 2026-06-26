@@ -85,8 +85,11 @@ export async function buildGuardCtx(
   const m = new Map<string, unknown>();
   m.set('event', event.kind);
   if ('tool' in event) m.set('tool', event.tool);
-  m.set('verdict.guess', await readVerdict(sessionId, 'coding-flow-guess-audit-cache'));
-  m.set('verdict.spec', await readVerdict(sessionId, 'coding-flow-spec-audit-cache'));
+  const verdictGuess = await readVerdict(sessionId, 'coding-flow-guess-audit-cache');
+  const verdictSpec = await readVerdict(sessionId, 'coding-flow-spec-audit-cache');
+  m.set('verdict.guess', verdictGuess); // R-AUDIT-CTX: keep the flat key (ARCHITECTURE.md:290) — stays MET
+  m.set('verdict.spec', verdictSpec);
+  m.set('verdict', { guess: verdictGuess, spec: verdictSpec }); // T2.3 — nested, so `verdict.guess` path-resolves too
   m.set('phase', phase);
   // T2.4 — SCOPE gate evidence. The advance event is a Write/Edit whose target is a pre-research artifact; only
   // then is the SCOPE gate "advancing" (the short-circuit `!scope.is_advance` passes every other event, so a
