@@ -1,0 +1,25 @@
+# system-design — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` → `requires: []` (coding-domain select is at the PACK level via
+#     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
+#   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
+name: system-design
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  System-design lens for coding work — component boundaries, data flow, failure modes, idempotency, and
+  capacity/back-pressure. Selected for design of services, APIs, queues, jobs, and cross-component contracts.
+rules:
+  - id: system-design-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            System-design lens: Define each component's contract and failure mode before its happy path; make
+            operations idempotent and retries safe. Push state to the edges, bound every queue/buffer, and
+            apply back-pressure rather than letting load amplify into cascading failure.

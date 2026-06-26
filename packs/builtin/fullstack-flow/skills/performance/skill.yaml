@@ -1,0 +1,25 @@
+# performance — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` → `requires: []` (coding-domain select is at the PACK level via
+#     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
+#   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
+name: performance
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Performance lens for coding work — algorithmic complexity, N+1 queries, hot-path allocations, caching, and
+  measure-before-optimize. Selected for code on a hot path, data-access layers, or latency/throughput-sensitive work.
+rules:
+  - id: performance-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Performance lens: Measure before optimizing — profile the real hot path rather than guessing, and
+            fix algorithmic complexity and N+1 access patterns before micro-tuning. Cache only what is provably
+            hot and bound it with explicit invalidation; never trade correctness or readability for speed unproven.

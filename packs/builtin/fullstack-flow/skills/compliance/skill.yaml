@@ -1,0 +1,25 @@
+# compliance — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` → `requires: []` (coding-domain select is at the PACK level via
+#     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
+#   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
+name: compliance
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Compliance lens for coding work — data privacy (PII), retention/deletion, consent, audit trails, and
+  license obligations. Selected for code handling personal data, regulated records, third-party licenses, or audits.
+rules:
+  - id: compliance-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Compliance lens: Collect the minimum personal data needed, record its lawful basis/consent, and
+            honor retention and deletion (right-to-erasure) — do not log PII into systems you cannot purge.
+            Keep an immutable audit trail for regulated actions and verify third-party license terms before use.

@@ -1,0 +1,25 @@
+# observability — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` → `requires: []` (coding-domain select is at the PACK level via
+#     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
+#   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
+name: observability
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Observability lens for coding work — structured logs, metrics, traces, correlation IDs, and actionable
+  alerting. Selected for code that handles requests, jobs, or failures that must be diagnosable in production.
+rules:
+  - id: observability-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Observability lens: Emit structured, correlated events (trace/request IDs through every layer) so a
+            failure can be reconstructed without a repro; log decisions and inputs, never secrets. Alert on
+            user-visible symptoms (latency, error rate) with a runbook, not on every internal metric.

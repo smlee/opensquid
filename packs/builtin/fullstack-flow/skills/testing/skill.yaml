@@ -1,0 +1,25 @@
+# testing — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` → `requires: []` (coding-domain select is at the PACK level via
+#     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
+#   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
+name: testing
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Testing lens for coding work — behavior-first tests, edge/error coverage, deterministic fixtures, and
+  test-as-spec. Selected when authoring or changing code that needs proof, or when adding/altering tests.
+rules:
+  - id: testing-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Testing lens: Test observable behavior and contracts, not implementation detail, so refactors do
+            not break the suite; cover the error and boundary cases, not only the happy path. Keep tests
+            deterministic — inject time/randomness/IO — and treat a failing test as the spec until it passes.

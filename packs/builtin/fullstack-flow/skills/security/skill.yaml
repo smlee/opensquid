@@ -1,0 +1,35 @@
+# security — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (noted; prefer shipped schema + the seo-aeo-expert precedent):
+#   - the spec's `requires: { domain: coding }` is NOT a valid `Skill.requires` value. The shipped
+#     `Skill.requires` is `z.array(SkillRequires)` (kinds: automation_mode_on / active_task_present ONLY —
+#     src/runtime/skill_requires.ts); an object `{ domain: coding }` fails parse ("Expected array, received
+#     object"). The CODING-DOMAIN select gate lives at the PACK level instead: fullstack-flow/pack.yaml
+#     declares `serves: { intent: produce, domain: coding }`, matched by src/packs/match.ts (ORCH.3) so a
+#     coding turn routes to this pack and a non-coding turn does not. The skill-level shortlist is then the
+#     embedding/LLM router (src/runtime/skill_prefilter.ts + skill_router.ts), which ranks on `prose` — hence
+#     the coding-anchored `prose:` below. So `requires: []` here (no precondition), domain-select via serves.
+#   - the spec's `rules[].inject[]` is NOT a schema field. A rule is a `track_check` with a `process[]` of
+#     primitive calls (schemas/skill.ts). The faithful, REGISTERED surface primitive for non-blocking lens
+#     guidance is `verdict` with `level: surface` (src/functions/verdict.ts) — exactly the seo-aeo-expert
+#     precedent's mechanism (those lenses `verdict` at warn/block; a lens HINT surfaces). The spec's two
+#     substantive guidance lines are the surface `message`.
+name: security
+load: lazy # NO runtime cost unless selected (design §4.3)
+requires: [] # coding-domain select is at the PACK level (serves.domain) — see header
+triggers:
+  - kind: tool_call
+prose: |
+  Security engineering lens for coding work — input validation at trust boundaries, secrets handling,
+  authn/authz on mutating paths, and injection defense. Selected for coding/build tasks that touch user
+  input, queries, commands, credentials, or access control.
+rules:
+  - id: security-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Security lens: Validate inputs at the trust boundary; never interpolate untrusted data into
+            queries/commands. Secrets never in code or logs; least-privilege; authn/authz on every mutating path.

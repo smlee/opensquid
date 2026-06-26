@@ -1,0 +1,28 @@
+# coding-principles — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to
+# the fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` is not a valid `Skill.requires` (it is `z.array(SkillRequires)`); the
+#     coding-domain select gate is at the PACK level (fullstack-flow/pack.yaml `serves.domain`, matched by
+#     src/packs/match.ts). So `requires: []` + a coding-anchored `prose:` for the skill router shortlist.
+#   - `rules[].inject[]` is not a schema field; the registered surface primitive is `verdict` with
+#     `level: surface` (the seo-aeo-expert precedent's mechanism). The two guidance lines are the message.
+name: coding-principles
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Core coding-principles lens for coding work — readability, single responsibility, small focused functions,
+  clear naming, DRY without premature abstraction, and explicit error handling. Selected for any code authored,
+  refactored, or reviewed.
+rules:
+  - id: coding-principles-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Coding-principles lens: Prefer small, single-responsibility functions with intention-revealing
+            names; make the simple path obvious and the edge cases explicit. Handle errors at the right layer —
+            fail loud at boundaries, never swallow; do not abstract until a third concrete duplication appears.

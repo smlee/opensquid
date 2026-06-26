@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.540] - 2026-06-26
+
+### Added — v2 fullstack-flow backend (engineering) lens skills (Track 2, T2.13)
+
+The 10 engineering lens skills (design §8 bucket, verbatim): `coding-principles`,
+`system-design`, `architecture`, `testing`, `observability`, `security`, `performance`,
+`accessibility`, `versioning`, `compliance`. Each is `load: lazy` (no runtime cost unless
+selected) with a coding-anchored `prose` and a `<lens>-lens` rule that surfaces two
+substantive guidance lines (`verdict` `level: surface`).
+
+- `packs/builtin/fullstack-flow/skills/<lens>/skill.yaml` ×10 (NEW) + `fullstack_lens_skills.skill.test.ts`.
+
+Schema-faithful divergences from the spec's literal shape (documented in each skill):
+`requires: { domain: coding }` isn't a valid `Skill.requires` value, so coding-domain
+select is at the PACK level (`serves: { domain: coding }`, matched by `match.ts`/ORCH.3) +
+the embedding router's `prose` ranking; `rules[].inject[]` isn't a schema field, so the
+registered surface primitive (`verdict level: surface`) carries the guidance (the
+seo-aeo-expert precedent's mechanism). Live skill SELECTION needs the v2 loader to load
+the pack `skills/` dir (the T2.1 wiring) — authored + schema-validated + select-tested here.
+
 ## [0.5.539] - 2026-06-26
 
 ### Added — v2 fullstack-flow pause gates + EXECUTE loop driver (Track 2, T2.9)

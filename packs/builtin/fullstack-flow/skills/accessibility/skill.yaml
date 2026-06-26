@@ -1,0 +1,25 @@
+# accessibility — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` → `requires: []` (coding-domain select is at the PACK level via
+#     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
+#   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
+name: accessibility
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Accessibility lens for coding work — semantic markup, keyboard operability, focus management, color contrast,
+  and ARIA used correctly. Selected for UI/interface code, components, forms, and anything a human interacts with.
+rules:
+  - id: accessibility-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Accessibility lens: Use native semantic elements first (button/label/nav) so keyboard, focus order,
+            and screen-reader semantics come for free; reach for ARIA only to fill a genuine gap. Ensure every
+            interaction is keyboard-operable with a visible focus state and meets WCAG AA contrast — test it.

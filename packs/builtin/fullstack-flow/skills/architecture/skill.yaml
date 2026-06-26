@@ -1,0 +1,25 @@
+# architecture — a lazy ENGINEERING lens (T2.13). Copies the seo-aeo-expert lens-skill shape, adapted to the
+# fullstack-flow (coding-domain) pack. Loaded ONLY when selected → NO runtime cost otherwise (design §4.3).
+#
+# DIVERGENCE FROM THE SPEC'S LITERAL SHAPE (see security/skill.yaml for the full rationale; same for all 10):
+#   - `requires: { domain: coding }` → `requires: []` (coding-domain select is at the PACK level via
+#     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
+#   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
+name: architecture
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Architecture lens for coding work — module dependency direction, layering, coupling/cohesion, and seams for
+  change. Selected for structural decisions: new modules, dependency edges, layering, and large refactors.
+rules:
+  - id: architecture-lens
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Architecture lens: Keep dependencies pointing inward toward stable abstractions; do not let a
+            high-level policy module import a low-level detail. Isolate volatile concerns (I/O, frameworks,
+            vendors) behind seams so the core logic stays testable and the blast radius of change stays small.
