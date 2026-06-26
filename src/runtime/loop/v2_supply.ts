@@ -25,6 +25,7 @@ import { appendTransition } from '../observe/transition_log.js';
 import { sessionStateFile } from '../paths.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
+import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
 import { planEvidence } from './plan_evidence.js';
 import { scopeEvidence } from './scope_evidence.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
@@ -76,6 +77,7 @@ export async function buildGuardCtx(
   sessionId: string,
   phase: string,
   authorInputs?: AuthorInputs,
+  codeDeps?: CodeEvidenceDeps,
 ): Promise<Map<string, unknown>> {
   const m = new Map<string, unknown>();
   m.set('event', event.kind);
@@ -156,6 +158,24 @@ export async function buildGuardCtx(
   m.set('author.coverage_complete', au.coverageComplete);
   m.set('author.real_code', au.realCode);
   m.set('author', { coverage_complete: au.coverageComplete, real_code: au.realCode });
+
+  // T2.7 — CODE gate evidence. THREE facets: `phases_complete` (the shipped 7-phase ledger `isComplete` for the
+  // active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧ `deprecated_clean` (the
+  // recorded readiness found NO deprecated call — the BLOCKING result, gates on the RESULT not merely "ran").
+  // DUAL-SHAPE like T2.4/T2.5/T2.6: a nested `code` object (the path the guard
+  // `code.phases_complete && code.readiness_ran && code.deprecated_clean` resolves) PLUS flat `code.*` Map keys
+  // (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `codeDeps` is injectable
+  // (tests pass pure readers); the default binds the shipped runtime readers. FAIL-CLOSED on no active task /
+  // any throw → {false,false,false}: an unprovable CODE blocks (never auto-"ready").
+  const co = await codeEvidenceForSession(sessionId, codeDeps);
+  m.set('code.phases_complete', co.phasesComplete);
+  m.set('code.readiness_ran', co.readinessRan);
+  m.set('code.deprecated_clean', co.deprecatedClean);
+  m.set('code', {
+    phases_complete: co.phasesComplete,
+    readiness_ran: co.readinessRan,
+    deprecated_clean: co.deprecatedClean,
+  });
   return m;
 }
 

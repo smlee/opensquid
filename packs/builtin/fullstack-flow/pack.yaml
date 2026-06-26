@@ -44,8 +44,14 @@ guards:
   # `author.real_code` (every requirement MET — where met for reachable/binding REQUIRES its proof-test to pass,
   # so a stub with no passing proof fails). Bound dual-shape by buildGuardCtx; FAIL-CLOSED on a build error.
   author_ready: 'author.coverage_complete && author.real_code'
+  # T2.7 — the CODE gate (inner gate of the `code_cycle` sub_flow): a deterministic, zero-LLM predicate.
+  # `code.phases_complete` (the shipped 7-phase ledger `isComplete` for the active task) ∧ `code.readiness_ran`
+  # (the three readiness surfacers ran + were recorded) ∧ `code.deprecated_clean` (the recorded readiness found
+  # NO known-deprecated call — the BLOCKING result: a deprecated hit BLOCKS, not merely "the surfacer ran").
+  # Bound dual-shape by buildGuardCtx; FAIL-CLOSED (never-run readiness / no active task → blocks).
+  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean'
   # Skeleton pass-through for the not-yet-built stages: `event` is always bound to a non-empty event-kind
-  # string → always truthy. The real per-stage readiness predicates arrive with T2.6–T2.8.
+  # string → always truthy. The real per-stage readiness predicates arrive with T2.8.
   ready: event
   # The human-acceptance signal. UNBOUND in the skeleton ctx → the accept decision's `else` branch fires, so
   # DEPLOY loops back to PLAN (a skeleton must NEVER auto-declare "shipped"). Bound in the acceptance slice.
@@ -75,13 +81,18 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: authored
       on_fail: { action: block, message: 'AUTHOR: coverage_complete∧real_code' }
-    # ── CODE ───────────────────────────────────────────────────────────────
+    # ── CODE (T2.7 — ENFORCING gate on the live OBSERVED path) ──────────────
+    # A `sub_flow` is INERT in observed mode (V2ObservedActor advances only at gate/decision,
+    # v2_observed_actor.ts:74) → it would PARK the live flow at CODE and never reach DEPLOY. So the live observed
+    # path uses a GATE here (traverses code→deploy). The `flows.code_cycle` sub_flow is RETAINED below (it
+    # exercises the sub_flow KIND + compiles/validates) as the §5-DEFERRED driven per-task region — same
+    # reconciliation as the executor kind + loopback flow: defined for the driven model, NOT on the live path.
     code:
       kind: gate
-      guard: ready
+      guard: code_ready
       trigger: [post_tool_call]
       on_pass_emits: coded
-      on_fail: { action: warn, message: 'CODE checkpoint (skeleton — handler deferred)' }
+      on_fail: { action: block, message: 'CODE: log all 7 phases + readiness clean' }
     # ── DEPLOY (new top-level region vs v1) ────────────────────────────────
     deploy:
       kind: gate
@@ -107,3 +118,23 @@ fsm:
     - { from: deploy, on: deployed, to: accept }
     - { from: accept, on: accepted, to: done }
     - { from: accept, on: rejected, to: plan }
+
+# HAR.1 registry of isolated nested machines (compile_v2.ts:160 — a `sub_flow.flow` is a key into this).
+flows:
+  # T2.7 — the per-task CODE region: the agent logs all 7 phases + runs the readiness surfacers, then the
+  # ENFORCING `code_ready` gate passes (→ committed/terminal `coded`) or BLOCKS on the RESULT (incomplete phases,
+  # never-run readiness, or a deprecated-syntax hit). One isolated machine per task (principle 9).
+  code_cycle:
+    initial: coding
+    states:
+      coding:
+        kind: gate
+        guard: code_ready
+        trigger: [post_tool_call]
+        on_pass_emits: committed
+        on_fail: { action: block, message: 'CODE: log all 7 phases + readiness clean' }
+      committed:
+        kind: terminal
+        outcome: shipped
+    transitions:
+      - { from: coding, on: committed, to: committed }

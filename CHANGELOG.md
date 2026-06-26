@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.532] - 2026-06-26
+
+### Added — v2 fullstack-flow CODE gate enforces deterministically (Track 2, T2.7)
+
+The fourth v2 gate now enforces, zero-LLM — SCOPE + PLAN + AUTHOR + CODE all enforce:
+
+- **CODE gate** = `code.phases_complete && code.readiness_ran && code.deprecated_clean`: `readiness.ts` (the 3
+  surfacers — affected-files via `importGraph.reaches`, existing-definitions, deprecated-syntax scan; gates on
+  RESULTS — a deprecated hit BLOCKS, not merely "the surfacer ran") + `code_evidence.ts` (binds
+  `phases_complete` via the shipped `isComplete`, `readiness_ran`, `deprecated_clean`; fail-closed). Dual-shape ctx.
+- **CODE is a GATE on the live observed path** (not a `sub_flow`): a sub_flow is inert in observed mode
+  (`v2_observed_actor.ts:74`) and would park the flow at CODE; the gate traverses code→deploy. `flows.code_cycle`
+  is retained as the §5-deferred driven per-task region (exercises the sub_flow kind; not on the live path).
+- `fullstack-flow/pack.yaml` — `code` gate `on_fail: block`. v1/kanban untouched; pack opt-in (Track 3).
+
 ## [0.5.531] - 2026-06-26
 
 ### Added — v2 fullstack-flow AUTHOR gate enforces deterministically (Track 2, T2.6)

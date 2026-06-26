@@ -22,6 +22,7 @@ import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { buildGuardCtx, runV2Cartridges } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
 import type { AuthorInputs } from './author_evidence.js';
+import type { CodeEvidenceDeps } from './code_evidence.js';
 import type { CodeIndex } from '../coverage/check.js';
 import { Requirement } from '../coverage/schema.js';
 
@@ -355,5 +356,121 @@ describe('buildGuardCtx — T2.6 AUTHOR binding', () => {
     expect(ctx.get('author.coverage_complete')).toBe(false);
     expect(ctx.get('author.real_code')).toBe(false);
     expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(false);
+  });
+});
+
+// ── T2.7 — the CODE gate binding over buildGuardCtx (phases_complete ∧ readiness_ran ∧ deprecated_clean) ─────
+
+const codeEv = {
+  kind: 'post_tool_call',
+  tool: 'Bash',
+  args: {},
+  exit_code: 0,
+} as unknown as Event;
+
+/** Injectable pure CODE deps — a fixed task + the three facets a test wants the producer to read. */
+const codeDeps = (
+  phasesComplete: boolean,
+  ran: boolean,
+  deprecatedClean: boolean,
+): CodeEvidenceDeps => ({
+  activeTaskId: () => Promise.resolve('T2.7'),
+  // a PhaseState whose `isComplete` is `phasesComplete`: all-7 when complete, one phase when not.
+  phaseState: () =>
+    Promise.resolve(
+      phasesComplete
+        ? {
+            task_id: 'T2.7',
+            phases: ['pre_research', 'learn', 'code', 'test', 'audit', 'post_research', 'fix'],
+          }
+        : { task_id: 'T2.7', phases: ['pre_research'] },
+    ),
+  readiness: () => Promise.resolve({ ran, deprecatedClean }),
+});
+
+// The real `code_ready` guard expression, evaluated over the nested `code` object buildGuardCtx binds.
+const CODE_GUARD = new RegistryGuardEvaluator(
+  new Map([['code_ready', 'code.phases_complete && code.readiness_ran && code.deprecated_clean']]),
+);
+
+describe('buildGuardCtx — T2.7 CODE binding', () => {
+  it('binds code.phases_complete/readiness_ran/deprecated_clean dual-shape (flat + nested)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-shape',
+      'code',
+      undefined,
+      codeDeps(true, true, true),
+    );
+    expect(ctx.has('code.phases_complete')).toBe(true);
+    expect(ctx.has('code.readiness_ran')).toBe(true);
+    expect(ctx.has('code.deprecated_clean')).toBe(true);
+    const nested = ctx.get('code') as {
+      phases_complete: boolean;
+      readiness_ran: boolean;
+      deprecated_clean: boolean;
+    };
+    expect(typeof nested.phases_complete).toBe('boolean');
+    expect(typeof nested.readiness_ran).toBe('boolean');
+    expect(typeof nested.deprecated_clean).toBe('boolean');
+  });
+
+  it('complete phases + clean readiness → all true → code_ready PASSES (gate advances)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-pass',
+      'code',
+      undefined,
+      codeDeps(true, true, true),
+    );
+    expect(ctx.get('code.phases_complete')).toBe(true);
+    expect(ctx.get('code.readiness_ran')).toBe(true);
+    expect(ctx.get('code.deprecated_clean')).toBe(true);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(true); // gate would advance
+  });
+
+  it('a deprecated hit → deprecated_clean:false → code_ready BLOCKS (results-gating, not just "ran")', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-dep',
+      'code',
+      undefined,
+      codeDeps(true, true, false),
+    );
+    expect(ctx.get('code.readiness_ran')).toBe(true); // it RAN…
+    expect(ctx.get('code.deprecated_clean')).toBe(false); // …but a deprecated hit BLOCKS
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('incomplete phases → phases_complete:false → code_ready BLOCKS', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-incomplete',
+      'code',
+      undefined,
+      codeDeps(false, true, true),
+    );
+    expect(ctx.get('code.phases_complete')).toBe(false);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('never-run readiness → readiness_ran:false → code_ready BLOCKS (fail-closed)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-norun',
+      'code',
+      undefined,
+      codeDeps(true, false, false),
+    );
+    expect(ctx.get('code.readiness_ran')).toBe(false);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('FAIL-CLOSED: no active task (default deps, no signal) → all false → BLOCKS', async () => {
+    const ctx = await buildGuardCtx(codeEv, 'sess-code-notask-xyz', 'code');
+    expect(ctx.get('code.phases_complete')).toBe(false);
+    expect(ctx.get('code.readiness_ran')).toBe(false);
+    expect(ctx.get('code.deprecated_clean')).toBe(false);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
   });
 });
