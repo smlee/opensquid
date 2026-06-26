@@ -110,6 +110,18 @@ describe('renderHandoverDoc', () => {
     expect(doc).not.toContain('Open work-graph issues'); // the old flat section is gone
   });
 
+  it("KANBAN.5: a wedged issue lands in the live doc's Wedged lane (deriveLane through renderHandoverDoc)", () => {
+    const doc = renderHandoverDoc({
+      ...base,
+      storyIssues: [
+        ...(base.storyIssues as Exclude<typeof base.storyIssues, string>),
+        { id: 'wg-wed', title: 'stuck item', status: 'in_progress', wedgeReason: 'cannot proceed' },
+      ],
+    });
+    expect(doc).toContain('**Wedged**');
+    expect(doc).toContain('`wg-wed` stuck item'); // wedgeReason precedes in_progress → Wedged lane
+  });
+
   it('KANBAN.5: an unreadable work-graph degrades to a marker (no throw)', () => {
     const doc = renderHandoverDoc({
       ...base,
