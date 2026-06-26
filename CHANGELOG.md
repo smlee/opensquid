@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.536] - 2026-06-26
+
+### Added — v2 fullstack-flow batch-vs-isolate decision (Track 2, T2.14)
+
+`batchDecide(issueIds, edges)` — a pure, deterministic two-axis read over the work-graph
+edges (zero LLM). axis-1: an issue with no unmet `blocks` blocker runs in parallel, a
+blocked one is sequential. axis-2: independent siblings sharing a `parent-child`/
+`discovered-from` parent are grouped into one batch run. "small/low-risk" is explicitly
+OUT (no deterministic signal). Consumed by the T2.9 EXECUTE loop driver to dispatch the
+next run-group.
+
+- `src/runtime/loop/batch_decide.ts` (NEW) + `batch_decide.test.ts` (8 tests).
+
 ## [0.5.535] - 2026-06-26
 
 ### Added — v2 fullstack-flow guardCtx nested verdict (Track 2, T2.3)
