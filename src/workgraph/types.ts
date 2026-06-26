@@ -102,6 +102,11 @@ export interface WorkGraphStore {
   releaseClaim(project: string, id: string): Promise<void>;
   /** The append-only op-log for an issue, in (lamport, id) order. */
   listEvents(project: string, issueId: string): Promise<WgOp[]>;
+  /**
+   * T2.5 — the folded edge projection for a project, as `{from,to,type}` triples (deterministic order by
+   * `edge_key`). Mirrors {@link listIssues}; the PLAN gate (`planAudit`) reads the dependency graph through it.
+   */
+  listEdges(project: string): Promise<{ from: string; to: string; type: EdgeType }[]>;
 }
 
 /**
@@ -128,4 +133,6 @@ export interface WorkGraphFacade {
   clearWedge(id: string): Promise<void>;
   releaseClaim(id: string): Promise<void>;
   listEvents(issueId: string): Promise<WgOp[]>;
+  /** T2.5 — the project's folded edge projection as `{from,to,type}` triples (deterministic). */
+  listEdges(): Promise<{ from: string; to: string; type: EdgeType }[]>;
 }

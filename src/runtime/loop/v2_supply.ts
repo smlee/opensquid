@@ -18,11 +18,13 @@
 import { readFile } from 'node:fs/promises';
 
 import { loadActiveV2Cartridges } from '../bootstrap.js';
+import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { sessionStateFile } from '../paths.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
+import { planEvidence } from './plan_evidence.js';
 import { scopeEvidence } from './scope_evidence.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
 
@@ -44,6 +46,11 @@ export interface V2Decision {
 }
 
 const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkills: [] };
+
+// T2.5 — the session-state key holding the CAPTURED pre-research artifact path. Stamped on the SCOPE advance
+// (a Write/Edit of a `docs/research/*-pre-research-*` file) so the later PLAN gate can `extractScope` the SAME
+// artifact (the INDEPENDENT design-element universe) without a live advance event in hand.
+const PRE_RESEARCH_PATH_KEY = 'fullstack-flow-pre-research-path';
 
 /** FAIL-OPEN read of a coding-flow audit-cache verdict (mirrors handoff/collect.ts readJsonState+auditHead):
  *  the flat `{ verdict: string }` shape; ANY error → undefined (observe-never-breaks). */
@@ -102,9 +109,51 @@ export async function buildGuardCtx(
     m.set('scope.anchors_ok', ev.anchorsOk);
     m.set('scope.depth', ev.depth);
     m.set('scope.open_question', ev.openQuestion);
+    // T2.5 — stamp the captured pre-research path so the PLAN gate can extractScope the SAME artifact later
+    // (when the live event is no longer the artifact write). Fail-open: a write failure must not break scoping.
+    try {
+      await atomicWriteFile(sessionStateFile(sessionId, PRE_RESEARCH_PATH_KEY), JSON.stringify(fp));
+    } catch (err) {
+      process.stderr.write(
+        `[v2-supply] pre-research path stamp failed (ignored): ${String(err)}\n`,
+      );
+    }
   }
   m.set('scope', sc); // nested object — the shape the guard expression path-resolves
+
+  // T2.5 — PLAN gate evidence. The facets come from the work-graph (issues + edges) joined against the
+  // INDEPENDENT design-element universe (`extractScope` of the captured pre-research artifact). DUAL-SHAPE like
+  // T2.4's `scope`: a nested `plan` object (the path the guard `plan.acyclic && plan.complete` resolves) PLUS
+  // flat `plan.*` Map keys (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold).
+  // FAIL-CLOSED when no artifact was captured yet (planEvidence → {false,false}) — a PLAN with no scope blocks.
+  const pl: { acyclic: boolean; complete: boolean } = { acyclic: false, complete: false };
+  try {
+    const captured = await readPreResearchPath(sessionId);
+    if (captured !== null) {
+      const ev = await planEvidence(sessionId, captured);
+      pl.acyclic = ev.acyclic;
+      pl.complete = ev.complete;
+    }
+  } catch (err) {
+    // FAIL-CLOSED stays {false,false}; observe-never-breaks — never let a work-graph read break the hook.
+    process.stderr.write(`[v2-supply] plan evidence failed (ignored): ${String(err)}\n`);
+  }
+  m.set('plan.acyclic', pl.acyclic);
+  m.set('plan.complete', pl.complete);
+  m.set('plan', pl); // nested object — the shape the guard expression path-resolves
   return m;
+}
+
+/** Read the captured pre-research artifact path (T2.5), or `null` when none was stamped/unreadable. */
+async function readPreResearchPath(sessionId: string): Promise<string | null> {
+  try {
+    const v = JSON.parse(
+      await readFile(sessionStateFile(sessionId, PRE_RESEARCH_PATH_KEY), 'utf8'),
+    ) as unknown;
+    return typeof v === 'string' && v !== '' ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

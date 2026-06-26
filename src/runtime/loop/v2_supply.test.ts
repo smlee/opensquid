@@ -8,15 +8,18 @@ import { join } from 'node:path';
 import { compilePackV2 } from '../../packs/compile_v2.js';
 import { PackV2 } from '../../packs/schemas/pack_v2.js';
 import type { LoadedPackV2 } from '../../packs/loader_v2.js';
+import { atomicWriteFile } from '../../storage/atomic_file.js';
+import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { appendAsk, readCapturedAsk } from '../coverage/captured_ask.js';
 import { readFsmStateRaw } from '../fsm_state.js';
+import { OPENSQUID_HOME, sessionStateFile } from '../paths.js';
 import { appendTool } from '../session_state.js';
 import type { Event } from '../event.js';
 
 // Mock the cartridge loader so each test controls the active v2 set.
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
 import { loadActiveV2Cartridges } from '../bootstrap.js';
-import { runV2Cartridges } from './v2_supply.js';
+import { buildGuardCtx, runV2Cartridges } from './v2_supply.js';
 
 const mockLoad = vi.mocked(loadActiveV2Cartridges);
 
@@ -194,5 +197,77 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
     const promptEvent = { kind: 'prompt_submit', prompt: 'build the thing' } as unknown as Event;
     await runV2Cartridges(sid, promptEvent, NOW);
     expect((await readCapturedAsk(sid)).turns).toEqual(['build the thing']);
+  });
+});
+
+// ── T2.5 — the PLAN gate binding over buildGuardCtx (acyclic ∧ complete, fail-closed) ──────────────────────
+
+const PRE_RESEARCH_PATH_KEY = 'fullstack-flow-pre-research-path';
+
+/** Stamp the captured pre-research path (what the SCOPE advance does) for the PLAN gate to read. */
+async function stampPreResearch(sessionId: string, p: string): Promise<void> {
+  await atomicWriteFile(sessionStateFile(sessionId, PRE_RESEARCH_PATH_KEY), JSON.stringify(p));
+}
+
+/** Populate the HOME work-graph (legacy-global — the project a marker-less session resolves to). */
+async function populateWg(
+  issues: { title: string; body: string }[],
+  edges: [number, number][] = [],
+): Promise<void> {
+  const store = workGraphStore({
+    dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
+    sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+  });
+  await store.init();
+  const wg = bindProject(store, 'legacy-global');
+  const ids: string[] = [];
+  for (const i of issues) ids.push((await wg.createIssue(i)).id);
+  for (const [f, t] of edges) {
+    const from = ids[f];
+    const to = ids[t];
+    if (from !== undefined && to !== undefined) await wg.addEdge(from, to, 'blocks');
+  }
+}
+
+describe('buildGuardCtx — T2.5 PLAN binding', () => {
+  const ev = { kind: 'post_tool_call', tool: 'Bash', args: {}, exit_code: 0 } as unknown as Event;
+
+  it('binds plan.acyclic/plan.complete dual-shape (flat + nested)', async () => {
+    const ctx = await buildGuardCtx(ev, 'sess-plan-shape', 'plan');
+    expect(ctx.has('plan.acyclic')).toBe(true);
+    expect(ctx.has('plan.complete')).toBe(true);
+    const nested = ctx.get('plan') as { acyclic: boolean; complete: boolean };
+    expect(typeof nested.acyclic).toBe('boolean');
+    expect(typeof nested.complete).toBe('boolean');
+  });
+
+  it('FAIL-CLOSED: no captured pre-research path → plan.acyclic=false, plan.complete=false', async () => {
+    const ctx = await buildGuardCtx(ev, 'sess-plan-noscope', 'plan');
+    expect(ctx.get('plan.acyclic')).toBe(false);
+    expect(ctx.get('plan.complete')).toBe(false);
+  });
+
+  it('populated + acyclic + every element covered → plan.acyclic=true, plan.complete=true', async () => {
+    const sid = 'sess-plan-ok';
+    const dir = await mkdtemp(join(tmpdir(), 'plan-ok-'));
+    const sub = join(dir, 'docs', 'research');
+    const p = join(sub, 'T-x-pre-research-2026.md');
+    await mkdir(sub, { recursive: true });
+    await writeFile(
+      p,
+      ['1. First [ask: "a"]', '2. Second [needs: 1] [ask: "b"]'].join('\n'),
+      'utf8',
+    );
+    await stampPreResearch(sid, p);
+    await populateWg(
+      [
+        { title: 'scope-1', body: 'sourceElementId:scope-1' },
+        { title: 'scope-2', body: 'sourceElementId:scope-2' },
+      ],
+      [[0, 1]],
+    );
+    const ctx = await buildGuardCtx(ev, sid, 'plan');
+    expect(ctx.get('plan.acyclic')).toBe(true);
+    expect(ctx.get('plan.complete')).toBe(true);
   });
 });

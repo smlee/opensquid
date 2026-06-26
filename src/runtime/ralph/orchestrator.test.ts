@@ -60,6 +60,7 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphFacad
     listIssues: () => P(ids.map(issue)),
     addEdge: () => P(undefined),
     listEvents: () => P([]),
+    listEdges: () => P([]),
   };
   return store;
 }

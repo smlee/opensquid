@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.530] - 2026-06-26
+
+### Added — v2 fullstack-flow PLAN gate enforces deterministically (Track 2, T2.5)
+
+The second v2 gate now enforces, zero-LLM:
+
+- **PLAN gate** = `plan.acyclic && plan.complete`: `plan_audit.ts` (`planAudit` — Kahn topological sort over
+  `blocks`+`parent-child` edges for acyclicity; `complete` = every design element has ≥1 covering issue) +
+  `buildCoveredBy` (a deterministic JOIN grouping issues by their stamped `sourceElementId`, no fuzzy match).
+  The design-element UNIVERSE is the independent `extractScope` output (NOT auto-decompose's issues) → the
+  completeness check is non-circular.
+- `auto_decompose.ts` — populates work-graph issues (stamped with their source element) + `blocks` edges from the
+  artifact's declared dependencies, consuming the deterministic `(lamport, actor-id)` order.
+- `plan_evidence.ts` — the runtime bridge binding `plan.acyclic`/`plan.complete` into `buildGuardCtx` (dual-shape,
+  like the SCOPE gate); fail-closed on a missing artifact.
+- `workgraph/store.ts` — added a `listEdges(project)` read accessor (additive).
+- `fullstack-flow/pack.yaml` — `plan` gate now `guard: plan_ready`, `on_fail: block`. v1/kanban untouched; pack
+  still opt-in (Track 3).
+
 ## [0.5.529] - 2026-06-26
 
 ### Added — v2 fullstack-flow SCOPE gate now ENFORCES deterministically (Track 2, T2.4)

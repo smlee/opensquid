@@ -241,6 +241,20 @@ export function workGraphStore(opts: {
       return rs.rows.map(rowToIssue);
     },
 
+    // T2.5 — the folded edge projection, `{from,to,type}` triples ordered by `edge_key` (deterministic, the
+    // content-derived key). Mirrors `listIssues`; `planAudit` reads the `blocks`+`parent-child` subset from it.
+    async listEdges(project) {
+      const rs = await db().execute({
+        sql: 'SELECT from_id, to_id, type FROM wg_edges WHERE project = ? ORDER BY edge_key',
+        args: [project],
+      });
+      return rs.rows.map((r) => ({
+        from: str(r, 'from_id'),
+        to: str(r, 'to_id'),
+        type: str(r, 'type') as EdgeType,
+      }));
+    },
+
     async updateIssue(project, id, patch) {
       const cur = await getIssue(project, id);
       if (cur === null) throw new Error(`workgraph: no issue ${id}`);
@@ -356,6 +370,7 @@ export function bindProject(base: WorkGraphStore, project: string): WorkGraphFac
     clearWedge: (id) => base.clearWedge(project, id),
     releaseClaim: (id) => base.releaseClaim(project, id),
     listEvents: (issueId) => base.listEvents(project, issueId),
+    listEdges: () => base.listEdges(project),
   };
 }
 

@@ -59,6 +59,19 @@ describe('workGraphStore (event-sourced)', () => {
     expect((await wg.listReady()).map((i) => i.id)).toEqual([a.id]);
   });
 
+  it('listEdges returns the folded {from,to,type} triples (T2.5 accessor)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'a' });
+    const b = await wg.createIssue({ title: 'b' });
+    const c = await wg.createIssue({ title: 'c' });
+    await wg.addEdge(a.id, b.id, 'blocks');
+    await wg.addEdge(b.id, c.id, 'parent-child');
+    const edges = await wg.listEdges();
+    expect(edges).toHaveLength(2);
+    expect(edges).toContainEqual({ from: a.id, to: b.id, type: 'blocks' });
+    expect(edges).toContainEqual({ from: b.id, to: c.id, type: 'parent-child' });
+  });
+
   it('re-adding an edge with a different type UPDATES it (type excluded from identity)', async () => {
     const wg = await fresh();
     const a = await wg.createIssue({ title: 'a' });
