@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.538] - 2026-06-26
+
+### Added — v2 fullstack-flow goal-map consultation (Track 2, T2.10)
+
+The shipped goal-map is now consulted at SCOPE. `goalConsult(sid, cwd)` is a deterministic,
+advisory destination check (zero LLM): it reads the goal map and the captured ask, and
+reports whether the goal's salient tokens (len > 4) still appear in the ask. No goal map /
+empty goal → not a drift signal (`aligned: true`). The value lights up the SCOPE-stage
+report's `## Goal alignment` line (the live consumer of T2.12's seam) — `on the captured
+goal` or `OFF the captured goal — destination drift`. Advisory only — never a block (the
+anti-drift gate is checkAnchors; this is the human-readable destination check).
+
+- `src/runtime/loop/goal_consult.ts` (NEW) + `goal_consult.test.ts` (6 tests).
+- `src/runtime/loop/v2_supply.ts` — the SCOPE transition passes `goalConsult().aligned` to the report.
+
 ## [0.5.537] - 2026-06-26
 
 ### Added — v2 fullstack-flow per-stage reports (Track 2, T2.12)

@@ -26,6 +26,7 @@ import { sessionStateFile } from '../paths.js';
 import { readActiveTaskId, readSessionCwd } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
+import { goalConsult } from './goal_consult.js';
 import { emitStageReport, renderStageReport, type Stage } from './stage_report.js';
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
@@ -295,15 +296,20 @@ export async function runV2Cartridges(
             try {
               const root = await readSessionCwd(sessionId);
               if (root !== null) {
-                // T2.10 SEAM (the SCOPE report's goal-alignment line): for now `goalAligned` is `undefined`
-                // for EVERY stage (no line). T2.10 will replace the SCOPE branch with
-                //   const goalAligned = p.from === 'scope' ? (await goalConsult(sessionId, root)).aligned : undefined;
-                // and spread it into `r` below.
+                // T2.10 — the SCOPE report's goal-alignment line (the live consumer of goalConsult). Only the
+                // SCOPE stage carries it (the destination check belongs at scope-time); other stages leave it
+                // undefined → no `## Goal alignment` line. ADVISORY (surfaced, never a block — the anti-drift
+                // gate is checkAnchors). FAIL-OPEN is the surrounding try/catch.
                 const r = {
                   stage,
                   taskId: taskId ?? 'no-active-task',
                   summary: `${p.from} complete`,
                   nextDirective: p.to,
+                  // T2.10 — only the SCOPE stage carries the goal-alignment line (`exactOptionalPropertyTypes`:
+                  // the key is present ONLY when defined, never an explicit `undefined`).
+                  ...(p.from === 'scope'
+                    ? { goalAligned: (await goalConsult(sessionId, root)).aligned }
+                    : {}),
                 };
                 await emitStageReport(root, r, now); // the dated docs/reports/ file
                 const { body } = renderStageReport(r, now); // the same body, mirrored into memory below

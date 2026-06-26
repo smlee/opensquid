@@ -11,6 +11,7 @@ import type { LoadedPackV2 } from '../../packs/loader_v2.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { appendAsk, readCapturedAsk } from '../coverage/captured_ask.js';
+import { writeGoalMap } from '../goal_map/goal_map.js';
 import { readFsmStateRaw, readFsmState, fsmStateKey } from '../fsm_state.js';
 import { OPENSQUID_HOME, sessionStateFile } from '../paths.js';
 import {
@@ -687,9 +688,12 @@ const stageGatePack = (stage: string): LoadedPackV2 =>
 const writeCall = (): Event =>
   ({ kind: 'tool_call', tool: 'Write', args: { file_path: '/tmp/x.ts' } }) as unknown as Event;
 
-/** A temp project root recorded as the session cwd (where docs/reports/ is written). */
+/** A temp project root recorded as the session cwd (where docs/reports/ is written). The `.opensquid` marker
+ *  makes it project-SCOPED so per-test goal maps (goalMapPath → resolveProjectScopeRoot) don't collide on the
+ *  shared user-scope fallback. */
 async function newProjectRoot(sessionId: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 't212-root-'));
+  await mkdir(join(root, '.opensquid'), { recursive: true });
   await recordSessionCwd(sessionId, root);
   return root;
 }
@@ -755,8 +759,9 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     expect(await exists(join(pendingLessonsDir(sid), 'potential-lessons'))).toBe(false);
   });
 
-  it('SCOPE report carries NO goal-alignment line yet (T2.10 seam left undefined)', async () => {
-    const sid = 'sess-t212-scope-noline';
+  // T2.10 — the SCOPE report's goal-alignment line is now the LIVE consumer of goalConsult.
+  it('SCOPE report carries the goal-alignment line (no goal map → on the captured goal)', async () => {
+    const sid = 'sess-t210-scope-nogoal';
     const root = await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('scope')]);
@@ -764,6 +769,38 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await runV2Cartridges(sid, writeCall(), NOW);
 
     const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
+    expect(body).toContain('## Goal alignment'); // absent goal → aligned:true (not a drift signal)
+    expect(body).toContain('on the captured goal');
+  });
+
+  it('SCOPE report surfaces destination drift when the goal is disjoint from the captured ask', async () => {
+    const sid = 'sess-t210-scope-drift';
+    const root = await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
+    await writeGoalMap(root, {
+      goal: 'Migrate the billing subsystem to Stripe',
+      createdAt: NOW,
+      claim: null,
+      worksheets: [],
+    });
+    await appendAsk(sid, 'tweak the homepage banner colors'); // disjoint from the goal
+    mockLoad.mockResolvedValue([stageGatePack('scope')]);
+
+    await runV2Cartridges(sid, writeCall(), NOW);
+
+    const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
+    expect(body).toContain('OFF the captured goal — destination drift');
+  });
+
+  it('a non-SCOPE stage report carries NO goal-alignment line (the check belongs at scope-time)', async () => {
+    const sid = 'sess-t210-plan-noline';
+    const root = await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
+    mockLoad.mockResolvedValue([stageGatePack('plan')]);
+
+    await runV2Cartridges(sid, writeCall(), NOW);
+
+    const body = await readFile(join(root, 'docs', 'reports', 'plan-T-rep-2026-06-22.md'), 'utf8');
     expect(body).not.toContain('## Goal alignment');
   });
 });
