@@ -11,10 +11,11 @@ import type { LoadedPackV2 } from '../../packs/loader_v2.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { appendAsk, readCapturedAsk } from '../coverage/captured_ask.js';
-import { readFsmStateRaw } from '../fsm_state.js';
+import { readFsmStateRaw, readFsmState, fsmStateKey } from '../fsm_state.js';
 import { OPENSQUID_HOME, sessionStateFile } from '../paths.js';
-import { appendTool } from '../session_state.js';
+import { appendTool, clearActiveTask, writeActiveTask } from '../session_state.js';
 import type { Event } from '../event.js';
+import type { Fsm } from '../fsm.js';
 
 // Mock the cartridge loader so each test controls the active v2 set.
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
@@ -563,5 +564,59 @@ describe('buildGuardCtx — T2.8 DEPLOY binding', () => {
     const ctx = await buildGuardCtx(deployEv, 'sess-deploy-default-xyz', 'deploy');
     expect(ctx.get('deploy.capability_ok')).toBe(true); // no deploy env wired → skip
     expect(ctx.get('deploy.accepted')).toBe(false); // no accepted item → never auto-ship
+  });
+});
+
+// ── T2.2 — per-task FSM key wired through runV2Cartridges (resolve active taskId; no cross-task rewind) ───────
+
+const FSM_MACHINE: Fsm = {
+  initial: 'g0',
+  states: ['g0', 'shipped'],
+  transitions: [{ from: 'g0', on: 'done', to: 'shipped' }],
+};
+
+describe('runV2Cartridges — T2.2 per-task FSM key', () => {
+  it('no active task → reads/writes the null (session-level) key; per-task key stays at initial', async () => {
+    const sid = 'sess-t22-null';
+    await clearActiveTask(sid);
+    mockLoad.mockResolvedValue([gatePack('warn')]); // warn-gate advances g0→shipped on a non-Write
+    await runV2Cartridges(sid, bashCall(), NOW);
+    // Persisted to the NULL key (SCOPE/PLAN-shared) — readFsmStateRaw keys fsm-<pack>.
+    expect(await readFsmStateRaw(sid, 'observed-gate')).toBe('shipped');
+    // A per-task read sees a FRESH machine (the null state is invisible to a task key).
+    expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'A')).toBe('g0');
+  });
+
+  it('a SECOND task gets its OWN AUTHOR/CODE FSM; activating it does NOT rewind the first', async () => {
+    const sid = 'sess-t22-twotask';
+    mockLoad.mockResolvedValue([gatePack('warn')]);
+
+    // Task A active → the cartridge resolves taskId 'A' and persists to fsm-observed-gate-A.
+    await writeActiveTask(sid, { id: '1', subject: 'task A', started_at: NOW, taskId: 'A' });
+    await runV2Cartridges(sid, bashCall(), NOW);
+    expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'A')).toBe('shipped');
+
+    // Switch to task B → a FRESH key (fsm-observed-gate-B) that STARTS at the initial state.
+    await writeActiveTask(sid, { id: '2', subject: 'task B', started_at: NOW, taskId: 'B' });
+    // Before B runs, B's key is unstarted (initial) — A's activation never seeded it.
+    expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'B')).toBe('g0');
+    await runV2Cartridges(sid, bashCall(), NOW);
+    expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'B')).toBe('shipped');
+
+    // CRITICAL: task A's FSM is UNTOUCHED by B's lifecycle — no cross-task rewind / leakage.
+    expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'A')).toBe('shipped');
+    // The two tasks occupy DISTINCT session-state keys.
+    expect(fsmStateKey('observed-gate', 'A')).not.toBe(fsmStateKey('observed-gate', 'B'));
+    await clearActiveTask(sid);
+  });
+
+  it('falls back to the harness numeric id when no metadata.taskId is set', async () => {
+    const sid = 'sess-t22-numeric';
+    mockLoad.mockResolvedValue([gatePack('warn')]);
+    await writeActiveTask(sid, { id: '42', subject: 'no track id', started_at: NOW }); // no taskId
+    await runV2Cartridges(sid, bashCall(), NOW);
+    // taskId resolves to the numeric id '42' → keyed fsm-observed-gate-42.
+    expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, '42')).toBe('shipped');
+    await clearActiveTask(sid);
   });
 });

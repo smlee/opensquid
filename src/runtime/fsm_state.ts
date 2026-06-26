@@ -39,8 +39,20 @@ export interface FsmStateFile {
   history: FsmHistoryEntry[];
 }
 
+/**
+ * T2.2 (principle 9) — the canonical session-state key for a pack's FSM, keyed PER-TASK.
+ * `taskId === null` → the session-level key `fsm-<pack>` (SCOPE/PLAN run once per track, so they
+ * SHARE the null key); a concrete `taskId` → `fsm-<pack>-<taskId>` (AUTHOR/CODE run per task, so each
+ * task gets an ISOLATED key that STARTS at the FSM initial state — activating task B can never rewind
+ * task A's FSM ([[coding-flow-task-start-reset-trap]]): distinct keys, no cross-task leakage).
+ */
+export function fsmStateKey(pack: string, taskId: string | null): string {
+  return taskId === null ? `fsm-${pack}` : `fsm-${pack}-${taskId}`;
+}
+
+/** The session-level key (taskId=null) — every v1 caller's historic shape is exactly this. */
 function fsmKey(packName: string): string {
-  return `fsm-${packName}`;
+  return fsmStateKey(packName, null);
 }
 
 function isFsmStateFile(o: unknown): o is FsmStateFile {
@@ -55,9 +67,14 @@ function isFsmStateFile(o: unknown): o is FsmStateFile {
  * is no longer a declared state (the pack's FSM changed) — a self-healing
  * no-throw read matching `readChainStage`.
  */
-export async function readFsmState(sessionId: string, packName: string, fsm: Fsm): Promise<string> {
+export async function readFsmState(
+  sessionId: string,
+  packName: string,
+  fsm: Fsm,
+  taskId: string | null = null,
+): Promise<string> {
   try {
-    const raw = await readFile(sessionStateFile(sessionId, fsmKey(packName)), 'utf8');
+    const raw = await readFile(sessionStateFile(sessionId, fsmStateKey(packName, taskId)), 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     if (isFsmStateFile(parsed) && fsm.states.includes(parsed.state)) {
       return parsed.state;
@@ -159,10 +176,11 @@ export async function readFsmStateRaw(sessionId: string, packName: string): Prom
 export async function readFsmStateFile(
   sessionId: string,
   packName: string,
+  taskId: string | null = null,
 ): Promise<FsmStateFile | null> {
   try {
     const parsed = JSON.parse(
-      await readFile(sessionStateFile(sessionId, fsmKey(packName)), 'utf8'),
+      await readFile(sessionStateFile(sessionId, fsmStateKey(packName, taskId)), 'utf8'),
     ) as unknown;
     return isFsmStateFile(parsed) ? parsed : null;
   } catch {
@@ -181,8 +199,9 @@ export async function persistActorState(
   packName: string,
   current: string,
   now: string,
+  taskId: string | null = null,
 ): Promise<void> {
-  const prior = await readFsmStateFile(sessionId, packName);
+  const prior = await readFsmStateFile(sessionId, packName, taskId);
   const history: FsmHistoryEntry[] = prior ? prior.history : [];
   const next: FsmStateFile = {
     state: current,
@@ -190,7 +209,7 @@ export async function persistActorState(
     history: [...history, { state: current, at: now }],
   };
   await atomicWriteFile(
-    sessionStateFile(sessionId, fsmKey(packName)),
+    sessionStateFile(sessionId, fsmStateKey(packName, taskId)),
     JSON.stringify(next, null, 2),
   );
 }

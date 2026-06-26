@@ -356,6 +356,17 @@ export async function readActiveTask(sessionId: string): Promise<ActiveTask | nu
   }
 }
 
+/**
+ * T2.2 (principle 9) — resolve the ACTIVE task's id (pack-independent), or `null` when no task is
+ * active. Prefers the harness track id (`metadata.taskId`, e.g. "AP.1"); falls back to the numeric
+ * harness id. Mirrors the CODE-gate derivation (`code_evidence.ts`) so a task is keyed identically
+ * across the runtime. `null` (no active task) is what makes SCOPE/PLAN share the session-level FSM key.
+ */
+export async function readActiveTaskId(sessionId: string): Promise<string | null> {
+  const t = await readActiveTask(sessionId);
+  return t === null ? null : (t.taskId ?? t.id);
+}
+
 /** Clear the active-task signal (task completed / none in progress). Ignores ENOENT. */
 export async function clearActiveTask(sessionId: string): Promise<void> {
   try {

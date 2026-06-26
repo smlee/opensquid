@@ -18,6 +18,7 @@ import {
   persistActorState,
   readFsmStateRaw,
   readFsmStateFile,
+  fsmStateKey,
 } from './fsm_state.js';
 import { recordSessionCwd, writeActiveTask } from './session_state.js';
 import { readGoalMap, writeGoalMap } from './goal_map/goal_map.js';
@@ -105,6 +106,79 @@ describe('fsm_state', () => {
     expect(await readFsmState(s, 'p', FSM)).toBe('idle');
     // idempotent: clearing again does not throw
     await clearFsmState(s, 'p');
+  });
+});
+
+// T2.2 (principle 9) — per-task FSM key + two-task isolation (no cross-task rewind).
+describe('fsmStateKey (T2.2)', () => {
+  it('null taskId → the session-level key fsm-<pack> (SCOPE/PLAN share it)', () => {
+    expect(fsmStateKey('coding-flow', null)).toBe('fsm-coding-flow');
+  });
+
+  it('a concrete taskId → the isolated per-task key fsm-<pack>-<taskId>', () => {
+    expect(fsmStateKey('coding-flow', 'AP.1')).toBe('fsm-coding-flow-AP.1');
+    expect(fsmStateKey('coding-flow', '15')).toBe('fsm-coding-flow-15');
+  });
+
+  it('the null key is byte-identical to every v1 caller (no default-arg regression)', async () => {
+    // readFsmState/persistActorState default taskId=null → the historic fsm-<pack> file. Proven by a
+    // round-trip: persist with the DEFAULT arg, read back via the EXPLICIT null — same file, same state.
+    const s = sid();
+    await persistActorState(s, 'coding-flow', 'scoped', NOW);
+    expect(await readFsmState(s, 'coding-flow', FSM /* default null */)).toBe('idle'); // 'scoped' ∉ FSM.states → initial
+    expect(await readFsmStateRaw(s, 'coding-flow')).toBe('scoped'); // raw read sees the same null-keyed file
+  });
+});
+
+describe('per-task FSM isolation (T2.2 — no cross-task rewind)', () => {
+  // A real two-phase machine: SCOPE/PLAN share the null key; AUTHOR/CODE run per task.
+  const FLOW2: Fsm = {
+    initial: 'scope',
+    states: ['scope', 'plan', 'author', 'code', 'done'],
+    transitions: [
+      { from: 'scope', on: 'planned', to: 'plan' },
+      { from: 'plan', on: 'authored', to: 'author' },
+      { from: 'author', on: 'coded', to: 'code' },
+      { from: 'code', on: 'shipped', to: 'done' },
+    ],
+  };
+
+  it('two tasks get two distinct FSM states (AUTHOR/CODE keyed per task)', async () => {
+    const s = sid();
+    // Task A advances to 'author'; task B advances to 'code' — independent keys, independent states.
+    await persistActorState(s, 'fsf', 'author', NOW, 'A');
+    await persistActorState(s, 'fsf', 'code', NOW, 'B');
+    expect(await readFsmState(s, 'fsf', FLOW2, 'A')).toBe('author');
+    expect(await readFsmState(s, 'fsf', FLOW2, 'B')).toBe('code');
+    // Distinct underlying keys (the isolation invariant).
+    expect(fsmStateKey('fsf', 'A')).not.toBe(fsmStateKey('fsf', 'B'));
+  });
+
+  it('SCOPE/PLAN share the null key (one state for the whole track pre-task)', async () => {
+    const s = sid();
+    // Before any task is active, the actor reads/writes the null key — SCOPE then PLAN share it.
+    await persistActorState(s, 'fsf', 'plan', NOW, null);
+    expect(await readFsmState(s, 'fsf', FLOW2, null)).toBe('plan');
+    // The null-keyed PLAN state is INVISIBLE to a per-task read (a fresh task starts at initial).
+    expect(await readFsmState(s, 'fsf', FLOW2, 'A')).toBe('scope');
+  });
+
+  it('activating a SECOND task never rewinds the FIRST task (no reset-trap regression)', async () => {
+    const s = sid();
+    // Task A reaches 'code'. Then task B becomes active — B starts at the FSM INITIAL state ('scope'),
+    // and A's state is untouched: distinct keys mean B's activation cannot rewind A. This is the
+    // [[coding-flow-task-start-reset-trap]] guarantee the per-task key delivers.
+    await persistActorState(s, 'fsf', 'code', NOW, 'A');
+    expect(await readFsmState(s, 'fsf', FLOW2, 'A')).toBe('code');
+
+    // B activates: its key is fresh → initial. No write to A's key occurs.
+    expect(await readFsmState(s, 'fsf', FLOW2, 'B')).toBe('scope');
+    // B advances independently.
+    await persistActorState(s, 'fsf', 'author', NOW, 'B');
+
+    // A is STILL at 'code' — never rewound by B's lifecycle.
+    expect(await readFsmState(s, 'fsf', FLOW2, 'A')).toBe('code');
+    expect(await readFsmState(s, 'fsf', FLOW2, 'B')).toBe('author');
   });
 });
 

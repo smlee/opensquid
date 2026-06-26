@@ -7,6 +7,21 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.534] - 2026-06-26
+
+### Added — v2 fullstack-flow per-task FSM key (Track 2, T2.2)
+
+The FSM state is now keyed per active task (`fsm-<pack>-<taskId>`) so AUTHOR/CODE run
+per task (principle 9). SCOPE/PLAN run pre-task (`readActiveTaskId` → null → the shared
+`fsm-<pack>` key); the moment a task is active, AUTHOR/CODE move to the isolated per-task
+key that starts at the FSM initial state — activating task B never rewinds task A
+(the `coding-flow-task-start-reset-trap` guarantee).
+
+- `src/runtime/fsm_state.ts` — `fsmStateKey(pack, taskId)`; optional `taskId` threaded
+  through `readFsmState`/`persistActorState` (default null → byte-identical v1 behavior).
+- `src/runtime/session_state.ts` — `readActiveTaskId` (`t.taskId ?? t.id`, matches code_evidence).
+- `src/runtime/loop/v2_supply.ts` — resolve the active taskId, key both the read and the persist.
+
 ## [0.5.533] - 2026-06-26
 
 ### Added — v2 fullstack-flow DEPLOY gate + durable acceptance (Track 2, T2.8)

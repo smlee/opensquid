@@ -23,6 +23,7 @@ import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { sessionStateFile } from '../paths.js';
+import { readActiveTaskId } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
@@ -238,7 +239,12 @@ export async function runV2Cartridges(
       if (loaded.compiled.fsm === undefined) continue; // foundation cartridge → not an observed actor
       const name = loaded.pack.name;
       const actor = new V2ObservedActor(`pack:${name}`, loaded);
-      actor.state.current = await readFsmState(sessionId, name, actor.fsm);
+      // T2.2 (principle 9) — key the FSM PER-TASK. `taskId` is null until a task is active, so SCOPE/PLAN
+      // share the session-level key `fsm-<pack>`; once a task is active, AUTHOR/CODE run on the isolated
+      // key `fsm-<pack>-<taskId>` that STARTS at the FSM initial state — activating task B never rewinds
+      // task A's FSM ([[coding-flow-task-start-reset-trap]]). The persist below uses the SAME taskId.
+      const taskId = await readActiveTaskId(sessionId);
+      actor.state.current = await readFsmState(sessionId, name, actor.fsm, taskId);
       const env: Envelope = {
         seq: 0,
         from: `pack:${name}`,
@@ -253,7 +259,7 @@ export async function runV2Cartridges(
       const skillRuntime = new InMemorySkillRuntime();
       for (const e of await actor.receive(env)) {
         if (e.kind === 'write_state') {
-          await persistActorState(sessionId, name, e.state, now);
+          await persistActorState(sessionId, name, e.state, now, taskId); // T2.2 — same per-task key as the read
         } else if (e.kind === 'emit' && e.messageKind === 'transition') {
           // INV2 in-process observability — the cited v1 durable equivalent of the bus transition.
           const p = e.payload as { from: string; to: string };
