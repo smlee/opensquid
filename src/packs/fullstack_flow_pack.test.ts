@@ -1,10 +1,11 @@
 /**
- * Slice 1 — the `fullstack-flow` pack skeleton.
+ * The `fullstack-flow` pack — the v2 enforcing discipline (T2.1).
  *
- * Proves the FIRST real v2 `pack.yaml` (packs/builtin/fullstack-flow/pack.yaml): it parses (PackV2), compiles
+ * Proves the real v2 `pack.yaml` (packs/builtin/fullstack-flow/pack.yaml): it parses (PackV2), compiles
  * (compilePackV2), passes validateFsm, and ADVANCES on hook events through the live observed runtime
  * (V2ObservedActor) — SCOPE → PLAN → AUTHOR → CODE → DEPLOY → (acceptance decision) → loop back to PLAN (the
- * deferred-acceptance default; a skeleton never auto-ships). Spec: loop/docs/tasks/T-v2-coding-flow-skeleton.md.
+ * deferred-acceptance default; never auto-ships). Each stage is now a DETERMINISTIC, ZERO-LLM ENFORCING gate
+ * (T2.4–T2.8): a not-ready advance BLOCKS. Spec: loop/docs/tasks/T-v2-track2-discipline.md (T2.1).
  */
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -61,7 +62,7 @@ function blockedIn(effects: Effect[]): boolean {
   );
 }
 
-describe('fullstack-flow pack skeleton (Slice 1)', () => {
+describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
   it('loads, compiles, and passes validateFsm', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     expect(loaded.pack.name).toBe('fullstack-flow');

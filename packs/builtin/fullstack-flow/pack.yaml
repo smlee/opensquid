@@ -1,20 +1,23 @@
 # fullstack-flow — the v2 rebuild of coding-flow as a single FSM-primary pack.yaml.
 #
-# Slice 1 = the SKELETON: the 5-stage lifecycle (SCOPE → PLAN → AUTHOR → CODE → DEPLOY) modelled as gate
+# The 5-stage discipline (SCOPE → PLAN → AUTHOR → CODE → DEPLOY → accept → done) modelled as ENFORCING gate
 # checkpoints + an acceptance decision + a terminal, that COMPILES, VALIDATES (validateFsm: every emit routed,
-# decision totality), LOADS, and ADVANCES on hook events through the live (but until-now dormant) v2 runtime
-# (V2ObservedActor / v2_supply). It is ADDITIVE + opt-in: v1 coding-flow stays the live default; fullstack-flow
-# activates ONLY when pinned in active.json.
+# decision totality), LOADS, and ADVANCES on hook events through the live v2 runtime (V2ObservedActor /
+# v2_supply). It is ADDITIVE + opt-in: v1 coding-flow stays the live default; fullstack-flow activates ONLY when
+# pinned in active.json.
+#
+# T2.1 — each stage is now a DETERMINISTIC, ZERO-LLM gate (T2.4–T2.8): every `guard` is a pure predicate over
+# `buildGuardCtx` and every `on_fail` is `block` (no always-true `ready` pass-through remains). The five gates:
+#   scope_ready (T2.4), plan_ready (T2.5), author_ready (T2.6), code_ready (T2.7), deploy_ready (T2.8) +
+#   the `accepted` decision (T2.8 durable human-accept). The PLAN-decompose / acceptance / per-stage reports /
+#   goal-consult / pause-discipline / lens skills are wired by T2.5/T2.8–T2.13.
 #
 # WHY GATES, NOT EXECUTORS: the live observed actor advances only at gate/decision states
 # (v2_observed_actor.ts:74 — an executor state is inert in observed mode). coding-flow is OBSERVED (the agent
 # works in its own harness; opensquid watches hook events), so the faithful translation of v1's pure
-# states+transitions is a gate chain whose triggers are hook events. The stage HANDLERS (PLAN-decompose,
-# plan-audit, the acceptance human-touchpoint, the resets) are explicitly DEFERRED to later slices — the
-# skeleton's gates are non-enforcing pass-throughs (guard `ready` is always-true; on_fail is `warn`, never
-# block/halt) so pinning it can never break a session.
+# states+transitions is a gate chain whose triggers are hook events.
 #
-# Spec: loop/docs/tasks/T-v2-coding-flow-skeleton.md. Design: loop/docs/design/opensquid-v2-coding-flow-design.md.
+# Spec: loop/docs/tasks/T-v2-track2-discipline.md (T2.1). Design: loop/docs/design/opensquid-v2-coding-flow-design.md.
 name: fullstack-flow
 version: 0.1.0
 scope: workflow
