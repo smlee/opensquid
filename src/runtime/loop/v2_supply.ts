@@ -24,6 +24,7 @@ import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { sessionStateFile } from '../paths.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
+import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { planEvidence } from './plan_evidence.js';
 import { scopeEvidence } from './scope_evidence.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
@@ -74,6 +75,7 @@ export async function buildGuardCtx(
   event: Event,
   sessionId: string,
   phase: string,
+  authorInputs?: AuthorInputs,
 ): Promise<Map<string, unknown>> {
   const m = new Map<string, unknown>();
   m.set('event', event.kind);
@@ -141,6 +143,19 @@ export async function buildGuardCtx(
   m.set('plan.acyclic', pl.acyclic);
   m.set('plan.complete', pl.complete);
   m.set('plan', pl); // nested object — the shape the guard expression path-resolves
+
+  // T2.6 — AUTHOR gate evidence. The two facets come from the SHIPPED coverage checker (`checkCoverage`) over
+  // the in-repo requirement manifest + the gated-tree CodeIndex: `coverage_complete` (no orphaned gated export)
+  // ∧ `real_code` (every requirement MET — where met for reachable/binding REQUIRES its proof-test to pass,
+  // check.ts:54-73, so a stub with no passing proof fails). DUAL-SHAPE like T2.4/T2.5: a nested `author` object
+  // (the path the guard `author.coverage_complete && author.real_code` resolves) PLUS flat `author.*` Map keys
+  // (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `authorInputs` is
+  // injectable (tests pass pure {reqs,opts}); the default builds the index from the session repo root.
+  // FAIL-CLOSED on any resolve/build error → {false,false}: an unprovable AUTHOR blocks (never auto-"real").
+  const au = await authorEvidenceForSession(sessionId, authorInputs);
+  m.set('author.coverage_complete', au.coverageComplete);
+  m.set('author.real_code', au.realCode);
+  m.set('author', { coverage_complete: au.coverageComplete, real_code: au.realCode });
   return m;
 }
 

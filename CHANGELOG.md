@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.531] - 2026-06-26
+
+### Added — v2 fullstack-flow AUTHOR gate enforces deterministically (Track 2, T2.6)
+
+The third v2 gate now enforces, zero-LLM:
+
+- **AUTHOR gate** = `author.coverage_complete && author.real_code`: `author_coverage.ts` (`authorEvidence` wraps
+  the shipped `checkCoverage` → `coverageComplete = orphans.length === 0`; `real_code = results.every(status ===
+'met')`, where `met` for a reachable/binding requirement REQUIRES its proof-test to pass — `check.ts:54-73` —
+  so a stub with no passing proof fails). `author_evidence.ts` is the runtime bridge (fail-closed; injectable for
+  tests) binding the two facets into `buildGuardCtx` (dual-shape, like SCOPE/PLAN).
+- `fullstack-flow/pack.yaml` — `author` gate now `guard: author_ready`, `on_fail: block`. v1/kanban untouched;
+  pack still opt-in (Track 3).
+
 ## [0.5.530] - 2026-06-26
 
 ### Added — v2 fullstack-flow PLAN gate enforces deterministically (Track 2, T2.5)

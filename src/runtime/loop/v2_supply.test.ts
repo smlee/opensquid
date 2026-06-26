@@ -20,6 +20,10 @@ import type { Event } from '../event.js';
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { buildGuardCtx, runV2Cartridges } from './v2_supply.js';
+import { RegistryGuardEvaluator } from './guard_evaluator.js';
+import type { AuthorInputs } from './author_evidence.js';
+import type { CodeIndex } from '../coverage/check.js';
+import { Requirement } from '../coverage/schema.js';
 
 const mockLoad = vi.mocked(loadActiveV2Cartridges);
 
@@ -269,5 +273,87 @@ describe('buildGuardCtx — T2.5 PLAN binding', () => {
     const ctx = await buildGuardCtx(ev, sid, 'plan');
     expect(ctx.get('plan.acyclic')).toBe(true);
     expect(ctx.get('plan.complete')).toBe(true);
+  });
+});
+
+// ── T2.6 — the AUTHOR gate binding over buildGuardCtx (coverage_complete ∧ real_code) ──────────────────────
+
+const authorEv = {
+  kind: 'post_tool_call',
+  tool: 'Bash',
+  args: {},
+  exit_code: 0,
+} as unknown as Event;
+
+const idx = (o: Partial<CodeIndex>): CodeIndex => ({
+  exports: [],
+  modules: [],
+  bindings: {},
+  tests: {},
+  importGraph: { reaches: () => false },
+  ...o,
+});
+const proofReq = (id: string, test: string): Requirement =>
+  Requirement.parse({ id, intent: 'x', assert: { kind: 'proof', test } });
+const authorInputs = (reqs: Requirement[], index: CodeIndex): AuthorInputs => ({
+  reqs,
+  opts: { gatedPrefixes: ['src/', 'packs/'], index },
+});
+
+// The real `author_ready` guard expression, evaluated over the nested `author` object buildGuardCtx binds.
+const AUTHOR_GUARD = new RegistryGuardEvaluator(
+  new Map([['author_ready', 'author.coverage_complete && author.real_code']]),
+);
+
+describe('buildGuardCtx — T2.6 AUTHOR binding', () => {
+  it('binds author.coverage_complete/author.real_code dual-shape (flat + nested)', async () => {
+    const ai = authorInputs(
+      [proofReq('R-A', 'src/a.test.ts')],
+      idx({ tests: { 'src/a.test.ts': { activeCount: 1 } } }),
+    );
+    const ctx = await buildGuardCtx(authorEv, 'sess-author-shape', 'author', ai);
+    expect(ctx.has('author.coverage_complete')).toBe(true);
+    expect(ctx.has('author.real_code')).toBe(true);
+    const nested = ctx.get('author') as { coverage_complete: boolean; real_code: boolean };
+    expect(typeof nested.coverage_complete).toBe('boolean');
+    expect(typeof nested.real_code).toBe('boolean');
+  });
+
+  it('all-met + zero-orphan → both true → author_ready PASSES (gate advances)', async () => {
+    const ai = authorInputs(
+      [proofReq('R-A', 'src/a.test.ts')],
+      idx({ tests: { 'src/a.test.ts': { activeCount: 1 } } }),
+    );
+    const ctx = await buildGuardCtx(authorEv, 'sess-author-pass', 'author', ai);
+    expect(ctx.get('author.coverage_complete')).toBe(true);
+    expect(ctx.get('author.real_code')).toBe(true);
+    expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(true); // gate would advance
+  });
+
+  it('an ORPHAN → coverage_complete:false → author_ready BLOCKS', async () => {
+    const ai = authorInputs(
+      [proofReq('R-A', 'src/a.test.ts')],
+      idx({
+        tests: { 'src/a.test.ts': { activeCount: 1 } },
+        exports: [{ name: 'orphanSym', file: 'src/o.ts' }], // gated export with no requirement
+      }),
+    );
+    const ctx = await buildGuardCtx(authorEv, 'sess-author-orphan', 'author', ai);
+    expect(ctx.get('author.coverage_complete')).toBe(false);
+    expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(false); // gate would block (on_fail: block)
+  });
+
+  it('a failing/absent proof-test → real_code:false → author_ready BLOCKS (declared ≠ wired)', async () => {
+    const ai = authorInputs([proofReq('R-STUB', 'src/stub.test.ts')], idx({})); // proof absent → unmet
+    const ctx = await buildGuardCtx(authorEv, 'sess-author-stub', 'author', ai);
+    expect(ctx.get('author.real_code')).toBe(false);
+    expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(false);
+  });
+
+  it('FAIL-CLOSED: unresolvable repo (no injected inputs, no session cwd) → both false → BLOCKS', async () => {
+    const ctx = await buildGuardCtx(authorEv, 'sess-author-noscope-xyz', 'author');
+    expect(ctx.get('author.coverage_complete')).toBe(false);
+    expect(ctx.get('author.real_code')).toBe(false);
+    expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(false);
   });
 });

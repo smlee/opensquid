@@ -39,6 +39,9 @@ const scopeReady = {
 /** The bound ctx for a READY PLAN advance (T2.5): the nested `plan` object the `plan_ready` guard reads. */
 const planReady = { plan: { acyclic: true, complete: true } };
 
+/** The bound ctx for a READY AUTHOR advance (T2.6): the nested `author` object the `author_ready` guard reads. */
+const authorReady = { author: { coverage_complete: true, real_code: true } };
+
 describe('fullstack-flow pack skeleton (Slice 1)', () => {
   it('loads, compiles, and passes validateFsm', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
@@ -63,7 +66,9 @@ describe('fullstack-flow pack skeleton (Slice 1)', () => {
     // PLAN is now the T2.5 ENFORCING gate (acyclic ∧ complete). A READY plan passes → AUTHOR.
     await a.receive(env('post_tool_call', planReady)); // PLAN → AUTHOR
     expect(a.state.current).toBe('author');
-    await a.receive(env('post_tool_call')); // AUTHOR → CODE
+
+    // AUTHOR is now the T2.6 ENFORCING gate (coverage_complete ∧ real_code). A READY author passes → CODE.
+    await a.receive(env('post_tool_call', authorReady)); // AUTHOR → CODE
     expect(a.state.current).toBe('code');
     await a.receive(env('post_tool_call')); // CODE → DEPLOY
     expect(a.state.current).toBe('deploy');
@@ -109,6 +114,25 @@ describe('fullstack-flow pack skeleton (Slice 1)', () => {
     const notReady = { plan: { acyclic: true, complete: false } };
     const effects = await a.receive(env('post_tool_call', notReady));
     expect(a.state.current).toBe('plan'); // blocked → stayed
+    const blocked = effects.some(
+      (e) =>
+        e.kind === 'emit' &&
+        e.messageKind === 'gate_action' &&
+        (e.payload as { action?: string }).action === 'block',
+    );
+    expect(blocked).toBe(true);
+  });
+
+  it('T2.6: an AUTHOR with orphans or a failing proof BLOCKS (stays at author, emits the block action)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = new V2ObservedActor('pack:fullstack-flow', loaded);
+    await a.receive(env('post_tool_call', scopeReady)); // → plan
+    await a.receive(env('post_tool_call', planReady)); // → author
+    expect(a.state.current).toBe('author');
+    // real_code false (a failing/absent proof-test) → predicate fails → on_fail block.
+    const notReady = { author: { coverage_complete: true, real_code: false } };
+    const effects = await a.receive(env('post_tool_call', notReady));
+    expect(a.state.current).toBe('author'); // blocked → stayed
     const blocked = effects.some(
       (e) =>
         e.kind === 'emit' &&

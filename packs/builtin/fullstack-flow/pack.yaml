@@ -39,6 +39,11 @@ guards:
   # the `blocks`+`parent-child` edges, Kahn) ∧ `plan.complete` (every design element of the INDEPENDENT
   # `extractScope` universe has ≥1 covering issue). Bound by buildGuardCtx; FAIL-CLOSED with no captured scope.
   plan_ready: 'plan.acyclic && plan.complete'
+  # T2.6 — the AUTHOR gate: a deterministic, zero-LLM predicate over the SHIPPED coverage checker.
+  # `author.coverage_complete` (no gated export lacks a covering requirement — `report.orphans.length === 0`) ∧
+  # `author.real_code` (every requirement MET — where met for reachable/binding REQUIRES its proof-test to pass,
+  # so a stub with no passing proof fails). Bound dual-shape by buildGuardCtx; FAIL-CLOSED on a build error.
+  author_ready: 'author.coverage_complete && author.real_code'
   # Skeleton pass-through for the not-yet-built stages: `event` is always bound to a non-empty event-kind
   # string → always truthy. The real per-stage readiness predicates arrive with T2.6–T2.8.
   ready: event
@@ -63,13 +68,13 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: planned
       on_fail: { action: block, message: 'PLAN: acyclic∧complete' }
-    # ── AUTHOR ─────────────────────────────────────────────────────────────
+    # ── AUTHOR (T2.6 — the ENFORCING coverage gate) ────────────────────────
     author:
       kind: gate
-      guard: ready
+      guard: author_ready
       trigger: [post_tool_call]
       on_pass_emits: authored
-      on_fail: { action: warn, message: 'AUTHOR checkpoint (skeleton — handler deferred)' }
+      on_fail: { action: block, message: 'AUTHOR: coverage_complete∧real_code' }
     # ── CODE ───────────────────────────────────────────────────────────────
     code:
       kind: gate
