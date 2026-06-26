@@ -7,6 +7,25 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.539] - 2026-06-26
+
+### Added — v2 fullstack-flow pause gates + EXECUTE loop driver (Track 2, T2.9)
+
+The pause discipline (AF.6/AF.7) and the AF.3 loop driver — the ≥v1 floor.
+
+- `packs/builtin/fullstack-flow/skills/pause-guard/skill.yaml` (NEW) — a preload guard skill:
+  `no-pause-past-scope` blocks an `AskUserQuestion`/`Stop` tool past SCOPE (questions are
+  allowed ONLY in SCOPE), deterministic over the FSM state (`read_fsm_state` → `phase`).
+  Mirrors v1's `pause-stop-guard` (a `verdict` with `level: block`, the real terminal block).
+- `src/runtime/loop/loop_driver.ts` (NEW) — `onPhasesComplete(sid, root, taskId, wg, iso)`:
+  emits the CODE stage report (the report `stage_report.ts` reserves for the driver) and
+  returns the next run-group from `batchDecide` (the T2.14 consumer). `wg` is the injectable
+  store adapter (`listReadyIds`/`listEdges` over the project-scoped store).
+
+NOTE: the loop driver's live FSM caller and loading the pack `skills/` dir into the v2
+loader (so the pause-guard fires live) are wired in T2.1 — the v2 PackV2 loader currently
+loads only the FSM, not a `skills/` dir. Authored + schema-validated + rule-tested here.
+
 ## [0.5.538] - 2026-06-26
 
 ### Added — v2 fullstack-flow goal-map consultation (Track 2, T2.10)
