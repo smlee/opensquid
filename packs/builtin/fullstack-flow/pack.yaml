@@ -26,10 +26,17 @@ detected_by: []
 # ORCH.1 serves contract — the orchestrator routes build work (produce × coding) to this pack.
 serves: { intent: produce, domain: coding }
 
-# Guard registry (ref → if:-expression, evaluated by RegistryGuardEvaluator over buildGuardCtx = {event, tool}).
+# Guard registry (ref → if:-expression, evaluated by RegistryGuardEvaluator over buildGuardCtx).
 guards:
-  # Skeleton pass-through: `event` is always bound to a non-empty event-kind string → always truthy. The real
-  # per-stage readiness predicates arrive with the stage handlers (later slices).
+  # T2.4 — the foundational SCOPE gate: a deterministic, zero-LLM predicate. The `!scope.is_advance`
+  # short-circuit passes EVERY non-advance event (so a gate never blocks mid-scoping); only a Write/Edit of a
+  # `docs/research/*-pre-research-*` artifact is an advance, and then all three facets must hold:
+  #   anchors_ok    — every scoped element traces to the captured ask (anti-drift verdict, zero drift)
+  #   depth >= 3    — at least 3 research tool-calls (recall/Read/Grep) in the since_scope_start window
+  #   !open_question — no unchecked `- [ ] OPEN QUESTION` remains in the artifact
+  scope_ready: '!scope.is_advance || (scope.anchors_ok && scope.depth >= 3 && !scope.open_question)'
+  # Skeleton pass-through for the not-yet-built stages: `event` is always bound to a non-empty event-kind
+  # string → always truthy. The real per-stage readiness predicates arrive with T2.5–T2.8.
   ready: event
   # The human-acceptance signal. UNBOUND in the skeleton ctx → the accept decision's `else` branch fires, so
   # DEPLOY loops back to PLAN (a skeleton must NEVER auto-declare "shipped"). Bound in the acceptance slice.
@@ -38,13 +45,13 @@ guards:
 fsm:
   initial: scope
   states:
-    # ── SCOPE ──────────────────────────────────────────────────────────────
+    # ── SCOPE (T2.4 — the foundational ENFORCING gate) ──────────────────────
     scope:
       kind: gate
-      guard: ready
-      trigger: [prompt_submit]
+      guard: scope_ready
+      trigger: [post_tool_call]
       on_pass_emits: scoped
-      on_fail: { action: warn, message: 'SCOPE checkpoint (skeleton — handler deferred)' }
+      on_fail: { action: block, message: 'SCOPE: anchors∧depth≥3∧!open_question' }
     # ── PLAN (new top-level region vs v1) ──────────────────────────────────
     plan:
       kind: gate

@@ -18,10 +18,12 @@
 import { readFile } from 'node:fs/promises';
 
 import { loadActiveV2Cartridges } from '../bootstrap.js';
+import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { sessionStateFile } from '../paths.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
+import { scopeEvidence } from './scope_evidence.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
 
 import type { Envelope } from '../bus/types.js';
@@ -72,6 +74,36 @@ export async function buildGuardCtx(
   m.set('verdict.guess', await readVerdict(sessionId, 'coding-flow-guess-audit-cache'));
   m.set('verdict.spec', await readVerdict(sessionId, 'coding-flow-spec-audit-cache'));
   m.set('phase', phase);
+  // T2.4 — SCOPE gate evidence. The advance event is a Write/Edit whose target is a pre-research artifact; only
+  // then is the SCOPE gate "advancing" (the short-circuit `!scope.is_advance` passes every other event, so a
+  // gate never blocks mid-scoping). The artifact path comes from the LIVE event (no read-after-write).
+  const filePath = 'args' in event ? event.args?.file_path : undefined;
+  const fp =
+    'tool' in event && /(?:Write|Edit)/.test(event.tool) && typeof filePath === 'string'
+      ? filePath
+      : '';
+  const isAdvance = /docs\/research\/.*-pre-research-/.test(fp);
+  // DIVERGENCE FROM THE SPEC'S FLAT-KEY SHAPE (noted): the guard grammar lexes `scope.is_advance` as a PATH
+  // (target `scope`, prop `is_advance`), so it resolves against a NESTED `scope` object — a flat `scope.x` Map
+  // key is invisible to the expression (it path-resolves `scope`→undefined→`!undefined`→true, defeating the
+  // gate). So `scope` is bound as a nested object (the path the guard reads). The flat `scope.*` keys are ALSO
+  // set so `ctx.get('scope.is_advance')` unit-asserts hold AND the coverage binding-extractor sees literal
+  // `.set` keys (index_build.ts) — this is exactly T2.3's dual-shape (flat + nested), additive.
+  const sc: { is_advance: boolean; anchors_ok?: boolean; depth?: number; open_question?: boolean } =
+    {
+      is_advance: isAdvance,
+    };
+  m.set('scope.is_advance', isAdvance);
+  if (isAdvance) {
+    const ev = await scopeEvidence(sessionId, fp);
+    sc.anchors_ok = ev.anchorsOk;
+    sc.depth = ev.depth;
+    sc.open_question = ev.openQuestion;
+    m.set('scope.anchors_ok', ev.anchorsOk);
+    m.set('scope.depth', ev.depth);
+    m.set('scope.open_question', ev.openQuestion);
+  }
+  m.set('scope', sc); // nested object — the shape the guard expression path-resolves
   return m;
 }
 
@@ -86,6 +118,17 @@ export async function runV2Cartridges(
 ): Promise<V2Decision> {
   const cartridges = await loadActiveV2Cartridges(sessionId);
   if (cartridges.length === 0) return ZERO; // INERT — the nothing-breaks path (no active v2 pack today)
+  // AD.1 capture (coordinated with T2.4): when a v2 cartridge is active, every user prompt appends to the
+  // per-task captured ask (no-op once frozen / on a duplicate). This is what makes `scope.anchors_ok` have a
+  // populated ask to verify against — captured_ask.ts is shipped but had NO callers (dormant); this wires it.
+  if (event.kind === 'prompt_submit') {
+    try {
+      await appendAsk(sessionId, event.prompt);
+    } catch (err) {
+      // FAIL-OPEN: capture plumbing must never break the hook (observe-never-breaks).
+      process.stderr.write(`[v2-supply] captured-ask append failed (ignored): ${String(err)}\n`);
+    }
+  }
   let exitCode: 0 | 2 = 0;
   const messages: string[] = [];
   const injections: string[] = [];
@@ -123,6 +166,18 @@ export async function runV2Cartridges(
             at: now,
             via: -1,
           });
+          // AD.1 capture lifecycle (fail-open): LEAVING `scope` (SCOPE complete) → FREEZE the captured ask so a
+          // frozen scope cannot be silently widened — it stays available for PLAN/AUTHOR's anti-drift checks.
+          // ENTERING `scope` (a new task's re-arm) → RESET to a fresh ask (else the next task inherits the prior
+          // frozen ask). Reset on ENTRY, NOT leave — so the ask survives the rest of the flow.
+          try {
+            if (p.from === 'scope') await freezeAsk(sessionId);
+            if (p.to === 'scope') await resetAsk(sessionId);
+          } catch (err) {
+            process.stderr.write(
+              `[v2-supply] captured-ask freeze/reset failed (ignored): ${String(err)}\n`,
+            );
+          }
           onStateLeave(p.from, skillRuntime); // SKILL.1: unloaded on leave
         } else if (e.kind === 'emit' && e.messageKind === 'gate_action') {
           const p = e.payload as { action: 'warn' | 'block' | 'halt'; message: string };

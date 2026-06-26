@@ -7,6 +7,24 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.529] - 2026-06-26
+
+### Added — v2 fullstack-flow SCOPE gate now ENFORCES deterministically (Track 2, T2.4)
+
+The v2 `fullstack-flow` pack was a non-enforcing skeleton (every gate `ready: event` always-true, `on_fail:
+warn`). Its first gate now enforces a deterministic, zero-LLM predicate.
+
+- **SCOPE gate** = `!scope.is_advance || (scope.anchors_ok && scope.depth >= 3 && !scope.open_question)`, bound
+  into `buildGuardCtx` from pack-independent runtime evidence (not v1 coding-flow skills): `scope_extract.ts`
+  (a deterministic regex parser of the pre-research artifact → ask-anchored elements + leaves + deps),
+  `scope_evidence.ts` (`anchorsOk` via the shipped `checkAnchors`/`buildAnchorUniverse` over the captured ask;
+  `depth` from the `since_scope_start` tool-ledger; `openQuestion` regex). The guard SHORT-CIRCUITS — it only
+  blocks on a not-ready pre-research-Write advance, never mid-scoping.
+- **Captured-ask capture is now LIVE** (was shipped-dormant): `appendAsk` on each user turn, `freezeAsk` on
+  leaving SCOPE (immutable for PLAN/AUTHOR), `resetAsk` on entering SCOPE (per-task re-arm) — all fail-open.
+- `verdict`/`scope` ctx bound BOTH flat and nested (the guard grammar path-resolves `scope.x`).
+- v1 `coding-flow` and kanban untouched; `fullstack-flow` stays opt-in (not in `active.json` until Track 3).
+
 ## [0.5.528] - 2026-06-26
 
 ### Changed — deterministic work-graph ids + order via the (lamport, actor-id) tuple

@@ -25,11 +25,16 @@ const BUILTIN_DIR = join(
   'fullstack-flow',
 );
 
-/** A hook-event envelope with the host-shaped ctx (buildGuardCtx binds `event` = the kind). */
-function env(kind: MessageKind): Envelope {
-  const ctx = new Map<string, unknown>([['event', kind]]);
+/** A hook-event envelope with the host-shaped ctx (buildGuardCtx binds `event` = the kind + extra keys). */
+function env(kind: MessageKind, extra: Record<string, unknown> = {}): Envelope {
+  const ctx = new Map<string, unknown>([['event', kind], ...Object.entries(extra)]);
   return { seq: 1, from: 'agent', to: 'pack:fullstack-flow', kind, payload: { ctx }, ts: 0 };
 }
+
+/** The bound ctx for a READY SCOPE advance (T2.4): the nested `scope` object the `scope_ready` guard reads. */
+const scopeReady = {
+  scope: { is_advance: true, anchors_ok: true, depth: 3, open_question: false },
+};
 
 describe('fullstack-flow pack skeleton (Slice 1)', () => {
   it('loads, compiles, and passes validateFsm', async () => {
@@ -48,7 +53,8 @@ describe('fullstack-flow pack skeleton (Slice 1)', () => {
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
     expect(a.state.current).toBe('scope'); // initial
 
-    await a.receive(env('prompt_submit')); // SCOPE gate fires → PLAN
+    // SCOPE is now the T2.4 ENFORCING gate (post_tool_call-triggered, blocking). A READY advance passes → PLAN.
+    await a.receive(env('post_tool_call', scopeReady)); // SCOPE gate fires → PLAN
     expect(a.state.current).toBe('plan');
 
     await a.receive(env('post_tool_call')); // PLAN → AUTHOR
@@ -66,9 +72,35 @@ describe('fullstack-flow pack skeleton (Slice 1)', () => {
   it('a gate at an await-point ignores a non-trigger observation (no spurious advance)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
-    // SCOPE waits for prompt_submit; a post_tool_call must NOT advance it.
-    const effects = await a.receive(env('post_tool_call'));
+    // SCOPE now waits for post_tool_call (T2.4); a prompt_submit must NOT advance it.
+    const effects = await a.receive(env('prompt_submit'));
     expect(effects).toEqual([]);
     expect(a.state.current).toBe('scope');
+  });
+
+  it('T2.4: a NOT-READY SCOPE advance BLOCKS (stays at scope, emits the block action)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = new V2ObservedActor('pack:fullstack-flow', loaded);
+    // is_advance true but anchors_ok false → the predicate fails → on_fail block.
+    const notReady = {
+      scope: { is_advance: true, anchors_ok: false, depth: 0, open_question: false },
+    };
+    const effects = await a.receive(env('post_tool_call', notReady));
+    expect(a.state.current).toBe('scope'); // blocked → stayed
+    const blocked = effects.some(
+      (e) =>
+        e.kind === 'emit' &&
+        e.messageKind === 'gate_action' &&
+        (e.payload as { action?: string }).action === 'block',
+    );
+    expect(blocked).toBe(true);
+  });
+
+  it('T2.4: a non-advance post_tool_call short-circuits PASS (advances; never blocks mid-scoping)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = new V2ObservedActor('pack:fullstack-flow', loaded);
+    // is_advance false → `!scope.is_advance` short-circuits true → gate passes without inspecting anchors.
+    await a.receive(env('post_tool_call', { scope: { is_advance: false } }));
+    expect(a.state.current).toBe('plan');
   });
 });

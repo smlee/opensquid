@@ -1,10 +1,16 @@
 /** FAC-CUT.5b.2 — runV2Cartridges: in-process v2 host supply (inert / gate-fires+persist / non-trigger / fail-open). */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { compilePackV2 } from '../../packs/compile_v2.js';
 import { PackV2 } from '../../packs/schemas/pack_v2.js';
 import type { LoadedPackV2 } from '../../packs/loader_v2.js';
+import { appendAsk, readCapturedAsk } from '../coverage/captured_ask.js';
 import { readFsmStateRaw } from '../fsm_state.js';
+import { appendTool } from '../session_state.js';
 import type { Event } from '../event.js';
 
 // Mock the cartridge loader so each test controls the active v2 set.
@@ -98,5 +104,95 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
     mockLoad.mockResolvedValue([broken]);
     const d = await runV2Cartridges('sess-fo', bashCall(), NOW);
     expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] }); // swallowed, fail-open
+  });
+});
+
+// ── T2.4 — the SCOPE gate over runV2Cartridges (short-circuit + block + capture) ──────────────────────────
+
+/** A single-gate fullstack-like pack whose `scope` state carries the real T2.4 `scope_ready` guard. */
+const scopeGatePack = (): LoadedPackV2 =>
+  load({
+    name: 'fsf-scope',
+    version: '1.0.0',
+    scope: 'workflow',
+    guards: {
+      scope_ready:
+        '!scope.is_advance || (scope.anchors_ok && scope.depth >= 3 && !scope.open_question)',
+    },
+    fsm: {
+      initial: 'scope',
+      states: {
+        scope: {
+          kind: 'gate',
+          guard: 'scope_ready',
+          trigger: ['post_tool_call'],
+          on_pass_emits: 'scoped',
+          on_fail: { action: 'block', message: 'SCOPE: anchors∧depth≥3∧!open_question' },
+        },
+        scoped: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: 'scope', on: 'scoped', to: 'scoped' }],
+    },
+  });
+
+/** A post_tool_call Write whose file_path is a pre-research artifact (the advance event). */
+const advanceWrite = (filePath: string): Event =>
+  ({
+    kind: 'post_tool_call',
+    tool: 'Write',
+    args: { file_path: filePath },
+    exit_code: 0,
+  }) as unknown as Event;
+
+/** A post_tool_call Bash (NOT an advance — no pre-research file_path). */
+const nonAdvance = (): Event =>
+  ({ kind: 'post_tool_call', tool: 'Bash', args: {}, exit_code: 0 }) as unknown as Event;
+
+async function writePreResearch(body: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'fsf-scope-'));
+  // path must match /docs\/research\/.*-pre-research-/ to count as an advance
+  const sub = join(dir, 'docs', 'research');
+  const p = join(sub, 'T-x-pre-research-2026.md');
+  await mkdir(sub, { recursive: true });
+  await writeFile(p, body, 'utf8');
+  return p;
+}
+
+describe('runV2Cartridges — T2.4 SCOPE gate', () => {
+  it('non-advance event → is_advance false → guard short-circuits PASS (gate advances, no block)', async () => {
+    mockLoad.mockResolvedValue([scopeGatePack()]);
+    const d = await runV2Cartridges('sess-scope-na', nonAdvance(), NOW);
+    expect(d.exitCode).toBe(0);
+    expect(d.messages).toEqual([]);
+    expect(await readFsmStateRaw('sess-scope-na', 'fsf-scope')).toBe('scoped'); // passed → advanced
+  });
+
+  it('NOT-READY advance (no captured ask, no depth) → BLOCK, no advance', async () => {
+    mockLoad.mockResolvedValue([scopeGatePack()]);
+    const p = await writePreResearch('1. Login [ask: "add login"]'); // off-ask (no captured ask) → drift
+    const d = await runV2Cartridges('sess-scope-block', advanceWrite(p), NOW);
+    expect(d.exitCode).toBe(2);
+    expect(d.messages).toContain('SCOPE: anchors∧depth≥3∧!open_question');
+    expect(await readFsmStateRaw('sess-scope-block', 'fsf-scope')).toBeNull(); // blocked → stayed
+  });
+
+  it('READY advance (ask resolves + depth≥3 + no open-q) → PASS, advances', async () => {
+    const sid = 'sess-scope-pass';
+    mockLoad.mockResolvedValue([scopeGatePack()]);
+    await appendAsk(sid, 'add login screen');
+    for (let i = 0; i < 3; i++) await appendTool(sid, 'Read'); // depth = 3
+    const p = await writePreResearch('1. Login [ask: "add login screen"]');
+    const d = await runV2Cartridges(sid, advanceWrite(p), NOW);
+    expect(d.exitCode).toBe(0);
+    expect(d.messages).toEqual([]);
+    expect(await readFsmStateRaw(sid, 'fsf-scope')).toBe('scoped'); // ready → advanced
+  });
+
+  it('AD.1 capture: a prompt_submit populates the captured ask when a v2 cartridge is active', async () => {
+    const sid = 'sess-scope-capture';
+    mockLoad.mockResolvedValue([scopeGatePack()]);
+    const promptEvent = { kind: 'prompt_submit', prompt: 'build the thing' } as unknown as Event;
+    await runV2Cartridges(sid, promptEvent, NOW);
+    expect((await readCapturedAsk(sid)).turns).toEqual(['build the thing']);
   });
 });
