@@ -1,7 +1,7 @@
 /** FAC-CUT.5b.2 — runV2Cartridges: in-process v2 host supply (inert / gate-fires+persist / non-trigger / fail-open). */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,7 +13,13 @@ import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { appendAsk, readCapturedAsk } from '../coverage/captured_ask.js';
 import { readFsmStateRaw, readFsmState, fsmStateKey } from '../fsm_state.js';
 import { OPENSQUID_HOME, sessionStateFile } from '../paths.js';
-import { appendTool, clearActiveTask, writeActiveTask } from '../session_state.js';
+import {
+  appendTool,
+  clearActiveTask,
+  recordSessionCwd,
+  writeActiveTask,
+} from '../session_state.js';
+import { pendingLessonsDir } from '../wedge/capture.js';
 import type { Event } from '../event.js';
 import type { Fsm } from '../fsm.js';
 
@@ -646,5 +652,118 @@ describe('buildGuardCtx — T2.3 verdict dual-shape', () => {
     // no audit-cache for this fresh session → fail-open undefined → the guard is falsy, but it RESOLVES (no throw).
     const guard = new RegistryGuardEvaluator(new Map([['has_guess', 'verdict.guess == "PASS"']]));
     expect(() => guard.eval('has_guess', ctx)).not.toThrow();
+  });
+});
+
+// ── T2.12 — the LIVE per-stage report trigger (leaving SCOPE/PLAN/AUTHOR/DEPLOY emits its report) ──────────
+// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/DEPLOY, emits a dated docs/reports/ file
+// under the SESSION CWD + mirrors the body into the session memory buffer. CODE is NOT emitted here (T2.9's
+// loop_driver owns it). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
+
+/** A one-state gate pack whose state is named `<stage>` and PASSES (advances to terminal) on a tool_call.
+ *  Leaving `<stage>` is the transition the T2.12 trigger reports on. */
+const stageGatePack = (stage: string): LoadedPackV2 =>
+  load({
+    name: `fsf-${stage}`,
+    version: '1.0.0',
+    scope: 'workflow',
+    guards: { always: 'tool == "Write"' },
+    fsm: {
+      initial: stage,
+      states: {
+        [stage]: {
+          kind: 'gate',
+          guard: 'always',
+          trigger: ['tool_call'],
+          on_pass_emits: 'next',
+          on_fail: { action: 'warn', message: 'n/a' },
+        },
+        done: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: stage, on: 'next', to: 'done' }],
+    },
+  });
+
+const writeCall = (): Event =>
+  ({ kind: 'tool_call', tool: 'Write', args: { file_path: '/tmp/x.ts' } }) as unknown as Event;
+
+/** A temp project root recorded as the session cwd (where docs/reports/ is written). */
+async function newProjectRoot(sessionId: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 't212-root-'));
+  await recordSessionCwd(sessionId, root);
+  return root;
+}
+
+async function exists(p: string): Promise<boolean> {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
+  for (const [stateName, stageUpper] of [
+    ['scope', 'SCOPE'],
+    ['plan', 'PLAN'],
+    ['author', 'AUTHOR'],
+    ['deploy', 'DEPLOY'],
+  ] as const) {
+    it(`leaving ${stageUpper} emits its dated report file + a memory mirror`, async () => {
+      const sid = `sess-t212-${stateName}`;
+      const root = await newProjectRoot(sid);
+      await writeActiveTask(sid, {
+        id: '1',
+        subject: 's',
+        started_at: NOW,
+        taskId: 'T-rep',
+      });
+      mockLoad.mockResolvedValue([stageGatePack(stateName)]);
+
+      const d = await runV2Cartridges(sid, writeCall(), NOW);
+      expect(d.exitCode).toBe(0);
+
+      // 1) the dated file under the SESSION CWD docs/reports/ (NOT the real repo).
+      const reportPath = join(root, 'docs', 'reports', `${stateName}-T-rep-2026-06-22.md`);
+      expect(await exists(reportPath)).toBe(true);
+      const body = await readFile(reportPath, 'utf8');
+      expect(body).toContain(`# ${stageUpper} report — T-rep (`);
+      expect(body).toContain('## Summary');
+      expect(body).toContain('## Next');
+
+      // 2) the memory mirror — a pending lesson whose content is the report body.
+      const lessonsDir = join(pendingLessonsDir(sid), 'potential-lessons');
+      const files = await readdir(lessonsDir);
+      expect(files.length).toBe(1);
+      const mirror = await readFile(join(lessonsDir, files[0]!), 'utf8');
+      expect(mirror).toContain(`# ${stageUpper} report — T-rep (`);
+    });
+  }
+
+  it('CODE is NOT emitted here (a transition leaving `code` writes no report) — T2.9 owns it', async () => {
+    const sid = 'sess-t212-code';
+    const root = await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
+    mockLoad.mockResolvedValue([stageGatePack('code')]);
+
+    await runV2Cartridges(sid, writeCall(), NOW);
+
+    // no docs/reports/ dir created at all (CODE not in the STAGE map).
+    expect(await exists(join(root, 'docs', 'reports'))).toBe(false);
+    // and no memory mirror was written.
+    expect(await exists(join(pendingLessonsDir(sid), 'potential-lessons'))).toBe(false);
+  });
+
+  it('SCOPE report carries NO goal-alignment line yet (T2.10 seam left undefined)', async () => {
+    const sid = 'sess-t212-scope-noline';
+    const root = await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
+    mockLoad.mockResolvedValue([stageGatePack('scope')]);
+
+    await runV2Cartridges(sid, writeCall(), NOW);
+
+    const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
+    expect(body).not.toContain('## Goal alignment');
   });
 });

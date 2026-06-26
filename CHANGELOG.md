@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.537] - 2026-06-26
+
+### Added — v2 fullstack-flow per-stage reports (Track 2, T2.12)
+
+Each stage transition now emits a mandatory report — a dated human-readable file under the
+project's `docs/reports/` AND a memory mirror. `renderStageReport`/`emitStageReport`
+produce plain-header bodies (`# <STAGE> report`, `## Summary`, `## Next`, and a
+`## Goal alignment` line only when `goalAligned` is set), with `iso` injected (no
+`Date.now` in pure code). The live trigger is the v2 transition-effect loop: leaving
+SCOPE/PLAN/AUTHOR/DEPLOY emits that stage's report (CODE is emitted by T2.9's loop driver
+on `phases_complete`, not here). The memory mirror uses `capturePendingLesson` (the
+session-scoped wedge write); the report root is the recorded session cwd (fail-open skip
+when unrecorded). The SCOPE report's `goalAligned` is a documented seam wired by T2.10.
+
+- `src/runtime/loop/stage_report.ts` (NEW) + `stage_report.test.ts` (5 tests).
+- `src/runtime/loop/v2_supply.ts` — emit + memory-mirror on each SCOPE/PLAN/AUTHOR/DEPLOY transition.
+
 ## [0.5.536] - 2026-06-26
 
 ### Added — v2 fullstack-flow batch-vs-isolate decision (Track 2, T2.14)

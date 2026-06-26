@@ -23,8 +23,10 @@ import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { sessionStateFile } from '../paths.js';
-import { readActiveTaskId } from '../session_state.js';
+import { readActiveTaskId, readSessionCwd } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
+import { capturePendingLesson } from '../wedge/capture.js';
+import { emitStageReport, renderStageReport, type Stage } from './stage_report.js';
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
 import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evidence.js';
@@ -50,6 +52,15 @@ export interface V2Decision {
 }
 
 const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkills: [] };
+
+// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition.
+// CODE is intentionally ABSENT here — T2.9's loop_driver owns the CODE report (on `phases_complete`).
+const STAGE: Record<string, Stage> = {
+  scope: 'SCOPE',
+  plan: 'PLAN',
+  author: 'AUTHOR',
+  deploy: 'DEPLOY',
+};
 
 // T2.5 — the session-state key holding the CAPTURED pre-research artifact path. Stamped on the SCOPE advance
 // (a Write/Edit of a `docs/research/*-pre-research-*` file) so the later PLAN gate can `extractScope` the SAME
@@ -275,6 +286,45 @@ export async function runV2Cartridges(
             at: now,
             via: -1,
           });
+          // T2.12 — the LIVE per-stage report trigger. On each transition LEAVING SCOPE/PLAN/AUTHOR/DEPLOY,
+          // emit that stage's report (a dated file under the project's docs/reports/ + a memory mirror). CODE
+          // is NOT emitted here — T2.9's loop_driver owns the CODE report (on `phases_complete`). FAIL-OPEN:
+          // a report-write failure must NEVER break the hook (observe-never-breaks).
+          const stage = STAGE[p.from];
+          if (stage !== undefined) {
+            try {
+              const root = await readSessionCwd(sessionId);
+              if (root !== null) {
+                // T2.10 SEAM (the SCOPE report's goal-alignment line): for now `goalAligned` is `undefined`
+                // for EVERY stage (no line). T2.10 will replace the SCOPE branch with
+                //   const goalAligned = p.from === 'scope' ? (await goalConsult(sessionId, root)).aligned : undefined;
+                // and spread it into `r` below.
+                const r = {
+                  stage,
+                  taskId: taskId ?? 'no-active-task',
+                  summary: `${p.from} complete`,
+                  nextDirective: p.to,
+                };
+                await emitStageReport(root, r, now); // the dated docs/reports/ file
+                const { body } = renderStageReport(r, now); // the same body, mirrored into memory below
+                // The caller mirrors `body` into memory (session-scoped wedge buffer — the real in-runtime
+                // memory write available here; no ToolContext/RagBackend at this layer). FAIL-OPEN.
+                await capturePendingLesson(sessionId, {
+                  id: `stage-report-${stage.toLowerCase()}-${r.taskId}-${now.replaceAll(':', '-')}`,
+                  type: 'workflow',
+                  content: body,
+                  sourceContext: `v2 stage transition ${p.from} → ${p.to} (task ${r.taskId})`,
+                  confidence: 1,
+                  proposedAt: now,
+                  author: 'agent',
+                });
+              }
+            } catch (err) {
+              process.stderr.write(
+                `[v2-supply] stage report emit/mirror failed (ignored): ${String(err)}\n`,
+              );
+            }
+          }
           // AD.1 capture lifecycle (fail-open): LEAVING `scope` (SCOPE complete) → FREEZE the captured ask so a
           // frozen scope cannot be silently widened — it stays available for PLAN/AUTHOR's anti-drift checks.
           // ENTERING `scope` (a new task's re-arm) → RESET to a fresh ask (else the next task inherits the prior
