@@ -55,6 +55,10 @@ export interface WgOp {
   type: WgOpType;
   payload: Record<string, unknown>;
   project: string; // T-WORKGRAPH-PROJECT-SCOPE: namespace ('legacy-global' for legacy/un-scoped ops)
+  // WGD.1 — the op-log replica id (per-HOME UUID); the `actor-id` half of the `(lamport, actor-id)`
+  // tuple that orders + content-addresses ops. Optional on the wire; replay defaults a missing one to
+  // 'legacy' (legacy op-files predate this field).
+  actorId?: string;
 }
 
 /**

@@ -60,6 +60,7 @@ import {
   resolveProjectUuidFromEnv,
 } from '../runtime/paths.js';
 import { readSessionCwd } from '../runtime/session_state.js';
+import { resolveActorId } from '../runtime/actor_id.js';
 import { bindProject, workGraphStore } from '../workgraph/store.js';
 
 import type { RagBackend } from '../rag/types.js';
@@ -154,6 +155,7 @@ function getWorkGraphBase(): Promise<WorkGraphStore> {
     const store = workGraphStore({
       dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
       sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+      actorId: await resolveActorId(), // WGD.1 — stamp the per-HOME replica id on ops
     });
     await store.init();
     return store;

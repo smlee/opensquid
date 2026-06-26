@@ -30,6 +30,7 @@ import {
   resolveUmbrellaForCwd,
 } from '../../channels/routing.js';
 import { workGraphStore } from '../../workgraph/store.js';
+import { resolveActorId } from '../actor_id.js';
 import { OPENSQUID_HOME, resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
 
 import { handoverDocPath, type HandoffState } from './collect.js';
@@ -221,6 +222,7 @@ export async function writeHandoffSurfaces(
     const store = workGraphStore({
       dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
       sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+      actorId: await resolveActorId(), // WGD.1 — stamp the per-HOME replica id on ops
     });
     await store.init();
     // T-WORKGRAPH-PROJECT-SCOPE: upsert into THIS project's namespace (degrade marker-less → 'legacy-global').

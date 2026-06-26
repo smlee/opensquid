@@ -17,7 +17,7 @@ import { type Client, type Row, createClient } from '@libsql/client';
 
 import { atomicWriteFile, safeRecordId } from '../storage/atomic_file.js';
 
-import { applyOp, makeOpId } from './events.js';
+import { applyOp, canonicalJson, makeOpId } from './events.js';
 
 import type {
   ClaimAudience,
@@ -31,10 +31,16 @@ import type {
 
 const EDGE_TYPES = new Set<EdgeType>(['blocks', 'parent-child', 'discovered-from', 'related']);
 
-const newIssueId = (title: string): string =>
+// WGD.1 — deterministic, content-addressed issue id over `(canonical {title,body}, lamport, actorId)`.
+// No Date.now/Math.random → the same create on the same replica reproduces the id (rebuild/sync replay).
+const newIssueId = (
+  payload: { title: string; body: string },
+  lamport: number,
+  actorId: string,
+): string =>
   'wg-' +
   createHash('sha256')
-    .update(`${title}\n${String(Date.now())}\n${String(Math.random())}`)
+    .update(`${canonicalJson(payload)}\n${String(lamport)}\n${actorId}`)
     .digest('hex')
     .slice(0, 12);
 
@@ -79,13 +85,17 @@ async function createSchema(client: Client): Promise<void> {
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_ops (
     id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, lamport INTEGER NOT NULL,
     type TEXT NOT NULL, payload TEXT NOT NULL, ts TEXT NOT NULL,
-    project TEXT NOT NULL DEFAULT 'legacy-global');`);
+    project TEXT NOT NULL DEFAULT 'legacy-global', actor_id TEXT);`);
+  // WGD.1 — `created_lamport`/`actor_id` are the `(lamport, actor-id)` order/identity tuple. created_lamport
+  // DEFAULT 0 for an ADD COLUMN on an old DB; init()'s backfillTuple then overwrites the 0 from the issue's
+  // issue_created lamport (else every legacy issue ties at 0).
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_issues (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     lww INTEGER NOT NULL DEFAULT 0,
     claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT, wedge_reason TEXT,
-    project TEXT NOT NULL DEFAULT 'legacy-global');`);
+    project TEXT NOT NULL DEFAULT 'legacy-global',
+    created_lamport INTEGER NOT NULL DEFAULT 0, actor_id TEXT);`);
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_edges (
     edge_key TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL,
     project TEXT NOT NULL DEFAULT 'legacy-global');`);
@@ -98,6 +108,10 @@ async function createSchema(client: Client): Promise<void> {
     `ALTER TABLE wg_ops ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
     `ALTER TABLE wg_issues ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
     `ALTER TABLE wg_edges ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
+    // WGD.1 — the (lamport, actor-id) tuple columns (idempotent; already-migrated throws → caught).
+    `ALTER TABLE wg_issues ADD COLUMN created_lamport INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE wg_issues ADD COLUMN actor_id TEXT`,
+    `ALTER TABLE wg_ops ADD COLUMN actor_id TEXT`,
   ]) {
     try {
       await client.execute(ddl);
@@ -108,9 +122,33 @@ async function createSchema(client: Client): Promise<void> {
   await client.execute(`DROP TABLE IF EXISTS wg_events;`); // clean cutover from the 1c state-primary store
 }
 
-export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): WorkGraphStore {
+/**
+ * WGD.1 — backfill the `(lamport, actor-id)` tuple on a pre-existing DB (idempotent). `created_lamport`
+ * comes from each issue's `issue_created` lamport (so legacy issues order by real Lamport, not all tied
+ * at 0); a NULL `actor_id` on either table degrades to `'legacy'`. Run from `init()` after createSchema.
+ */
+async function backfillTuple(c: Client): Promise<void> {
+  await c.execute(
+    `UPDATE wg_issues SET created_lamport =
+       COALESCE((SELECT MIN(lamport) FROM wg_ops
+                 WHERE wg_ops.issue_id = wg_issues.id AND type = 'issue_created'), 0)
+     WHERE created_lamport = 0`,
+  );
+  await c.execute(`UPDATE wg_issues SET actor_id = 'legacy' WHERE actor_id IS NULL`);
+  await c.execute(`UPDATE wg_ops SET actor_id = 'legacy' WHERE actor_id IS NULL`);
+}
+
+export function workGraphStore(opts: {
+  dbUrl: string;
+  sourceDir?: string;
+  // WGD.1 — this replica's actor id (the per-HOME UUID; the live openers pass `resolveActorId()`).
+  // Closure-captured like `hwm`; default 'legacy' so the existing tests need no actor wiring.
+  actorId?: string;
+}): WorkGraphStore {
   let client: Client | null = null;
   let hwm = 0; // Lamport high-water mark
+  const actorId = opts.actorId ?? 'legacy';
+  const nextLamport = (): number => ++hwm;
   const db = (): Client => {
     if (!client) throw new Error('workgraph: not initialized');
     return client;
@@ -131,19 +169,21 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
   async function appendOp(
     project: string,
     issueId: string,
+    lamport: number,
     type: WgOp['type'],
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const lamport = ++hwm;
     const ts = new Date().toISOString();
-    const fullPayload = { ...payload, ts };
     const op: WgOp = {
-      id: makeOpId(type, fullPayload, lamport),
+      // WGD.1 — id hashes the CONTENT payload (not `{...payload, ts}`): `ts` is excluded from identity,
+      // so the same op on the same replica reproduces its id. `ts` lives in the stored payload + column.
+      id: makeOpId(type, payload, lamport, actorId),
       issueId,
       lamport,
       type,
-      payload: fullPayload,
+      payload: { ...payload, ts },
       project,
+      actorId,
     };
     if (opts.sourceDir !== undefined) {
       await atomicWriteFile(
@@ -152,8 +192,17 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       );
     }
     await db().execute({
-      sql: 'INSERT INTO wg_ops (id, issue_id, lamport, type, payload, ts, project) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      args: [op.id, op.issueId, op.lamport, op.type, JSON.stringify(op.payload), ts, op.project],
+      sql: 'INSERT INTO wg_ops (id, issue_id, lamport, type, payload, ts, project, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      args: [
+        op.id,
+        op.issueId,
+        op.lamport,
+        op.type,
+        JSON.stringify(op.payload),
+        ts,
+        op.project,
+        op.actorId ?? 'legacy',
+      ],
     });
     await applyOp(db(), op);
   }
@@ -162,6 +211,7 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
     async init() {
       client = createClient({ url: opts.dbUrl });
       await createSchema(client);
+      await backfillTuple(client); // WGD.1 — fill the (lamport, actor-id) tuple on pre-existing rows
       const rs = await client.execute('SELECT COALESCE(MAX(lamport), 0) AS hwm FROM wg_ops');
       hwm = num(rs.rows[0]?.hwm);
     },
@@ -169,8 +219,9 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
     getIssue,
 
     async createIssue(project, { title, body = '' }) {
-      const id = newIssueId(title);
-      await appendOp(project, id, 'issue_created', { title, body });
+      const lamport = nextLamport();
+      const id = newIssueId({ title, body }, lamport, actorId);
+      await appendOp(project, id, lamport, 'issue_created', { title, body });
       const issue = await getIssue(project, id);
       if (issue === null) throw new Error('workgraph: createIssue failed to project');
       return issue;
@@ -180,11 +231,11 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       const rs =
         filter?.status !== undefined
           ? await db().execute({
-              sql: 'SELECT * FROM wg_issues WHERE project = ? AND status = ? ORDER BY created_at',
+              sql: 'SELECT * FROM wg_issues WHERE project = ? AND status = ? ORDER BY created_lamport, actor_id',
               args: [project, filter.status],
             })
           : await db().execute({
-              sql: 'SELECT * FROM wg_issues WHERE project = ? ORDER BY created_at',
+              sql: 'SELECT * FROM wg_issues WHERE project = ? ORDER BY created_lamport, actor_id',
               args: [project],
             });
       return rs.rows.map(rowToIssue);
@@ -197,7 +248,8 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       if (patch.title !== undefined) payload.title = patch.title;
       if (patch.body !== undefined) payload.body = patch.body;
       if (patch.status !== undefined) payload.status = patch.status;
-      await appendOp(project, id, 'issue_set', payload);
+      const lamport = nextLamport();
+      await appendOp(project, id, lamport, 'issue_set', payload);
       const next = await getIssue(project, id);
       if (next === null) throw new Error('workgraph: updateIssue lost the issue');
       return next;
@@ -209,7 +261,8 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
       if ((await getIssue(project, fromId)) === null || (await getIssue(project, toId)) === null) {
         throw new Error('workgraph: edge endpoint missing');
       }
-      await appendOp(project, fromId, 'dep_added', { from: fromId, to: toId, type });
+      const lamport = nextLamport();
+      await appendOp(project, fromId, lamport, 'dep_added', { from: fromId, to: toId, type });
     },
 
     async listReady(project) {
@@ -224,7 +277,7 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
           AND wedge_reason IS NULL
           AND id NOT IN (
             SELECT e.to_id FROM wg_edges e JOIN wg_issues x ON x.id = e.from_id
-            WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_at`,
+            WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_lamport, actor_id`,
         args: [project, now],
       });
       return rs.rows.map(rowToIssue);
@@ -232,17 +285,20 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
 
     async wedgeMark(project, id, reason: string) {
       if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      await appendOp(project, id, 'wedge_marked', { reason });
+      const lamport = nextLamport();
+      await appendOp(project, id, lamport, 'wedge_marked', { reason });
     },
 
     async clearWedge(project, id) {
       if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      await appendOp(project, id, 'wedge_cleared', {});
+      const lamport = nextLamport();
+      await appendOp(project, id, lamport, 'wedge_cleared', {});
     },
 
     async releaseClaim(project, id) {
       if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      await appendOp(project, id, 'claim_released', {});
+      const lamport = nextLamport();
+      await appendOp(project, id, lamport, 'claim_released', {});
     },
 
     async claimIssue(project, id, audience: ClaimAudience, ttlSec) {
@@ -255,7 +311,8 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
           .update(`${id}\n${String(Date.now())}\n${String(Math.random())}`)
           .digest('hex')
           .slice(0, 16);
-      await appendOp(project, id, 'claim_acquired', { claimToken, audience, expiresAt });
+      const lamport = nextLamport();
+      await appendOp(project, id, lamport, 'claim_acquired', { claimToken, audience, expiresAt });
       // applyOp ran the conditional CAS; we won iff OUR token is the one that landed.
       const cur = await getIssue(project, id);
       return { won: cur?.claimToken === claimToken, expiresAt };
@@ -263,7 +320,7 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
 
     async listEvents(project, issueId) {
       const rs = await db().execute({
-        sql: 'SELECT id, issue_id, lamport, type, payload, project FROM wg_ops WHERE issue_id = ? AND project = ? ORDER BY lamport, id',
+        sql: 'SELECT id, issue_id, lamport, type, payload, project, actor_id FROM wg_ops WHERE issue_id = ? AND project = ? ORDER BY lamport, id',
         args: [issueId, project],
       });
       return rs.rows.map(
@@ -274,6 +331,7 @@ export function workGraphStore(opts: { dbUrl: string; sourceDir?: string }): Wor
           type: str(r, 'type') as WgOp['type'],
           payload: JSON.parse(str(r, 'payload') || '{}') as Record<string, unknown>,
           project: str(r, 'project'),
+          actorId: str(r, 'actor_id') || 'legacy',
         }),
       );
     },
@@ -329,13 +387,16 @@ export async function rebuildWorkGraph(opts: {
     // Legacy op-files predate `project` (T-WORKGRAPH-PROJECT-SCOPE): default a missing one to 'legacy-global'
     // so the replay folds them into the global bucket (mirrors the schema DEFAULT + the resolution degrade).
     if (typeof op.project !== 'string' || op.project === '') op.project = 'legacy-global';
+    // WGD.1 — legacy op-files predate `actorId`; default a missing one to 'legacy' (mirrors the schema/replay
+    // degrade). The stored op id is REPLAYED as-is (never recomputed), so a non-reproducible lease-op id survives.
+    if (typeof op.actorId !== 'string' || op.actorId === '') op.actorId = 'legacy';
     ops.push(op);
   }
   ops.sort((a, b) => a.lamport - b.lamport || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   for (const op of ops) {
     await client.execute({
-      sql: 'INSERT OR IGNORE INTO wg_ops (id, issue_id, lamport, type, payload, ts, project) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      sql: 'INSERT OR IGNORE INTO wg_ops (id, issue_id, lamport, type, payload, ts, project, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       args: [
         op.id,
         op.issueId,
@@ -344,6 +405,7 @@ export async function rebuildWorkGraph(opts: {
         JSON.stringify(op.payload),
         (op.payload as { ts?: string }).ts ?? '',
         op.project,
+        op.actorId ?? 'legacy',
       ],
     });
     await applyOp(client, op);

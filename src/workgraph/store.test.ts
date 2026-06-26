@@ -4,7 +4,7 @@
  * mutations write per-op files under `sourceDir`, and `rebuildWorkGraph` reproduces the projection
  * from those files in Lamport order (incl. LWW on replay). Deterministic fake clock-free logic.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -363,6 +363,272 @@ describe('workGraphStore project-scope (T-WORKGRAPH-PROJECT-SCOPE)', () => {
       expect(await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir })).toBe(1);
       const base = await baseOpen({ dbUrl: rebuiltUrl });
       expect((await base.getIssue('legacy-global', 'wg-old'))?.title).toBe('legacy');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () => {
+  const baseOpen = async (opts: { dbUrl: string; sourceDir?: string; actorId?: string }) => {
+    const b = workGraphStore(opts);
+    await b.init();
+    return b;
+  };
+  const Q = 'det-project';
+
+  it('ORDER reproducibility: two fresh stores, same create seq → identical order (NOT wall-clock)', async () => {
+    const seq = ['gamma', 'alpha', 'beta'];
+    const run = async () => {
+      const b = await baseOpen({ dbUrl: ':memory:', actorId: 'dev-x' });
+      for (const title of seq) await b.createIssue(Q, { title });
+      return (await b.listIssues(Q)).map((i) => i.id);
+    };
+    const first = await run();
+    const second = await run();
+    expect(second).toEqual(first); // same (created_lamport, actor_id) order, deterministic ids
+    expect(first).toHaveLength(3); // listed in creation (lamport) order, not wall-clock/alpha
+  });
+
+  it('ID reproducibility (CONTENT ops): same seq + same actorId → identical issue/op ids + op-file names', async () => {
+    const dir1 = await mkdtemp(join(tmpdir(), 'wg-det-1-'));
+    const dir2 = await mkdtemp(join(tmpdir(), 'wg-det-2-'));
+    try {
+      const run = async (dir: string) => {
+        const b = await baseOpen({
+          dbUrl: `file:${join(dir, 'wg.db')}`,
+          sourceDir: dir,
+          actorId: 'dev-x',
+        });
+        const a = await b.createIssue(Q, { title: 'a', body: 'A' });
+        await b.updateIssue(Q, a.id, { status: 'in_progress' });
+        const c = await b.createIssue(Q, { title: 'c' });
+        await b.addEdge(Q, a.id, c.id, 'blocks');
+        const ops = [...(await b.listEvents(Q, a.id)), ...(await b.listEvents(Q, c.id))];
+        return { issueIds: [a.id, c.id], opIds: ops.map((o) => o.id) };
+      };
+      const r1 = await run(dir1);
+      const r2 = await run(dir2);
+      expect(r2.issueIds).toEqual(r1.issueIds);
+      expect(r2.opIds).toEqual(r1.opIds);
+      // op-file names are the op ids — identical across the two independent stores
+      expect((await readdir(dir1)).filter((f) => f.endsWith('.json')).sort()).toEqual(
+        (await readdir(dir2)).filter((f) => f.endsWith('.json')).sort(),
+      );
+    } finally {
+      await rm(dir1, { recursive: true, force: true });
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it('LEASE carve-out: two stores → DIFFERENT claim_acquired ids; replaying one op-log reproduces its id', async () => {
+    const mkStore = async (dir: string) => {
+      const b = await baseOpen({
+        dbUrl: `file:${join(dir, 'wg.db')}`,
+        sourceDir: dir,
+        actorId: 'dev-x',
+      });
+      const a = await b.createIssue(Q, { title: 'claim me' });
+      await b.claimIssue(Q, a.id, { source: 'claudecode' }, 1800);
+      const claimOp = (await b.listEvents(Q, a.id)).find((o) => o.type === 'claim_acquired');
+      return { dir, claimId: claimOp?.id, issueId: a.id };
+    };
+    const d1 = await mkdtemp(join(tmpdir(), 'wg-lease-1-'));
+    const d2 = await mkdtemp(join(tmpdir(), 'wg-lease-2-'));
+    try {
+      const s1 = await mkStore(d1);
+      const s2 = await mkStore(d2);
+      // random claimToken (a lease secret) → the two stores' claim-op ids DIFFER (intentional carve-out)
+      expect(s1.claimId).not.toBe(s2.claimId);
+      // but replaying ONE op-log reproduces ITS stored id exactly (replay reads, never recomputes)
+      const rebuiltUrl = `file:${join(d1, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: d1 });
+      const rb = await baseOpen({ dbUrl: rebuiltUrl });
+      const replayed = (await rb.listEvents(Q, s1.issueId)).find(
+        (o) => o.type === 'claim_acquired',
+      );
+      expect(replayed?.id).toBe(s1.claimId);
+    } finally {
+      await rm(d1, { recursive: true, force: true });
+      await rm(d2, { recursive: true, force: true });
+    }
+  });
+
+  it('CROSS-ACTOR: different actorIds, colliding lamports → distinct content-op ids + deterministic merged order', async () => {
+    // Two replicas each emit issue_created at lamport 1 with the SAME content but DIFFERENT actorId.
+    const dir = await mkdtemp(join(tmpdir(), 'wg-cross-'));
+    try {
+      const mk = (actorId: string) => async () => {
+        const b = await baseOpen({ dbUrl: ':memory:', actorId });
+        const i = await b.createIssue(Q, { title: 'same-title', body: 'same' });
+        const op = (await b.listEvents(Q, i.id))[0];
+        return { issueId: i.id, opId: op?.id, lamport: op?.lamport, actorId: op?.actorId };
+      };
+      const a = await mk('actor-aaa')();
+      const z = await mk('actor-zzz')();
+      // same lamport, same content, but the actor disambiguates → distinct ids (no silent dedupe)
+      expect(a.lamport).toBe(z.lamport);
+      expect(a.issueId).not.toBe(z.issueId);
+      expect(a.opId).not.toBe(z.opId);
+
+      // merge both issue_created op-files into one source dir → deterministic ORDER BY created_lamport, actor_id
+      const opFile = (issueId: string, opId: string, actorId: string) => ({
+        id: opId,
+        issueId,
+        lamport: 1,
+        type: 'issue_created',
+        payload: { title: 'same-title', body: 'same', ts: '2026-01-01T00:00:00.000Z' },
+        project: Q,
+        actorId,
+      });
+      await writeFile(
+        join(dir, `${a.opId}.json`),
+        JSON.stringify(opFile(a.issueId, a.opId!, 'actor-aaa')),
+      );
+      await writeFile(
+        join(dir, `${z.opId}.json`),
+        JSON.stringify(opFile(z.issueId, z.opId!, 'actor-zzz')),
+      );
+      const merged = `file:${join(dir, 'merged.db')}`;
+      expect(await rebuildWorkGraph({ dbUrl: merged, sourceDir: dir })).toBe(2);
+      const mb = await baseOpen({ dbUrl: merged });
+      // both distinct issues survive (no INSERT OR IGNORE dedupe) and order by actor_id at the colliding lamport
+      const listed = (await mb.listIssues(Q)).map((i) => i.id);
+      expect(listed).toEqual([a.issueId, z.issueId]); // actor-aaa < actor-zzz
+      expect(listed).toHaveLength(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ts excluded from identity: same (type,payload,lamport,actorId), different ts → same op id; row keeps ts', async () => {
+    // Build the SAME op at two different wall-clocks via fake timers; the id must not change.
+    const idAt = async (iso: string) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date(iso));
+        const b = await baseOpen({ dbUrl: ':memory:', actorId: 'dev-x' });
+        const i = await b.createIssue(Q, { title: 'fixed', body: 'fixed' });
+        const op = (await b.listEvents(Q, i.id))[0];
+        return { id: op?.id, ts: (op?.payload as { ts?: string }).ts };
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    const t1 = await idAt('2026-01-01T00:00:00.000Z');
+    const t2 = await idAt('2026-09-09T09:09:09.000Z');
+    expect(t2.id).toBe(t1.id); // ts NOT in identity
+    expect(t1.ts).not.toBe(t2.ts); // but the row/payload keeps the real ts
+  });
+
+  it('existing-DB ALTER+backfill: old-schema rows get created_lamport (from issue_created) + actor_id=legacy; idempotent', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wg-altbf-'));
+    try {
+      const dbUrl = `file:${join(dir, 'old.db')}`;
+      // Pre-WGD schema: wg_issues without created_lamport/actor_id, wg_ops without actor_id, with a real
+      // issue_created op at lamport 7 so the backfill has a non-zero source.
+      const raw = createClient({ url: dbUrl });
+      await raw.execute(
+        `CREATE TABLE wg_issues (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          lww INTEGER NOT NULL DEFAULT 0, project TEXT NOT NULL DEFAULT 'legacy-global')`,
+      );
+      await raw.execute(
+        `CREATE TABLE wg_ops (id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, lamport INTEGER NOT NULL,
+          type TEXT NOT NULL, payload TEXT NOT NULL, ts TEXT NOT NULL,
+          project TEXT NOT NULL DEFAULT 'legacy-global')`,
+      );
+      await raw.execute({
+        sql: `INSERT INTO wg_issues (id, title, created_at, updated_at, project) VALUES (?, ?, ?, ?, ?)`,
+        args: ['wg-old', 'old', 't', 't', 'legacy-global'],
+      });
+      await raw.execute({
+        sql: `INSERT INTO wg_ops (id, issue_id, lamport, type, payload, ts, project) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          'op-old01',
+          'wg-old',
+          7,
+          'issue_created',
+          JSON.stringify({ title: 'old', body: '', ts: 't' }),
+          't',
+          'legacy-global',
+        ],
+      });
+      raw.close();
+
+      const probe = async () => {
+        const b = createClient({ url: dbUrl });
+        const rs = await b.execute(
+          `SELECT created_lamport, actor_id FROM wg_issues WHERE id = 'wg-old'`,
+        );
+        const opRs = await b.execute(`SELECT actor_id FROM wg_ops WHERE id = 'op-old01'`);
+        b.close();
+        return {
+          createdLamport: rs.rows[0]?.created_lamport,
+          issueActor: rs.rows[0]?.actor_id,
+          opActor: opRs.rows[0]?.actor_id,
+        };
+      };
+
+      await baseOpen({ dbUrl }); // first init → ALTER + backfill
+      const after1 = await probe();
+      expect(Number(after1.createdLamport)).toBe(7); // from the issue_created lamport, NOT 0
+      expect(after1.issueActor).toBe('legacy');
+      expect(after1.opActor).toBe('legacy');
+
+      await baseOpen({ dbUrl }); // re-init → idempotent (no throw, values unchanged)
+      const after2 = await probe();
+      expect(after2).toEqual(after1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rebuild parity: replay an op-log → identical issues/order/ids', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wg-parity-'));
+    try {
+      const b = await baseOpen({
+        dbUrl: `file:${join(dir, 'wg.db')}`,
+        sourceDir: dir,
+        actorId: 'dev-x',
+      });
+      await b.createIssue(Q, { title: 'one' });
+      await b.createIssue(Q, { title: 'two' });
+      const liveOrder = (await b.listIssues(Q)).map((i) => i.id);
+
+      const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const rb = await baseOpen({ dbUrl: rebuiltUrl });
+      expect((await rb.listIssues(Q)).map((i) => i.id)).toEqual(liveOrder);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('listEvents read-back carries actorId (X for a stamped op, legacy for a NULL row)', async () => {
+    const b = await baseOpen({ dbUrl: ':memory:', actorId: 'dev-X' });
+    const i = await b.createIssue(Q, { title: 'e' });
+    const op = (await b.listEvents(Q, i.id))[0];
+    expect(op?.actorId).toBe('dev-X');
+
+    // a legacy NULL row → 'legacy' on read-back (replay default)
+    const dir = await mkdtemp(join(tmpdir(), 'wg-evt-legacy-'));
+    try {
+      const legacyOp = {
+        id: 'op-legacyactor',
+        issueId: 'wg-leg',
+        lamport: 1,
+        type: 'issue_created',
+        payload: { title: 'leg', body: '', ts: '2026-01-01T00:00:00.000Z' },
+        project: Q,
+        // no actorId field
+      };
+      await writeFile(join(dir, `${legacyOp.id}.json`), JSON.stringify(legacyOp));
+      const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const rb = await baseOpen({ dbUrl: rebuiltUrl });
+      const ev = (await rb.listEvents(Q, 'wg-leg'))[0];
+      expect(ev?.actorId).toBe('legacy');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

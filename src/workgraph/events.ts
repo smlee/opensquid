@@ -23,7 +23,7 @@ import type { WgOp } from './types.js';
 const UNIT_SEP = ''; // ASCII unit separator — cannot appear in ids
 
 /** Canonical (key-sorted) JSON so content-addressing is independent of key insertion order. */
-function canonicalJson(v: unknown): string {
+export function canonicalJson(v: unknown): string {
   if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
   const obj = v as Record<string, unknown>;
@@ -37,11 +37,20 @@ function canonicalJson(v: unknown): string {
 export const edgeKey = (fromId: string, toId: string): string =>
   createHash('sha256').update(`${fromId}${UNIT_SEP}${toId}`).digest('hex').slice(0, 16);
 
-/** Content-addressed op id over a canonical payload; lamport keeps distinct emits distinct. */
-export const makeOpId = (type: string, payload: unknown, lamport: number): string =>
+/**
+ * Content-addressed op id over the `(type, lamport, actorId, canonical payload)` tuple (WGD.1). The
+ * `actorId` keeps distinct device replicas distinct even when their lamports collide on a merge; `ts`
+ * is NOT part of identity (it lives in the payload for display, never hashed here).
+ */
+export const makeOpId = (
+  type: string,
+  payload: unknown,
+  lamport: number,
+  actorId: string,
+): string =>
   'op-' +
   createHash('sha256')
-    .update(`${type}\n${String(lamport)}\n${canonicalJson(payload)}`)
+    .update(`${type}\n${String(lamport)}\n${actorId}\n${canonicalJson(payload)}`)
     .digest('hex')
     .slice(0, 16);
 
@@ -57,9 +66,20 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
     case 'issue_created':
       // created_at/updated_at = ISO ts (display); lww = lamport (the LWW stamp for issue_set).
       await client.execute({
-        sql: `INSERT OR IGNORE INTO wg_issues (id, title, body, status, created_at, updated_at, lww, project)
-              VALUES (?, ?, ?, 'open', ?, ?, ?, ?)`,
-        args: [op.issueId, s(p.title), s(p.body), s(p.ts), s(p.ts), op.lamport, op.project],
+        sql: `INSERT OR IGNORE INTO wg_issues
+              (id, title, body, status, created_at, updated_at, lww, project, created_lamport, actor_id)
+              VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+        args: [
+          op.issueId,
+          s(p.title),
+          s(p.body),
+          s(p.ts),
+          s(p.ts),
+          op.lamport,
+          op.project,
+          op.lamport,
+          op.actorId ?? 'legacy',
+        ],
       });
       return;
     case 'issue_set':

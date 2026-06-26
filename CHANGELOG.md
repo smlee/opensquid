@@ -7,6 +7,26 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.528] - 2026-06-26
+
+### Changed — deterministic work-graph ids + order via the (lamport, actor-id) tuple
+
+Work-graph ORDER and IDENTITY were wall-clock/RNG-derived (`ORDER BY created_at`; ids hashed `Date.now()` +
+`Math.random()` + the op `ts`), so a rebuild or a future cross-device merge could reorder + re-id — incompatible
+with the cross-device-continuity sync-conflict model (append-only op logs, content-addressed ids, Lamport clocks,
+deterministic replay). Now deterministic, on the EXISTING home store (no storage change):
+
+- **`(lamport, actor-id)` tuple.** New `created_lamport` (wg_issues) + `actor_id` (both tables); `ORDER BY
+created_lamport, actor_id`; ids = `sha(canonicalJson(content) + lamport + actorId)` with `ts` demoted to a
+  display column (excluded from identity). `actorId` is a per-HOME (per-device) UUID (`src/runtime/actor_id.ts`),
+  so op-logs from distinct devices merge collision-free; all sessions/worktrees on one machine share the one home
+  actor. Idempotent `ALTER` + `init()` backfill for existing DBs (`created_lamport` from the issue_created lamport;
+  `actor_id='legacy'`).
+- Lease ops (`claim_acquired`) keep their intentionally-random token/expiry and are not id-reproducible across
+  independent stores (replay reads the stored id). `listEvents` now round-trips `actor_id`.
+- The home store, `bindProject`, the `project` column, the global Lamport clock, and the export/import portability
+  model are unchanged.
+
 ## [0.5.527] - 2026-06-25
 
 ### Changed — v2 discipline Track 1: finish v2 to spec (SKILL.1 live binding + audit-backed guard ctx)

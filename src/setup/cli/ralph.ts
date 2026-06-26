@@ -22,6 +22,7 @@ import {
   resolveProjectUuidFromEnv,
 } from '../../runtime/paths.js';
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
+import { resolveActorId } from '../../runtime/actor_id.js';
 import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
@@ -41,6 +42,7 @@ async function openRalphWorkGraph() {
   const base = workGraphStore({
     dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
     sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+    actorId: await resolveActorId(), // WGD.1 — stamp the per-HOME replica id on ops
   });
   await base.init();
   const cwd = process.cwd();

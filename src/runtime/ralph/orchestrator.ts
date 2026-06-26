@@ -91,7 +91,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       await parkAndEscalate('BOARD_EMPTY'); // resource pause → escalate + STOP
       return { stopped: 'BOARD_EMPTY', spent, closed, parked };
     }
-    const item = ready[0]; // oldest-first (shipped listReady ORDER BY created_at; no priority column)
+    const item = ready[0]; // oldest-first (listReady ORDER BY created_lamport ASC; no priority column)
     if (item === undefined) continue; // unreachable (length checked) — narrows for strict indexing
     const { won } = await wg.claimIssue(item.id, deps.claimAudience(), cfg.claimTtlSec); // GR.1 atomic CAS
     if (!won) continue; // another runner/harness won it — it now carries a live claim, excluded next pass
