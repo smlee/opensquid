@@ -21,14 +21,32 @@
  * Imported by: mcp/server.ts (handler map).
  */
 
-import { readAllDriftCatalogs } from '../../runtime/drift_catalog.js';
+import { readAllDriftCatalogs, projectDriftCounts } from '../../runtime/drift_catalog.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 
 export interface ListDriftEventsArgs {
   packs?: string[];
+  /**
+   * T-project-drift-counter — when true, return the PROJECT-level drift COUNTER (drift counts grouped by
+   * TYPE/ruleId with a per-level breakdown), instead of the raw event list. The project is resolved from the
+   * server's cwd (its `.opensquid/` ancestor); no project scope → `{ total: 0, byType: [] }`.
+   */
+  byType?: boolean;
 }
 
 export async function handleListDriftEvents(args: ListDriftEventsArgs): Promise<string> {
+  // T-project-drift-counter: by-type counter is a SEPARATE, project-scoped surface (independent of the
+  // session/pack catalogs above) — the "counter for types of drifts caught, project-level".
+  if (args.byType) {
+    try {
+      const byType = await projectDriftCounts(process.cwd());
+      const total = byType.reduce((n, c) => n + c.count, 0);
+      return JSON.stringify({ total, byType });
+    } catch (e) {
+      return `list_drift_events error: ${(e as Error).message}`;
+    }
+  }
+
   // FU.8 — resolve the real session (was `?? 'unknown'`). null → no events.
   const sessionId = await resolveMcpSessionId();
   if (sessionId === null) return '[]';

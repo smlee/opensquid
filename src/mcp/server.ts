@@ -264,8 +264,11 @@ const ToolHandlers = {
     handle: () => handleReadViolations(),
   },
   list_drift_events: {
-    schema: z.object({ packs: z.array(z.string()).optional() }),
-    handle: (args: { packs?: string[] }) => handleListDriftEvents(args),
+    schema: z.object({
+      packs: z.array(z.string()).optional(),
+      byType: z.boolean().optional(),
+    }),
+    handle: (args: { packs?: string[]; byType?: boolean }) => handleListDriftEvents(args),
   },
   recall: {
     schema: z.object({
@@ -423,7 +426,8 @@ const descriptions: Record<ToolName, string> = {
   inspect_skill: 'Show rules, load conditions, drift policy of a skill',
   read_state: 'Read a session state key',
   read_violations: 'Read the session violations.jsonl',
-  list_drift_events: 'List drift events aggregated across packs + session',
+  list_drift_events:
+    'List drift events aggregated across packs + session; pass byType:true for the project-level drift counter (counts by type)',
   recall: 'Find memories relevant to a query. Returns up to k ranked results.',
   memorize:
     'Persist a memory. authored_by="user" (default) makes it eviction-immune. Scope defaults to user.',

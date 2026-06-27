@@ -35,9 +35,9 @@
 
 import { appendFile, mkdir } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
-import { packLogFile, sessionLogFile } from './paths.js';
+import { packLogFile, sessionLogFile, resolveProjectScopeRoot } from './paths.js';
 
 export interface DriftEvent {
   /** ISO-8601 timestamp; sort key. */
@@ -193,6 +193,60 @@ export async function appendSessionDriftEvent(sessionId: string, event: DriftEve
   const path = sessionLogFile(sessionId, 'drift-catalog');
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+// ---------------------------------------------------------------------------
+// T-project-drift-counter — PROJECT-scoped drift catalog + a by-TYPE counter.
+//
+// A project carries its own `<project>/.opensquid/state/drift-catalog.jsonl` (resolved from cwd), so drift
+// is countable PER PROJECT (not just per global session/pack). `countDriftsByType` tallies events by `ruleId`
+// (the drift TYPE) with a per-level breakdown. The live dispatcher records every drift verdict here
+// (dispatch.ts), so the counter reflects real gate activity. All best-effort — a missing catalog reads `[]`.
+// ---------------------------------------------------------------------------
+
+/** Project-scoped drift catalog path, or null when cwd has no `.opensquid/` ancestor. */
+async function projectDriftCatalogPath(cwd: string): Promise<string | null> {
+  const root = await resolveProjectScopeRoot(cwd);
+  return root === null ? null : join(root, 'state', 'drift-catalog.jsonl');
+}
+
+/** Append one drift event to the PROJECT catalog (resolved from cwd). No-op when there's no project scope. */
+export async function appendProjectDriftEvent(cwd: string, event: DriftEvent): Promise<void> {
+  const path = await projectDriftCatalogPath(cwd);
+  if (path === null) return;
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+/** Read the PROJECT drift catalog (chronological as written). Missing/no-scope → `[]`. */
+export async function readProjectDriftCatalog(cwd: string): Promise<DriftEvent[]> {
+  const path = await projectDriftCatalogPath(cwd);
+  return path === null ? [] : readJsonl(path, '<project>');
+}
+
+export interface DriftTypeCount {
+  /** The drift TYPE — the rule id that produced the events. */
+  ruleId: string;
+  count: number;
+  /** Per-level breakdown (block / warn / surface). */
+  byLevel: Record<string, number>;
+}
+
+/** PURE — tally drift events by `ruleId` (type), with a per-level breakdown, sorted most-frequent first. */
+export function countDriftsByType(events: readonly DriftEvent[]): DriftTypeCount[] {
+  const map = new Map<string, DriftTypeCount>();
+  for (const e of events) {
+    const cur = map.get(e.ruleId) ?? { ruleId: e.ruleId, count: 0, byLevel: {} };
+    cur.count += 1;
+    cur.byLevel[e.level] = (cur.byLevel[e.level] ?? 0) + 1;
+    map.set(e.ruleId, cur);
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count || a.ruleId.localeCompare(b.ruleId));
+}
+
+/** The PROJECT-level drift counts by type (the "drift counter, project-level"). */
+export async function projectDriftCounts(cwd: string): Promise<DriftTypeCount[]> {
+  return countDriftsByType(await readProjectDriftCatalog(cwd));
 }
 
 export async function recordSubagentDrifts(

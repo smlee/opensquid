@@ -65,6 +65,7 @@
 
 import type { EvalCtx, FunctionRegistry } from '../../functions/registry.js';
 import { applyDriftResponse, defaultPolicyForLevel } from '../drift_response.js';
+import { appendProjectDriftEvent } from '../drift_catalog.js';
 import { evaluateProcess } from '../evaluator.js';
 import { Matcher, matchesEvent } from '../load_matchers.js';
 import { partitionSkills } from '../pinned_skills.js';
@@ -483,6 +484,26 @@ export async function dispatchEvent(
         }
 
         if (result.kind !== 'verdict') continue;
+
+        // T-project-drift-counter: record every DRIFT verdict (block/warn/surface) to the project-scoped
+        // catalog, keyed by ruleId (the type) + level, so the project-level by-type counter reflects real
+        // gate activity. FAIL-OPEN — recording must NEVER break dispatch (observe-never-breaks).
+        const vLevel = result.verdict.level;
+        if (vLevel === 'block' || vLevel === 'warn' || vLevel === 'surface') {
+          try {
+            const driftCwd =
+              'cwd' in event && typeof event.cwd === 'string' ? event.cwd : process.cwd();
+            await appendProjectDriftEvent(driftCwd, {
+              timestamp: new Date().toISOString(),
+              pack: pack.name,
+              ruleId: rule.id,
+              level: vLevel,
+              message: 'message' in result.verdict ? result.verdict.message : '',
+            });
+          } catch {
+            /* fail-open */
+          }
+        }
 
         // Resolve drift-response policy from the pack's `drift_response.yaml`
         // (folded into `Pack.driftResponse` by `loadPack`). Precedence:
