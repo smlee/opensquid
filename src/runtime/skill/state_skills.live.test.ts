@@ -17,8 +17,12 @@ import type { Event } from '../event.js';
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { runV2Cartridges } from '../loop/v2_supply.js';
+import { FunctionRegistry } from '../../functions/registry.js';
 
 const mockLoad = vi.mocked(loadActiveV2Cartridges);
+// These packs carry `skills: []` (no loaded skills to host-evaluate), so an empty registry satisfies the
+// runV2Cartridges signature without registering any primitive.
+const REG = new FunctionRegistry();
 
 function load(spec: unknown): LoadedPackV2 {
   const pack = PackV2.parse(spec);
@@ -98,13 +102,13 @@ beforeEach(() => mockLoad.mockReset());
 describe('SKILL.1 live binding (R-SKILLS-PER-STATE)', () => {
   it('steady-state: an event in a skilled executor binds skills(S) every event (no transition needed)', async () => {
     mockLoad.mockResolvedValue([steadyPack()]);
-    const d = await runV2Cartridges('sess-skill-steady', toolCall(), NOW);
+    const d = await runV2Cartridges('sess-skill-steady', toolCall(), NOW, REG);
     expect(d.boundSkills).toEqual(['alpha', 'beta']);
   });
 
   it('transition: advancing a gate INTO the skilled executor binds the ENTERED state skills (live path)', async () => {
     mockLoad.mockResolvedValue([transitionPack()]);
-    const d = await runV2Cartridges('sess-skill-transition', toolCall(), NOW);
+    const d = await runV2Cartridges('sess-skill-transition', toolCall(), NOW, REG);
     expect(d.boundSkills).toEqual(['alpha', 'beta']);
   });
 
@@ -112,7 +116,7 @@ describe('SKILL.1 live binding (R-SKILLS-PER-STATE)', () => {
     // g0 is a gate (skills []) that fails its trigger? No — drive a non-trigger event so it sits at the gate.
     mockLoad.mockResolvedValue([transitionPack()]);
     const promptEvent = { kind: 'prompt_submit' } as unknown as Event;
-    const d = await runV2Cartridges('sess-skill-gate', promptEvent, NOW);
+    const d = await runV2Cartridges('sess-skill-gate', promptEvent, NOW, REG);
     expect(d.boundSkills).toEqual([]); // sat at gate g0 (binds []) — dormancy would also be [], but see other cases
   });
 });

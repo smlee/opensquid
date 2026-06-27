@@ -22,6 +22,7 @@ import { exitIfSubagent } from './subagent_guard.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
+import { runV2Cartridges } from '../loop/v2_supply.js';
 import { extractSessionId } from './session_id.js';
 import { emitDriftStderrAndExit, squidPrefix } from './hook_output.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
@@ -113,6 +114,12 @@ async function main(): Promise<void> {
   const packs = await loadActivePacks(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
+  // H4: run the v2 cartridges so an active v2 pack sees the `stop` event (e.g. the post-scope pause-guard-stop
+  // block). ADDITIVE — runV2Cartridges fail-opens to ZERO when no v2 pack is active, so `stopExit`/`stopStderr`
+  // collapse to the v1 `exitCode`/`stderr` and the path below stays byte-identical to the v1-only Stop path.
+  const v2 = await runV2Cartridges(sessionId, parsed.data, new Date().toISOString(), registry);
+  const stopExit = exitCode !== 0 || v2.exitCode === 2 ? 2 : 0; // OR v1 + v2
+  const stopStderr = [stderr, ...v2.messages].filter(Boolean).join('\n');
 
   const cwd = extractCwd(raw);
 
@@ -121,9 +128,9 @@ async function main(): Promise<void> {
   // mid-run user message is never invisible (T-CHAT-INBOUND-SURFACE-MIDRUN). The peek is
   // READ-ONLY (unacked), so the same message still DRIVES a proper response turn at the next
   // clean stop (maybeDriveInbound below) — surfacing loses nothing.
-  if (exitCode !== 0) {
+  if (stopExit !== 0) {
     const peek = await maybePeekInbound(sessionId, cwd);
-    emitDriftStderrAndExit(exitCode, peek === null ? stderr : `${stderr}\n\n${peek}`);
+    emitDriftStderrAndExit(stopExit, peek === null ? stopStderr : `${stopStderr}\n\n${peek}`);
   }
 
   // Interactive responder: this live session claims its umbrella's chat lease

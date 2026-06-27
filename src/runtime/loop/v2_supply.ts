@@ -18,6 +18,7 @@
 import { readFile } from 'node:fs/promises';
 
 import { loadActiveV2Cartridges } from '../bootstrap.js';
+import { evaluateProcess } from '../evaluator.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
@@ -37,6 +38,7 @@ import { V2ObservedActor } from './v2_observed_actor.js';
 
 import type { Envelope } from '../bus/types.js';
 import type { Event } from '../event.js';
+import type { EvalCtx, FunctionRegistry } from '../../functions/registry.js';
 
 export interface V2Decision {
   exitCode: 0 | 2;
@@ -231,6 +233,7 @@ export async function runV2Cartridges(
   sessionId: string,
   event: Event,
   now: string,
+  registry: FunctionRegistry,
 ): Promise<V2Decision> {
   const cartridges = await loadActiveV2Cartridges(sessionId);
   if (cartridges.length === 0) return ZERO; // INERT — the nothing-breaks path (no active v2 pack today)
@@ -356,6 +359,45 @@ export async function runV2Cartridges(
       // actor.state.current is the final (post-event) state (v2_observed_actor.ts:97) → bind skills(S) every event.
       onStateEntry(actor.state.current, loaded.compiled.meta, skillRuntime);
       boundSkills.push(...skillRuntime.current().skills);
+
+      // H3 (SKILL.1 host): evaluate the CURRENT state's bound skills' rules over this event. State-keyed
+      // selection (the state IS the router) + trigger filter (dispatch.ts:349). Routes the RuleResult into the
+      // existing delivery channels: inject_context / surface / warn → injections; verdict block → messages +
+      // exit 2; pass / directive / no_verdict / error → no-op (backend skills emit only verdict + inject).
+      const boundNames = new Set(skillRuntime.current().skills);
+      for (const skill of loaded.skills) {
+        if (!boundNames.has(skill.name)) continue; // only the current state's skills(S)
+        if (!skill.triggers.some((t) => t.kind === event.kind)) continue; // trigger filter (dispatch.ts:349)
+        for (const rule of skill.rules) {
+          // Phase 4: destination_check rules fire on the scheduler tick (dispatch.ts:378), not the per-event
+          // walker, and carry no `process`. Skip them so we only walk track_check processes.
+          if (rule.kind === 'destination_check') continue;
+          // DIVERGENCE (noted): the spec threads `packFsm: loaded.pack.fsm`, but PackV2.fsm is the v2 FSM shape
+          // (compiled by compile_v2 → runtime/fsm.ts), NOT the v1 `EvalCtx.packFsm: Fsm` shape — they are
+          // type-incompatible. Backend pack skills emit only verdict/inject_context and never invoke the
+          // packFsm-reading primitives (read_fsm_state/advance_fsm), so packFsm is omitted (correctness > literal).
+          const ctx: EvalCtx = {
+            event,
+            bindings: new Map(),
+            sessionId,
+            packId: loaded.pack.name,
+          };
+          const result = await evaluateProcess(rule.process, ctx, registry);
+          // RuleResult union (evaluator.ts:449-454): verdict | directive | no_verdict | error | inject_context.
+          if (result.kind === 'inject_context') {
+            injections.push(result.content); // → additionalContext
+          } else if (result.kind === 'verdict') {
+            if (result.verdict.level === 'block') {
+              messages.push(result.verdict.message); // → block (enforced exit 2)
+              exitCode = 2;
+            } else if (result.verdict.level === 'surface' || result.verdict.level === 'warn') {
+              injections.push(result.verdict.message); // non-blocking LENS/nudge → additionalContext
+            }
+            // level 'pass' → no-op.
+          }
+          // `directive` / `no_verdict` / `error` → intentionally no-op (fail-open; backend skills don't emit them).
+        }
+      }
     } catch (err) {
       // FAIL-OPEN: a v2 cartridge bug must NEVER break the hook (observe-never-breaks discipline).
       process.stderr.write(`[v2-supply] cartridge error (ignored): ${String(err)}\n`);
