@@ -74,41 +74,6 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(validateFsm(fsm!)).toEqual([]); // every emit routed, targets declared, decision totality
   });
 
-  it('H6: binds the backend skills per state (state-keyed) — pause-guards post-scope, lenses where code is authored', async () => {
-    const loaded = await loadPackV2(BUILTIN_DIR);
-    const meta = loaded.compiled.meta;
-    const LENSES = [
-      'coding-principles',
-      'system-design',
-      'architecture',
-      'testing',
-      'observability',
-      'security',
-      'performance',
-      'accessibility',
-      'versioning',
-      'compliance',
-    ];
-    // scope = NO skills (questions allowed in SCOPE).
-    expect(meta.scope?.skills).toEqual([]);
-    // plan/deploy = the two pause-guards only.
-    expect(meta.plan?.skills).toEqual(['pause-guard-tool', 'pause-guard-stop']);
-    expect(meta.deploy?.skills).toEqual(['pause-guard-tool', 'pause-guard-stop']);
-    // author/code = pause-guards + all 10 engineering lenses.
-    for (const s of ['author', 'code']) {
-      expect(meta[s]?.skills).toContain('pause-guard-tool');
-      expect(meta[s]?.skills).toContain('pause-guard-stop');
-      for (const lens of LENSES) expect(meta[s]?.skills, `${s} missing ${lens}`).toContain(lens);
-    }
-    // every declared skill name resolves to a loaded skill (no dangling reference).
-    const loadedNames = new Set(loaded.skills.map((sk) => sk.name));
-    for (const st of ['plan', 'author', 'code', 'deploy']) {
-      for (const name of meta[st]?.skills ?? []) {
-        expect(loadedNames, `dangling skill ref: ${name}`).toContain(name);
-      }
-    }
-  });
-
   it('advances SCOPE → PLAN → AUTHOR → CODE; CODE is the T2.7 sub_flow await-point (observed mode)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);

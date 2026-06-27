@@ -73,36 +73,17 @@ fsm:
       on_pass_emits: scoped
       on_fail: { action: block, message: 'SCOPE: anchors∧depth≥3∧!open_question' }
     # ── PLAN (new top-level region vs v1) ──────────────────────────────────
-    # H6 — state-keyed skills (SKILL.1): pause-discipline bound on every POST-SCOPE gate (NOT scope, where
-    # questions are allowed). The binding IS the post-scope gate; the skills carry no in-rule phase check.
     plan:
       kind: gate
       guard: plan_ready
       trigger: [post_tool_call]
-      skills: [pause-guard-tool, pause-guard-stop]
       on_pass_emits: planned
       on_fail: { action: block, message: 'PLAN: acyclic∧complete' }
     # ── AUTHOR (T2.6 — the ENFORCING coverage gate) ────────────────────────
-    # H6 — pause-discipline + the 10 engineering lenses (design §8 bucket) bound where backend code is authored.
     author:
       kind: gate
       guard: author_ready
       trigger: [post_tool_call]
-      skills:
-        [
-          pause-guard-tool,
-          pause-guard-stop,
-          coding-principles,
-          system-design,
-          architecture,
-          testing,
-          observability,
-          security,
-          performance,
-          accessibility,
-          versioning,
-          compliance,
-        ]
       on_pass_emits: authored
       on_fail: { action: block, message: 'AUTHOR: coverage_complete∧real_code' }
     # ── CODE (T2.7 — ENFORCING gate on the live OBSERVED path) ──────────────
@@ -115,21 +96,6 @@ fsm:
       kind: gate
       guard: code_ready
       trigger: [post_tool_call]
-      skills:
-        [
-          pause-guard-tool,
-          pause-guard-stop,
-          coding-principles,
-          system-design,
-          architecture,
-          testing,
-          observability,
-          security,
-          performance,
-          accessibility,
-          versioning,
-          compliance,
-        ]
       on_pass_emits: coded
       on_fail: { action: block, message: 'CODE: log all 7 phases + readiness clean' }
     # ── DEPLOY (T2.8 — the ENFORCING capability gate) ──────────────────────
@@ -137,7 +103,6 @@ fsm:
       kind: gate
       guard: deploy_ready
       trigger: [post_tool_call]
-      skills: [pause-guard-tool, pause-guard-stop]
       on_pass_emits: deployed
       on_fail: { action: block, message: 'DEPLOY: capability gate' }
     # ── acceptance (the second/last human touchpoint) ──────────────────────
