@@ -30,6 +30,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { dirname } from 'node:path';
 
 // Maps opensquid's supported Claude Code hook events to the bin entries
 // declared in package.json (resolve to `dist/runtime/hooks/*.js` binaries
@@ -183,6 +184,9 @@ export function projectOpensquidHooks(input: SettingsJson): {
  */
 export async function writeOpensquidHooks(settingsPath: string): Promise<WriteResult> {
   const input = await readSettingsJson(settingsPath);
+  // A project with `.opensquid/` but no `.claude/` (first-run) has no parent dir
+  // yet — create it so the `.bak` snapshot + write don't ENOENT-abort the wizard.
+  await fs.mkdir(dirname(settingsPath), { recursive: true });
   const backupPath = `${settingsPath}.bak`;
   await fs.writeFile(backupPath, JSON.stringify(input, null, 2));
 

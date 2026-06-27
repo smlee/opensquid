@@ -69,6 +69,14 @@ describe('writeOpensquidHooks — empty / nonexistent settings.json', () => {
     expect(bak).toEqual({});
   });
 
+  it('creates the parent dir when missing (project has .opensquid but no .claude yet)', async () => {
+    // first-run project: <root>/.claude/ does not exist → must not ENOENT-abort
+    const nested = join(dir, '.claude', 'settings.json');
+    const result = await writeOpensquidHooks(nested);
+    expect(result.added).toBe(Object.keys(OPENSQUID_BIN_FOR_EVENT).length);
+    expect(await readJson(nested)).toHaveProperty('hooks');
+  });
+
   it('produces a settings.json that has just the opensquid hooks block (no spurious keys)', async () => {
     await writeOpensquidHooks(settingsPath);
     const out = (await readJson(settingsPath)) as Record<string, unknown>;
