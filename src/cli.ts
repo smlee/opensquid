@@ -23,6 +23,7 @@ import { Command } from 'commander';
 import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
+import { registerYoloCli } from './cli/yolo.js';
 import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { resolveBackendConfig } from './rag/config.js';
 import { fastembedEmbedder } from './rag/embedders/fastembed.js';
@@ -385,6 +386,10 @@ function runCli(): void {
   // living-pack mechanic. v1 ships local-directory install + lessons-only/raw
   // export modes. Tarball/URL install + with-evidence export are v1.5.
   registerPackCli(program);
+
+  // YOLO mode — `opensquid yolo on|off|status`: downgrade the Safety floor's DANGEROUS tier to warn
+  // (hardline stays enforced). The toggle the user runs to let dangerous-but-reversible actions proceed.
+  registerYoloCli(program);
 
   // G.6 — `opensquid memory import-auto`. Bulk-imports Claude Code auto-memory
   // files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the loop-engine

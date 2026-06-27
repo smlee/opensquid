@@ -23,6 +23,7 @@ describe('loadSafetyPolicy (T2)', () => {
   it('a valid config file is read + parsed', async () => {
     const custom: SafetyPolicy = {
       forbid: [{ argPattern: 'shutdown', tier: 'hardline', message: 'no shutdowns' }],
+      allow: [],
     };
     await writeFile(safetyPolicyPath(), JSON.stringify(custom));
     expect(await loadSafetyPolicy()).toEqual(custom);

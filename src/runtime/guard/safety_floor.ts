@@ -13,16 +13,28 @@
 import type { Action } from '../gate/kernel.js';
 import type { SafetyPolicy } from './safety_policy.js';
 
-export type SafetyAction = Extract<Action, 'pass' | 'block' | 'halt'>;
+export type SafetyAction = Extract<Action, 'pass' | 'warn' | 'block' | 'halt'>;
 
 export interface SafetyResult {
   action: SafetyAction;
   message?: string;
+  /** The matched rule's id (or its argPattern when unnamed) — lets a `warn` be recorded as a typed drift. */
+  ruleId?: string;
 }
 
 export interface SafetyCall {
   tool: string;
   args: unknown;
+}
+
+/**
+ * Tier-downgrade options. The ONLY relaxation the floor permits: move the `dangerous` tier from `block` to
+ * `warn` (the call PROCEEDS but is surfaced) when `dangerousToWarn` is set. The `hardline` tier is NEVER
+ * affected — `rm -rf /`, substrate writes, `.env` exfil always `halt`, regardless of this option. Enforced
+ * in code (below), not config, so a misconfigured policy or env can never relax a hardline rule.
+ */
+export interface SafetyOptions {
+  dangerousToWarn?: boolean;
 }
 
 /**
@@ -50,9 +62,27 @@ function actionText(call: SafetyCall): string {
   }
 }
 
-/** Evaluate a tool call against the policy: hardline→halt, dangerous→block, else pass (fail-open). */
-export function checkSafety(call: SafetyCall, policy: SafetyPolicy): SafetyResult {
+/**
+ * Evaluate a tool call against the policy:
+ *   ALLOW first (an explicitly-permitted action — e.g. the agent-authored `context.md` — is never denied),
+ *   then forbid: hardline→halt (ALWAYS, even under yolo), dangerous→block — OR →warn when `dangerousToWarn`
+ *   is set (yolo mode: the ONE downgrade the floor permits). Unmatched → pass (FAIL OPEN).
+ *
+ * The downgrade is structurally confined to the `dangerous` tier: `hardline` returns `halt` before the
+ * downgrade branch is ever reached, so no option, config, or env can relax `rm -rf /`, substrate DELETE,
+ * or `.env` exfil.
+ */
+export function checkSafety(
+  call: SafetyCall,
+  policy: SafetyPolicy,
+  opts: SafetyOptions = {},
+): SafetyResult {
   const hay = actionText(call); // the ACTION, not incidental content
+  // ALLOW wins: an action on an explicitly-permitted path is never denied (checked before forbid).
+  for (const a of policy.allow ?? []) {
+    if (a.tool !== undefined && a.tool !== call.tool) continue;
+    if (hay.includes(a.argPattern)) return { action: 'pass' };
+  }
   for (const r of policy.forbid) {
     if (r.tool !== undefined && r.tool !== call.tool) continue;
     if (!hay.includes(r.argPattern)) continue; // exact/substring/path rule — never a heuristic
@@ -69,7 +99,14 @@ export function checkSafety(call: SafetyCall, policy: SafetyPolicy): SafetyResul
       !/>>?\s*[^\s|;&<>]*\.opensquid/.test(hay)
     )
       continue; // needs a delete verb or a substrate-TARGETED redirect
-    return { action: r.tier === 'hardline' ? 'halt' : 'block', message: r.message };
+    const ruleId = r.id ?? r.argPattern;
+    if (r.tier === 'hardline') return { action: 'halt', message: r.message, ruleId }; // never downgradable
+    // dangerous: the ONE tier yolo can move block→warn (the call then proceeds but is surfaced + recorded).
+    return {
+      action: opts.dangerousToWarn === true ? 'warn' : 'block',
+      message: r.message,
+      ruleId,
+    };
   }
   return { action: 'pass' }; // FAIL OPEN — an unmatched call is never denied
 }

@@ -36,6 +36,8 @@ import {
 import { extractSessionId } from './session_id.js';
 import { checkSafety } from '../guard/safety_floor.js';
 import { loadSafetyPolicy } from '../guard/safety_policy.js';
+import { isYoloMode } from '../guard/yolo.js';
+import { appendProjectDriftEvent } from '../drift_catalog.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -144,14 +146,39 @@ async function main(): Promise<void> {
   // a pack: it fires under every agent regardless of pack. FAIL-OPEN: any error here must NEVER block.
   if (parsed.data.kind === 'tool_call') {
     try {
+      // YOLO mode (env or marker) downgrades the DANGEROUS tier block→warn. hardline is unaffected.
       const verdict = checkSafety(
         { tool: parsed.data.tool, args: parsed.data.args },
         await loadSafetyPolicy(),
+        { dangerousToWarn: await isYoloMode() },
       );
       if (verdict.action === 'block' || verdict.action === 'halt') {
         const msg = `🦑 [safety floor] ${verdict.message ?? 'forbidden action'}`;
         process.stdout.write(JSON.stringify(buildPreToolUseDeny(msg, '')));
         process.exit(0);
+      }
+      if (verdict.action === 'warn') {
+        // YOLO: a dangerous-tier action was downgraded block→warn. Surface it LOUDLY (never silent) and
+        // record it to the project drift counter, then let the tool run. hardline can never reach here.
+        process.stderr.write(
+          `🦑 [safety floor · YOLO] ${verdict.message ?? 'dangerous action'} — allowed (block→warn). ` +
+            `hardline rules (rm -rf, substrate delete, .env) still enforced.\n`,
+        );
+        try {
+          const cwd =
+            'cwd' in parsed.data && typeof parsed.data.cwd === 'string'
+              ? parsed.data.cwd
+              : process.cwd();
+          await appendProjectDriftEvent(cwd, {
+            timestamp: new Date().toISOString(),
+            pack: '<safety-floor>',
+            ruleId: `safety:${verdict.ruleId ?? 'dangerous'}`,
+            level: 'warn',
+            message: verdict.message ?? '',
+          });
+        } catch {
+          /* fail-open: recording a warn must never block the call */
+        }
       }
     } catch {
       /* fail-open: a Safety-floor error never blocks the call (the hook's fail-open contract) */

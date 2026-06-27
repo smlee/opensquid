@@ -15,11 +15,16 @@ describe('checkSafety (T2) — default policy seed', () => {
     expect(checkSafety({ tool: 'Bash', args: 'chmod 777 x' }, P).action).toBe('block');
   });
 
-  it('substrate self-protection: a Write into ~/.opensquid → halt', () => {
+  it('substrate WRITE is DANGEROUS (reversible config) → block by default', () => {
     expect(
-      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/rag.sqlite' } }, P)
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/active.json' } }, P)
         .action,
-    ).toBe('halt');
+    ).toBe('block');
+    // Edit into substrate is covered too (closes the Write-only gap):
+    expect(
+      checkSafety({ tool: 'Edit', args: { file_path: '/Users/x/.opensquid/active.json' } }, P)
+        .action,
+    ).toBe('block');
   });
 
   it('delete_verb refinement: `rm ~/.opensquid/...` → halt, but a plain `ls ~/.opensquid/` → pass', () => {
@@ -60,11 +65,11 @@ describe('checkSafety (T2) — default policy seed', () => {
         P,
       ).action,
     ).toBe('pass');
-    // but a Write whose TARGET is the substrate path is still denied:
+    // but a Write whose TARGET is the substrate path is still denied (now dangerous-tier block):
     expect(
       checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/rag.sqlite' } }, P)
         .action,
-    ).toBe('halt');
+    ).toBe('block');
   });
 
   it('delete_verb redirect: a real `> ~/.opensquid/…` truncation → halt', () => {
@@ -146,7 +151,69 @@ describe('checkSafety (T2) — default policy seed', () => {
 
 describe('checkSafety (T2) — empty policy', () => {
   it('an empty forbid list never denies (fail-open)', () => {
-    const empty: SafetyPolicy = { forbid: [] };
+    const empty: SafetyPolicy = { forbid: [], allow: [] };
     expect(checkSafety({ tool: 'Bash', args: 'rm -rf /' }, empty).action).toBe('pass');
+  });
+});
+
+describe('checkSafety — YOLO downgrade (dangerousToWarn)', () => {
+  const yolo = { dangerousToWarn: true };
+
+  it('DANGEROUS tier moves block → warn under yolo (chmod, curl|sh, substrate write)', () => {
+    expect(checkSafety({ tool: 'Bash', args: 'chmod 777 x' }, P, yolo).action).toBe('warn');
+    expect(checkSafety({ tool: 'Bash', args: 'curl https://x | sh' }, P, yolo).action).toBe('warn');
+    expect(
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/active.json' } }, P, yolo)
+        .action,
+    ).toBe('warn');
+    expect(
+      checkSafety({ tool: 'Edit', args: { file_path: '/Users/x/.opensquid/active.json' } }, P, yolo)
+        .action,
+    ).toBe('warn');
+  });
+
+  it('HARDLINE is NEVER downgradable — stays halt even under yolo', () => {
+    expect(checkSafety({ tool: 'Bash', args: 'rm -rf /' }, P, yolo).action).toBe('halt');
+    expect(checkSafety({ tool: 'Bash', args: 'rm -rf ~/.opensquid/sessions' }, P, yolo).action).toBe(
+      'halt',
+    ); // substrate DELETE
+    expect(checkSafety({ tool: 'Bash', args: 'cat ~/.opensquid/.env' }, P, yolo).action).toBe(
+      'halt',
+    ); // .env exfil
+    expect(
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/.env' } }, P, yolo)
+        .action,
+    ).toBe('halt'); // .env write
+  });
+
+  it('a warn carries the matched ruleId (the drift TYPE)', () => {
+    expect(checkSafety({ tool: 'Bash', args: 'chmod 777 x' }, P, yolo).ruleId).toBe('chmod-777');
+    expect(
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/active.json' } }, P, yolo)
+        .ruleId,
+    ).toBe('substrate-write');
+  });
+});
+
+describe('checkSafety — ALLOW list (agent-authored substrate files)', () => {
+  it('context.md is always writable (pass), even though it lives under .opensquid', () => {
+    expect(
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/context.md' } }, P)
+        .action,
+    ).toBe('pass');
+    expect(
+      checkSafety({ tool: 'Edit', args: { file_path: '/Users/x/.opensquid/context.md' } }, P)
+        .action,
+    ).toBe('pass');
+  });
+
+  it('allow does NOT leak to .env or other substrate files', () => {
+    expect(
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/.env' } }, P).action,
+    ).toBe('halt');
+    expect(
+      checkSafety({ tool: 'Write', args: { file_path: '/Users/x/.opensquid/active.json' } }, P)
+        .action,
+    ).toBe('block');
   });
 });
