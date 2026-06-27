@@ -94,10 +94,11 @@ export function registerYoloCli(program: Command, deps: YoloCliDeps = {}): Comma
   return program
     .command('yolo [state]')
     .description(
-      'Toggle YOLO mode: DANGEROUS tier block→warn (hardline stays enforced). state: on | off | status (default: status)',
+      'YOLO mode: DANGEROUS tier block→warn (hardline stays enforced). state: on | off | status (default: on, matching `--yolo`)',
     )
     .action(async (state?: string) => {
-      const s = (state ?? 'status').toLowerCase();
+      // bare `opensquid yolo` turns it ON — consistent with the bare `--yolo` flag (was: status).
+      const s = (state ?? 'on').toLowerCase();
       if (s === 'on') {
         await setYoloMarker(true);
         print(ON_MSG);

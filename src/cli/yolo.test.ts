@@ -29,9 +29,10 @@ describe('opensquid yolo (verb)', () => {
     expect(await isYoloMode()).toBe(false);
   });
 
-  it('status (default) reports OFF then ON', async () => {
-    expect((await run([])).join(' ')).toMatch(/OFF/);
-    await run(['on']);
+  it('bare `yolo` turns it ON (matches bare --yolo); `yolo status` reports', async () => {
+    expect((await run(['status'])).join(' ')).toMatch(/OFF/);
+    await run([]); // bare verb → ON
+    expect(await isYoloMode()).toBe(true);
     expect((await run(['status'])).join(' ')).toMatch(/ON/);
   });
 
