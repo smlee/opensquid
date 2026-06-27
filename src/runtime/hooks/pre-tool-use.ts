@@ -146,11 +146,16 @@ async function main(): Promise<void> {
   // a pack: it fires under every agent regardless of pack. FAIL-OPEN: any error here must NEVER block.
   if (parsed.data.kind === 'tool_call') {
     try {
-      // YOLO mode (env or marker) downgrades the DANGEROUS tier block→warn. hardline is unaffected.
+      // Resolve YOLO for THIS project (env → project config → global config). The event cwd selects the
+      // project so a per-repo override applies; YOLO downgrades the DANGEROUS tier block→warn (hardline never).
+      const cwd =
+        'cwd' in parsed.data && typeof parsed.data.cwd === 'string'
+          ? parsed.data.cwd
+          : process.cwd();
       const verdict = checkSafety(
         { tool: parsed.data.tool, args: parsed.data.args },
         await loadSafetyPolicy(),
-        { dangerousToWarn: await isYoloMode() },
+        { dangerousToWarn: await isYoloMode(cwd) },
       );
       if (verdict.action === 'block' || verdict.action === 'halt') {
         const msg = `🦑 [safety floor] ${verdict.message ?? 'forbidden action'}`;
@@ -165,10 +170,6 @@ async function main(): Promise<void> {
             `hardline rules (rm -rf, substrate delete, .env) still enforced.\n`,
         );
         try {
-          const cwd =
-            'cwd' in parsed.data && typeof parsed.data.cwd === 'string'
-              ? parsed.data.cwd
-              : process.cwd();
           await appendProjectDriftEvent(cwd, {
             timestamp: new Date().toISOString(),
             pack: '<safety-floor>',

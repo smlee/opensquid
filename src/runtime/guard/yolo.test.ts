@@ -1,47 +1,107 @@
-/** YOLO mode — env-wins toggle (env `OPENSQUID_YOLO` or the persistent marker), fail-safe OFF. */
-import { rm } from 'node:fs/promises';
+/**
+ * YOLO mode — two-level config field (global + per-project override) with a session env override.
+ * Precedence: env → project config → global config → legacy marker → OFF. Each test sandboxes its own
+ * OPENSQUID_HOME + project dir so it never touches real state.
+ */
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { isYoloMode, setYoloMarker, yoloMarkerPath } from './yolo.js';
+import { isYoloMode, setYolo, yoloStatus, yoloMarkerPath } from './yolo.js';
 
-const ENV = process.env.OPENSQUID_YOLO;
-beforeEach(() => {
+const PRIOR_HOME = process.env.OPENSQUID_HOME;
+const PRIOR_ENV = process.env.OPENSQUID_YOLO;
+
+let home: string;
+let project: string;
+beforeEach(async () => {
+  home = await mkdtemp(join(tmpdir(), 'osq-yolo-home-'));
+  project = await mkdtemp(join(tmpdir(), 'osq-yolo-proj-'));
+  await mkdir(join(project, '.opensquid'), { recursive: true }); // project-scope marker
+  process.env.OPENSQUID_HOME = home;
   delete process.env.OPENSQUID_YOLO;
 });
 afterEach(async () => {
-  await rm(yoloMarkerPath(), { force: true });
-  if (ENV === undefined) delete process.env.OPENSQUID_YOLO;
-  else process.env.OPENSQUID_YOLO = ENV;
+  await rm(home, { recursive: true, force: true });
+  await rm(project, { recursive: true, force: true });
+  if (PRIOR_HOME === undefined) delete process.env.OPENSQUID_HOME;
+  else process.env.OPENSQUID_HOME = PRIOR_HOME;
+  if (PRIOR_ENV === undefined) delete process.env.OPENSQUID_YOLO;
+  else process.env.OPENSQUID_YOLO = PRIOR_ENV;
 });
 
-describe('isYoloMode', () => {
-  it('default (no env, no marker) → OFF (fail-safe to full enforcement)', async () => {
-    expect(await isYoloMode()).toBe(false);
+const writeProjectConfig = (obj: unknown) =>
+  writeFile(join(project, '.opensquid', 'config.json'), JSON.stringify(obj), 'utf8');
+
+describe('isYoloMode — config resolution', () => {
+  it('default (nothing set) → OFF', async () => {
+    expect(await isYoloMode(project)).toBe(false);
   });
 
-  it('env OPENSQUID_YOLO truthy → ON (1/true/on/yes)', async () => {
-    for (const v of ['1', 'true', 'on', 'YES']) {
-      process.env.OPENSQUID_YOLO = v;
-      expect(await isYoloMode()).toBe(true);
-    }
+  it('global ON → a project with NO key inherits it', async () => {
+    await setYolo(true, 'global');
+    expect(await isYoloMode(project)).toBe(true); // inherited
   });
 
-  it('env present but falsy → OFF', async () => {
-    process.env.OPENSQUID_YOLO = '0';
-    expect(await isYoloMode()).toBe(false);
+  it('project key OVERRIDES global (opt-out under global-ON)', async () => {
+    await setYolo(true, 'global');
+    await setYolo(false, 'project', project);
+    expect(await isYoloMode(project)).toBe(false); // project false beats global true
   });
 
-  it('marker on → ON; marker off (removed) → OFF', async () => {
-    await setYoloMarker(true);
-    expect(await isYoloMode()).toBe(true);
-    await setYoloMarker(false);
-    expect(await isYoloMode()).toBe(false);
+  it('project key OVERRIDES global (opt-in under global-OFF)', async () => {
+    await setYolo(false, 'global');
+    await setYolo(true, 'project', project);
+    expect(await isYoloMode(project)).toBe(true);
   });
 
-  it('env wins over a missing marker (env ON, no marker → ON)', async () => {
+  it('env beats both files (force on / force off)', async () => {
+    await setYolo(false, 'global');
+    await setYolo(false, 'project', project);
     process.env.OPENSQUID_YOLO = '1';
-    await setYoloMarker(false);
-    expect(await isYoloMode()).toBe(true);
+    expect(await isYoloMode(project)).toBe(true);
+    process.env.OPENSQUID_YOLO = 'off';
+    await setYolo(true, 'project', project);
+    expect(await isYoloMode(project)).toBe(false);
+  });
+});
+
+describe('setYolo — preserves other config keys', () => {
+  it('global write keeps engine_bin / chat_connections intact', async () => {
+    await writeFile(
+      join(home, 'config.json'),
+      JSON.stringify({
+        version: 1,
+        engine_bin: '/x',
+        chat_connections: { telegram: { bot_token: 't' } },
+      }),
+      'utf8',
+    );
+    await setYolo(true, 'global');
+    const { global } = await yoloStatus(project);
+    expect(global).toBe(true);
+    // round-trip the file: foreign keys survive
+    const raw = JSON.parse(
+      await (await import('node:fs/promises')).readFile(join(home, 'config.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(raw.engine_bin).toBe('/x');
+    expect(raw.yolo).toBe(true);
+  });
+
+  it('project key absent → undefined (inherit), present → that boolean', async () => {
+    expect((await yoloStatus(project)).project).toBeUndefined();
+    await writeProjectConfig({ version: 1, yolo: false });
+    expect((await yoloStatus(project)).project).toBe(false);
+  });
+});
+
+describe('legacy marker (deprecated back-compat)', () => {
+  it('marker present → ON when no config field set; cleared on a global write', async () => {
+    await writeFile(yoloMarkerPath(), 'on\n', 'utf8');
+    expect(await isYoloMode(project)).toBe(true); // legacy fallback
+    await setYolo(false, 'global'); // migrate: writes global false + removes the marker
+    expect(await isYoloMode(project)).toBe(false);
   });
 });

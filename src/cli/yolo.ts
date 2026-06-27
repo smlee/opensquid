@@ -1,22 +1,23 @@
 /**
- * YOLO mode CLI — two surfaces, both following established CLI conventions:
- *   - `--yolo` / `--no-yolo` — a global, CHAINABLE boolean flag (the GNU/commander `--no-` negation pair, as
- *     in `git --no-pager`, `npm --no-save`). `--yolo` defaults to ON. Chainable: `opensquid --yolo <command>`
- *     applies the toggle before the command runs. (A space-separated `--yolo off` is deliberately NOT used —
- *     it can't be chained, since the parser can't tell the value from the next token.)
- *   - `opensquid yolo [on|off|status]` — the verb form (status is the default), the explicit on/off surface.
+ * YOLO mode CLI — surfaces over the two-level `yolo` config field (global default + per-project override):
+ *   - `opensquid yolo [on|off|status] [--project]` — the verb. Writes GLOBAL config by default; `--project`
+ *     targets this repo's `.opensquid/config.json` (a project override). Bare `yolo` = ON. `status` shows the
+ *     resolved value + per-source breakdown.
+ *   - `--yolo` / `--no-yolo` — a CHAINABLE flag (any position) that writes the GLOBAL setting; `--yolo on|off`
+ *     and `--yolo=on|off` also accepted. Parsed pre-commander (consumeYoloFlags) so it never swallows a
+ *     subcommand.
  *
  * YOLO moves the Safety floor's DANGEROUS tier from block → warn: dangerous-but-reversible actions (writing
  * substrate config like `active.json`, `chmod 777`, `curl | sh`) PROCEED with a surfaced warning + a recorded
  * drift, instead of being denied. The HARDLINE tier is untouched — `rm -rf /`, substrate DELETE, and `.env`
  * exfil stay blocked even with YOLO on.
  *
- * Both surfaces write/remove the persistent marker (`<home>/.opensquid/yolo`); env `OPENSQUID_YOLO=1` also
- * turns it on for a single session and takes precedence.
+ * Resolution per project: env `OPENSQUID_YOLO` → project config → global config → OFF. A new project inherits
+ * the global default; setting it `--project` lets that repo opt in/out independently.
  */
 import type { Command } from 'commander';
 
-import { isYoloMode, setYoloMarker, yoloMarkerPath } from '../runtime/guard/yolo.js';
+import { setYolo, yoloStatus, type YoloScope } from '../runtime/guard/yolo.js';
 
 export interface YoloCliDeps {
   /** Test seam — override stdout for assertion. */
@@ -31,8 +32,12 @@ export const YOLO_ON_MSG =
   '🦑 YOLO mode ON — dangerous actions now WARN (proceed) instead of block. ' +
   'hardline still enforced (rm -rf, substrate delete, .env). Turn off: `opensquid --no-yolo` (or `opensquid yolo off`)';
 export const YOLO_OFF_MSG = '🦑 YOLO mode OFF — full enforcement restored (dangerous tier blocks).';
-const ON_MSG = YOLO_ON_MSG;
-const OFF_MSG = YOLO_OFF_MSG;
+
+/** Format the ON/OFF confirmation, naming the scope + file written. */
+function setMsg(on: boolean, scope: YoloScope, path: string): string {
+  const base = on ? YOLO_ON_MSG : YOLO_OFF_MSG;
+  return `${base}\n   scope: ${scope} (${path})`;
+}
 
 export interface YoloFlagScan {
   /** argv with all YOLO tokens removed — parses normally regardless of where the flag appeared. */
@@ -94,29 +99,37 @@ export function registerYoloCli(program: Command, deps: YoloCliDeps = {}): Comma
   return program
     .command('yolo [state]')
     .description(
-      'YOLO mode: DANGEROUS tier block→warn (hardline stays enforced). state: on | off | status (default: on, matching `--yolo`)',
+      'YOLO mode: DANGEROUS tier block→warn (hardline stays enforced). state: on | off | status (default: on). --project targets this repo',
     )
-    .action(async (state?: string) => {
-      // bare `opensquid yolo` turns it ON — consistent with the bare `--yolo` flag (was: status).
-      const s = (state ?? 'on').toLowerCase();
-      if (s === 'on') {
-        await setYoloMarker(true);
-        print(ON_MSG);
-        return;
-      }
-      if (s === 'off') {
-        await setYoloMarker(false);
-        print(OFF_MSG);
+    .option(
+      '--project',
+      "write the PROJECT override (this repo's .opensquid/config.json) instead of global",
+    )
+    .action(async (state: string | undefined, opts: { project?: boolean }) => {
+      const scope: YoloScope = opts.project === true ? 'project' : 'global';
+      const s = (state ?? 'on').toLowerCase(); // bare `opensquid yolo` = ON (matches bare `--yolo`)
+      if (s === 'on' || s === 'off') {
+        const res = await setYolo(s === 'on', scope, process.cwd());
+        print(setMsg(res.on, res.scope, res.path));
         return;
       }
       if (s === 'status') {
-        const on = await isYoloMode();
+        const st = await yoloStatus(process.cwd());
+        const fmt = (v: boolean | undefined): string =>
+          v === undefined ? 'unset' : v ? 'ON' : 'OFF';
         print(
-          `🦑 YOLO mode: ${on ? 'ON' : 'OFF'}` +
-            (on ? ` (marker ${yoloMarkerPath()} or OPENSQUID_YOLO env)` : ''),
+          `🦑 YOLO mode: ${st.on ? 'ON' : 'OFF'} (resolved)\n` +
+            `   env: ${fmt(st.env)} · project: ${fmt(st.project)} · global: ${fmt(st.global)}\n` +
+            `   precedence: env → project → global`,
         );
         return;
       }
       throw new Error(`opensquid yolo: state must be on|off|status, got "${state ?? ''}"`);
     });
+}
+
+/** Apply a chainable-flag decision (global scope) + return the confirmation line. Used by the CLI entry. */
+export async function applyYoloFlagDecision(on: boolean): Promise<string> {
+  const res = await setYolo(on, 'global');
+  return setMsg(res.on, res.scope, res.path);
 }

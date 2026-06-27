@@ -23,8 +23,7 @@ import { Command } from 'commander';
 import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
-import { registerYoloCli, consumeYoloFlags, YOLO_ON_MSG, YOLO_OFF_MSG } from './cli/yolo.js';
-import { setYoloMarker } from './runtime/guard/yolo.js';
+import { registerYoloCli, consumeYoloFlags, applyYoloFlagDecision } from './cli/yolo.js';
 import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { resolveBackendConfig } from './rag/config.js';
 import { fastembedEmbedder } from './rag/embedders/fastembed.js';
@@ -516,8 +515,8 @@ function runCli(): void {
   const applied =
     decision === null
       ? Promise.resolve(false)
-      : setYoloMarker(decision).then(() => {
-          process.stdout.write((decision ? YOLO_ON_MSG : YOLO_OFF_MSG) + '\n');
+      : applyYoloFlagDecision(decision).then((msg) => {
+          process.stdout.write(msg + '\n');
           return rest.length <= 2; // only the flag, no command → nothing left to run
         });
   applied
