@@ -56,9 +56,50 @@ export function splitFrontmatter(raw: string): { frontmatter: string | null; bod
   return { frontmatter: m[1] ?? '', body: m[2] ?? '' };
 }
 
-/** Expand the typed frontmatter settings into the `Guard[]` the compiler consumes. */
+/** A guard name fragment: lowercase alnum + hyphens (matches the Guard name schema). */
+function slug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Parse one `forbid:` command string into a structural block-guard. The first
+ * token is the program; the next NON-flag token (if any) is the subcommand
+ * (`"npm install"` → program npm + subcommand install; `"npm"` → any npm). Flags
+ * are ignored here — for flag/refspec conditions an author uses raw `rules:`.
+ * Index keeps the guard name unique even if two entries slugify the same.
+ */
+function forbidToGuard(command: string, index: number): Guard {
+  const tokens = command.trim().split(/\s+/);
+  const program = tokens[0] ?? '';
+  const subcommand = tokens.slice(1).find((t) => !t.startsWith('-'));
+  return {
+    name: `forbid-${index}-${slug(command)}`.slice(0, 80),
+    on: 'tool_call',
+    detect: {
+      call: 'command_invokes',
+      args: { program, ...(subcommand !== undefined ? { subcommand } : {}) },
+    },
+    as: 'hit',
+    when: 'hit',
+    level: 'block',
+    message:
+      `BLOCKED: \`${command}\` is forbidden in this project ` +
+      `(declared in .opensquid/context.md).`,
+  };
+}
+
+/**
+ * Expand the user-authored frontmatter into the `Guard[]` the compiler consumes —
+ * the union of three surfaces: `package_manager` shorthand, `forbid` commands,
+ * and raw `rules`. All three compile through the same `compileGuards`.
+ */
 export function settingsToGuards(fm: ProjectContextFrontmatter): Guard[] {
   const guards: Guard[] = [];
+
+  // 1. package_manager shorthand → block the OTHER managers' install/add verbs.
   const pm = fm.package_manager;
   if (pm !== undefined) {
     for (const other of Object.keys(PM_INSTALL_VERBS) as PackageManager[]) {
@@ -78,6 +119,15 @@ export function settingsToGuards(fm: ProjectContextFrontmatter): Guard[] {
       }
     }
   }
+
+  // 2. forbid → one structural command guard per entry (the approachable surface).
+  for (const [i, command] of (fm.forbid ?? []).entries()) {
+    guards.push(forbidToGuard(command, i));
+  }
+
+  // 3. rules → raw user-authored Guards, verbatim (the power surface).
+  guards.push(...(fm.rules ?? []));
+
   return guards;
 }
 

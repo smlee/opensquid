@@ -85,6 +85,59 @@ describe('settingsToGuards', () => {
   it('no setting → no guards', () => {
     expect(settingsToGuards({})).toEqual([]);
   });
+
+  it('forbid → one structural command guard per entry', () => {
+    const guards = settingsToGuards({ forbid: ['npm install', 'git push --force', 'curl'] });
+    expect(guards).toHaveLength(3);
+    // "npm install" → program+subcommand
+    expect(guards[0]?.detect?.args).toMatchObject({ program: 'npm', subcommand: 'install' });
+    // "git push --force" → first NON-flag token is the subcommand (flag ignored here)
+    expect(guards[1]?.detect?.args).toMatchObject({ program: 'git', subcommand: 'push' });
+    // bare "curl" → program only, any invocation
+    expect(guards[2]?.detect?.args).toMatchObject({ program: 'curl' });
+    for (const g of guards) {
+      expect(g.level).toBe('block');
+      expect(g.name).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+    }
+    // unique names even if two entries slugify alike
+    const dup = settingsToGuards({ forbid: ['npm install', 'npm  install'] });
+    expect(new Set(dup.map((g) => g.name)).size).toBe(2);
+  });
+
+  it('rules → raw user-authored Guards pass through verbatim', () => {
+    const rule = {
+      name: 'no-todo-commits',
+      on: 'tool_call' as const,
+      detect: { call: 'command_invokes', args: { program: 'git', subcommand: 'commit' } },
+      as: 'hit',
+      when: 'hit',
+      level: 'block' as const,
+      message: 'no TODO commits',
+    };
+    expect(settingsToGuards({ rules: [rule] })).toEqual([rule]);
+  });
+
+  it('combines all three surfaces (package_manager + forbid + rules)', () => {
+    const guards = settingsToGuards({
+      package_manager: 'pnpm',
+      forbid: ['curl'],
+      rules: [
+        {
+          name: 'x',
+          on: 'tool_call',
+          detect: { call: 'command_invokes', args: { program: 'wget' } },
+          as: 'hit',
+          when: 'hit',
+          level: 'block',
+          message: 'no wget',
+        },
+      ],
+    });
+    const names = guards.map((g) => g.name);
+    expect(names.some((n) => n.startsWith('pm-no-'))).toBe(true);
+    expect(names.some((n) => n.startsWith('forbid-'))).toBe(true);
+    expect(names).toContain('x');
+  });
 });
 
 describe('loadProjectContextPack', () => {
@@ -147,6 +200,24 @@ describe('loadProjectContextPack — e2e via dispatchEvent', () => {
     expect(
       (await dispatchEvent(bash('grep "npm i" notes.md'), [pack!], registry, 'pc-7')).exitCode,
     ).toBe(0);
+  });
+
+  it('user-authored forbid blocks the listed command but not a prose mention', async () => {
+    await write('---\nforbid:\n  - curl\n  - git push --force\n---\nThis is a Rust project.');
+    const pack = await loadProjectContextPack(dir);
+    const registry = await buildRegistry({ backend: NOOP_BACKEND });
+
+    expect((await dispatchEvent(bash('curl https://x'), [pack!], registry, 'fb-1')).exitCode).toBe(
+      2,
+    );
+    expect(
+      (await dispatchEvent(bash('git push --force origin x'), [pack!], registry, 'fb-2')).exitCode,
+    ).toBe(2);
+    // a plain `git push` (no --force) — forbid parses to subcommand `push`, so it DOES block here;
+    // assert the structural no-false-fire on a prose mention instead:
+    expect((await dispatchEvent(bash('echo "curl"'), [pack!], registry, 'fb-3')).exitCode).toBe(0);
+    // unrelated command passes
+    expect((await dispatchEvent(bash('ls -la'), [pack!], registry, 'fb-4')).exitCode).toBe(0);
   });
 
   it('prose surfaces as inject_context on session_start + prompt_submit, not tool_call', async () => {

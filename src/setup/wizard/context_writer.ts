@@ -1,78 +1,72 @@
 /**
- * T-project-context (write half) — the managed-frontmatter writer for
+ * T-project-context (write half) — the SCAFFOLDER for
  * `<project>/.opensquid/context.md`.
  *
- * The loader (`packs/project_context.ts`) reads YAML frontmatter (typed settings)
- * + a markdown body (free-form prose). This writer OWNS the frontmatter and
- * PRESERVES the body — frontmatter = opensquid-managed, body = the human's, never
- * clobbered. Mirrors `managed_block.ts`'s contract (replace owned region, keep
- * foreign, `.bak` snapshot, atomic tmp+rename, created/updated/added) but for the
- * YAML frontmatter region instead of a comment-delimited block.
+ * `context.md` is USER-authored (every project differs — there is no fixed
+ * settings menu that fits all). So opensquid's only job at setup is to drop a
+ * STARTER if none exists, then get out of the way: it NEVER overwrites an
+ * existing file. The user owns it; the runtime re-reads it live every dispatch,
+ * so edits take effect immediately and are never clobbered (which is why the
+ * earlier managed-frontmatter merge is gone — there is nothing to merge when the
+ * file is wholly the user's).
  *
- * This is the sanctioned write path the agent itself cannot take (the safety
- * floor forbids an agent writing `.opensquid/`): a setup function, runnable on
- * every adopter's machine and validated by its own test — so the initial process
- * is exercised, not bypassed.
+ * The starter shows both tiers (enforceable `forbid`/`rules` + free-form body)
+ * and, when the package manager is detected, seeds it as a working example.
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
-
-import { splitFrontmatter } from '../../packs/project_context.js';
 import type { PackageManager } from '../../packs/schemas/project_context.js';
 
-export interface ProjectContextSettings {
-  packageManager?: PackageManager;
+export interface ScaffoldOptions {
+  /** When detected, seeded into the starter as a working `package_manager` line. */
+  detectedPackageManager?: PackageManager;
 }
 
-const STARTER_BODY =
-  '# project context\n\n' +
-  '_Free-form notes for the agent (injected each turn) — conventions, where things live, gotchas._';
-
-/** PURE: compose the new file text from existing content + the settings to set. */
-export function composeContext(existing: string, settings: ProjectContextSettings): string {
-  const { frontmatter, body } = splitFrontmatter(existing);
-  const fm: Record<string, unknown> =
-    frontmatter !== null && frontmatter.trim().length > 0
-      ? ((yamlParse(frontmatter) as Record<string, unknown> | null) ?? {})
-      : {};
-
-  if (settings.packageManager !== undefined) fm.package_manager = settings.packageManager;
-
-  const fmText = yamlStringify(fm).trim();
-  const bodyText = body.trim();
-  return `---\n${fmText}\n---\n${bodyText.length > 0 ? bodyText : STARTER_BODY}\n`;
+/** PURE: the starter `context.md` body. */
+export function composeStarter(opts: ScaffoldOptions): string {
+  const pmLine =
+    opts.detectedPackageManager !== undefined
+      ? `package_manager: ${opts.detectedPackageManager}\n`
+      : '';
+  return (
+    `---\n` +
+    pmLine +
+    `# Enforceable rules — blocked where opensquid hooks run (claude-code, codex).\n` +
+    `# Uncomment + edit. \`forbid\` is the easy form; \`rules\` is the raw guard form.\n` +
+    `# forbid:\n` +
+    `#   - npm install\n` +
+    `#   - git push --force\n` +
+    `---\n` +
+    `# project context\n` +
+    `\n` +
+    `Free-form notes for the agent — injected every turn. Describe what makes THIS\n` +
+    `project different: language, toolchain, conventions, gotchas. This text is\n` +
+    `advisory; the rules above are hard-enforced where hooks run.\n`
+  );
 }
 
 /**
- * Write the settings into `<opensquidDir>/context.md`, preserving any prose body
- * (and any unmanaged frontmatter keys). `.bak` snapshot of the prior content;
- * atomic via tmp+rename. Returns 'created' (no prior file) | 'added' (file existed
- * with no frontmatter) | 'updated' (frontmatter replaced).
+ * Create `<opensquidDir>/context.md` ONLY if absent (atomic tmp+rename). Returns
+ * 'created' on a fresh write, or 'exists' when a file is already there — in which
+ * case nothing is touched (the user's file is never overwritten).
  */
-export async function writeProjectContext(
+export async function scaffoldProjectContext(
   opensquidDir: string,
-  settings: ProjectContextSettings,
-): Promise<'created' | 'updated' | 'added'> {
+  opts: ScaffoldOptions = {},
+): Promise<'created' | 'exists'> {
   const path = join(opensquidDir, 'context.md');
 
-  let existing = '';
-  let existed = true;
   try {
-    existing = await readFile(path, 'utf8');
+    await readFile(path, 'utf8');
+    return 'exists'; // never overwrite a user-authored file
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-    existed = false;
   }
 
-  const hadFrontmatter = splitFrontmatter(existing).frontmatter !== null;
-
-  if (existed) await writeFile(`${path}.bak`, existing);
   await mkdir(opensquidDir, { recursive: true });
   const tmp = `${path}.tmp`;
-  await writeFile(tmp, composeContext(existing, settings));
+  await writeFile(tmp, composeStarter(opts));
   await rename(tmp, path);
-
-  return !existed ? 'created' : hadFrontmatter ? 'updated' : 'added';
+  return 'created';
 }

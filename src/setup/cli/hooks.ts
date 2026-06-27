@@ -41,7 +41,7 @@ import {
 import { installPacksSkill } from '../wizard/skill-installer.js';
 import { hasBinaryOnPath, installAgentsContext } from '../wizard/install_agents_context.js';
 import { detectPackageManager } from '../wizard/package_manager_detect.js';
-import { writeProjectContext } from '../wizard/context_writer.js';
+import { scaffoldProjectContext } from '../wizard/context_writer.js';
 
 import type { Command } from 'commander';
 
@@ -149,11 +149,13 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
       );
     if (flags.context !== false && flags.userOnly !== true) {
       const scopeRoot = await resolveProjectScopeRoot(r.cwd());
-      const pm = scopeRoot === null ? null : await detectPackageManager(dirname(scopeRoot));
-      if (scopeRoot !== null && pm !== null)
+      if (scopeRoot !== null) {
+        const pm = await detectPackageManager(dirname(scopeRoot));
         r.out(
-          `  would write ${join(scopeRoot, 'context.md')} (package_manager: ${pm}; opt-out: --no-context)\n`,
+          `  would scaffold ${join(scopeRoot, 'context.md')} if absent` +
+            `${pm !== null ? ` (seed package_manager: ${pm})` : ''}; never overwrites; opt-out: --no-context\n`,
         );
+      }
     }
     return;
   }
@@ -187,20 +189,26 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
     }
   }
 
-  // T-project-context — scaffold <project>/.opensquid/context.md from the detected
-  // package manager (opt-out: --no-context). Project-scope only: no .opensquid
-  // ancestor → nothing to seed. The body is preserved on re-run (managed
-  // frontmatter only). This is the sanctioned write path the agent cannot take.
+  // T-project-context — scaffold <project>/.opensquid/context.md IF ABSENT (opt-out:
+  // --no-context). The file is user-authored: opensquid drops a starter (seeded with
+  // the detected package manager when available) and NEVER overwrites an existing
+  // one — the user owns it, the runtime re-reads it live. This is the sanctioned
+  // write path the agent itself cannot take (safety floor).
   if (flags.context !== false && flags.userOnly !== true) {
     const scopeRoot = await resolveProjectScopeRoot(r.cwd());
     if (scopeRoot !== null) {
       const pm = await detectPackageManager(dirname(scopeRoot));
-      if (pm === null) {
-        r.out('  context: no package manager detected (no lockfile) — skipped context.md\n');
-      } else {
-        const result = await writeProjectContext(scopeRoot, { packageManager: pm });
-        r.out(`  context: ${result} ${join(scopeRoot, 'context.md')} (package_manager: ${pm})\n`);
-      }
+      const result = await scaffoldProjectContext(
+        scopeRoot,
+        pm !== null ? { detectedPackageManager: pm } : {},
+      );
+      const at = join(scopeRoot, 'context.md');
+      if (result === 'created')
+        r.out(
+          `  context: created ${at}${pm !== null ? ` (seeded package_manager: ${pm})` : ''}` +
+            ` — edit it to add project rules + context\n`,
+        );
+      else r.out(`  context: ${at} already exists — left as-is (yours)\n`);
     }
   }
 }

@@ -1,32 +1,53 @@
 /**
  * T-project-context — the `<project>/.opensquid/context.md` FRONTMATTER schema.
  *
- * A lightweight, per-project context + settings file: YAML frontmatter (typed
- * settings, validated here) + a markdown body (free-form prose, injected). The
- * settings expand to deterministic block-guards (loader: `project_context.ts`);
- * the body is surfaced via `inject_context`. NOT a pack — no manifest/active.json
- * boilerplate; auto-loaded as a synthetic project-scoped pack when present.
+ * `context.md` is **user-authored, per-project** (every project is different —
+ * pnpm vs npm, JS vs Rust, different conventions — so there is NO fixed settings
+ * menu that fits all). opensquid READS it live and never overwrites it; the user
+ * owns the file. Two tiers of content, because not everything can be enforced:
  *
- * `.strict()`: an unknown frontmatter key is a fail-loud error (a typo'd setting
- * must surface, not silently no-op). Extend by adding NAMED settings here + a row
- * in the loader's expansion table — never a raw guard passthrough (out of scope:
- * the ask was "a setting", not a guard-authoring surface).
+ *   - the markdown BODY = free-form context (advisory) — injected so the agent
+ *     always carries it ("this is a Rust project; use cargo; errors via Result");
+ *   - the frontmatter = the user's ENFORCEABLE rules (the deterministically
+ *     checkable subset), compiled to block-guards via `compileGuards`:
+ *       * `forbid:` — a list of command strings to block (the approachable form);
+ *       * `rules:`  — raw `Guard` objects for full control (the power form);
+ *       * `package_manager:` — an optional shorthand kept for convenience/compat
+ *         (expands to forbid the OTHER managers' install verbs). NOT the center
+ *         of gravity — `forbid`/`rules` are the general surface.
+ *
+ * `.strict()`: an unknown frontmatter key fails loud (a typo must surface).
  */
 import { z } from 'zod';
 
-/** The package managers a project may declare. */
+import { Guard } from './manifest.js';
+
+/** The package managers the `package_manager` shorthand accepts. */
 export const PackageManager = z.enum(['pnpm', 'npm', 'yarn', 'bun']);
 export type PackageManager = z.infer<typeof PackageManager>;
 
 export const ProjectContextFrontmatter = z
   .object({
     /**
-     * The project's package manager. Expands (loader) to block-guards on EVERY
-     * OTHER manager's install/add verbs — e.g. `pnpm` blocks `npm install`,
-     * `npm i`, `npm ci`, `npm add`, `yarn add`, `bun add`. Structural match via
-     * `command_invokes` (program+subcommand) — no false-fire on a prose mention.
+     * Optional shorthand: declare the project's package manager and opensquid
+     * blocks every OTHER manager's install/add verbs. Convenience for the common
+     * case; equivalent to writing the same entries under `forbid`.
      */
     package_manager: PackageManager.optional(),
+    /**
+     * The approachable enforcement surface: command strings to block, e.g.
+     * `["npm install", "yarn add", "git push --force"]`. Each is parsed to a
+     * structural `command_invokes` guard (program + first subcommand) — a prose
+     * mention never false-fires. For conditions a bare command can't express,
+     * use `rules`.
+     */
+    forbid: z.array(z.string().min(1)).optional(),
+    /**
+     * The power surface: raw `Guard` objects (the same shape builtin packs use —
+     * `{ name, detect, when, level, message, … }`), compiled verbatim by
+     * `compileGuards`. For authors who need conditions beyond a flat command.
+     */
+    rules: z.array(Guard).optional(),
   })
   .strict();
 export type ProjectContextFrontmatter = z.infer<typeof ProjectContextFrontmatter>;

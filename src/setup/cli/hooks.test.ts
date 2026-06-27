@@ -174,7 +174,7 @@ describe('runHooksWizard — project context.md (T-project-context)', () => {
   const readCtx = (projRoot: string) =>
     readFile(join(projRoot, '.opensquid', 'context.md'), 'utf8');
 
-  it('writes context.md with the detected package manager', async () => {
+  it('scaffolds context.md (seeded with the detected package manager) when absent', async () => {
     const projRoot = join(root, 'proj');
     await mkdir(join(projRoot, '.opensquid'), { recursive: true });
     await writeFile(join(projRoot, 'pnpm-lock.yaml'), '', 'utf8');
@@ -185,17 +185,30 @@ describe('runHooksWizard — project context.md (T-project-context)', () => {
     expect(stdoutBuf).toContain('context: created');
   });
 
-  it('skips context.md when no package manager is detected (no lockfile)', async () => {
+  it('still scaffolds a starter when NO package manager is detected', async () => {
     const projRoot = join(root, 'proj');
     await mkdir(join(projRoot, '.opensquid'), { recursive: true });
 
     await runHooksWizard({}, baseDeps(projRoot, join(root, 'home')));
 
-    expect(stdoutBuf).toContain('no package manager detected');
-    await expect(readCtx(projRoot)).rejects.toThrow(); // file not written
+    expect(await readCtx(projRoot)).toMatch(/project context/i); // free-form starter written
+    expect(stdoutBuf).toContain('context: created');
   });
 
-  it('--no-context opt-out skips the write even with a lockfile', async () => {
+  it('NEVER overwrites an existing user-authored context.md', async () => {
+    const projRoot = join(root, 'proj');
+    await mkdir(join(projRoot, '.opensquid'), { recursive: true });
+    await writeFile(join(projRoot, 'pnpm-lock.yaml'), '', 'utf8');
+    const mine = '---\nforbid:\n  - rm -rf /\n---\n# mine\n';
+    await writeFile(join(projRoot, '.opensquid', 'context.md'), mine, 'utf8');
+
+    await runHooksWizard({}, baseDeps(projRoot, join(root, 'home')));
+
+    expect(await readCtx(projRoot)).toBe(mine); // untouched
+    expect(stdoutBuf).toContain('already exists');
+  });
+
+  it('--no-context opt-out skips scaffolding', async () => {
     const projRoot = join(root, 'proj');
     await mkdir(join(projRoot, '.opensquid'), { recursive: true });
     await writeFile(join(projRoot, 'pnpm-lock.yaml'), '', 'utf8');
@@ -206,14 +219,14 @@ describe('runHooksWizard — project context.md (T-project-context)', () => {
     expect(stdoutBuf).not.toContain('context:');
   });
 
-  it('dry-run previews the write without touching disk', async () => {
+  it('dry-run previews the scaffold without touching disk', async () => {
     const projRoot = join(root, 'proj');
     await mkdir(join(projRoot, '.opensquid'), { recursive: true });
     await writeFile(join(projRoot, 'pnpm-lock.yaml'), '', 'utf8');
 
     await runHooksWizard({ dryRun: true }, baseDeps(projRoot, join(root, 'home')));
 
-    expect(stdoutBuf).toMatch(/would write .*context\.md \(package_manager: pnpm/);
+    expect(stdoutBuf).toMatch(/would scaffold .*context\.md if absent/);
     await expect(readCtx(projRoot)).rejects.toThrow();
   });
 });
