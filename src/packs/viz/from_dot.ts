@@ -41,6 +41,7 @@ function stub(kind: StateV2['kind'], out: OutEdge[]): StateV2 {
     case 'gate':
       return {
         kind,
+        skills: [],
         guard: 'TODO',
         on_pass_emits: first,
         on_fail: { action: 'block', message: 'TODO' },

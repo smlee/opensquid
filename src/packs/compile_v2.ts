@@ -92,7 +92,7 @@ function compileMachine(pack: PackV2): CompiledPack {
           // on_pass_emits advances; on_fail is an ACTION (block/halt + self-continue), NOT a transition.
           meta[name] = {
             kind: s.kind,
-            skills: [],
+            skills: s.skills, // SKILL.1: the per-state skills bound while resting at this gate (default [])
             guard: s.guard,
             onFail: s.on_fail,
             emits: s.on_pass_emits,

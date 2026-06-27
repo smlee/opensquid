@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.542] - 2026-06-26
+
+### Added — v2 gate states carry state-keyed skills(S) (backend pack correction, H2)
+
+A v2 GATE state may now declare `skills: string[]` (default `[]`), mirroring the executor state;
+`compilePackV2` surfaces them in `meta[gate].skills` so `onStateEntry` binds exactly that set
+while the FSM rests at the gate (SKILL.1 state-keyed binding). Backward-compatible: an absent
+`skills:` defaults to `[]`, so every existing v2 pack is unchanged.
+
+- `src/packs/schemas/pack_v2.ts` — `GateState.skills`.
+- `src/packs/compile_v2.ts` — gate meta surfaces `s.skills` (was hardcoded `[]`).
+- `src/packs/viz/{from_dot,from_mermaid}.ts` — gate stubs carry `skills: []`.
+
 ## [0.5.541] - 2026-06-26
 
 ### Added — v2 pack loads its skills/ dir (backend pack correction, H1)
