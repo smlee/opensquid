@@ -91,6 +91,7 @@ import { registerFsmFunctions } from '../functions/fsm.js';
 import { registerReadRubric } from '../functions/read_rubric.js';
 import { registerPhaseInject } from '../functions/phase_inject.js';
 import { registerPhaseBundleText } from '../functions/phase_bundle_text.js';
+import { registerProjectContextInject } from '../functions/project_context_inject.js';
 import { registerSetRequestType } from '../functions/set_request_type.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
 import { registerCheckChatConnectionFunction } from '../functions/check_chat_connection.js';
@@ -98,6 +99,7 @@ import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrell
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import { discoverActivePacks, partitionActivePacks } from '../packs/discovery.js';
+import { loadProjectContextPack } from '../packs/project_context.js';
 import type { LoadedPackV2 } from '../packs/loader_v2.js';
 import { type DetectionContext } from './detection.js';
 import { dedupePacksByName, sortPacksByScope } from '../packs/load_order.js';
@@ -140,6 +142,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerReadRubric(r); // TR.A: the audits interpolate {{rubric}} from this; phase_inject reuses it
   registerPhaseInject(r); // GI.4: channel (a) — per-gate phase bundle (procedure §N + rubric) at the turn boundary
   registerPhaseBundleText(r); // CFD.3 PG.3: bindable phase bundle for inject-on-pause (pause guards interpolate {{bundle.text}})
+  registerProjectContextInject(r); // T-project-context: echoes context.md prose (baked in args) as inject_context
   registerSetRequestType(r); // wg-3d175ec06767: RTC.5 llm refinement writes the refined request-type
   // Phase 4: `check_destination` is the destination-side anti-drift
   // primitive. It composes `llm_classify` (registered just above) so the
@@ -513,9 +516,13 @@ export function v2PackToPack(loaded: LoadedPackV2): Pack {
  * this for their `dispatchEvent` input; non-dispatch `loadActivePacks` callers are unchanged.
  */
 export async function loadActivePacksForDispatch(sessionId: string): Promise<Pack[]> {
-  const [v1, v2] = await Promise.all([
+  const [v1, v2, projectContext] = await Promise.all([
     loadActivePacks(sessionId),
     loadActiveV2Cartridges(sessionId),
+    // T-project-context: the project's own `.opensquid/context.md` (settings → block-guards +
+    // prose → inject_context), auto-loaded as a synthetic project-scoped pack. ADDITIVE — null
+    // (no file / no project scope) leaves the dispatch set unchanged.
+    loadProjectContextPack(process.cwd()),
   ]);
-  return [...v1, ...v2.map(v2PackToPack)];
+  return [...v1, ...v2.map(v2PackToPack), ...(projectContext !== null ? [projectContext] : [])];
 }
