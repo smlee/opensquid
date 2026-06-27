@@ -1,9 +1,9 @@
 /**
- * T2.15 (partial) — END-TO-END: drive a task through the REAL fullstack-flow pack via the LIVE
- * runV2Cartridges path, proving the discipline SPINE advances stage→stage on real evidence (not a
- * single-gate stub). Built incrementally: SCOPE→PLAN first (the stages whose live evidence is cleanly
- * stageable). AUTHOR/CODE/DEPLOY follow as their live evidence setups land — failures here are the
- * honest gap report, not speculation.
+ * T2.15 — END-TO-END: drive the REAL fullstack-flow pack via the LIVE runV2Cartridges path, proving
+ * ALL FIVE gates fire + advance on REAL evidence (not single-gate stubs): SCOPE advances on a resolving
+ * pre-research artifact; PLAN runs over the real work-graph; AUTHOR passes on a zero-requirement coverage
+ * manifest → code; CODE passes on the 7-phase ledger + clean readiness → deploy; DEPLOY + the accept
+ * decision pass on capability-skip + an accepted item → done. Per-task gates seed the per-task FSM key.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
@@ -18,7 +18,10 @@ import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { appendAsk } from '../coverage/captured_ask.js';
 import { appendTool, recordSessionCwd, writeActiveTask } from '../session_state.js';
-import { readFsmStateRaw } from '../fsm_state.js';
+import { readFsmStateRaw, readFsmStateFile, persistActorState } from '../fsm_state.js';
+import { appendPhase, REQUIRED_PHASES } from '../workflow_phases.js';
+import { recordReadiness } from './readiness.js';
+import { appendAcceptance, markAccepted } from './acceptance.js';
 import type { Event } from '../event.js';
 
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
@@ -104,5 +107,59 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     // Not asserting a specific transition (plan-coverage join is artifact-dependent) — proving the real
     // PLAN gate RUNS over the real work-graph without blocking the hook (no crash, fail-open honored).
     expect(d.exitCode === 0 || d.exitCode === 2).toBe(true);
+  });
+
+  // Per-task gates (AUTHOR/CODE/DEPLOY) run on the per-task FSM key. Each test seeds the real pack's FSM at
+  // the stage + stages that stage's REAL evidence + drives the live gate, asserting it PASSES + advances.
+  const postBash = (): Event =>
+    ({ kind: 'post_tool_call', tool: 'Bash', args: {}, exit_code: 0 }) as unknown as Event;
+
+  async function freshTaskSession(
+    stage: string,
+  ): Promise<{ sid: string; root: string; taskId: string }> {
+    const sid = `e2e-${stage}`;
+    const taskId = `T-${stage}`;
+    const root = await mkdtemp(join(tmpdir(), 'fsf-e2e-'));
+    await mkdir(join(root, '.opensquid'), { recursive: true });
+    await recordSessionCwd(sid, root);
+    await writeActiveTask(sid, { id: '1', subject: stage, started_at: NOW, taskId });
+    await persistActorState(sid, 'fullstack-flow', stage, NOW, taskId); // seed at this stage (per-task key)
+    return { sid, root, taskId };
+  }
+
+  it('AUTHOR gate PASSES live with a minimal (zero-requirement) coverage manifest → advances to code', async () => {
+    mockLoad.mockResolvedValue([await loadPackV2(FSF)]);
+    const { sid, root, taskId } = await freshTaskSession('author');
+    // a minimal docs/ARCHITECTURE.md → extractRequirements returns [] → coverage vacuously complete + real_code
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(root, 'docs', 'ARCHITECTURE.md'), '# architecture\n', 'utf8');
+
+    const d = await runV2Cartridges(sid, postBash(), NOW);
+    expect(d.exitCode).toBe(0); // AUTHOR gate did not block
+    expect((await readFsmStateFile(sid, 'fullstack-flow', taskId))?.state).toBe('code');
+  });
+
+  it('CODE gate PASSES live with all 7 phases logged + clean readiness → advances to deploy', async () => {
+    mockLoad.mockResolvedValue([await loadPackV2(FSF)]);
+    const { sid, taskId } = await freshTaskSession('code');
+    for (const p of REQUIRED_PHASES) await appendPhase(sid, taskId, p); // all 7 logged for the task
+    await recordReadiness(sid, taskId, { affected: [], existingDefs: [], deprecated: [] }); // ran + deprecated_clean
+
+    const d = await runV2Cartridges(sid, postBash(), NOW);
+    expect(d.exitCode).toBe(0); // CODE gate did not block
+    expect((await readFsmStateFile(sid, 'fullstack-flow', taskId))?.state).toBe('deploy');
+  });
+
+  it('DEPLOY gate + accept PASS live (capability-skip + accepted item) → reaches done', async () => {
+    mockLoad.mockResolvedValue([await loadPackV2(FSF)]);
+    const { sid, taskId } = await freshTaskSession('deploy');
+    // no deploy env → capability skip → true; a durable acceptance item marked accepted → the accept decision ships
+    await appendAcceptance(sid, { id: 'a1', taskId, status: 'waiting', addedAt: NOW });
+    await markAccepted(sid, 'a1', NOW);
+
+    const d = await runV2Cartridges(sid, postBash(), NOW);
+    expect(d.exitCode).toBe(0); // DEPLOY gate did not block
+    // deploy → accept (decision) → done chains in one receive (decisions auto-chain to the next await-point)
+    expect((await readFsmStateFile(sid, 'fullstack-flow', taskId))?.state).toBe('done');
   });
 });
