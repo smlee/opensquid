@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.546] - 2026-06-26
+
+### Reverted — the state-keyed skill model (drift from the scoped router model)
+
+H2/H3+H4/H5+H6/H7a built the fullstack-flow skill layer **state-keyed** (skills bound per FSM gate,
+evaluated by a new `runV2Cartridges` host). That **drifted from the scoped model**: the Track-2 spec
+T2.13 scopes the engineering lenses as **router-selected** (`skill_prefilter/skill_router`, `load: lazy`)
+and T2.9 scopes the pause-guard as **`load: preload`**. State-keyed `SKILL.1` + deleting the router are
+**Track 1 / the Track-4 cutover** — a different track — and `state_skills.ts:11-15` confirms the router
+is "still imported by the live V1 dispatch path" (not deleted). These four commits are reverted to the
+scoped router/preload model. **H1 is retained** (`loadPackV2` loads the pack's `skills/`) — needed under
+either model. The aligned implementation (feed the v2 pack's skills into the live dispatcher so the
+authored T2.13 lenses + T2.9 pause-guard fire) is the next task.
+
 ## [0.5.541] - 2026-06-26
 
 ### Added — v2 pack loads its skills/ dir (backend pack correction, H1)
