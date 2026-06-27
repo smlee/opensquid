@@ -27,7 +27,7 @@ import { readActiveTaskId, readSessionCwd } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
-import { emitStageReport, type Stage } from './stage_report.js';
+import { CODE_PHASES, emitStageReport, type Stage } from './stage_report.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
 
@@ -61,6 +61,12 @@ function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string
       return [
         { label: 'coverage_complete', ok: isTrue('author.coverage_complete') },
         { label: 'real_code', ok: isTrue('author.real_code') },
+      ];
+    case 'code':
+      return [
+        { label: 'phases_complete', ok: isTrue('code.phases_complete') },
+        { label: 'readiness_ran', ok: isTrue('code.readiness_ran') },
+        { label: 'deprecated_clean', ok: isTrue('code.deprecated_clean') },
       ];
     case 'deploy':
       return [{ label: 'capability_ok', ok: isTrue('deploy.capability_ok') }];
@@ -106,12 +112,16 @@ export interface V2Decision {
 
 const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkills: [] };
 
-// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition.
-// CODE is intentionally ABSENT here — T2.9's loop_driver owns the CODE report (on `phases_complete`).
+// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition. ALL FIVE
+// fire here, on the `code → deploy` transition for CODE included — the `loop_driver.onPhasesComplete` path the
+// spec earmarked for CODE was never wired (no live caller), so this is the single, consistent live emitter for
+// every phase. (If the autonomous run-group loop later wires loop_driver, CODE moves there to avoid a double
+// emit; until then CODE reports HERE so it actually fires.)
 const STAGE: Record<string, Stage> = {
   scope: 'SCOPE',
   plan: 'PLAN',
   author: 'AUTHOR',
+  code: 'CODE',
   deploy: 'DEPLOY',
 };
 
@@ -340,10 +350,9 @@ export async function runV2Cartridges(
             at: now,
             via: -1,
           });
-          // T2.12 — the LIVE per-stage report trigger. On each transition LEAVING SCOPE/PLAN/AUTHOR/DEPLOY,
-          // emit that stage's report (a dated file under the project's docs/reports/ + a memory mirror). CODE
-          // is NOT emitted here — T2.9's loop_driver owns the CODE report (on `phases_complete`). FAIL-OPEN:
-          // a report-write failure must NEVER break the hook (observe-never-breaks).
+          // T2.12 — the LIVE per-stage report trigger. On each transition LEAVING a stage (SCOPE/PLAN/AUTHOR/
+          // CODE/DEPLOY — see STAGE), emit that stage's report (dated docs/reports/ file + memory mirror +
+          // in-session injection + best-effort chat). FAIL-OPEN: a report failure must NEVER break the hook.
           const stage = STAGE[p.from];
           if (stage !== undefined) {
             try {
@@ -360,6 +369,10 @@ export async function runV2Cartridges(
                   nextDirective: p.to,
                   // T2.12-evidence — the deterministic gate predicates that backed this phase.
                   evidence: stageEvidence(ctx, p.from),
+                  // CODE is the long, stand-out report: the 7-phase chart (all logged — the gate passed).
+                  ...(p.from === 'code'
+                    ? { phases: CODE_PHASES.map((name) => ({ name, done: true })) }
+                    : {}),
                   // T2.10 — only the SCOPE stage carries the goal-alignment line (`exactOptionalPropertyTypes`:
                   // the key is present ONLY when defined, never an explicit `undefined`).
                   ...(p.from === 'scope'

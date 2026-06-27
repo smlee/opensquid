@@ -662,10 +662,10 @@ describe('buildGuardCtx — T2.3 verdict dual-shape', () => {
   });
 });
 
-// ── T2.12 — the LIVE per-stage report trigger (leaving SCOPE/PLAN/AUTHOR/DEPLOY emits its report) ──────────
-// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/DEPLOY, emits a dated docs/reports/ file
-// under the SESSION CWD + mirrors the body into the session memory buffer. CODE is NOT emitted here (T2.9's
-// loop_driver owns it). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
+// ── T2.12 — the LIVE per-stage report trigger (leaving any of the 5 stages emits its report) ──────────────
+// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, emits a dated docs/reports/
+// file + memory mirror + in-session injection + best-effort chat. CODE fires here too (loop_driver was never
+// wired). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
 
 /** A one-state gate pack whose state is named `<stage>` and PASSES (advances to terminal) on a tool_call.
  *  Leaving `<stage>` is the transition the T2.12 trigger reports on. */
@@ -718,6 +718,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     ['scope', 'SCOPE'],
     ['plan', 'PLAN'],
     ['author', 'AUTHOR'],
+    ['code', 'CODE'], // CODE now fires HERE too (loop_driver was never wired) — the report's live emitter
     ['deploy', 'DEPLOY'],
   ] as const) {
     it(`leaving ${stageUpper} emits its dated report file + a memory mirror`, async () => {
@@ -752,18 +753,20 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     });
   }
 
-  it('CODE is NOT emitted here (a transition leaving `code` writes no report) — T2.9 owns it', async () => {
-    const sid = 'sess-t212-code';
+  it('CODE report fires HERE now (loop_driver was never wired) — with the 7-phase chart', async () => {
+    const sid = 'sess-t212-code-chart';
     const root = await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('code')]);
 
     await runV2Cartridges(sid, writeCall(), NOW);
 
-    // no docs/reports/ dir created at all (CODE not in the STAGE map).
-    expect(await exists(join(root, 'docs', 'reports'))).toBe(false);
-    // and no memory mirror was written.
-    expect(await exists(join(pendingLessonsDir(sid), 'potential-lessons'))).toBe(false);
+    const body = await readFile(join(root, 'docs', 'reports', 'code-T-rep-2026-06-22.md'), 'utf8');
+    expect(body).toContain('🦑 Phase report — CODE complete · T-rep ·');
+    expect(body).toContain('Phases:'); // the long, stand-out 7-step chart
+    expect(body).toContain('[x] pre_research');
+    expect(body).toContain('[x] fix');
+    expect(body).toContain('Evidence:'); // the CODE gate predicates
   });
 
   // T2.10 — the SCOPE report's goal-alignment line is now the LIVE consumer of goalConsult.
