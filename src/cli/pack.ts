@@ -216,17 +216,31 @@ async function readdirSafe(dir: string): Promise<string[]> {
   }
 }
 
+/**
+ * A built-in pack dir carries a v2 `pack.yaml` OR a v1 `manifest.yaml` (FAC-CUT.5a: v2 subsumes v1, and the
+ * runtime's `discovery.ts` resolves both). Recognizing BOTH here lets `pack set`/`pack list` see v2 packs like
+ * `fullstack-flow` — otherwise a v2 built-in is invisible to the pack CLI and `set` rejects it as "no such pack".
+ */
+async function builtinPackPresent(dir: string): Promise<boolean> {
+  for (const f of ['pack.yaml', 'manifest.yaml']) {
+    if (
+      await stat(join(dir, f)).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Built-in pack names = `packs/builtin/<name>/manifest.yaml` (excludes non-pack
  *  dirs like `examples/`). */
 async function listBuiltinPackNames(builtinRoot: string): Promise<string[]> {
   const out: string[] = [];
   for (const name of await readdirSafe(builtinRoot)) {
-    try {
-      await stat(join(builtinRoot, name, 'manifest.yaml'));
-      out.push(name);
-    } catch {
-      /* not a pack dir */
-    }
+    if (await builtinPackPresent(join(builtinRoot, name))) out.push(name); // v2 pack.yaml or v1 manifest.yaml
   }
   return out;
 }
@@ -245,12 +259,7 @@ async function listInstalledPackNames(packsDir: string): Promise<string[]> {
  *  existence check guards `set` against writing a dead name into `active.json`
  *  (a name `discoverActivePacks` can't resolve THROWS and bricks every hook). */
 async function packExists(name: string, projectRoot: string | null): Promise<boolean> {
-  try {
-    await stat(join(resolveBuiltinScopeRoot(), name, 'manifest.yaml'));
-    return true;
-  } catch {
-    /* not built-in */
-  }
+  if (await builtinPackPresent(join(resolveBuiltinScopeRoot(), name))) return true; // v2 or v1 built-in
   if ((await readVersionJson(resolvePackStateDir(name, 'user')).catch(() => null)) !== null) {
     return true;
   }

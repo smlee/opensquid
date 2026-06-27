@@ -76,14 +76,23 @@ describe('v2PackToPack (S1 adapter)', () => {
 
 describe('loadActivePacksForDispatch (S1)', () => {
   it('is ADDITIVE — equals loadActivePacks (modulo the cwd project-context pack) when no v2 cartridge is active', async () => {
-    await setHome([]);
-    // T-project-context: loadActivePacksForDispatch ALSO folds in <cwd>/.opensquid/context.md,
-    // a process.cwd()-derived source independent of OPENSQUID_HOME (so it's present whenever the
-    // repo itself has a context.md). Isolate it to assert the v1+v2 composition invariant.
-    const dispatch = (await loadActivePacksForDispatch('sess-add')).filter(
-      (p) => p.name !== 'project-context',
-    );
-    expect(dispatch).toEqual(await loadActivePacks('sess-add'));
+    // Hermeticity: loadActivePacksForDispatch resolves a v2 cartridge set from BOTH OPENSQUID_HOME and the
+    // PROJECT scope walked up from process.cwd(). Running inside the opensquid repo (whose own active.json may
+    // list a v2 pack like fullstack-flow) would leak that in — so run from a NEUTRAL cwd with no `.opensquid`
+    // ancestor to genuinely assert "no v2 cartridge active".
+    const prevCwd = process.cwd();
+    const neutral = await mkdtemp(join(tmpdir(), 'osq-s1-neutral-'));
+    process.chdir(neutral);
+    try {
+      await setHome([]);
+      const dispatch = (await loadActivePacksForDispatch('sess-add')).filter(
+        (p) => p.name !== 'project-context',
+      );
+      expect(dispatch).toEqual(await loadActivePacks('sess-add'));
+    } finally {
+      process.chdir(prevCwd);
+      await rm(neutral, { recursive: true, force: true });
+    }
   });
 
   it('appends the adapted v2 pack (with its skills) when fullstack-flow is active', async () => {

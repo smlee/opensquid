@@ -370,6 +370,14 @@ describe('pack set / list (PT.1 tri-state)', () => {
     expect(await activeNames(tempHome)).toEqual([]);
   });
 
+  it('set recognizes a v2 built-in (pack.yaml, no manifest.yaml) — FAC-CUT.5a', async () => {
+    // a v2 built-in carries `pack.yaml`, not `manifest.yaml`; `set` must still find it (e.g. fullstack-flow).
+    await mkdir(join(builtinRoot, 'flow-v2'), { recursive: true });
+    await writeFile(join(builtinRoot, 'flow-v2', 'pack.yaml'), 'name: flow-v2\n');
+    await run(buildSetCommand(captureOut()), ['flow-v2', 'local', '--project-cwd', projectCwd]);
+    expect(await activeNames(join(projectCwd, '.opensquid'))).toEqual(['flow-v2']);
+  });
+
   it('set rejects an invalid state', async () => {
     await expect(run(buildSetCommand(captureOut()), ['gate', 'sideways'])).rejects.toThrow(
       /off\|local\|global/,

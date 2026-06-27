@@ -40,7 +40,8 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -49,6 +50,12 @@ const REPO_ROOT = resolve(import.meta.dirname, '..', '..');
 const HOOK_BIN = resolve(REPO_ROOT, 'dist', 'runtime', 'hooks', 'pre-tool-use.js');
 const SMOKE_PACK_DIR = resolve(REPO_ROOT, 'test', 'fixtures', 'packs', 'smoke');
 const HOOK_TIMEOUT_MS = 10_000;
+
+// Hermeticity: run the hook subprocess from a NEUTRAL cwd (no `.opensquid` ancestor) so it never resolves the
+// opensquid repo's own project active.json — otherwise an active v2 pack (e.g. fullstack-flow) would inject
+// context into stderr and break the "empty stderr on allow" assertions. The pack under test is injected via
+// the OPENSQUID_TEST_PACK_DIR env seam, which is cwd-independent.
+const NEUTRAL_CWD = mkdtempSync(resolve(tmpdir(), 'osq-smoke-cwd-'));
 
 beforeAll(() => {
   // The fixture pack folder must exist before we let `pnpm build` run — a
@@ -82,6 +89,7 @@ function runHook(payload: Record<string, unknown>, env: NodeJS.ProcessEnv): Prom
     const proc = spawn('node', [HOOK_BIN], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
+      cwd: NEUTRAL_CWD, // hermetic: don't resolve the repo's own project active.json
     });
 
     let stderr = '';
