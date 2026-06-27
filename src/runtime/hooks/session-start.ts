@@ -30,7 +30,7 @@
  * connection-check pack rule (HH6.2). Until a pack rule emits an
  * inject_context on `session_start`, this bin produces no stdout.
  */
-import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { Event } from '../types.js';
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
       process.stderr.write(`opensquid: stranded-scoping check failed — ${String(e)}\n`);
     }
   }
-  const packs = await loadActivePacks(sessionId);
+  const packs = await loadActivePacksForDispatch(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections } = await dispatchEvent(
     parsed.data,

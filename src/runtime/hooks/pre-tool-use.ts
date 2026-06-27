@@ -19,7 +19,7 @@
  * the parent agent because of an opensquid bug. The `main().catch()` at the
  * bottom is the last line of defense.
  */
-import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { parseApplyPatch } from './apply_patch.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const packs = await loadActivePacks(sessionId);
+  const packs = await loadActivePacksForDispatch(sessionId);
   const registry = await buildRegistry();
 
   // CHS.2 — codex's file-edit tool is `apply_patch` (patch text in

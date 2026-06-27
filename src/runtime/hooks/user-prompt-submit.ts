@@ -16,7 +16,7 @@
  *
  * Fail-open on any internal error.
  */
-import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
 import { listInstalledV2Packs } from '../../packs/installed.js';
 import { orchestrate } from '../loop/orchestrate.js';
 import { exitIfSubagent } from './subagent_guard.js';
@@ -155,7 +155,7 @@ async function main(): Promise<void> {
   // through the dispatcher and advances its lifecycle FSM (the FSM's totality
   // makes scope_start a no-op once the workflow has already started). See
   // T-FSM-UNIFY.
-  const packs = await loadActivePacks(sessionId);
+  const packs = await loadActivePacksForDispatch(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr, contextInjections, directives } = await dispatchEvent(
     parsed.data,

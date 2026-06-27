@@ -17,7 +17,7 @@
  *
  * Fail-open on any internal error — see `main().catch()` below.
  */
-import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { Event } from '../types.js';
 
@@ -110,7 +110,7 @@ async function main(): Promise<void> {
   await maybeIngestTurn(raw);
 
   const sessionId = extractSessionId(raw);
-  const packs = await loadActivePacks(sessionId);
+  const packs = await loadActivePacksForDispatch(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
 

@@ -17,7 +17,7 @@
  *
  * Fail-open on any internal error.
  */
-import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { clearFsmState } from '../fsm_state.js';
 import { runCompression } from '../compression_orchestrator.js';
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
   // Stdin-first session id (parsePayload already applied the correct precedence,
   // matching the stop/pre-tool-use/user-prompt-submit hooks post-2026-05-26 fix).
   const sessionId = parsed.data.kind === 'session_end' ? parsed.data.sessionId : 'unknown';
-  const packs = await loadActivePacks(sessionId);
+  const packs = await loadActivePacksForDispatch(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
   if (stderr) process.stderr.write(stderr + '\n');

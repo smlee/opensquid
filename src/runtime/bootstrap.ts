@@ -483,3 +483,39 @@ export async function loadActiveV2Cartridges(_sessionId: string): Promise<Loaded
   const project = await partitionActivePacks(await resolveProjectScopeRoot(cwd), ctx, builtinRoot);
   return [...user.v2, ...project.v2];
 }
+
+/**
+ * S1 (T-v2-dispatch-adapter) — adapt a v2 cartridge into a `Pack` carrying ONLY its authored skills (+ the
+ * compiled FSM, for the skills' `read_fsm_state`). This lets the LIVE dispatch skill-walk fire a v2 pack's
+ * authored skills (T2.9 pause-guard `load:preload`, T2.13 lenses `load:lazy`) exactly like every shipped skill.
+ * The v2 GATES stay on `runV2Cartridges`; the adapted Pack carries no v1 `guards`/`driftResponse`/rules, so there
+ * is NO double-processing. `activationScope` is left unset → the dispatcher defaults `?? 'project'`
+ * (dispatch.ts:338). PURE. `LoadedPackV2` has no `procedure` (loader_v2 loads pack.yaml + skills/ only).
+ */
+export function v2PackToPack(loaded: LoadedPackV2): Pack {
+  return {
+    name: loaded.pack.name,
+    version: loaded.pack.version,
+    scope: loaded.pack.scope, // PackScope ≡ the v1 Scope enum (universal|domain|specialty|workflow|project)
+    goal: '',
+    description: '',
+    requires: [],
+    conflicts: [],
+    evolves: true,
+    skills: loaded.skills, // H1: LoadedPackV2.skills (SkillOutput[] = z.infer<typeof Skill>)
+    ...(loaded.compiled.fsm !== undefined ? { fsm: loaded.compiled.fsm } : {}),
+  };
+}
+
+/**
+ * The DISPATCH-input pack set: the v1 active packs ++ the adapted active v2 packs (so the dispatch skill-walk
+ * fires v2 pack skills). ADDITIVE — with no active v2 cartridge this equals `loadActivePacks`. Hook bins use
+ * this for their `dispatchEvent` input; non-dispatch `loadActivePacks` callers are unchanged.
+ */
+export async function loadActivePacksForDispatch(sessionId: string): Promise<Pack[]> {
+  const [v1, v2] = await Promise.all([
+    loadActivePacks(sessionId),
+    loadActiveV2Cartridges(sessionId),
+  ]);
+  return [...v1, ...v2.map(v2PackToPack)];
+}

@@ -7,6 +7,23 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.547] - 2026-06-26
+
+### Added — v2 dispatcher adapter: fullstack-flow's authored skills fire via the live dispatch (S1)
+
+`v2PackToPack(loaded)` adapts an active v2 cartridge into a `Pack` carrying only its authored skills (+ the
+compiled FSM, for `read_fsm_state`); `loadActivePacksForDispatch(sid)` = `loadActivePacks` ++ the adapted active
+v2 packs; the 6 hook bins use it for the `dispatchEvent` input. The live dispatch skill-walk now fires
+fullstack-flow's T2.9 pause-guard (`load:preload` → blocks a post-scope AskUserQuestion, exit 2) and T2.13 lenses
+(`load:lazy`, `verdict:surface` → stderr). Gates stay on `runV2Cartridges`; the adapted Pack carries no v1
+gates/rules (no double-processing). ADDITIVE — with no active v2 cartridge it equals `loadActivePacks`.
+
+This is the Track-2-aligned skill mechanism (the live dispatch walk); state-keyed `R-SKILLS-PER-STATE` is the
+Track-1 0.6.0 rebuild (ARCHITECTURE.md §10), out of this slice.
+
+- `src/runtime/bootstrap.ts` — `v2PackToPack` + `loadActivePacksForDispatch`.
+- `src/runtime/hooks/{pre,post}-tool-use, user-prompt-submit, session-{start,end}, stop}.ts` — use it.
+
 ## [0.5.546] - 2026-06-26
 
 ### Reverted — the state-keyed skill model (drift from the scoped router model)

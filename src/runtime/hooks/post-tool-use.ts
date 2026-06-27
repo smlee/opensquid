@@ -27,7 +27,7 @@
  *
  * Fail-open: any internal crash exits 0 with a stderr message.
  */
-import { buildRegistry, loadActivePacks } from '../bootstrap.js';
+import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { Event } from '../types.js';
 
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
   }
 
   const sessionId = extractSessionId(raw);
-  const packs = await loadActivePacks(sessionId);
+  const packs = await loadActivePacksForDispatch(sessionId);
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
   // FAC-CUT.5b.2: run the v2 cartridges so an observed actor advances on `post_tool_call` (state-write +
