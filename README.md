@@ -13,7 +13,7 @@ It is an MCP operating layer that adds durable memory, dependency-aware task sta
 
 `opensquid` is the package, CLI, MCP server name, and `~/.opensquid/` data root. OpenSquid is the human-facing wordmark.
 
-> **Status, June 25, 2026.** Pre-1.0 and moving fast (`0.5.522`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
+> **Status, June 27, 2026.** Pre-1.0 and moving fast (`0.5.547`). The tool surface is usable but not frozen. This README is a front-door draft for the current architecture, not a stability promise.
 
 ## Quickstart
 
@@ -266,6 +266,30 @@ When active, the commit gate reads the phase ledger written by `log_phase`. Hook
 
 The gates bind to the agent, never to you. Agent-spawned git commands are recognized by the environment markers agent hosts set; your own terminal passes through and git behaves normally, with commits still recorded in the provenance trail.
 
+The default discipline also enforces **evidence-or-flag**: a load-bearing claim or recommendation written
+without a verifying tool call that turn is flagged, and the next action is blocked until the agent gathers
+evidence (read/grep/search/recall) — so it can't keep acting on unbacked assertions. Evidence tools are never
+blocked, so there is no deadlock; gathering evidence clears the flag.
+
+## Project context
+
+Each project can carry its own rules and context in `<project>/.opensquid/context.md` — a user-authored file
+OpenSquid reads live on every tool call, so edits take effect immediately and different projects get
+different rules. Two tiers, because not everything can be enforced:
+
+- **Free-form body** — advisory context the agent always carries ("this is a Rust project; use cargo; errors
+  go through `Result`"). Injected at session start and on each turn.
+- **Frontmatter rules** — the deterministically checkable subset, compiled to block-guards: `forbid:` (a list
+  of commands to block), `rules:` (raw guards for conditions a flat command can't express), and a
+  `package_manager:` shorthand. These hard-block (exit 2) on the harnesses OpenSquid runs hooks under
+  (Claude Code, codex).
+
+The file is yours — OpenSquid never overwrites it. `opensquid setup wizard hooks` scaffolds a starter
+`context.md` if none exists (seeded with the detected package manager), and renders it into each detected
+harness's own project rules file (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/`, `.goosehints`, …) so harnesses
+that don't run OpenSquid's hooks still receive the context as advisory guidance. A malformed `context.md`
+degrades and warns — a typo can never silently disable the discipline.
+
 ## Memory And Lessons
 
 OpenSquid separates memory from lessons.
@@ -330,6 +354,9 @@ Works today:
 - Optional hooks for workflow and drift enforcement in Claude Code and codex CLI.
 - Deterministic session handoffs with automatic backup and recovery triggers.
 - Git gates that bind to the agent and pass humans through, with commit provenance.
+- Per-project context + rules (`<project>/.opensquid/context.md`): free-form context + `forbid`/`rules`/`package_manager`, read live, with a resilient (degrade-and-warn) loader.
+- Evidence-or-flag gate: an unbacked claim flags, then blocks the next non-evidence action until the agent verifies.
+- Advisory project-context tier: `context.md` rendered into ~17 harnesses' own project rules files (`AGENTS.md`/`CLAUDE.md`/`.cursor/rules/`…), reusing the managed-block writer (your content preserved).
 - Multi-host MCP setup paths for local development.
 
 Still evolving:
