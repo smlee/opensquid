@@ -15,6 +15,9 @@ dist/
 # Local runtime state — never ship internal state to public repo
 .opensquid/
 
+# Local Claude Code config + wizard-written project hooks (machine-specific)
+.claude/
+
 # Local Claude Code MCP config — contains absolute paths to local install
 .mcp.json
 
