@@ -75,9 +75,15 @@ describe('v2PackToPack (S1 adapter)', () => {
 });
 
 describe('loadActivePacksForDispatch (S1)', () => {
-  it('is ADDITIVE — equals loadActivePacks when no v2 cartridge is active', async () => {
+  it('is ADDITIVE — equals loadActivePacks (modulo the cwd project-context pack) when no v2 cartridge is active', async () => {
     await setHome([]);
-    expect(await loadActivePacksForDispatch('sess-add')).toEqual(await loadActivePacks('sess-add'));
+    // T-project-context: loadActivePacksForDispatch ALSO folds in <cwd>/.opensquid/context.md,
+    // a process.cwd()-derived source independent of OPENSQUID_HOME (so it's present whenever the
+    // repo itself has a context.md). Isolate it to assert the v1+v2 composition invariant.
+    const dispatch = (await loadActivePacksForDispatch('sess-add')).filter(
+      (p) => p.name !== 'project-context',
+    );
+    expect(dispatch).toEqual(await loadActivePacks('sess-add'));
   });
 
   it('appends the adapted v2 pack (with its skills) when fullstack-flow is active', async () => {
