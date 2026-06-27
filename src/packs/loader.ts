@@ -76,7 +76,7 @@ const fs = { readFile: fsReadFile };
 // We use these throughout the loader so the returned `Pack` and intermediate
 // `Skill[]` line up with the runtime types declared in `runtime/types.ts`.
 type ManifestOutput = z.infer<typeof Manifest>;
-type SkillOutput = z.infer<typeof Skill>;
+export type SkillOutput = z.infer<typeof Skill>;
 type ModelsConfigOutput = z.infer<typeof ModelsConfig>;
 type DriftResponseConfigOutput = z.infer<typeof DriftResponseConfig>;
 
@@ -395,7 +395,7 @@ async function loadOptionalFsm(
 //     skills (spec risk callout 3).
 // ---------------------------------------------------------------------------
 
-async function loadSkillsDir(skillsDir: string): Promise<SkillOutput[]> {
+export async function loadSkillsDir(skillsDir: string): Promise<SkillOutput[]> {
   let entries: string[];
   try {
     entries = await readdir(skillsDir);

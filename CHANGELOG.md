@@ -7,6 +7,17 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.541] - 2026-06-26
+
+### Added — v2 pack loads its skills/ dir (backend pack correction, H1)
+
+`loadPackV2` now loads the pack's `skills/<name>/skill.yaml` into `LoadedPackV2.skills`, reusing
+the v1 `loadSkillsDir` (now exported alongside `SkillOutput`). Absent dir → `[]`; malformed →
+fail-loud. The first step of making fullstack-flow's state-keyed skills live.
+
+- `src/packs/loader.ts` — export `loadSkillsDir` + `SkillOutput`.
+- `src/packs/loader_v2.ts` — `LoadedPackV2.skills` + load in `loadPackV2`.
+
 ## [0.5.540] - 2026-06-26
 
 ### Added — v2 fullstack-flow backend (engineering) lens skills (Track 2, T2.13)

@@ -22,7 +22,13 @@ const mockLoad = vi.mocked(loadActiveV2Cartridges);
 
 function load(spec: unknown): LoadedPackV2 {
   const pack = PackV2.parse(spec);
-  return { pack, compiled: compilePackV2(pack), guards: pack.guards, messages: pack.messages };
+  return {
+    pack,
+    compiled: compilePackV2(pack),
+    guards: pack.guards,
+    messages: pack.messages,
+    skills: [],
+  };
 }
 
 // (1) Steady-state: the INITIAL state is a skilled executor (no `serves` → ORCH.8 doesn't force a gate-initial).

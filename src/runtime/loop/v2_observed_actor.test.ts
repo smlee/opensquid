@@ -10,7 +10,13 @@ import { V2ObservedActor } from './v2_observed_actor.js';
 /** Build a LoadedPackV2 from an inline PackV2 (mirrors compile_v2.test.ts). */
 function load(spec: unknown): LoadedPackV2 {
   const pack = PackV2.parse(spec);
-  return { pack, compiled: compilePackV2(pack), guards: pack.guards, messages: pack.messages };
+  return {
+    pack,
+    compiled: compilePackV2(pack),
+    guards: pack.guards,
+    messages: pack.messages,
+    skills: [],
+  };
 }
 
 /** A gate that passes iff ctx `verdict === "PASS"` (mirrors the real `contains(guess_audit,"GUESS_FREE")`). */

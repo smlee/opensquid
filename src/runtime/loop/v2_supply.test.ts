@@ -40,7 +40,13 @@ const mockLoad = vi.mocked(loadActiveV2Cartridges);
 /** Build a LoadedPackV2 from an inline PackV2 (mirrors v2_observed_actor.test.ts). */
 function load(spec: unknown): LoadedPackV2 {
   const pack = PackV2.parse(spec);
-  return { pack, compiled: compilePackV2(pack), guards: pack.guards, messages: pack.messages };
+  return {
+    pack,
+    compiled: compilePackV2(pack),
+    guards: pack.guards,
+    messages: pack.messages,
+    skills: [],
+  };
 }
 
 /** A gate triggered by tool_call whose guard is `tool == "Write"`. A `Bash` tool_call FAILS the guard →

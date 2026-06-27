@@ -1,7 +1,8 @@
 /** PFV2.2 — loader-v2: read pack.yaml → LoadedPackV2. */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ZodError } from 'zod';
@@ -100,5 +101,48 @@ fsm:
       'name: x\nversion: 1\nscope: workflow\nfsm: [unbalanced',
     );
     await expect(loadPackV2(dir)).rejects.toThrow();
+  });
+
+  // H1 — loadPackV2 loads the pack's skills/ dir into LoadedPackV2.skills (reusing the v1 loadSkillsDir).
+  it('loads skills/<name>/skill.yaml into LoadedPackV2.skills', async () => {
+    await writeFile(join(dir, 'pack.yaml'), PACK_YAML);
+    const sdir = join(dir, 'skills', 'demo-skill');
+    await mkdir(sdir, { recursive: true });
+    await writeFile(
+      join(sdir, 'skill.yaml'),
+      `name: demo-skill
+load: preload
+triggers: [{ kind: tool_call }]
+rules:
+  - id: demo
+    process:
+      - call: verdict
+        args: { level: surface, message: hi }
+`,
+    );
+    const loaded = await loadPackV2(dir);
+    expect(loaded.skills.map((s) => s.name)).toEqual(['demo-skill']);
+  });
+
+  it('returns skills: [] when the pack has no skills/ dir (ENOENT contract)', async () => {
+    await writeFile(join(dir, 'pack.yaml'), PACK_YAML);
+    const loaded = await loadPackV2(dir);
+    expect(loaded.skills).toEqual([]);
+  });
+
+  it('fails loud on a malformed skill.yaml', async () => {
+    await writeFile(join(dir, 'pack.yaml'), PACK_YAML);
+    const sdir = join(dir, 'skills', 'bad');
+    await mkdir(sdir, { recursive: true });
+    await writeFile(join(sdir, 'skill.yaml'), 'name: 123\nrules: not-an-array\n');
+    await expect(loadPackV2(dir)).rejects.toThrow();
+  });
+
+  it('live-loads the real fullstack-flow pack skills (≥1; includes a lens)', async () => {
+    const here = dirname(fileURLToPath(import.meta.url)); // src/packs
+    const packDir = join(here, '..', '..', 'packs', 'builtin', 'fullstack-flow');
+    const loaded = await loadPackV2(packDir);
+    expect(loaded.skills.length).toBeGreaterThan(0);
+    expect(loaded.skills.map((s) => s.name)).toContain('security'); // an engineering lens
   });
 });
