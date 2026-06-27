@@ -43,6 +43,7 @@ import { hasBinaryOnPath, installAgentsContext } from '../wizard/install_agents_
 import { detectPackageManager } from '../wizard/package_manager_detect.js';
 import { scaffoldProjectContext } from '../wizard/context_writer.js';
 import { installProjectContextRules } from '../wizard/install_project_context.js';
+import { installEnforcementHooks } from '../wizard/enforcement_hooks.js';
 
 import type { Command } from 'commander';
 
@@ -217,6 +218,15 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
       const projectRoot = dirname(scopeRoot);
       const rep = await installProjectContextRules(projectRoot, r.home(), r.hasBinary);
       for (const w of rep.written) r.out(`  context-rules: ${w.result} ${w.harness} (${w.path})\n`);
+
+      // T-multi-harness-enforce: wire the opensquid DENY hook (exit-2) into each detected blocking-capable
+      // harness's project config (Gemini/Windsurf/Cursor/Continue/Qwen/Trae). Amp/OpenCode/Cline → manual.
+      const enf = await installEnforcementHooks(projectRoot);
+      for (const w of enf.written) r.out(`  enforce-hook: ${w.result} ${w.harness} (${w.path})\n`);
+      if (enf.manual.length > 0) {
+        r.out('  enforce-hook: manual (plugin/script) harnesses:\n');
+        for (const m of enf.manual) r.out(`    [${m.harness}] ${m.note}\n`);
+      }
     }
   }
 }
