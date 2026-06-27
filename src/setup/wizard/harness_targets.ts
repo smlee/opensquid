@@ -157,6 +157,44 @@ export const REGISTRY: HarnessRow[] = [
   { harness: 'warp', kind: 'manual', alwaysOffer: true },
 ];
 
+/**
+ * T-project-context (advisory tier) — PROJECT-level rules-file targets, keyed by harness.
+ *
+ * Additive + separate from REGISTRY (which is GLOBAL-only) so the global path code is
+ * untouched. Each entry resolves a path relative to the PROJECT ROOT, with a write
+ * `kind`: `block` = a shared file the user may also edit (managed-block + foreign-
+ * preserve — AGENTS.md/CLAUDE.md/…); `file` = an opensquid-owned dedicated file in a
+ * rules dir (.cursor/rules/opensquid.mdc, …). Paths are from the cited capability
+ * matrix (docs/research/per-harness-capability-matrix.md). Harnesses whose PROJECT
+ * path isn't authoritatively sourced (pi, hermes) or that need a config entry rather
+ * than a file drop (aider) are intentionally OMITTED — no guessing.
+ *
+ * AGENTS.md sharers (codex/amp/opencode/crush/warp) resolve to the SAME `./AGENTS.md`
+ * and dedupe by path at write time (one write, all benefit).
+ */
+export const PROJECT_RULE_TARGETS: Record<
+  string,
+  { path: (projectRoot: string) => string; kind: 'block' | 'file' }
+> = {
+  'claude-code': { path: (p) => join(p, 'CLAUDE.md'), kind: 'block' },
+  codex: { path: (p) => join(p, 'AGENTS.md'), kind: 'block' },
+  gemini: { path: (p) => join(p, 'GEMINI.md'), kind: 'block' },
+  amp: { path: (p) => join(p, 'AGENTS.md'), kind: 'block' },
+  opencode: { path: (p) => join(p, 'AGENTS.md'), kind: 'block' },
+  crush: { path: (p) => join(p, 'AGENTS.md'), kind: 'block' },
+  warp: { path: (p) => join(p, 'AGENTS.md'), kind: 'block' },
+  qwen: { path: (p) => join(p, 'QWEN.md'), kind: 'block' },
+  goose: { path: (p) => join(p, '.goosehints'), kind: 'block' },
+  zed: { path: (p) => join(p, '.rules'), kind: 'block' },
+  windsurf: { path: (p) => join(p, '.windsurf', 'rules', 'opensquid.md'), kind: 'file' },
+  cursor: { path: (p) => join(p, '.cursor', 'rules', 'opensquid.mdc'), kind: 'file' },
+  cline: { path: (p) => join(p, '.clinerules', 'opensquid.md'), kind: 'file' },
+  roo: { path: (p) => join(p, '.roo', 'rules', 'opensquid.md'), kind: 'file' },
+  kilo: { path: (p) => join(p, '.kilocode', 'rules', 'opensquid.md'), kind: 'file' },
+  continue: { path: (p) => join(p, '.continue', 'rules', 'opensquid.md'), kind: 'file' },
+  trae: { path: (p) => join(p, '.trae', 'rules', 'opensquid.md'), kind: 'file' },
+};
+
 export interface ResolvedTarget {
   harness: string;
   kind: Kind;

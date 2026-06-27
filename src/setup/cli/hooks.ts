@@ -42,6 +42,7 @@ import { installPacksSkill } from '../wizard/skill-installer.js';
 import { hasBinaryOnPath, installAgentsContext } from '../wizard/install_agents_context.js';
 import { detectPackageManager } from '../wizard/package_manager_detect.js';
 import { scaffoldProjectContext } from '../wizard/context_writer.js';
+import { installProjectContextRules } from '../wizard/install_project_context.js';
 
 import type { Command } from 'commander';
 
@@ -209,6 +210,13 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
             ` — edit it to add project rules + context\n`,
         );
       else r.out(`  context: ${at} already exists — left as-is (yours)\n`);
+
+      // T-project-context advisory tier: render context.md into each detected harness's
+      // PROJECT rules file (AGENTS.md/CLAUDE.md/.cursor/rules/…) so non-hook harnesses
+      // also receive the project context. Reuses the managed-block writer (foreign-safe).
+      const projectRoot = dirname(scopeRoot);
+      const rep = await installProjectContextRules(projectRoot, r.home(), r.hasBinary);
+      for (const w of rep.written) r.out(`  context-rules: ${w.result} ${w.harness} (${w.path})\n`);
     }
   }
 }
