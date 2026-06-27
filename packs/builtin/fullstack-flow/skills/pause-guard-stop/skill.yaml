@@ -1,0 +1,25 @@
+# pause-guard-stop (H5, AF.6/AF.7) — blocks the STOP EVENT post-scope.
+#
+# v2 state-keyed model: BOUND (via fullstack-flow/pack.yaml per-state `skills:`) ONLY to the post-scope gates,
+# never to `scope`. The `stop` trigger guarantees this skill fires ONLY on a stop event; the binding guarantees
+# it fires ONLY post-scope. So the rule is UNCONDITIONAL (no `if:`) — both gates live outside the rule (the
+# trigger gates the event kind; the binding gates the phase). The stop event carries no `tool` field, so an
+# in-rule tool/phase check is neither possible nor needed.
+name: pause-guard-stop
+load: preload
+when_to_load: []
+triggers:
+  - kind: stop
+rules:
+  - id: no-stop-event
+    process:
+      # No `if:` → runs unconditionally on a stop event (the trigger + the binding are the gates).
+      - call: verdict
+        args:
+          level: block
+          message: >-
+            Past SCOPE there are no pauses — run to done (AF.6/AF.7). The fullstack-flow run is automated
+            past SCOPE; do not stop mid-run. If a real gap surfaced the SCOPE was incomplete — re-scope it.
+prose: |
+  The fullstack-flow pause discipline (the ≥v1 floor): a STOP event past SCOPE is HARD-BLOCKED. State-keyed —
+  bound only to the automated post-scope gates; the stop trigger + binding are the sole gates.

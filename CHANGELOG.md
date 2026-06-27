@@ -7,6 +7,20 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.544] - 2026-06-26
+
+### Changed — fullstack-flow pause-guard split + per-state backend skill bindings (H5+H6)
+
+The pause-guard is split into `pause-guard-tool` (trigger `tool_call`, blocks AskUserQuestion/Stop) and
+`pause-guard-stop` (trigger `stop`, unconditional block) — the v2 state-keyed model: the per-state
+binding gates phase, so the rules carry no in-rule phase check (and no `read_fsm_state`, which the v2
+skill ctx doesn't supply). fullstack-flow now binds both pause-guards on every post-scope gate
+(plan/author/code/deploy, never scope) and the 10 engineering lenses on the author/code gates — live via
+the H3 host. This makes the backend pack's skill layer state-keyed (correcting the v1-router model).
+
+- `packs/builtin/fullstack-flow/skills/pause-guard-{tool,stop}/` (replaces `pause-guard/`).
+- `packs/builtin/fullstack-flow/pack.yaml` — per-state `skills:` bindings.
+
 ## [0.5.543] - 2026-06-26
 
 ### Added — the v2 skill host: runV2Cartridges evaluates state-keyed skills (backend pack correction, H3+H4)
