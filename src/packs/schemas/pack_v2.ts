@@ -46,7 +46,6 @@ const GateState = z
   .object({
     kind: z.literal('gate'),
     guard: z.string().min(1),
-    skills: z.array(z.string()).default([]), // SKILL.1 state-keyed binding: skills bound while resting at this gate
     trigger: z.array(z.string().min(1)).min(1).optional(), // observed event names this gate reacts to
     on_pass_emits: z.string().min(1), // NAMED pass event (routed by fsm.transitions) — was on_pass.to
     on_fail: z

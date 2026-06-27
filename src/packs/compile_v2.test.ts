@@ -32,7 +32,6 @@ const amazonClone = PackV2.parse({
       size_check: {
         kind: 'gate',
         guard: 'bundle_size_ok',
-        skills: ['security'], // H2 — a gate may carry state-keyed skills(S)
         on_pass_emits: 'size_passed',
         on_fail: { action: 'block', message: 'size_too_big' },
       },
@@ -121,7 +120,6 @@ describe('compilePackV2 (T1)', () => {
     expect(meta.size_check).toMatchObject({
       kind: 'gate',
       guard: 'bundle_size_ok',
-      skills: ['security'], // H2 — gate-state skills(S) surface in meta (was hardcoded [])
       onFail: { action: 'block', message: 'size_too_big' },
       emits: 'size_passed', // on_pass_emits
     });
