@@ -1,0 +1,79 @@
+# verify-before-claiming — the evidence-or-flag PREREQUISITE gate.
+#
+# Codifies CHARTER principle 1 ("every claim/decision/artifact is backed by
+# evidence or flagged") as a runtime drift check on the agent's OWN output —
+# the sibling of `verify-before-citing-memory`, generalized from memory-citing
+# to load-bearing CLAIMS and RECOMMENDATIONS ("the gap is…", "the best
+# solution…", "I recommend…", "100%…", "there are no…").
+#
+# How it works (same proven machinery as verify-before-citing-memory):
+#   1. text_pattern_match scans assistantText on the Stop event for the
+#      load-bearing claim/suggestion phrases below.
+#   2. If any matched, session_tool_history checks the per-turn tool ledger for
+#      an EVIDENCE-GATHERING tool (Bash / Read / Grep / Glob / Agent / recall /
+#      inspect_skill).
+#   3. matched-without-evidence → warn verdict: cite file:line or flag it as
+#      unverified. Warn (not block): a hook fires on events, not mid-generation,
+#      so it cannot stop a claim BEFORE it is written — it flags it at turn end
+#      so the drift must be resolved before the next step. Detection is of FORM
+#      (a strong claim with no evidence call this turn), not substance.
+#
+# Tunables: the pattern list + evidence-tool allow-list live in THIS YAML, so a
+# project/user can extend or replace them via their own pack.
+name: verify-before-claiming
+load: preload
+when_to_load:
+  - kind: event_type
+    type: stop
+triggers:
+  - kind: stop
+rules:
+  - id: claim-without-evidence
+    kind: track_check
+    process:
+      - call: text_pattern_match
+        as: claim_phrases
+        args:
+          text_field: assistantText
+          patterns:
+            - '\bthe (gap|issue|problem|root cause) is\b'
+            - '\bthe (fix|solution|answer) is\b'
+            - '\bthe best (solution|approach|option|way)\b'
+            - '\bI recommend\b'
+            - '\bmy recommendation\b'
+            - '\b100%\b'
+            - '\b(definitely|certainly|guaranteed)\b'
+            - '\bthere (is|are) no\b'
+            - '\bturns out\b'
+      - call: session_tool_history
+        as: evidence_tools
+        if: 'claim_phrases.matched.length > 0'
+        args:
+          scope: current_turn
+          filter_names:
+            - Bash
+            - Read
+            - Grep
+            - Glob
+            - Agent
+            - Task
+            - mcp__opensquid__recall
+            - mcp__opensquid__inspect_skill
+            - mcp__opensquid__list_skills
+      - call: verdict
+        if: 'claim_phrases.matched.length > 0 && evidence_tools.count === 0'
+        args:
+          level: warn
+          message: 'opensquid drift-flag: load-bearing claim/recommendation ({{claim_phrases.matched}}) made without gathering evidence this turn (no Bash/Read/Grep/Glob/Agent/recall/inspect_skill). Cite file:line or flag it as unverified — CHARTER principle 1 (evidence-or-flag).'
+prose: |
+  The evidence-or-flag prerequisite, enforced on the agent's own response.
+  When the assistant's turn contains a load-bearing claim or recommendation
+  ("the gap is", "the best solution", "I recommend", "100%", "there are no")
+  WITHOUT an evidence-gathering tool call in the same turn, emits a `warn`
+  verdict so the drift is surfaced before the next step proceeds.
+
+  Warn, not block: a Stop hook fires after the turn is written, so it cannot
+  prevent the claim pre-emission — only flag it. It detects FORM (a strong
+  claim with no Read/Grep/Bash/recall this turn), not substance (whether the
+  evidence actually supports the claim). The companion to
+  verify-before-citing-memory; both codify CHARTER principle 1.

@@ -49,8 +49,8 @@ describe('builtin default-discipline pack', () => {
       'd9-guard',
       'default-discipline/guards',
       'inbound-greeter',
-      'pnpm-only',
       'session-connection-check',
+      'verify-before-claiming',
       'workflow',
     ]);
   });
@@ -92,6 +92,33 @@ describe('builtin default-discipline pack', () => {
     expect(ids).toContain('guard:no-force-push-main');
     expect(ids).toContain('guard:substrate-purity');
     expect(ids).toContain('guard:versioning-pre1-patch-only');
+  });
+
+  it('verify-before-claiming: warns on a claim made WITHOUT an evidence tool, silent WITH one', async () => {
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
+    // policy must be warn (not the full_stop_and_redo default) — explicit per_rule entry
+    expect(pack.driftResponse?.per_rule['claim-without-evidence']).toBe('warn');
+
+    const registry = await buildRegistry({
+      backend: {
+        init: () => Promise.resolve(),
+        embed: () => Promise.resolve(null),
+        recall: () => Promise.resolve([]),
+        storeLesson: () => Promise.resolve(),
+        deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+      },
+    });
+    const stop = (assistantText: string, sid: string) =>
+      dispatchEvent({ kind: 'stop', assistantText } as never, [pack], registry, sid);
+
+    // A load-bearing claim with no evidence tool this turn → warn surfaced (exit 0 + stderr).
+    const flagged = await stop('I recommend this; it is 100% the best solution.', 'vbc-1');
+    expect(flagged.exitCode).toBe(0);
+    expect(flagged.stderr).toMatch(/drift-flag|evidence/i);
+
+    // Plain prose with no claim phrase → no flag.
+    const clean = await stop('Here is the updated file.', 'vbc-2');
+    expect(clean.stderr).not.toMatch(/drift-flag/i);
   });
 
   it('declares workflow skill with a destination_check + track_check pair', async () => {

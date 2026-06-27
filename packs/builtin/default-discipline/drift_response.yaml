@@ -49,3 +49,7 @@ per_rule:
   # Workflow hard-stops — NOT migrated (workflow skill keeps bare rule ids).
   workflow-phases-required: full_stop_and_redo
   phase-logged-before-commit: full_stop_and_redo
+
+  # verify-before-claiming — evidence-or-flag prerequisite. Warn, never halt:
+  # a Stop-event flag, not a pre-emission block (bare skill rule id).
+  claim-without-evidence: warn
