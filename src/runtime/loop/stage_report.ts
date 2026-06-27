@@ -2,60 +2,103 @@
  * T2.12 — per-stage reports (SCOPE / PLAN / AUTHOR / CODE / DEPLOY).
  *
  * Each FSM stage emits a MANDATORY report: a dated, human-readable file under the active project's
- * `docs/reports/` AND (via the caller) a memory entry. The renderer is PURE — `iso` is injected, never
- * `Date.now()` — so the dated path + body are deterministic in fixtures. The file is a per-project
- * artifact (a regenerated projection), so it lives under the project root (the session cwd), NOT
- * `OPENSQUID_HOME`.
+ * `docs/reports/`, a memory mirror, AND (T2.12-surface) an in-session injection + best-effort chat push —
+ * so the phase status is SHOWN, not just filed. The renderer is PURE — `iso` is injected, never `Date.now()`.
  *
- * The LIVE trigger is `v2_supply.ts`: it calls `emitStageReport` on each FSM transition LEAVING
- * SCOPE/PLAN/AUTHOR/DEPLOY (CODE is emitted by T2.9's loop_driver on `phases_complete`), and mirrors the
- * returned body into the session memory buffer. So all five stage reports have a named live caller — the
- * renderer is not dormant.
+ * STANDARDIZED FORMAT (one shape for every phase, so reports are recognizable):
+ *   🦑 Phase report — <STAGE> complete · <taskId> · <date>
+ *   Summary: …
+ *   Phases:  (CODE only) a checklist chart of the 7-phase coding cycle — the long, stand-out report
+ *   Next → <stage>: <what that phase will work on>
+ *   Goal: …  (SCOPE only — the destination check)
+ *
+ * Live triggers: `v2_supply.ts` (SCOPE/PLAN/AUTHOR/DEPLOY on the leaving transition) + `loop_driver` (CODE on
+ * `phases_complete`). Both also surface the returned body in-session + chat.
  *
  * Imports from: node:path, ../../storage/atomic_file.
- * Imported by: src/runtime/loop/v2_supply.ts (the live trigger) + loop_driver (T2.9, the CODE caller).
  */
 import { join } from 'node:path';
 
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 
-// 'CODE' is included (emitted by T2.9's loop_driver on phases_complete), even though v2_supply only
-// emits SCOPE/PLAN/AUTHOR/DEPLOY on the leaving transition.
+// 'CODE' is included (emitted by T2.9's loop_driver on phases_complete).
 export type Stage = 'SCOPE' | 'PLAN' | 'AUTHOR' | 'CODE' | 'DEPLOY';
+
+/** The canonical 7-phase coding cycle the CODE stage runs (the `log_phase` enum order). */
+export const CODE_PHASES = [
+  'pre_research',
+  'learn',
+  'code',
+  'test',
+  'audit',
+  'post_research',
+  'fix',
+] as const;
+
+/** What the NEXT stage will work on — the "tell me what you'll be working on" line. Keyed by the FSM state. */
+const NEXT_STAGE_WORK: Record<string, string> = {
+  scope: 'capture + scope the next task (anchors resolve, depth, no open question)',
+  plan: 'decompose the scope into a dependency-ordered, acyclic plan',
+  author: 'author the spec + real code covering every scoped element',
+  code: 'run the 7-phase coding cycle: pre_research → learn → code → test → audit → post_research → fix',
+  deploy: 'verify deploy capability, then the human-accept gate',
+  accepted: 'task accepted — complete',
+  done: 'task complete',
+};
 
 export interface StageReport {
   stage: Stage;
   taskId: string;
   summary: string;
+  /** The next FSM state (e.g. `plan`). Rendered with its NEXT_STAGE_WORK description. */
   nextDirective: string;
   /** Only the SCOPE report carries the goal-alignment line (T2.10's live consumer). Omitted → no line. */
   goalAligned?: boolean;
+  /** CODE-stage step chart: which of the 7 coding phases ran. Omitted → no Phases section. */
+  phases?: readonly { name: string; done: boolean }[];
 }
 
-/**
- * Render a plain-header report → a dated file path + the body text (also used for the memory mirror).
- * `iso` is passed in (no `Date.now()` — keeps the renderer pure/deterministic). The `## Goal alignment`
- * line is emitted ONLY when `goalAligned !== undefined`. Path: `docs/reports/<stage-lower>-<taskId>-<iso-date>.md`.
- */
+/** Render the standardized report body + its dated file path. Pure (no `Date.now()`). */
 export function renderStageReport(r: StageReport, iso: string): { path: string; body: string } {
-  const goal =
-    r.goalAligned === undefined
-      ? '' // SCOPE report carries the goal-alignment line (T2.10's live consumer)
-      : `\n## Goal alignment\n${r.goalAligned ? 'on the captured goal' : 'OFF the captured goal — destination drift'}\n`;
-  const body = `# ${r.stage} report — ${r.taskId} (${iso})\n\n## Summary\n${r.summary}\n\n## Next\n${r.nextDirective}\n${goal}`;
+  const date = iso.slice(0, 10);
+  const lines: string[] = [`🦑 Phase report — ${r.stage} complete · ${r.taskId} · ${date}`, ''];
+  lines.push(`Summary: ${r.summary}`, '');
+
+  // CODE (or any stage that supplies `phases`) renders the step chart — the long, stand-out report.
+  if (r.phases !== undefined && r.phases.length > 0) {
+    lines.push('Phases:');
+    for (const p of r.phases) lines.push(`  [${p.done ? 'x' : ' '}] ${p.name}`);
+    lines.push('');
+  }
+
+  const work = NEXT_STAGE_WORK[r.nextDirective];
+  lines.push(`Next → ${r.nextDirective}${work !== undefined ? `: ${work}` : ''}`);
+
+  if (r.goalAligned !== undefined) {
+    lines.push(
+      '',
+      `Goal: ${r.goalAligned ? 'on the captured goal' : 'OFF the captured goal — destination drift'}`,
+    );
+  }
+
+  const body = lines.join('\n') + '\n';
   return {
-    path: join('docs/reports', `${r.stage.toLowerCase()}-${r.taskId}-${iso.slice(0, 10)}.md`),
+    path: join('docs/reports', `${r.stage.toLowerCase()}-${r.taskId}-${date}.md`),
     body,
   };
 }
 
 /**
- * Atomically write the rendered report to `join(root, path)` and return the (root-relative) path. The
- * caller (v2_supply / loop_driver) mirrors the returned body into memory — the session-scoped memory write
- * needs a `sessionId` that this signature does not carry, so the mirror lives in the caller (see v2_supply).
+ * Atomically write the rendered report and return BOTH the (root-relative) path and the body — the caller
+ * surfaces the body in-session (injection) + chat + memory, which this signature's lack of a sessionId
+ * keeps in the caller (v2_supply / loop_driver).
  */
-export async function emitStageReport(root: string, r: StageReport, iso: string): Promise<string> {
+export async function emitStageReport(
+  root: string,
+  r: StageReport,
+  iso: string,
+): Promise<{ path: string; body: string }> {
   const { path, body } = renderStageReport(r, iso);
-  await atomicWriteFile(join(root, path), body); // + the caller mirrors `body` into memory (see v2_supply.ts)
-  return path;
+  await atomicWriteFile(join(root, path), body);
+  return { path, body };
 }

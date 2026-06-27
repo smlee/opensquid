@@ -25,7 +25,7 @@
  * Imported by: (deferred) T2.1/T2.15 FSM driver + its test.
  */
 import { batchDecide, type Edge } from './batch_decide.js';
-import { emitStageReport } from './stage_report.js';
+import { CODE_PHASES, emitStageReport } from './stage_report.js';
 
 /**
  * The minimal work-graph view the driver needs — injectable so the driver never touches the concrete store.
@@ -49,15 +49,25 @@ export async function onPhasesComplete(
   taskId: string,
   wg: LoopWorkGraph,
   iso: string,
-): Promise<{ next: string[][] }> {
+): Promise<{ next: string[][]; report: string }> {
   // sid threads through for symmetry with the FSM caller (T2.1) which keys session-scoped state by it; the
   // CODE report itself is a per-project artifact (no sessionId in emitStageReport's signature — see its JSDoc).
   void sid;
-  await emitStageReport(
+  // The CODE report is the long, stand-out one: it carries the 7-phase coding-cycle chart. At
+  // `phases_complete` the gate has confirmed all 7 ran, so every box is checked. `report.body` is
+  // returned so the (deferred T2.1/T2.15) live caller can SHOW it in-session + chat, exactly as
+  // v2_supply does for the other stages.
+  const { body } = await emitStageReport(
     root,
-    { stage: 'CODE', taskId, summary: 'phases complete', nextDirective: 'next task' },
+    {
+      stage: 'CODE',
+      taskId,
+      summary: 'all 7 coding phases logged + readiness surfacers ran',
+      nextDirective: 'deploy',
+      phases: CODE_PHASES.map((name) => ({ name, done: true })),
+    },
     iso,
   );
   const { parallel, batches } = batchDecide(await wg.listReadyIds(), await wg.listEdges());
-  return { next: batches.length ? batches : parallel.map((i) => [i]) };
+  return { next: batches.length ? batches : parallel.map((i) => [i]), report: body };
 }

@@ -29,11 +29,14 @@ describe('onPhasesComplete (T2.9 loop driver)', () => {
     await onPhasesComplete('sid-1', root, 'T-code', stubWg([], []), ISO);
     const path = join(root, 'docs/reports', 'code-T-code-2026-06-22.md');
     const body = await readFile(path, 'utf8');
-    expect(body).toContain('# CODE report — T-code (2026-06-22T13:45:07.000Z)');
-    expect(body).toContain('## Summary\nphases complete');
-    expect(body).toContain('## Next\nnext task');
-    // CODE report carries NO goal-alignment line (only SCOPE does — T2.10).
-    expect(body).not.toContain('## Goal alignment');
+    expect(body).toContain('🦑 Phase report — CODE complete · T-code · 2026-06-22');
+    // the long, stand-out CODE report: the 7-phase step chart
+    expect(body).toContain('Phases:');
+    expect(body).toContain('[x] pre_research');
+    expect(body).toContain('[x] fix');
+    expect(body).toContain('Next → deploy:');
+    // CODE report carries NO goal line (only SCOPE does — T2.10).
+    expect(body).not.toContain('Goal:');
   });
 
   it('independent ready issues → each its own singleton run-group', async () => {

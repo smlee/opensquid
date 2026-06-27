@@ -738,16 +738,16 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       const reportPath = join(root, 'docs', 'reports', `${stateName}-T-rep-2026-06-22.md`);
       expect(await exists(reportPath)).toBe(true);
       const body = await readFile(reportPath, 'utf8');
-      expect(body).toContain(`# ${stageUpper} report — T-rep (`);
-      expect(body).toContain('## Summary');
-      expect(body).toContain('## Next');
+      expect(body).toContain(`🦑 Phase report — ${stageUpper} complete · T-rep ·`);
+      expect(body).toContain('Summary:');
+      expect(body).toContain('Next →');
 
       // 2) the memory mirror — a pending lesson whose content is the report body.
       const lessonsDir = join(pendingLessonsDir(sid), 'potential-lessons');
       const files = await readdir(lessonsDir);
       expect(files.length).toBe(1);
       const mirror = await readFile(join(lessonsDir, files[0]!), 'utf8');
-      expect(mirror).toContain(`# ${stageUpper} report — T-rep (`);
+      expect(mirror).toContain(`🦑 Phase report — ${stageUpper} complete · T-rep ·`);
     });
   }
 
@@ -775,8 +775,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await runV2Cartridges(sid, writeCall(), NOW);
 
     const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
-    expect(body).toContain('## Goal alignment'); // absent goal → aligned:true (not a drift signal)
-    expect(body).toContain('on the captured goal');
+    expect(body).toContain('Goal: on the captured goal'); // absent goal → aligned:true (not a drift signal)
   });
 
   it('SCOPE report surfaces destination drift when the goal is disjoint from the captured ask', async () => {

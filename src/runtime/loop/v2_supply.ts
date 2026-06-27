@@ -27,7 +27,26 @@ import { readActiveTaskId, readSessionCwd } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
-import { emitStageReport, renderStageReport, type Stage } from './stage_report.js';
+import { emitStageReport, type Stage } from './stage_report.js';
+import { sendChat } from '../../chat_daemon/client.js';
+import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
+
+/**
+ * T2.12-surface — best-effort push of a phase report to the project's chat. FAIL-OPEN in every branch: no
+ * channels config / no umbrella for this cwd / no daemon running → silently skip (a report must never break
+ * the hook, and chat is optional). The daemon resolves `project:telegram` to the cwd-umbrella's channel.
+ */
+async function surfaceReportToChat(cwd: string, body: string): Promise<void> {
+  try {
+    const cfg = await loadChannelsConfig().catch(() => null);
+    if (cfg === null) return;
+    const umbrellaId = resolveUmbrellaForCwd(cfg, cwd);
+    if (umbrellaId === null || umbrellaId === '') return;
+    await sendChat({ channel: 'project:telegram', text: body });
+  } catch {
+    /* fail-open: chat is optional — never break the hook over it */
+  }
+}
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
 import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evidence.js';
@@ -311,8 +330,11 @@ export async function runV2Cartridges(
                     ? { goalAligned: (await goalConsult(sessionId, root)).aligned }
                     : {}),
                 };
-                await emitStageReport(root, r, now); // the dated docs/reports/ file
-                const { body } = renderStageReport(r, now); // the same body, mirrored into memory below
+                const { body } = await emitStageReport(root, r, now); // dated file + the body
+                // T2.12-surface: SHOW the phase report — in-session (the injections set the hooks emit as
+                // additionalContext) + a best-effort chat push (fail-open). Was file+memory only → invisible.
+                injections.push(body);
+                await surfaceReportToChat(root, body);
                 // The caller mirrors `body` into memory (session-scoped wedge buffer — the real in-runtime
                 // memory write available here; no ToolContext/RagBackend at this layer). FAIL-OPEN.
                 await capturePendingLesson(sessionId, {

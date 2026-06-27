@@ -1,8 +1,8 @@
 /**
  * T2.12 — stage_report renderer + emitter (zero LLM, deterministic, iso injected).
  *
- * Covers: renderStageReport path + plain-header body (with AND without the goal-alignment line);
- * emitStageReport writes the dated file under a TEMP root (never the real repo docs/reports/).
+ * Covers the STANDARDIZED format: the 🦑 header, Summary, the CODE phase-chart, the "Next → <stage>: <work>"
+ * line, and the SCOPE-only Goal line. emitStageReport returns {path, body} + writes the dated file.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -10,12 +10,17 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { emitStageReport, renderStageReport, type StageReport } from './stage_report.js';
+import {
+  CODE_PHASES,
+  emitStageReport,
+  renderStageReport,
+  type StageReport,
+} from './stage_report.js';
 
 const ISO = '2026-06-22T13:45:07.000Z';
 
-describe('renderStageReport (pure)', () => {
-  it('plain-header body + dated path, NO goal line when goalAligned is undefined', () => {
+describe('renderStageReport (pure, standardized format)', () => {
+  it('standardized header + Summary + Next-with-work; NO goal line / NO phases when absent', () => {
     const r: StageReport = {
       stage: 'PLAN',
       taskId: 'T-x',
@@ -24,38 +29,61 @@ describe('renderStageReport (pure)', () => {
     };
     const { path, body } = renderStageReport(r, ISO);
     expect(path).toBe(join('docs/reports', 'plan-T-x-2026-06-22.md'));
-    expect(body).toBe(
-      '# PLAN report — T-x (2026-06-22T13:45:07.000Z)\n\n## Summary\nplan complete\n\n## Next\nauthor\n',
+    expect(body).toContain('🦑 Phase report — PLAN complete · T-x · 2026-06-22');
+    expect(body).toContain('Summary: plan complete');
+    // "Next" names the next stage AND what it will work on (the "tell me what you'll be working on" line)
+    expect(body).toContain(
+      'Next → author: author the spec + real code covering every scoped element',
     );
-    expect(body).not.toContain('## Goal alignment');
+    expect(body).not.toContain('Goal:');
+    expect(body).not.toContain('Phases:');
   });
 
-  it('emits the goal-alignment line (ON) when goalAligned === true', () => {
+  it('CODE report renders the 7-phase step chart (the long, stand-out report)', () => {
+    const r: StageReport = {
+      stage: 'CODE',
+      taskId: 'T-c',
+      summary: 'all 7 phases logged',
+      nextDirective: 'deploy',
+      phases: CODE_PHASES.map((name) => ({ name, done: true })),
+    };
+    const { body } = renderStageReport(r, ISO);
+    expect(body).toContain('Phases:');
+    for (const p of CODE_PHASES) expect(body).toContain(`[x] ${p}`);
+    expect(body).toContain('Next → deploy: verify deploy capability, then the human-accept gate');
+  });
+
+  it('an unchecked phase renders an empty box', () => {
     const { body } = renderStageReport(
       {
-        stage: 'SCOPE',
-        taskId: 'T-y',
-        summary: 'scope complete',
-        nextDirective: 'plan',
-        goalAligned: true,
+        stage: 'CODE',
+        taskId: 'T-c',
+        summary: 's',
+        nextDirective: 'deploy',
+        phases: [
+          { name: 'code', done: true },
+          { name: 'test', done: false },
+        ],
       },
       ISO,
     );
-    expect(body).toContain('## Goal alignment\non the captured goal');
+    expect(body).toContain('[x] code');
+    expect(body).toContain('[ ] test');
   });
 
-  it('emits the goal-alignment line (OFF/drift) when goalAligned === false', () => {
-    const { body } = renderStageReport(
-      {
-        stage: 'SCOPE',
-        taskId: 'T-z',
-        summary: 'scope complete',
-        nextDirective: 'plan',
-        goalAligned: false,
-      },
-      ISO,
-    );
-    expect(body).toContain('## Goal alignment\nOFF the captured goal — destination drift');
+  it('SCOPE goal line: ON when goalAligned true, OFF/drift when false', () => {
+    expect(
+      renderStageReport(
+        { stage: 'SCOPE', taskId: 'T-y', summary: 's', nextDirective: 'plan', goalAligned: true },
+        ISO,
+      ).body,
+    ).toContain('Goal: on the captured goal');
+    expect(
+      renderStageReport(
+        { stage: 'SCOPE', taskId: 'T-z', summary: 's', nextDirective: 'plan', goalAligned: false },
+        ISO,
+      ).body,
+    ).toContain('Goal: OFF the captured goal — destination drift');
   });
 
   it('lowercases the stage + slices the iso date in the path', () => {
@@ -68,17 +96,17 @@ describe('renderStageReport (pure)', () => {
 });
 
 describe('emitStageReport (writes a dated file under a temp root)', () => {
-  it('atomic-writes the body to join(root, path) and returns the root-relative path', async () => {
+  it('atomic-writes the body to join(root, path) and returns {path, body}', async () => {
     const root = await mkdtemp(join(tmpdir(), 'stage-report-'));
     const r: StageReport = {
       stage: 'DEPLOY',
       taskId: 'T-deploy',
       summary: 'deploy complete',
-      nextDirective: 'shipped',
+      nextDirective: 'accepted',
     };
-    const rel = await emitStageReport(root, r, ISO);
-    expect(rel).toBe(join('docs/reports', 'deploy-T-deploy-2026-06-22.md'));
-    const onDisk = await readFile(join(root, rel), 'utf8');
-    expect(onDisk).toBe(renderStageReport(r, ISO).body);
+    const { path, body } = await emitStageReport(root, r, ISO);
+    expect(path).toBe(join('docs/reports', 'deploy-T-deploy-2026-06-22.md'));
+    expect(await readFile(join(root, path), 'utf8')).toBe(body);
+    expect(body).toBe(renderStageReport(r, ISO).body);
   });
 });
