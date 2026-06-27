@@ -27,9 +27,11 @@ whole board — the orchestrator takes the next item.
 
 1. **Resume + load lean.** Read the item (\`workgraph_get\`) and recall only the lessons/memories relevant
    to it (scoped recall). Do NOT bulk-load the whole store — fresh context is the point.
-2. **Run the flow.** Drive SCOPE → AUTHOR → the 7-phase exactly as an interactive session would. The gate
-   is identical for you (it is harness-agnostic). You CANNOT route around it — \`--no-verify\` is futile
-   (the PreToolUse + git-owned gates both hold), and that is the safety floor that lets you run unattended.
+2. **Run the flow.** Drive the project's ACTIVE discipline end-to-end exactly as an interactive session
+   would — whichever pack is active gates you, and its gates enforce the stages: v2 \`fullstack-flow\`'s
+   SCOPE → PLAN → AUTHOR → CODE → DEPLOY, or v1 coding-flow's 7-phase. The gate is identical for you (it is
+   harness-agnostic). You CANNOT route around it — \`--no-verify\` is futile (the PreToolUse + git-owned
+   gates both hold), and that is the safety floor that lets you run unattended.
 3. **DECIDE, don't ask.** Surface decisions are yours to settle by the locked principles (rename, format,
    file location, refactor — Simplicity). Decide and proceed. Permission-fishing is drift, not diligence.
 4. **ESCALATE only the genuine residual.** Stop and emit \`HUMAN_REQUIRED\` ONLY for: an irreversible /

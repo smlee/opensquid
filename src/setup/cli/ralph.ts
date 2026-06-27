@@ -167,7 +167,7 @@ export function registerRalph(program: Command): Command {
   const loop = program
     .command('loop')
     .description(
-      'Run the gated-ralph autonomous loop (composes the work-graph + the coding-flow gate)',
+      "Run the gated-ralph autonomous loop (composes the work-graph + the project's active discipline gates — v2 fullstack-flow or v1 coding-flow)",
     );
 
   loop
