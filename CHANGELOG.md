@@ -7,21 +7,6 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
-## [0.5.543] - 2026-06-26
-
-### Added — the v2 skill host: runV2Cartridges evaluates state-keyed skills (backend pack correction, H3+H4)
-
-`runV2Cartridges` now takes a `FunctionRegistry` and, after binding the current state's `skills(S)`,
-evaluates each bound skill (trigger-filtered on `event.kind`) via `evaluateProcess` — routing
-`inject_context` + `verdict level:surface`/`warn` → `injections` (additionalContext), `verdict
-level:block` → `messages` + exit 2. State-keyed selection (no router); fail-open per cartridge. The
-registry is threaded from the three hooks (`pre-tool-use`, `post-tool-use`), and the **Stop hook now
-calls `runV2Cartridges`** so v2 sees `stop` events (additive — v1 Stop byte-identical when no v2 pack).
-
-- `src/runtime/loop/v2_supply.ts` — registry param + the state-keyed skill-eval host.
-- `src/runtime/hooks/{pre-tool-use,post-tool-use}.ts` — thread the registry.
-- `src/runtime/hooks/stop.ts` — additive `runV2Cartridges` merge (v2 sees stop).
-
 ## [0.5.542] - 2026-06-26
 
 ### Added — v2 gate states carry state-keyed skills(S) (backend pack correction, H2)

@@ -1,6 +1,5 @@
 /** FAC-CUT.5b.2 — runV2Cartridges: in-process v2 host supply (inert / gate-fires+persist / non-trigger / fail-open). */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { z } from 'zod';
 
 import { access, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -30,9 +29,6 @@ vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { buildGuardCtx, runV2Cartridges } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
-import { FunctionRegistry } from '../../functions/registry.js';
-import { registerVerdictFunctions } from '../../functions/verdict.js';
-import { ok } from '../result.js';
 import type { AuthorInputs } from './author_evidence.js';
 import type { CodeEvidenceDeps } from './code_evidence.js';
 import type { DeployEvidenceDeps } from './deploy_evidence.js';
@@ -81,35 +77,18 @@ const bashCall = (): Event => ({ kind: 'tool_call', tool: 'Bash', args: {} }) as
 
 const NOW = '2026-06-22T00:00:00.000Z';
 
-/** A real FunctionRegistry for the H3 skill host: `verdict` (block/surface/warn/pass) + a tiny
- *  `inject_test` primitive returning the inject_context shape the evaluator routes (evaluator.ts:251). */
-function buildTestRegistry(): FunctionRegistry {
-  const r = new FunctionRegistry();
-  registerVerdictFunctions(r);
-  r.register({
-    name: 'inject_test',
-    argSchema: z.object({ content: z.string() }).strict(),
-    durable: false,
-    memoizable: false,
-    execute: (args: { content: string }) =>
-      Promise.resolve(ok({ kind: 'inject_context' as const, content: args.content })),
-  });
-  return r;
-}
-const REG = buildTestRegistry();
-
 beforeEach(() => mockLoad.mockReset());
 
 describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
   it('INERT: no active v2 cartridges → ZERO decision (the nothing-breaks path)', async () => {
     mockLoad.mockResolvedValue([]);
-    const d = await runV2Cartridges('sess-inert', bashCall(), NOW, REG);
+    const d = await runV2Cartridges('sess-inert', bashCall(), NOW);
     expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] });
   });
 
   it('gate FAIL + block → exitCode 2 + message; no advance (state stays at the gate)', async () => {
     mockLoad.mockResolvedValue([gatePack('block')]);
-    const d = await runV2Cartridges('sess-block', bashCall(), NOW, REG);
+    const d = await runV2Cartridges('sess-block', bashCall(), NOW);
     expect(d.exitCode).toBe(2);
     expect(d.messages).toContain('resolve it');
     expect(d.injections).toEqual([]);
@@ -118,7 +97,7 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
 
   it('gate FAIL + warn → exitCode 0 + injection (nudge); advance persisted', async () => {
     mockLoad.mockResolvedValue([gatePack('warn')]);
-    const d = await runV2Cartridges('sess-warn', bashCall(), NOW, REG);
+    const d = await runV2Cartridges('sess-warn', bashCall(), NOW);
     expect(d.exitCode).toBe(0);
     expect(d.injections).toContain('resolve it');
     expect(d.messages).toEqual([]);
@@ -128,7 +107,7 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
   it('non-trigger event → ZERO, no state change (await-point)', async () => {
     mockLoad.mockResolvedValue([gatePack('block')]);
     const promptEvent = { kind: 'prompt_submit' } as unknown as Event;
-    const d = await runV2Cartridges('sess-nt', promptEvent, NOW, REG);
+    const d = await runV2Cartridges('sess-nt', promptEvent, NOW);
     expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] });
     expect(await readFsmStateRaw('sess-nt', 'observed-gate')).toBeNull();
   });
@@ -146,168 +125,8 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
       messages: {},
     } as unknown as LoadedPackV2;
     mockLoad.mockResolvedValue([broken]);
-    const d = await runV2Cartridges('sess-fo', bashCall(), NOW, REG);
+    const d = await runV2Cartridges('sess-fo', bashCall(), NOW);
     expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] }); // swallowed, fail-open
-  });
-});
-
-// ── H3 — the v2 skill host: evaluate the state-bound skills' rules in runV2Cartridges ───────────────────────
-
-/** A SkillOutput-shaped object (minimal fields the host reads: name, triggers, rules). */
-type FixtureSkill = LoadedPackV2['skills'][number];
-
-const verdictSkill = (name: string, level: 'block' | 'surface' | 'warn' | 'pass'): FixtureSkill =>
-  ({
-    name,
-    load: 'preload',
-    when_to_load: [],
-    requires: [],
-    unloads_when: [],
-    triggers: [{ kind: 'tool_call' }],
-    tools: [],
-    rules: [
-      {
-        id: `${name}-rule`,
-        kind: 'track_check',
-        requires: [],
-        process: [{ call: 'verdict', args: { level, message: `${name}:${level}` } }],
-      },
-    ],
-  }) as unknown as FixtureSkill;
-
-const injectSkill = (name: string, content: string): FixtureSkill =>
-  ({
-    name,
-    load: 'preload',
-    when_to_load: [],
-    requires: [],
-    unloads_when: [],
-    triggers: [{ kind: 'tool_call' }],
-    tools: [],
-    rules: [
-      {
-        id: `${name}-rule`,
-        kind: 'track_check',
-        requires: [],
-        process: [{ call: 'inject_test', args: { content } }],
-      },
-    ],
-  }) as unknown as FixtureSkill;
-
-const throwSkill = (name: string): FixtureSkill =>
-  ({
-    name,
-    load: 'preload',
-    when_to_load: [],
-    requires: [],
-    unloads_when: [],
-    triggers: [{ kind: 'tool_call' }],
-    tools: [],
-    rules: [
-      {
-        id: `${name}-rule`,
-        kind: 'track_check',
-        requires: [],
-        // `no_such_primitive` is unregistered → registry.call returns Err → evaluateProcess returns
-        // kind:'error'; the host no-ops on error (fail-open). (No throw escapes either way.)
-        process: [{ call: 'no_such_primitive', args: {} }],
-      },
-    ],
-  }) as unknown as FixtureSkill;
-
-/**
- * A pack whose initial GATE declares `skills:` (so onStateEntry binds them while resting) but whose `trigger`
- * is `post_tool_call` — a `tool_call` event does NOT fire the gate, so the actor RESTS at the gate and binds its
- * declared skills; the bound skills are then host-evaluated over the `tool_call` event. `loaded.skills` carries
- * the fixture skills.
- */
-const skillHostPack = (declared: string[], skills: FixtureSkill[]): LoadedPackV2 => {
-  const base = load({
-    name: 'skill-host',
-    version: '1.0.0',
-    scope: 'workflow',
-    guards: { never: 'tool == "Nope"' },
-    fsm: {
-      initial: 'g0',
-      states: {
-        g0: {
-          kind: 'gate',
-          guard: 'never',
-          trigger: ['post_tool_call'], // tool_call does NOT fire it → actor rests at g0 + binds g0.skills
-          skills: declared,
-          on_pass_emits: 'done',
-          on_fail: { action: 'block', message: 'gate-block' },
-        },
-        end: { kind: 'terminal', outcome: 'shipped' },
-      },
-      transitions: [{ from: 'g0', on: 'done', to: 'end' }],
-    },
-  });
-  return { ...base, skills };
-};
-
-describe('runV2Cartridges — H3 skill host', () => {
-  it('(a) a bound skill emitting verdict level:surface → injections includes the message (LENS path)', async () => {
-    mockLoad.mockResolvedValue([skillHostPack(['lens'], [verdictSkill('lens', 'surface')])]);
-    const d = await runV2Cartridges('sess-h3-surface', bashCall(), NOW, REG);
-    expect(d.exitCode).toBe(0);
-    expect(d.injections).toContain('lens:surface');
-  });
-
-  it('(b) a bound skill emitting verdict level:block on a matching trigger → exit 2 + message', async () => {
-    mockLoad.mockResolvedValue([skillHostPack(['guard'], [verdictSkill('guard', 'block')])]);
-    const d = await runV2Cartridges('sess-h3-block', bashCall(), NOW, REG);
-    expect(d.exitCode).toBe(2);
-    expect(d.messages).toContain('guard:block');
-  });
-
-  it('(c) a bound skill emitting inject_context → injections includes the content', async () => {
-    mockLoad.mockResolvedValue([skillHostPack(['ctx'], [injectSkill('ctx', 'extra-context')])]);
-    const d = await runV2Cartridges('sess-h3-inject', bashCall(), NOW, REG);
-    expect(d.injections).toContain('extra-context');
-  });
-
-  it('(d) a skill NOT in the bound set → never evaluated', async () => {
-    // gate declares only `bound`; `unbound` is loaded but not in skills(S) → its surface never fires.
-    mockLoad.mockResolvedValue([
-      skillHostPack(
-        ['bound'],
-        [verdictSkill('bound', 'surface'), verdictSkill('unbound', 'surface')],
-      ),
-    ]);
-    const d = await runV2Cartridges('sess-h3-notbound', bashCall(), NOW, REG);
-    expect(d.injections).toContain('bound:surface');
-    expect(d.injections).not.toContain('unbound:surface');
-  });
-
-  it('(e) a non-matching event.kind → skill skipped (trigger filter)', async () => {
-    // the skill triggers on tool_call only; drive a post_tool_call event → skill skipped (and the gate, which
-    // triggers on post_tool_call, fires + advances away — so no bound skills remain either).
-    mockLoad.mockResolvedValue([skillHostPack(['lens'], [verdictSkill('lens', 'surface')])]);
-    const postCall = {
-      kind: 'post_tool_call',
-      tool: 'Bash',
-      args: {},
-      exit_code: 0,
-    } as unknown as Event;
-    const d = await runV2Cartridges('sess-h3-kind', postCall, NOW, REG);
-    expect(d.injections).not.toContain('lens:surface');
-  });
-
-  it('(f) a throwing/erroring bound skill → fail-open ZERO (host no-ops on error)', async () => {
-    mockLoad.mockResolvedValue([skillHostPack(['boom'], [throwSkill('boom')])]);
-    const d = await runV2Cartridges('sess-h3-throw', bashCall(), NOW, REG);
-    expect(d.exitCode).toBe(0);
-    expect(d.messages).toEqual([]);
-    expect(d.injections).toEqual([]);
-  });
-
-  it('verdict level:pass → no-op (no message, no injection)', async () => {
-    mockLoad.mockResolvedValue([skillHostPack(['ok'], [verdictSkill('ok', 'pass')])]);
-    const d = await runV2Cartridges('sess-h3-pass', bashCall(), NOW, REG);
-    expect(d.exitCode).toBe(0);
-    expect(d.injections).toEqual([]);
-    expect(d.messages).toEqual([]);
   });
 });
 
@@ -365,7 +184,7 @@ async function writePreResearch(body: string): Promise<string> {
 describe('runV2Cartridges — T2.4 SCOPE gate', () => {
   it('non-advance event → is_advance false → guard short-circuits PASS (gate advances, no block)', async () => {
     mockLoad.mockResolvedValue([scopeGatePack()]);
-    const d = await runV2Cartridges('sess-scope-na', nonAdvance(), NOW, REG);
+    const d = await runV2Cartridges('sess-scope-na', nonAdvance(), NOW);
     expect(d.exitCode).toBe(0);
     expect(d.messages).toEqual([]);
     expect(await readFsmStateRaw('sess-scope-na', 'fsf-scope')).toBe('scoped'); // passed → advanced
@@ -374,7 +193,7 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
   it('NOT-READY advance (no captured ask, no depth) → BLOCK, no advance', async () => {
     mockLoad.mockResolvedValue([scopeGatePack()]);
     const p = await writePreResearch('1. Login [ask: "add login"]'); // off-ask (no captured ask) → drift
-    const d = await runV2Cartridges('sess-scope-block', advanceWrite(p), NOW, REG);
+    const d = await runV2Cartridges('sess-scope-block', advanceWrite(p), NOW);
     expect(d.exitCode).toBe(2);
     expect(d.messages).toContain('SCOPE: anchors∧depth≥3∧!open_question');
     expect(await readFsmStateRaw('sess-scope-block', 'fsf-scope')).toBeNull(); // blocked → stayed
@@ -386,7 +205,7 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
     await appendAsk(sid, 'add login screen');
     for (let i = 0; i < 3; i++) await appendTool(sid, 'Read'); // depth = 3
     const p = await writePreResearch('1. Login [ask: "add login screen"]');
-    const d = await runV2Cartridges(sid, advanceWrite(p), NOW, REG);
+    const d = await runV2Cartridges(sid, advanceWrite(p), NOW);
     expect(d.exitCode).toBe(0);
     expect(d.messages).toEqual([]);
     expect(await readFsmStateRaw(sid, 'fsf-scope')).toBe('scoped'); // ready → advanced
@@ -396,7 +215,7 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
     const sid = 'sess-scope-capture';
     mockLoad.mockResolvedValue([scopeGatePack()]);
     const promptEvent = { kind: 'prompt_submit', prompt: 'build the thing' } as unknown as Event;
-    await runV2Cartridges(sid, promptEvent, NOW, REG);
+    await runV2Cartridges(sid, promptEvent, NOW);
     expect((await readCapturedAsk(sid)).turns).toEqual(['build the thing']);
   });
 });
@@ -774,7 +593,7 @@ describe('runV2Cartridges — T2.2 per-task FSM key', () => {
     const sid = 'sess-t22-null';
     await clearActiveTask(sid);
     mockLoad.mockResolvedValue([gatePack('warn')]); // warn-gate advances g0→shipped on a non-Write
-    await runV2Cartridges(sid, bashCall(), NOW, REG);
+    await runV2Cartridges(sid, bashCall(), NOW);
     // Persisted to the NULL key (SCOPE/PLAN-shared) — readFsmStateRaw keys fsm-<pack>.
     expect(await readFsmStateRaw(sid, 'observed-gate')).toBe('shipped');
     // A per-task read sees a FRESH machine (the null state is invisible to a task key).
@@ -787,14 +606,14 @@ describe('runV2Cartridges — T2.2 per-task FSM key', () => {
 
     // Task A active → the cartridge resolves taskId 'A' and persists to fsm-observed-gate-A.
     await writeActiveTask(sid, { id: '1', subject: 'task A', started_at: NOW, taskId: 'A' });
-    await runV2Cartridges(sid, bashCall(), NOW, REG);
+    await runV2Cartridges(sid, bashCall(), NOW);
     expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'A')).toBe('shipped');
 
     // Switch to task B → a FRESH key (fsm-observed-gate-B) that STARTS at the initial state.
     await writeActiveTask(sid, { id: '2', subject: 'task B', started_at: NOW, taskId: 'B' });
     // Before B runs, B's key is unstarted (initial) — A's activation never seeded it.
     expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'B')).toBe('g0');
-    await runV2Cartridges(sid, bashCall(), NOW, REG);
+    await runV2Cartridges(sid, bashCall(), NOW);
     expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, 'B')).toBe('shipped');
 
     // CRITICAL: task A's FSM is UNTOUCHED by B's lifecycle — no cross-task rewind / leakage.
@@ -808,7 +627,7 @@ describe('runV2Cartridges — T2.2 per-task FSM key', () => {
     const sid = 'sess-t22-numeric';
     mockLoad.mockResolvedValue([gatePack('warn')]);
     await writeActiveTask(sid, { id: '42', subject: 'no track id', started_at: NOW }); // no taskId
-    await runV2Cartridges(sid, bashCall(), NOW, REG);
+    await runV2Cartridges(sid, bashCall(), NOW);
     // taskId resolves to the numeric id '42' → keyed fsm-observed-gate-42.
     expect(await readFsmState(sid, 'observed-gate', FSM_MACHINE, '42')).toBe('shipped');
     await clearActiveTask(sid);
@@ -912,7 +731,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       });
       mockLoad.mockResolvedValue([stageGatePack(stateName)]);
 
-      const d = await runV2Cartridges(sid, writeCall(), NOW, REG);
+      const d = await runV2Cartridges(sid, writeCall(), NOW);
       expect(d.exitCode).toBe(0);
 
       // 1) the dated file under the SESSION CWD docs/reports/ (NOT the real repo).
@@ -938,7 +757,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('code')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW, REG);
+    await runV2Cartridges(sid, writeCall(), NOW);
 
     // no docs/reports/ dir created at all (CODE not in the STAGE map).
     expect(await exists(join(root, 'docs', 'reports'))).toBe(false);
@@ -953,7 +772,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('scope')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW, REG);
+    await runV2Cartridges(sid, writeCall(), NOW);
 
     const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
     expect(body).toContain('## Goal alignment'); // absent goal → aligned:true (not a drift signal)
@@ -973,7 +792,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await appendAsk(sid, 'tweak the homepage banner colors'); // disjoint from the goal
     mockLoad.mockResolvedValue([stageGatePack('scope')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW, REG);
+    await runV2Cartridges(sid, writeCall(), NOW);
 
     const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
     expect(body).toContain('OFF the captured goal — destination drift');
@@ -985,7 +804,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('plan')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW, REG);
+    await runV2Cartridges(sid, writeCall(), NOW);
 
     const body = await readFile(join(root, 'docs', 'reports', 'plan-T-rep-2026-06-22.md'), 'utf8');
     expect(body).not.toContain('## Goal alignment');
