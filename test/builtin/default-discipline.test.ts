@@ -49,6 +49,7 @@ describe('builtin default-discipline pack', () => {
       'd9-guard',
       'default-discipline/guards',
       'inbound-greeter',
+      'pnpm-only',
       'session-connection-check',
       'workflow',
     ]);

@@ -1,0 +1,50 @@
+# pnpm-only — block `npm install` / `npm i` / `npm ci` / `npm add` IN A pnpm-MANAGED REPO (it corrupts the
+# pnpm node_modules). Mirrors the command-guard shape (match_command → verdict block, e.g. sole-author).
+#
+# Evidence (the authoritative rule): `packs/builtin/coding-flow/procedure.md:32` — "`pnpm` only — never
+# `npm i` (it corrupts node_modules)." That rule lived only in the coding-flow PROCEDURE (advisory) with NO
+# enforcing guard. Promoted here to a deterministic guard.
+#
+# Universally safe (why it can ship in the generic builtin, not just a personal pack): the block fires ONLY
+# when a `pnpm-lock.yaml` exists in the event cwd (i.e. a pnpm repo) — `path_exists` (`src/functions/path_exists.ts`).
+# A pure-npm project has no pnpm-lock.yaml → never blocked. `npm publish` is a DIFFERENT concern; `npm run` /
+# `npx` are legitimate and NOT matched. `pnpm install` is NOT matched (`\bnpm` has no word boundary inside "pnpm").
+#
+# Load: lazy; only on Bash events. match_command + a single-dir readdir; no LLM call.
+name: pnpm-only
+load: lazy
+when_to_load:
+  - tool_match: Bash
+triggers:
+  - kind: tool_call
+rules:
+  - id: no-npm-install-in-pnpm-repo
+    kind: track_check
+    process:
+      - call: match_command
+        # Anchor to a COMMAND position (start, or after a shell operator ; & |) so an actual `npm install`
+        # invocation matches but a string that merely MENTIONS "npm install" (e.g. a git commit message) does
+        # NOT. `[;&|]` covers `;`, `&&`/`&`, `||`/`|`.
+        as: hit
+        args:
+          pattern: '(?:^|[;&|])\s*npm\s+(?:install|i|ci|add)\b'
+          target: tool_args.command
+      # Only check for the lockfile when it IS an npm-install command (cheap short-circuit).
+      - call: path_exists
+        as: lock
+        if: hit
+        args:
+          dir: '.'
+          pattern: 'pnpm-lock.yaml'
+      - call: verdict
+        if: 'hit && lock.exists'
+        args:
+          level: block
+          message: >-
+            BLOCKED: `npm install`/`i`/`ci`/`add` in a pnpm-managed repo (a `pnpm-lock.yaml` is present) corrupts
+            node_modules — coding-flow/procedure.md: "pnpm only — never npm i". Use the pnpm equivalent:
+            `pnpm install`, `pnpm add <pkg>`, or `pnpm install --frozen-lockfile` (the `npm ci` equivalent).
+prose: |
+  pnpm-only: in a pnpm-managed repo (pnpm-lock.yaml present), `npm install`/`i`/`ci`/`add` corrupts
+  node_modules — use pnpm. Fires only in pnpm repos; pure-npm projects are unaffected. (`npm publish` is a
+  separate concern; `npm run`/`npx` are fine.)
