@@ -46,6 +46,7 @@ describe('builtin default-discipline pack', () => {
     // FC.1b: git/engine-vocab/versioning/honesty-ledger/phase-logging folders were
     // deleted; their rules are now the compiled `default-discipline/guards` skill.
     expect(skillNames).toEqual([
+      'claim-evidence-gate',
       'd9-guard',
       'default-discipline/guards',
       'inbound-greeter',
@@ -119,6 +120,54 @@ describe('builtin default-discipline pack', () => {
     // Plain prose with no claim phrase → no flag.
     const clean = await stop('Here is the updated file.', 'vbc-2');
     expect(clean.stderr).not.toMatch(/drift-flag/i);
+  });
+
+  it('claim-evidence-gate: unbacked claim at Stop BLOCKS the next non-evidence tool, evidence clears it', async () => {
+    const pack = await loadPack(resolve('packs/builtin/default-discipline'));
+    expect(pack.driftResponse?.per_rule['claim-evidence-block']).toBe('block_tool');
+    const registry = await buildRegistry({
+      backend: {
+        init: () => Promise.resolve(),
+        embed: () => Promise.resolve(null),
+        recall: () => Promise.resolve([]),
+        storeLesson: () => Promise.resolve(),
+        deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+      },
+    });
+    const sid = 'ceg-block';
+
+    // 1. Stop with a load-bearing claim + NO evidence tool this turn → flags it.
+    await dispatchEvent(
+      { kind: 'stop', assistantText: 'I recommend X; it is 100% the best solution.' } as never,
+      [pack],
+      registry,
+      sid,
+    );
+    // 2. The next NON-evidence tool (Edit) is DENIED.
+    const blocked = await dispatchEvent(
+      { kind: 'tool_call', tool: 'Edit', args: {} } as never,
+      [pack],
+      registry,
+      sid,
+    );
+    expect(blocked.exitCode).toBe(2);
+    expect(blocked.stderr).toMatch(/BLOCKED|evidence/i);
+    // 3. An EVIDENCE tool (Read) is allowed AND clears the flag.
+    const read = await dispatchEvent(
+      { kind: 'tool_call', tool: 'Read', args: {} } as never,
+      [pack],
+      registry,
+      sid,
+    );
+    expect(read.exitCode).toBe(0);
+    // 4. After evidence, the non-evidence tool proceeds (flag cleared).
+    const after = await dispatchEvent(
+      { kind: 'tool_call', tool: 'Edit', args: {} } as never,
+      [pack],
+      registry,
+      sid,
+    );
+    expect(after.exitCode).toBe(0);
   });
 
   it('declares workflow skill with a destination_check + track_check pair', async () => {

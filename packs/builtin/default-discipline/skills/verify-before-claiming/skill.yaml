@@ -60,6 +60,18 @@ rules:
             - mcp__opensquid__recall
             - mcp__opensquid__inspect_skill
             - mcp__opensquid__list_skills
+      # BLOCK arm (MUST precede the verdict — a verdict step is TERMINAL, so any
+      # step after it never runs). Flag the unbacked claim in session state so the
+      # tool_call gate (claim-evidence-gate skill) DENIES the next non-evidence
+      # action until evidence is gathered. The warn below is the same-turn signal;
+      # this flag is the next-turn prerequisite block. Cleared by the gate once an
+      # evidence tool runs.
+      - call: write_state
+        if: 'claim_phrases.matched.length > 0 && evidence_tools.count === 0'
+        args:
+          key: 'unbacked-claim'
+          value:
+            phrases: '{{claim_phrases.matched}}'
       - call: verdict
         if: 'claim_phrases.matched.length > 0 && evidence_tools.count === 0'
         args:

@@ -1,0 +1,45 @@
+# claim-evidence-gate — the tool_call BLOCK side of the evidence-or-flag prerequisite.
+#
+# Pairs with verify-before-claiming (stop). When the prior turn made a load-bearing
+# claim without gathering evidence, that skill flags it in session state. This skill
+# fires on every tool_call and, via the `claim_evidence_gate` primitive, BLOCKS the
+# next NON-evidence tool until the agent runs an evidence tool (Read/Grep/Bash/
+# recall/…) — which clears the flag. Evidence tools are never blocked (no deadlock).
+#
+# This is the true prerequisite block opensquid can enforce: a Stop hook can't block
+# (stop.ts:15-16), but a PreToolUse deny can — so the claim is detected at Stop and
+# enforced at the next tool_call (state-bridge, mirroring the request_type pattern).
+#
+# Policy: block_tool (drift_response.yaml) — deny THIS action, not halt the task.
+name: claim-evidence-gate
+load: preload
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules:
+  - id: claim-evidence-block
+    kind: track_check
+    process:
+      - call: claim_evidence_gate
+        as: gate
+        args:
+          evidence_tools:
+            - Bash
+            - Read
+            - Grep
+            - Glob
+            - Agent
+            - Task
+            - mcp__opensquid__recall
+            - mcp__opensquid__inspect_skill
+            - mcp__opensquid__list_skills
+      - call: verdict
+        if: 'gate.blocked'
+        args:
+          level: block
+          message: 'BLOCKED: your prior turn made a load-bearing claim without gathering evidence ({{gate.phrases}}). Run a Read/Grep/Bash/recall to verify it (evidence tools are allowed), or retract the claim, before this action. CHARTER principle 1 (evidence-or-flag).'
+prose: |
+  The enforcement half of the evidence-or-flag prerequisite. verify-before-claiming
+  (stop) flags an unbacked claim; this gate (tool_call) denies the next non-evidence
+  action until an evidence tool clears the flag. Evidence tools always proceed, so
+  the agent can never deadlock — it unsticks by gathering evidence.

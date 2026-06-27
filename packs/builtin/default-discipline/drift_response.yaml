@@ -53,3 +53,7 @@ per_rule:
   # verify-before-claiming — evidence-or-flag prerequisite. Warn, never halt:
   # a Stop-event flag, not a pre-emission block (bare skill rule id).
   claim-without-evidence: warn
+
+  # claim-evidence-gate — the tool_call BLOCK arm of the prerequisite. Deny THIS
+  # action (block_tool) until evidence is gathered; not a whole-task halt.
+  claim-evidence-block: block_tool
