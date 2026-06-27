@@ -23,7 +23,8 @@ import { Command } from 'commander';
 import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
-import { registerYoloCli } from './cli/yolo.js';
+import { registerYoloCli, consumeYoloFlags, YOLO_ON_MSG, YOLO_OFF_MSG } from './cli/yolo.js';
+import { setYoloMarker } from './runtime/guard/yolo.js';
 import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { resolveBackendConfig } from './rag/config.js';
 import { fastembedEmbedder } from './rag/embedders/fastembed.js';
@@ -505,8 +506,21 @@ function runCli(): void {
       process.stdout.write(`handover doc: ${result.docPath}\n`);
     });
 
-  program.parseAsync(process.argv).catch((err: unknown) => {
+  // YOLO flag is parsed + stripped PRE-commander so it chains in any position (`opensquid --yolo <cmd>`,
+  // `opensquid <cmd> --yolo`) and supports bare `--yolo` (ON) plus explicit `--yolo on|off` / `--no-yolo`.
+  const { rest, decision } = consumeYoloFlags(process.argv);
+  const onFail = (err: unknown): never => {
     process.stderr.write(`opensquid: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
-  });
+  };
+  const applied =
+    decision === null
+      ? Promise.resolve(false)
+      : setYoloMarker(decision).then(() => {
+          process.stdout.write((decision ? YOLO_ON_MSG : YOLO_OFF_MSG) + '\n');
+          return rest.length <= 2; // only the flag, no command → nothing left to run
+        });
+  applied
+    .then((done) => (done ? undefined : program.parseAsync(rest).then(() => undefined)))
+    .catch(onFail);
 }
