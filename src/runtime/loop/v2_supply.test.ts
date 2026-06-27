@@ -740,6 +740,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       const body = await readFile(reportPath, 'utf8');
       expect(body).toContain(`🦑 Phase report — ${stageUpper} complete · T-rep ·`);
       expect(body).toContain('Summary:');
+      expect(body).toContain('Evidence:'); // the gate predicates that backed the phase
       expect(body).toContain('Next →');
 
       // 2) the memory mirror — a pending lesson whose content is the report body.

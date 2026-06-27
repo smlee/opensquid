@@ -35,6 +35,8 @@ describe('onPhasesComplete (T2.9 loop driver)', () => {
     expect(body).toContain('[x] pre_research');
     expect(body).toContain('[x] fix');
     expect(body).toContain('Next → deploy:');
+    // the gate-evidence line (the CODE predicates that passed)
+    expect(body).toContain('Evidence: phases_complete ✓ · readiness_ran ✓ · deprecated_clean ✓');
     // CODE report carries NO goal line (only SCOPE does — T2.10).
     expect(body).not.toContain('Goal:');
   });

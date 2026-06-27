@@ -65,6 +65,12 @@ export async function onPhasesComplete(
       summary: 'all 7 coding phases logged + readiness surfacers ran',
       nextDirective: 'deploy',
       phases: CODE_PHASES.map((name) => ({ name, done: true })),
+      // At phases_complete the CODE gate (phases_complete ∧ readiness_ran ∧ deprecated_clean) has passed.
+      evidence: [
+        { label: 'phases_complete', ok: true },
+        { label: 'readiness_ran', ok: true },
+        { label: 'deprecated_clean', ok: true },
+      ],
     },
     iso,
   );

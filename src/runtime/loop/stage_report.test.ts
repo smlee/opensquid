@@ -53,6 +53,41 @@ describe('renderStageReport (pure, standardized format)', () => {
     expect(body).toContain('Next → deploy: verify deploy capability, then the human-accept gate');
   });
 
+  it('renders the Evidence line — the deterministic gate predicates that backed the phase', () => {
+    const { body } = renderStageReport(
+      {
+        stage: 'SCOPE',
+        taskId: 'T',
+        summary: 's',
+        nextDirective: 'plan',
+        evidence: [
+          { label: 'anchors_ok', ok: true },
+          { label: 'depth 4≥3', ok: true },
+          { label: 'no open question', ok: true },
+        ],
+      },
+      ISO,
+    );
+    expect(body).toContain('Evidence: anchors_ok ✓ · depth 4≥3 ✓ · no open question ✓');
+  });
+
+  it('marks a failed predicate with ✗', () => {
+    const { body } = renderStageReport(
+      {
+        stage: 'PLAN',
+        taskId: 'T',
+        summary: 's',
+        nextDirective: 'author',
+        evidence: [
+          { label: 'acyclic', ok: true },
+          { label: 'complete', ok: false },
+        ],
+      },
+      ISO,
+    );
+    expect(body).toContain('acyclic ✓ · complete ✗');
+  });
+
   it('an unchecked phase renders an empty box', () => {
     const { body } = renderStageReport(
       {

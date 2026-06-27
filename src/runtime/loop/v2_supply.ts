@@ -36,6 +36,39 @@ import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routin
  * channels config / no umbrella for this cwd / no daemon running → silently skip (a report must never break
  * the hook, and chat is optional). The daemon resolves `project:telegram` to the cwd-umbrella's channel.
  */
+/**
+ * T2.12-evidence — the deterministic gate predicates that backed a stage, read from the just-evaluated guard
+ * ctx (flat dotted keys). Rendered as the report's `Evidence:` line so a phase report is a readable proof.
+ * The phase already passed (the transition fired), so these are the checks that made it pass.
+ */
+function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string; ok: boolean }[] {
+  const isTrue = (k: string): boolean => ctx.get(k) === true;
+  switch (from) {
+    case 'scope': {
+      const depth = Number(ctx.get('scope.depth') ?? 0);
+      return [
+        { label: 'anchors_ok', ok: isTrue('scope.anchors_ok') },
+        { label: `depth ${depth}≥3`, ok: depth >= 3 },
+        { label: 'no open question', ok: ctx.get('scope.open_question') === false },
+      ];
+    }
+    case 'plan':
+      return [
+        { label: 'acyclic', ok: isTrue('plan.acyclic') },
+        { label: 'complete', ok: isTrue('plan.complete') },
+      ];
+    case 'author':
+      return [
+        { label: 'coverage_complete', ok: isTrue('author.coverage_complete') },
+        { label: 'real_code', ok: isTrue('author.real_code') },
+      ];
+    case 'deploy':
+      return [{ label: 'capability_ok', ok: isTrue('deploy.capability_ok') }];
+    default:
+      return [];
+  }
+}
+
 async function surfaceReportToChat(cwd: string, body: string): Promise<void> {
   try {
     const cfg = await loadChannelsConfig().catch(() => null);
@@ -279,13 +312,14 @@ export async function runV2Cartridges(
       // task A's FSM ([[coding-flow-task-start-reset-trap]]). The persist below uses the SAME taskId.
       const taskId = await readActiveTaskId(sessionId);
       actor.state.current = await readFsmState(sessionId, name, actor.fsm, taskId);
+      const ctx = await buildGuardCtx(event, sessionId, actor.state.current);
       const env: Envelope = {
         seq: 0,
         from: `pack:${name}`,
         to: `pack:${name}`,
         kind: event.kind,
         // R-AUDIT-CTX: phase = the cartridge's current FSM state (pre-receive); verdicts read fail-open.
-        payload: { ctx: await buildGuardCtx(event, sessionId, actor.state.current) },
+        payload: { ctx },
         ts: Date.parse(now),
       };
       // SKILL.1 (R-SKILLS-PER-STATE): one runtime per cartridge; `onStateLeave` on each transition, then bind
@@ -324,6 +358,8 @@ export async function runV2Cartridges(
                   taskId: taskId ?? 'no-active-task',
                   summary: `${p.from} complete`,
                   nextDirective: p.to,
+                  // T2.12-evidence — the deterministic gate predicates that backed this phase.
+                  evidence: stageEvidence(ctx, p.from),
                   // T2.10 — only the SCOPE stage carries the goal-alignment line (`exactOptionalPropertyTypes`:
                   // the key is present ONLY when defined, never an explicit `undefined`).
                   ...(p.from === 'scope'

@@ -56,6 +56,12 @@ export interface StageReport {
   goalAligned?: boolean;
   /** CODE-stage step chart: which of the 7 coding phases ran. Omitted → no Phases section. */
   phases?: readonly { name: string; done: boolean }[];
+  /**
+   * The deterministic gate predicates that gated this phase (the evidence the transition passed) — e.g.
+   * `[{label:'anchors_ok', ok:true}, …]`. Rendered as the `Evidence:` line so the report is a readable
+   * proof: a phase cannot advance unless these are true, and this shows WHICH checks backed the step.
+   */
+  evidence?: readonly { label: string; ok: boolean }[];
 }
 
 /** Render the standardized report body + its dated file path. Pure (no `Date.now()`). */
@@ -63,6 +69,14 @@ export function renderStageReport(r: StageReport, iso: string): { path: string; 
   const date = iso.slice(0, 10);
   const lines: string[] = [`🦑 Phase report — ${r.stage} complete · ${r.taskId} · ${date}`, ''];
   lines.push(`Summary: ${r.summary}`, '');
+
+  // Evidence line — the deterministic gate predicates that backed this phase (how you know it passed).
+  if (r.evidence !== undefined && r.evidence.length > 0) {
+    lines.push(
+      `Evidence: ${r.evidence.map((e) => `${e.label} ${e.ok ? '✓' : '✗'}`).join(' · ')}`,
+      '',
+    );
+  }
 
   // CODE (or any stage that supplies `phases`) renders the step chart — the long, stand-out report.
   if (r.phases !== undefined && r.phases.length > 0) {
