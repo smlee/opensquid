@@ -26,28 +26,37 @@ import { Guard } from './manifest.js';
 export const PackageManager = z.enum(['pnpm', 'npm', 'yarn', 'bun']);
 export type PackageManager = z.infer<typeof PackageManager>;
 
-export const ProjectContextFrontmatter = z
-  .object({
-    /**
-     * Optional shorthand: declare the project's package manager and opensquid
-     * blocks every OTHER manager's install/add verbs. Convenience for the common
-     * case; equivalent to writing the same entries under `forbid`.
-     */
-    package_manager: PackageManager.optional(),
-    /**
-     * The approachable enforcement surface: command strings to block, e.g.
-     * `["npm install", "yarn add", "git push --force"]`. Each is parsed to a
-     * structural `command_invokes` guard (program + first subcommand) — a prose
-     * mention never false-fires. For conditions a bare command can't express,
-     * use `rules`.
-     */
-    forbid: z.array(z.string().min(1)).optional(),
-    /**
-     * The power surface: raw `Guard` objects (the same shape builtin packs use —
-     * `{ name, detect, when, level, message, … }`), compiled verbatim by
-     * `compileGuards`. For authors who need conditions beyond a flat command.
-     */
-    rules: z.array(Guard).optional(),
-  })
-  .strict();
+const shape = {
+  /**
+   * Optional shorthand: declare the project's package manager and opensquid
+   * blocks every OTHER manager's install/add verbs. Convenience for the common
+   * case; equivalent to writing the same entries under `forbid`.
+   */
+  package_manager: PackageManager.optional(),
+  /**
+   * The approachable enforcement surface: command strings to block, e.g.
+   * `["npm install", "yarn add", "git push --force"]`. Each is parsed to a
+   * structural `command_invokes` guard (program + first subcommand) — a prose
+   * mention never false-fires. For conditions a bare command can't express,
+   * use `rules`.
+   */
+  forbid: z.array(z.string().min(1)).optional(),
+  /**
+   * The power surface: raw `Guard` objects (the same shape builtin packs use —
+   * `{ name, detect, when, level, message, … }`), compiled verbatim by
+   * `compileGuards`. For authors who need conditions beyond a flat command.
+   */
+  rules: z.array(Guard).optional(),
+} as const;
+
+export const ProjectContextFrontmatter = z.object(shape).strict();
 export type ProjectContextFrontmatter = z.infer<typeof ProjectContextFrontmatter>;
+
+/**
+ * Loader-side LENIENT variant: strips unknown keys (zod's default object
+ * behavior) instead of rejecting them. The loader parses with this + warns about
+ * what it dropped, so a single typo'd key never throws into the fail-open hook
+ * (`pre-tool-use.ts` main().catch → exit 0) and silently disables the discipline.
+ * Authoring/tests use the strict variant above to catch typos loudly.
+ */
+export const ProjectContextFrontmatterLenient = z.object(shape);

@@ -27,7 +27,11 @@ import type { Pack } from '../runtime/types.js';
 
 import { compileGuards } from './guards_compiler.js';
 import type { Guard } from './schemas/manifest.js';
-import { ProjectContextFrontmatter, type PackageManager } from './schemas/project_context.js';
+import {
+  ProjectContextFrontmatter,
+  ProjectContextFrontmatterLenient,
+  type PackageManager,
+} from './schemas/project_context.js';
 import type { SkillType } from './schemas/index.js';
 
 const CONTEXT_FILE = 'context.md';
@@ -152,34 +156,61 @@ function buildProseSkill(prose: string): SkillType {
   };
 }
 
+/** Surface a non-fatal context.md problem to stderr (the hook's warn channel). */
+function warn(message: string): void {
+  process.stderr.write(`opensquid: ${message}\n`);
+}
+
 /**
  * Load the project's `context.md` as a synthetic Pack, or `null` when there is no
- * project scope / no file. Throws on malformed frontmatter or a guard-compile
- * error (fail loud — a typo'd setting must surface).
+ * project scope / no file / nothing usable.
+ *
+ * RESILIENT BY DESIGN — it NEVER throws on a user `context.md`. The pre-tool-use
+ * hook is fail-open (`main().catch → exit 0`), so a throw here would silently
+ * disable EVERY guard for that event, not just this file. So a malformed file
+ * degrades + warns instead: an unknown/typo'd key is stripped (valid keys still
+ * load), unparseable YAML or a bad value drops the frontmatter to nothing (the
+ * prose body still loads), and a guard-compile error skips the guards (prose
+ * still loads). A user mistake can warn — it must never switch the discipline off.
  */
 export async function loadProjectContextPack(cwd: string): Promise<Pack | null> {
   const root = await resolveProjectScopeRoot(cwd);
   if (root === null) return null;
+  const file = join(root, CONTEXT_FILE);
 
   let raw: string;
   try {
-    raw = await readFile(join(root, CONTEXT_FILE), 'utf8');
+    raw = await readFile(file, 'utf8');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null; // no file → no-op
-    throw e;
+    warn(`could not read ${file} (${String(e)}) — skipping project context`);
+    return null;
   }
 
   const { frontmatter, body } = splitFrontmatter(raw);
   let fm: ProjectContextFrontmatter = {};
   if (frontmatter !== null && frontmatter.trim().length > 0) {
-    const parsed = yamlParse(frontmatter) as unknown;
-    const result = ProjectContextFrontmatter.safeParse(parsed ?? {});
-    if (!result.success) {
-      throw new Error(
-        `opensquid: malformed ${join(root, CONTEXT_FILE)} frontmatter: ${result.error.message}`,
-      );
+    let parsed: unknown;
+    try {
+      parsed = yamlParse(frontmatter);
+    } catch (e) {
+      warn(`${file}: unparseable YAML frontmatter — ignoring it (${String(e)})`);
+      parsed = undefined;
     }
-    fm = result.data;
+    if (parsed !== undefined && parsed !== null) {
+      const strict = ProjectContextFrontmatter.safeParse(parsed);
+      if (strict.success) {
+        fm = strict.data;
+      } else {
+        // Degrade: strip unknown keys + keep what validates; a bad VALUE drops all.
+        const lenient = ProjectContextFrontmatterLenient.safeParse(parsed);
+        fm = lenient.success ? lenient.data : {};
+        warn(
+          `${file}: ${strict.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}` +
+            ` — ignoring the invalid setting(s), loading the rest`,
+        );
+      }
+    }
   }
 
   const skills: SkillType[] = [];
@@ -189,9 +220,10 @@ export async function loadProjectContextPack(cwd: string): Promise<Pack | null> 
     const compiled = compileGuards(PACK_NAME, guards);
     if (!compiled.ok) {
       const details = compiled.errors.map((x) => `${x.guardName}: ${x.message}`).join('; ');
-      throw new Error(`opensquid: ${join(root, CONTEXT_FILE)} guard compile failed: ${details}`);
+      warn(`${file}: guard compile failed (${details}) — skipping rules, keeping context`);
+    } else if (compiled.skill.rules.length > 0) {
+      skills.push(compiled.skill);
     }
-    if (compiled.skill.rules.length > 0) skills.push(compiled.skill);
   }
 
   if (body.trim().length > 0) skills.push(buildProseSkill(body.trim()));

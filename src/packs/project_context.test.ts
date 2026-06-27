@@ -170,9 +170,26 @@ describe('loadProjectContextPack', () => {
     expect(pack?.skills.map((s) => s.name)).toEqual(['project-context/guards']);
   });
 
-  it('throws (fail loud) on an unknown frontmatter key', async () => {
-    await write('---\nnot_a_setting: true\n---\nprose');
-    await expect(loadProjectContextPack(dir)).rejects.toThrow(/malformed|frontmatter/i);
+  it('RESILIENT: an unknown key is stripped, valid settings still load (never throws)', async () => {
+    // a typo'd key alongside a valid forbid — must NOT throw (fail-open hook would disable all guards)
+    await write('---\nnot_a_setting: true\nforbid:\n  - curl\n---\nprose');
+    const pack = await loadProjectContextPack(dir);
+    expect(pack?.skills.map((s) => s.name).sort()).toEqual([
+      'project-context/context',
+      'project-context/guards',
+    ]); // forbid survived, body survived
+  });
+
+  it('RESILIENT: unparseable YAML frontmatter degrades to body-only (never throws)', async () => {
+    await write('---\n:::not yaml:::\n  - [\n---\nstill have prose');
+    const pack = await loadProjectContextPack(dir);
+    expect(pack?.skills.map((s) => s.name)).toEqual(['project-context/context']);
+  });
+
+  it('RESILIENT: a bad setting VALUE drops frontmatter but keeps the prose (never throws)', async () => {
+    await write('---\npackage_manager: cargo\n---\nproject notes'); // cargo not in the enum
+    const pack = await loadProjectContextPack(dir);
+    expect(pack?.skills.map((s) => s.name)).toEqual(['project-context/context']);
   });
 });
 
