@@ -12,7 +12,7 @@
  * iteration + dry-run gating) are isolated.
  */
 
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -157,5 +157,63 @@ describe('runHooksWizard — write mode', () => {
       join(projRoot, '.claude', 'settings.json'),
     ]);
     expect(stderrBuf).toBe('');
+  });
+});
+
+describe('runHooksWizard — project context.md (T-project-context)', () => {
+  // Common deps: stub the settings writer + silence the agents step (no harnesses).
+  const baseDeps = (cwd: string, home: string) => ({
+    writer: (p: string) =>
+      Promise.resolve({ added: 4, replaced: 0, preserved: 0, backupPath: `${p}.bak` }),
+    cwd: () => cwd,
+    home: () => home,
+    hasBinary: () => Promise.resolve(false),
+    stdout: recordStdout,
+    stderr: recordStderr,
+  });
+  const readCtx = (projRoot: string) =>
+    readFile(join(projRoot, '.opensquid', 'context.md'), 'utf8');
+
+  it('writes context.md with the detected package manager', async () => {
+    const projRoot = join(root, 'proj');
+    await mkdir(join(projRoot, '.opensquid'), { recursive: true });
+    await writeFile(join(projRoot, 'pnpm-lock.yaml'), '', 'utf8');
+
+    await runHooksWizard({}, baseDeps(projRoot, join(root, 'home')));
+
+    expect(await readCtx(projRoot)).toMatch(/package_manager: pnpm/);
+    expect(stdoutBuf).toContain('context: created');
+  });
+
+  it('skips context.md when no package manager is detected (no lockfile)', async () => {
+    const projRoot = join(root, 'proj');
+    await mkdir(join(projRoot, '.opensquid'), { recursive: true });
+
+    await runHooksWizard({}, baseDeps(projRoot, join(root, 'home')));
+
+    expect(stdoutBuf).toContain('no package manager detected');
+    await expect(readCtx(projRoot)).rejects.toThrow(); // file not written
+  });
+
+  it('--no-context opt-out skips the write even with a lockfile', async () => {
+    const projRoot = join(root, 'proj');
+    await mkdir(join(projRoot, '.opensquid'), { recursive: true });
+    await writeFile(join(projRoot, 'pnpm-lock.yaml'), '', 'utf8');
+
+    await runHooksWizard({ context: false }, baseDeps(projRoot, join(root, 'home')));
+
+    await expect(readCtx(projRoot)).rejects.toThrow();
+    expect(stdoutBuf).not.toContain('context:');
+  });
+
+  it('dry-run previews the write without touching disk', async () => {
+    const projRoot = join(root, 'proj');
+    await mkdir(join(projRoot, '.opensquid'), { recursive: true });
+    await writeFile(join(projRoot, 'pnpm-lock.yaml'), '', 'utf8');
+
+    await runHooksWizard({ dryRun: true }, baseDeps(projRoot, join(root, 'home')));
+
+    expect(stdoutBuf).toMatch(/would write .*context\.md \(package_manager: pnpm/);
+    await expect(readCtx(projRoot)).rejects.toThrow();
   });
 });

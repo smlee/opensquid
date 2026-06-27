@@ -40,6 +40,8 @@ import {
 } from '../wizard/settings-writer.js';
 import { installPacksSkill } from '../wizard/skill-installer.js';
 import { hasBinaryOnPath, installAgentsContext } from '../wizard/install_agents_context.js';
+import { detectPackageManager } from '../wizard/package_manager_detect.js';
+import { writeProjectContext } from '../wizard/context_writer.js';
 
 import type { Command } from 'commander';
 
@@ -63,6 +65,8 @@ export interface HooksCliFlags {
   userOnly?: boolean;
   /** commander maps `--no-agents` → `agents === false` (GAC.4 opt-out). */
   agents?: boolean;
+  /** commander maps `--no-context` → `context === false` (T-project-context opt-out). */
+  context?: boolean;
 }
 
 interface ResolvedDeps {
@@ -143,6 +147,14 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
       r.out(
         '  would install the agent-context baseline into detected harnesses (opt-out: --no-agents)\n',
       );
+    if (flags.context !== false && flags.userOnly !== true) {
+      const scopeRoot = await resolveProjectScopeRoot(r.cwd());
+      const pm = scopeRoot === null ? null : await detectPackageManager(dirname(scopeRoot));
+      if (scopeRoot !== null && pm !== null)
+        r.out(
+          `  would write ${join(scopeRoot, 'context.md')} (package_manager: ${pm}; opt-out: --no-context)\n`,
+        );
+    }
     return;
   }
 
@@ -174,6 +186,23 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
       for (const m of rep.manual) r.out(`    [${m.harness}]\n${m.block}\n`);
     }
   }
+
+  // T-project-context — scaffold <project>/.opensquid/context.md from the detected
+  // package manager (opt-out: --no-context). Project-scope only: no .opensquid
+  // ancestor → nothing to seed. The body is preserved on re-run (managed
+  // frontmatter only). This is the sanctioned write path the agent cannot take.
+  if (flags.context !== false && flags.userOnly !== true) {
+    const scopeRoot = await resolveProjectScopeRoot(r.cwd());
+    if (scopeRoot !== null) {
+      const pm = await detectPackageManager(dirname(scopeRoot));
+      if (pm === null) {
+        r.out('  context: no package manager detected (no lockfile) — skipped context.md\n');
+      } else {
+        const result = await writeProjectContext(scopeRoot, { packageManager: pm });
+        r.out(`  context: ${result} ${join(scopeRoot, 'context.md')} (package_manager: ${pm})\n`);
+      }
+    }
+  }
 }
 
 /**
@@ -191,6 +220,10 @@ export function registerSetupWizard(setup: Command, deps: HooksCliDeps = {}): Co
     .option(
       '--no-agents',
       'skip installing the global agent-context baseline into detected harnesses',
+    )
+    .option(
+      '--no-context',
+      'skip scaffolding <project>/.opensquid/context.md from the detected package manager',
     )
     .action(async (flags: HooksCliFlags) => {
       await runHooksWizard(flags, deps);
