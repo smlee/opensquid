@@ -7,6 +7,19 @@ This project follows [SemVer 2.0.0](https://semver.org/) starting at 1.0.
 
 ---
 
+## [0.5.545] - 2026-06-26
+
+### Added — e2e proof that v2 > v1 (backend pack correction, H7a)
+
+`fullstack_flow.e2e.test.ts` drives the real `runV2Cartridges` with the real `fullstack-flow`
+pack active (FSM rested at the `code` gate) and proves, live: a post-scope `AskUserQuestion`
+tool_call is blocked (exit 2), a post-scope `stop` event is blocked (exit 2), a code-stage
+tool_call surfaces the engineering lenses (`injections > 0`), and v1 is byte-identical when no
+v2 pack is active (the ZERO decision). Combined with the already-deterministic gates, this is
+the v2 > v1 floor. Test-only; the live `active.json` flip (turn-on) is the remaining user-gated step.
+
+- `src/runtime/loop/fullstack_flow.e2e.test.ts` (NEW).
+
 ## [0.5.544] - 2026-06-26
 
 ### Changed — fullstack-flow pause-guard split + per-state backend skill bindings (H5+H6)
