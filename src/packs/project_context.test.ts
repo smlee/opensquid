@@ -19,11 +19,7 @@ import { buildRegistry } from '../runtime/bootstrap.js';
 import type { Event } from '../runtime/event.js';
 import { dispatchEvent } from '../runtime/hooks/dispatch.js';
 
-import {
-  loadProjectContextPack,
-  settingsToGuards,
-  splitFrontmatter,
-} from './project_context.js';
+import { loadProjectContextPack, settingsToGuards, splitFrontmatter } from './project_context.js';
 
 const NOOP_BACKEND = {
   init: () => Promise.resolve(),
@@ -42,7 +38,8 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const write = (content: string) => writeFile(join(dir, '.opensquid', 'context.md'), content, 'utf8');
+const write = (content: string) =>
+  writeFile(join(dir, '.opensquid', 'context.md'), content, 'utf8');
 
 describe('splitFrontmatter', () => {
   it('splits leading YAML frontmatter from the body', () => {
@@ -137,13 +134,19 @@ describe('loadProjectContextPack — e2e via dispatchEvent', () => {
 
     expect((await dispatchEvent(bash('npm install'), [pack!], registry, 'pc-1')).exitCode).toBe(2);
     expect((await dispatchEvent(bash('npm i lodash'), [pack!], registry, 'pc-2')).exitCode).toBe(2);
-    expect((await dispatchEvent(bash('yarn add react'), [pack!], registry, 'pc-3')).exitCode).toBe(2);
+    expect((await dispatchEvent(bash('yarn add react'), [pack!], registry, 'pc-3')).exitCode).toBe(
+      2,
+    );
     expect((await dispatchEvent(bash('bun add zod'), [pack!], registry, 'pc-4')).exitCode).toBe(2);
     // pnpm itself is allowed
     expect((await dispatchEvent(bash('pnpm install'), [pack!], registry, 'pc-5')).exitCode).toBe(0);
     // a prose MENTION does not false-fire (structural command_invokes)
-    expect((await dispatchEvent(bash('echo "run npm install"'), [pack!], registry, 'pc-6')).exitCode).toBe(0);
-    expect((await dispatchEvent(bash('grep "npm i" notes.md'), [pack!], registry, 'pc-7')).exitCode).toBe(0);
+    expect(
+      (await dispatchEvent(bash('echo "run npm install"'), [pack!], registry, 'pc-6')).exitCode,
+    ).toBe(0);
+    expect(
+      (await dispatchEvent(bash('grep "npm i" notes.md'), [pack!], registry, 'pc-7')).exitCode,
+    ).toBe(0);
   });
 
   it('prose surfaces as inject_context on session_start + prompt_submit, not tool_call', async () => {
@@ -151,7 +154,12 @@ describe('loadProjectContextPack — e2e via dispatchEvent', () => {
     const pack = await loadProjectContextPack(dir);
     const registry = await buildRegistry({ backend: NOOP_BACKEND });
 
-    const ss = await dispatchEvent({ kind: 'session_start' } as unknown as Event, [pack!], registry, 'pc-ss');
+    const ss = await dispatchEvent(
+      { kind: 'session_start' } as unknown as Event,
+      [pack!],
+      registry,
+      'pc-ss',
+    );
     expect(ss.contextInjections.join('\n')).toMatch(/deploy script/);
 
     const ups = await dispatchEvent(
