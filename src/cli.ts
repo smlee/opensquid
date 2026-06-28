@@ -54,6 +54,7 @@ import { registerPermissions } from './setup/cli/permissions.js';
 import { registerRalph } from './setup/cli/ralph.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
+import { registerStatusCli } from './setup/cli/status.js';
 import { registerTriggers } from './setup/cli/triggers.js';
 import { registerUpdate } from './setup/cli/update.js';
 import { registerWebhooks } from './setup/cli/webhooks.js';
@@ -239,6 +240,7 @@ function runCli(): void {
   // Registered via a sibling module to keep the verb tree's commander wiring
   // + libsql client lifecycle ownership out of `cli.ts`.
   registerTraceCommand(program);
+  registerStatusCli(program); // F5: `opensquid status` — inspect the live v2 discipline
 
   // CLI.1 — `opensquid triggers list|show|fire|enable|disable`. Unified view
   // of skill `triggers:` blocks across all installed packs + user-side
