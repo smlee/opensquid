@@ -95,6 +95,7 @@ import { autoDecompose } from './auto_decompose.js';
 import { buildCoveredBy } from './plan_audit.js';
 import { extractScope } from './scope_extract.js';
 import { gatherReadiness, recordReadiness, readinessResult } from './readiness.js';
+import { appendAcceptance, readAcceptance } from './acceptance.js';
 import { scopeEvidence } from './scope_evidence.js';
 import { isComplete, readPhaseState } from '../workflow_phases.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
@@ -118,11 +119,10 @@ export interface V2Decision {
 
 const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkills: [] };
 
-// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition. ALL FIVE
-// fire here, on the `code → deploy` transition for CODE included — the `loop_driver.onPhasesComplete` path the
-// spec earmarked for CODE was never wired (no live caller), so this is the single, consistent live emitter for
-// every phase. (If the autonomous run-group loop later wires loop_driver, CODE moves there to avoid a double
-// emit; until then CODE reports HERE so it actually fires.)
+// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition. SCOPE/PLAN/
+// AUTHOR/DEPLOY always emit here. CODE emits here too INTERACTIVELY, but in an autonomous lap
+// (OPENSQUID_AUTOMATION=1) the orchestrator's loop_driver.onPhasesComplete owns the CODE report — the emit site
+// below skips CODE under that env to avoid a double emit (T2.9 wiring).
 const STAGE: Record<string, Stage> = {
   scope: 'SCOPE',
   plan: 'PLAN',
@@ -475,6 +475,28 @@ export async function runV2Cartridges(
               }
             } catch (err) {
               process.stderr.write(`[v2-supply] auto-decompose failed (ignored): ${String(err)}\n`);
+            }
+          }
+          // T2.8 LIVE WIRING (the fix for "the FSM can't reach done"): on entering DEPLOY, create the durable
+          // "waiting for your OK" acceptance item so the `accept` decision has something to accept. Without this
+          // caller appendAcceptance never runs → deploy.accepted is always false → the accept decision loops to
+          // PLAN forever. IDEMPOTENT (one item per task, keyed by taskId) + FAIL-OPEN. The human-accept input is
+          // the `opensquid accept <taskId>` command (markAccepted); the start-up handoff surfaces waiting items.
+          if (p.to === 'deploy' && taskId !== null) {
+            try {
+              const existing = await readAcceptance(sessionId);
+              if (!existing.some((i) => i.id === taskId)) {
+                await appendAcceptance(sessionId, {
+                  id: taskId,
+                  taskId,
+                  status: 'waiting',
+                  addedAt: now,
+                });
+              }
+            } catch (err) {
+              process.stderr.write(
+                `[v2-supply] acceptance append failed (ignored): ${String(err)}\n`,
+              );
             }
           }
           onStateLeave(p.from, skillRuntime); // SKILL.1: unloaded on leave

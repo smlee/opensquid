@@ -25,6 +25,7 @@ import {
 import { pendingLessonsDir } from '../wedge/capture.js';
 import { appendPhase, REQUIRED_PHASES } from '../workflow_phases.js';
 import { readinessResult } from './readiness.js';
+import { appendAcceptance, readAcceptance } from './acceptance.js';
 import type { Event } from '../event.js';
 import type { Fsm } from '../fsm.js';
 
@@ -935,5 +936,56 @@ describe('runV2Cartridges — T2.7 readiness live wiring', () => {
     const dir = await repo('a.ts', 'export const x = 1;');
     await runV2Cartridges(s, postIn(dir), NOW);
     expect((await readinessResult(s, 'T-i')).ran).toBe(false);
+  });
+});
+
+describe('runV2Cartridges — T2.8 acceptance live wiring', () => {
+  // A pack whose gate transitions code → deploy (so the p.to === 'deploy' append fires).
+  const toDeployPack = (): LoadedPackV2 =>
+    load({
+      name: 'fsf-todeploy',
+      version: '1.0.0',
+      scope: 'workflow',
+      guards: { always: 'tool == "Write"' },
+      fsm: {
+        initial: 'code',
+        states: {
+          code: {
+            kind: 'gate',
+            guard: 'always',
+            trigger: ['tool_call'],
+            on_pass_emits: 'coded',
+            on_fail: { action: 'warn', message: 'n/a' },
+          },
+          deploy: { kind: 'terminal', outcome: 'shipped' },
+        },
+        transitions: [{ from: 'code', on: 'coded', to: 'deploy' }],
+      },
+    });
+  const writeC = (): Event =>
+    ({ kind: 'tool_call', tool: 'Write', args: { file_path: '/tmp/x.ts' } }) as unknown as Event;
+
+  it('entering DEPLOY creates the durable "waiting for your OK" acceptance item', async () => {
+    const sid = 'sess-accept-create';
+    mockLoad.mockResolvedValue([toDeployPack()]);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-acc' });
+    await runV2Cartridges(sid, writeC(), NOW); // code → deploy transition
+    const items = await readAcceptance(sid);
+    expect(items.some((i) => i.taskId === 'T-acc' && i.status === 'waiting')).toBe(true);
+  });
+
+  it('IDEMPOTENT: does not overwrite an already-accepted item back to waiting', async () => {
+    const sid = 'sess-accept-idem';
+    mockLoad.mockResolvedValue([toDeployPack()]);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-acc2' });
+    await appendAcceptance(sid, {
+      id: 'T-acc2',
+      taskId: 'T-acc2',
+      status: 'accepted',
+      addedAt: NOW,
+    });
+    await runV2Cartridges(sid, writeC(), NOW); // transition to deploy — must SKIP (item exists)
+    const item = (await readAcceptance(sid)).find((i) => i.id === 'T-acc2');
+    expect(item?.status).toBe('accepted'); // not clobbered back to waiting
   });
 });

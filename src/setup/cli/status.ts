@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { Command } from 'commander';
 
 import { disciplineStatus, formatDisciplineStatus } from '../../runtime/loop/discipline_status.js';
+import { markAccepted } from '../../runtime/loop/acceptance.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 
 /** Most-recently-modified session id under $OPENSQUID_HOME/sessions, or null when there are none. */
@@ -36,6 +37,22 @@ export async function latestSessionId(home: string = OPENSQUID_HOME()): Promise<
 }
 
 export function registerStatusCli(program: Command): Command {
+  // `opensquid accept <taskId>` — the DEPLOY human-accept touchpoint (T2.8). Marks the durable acceptance item
+  // accepted so `deploy.accepted` holds and the `accept` decision can reach `done` (instead of looping to PLAN).
+  program
+    .command('accept <taskId>')
+    .description('Accept a task waiting at the DEPLOY gate (the human-accept touchpoint, T2.8)')
+    .option('--session <id>', 'session id (default: the most recent session)')
+    .action(async (taskId: string, opts: { session?: string }) => {
+      const sessionId = opts.session ?? (await latestSessionId());
+      if (sessionId === undefined || sessionId === null) {
+        process.stdout.write('🦑 no opensquid sessions found.\n');
+        return;
+      }
+      await markAccepted(sessionId, taskId, new Date().toISOString());
+      process.stdout.write(`🦑 accepted ${taskId} — the DEPLOY gate can now reach done.\n`);
+    });
+
   return program
     .command('status')
     .description('Inspect the live v2 discipline: active task, FSM state, gate pass/fail, reports')
