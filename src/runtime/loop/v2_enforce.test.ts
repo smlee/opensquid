@@ -143,25 +143,36 @@ describe('FD5/FD6 — frontend pre-delivery gate (a commit BLOCKS on a staged CR
 
 describe('runToDoneStopBlock (AF.6/AF.7 — the run-to-done pause-gate)', () => {
   const NOW = '2026-06-27T00:00:00.000Z';
+  // F6: the signal is the PER-PROCESS env OPENSQUID_AUTOMATION=1 (a real lap), NOT the persistent flag-file.
+  const PRIOR_AUTO = process.env.OPENSQUID_AUTOMATION;
+  const setLap = (): void => {
+    process.env.OPENSQUID_AUTOMATION = '1';
+  };
+  afterEach(() => {
+    if (PRIOR_AUTO === undefined) delete process.env.OPENSQUID_AUTOMATION;
+    else process.env.OPENSQUID_AUTOMATION = PRIOR_AUTO;
+  });
 
-  it('BLOCKS turn-end in automation mode when the FSM is past SCOPE + not terminal', async () => {
+  it('BLOCKS turn-end in an autonomous lap when the FSM is past SCOPE + not terminal', async () => {
     const sid = 'sess-r2d-block';
-    await setAutomationFlag(sid);
+    setLap();
     await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
     await persistActorState(sid, 'fullstack-flow', 'plan', NOW, 'T-r');
     expect(await runToDoneStopBlock(sid)).toMatch(/run to done/i);
   });
 
-  it('ALLOWS turn-end in INTERACTIVE mode (no automation flag — never traps the human)', async () => {
+  it('ALLOWS turn-end in INTERACTIVE mode (no automation env — never traps the human)', async () => {
     const sid = 'sess-r2d-interactive';
+    delete process.env.OPENSQUID_AUTOMATION; // interactive: even with a stale flag-file, no per-process env
+    await setAutomationFlag(sid); // the persistent flag-file MUST NOT trigger the turn-end block (the F6 bug)
     await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
     await persistActorState(sid, 'fullstack-flow', 'plan', NOW, 'T-r');
     expect(await runToDoneStopBlock(sid)).toBeNull();
   });
 
-  it('ALLOWS turn-end at SCOPE (the interactive boundary) even in automation mode', async () => {
+  it('ALLOWS turn-end at SCOPE (the interactive boundary) even in an autonomous lap', async () => {
     const sid = 'sess-r2d-scope';
-    await setAutomationFlag(sid);
+    setLap();
     await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
     await persistActorState(sid, 'fullstack-flow', 'scope', NOW, 'T-r');
     expect(await runToDoneStopBlock(sid)).toBeNull();
@@ -169,7 +180,7 @@ describe('runToDoneStopBlock (AF.6/AF.7 — the run-to-done pause-gate)', () => 
 
   it('ALLOWS turn-end when there is no active task', async () => {
     const sid = 'sess-r2d-notask';
-    await setAutomationFlag(sid);
+    setLap();
     expect(await runToDoneStopBlock(sid)).toBeNull();
   });
 });

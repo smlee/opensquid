@@ -21,7 +21,6 @@
  */
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import type { Event } from '../types.js';
-import { isAutomationFlagSet } from '../automation_state.js';
 import { readFsmStateFile } from '../fsm_state.js';
 
 import { buildGuardCtx } from './v2_supply.js';
@@ -122,16 +121,20 @@ export async function enforceV2GatesPre(sessionId: string, event: Event): Promis
 /**
  * V2 — the run-to-done STOP gate (AF.6/AF.7 "past SCOPE there are no pauses; run to done").
  *
- * In AUTOMATION mode, if the active task's fullstack-flow FSM is PAST SCOPE and not terminal, return a reason
- * to BLOCK the turn-end (the caller emits `{decision:"block",reason}` so the autonomous lap CONTINUES to DEPLOY
+ * In a true autonomous LAP, if the active task's fullstack-flow FSM is PAST SCOPE and not terminal, return a
+ * reason to BLOCK the turn-end (the caller emits `{decision:"block",reason}` so the lap CONTINUES to DEPLOY
  * instead of pausing mid-run). Returns null to allow the stop.
  *
- * AUTOMATION-SCOPED on purpose: blocking turn-end in an INTERACTIVE session would trap the human (they could
- * never reply) — "it runs by itself" is the autonomous-run model. FAIL-OPEN: any error → allow the stop.
+ * F6 (T-v2-audit): the signal is the PER-PROCESS env `OPENSQUID_AUTOMATION=1`, NOT the persistent automation
+ * FLAG-FILE. The flag-file (`opensquid automation on`) bleeds across an entire session, so it would trap a HUMAN
+ * who later interacts (it blocked an AskUserQuestion before this fix). Only a genuine `opensquid loop` lap process
+ * carries the env (ralph.ts sets it; runOneShotCli propagates it to the lap + its hook bins), so keying the
+ * turn-end BLOCK on the env fires it ONLY in real autonomous laps and never traps an interactive session.
+ * FAIL-OPEN: any error → allow the stop.
  */
 export async function runToDoneStopBlock(sessionId: string): Promise<string | null> {
   try {
-    if (!(await isAutomationFlagSet(sessionId))) return null; // interactive: the human drives — never trap
+    if (process.env.OPENSQUID_AUTOMATION !== '1') return null; // interactive: the human drives — never trap
     const taskId = await defaultCodeEvidenceDeps.activeTaskId(sessionId);
     if (taskId === null) return null; // nothing in flight
     const state = (await readFsmStateFile(sessionId, 'fullstack-flow', taskId))?.state;

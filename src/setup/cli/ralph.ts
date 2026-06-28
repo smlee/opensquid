@@ -182,6 +182,11 @@ export function registerRalph(program: Command): Command {
         process.exitCode = 1;
         return;
       }
+      // F6 (T-v2-audit): mark THIS process as a true autonomous run. runOneShotCli spawns each lap with
+      // `...process.env`, so the lap's claude + its hook bins inherit OPENSQUID_AUTOMATION=1 — the per-process
+      // signal the run-to-done Stop gate keys off. (The persistent automation.flag bleeds across an interactive
+      // session and must NOT drive a turn-end BLOCK; only a genuine lap process carries this env.)
+      process.env.OPENSQUID_AUTOMATION = '1';
       const cfg = buildRalphConfig(file, {
         once: opts.once === true,
         ...(opts.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: Number(opts.maxBudgetUsd) }),
