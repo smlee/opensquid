@@ -16,10 +16,21 @@ prose: |
 rules:
   - id: accessibility-lens
     process:
+      # FD2 — load the primary-sourced WCAG 2.2 + APG rules so the agent can query the full, cited set
+      # (knowledge/accessibility.json) for source URLs + thresholds; the headline checks are surfaced below.
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: accessibility
+          query: { severity: ['critical', 'high'] }
+        as: a11y
       - call: verdict
         args:
           level: surface
           message: >-
-            Accessibility lens: Use native semantic elements first (button/label/nav) so keyboard, focus order,
-            and screen-reader semantics come for free; reach for ARIA only to fill a genuine gap. Ensure every
-            interaction is keyboard-operable with a visible focus state and meets WCAG AA contrast — test it.
+            Accessibility lens (WCAG 2.2 + ARIA APG, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=accessibility) for the full cited set): prefer native
+            HTML before ARIA; every interaction keyboard-operable (SC 2.1.1) with a visible focus indicator (SC
+            2.4.7) that isn't obscured (SC 2.4.11); text contrast >= 4.5:1 (SC 1.4.3), UI/non-text >= 3:1 (SC
+            1.4.11); target size >= 24px (SC 2.5.8); alt on every image (SC 1.1.1); a modal carries
+            aria-modal + focus-trap + Esc + focus-restore (APG); honor prefers-reduced-motion (SC 2.3.3).
