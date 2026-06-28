@@ -90,7 +90,10 @@ import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.j
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
 import { frontendEvidenceForEvent, type FrontendEvidenceDeps } from './frontend_evidence.js';
 import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evidence.js';
-import { planEvidence } from './plan_evidence.js';
+import { planEvidence, openWg } from './plan_evidence.js';
+import { autoDecompose } from './auto_decompose.js';
+import { buildCoveredBy } from './plan_audit.js';
+import { extractScope } from './scope_extract.js';
 import { scopeEvidence } from './scope_evidence.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
 
@@ -426,6 +429,26 @@ export async function runV2Cartridges(
             process.stderr.write(
               `[v2-supply] captured-ask freeze/reset failed (ignored): ${String(err)}\n`,
             );
+          }
+          // T2.5 LIVE WIRING (the fix for "FSM stalls at PLAN"): on SCOPE→PLAN, POPULATE the work-graph from the
+          // captured pre-research artifact so `plan.complete` can hold and the PLAN gate can advance. Without this
+          // caller, autoDecompose never runs live → the work-graph is empty → plan_ready never passes → stall.
+          // IDEMPOTENT: skip if any of the artifact's elements are already covered (don't duplicate issues on a
+          // re-fire). FAIL-OPEN: a work-graph error must never break the hook.
+          if (p.from === 'scope') {
+            try {
+              const artifact = await readPreResearchPath(sessionId);
+              const ext = artifact === null ? null : await extractScope(artifact);
+              if (artifact !== null && ext !== null && ext.authoredElements.length > 0) {
+                const wg = await openWg(sessionId);
+                const ids = ext.authoredElements.map((el) => el.id);
+                const covered = buildCoveredBy(ids, await wg.listIssues());
+                const already = Object.values(covered).some((c) => c.length > 0);
+                if (!already) await autoDecompose(artifact, wg); // first decomposition of this scope
+              }
+            } catch (err) {
+              process.stderr.write(`[v2-supply] auto-decompose failed (ignored): ${String(err)}\n`);
+            }
           }
           onStateLeave(p.from, skillRuntime); // SKILL.1: unloaded on leave
         } else if (e.kind === 'emit' && e.messageKind === 'gate_action') {

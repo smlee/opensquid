@@ -218,6 +218,60 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
     await runV2Cartridges(sid, promptEvent, NOW);
     expect((await readCapturedAsk(sid)).turns).toEqual(['build the thing']);
   });
+
+  // T2.5 LIVE WIRING (the fix for "FSM stalls at PLAN"): the SCOPE→PLAN transition must auto-populate the
+  // work-graph from the captured artifact, so plan_ready can later pass. Before this wiring autoDecompose had no
+  // live caller and the work-graph stayed empty → plan never completed.
+  async function readWgIssues(): Promise<{ id: string; body: string }[]> {
+    const store = workGraphStore({
+      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
+      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+    });
+    await store.init();
+    return bindProject(store, 'legacy-global').listIssues();
+  }
+
+  // Isolate OPENSQUID_HOME per test (the file otherwise shares one HOME → the work-graph leaks across tests).
+  async function withFreshHome<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.OPENSQUID_HOME;
+    process.env.OPENSQUID_HOME = await mkdtemp(join(tmpdir(), 'osq-decomp-'));
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.OPENSQUID_HOME;
+      else process.env.OPENSQUID_HOME = prev;
+    }
+  }
+  const countScope1 = async (): Promise<number> =>
+    (await readWgIssues()).filter((i) => i.body.includes('sourceElementId:scope-1')).length;
+
+  it('READY advance AUTO-DECOMPOSES: SCOPE→PLAN populates the work-graph (autoDecompose live caller)', async () => {
+    await withFreshHome(async () => {
+      const sid = 'sess-scope-decompose';
+      mockLoad.mockResolvedValue([scopeGatePack()]);
+      await appendAsk(sid, 'add login screen');
+      for (let i = 0; i < 3; i++) await appendTool(sid, 'Read');
+      expect(await countScope1()).toBe(0); // clean baseline
+      const p = await writePreResearch('1. Login [ask: "add login screen"]');
+      await runV2Cartridges(sid, advanceWrite(p), NOW);
+      // the artifact's element (scope-1) was stamped into a work-graph issue → plan.complete can now hold
+      expect(await countScope1()).toBe(1);
+    });
+  });
+
+  it('auto-decompose is IDEMPOTENT: a SCOPE pass over an already-covered element does not duplicate', async () => {
+    await withFreshHome(async () => {
+      const sid = 'sess-scope-idem';
+      mockLoad.mockResolvedValue([scopeGatePack()]);
+      await appendAsk(sid, 'add login screen');
+      for (let i = 0; i < 3; i++) await appendTool(sid, 'Read');
+      await populateWg([{ title: 'pre', body: 'sourceElementId:scope-1' }]); // already covered
+      const before = await countScope1();
+      const p = await writePreResearch('1. Login [ask: "add login screen"]');
+      await runV2Cartridges(sid, advanceWrite(p), NOW);
+      expect(await countScope1()).toBe(before); // skipped (guard saw it covered) — not re-populated
+    });
+  });
 });
 
 // ── T2.5 — the PLAN gate binding over buildGuardCtx (acyclic ∧ complete, fail-closed) ──────────────────────

@@ -51,7 +51,7 @@ async function resolveWgProject(sessionId: string): Promise<string> {
  * Open a project-bound work-graph facade over the HOME store (mirrors MCP `getWorkGraphBase`). A fresh store
  * per call — the hook subprocess is short-lived. OPENSQUID_HOME is test-isolated (global-teardown).
  */
-async function openWg(sessionId: string): Promise<WorkGraphFacade> {
+export async function openWg(sessionId: string): Promise<WorkGraphFacade> {
   const store = workGraphStore({
     dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
     sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
