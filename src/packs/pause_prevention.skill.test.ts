@@ -58,6 +58,7 @@ async function setOpenTasks(n: number): Promise<void> {
 const ask: Event = { kind: 'tool_call', tool: 'AskUserQuestion', args: {}, cwd: '/tmp' };
 
 function run(): Promise<RuleResult> {
+  if (rule.kind !== 'track_check') throw new Error('no-question-after-scope must be track_check');
   const reg = new FunctionRegistry();
   registerEventFunctions(reg);
   registerFsmFunctions(reg);
