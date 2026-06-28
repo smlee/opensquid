@@ -12,7 +12,11 @@
       "do": "Pair #1E293B text on #FFFFFF (13.6:1).",
       "dont": "Gray-on-gray (#9CA3AF on #F3F4F6 ~ 3.2:1) fails AA for body text.",
       "tags": ["color", "wcag-aa"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#contrast-minimum", "ref": "SC 1.4.3 (AA)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#contrast-minimum",
+        "ref": "SC 1.4.3 (AA)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -23,7 +27,11 @@
       "rule": "UI components (borders of inputs, focus indicators, toggle states) and meaningful graphics >= 3:1 against adjacent colors.",
       "dont": "A 1px #E5E7EB input border on white (~1.2:1) is invisible to low-vision users.",
       "tags": ["color", "ui", "wcag-aa"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#non-text-contrast", "ref": "SC 1.4.11 (AA)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#non-text-contrast",
+        "ref": "SC 1.4.11 (AA)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -34,7 +42,11 @@
       "rule": "Interactive targets >= 24x24 CSS px (or have >= 24px spacing), unless an equivalent control exists. iOS HIG recommends 44pt; Material 48dp.",
       "do": "Hit area >= 24px even if the icon is smaller (pad it).",
       "tags": ["touch", "mobile", "wcag-aa", "new-2.2"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#target-size-minimum", "ref": "SC 2.5.8 (AA, new in 2.2)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#target-size-minimum",
+        "ref": "SC 2.5.8 (AA, new in 2.2)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -46,7 +58,11 @@
       "do": "Use :focus-visible with a >= 2px ring meeting 3:1 contrast (SC 1.4.11).",
       "dont": "`*:focus { outline: none }` strips keyboard orientation.",
       "tags": ["keyboard", "focus", "wcag-aa"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#focus-visible", "ref": "SC 2.4.7 (AA)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#focus-visible",
+        "ref": "SC 2.4.7 (AA)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -57,7 +73,11 @@
       "rule": "A focused element must not be entirely hidden by sticky headers/footers or other author content.",
       "dont": "A sticky header that covers the focused input when tabbing.",
       "tags": ["focus", "layout", "wcag-aa", "new-2.2"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#focus-not-obscured-minimum", "ref": "SC 2.4.11 (AA, new in 2.2)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#focus-not-obscured-minimum",
+        "ref": "SC 2.4.11 (AA, new in 2.2)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -68,7 +88,11 @@
       "rule": "Any drag operation has a single-pointer (tap/click) alternative, unless dragging is essential.",
       "do": "A reorderable list also offers up/down buttons.",
       "tags": ["touch", "wcag-aa", "new-2.2"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#dragging-movements", "ref": "SC 2.5.7 (AA, new in 2.2)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#dragging-movements",
+        "ref": "SC 2.5.7 (AA, new in 2.2)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -80,7 +104,11 @@
       "good": "<img src=\"chart.png\" alt=\"Revenue up 12% in Q3\">",
       "bad": "<img src=\"chart.png\"> (screen reader announces the filename)",
       "tags": ["semantics", "screen-reader", "wcag-a"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#non-text-content", "ref": "SC 1.1.1 (A)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#non-text-content",
+        "ref": "SC 1.1.1 (A)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -91,7 +119,11 @@
       "rule": "All functionality is operable by keyboard alone (no mouse-only handlers). Custom widgets implement the expected key interactions.",
       "dont": "A <div onClick> with no role/tabindex/keydown is keyboard-dead.",
       "tags": ["keyboard", "wcag-a"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#keyboard", "ref": "SC 2.1.1 (A)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#keyboard",
+        "ref": "SC 2.1.1 (A)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -103,7 +135,11 @@
       "good": "<button>Save</button> (focus, role, keyboard, name come free)",
       "bad": "<div role=\"button\" tabindex=\"0\"> re-implementing all of the above",
       "tags": ["semantics", "aria"],
-      "source": { "name": "ARIA APG", "url": "https://www.w3.org/WAI/ARIA/apg/practices/read-me-first/", "ref": "No ARIA is better than bad ARIA" }
+      "source": {
+        "name": "ARIA APG",
+        "url": "https://www.w3.org/WAI/ARIA/apg/practices/read-me-first/",
+        "ref": "No ARIA is better than bad ARIA"
+      }
     },
     {
       "id": "apg-dialog-modal",
@@ -113,7 +149,11 @@
       "rule": "role=dialog + aria-modal=true + an accessible name (aria-labelledby); move focus in on open, TRAP focus within, Esc closes, and RESTORE focus to the trigger on close.",
       "dont": "A modal that leaves focus behind it or can't be closed with Esc.",
       "tags": ["components", "focus", "keyboard", "aria"],
-      "source": { "name": "ARIA APG", "url": "https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/", "ref": "Dialog (Modal) Pattern" }
+      "source": {
+        "name": "ARIA APG",
+        "url": "https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/",
+        "ref": "Dialog (Modal) Pattern"
+      }
     },
     {
       "id": "wcag-2.3.3-reduced-motion",
@@ -123,7 +163,11 @@
       "rule": "Non-essential motion animation triggered by interaction is disabled under @media (prefers-reduced-motion: reduce).",
       "good": "@media (prefers-reduced-motion: reduce){ *{ animation: none; transition: none } }",
       "tags": ["motion", "wcag-aaa"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#animation-from-interactions", "ref": "SC 2.3.3 (AAA)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#animation-from-interactions",
+        "ref": "SC 2.3.3 (AAA)"
+      },
       "spec_version": "2.2"
     },
     {
@@ -133,7 +177,11 @@
       "severity": "medium",
       "rule": "Information already entered earlier in a multi-step process is auto-populated or selectable — don't make users re-type it.",
       "tags": ["forms", "wcag-a", "new-2.2"],
-      "source": { "name": "WCAG 2.2", "url": "https://www.w3.org/TR/WCAG22/#redundant-entry", "ref": "SC 3.3.7 (A, new in 2.2)" },
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#redundant-entry",
+        "ref": "SC 3.3.7 (A, new in 2.2)"
+      },
       "spec_version": "2.2"
     }
   ]
