@@ -90,6 +90,7 @@ import { registerArmScopeFunction } from '../functions/arm_scope.js';
 import { registerFsmFunctions } from '../functions/fsm.js';
 import { registerReadRubric } from '../functions/read_rubric.js';
 import { registerKnowledgeLookup } from '../functions/knowledge_lookup.js';
+import { registerFrontendAudit } from '../functions/frontend_audit.js';
 import { registerPhaseInject } from '../functions/phase_inject.js';
 import { registerPhaseBundleText } from '../functions/phase_bundle_text.js';
 import { registerProjectContextInject } from '../functions/project_context_inject.js';
@@ -143,6 +144,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerCachedAuditFunction(r);
   registerReadRubric(r); // TR.A: the audits interpolate {{rubric}} from this; phase_inject reuses it
   registerKnowledgeLookup(r); // FD1: design-knowledge retrieval engine for the frontend lenses + output skills
+  registerFrontendAudit(r); // FD5: pre-delivery audit — blocks on CRITICAL frontend violations
   registerPhaseInject(r); // GI.4: channel (a) — per-gate phase bundle (procedure §N + rubric) at the turn boundary
   registerPhaseBundleText(r); // CFD.3 PG.3: bindable phase bundle for inject-on-pause (pause guards interpolate {{bundle.text}})
   registerProjectContextInject(r); // T-project-context: echoes context.md prose (baked in args) as inject_context
