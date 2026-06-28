@@ -26,8 +26,19 @@ import type { FunctionRegistry } from './registry.js';
 /** Extending this list requires the TRANSITIVE purity review above —
  *  reviewed 2026-06-11: `recall`/`embed` (rag.ts — execute(args) only,
  *  deterministic backend) and `recall_lesson` (lessons.ts — execute(args)
- *  only, no registry.call forwarding). */
-const REVIEWED_PURE = ['embed', 'recall', 'recall_lesson'];
+ *  only, no registry.call forwarding).
+ *  reviewed 2026-06-27 (FD5): `design_system_generate` (design_system.ts —
+ *  execute calls only the pure `generateDesignSystem(args)`: deterministic
+ *  color math, no IO, no registry.call) and `component_scaffold`
+ *  (component_scaffold.ts — execute is a pure `kind`→fixed-template lookup).
+ *  Both depend ONLY on args (the memo key), so memoization is sound. */
+const REVIEWED_PURE = [
+  'component_scaffold',
+  'design_system_generate',
+  'embed',
+  'recall',
+  'recall_lesson',
+];
 
 let home: string;
 let priorHome: string | undefined;
