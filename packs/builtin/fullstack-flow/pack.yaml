@@ -18,6 +18,16 @@
 # states+transitions is a gate chain whose triggers are hook events.
 #
 # Spec: loop/docs/tasks/T-v2-track2-discipline.md (T2.1). Design: loop/docs/design/opensquid-v2-coding-flow-design.md.
+#
+# FRONTEND DESIGN-INTELLIGENCE (T-frontend-design-pack, FD1–FD6) — the ui-ux-pro-max capability re-derived from
+# PRIMARY sources, typed/cited/enforced INSIDE this pack (not a separate pack):
+#   INPUT lenses (lazy, knowledge_lookup-backed): the 8 frontend lenses (visual-design, ux-heuristics,
+#     frontend-performance, design-tokens, motion, i18n, content-microcopy, data-viz) joined the 10 engineering
+#     lenses; `accessibility` was DEEPENED (WCAG 2.2 SC + APG) rather than duplicated — the overlap reconciliation.
+#   KNOWLEDGE: packs/builtin/fullstack-flow/knowledge/<lens>.json — Zod-validated, each rule cites a primary URL.
+#   OUTPUT (skills/frontend-output + primitives): design_system_generate (DTCG tokens, WCAG-enforced contrast),
+#     component_scaffold (APG-correct), frontend_audit. The audit's CRITICAL findings BLOCK a commit via the
+#     `code_frontend_clean` guard, enforced PRE-commit by v2_enforce (FAIL-OPEN for non-frontend commits).
 name: fullstack-flow
 version: 0.1.0
 scope: workflow

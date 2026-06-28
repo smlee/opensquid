@@ -1,0 +1,28 @@
+# frontend-output — the OUTPUT capability skill (FD5/FD6). Unlike the input lenses (which SURFACE guidance), this
+# routes the agent to the three OUTPUT primitives that PRODUCE + ENFORCE proper frontend deliverables:
+#   - design_system_generate — coherent DTCG token system (OKLCH ramps + modular scale + 8pt) with WCAG-enforced contrast
+#   - component_scaffold      — accessible component skeletons (APG-correct by construction)
+#   - frontend_audit          — pre-delivery audit; the CRITICAL findings BLOCK the commit (v2_enforce code_frontend_clean)
+# Lazy + tool_call-triggered like the lenses (no runtime cost unless selected). It is an OUTPUT skill, not an input
+# lens — so it is excluded from the input-lens bucket assertion (see fullstack_lens_skills.skill.test.ts).
+name: frontend-output
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Frontend OUTPUT capability for UI work — generate a token system, scaffold accessible components, and audit
+  before delivery. Selected when producing a design system, new components, or any frontend deliverable headed to commit.
+rules:
+  - id: frontend-output-capability
+    process:
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Frontend output capability — PRODUCE + ENFORCE, don't hand-roll: call design_system_generate
+            {brandHue,scaleRatio,baseSize,density} for a coherent DTCG token system (OKLCH ramps + modular type
+            scale + 8pt spacing + semantic aliases) whose text/surface contrast is WCAG-AA verified, not assumed;
+            call component_scaffold {kind: button|dialog|disclosure|textfield} for APG-correct skeletons that pass
+            the audit by construction; run frontend_audit on the staged files before delivery — a CRITICAL finding
+            (img-no-alt WCAG 1.1.1, keyboard-dead onClick WCAG 2.1.1) BLOCKS the commit at the pre-delivery gate.

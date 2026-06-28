@@ -91,10 +91,12 @@ describe('fullstack-flow engineering lens skills (T2.13)', () => {
   it('the skills/ dir contains exactly the 10 engineering + 8 frontend lenses (FD4 integration)', async () => {
     const dirents = await readdir(SKILLS_DIR, { withFileTypes: true });
     const dirs = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    // pause-guard (T2.9) co-exists; the 18 lenses (10 engineering + 8 frontend; accessibility counts once in
-    // the engineering bucket) must all be present and no OTHER lens beyond them + pause-guard.
+    // Non-lens skills co-exist: pause-guard (T2.9) and frontend-output (FD6 — an OUTPUT skill, not an input lens).
+    // The 18 input lenses (10 engineering + 8 frontend; accessibility counts once) must all be present and no
+    // OTHER input lens beyond them.
+    const NON_LENS = new Set(['pause-guard', 'frontend-output']);
     for (const lens of LENSES) expect(dirs, `missing lens dir: ${lens}`).toContain(lens);
-    const lensDirs = dirs.filter((d) => d !== 'pause-guard');
+    const lensDirs = dirs.filter((d) => !NON_LENS.has(d));
     expect(new Set(lensDirs)).toEqual(new Set(LENSES));
   });
 
