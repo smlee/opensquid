@@ -26,8 +26,11 @@
 #     lenses; `accessibility` was DEEPENED (WCAG 2.2 SC + APG) rather than duplicated — the overlap reconciliation.
 #   KNOWLEDGE: packs/builtin/fullstack-flow/knowledge/<lens>.json — Zod-validated, each rule cites a primary URL.
 #   OUTPUT (skills/frontend-output + primitives): design_system_generate (DTCG tokens, WCAG-enforced contrast),
-#     component_scaffold (APG-correct), frontend_audit. The audit's CRITICAL findings BLOCK a commit via the
-#     `code_frontend_clean` guard, enforced PRE-commit by v2_enforce (FAIL-OPEN for non-frontend commits).
+#     component_scaffold (APG-correct), frontend_audit. The audit CAPABILITY remains available; its
+#     `code_frontend_clean` enforcement guard is DEFINED but currently UNWIRED — its only evaluator was the bespoke
+#     v2_enforce PreToolUse hook, removed as drift (enforcement belongs in the FSM gates/floors/commit-gate per the
+#     canonical design, not a parallel hook). Per the build order (frontend is the last slice), re-wiring its
+#     enforcement via the canonical commit-gate is deferred to the frontend slice.
 name: fullstack-flow
 version: 0.1.0
 scope: workflow
@@ -71,11 +74,12 @@ guards:
   # `accepted`, acceptance.ts — survives a closed session, re-surfaces at start-up). UNACCEPTED/absent → the
   # accept decision's `else` branch fires → DEPLOY loops back to PLAN (NEVER auto-declare "shipped").
   accepted: 'deploy.accepted'
-  # FD5/FD6 — the FRONTEND pre-delivery gate: a deterministic, zero-LLM predicate over the OUTPUT enforcement.
+  # FD5/FD6 — the FRONTEND pre-delivery predicate: a deterministic, zero-LLM check over the OUTPUT enforcement.
   # `frontend.clean` = the STAGED frontend files carry NO CRITICAL accessibility defect (frontend_audit:
   # img-no-alt, keyboard-dead onClick). FAIL-OPEN (frontend_evidence.ts) — a non-frontend / non-repo / unanalyzable
-  # commit is clean:true, so this gate ONLY blocks a commit that stages a proven critical frontend defect. Enforced
-  # at PRE-commit time by v2_enforce (cheap ctx — frontend evidence only, NOT the full buildGuardCtx).
+  # commit is clean:true. NOTE: currently UNWIRED — its evaluator (the bespoke v2_enforce PreToolUse hook) was
+  # removed as drift and NO FSM state references this guard. Re-wiring via the canonical commit-gate is deferred to
+  # the frontend slice (build order: frontend last). Retained as the predicate the frontend slice will bind.
   code_frontend_clean: 'frontend.clean'
 
 fsm:
