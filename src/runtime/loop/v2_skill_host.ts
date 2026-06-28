@@ -45,7 +45,7 @@ function synthSkillPack(loaded: LoadedPackV2): Pack {
     skills: loaded.skills,
     activationScope: 'project',
     fsm: loaded.compiled.fsm,
-  } as Pack;
+  };
 }
 
 /**
@@ -70,7 +70,9 @@ export async function runV2SkillHost(
       contextInjections.push(...r.contextInjections);
     } catch (e) {
       // FAIL-OPEN: a skill-host error must never block the tool or crash the hook.
-      process.stderr.write(`[v2-skill-host] cartridge '${loaded.pack.name}' skipped: ${String(e)}\n`);
+      process.stderr.write(
+        `[v2-skill-host] cartridge '${loaded.pack.name}' skipped: ${String(e)}\n`,
+      );
     }
   }
   return { exitCode, stderr: stderrParts.join('\n'), contextInjections };
