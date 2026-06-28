@@ -18,7 +18,7 @@ import type { FunctionRegistry } from '../../functions/registry.js';
 import { sessionStateFile } from '../paths.js';
 import type { Event } from '../types.js';
 
-import { runV2SkillHost } from './v2_skill_host.js';
+import { runV2SkillHost, relevantSkills } from './v2_skill_host.js';
 
 const HERE = fileURLToPath(import.meta.url);
 const PACK_DIR = resolve(HERE, '../../../../packs/builtin/fullstack-flow');
@@ -67,5 +67,32 @@ describe('v2 skill host — pause-guard executes under fullstack-flow (T-v2-skil
     await setFsmState('scope');
     const r = await runV2SkillHost([cart], ask, registry, SID);
     expect(r.exitCode).toBe(0);
+  });
+});
+
+describe('v2 skill host — deterministic lens relevance gate (VS.3, §4.3)', () => {
+  const ev = (tool: string, file_path?: string): Event => ({
+    kind: 'tool_call',
+    tool,
+    args: file_path !== undefined ? { file_path } : { command: 'ls' },
+    cwd: '/tmp',
+  });
+
+  it('a source-code Write lets the lenses through (all skills relevant)', () => {
+    const r = relevantSkills(cart.skills, ev('Write', '/x/Button.tsx'));
+    expect(r.length).toBe(cart.skills.length);
+  });
+
+  it('a Bash/non-edit gets NO lens — only preload skills (pause-guard)', () => {
+    const r = relevantSkills(cart.skills, ev('Bash'));
+    expect(r.length).toBeLessThan(cart.skills.length);
+    expect(r.every((s) => s.load === 'preload')).toBe(true);
+    expect(r.some((s) => s.name === 'pause-guard')).toBe(true);
+  });
+
+  it('a docs/non-source Write gets NO lens (only source edits are lens-relevant)', () => {
+    const r = relevantSkills(cart.skills, ev('Write', '/x/README.md'));
+    expect(r.length).toBeLessThan(cart.skills.length);
+    expect(r.some((s) => s.name === 'pause-guard')).toBe(true);
   });
 });
