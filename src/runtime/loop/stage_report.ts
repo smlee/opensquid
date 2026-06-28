@@ -12,9 +12,8 @@
  *   Next → <stage>: <what that phase will work on>
  *   Goal: …  (SCOPE only — the destination check)
  *
- * Live trigger: `v2_supply.ts` emits ALL FIVE stage reports (SCOPE/PLAN/AUTHOR/CODE/DEPLOY) on the leaving
- * transition + surfaces the returned body in-session + chat. (The T2.9 `loop_driver` that was to own CODE was
- * dead code and was removed 2026-06-27.)
+ * Live triggers: `v2_supply.ts` (SCOPE/PLAN/AUTHOR/DEPLOY on the leaving transition) + `loop_driver` (CODE on
+ * `phases_complete`). Both also surface the returned body in-session + chat.
  *
  * Imports from: node:path, ../../storage/atomic_file.
  */
@@ -22,7 +21,7 @@ import { join } from 'node:path';
 
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 
-// 'CODE' is included (emitted by v2_supply on the code→deploy transition, like the other four).
+// 'CODE' is included (emitted by T2.9's loop_driver on phases_complete).
 export type Stage = 'SCOPE' | 'PLAN' | 'AUTHOR' | 'CODE' | 'DEPLOY';
 
 /** The canonical 7-phase coding cycle the CODE stage runs (the `log_phase` enum order). */
@@ -106,7 +105,7 @@ export function renderStageReport(r: StageReport, iso: string): { path: string; 
 /**
  * Atomically write the rendered report and return BOTH the (root-relative) path and the body — the caller
  * surfaces the body in-session (injection) + chat + memory, which this signature's lack of a sessionId
- * keeps in the caller (v2_supply).
+ * keeps in the caller (v2_supply / loop_driver).
  */
 export async function emitStageReport(
   root: string,

@@ -664,8 +664,8 @@ describe('buildGuardCtx — T2.3 verdict dual-shape', () => {
 
 // ── T2.12 — the LIVE per-stage report trigger (leaving any of the 5 stages emits its report) ──────────────
 // runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, emits a dated docs/reports/
-// file + memory mirror + in-session injection + best-effort chat. CODE fires here too (it is the single live
-// emitter for all 5 stages). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
+// file + memory mirror + in-session injection + best-effort chat. CODE fires here too (loop_driver was never
+// wired). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
 
 /** A one-state gate pack whose state is named `<stage>` and PASSES (advances to terminal) on a tool_call.
  *  Leaving `<stage>` is the transition the T2.12 trigger reports on. */
@@ -718,7 +718,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     ['scope', 'SCOPE'],
     ['plan', 'PLAN'],
     ['author', 'AUTHOR'],
-    ['code', 'CODE'], // CODE fires HERE too — v2_supply is the single live emitter for all 5 stages
+    ['code', 'CODE'], // CODE now fires HERE too (loop_driver was never wired) — the report's live emitter
     ['deploy', 'DEPLOY'],
   ] as const) {
     it(`leaving ${stageUpper} emits its dated report file + a memory mirror`, async () => {
@@ -753,7 +753,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     });
   }
 
-  it('CODE report fires from v2_supply (single live emitter) — with the 7-phase chart', async () => {
+  it('CODE report fires HERE now (loop_driver was never wired) — with the 7-phase chart', async () => {
     const sid = 'sess-t212-code-chart';
     const root = await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });

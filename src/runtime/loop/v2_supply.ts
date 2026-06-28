@@ -114,9 +114,10 @@ export interface V2Decision {
 const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkills: [] };
 
 // T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition. ALL FIVE
-// fire here, on the `code → deploy` transition for CODE included. (The T2.9 "loop_driver" subsystem the spec
-// earmarked for the CODE report was dead code — zero live callers — and was REMOVED 2026-06-27; this is the
-// single, consistent live emitter for every phase.)
+// fire here, on the `code → deploy` transition for CODE included — the `loop_driver.onPhasesComplete` path the
+// spec earmarked for CODE was never wired (no live caller), so this is the single, consistent live emitter for
+// every phase. (If the autonomous run-group loop later wires loop_driver, CODE moves there to avoid a double
+// emit; until then CODE reports HERE so it actually fires.)
 const STAGE: Record<string, Stage> = {
   scope: 'SCOPE',
   plan: 'PLAN',
