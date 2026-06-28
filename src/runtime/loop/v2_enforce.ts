@@ -1,0 +1,88 @@
+/**
+ * V2 gate ENFORCEMENT in PreToolUse (the fix for "gates can't block").
+ *
+ * Per the Claude Code hooks contract, ONLY a PreToolUse hook can block a tool before it runs (via
+ * `permissionDecision: "deny"`); a PostToolUse hook is too late (the tool already ran). The v2 stage gates
+ * trigger on `post_tool_call`, so they advance the FSM + emit reports AFTER an action, but they cannot prevent
+ * one — which is why the discipline never actually blocked anything. This module restores enforcement by
+ * evaluating the relevant gate guard BEFORE the action, in pre-tool-use.
+ *
+ * It is ACTION-scoped (mirrors v1's pre-tool commit gate), not FSM-state-scoped — the two gates the spec says
+ * block a specific action:
+ *   - CODE  (`code_ready`)  on a `git commit` attempt  — T2.7: "blocks a commit attempt with incomplete phases
+ *     … mirrors the v1 commit gate's `phases_complete`".
+ *   - SCOPE (`scope_ready`) on a Write/Edit of `docs/research/*-pre-research-*` — T2.4 `is_advance`; the guard's
+ *     own `!scope.is_advance` short-circuit means it only blocks the not-ready advance, never mid-scoping.
+ * PLAN/AUTHOR/DEPLOY stay PROGRESSION gates (advance + report on post when ready) — the spec's "past SCOPE it
+ * runs by itself", so they don't deny individual tools.
+ *
+ * Cheap by construction: the (expensive) `buildGuardCtx` is built ONLY when the pending action is one of the
+ * two advance-actions — every other tool returns PASS immediately. FAIL-OPEN: any error never blocks
+ * (observe-never-breaks).
+ */
+import { loadActiveV2Cartridges } from '../bootstrap.js';
+import type { Event } from '../types.js';
+
+import { buildGuardCtx } from './v2_supply.js';
+import { RegistryGuardEvaluator } from './guard_evaluator.js';
+import { defaultCodeEvidenceDeps } from './code_evidence.js';
+
+export interface V2EnforceResult {
+  exitCode: 0 | 2;
+  message: string;
+}
+const PASS: V2EnforceResult = { exitCode: 0, message: '' };
+
+/** The pending action → the gate guard that enforces it (its advance-action), or null when no gate applies. */
+function gateForAction(event: Event): { guardRef: string; state: string } | null {
+  if (!('tool' in event)) return null;
+  const args = 'args' in event ? event.args : undefined;
+  const command = typeof args?.command === 'string' ? args.command : '';
+  const filePath = typeof args?.file_path === 'string' ? args.file_path : '';
+  // CODE gate: a `git commit` attempt (T2.7 — mirrors the v1 commit gate).
+  if (event.tool === 'Bash' && /\bgit\s+commit\b/.test(command)) {
+    return { guardRef: 'code_ready', state: 'code' };
+  }
+  // SCOPE gate: writing a pre-research artifact (T2.4 is_advance); scope_ready short-circuits non-advances.
+  if (
+    (event.tool === 'Write' || event.tool === 'Edit') &&
+    /docs\/research\/.*-pre-research-/.test(filePath)
+  ) {
+    return { guardRef: 'scope_ready', state: 'scope' };
+  }
+  return null;
+}
+
+/**
+ * Enforce the v2 discipline gates for a PENDING tool call. Returns `{exitCode: 2, message}` to DENY when the
+ * action's gate guard fails; `{exitCode: 0}` otherwise (and for every non-advance action). Caller emits the
+ * deny as a PreToolUse `permissionDecision: "deny"`.
+ */
+export async function enforceV2GatesPre(sessionId: string, event: Event): Promise<V2EnforceResult> {
+  const match = gateForAction(event);
+  if (match === null) return PASS;
+  // The CODE gate is per-active-task (mirrors the v1 commit gate): it gates a TASK's commit. With no active
+  // task there is nothing to gate, so an ad-hoc commit is NOT blocked (else every commit would fail-closed).
+  if (match.guardRef === 'code_ready') {
+    const taskId = await defaultCodeEvidenceDeps.activeTaskId(sessionId);
+    if (taskId === null) return PASS;
+  }
+  try {
+    const cartridges = await loadActiveV2Cartridges(sessionId);
+    for (const c of cartridges) {
+      const exprs = c.compiled.guardExprs;
+      if (exprs === undefined) continue;
+      if (!exprs.has(match.guardRef)) continue;
+      const ctx = await buildGuardCtx(event, sessionId, match.state);
+      const pass = new RegistryGuardEvaluator(exprs).eval(match.guardRef, ctx);
+      if (!pass) {
+        const msg =
+          c.compiled.meta[match.state]?.onFail?.message ?? `${match.state} gate not ready`;
+        return { exitCode: 2, message: `🦑 [${match.state} gate] ${msg}` };
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`[v2-enforce] gate enforcement error (ignored): ${String(err)}\n`);
+  }
+  return PASS;
+}

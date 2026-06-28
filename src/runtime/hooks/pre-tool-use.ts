@@ -38,6 +38,7 @@ import { checkSafety } from '../guard/safety_floor.js';
 import { loadSafetyPolicy } from '../guard/safety_policy.js';
 import { isYoloMode } from '../guard/yolo.js';
 import { appendProjectDriftEvent } from '../drift_catalog.js';
+import { enforceV2GatesPre } from '../loop/v2_enforce.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -223,8 +224,12 @@ async function main(): Promise<void> {
   // FAC-CUT.5b.2: run the v2 cartridges in-process + merge most-severe. ADDITIVE — ZERO (no-op) until an
   // active v2 pack exists, so v1 behavior is unchanged today. Fail-open inside runV2Cartridges.
   const v2 = await runV2Cartridges(sessionId, parsed.data, new Date().toISOString());
-  const exitCode: 0 | 2 = v1.exitCode === 2 || v2.exitCode === 2 ? 2 : 0;
-  const stderr = [v1.stderr, ...v2.messages].filter(Boolean).join('\n');
+  // v2 stage-gate ENFORCEMENT — the gates trigger on `post_tool_call` (which cannot block per the Claude hook
+  // contract), so they advance/report but never deny. enforceV2GatesPre evaluates the action's gate guard HERE,
+  // before the tool runs (the only hook that can block): `git commit`→code_ready, pre-research write→scope_ready.
+  const v2gate = await enforceV2GatesPre(sessionId, parsed.data);
+  const exitCode: 0 | 2 = v1.exitCode === 2 || v2.exitCode === 2 || v2gate.exitCode === 2 ? 2 : 0;
+  const stderr = [v1.stderr, ...v2.messages, v2gate.message].filter(Boolean).join('\n');
   const contextInjections = [...v1.contextInjections, ...v2.injections];
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
