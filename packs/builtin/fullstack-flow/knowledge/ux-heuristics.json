@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "lens": "ux-heuristics",
+  "description": "Primary-sourced interaction/usability heuristics — Nielsen's 10 + Fitts's/Hick's laws. Re-derived from Nielsen Norman Group originals, not the reference skill's paraphrase.",
+  "rules": [
+    {
+      "id": "nn-1-system-status",
+      "title": "Visibility of system status",
+      "category": "feedback",
+      "severity": "high",
+      "rule": "The system always keeps users informed of what is going on, through timely feedback. Any action >1s shows progress; state changes are visible.",
+      "do": "Optimistic UI + spinner past 1s; toast on save.",
+      "tags": ["feedback", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 1"
+      }
+    },
+    {
+      "id": "nn-2-match-real-world",
+      "title": "Match between system and the real world",
+      "category": "language",
+      "severity": "medium",
+      "rule": "Speak the users' language — words, phrases, concepts familiar to them; follow real-world conventions in a natural, logical order. No internal jargon.",
+      "tags": ["language", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 2"
+      }
+    },
+    {
+      "id": "nn-3-user-control",
+      "title": "User control and freedom",
+      "category": "control",
+      "severity": "high",
+      "rule": "Provide a clearly marked emergency exit — undo and redo. Users pick functions by mistake; let them leave without an extended dialog.",
+      "do": "Undo on destructive actions; cancel on every modal.",
+      "tags": ["control", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 3"
+      }
+    },
+    {
+      "id": "nn-4-consistency-standards",
+      "title": "Consistency and standards",
+      "category": "consistency",
+      "severity": "high",
+      "rule": "Follow platform and industry conventions (Jakob's Law — users spend most time on other sites). Same words/actions mean the same thing throughout.",
+      "tags": ["consistency", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 4"
+      }
+    },
+    {
+      "id": "nn-5-error-prevention",
+      "title": "Error prevention",
+      "category": "errors",
+      "severity": "high",
+      "rule": "Prevent problems before they occur — eliminate error-prone conditions or confirm before commit. Better than good error messages.",
+      "do": "Disable submit until valid; confirm irreversible deletes.",
+      "tags": ["errors", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 5"
+      }
+    },
+    {
+      "id": "nn-6-recognition-recall",
+      "title": "Recognition rather than recall",
+      "category": "memory",
+      "severity": "medium",
+      "rule": "Minimize memory load — make elements, actions, options visible. Don't force users to remember information across steps.",
+      "tags": ["memory", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 6"
+      }
+    },
+    {
+      "id": "nn-7-flexibility-efficiency",
+      "title": "Flexibility and efficiency of use",
+      "category": "efficiency",
+      "severity": "low",
+      "rule": "Accelerators (keyboard shortcuts, defaults, recents) speed up experts without hindering novices; let users tailor frequent actions.",
+      "tags": ["efficiency", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 7"
+      }
+    },
+    {
+      "id": "nn-8-aesthetic-minimalist",
+      "title": "Aesthetic and minimalist design",
+      "category": "content",
+      "severity": "medium",
+      "rule": "Interfaces contain no irrelevant or rarely-needed information — every extra unit competes with the relevant units and diminishes their visibility.",
+      "tags": ["content", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 8"
+      }
+    },
+    {
+      "id": "nn-9-error-recovery",
+      "title": "Help users recognize, diagnose, recover from errors",
+      "category": "errors",
+      "severity": "high",
+      "rule": "Error messages are in plain language (no codes), precisely state the problem, and constructively suggest a fix.",
+      "do": "\"Email already in use — sign in or use another.\"",
+      "dont": "\"Error 0x80004005.\"",
+      "tags": ["errors", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 9"
+      }
+    },
+    {
+      "id": "nn-10-help-docs",
+      "title": "Help and documentation",
+      "category": "help",
+      "severity": "low",
+      "rule": "Ideally no docs needed, but when required they are easy to search, focused on the user's task, list concrete steps, and aren't too large.",
+      "tags": ["help", "nielsen"],
+      "source": {
+        "name": "NN/g — 10 Usability Heuristics",
+        "url": "https://www.nngroup.com/articles/ten-usability-heuristics/",
+        "ref": "Heuristic 10"
+      }
+    },
+    {
+      "id": "fitts-law",
+      "title": "Fitts's Law — size + distance of targets",
+      "category": "interaction",
+      "severity": "medium",
+      "rule": "Time to acquire a target is a function of distance to and size of the target. Make frequent/important targets large and close; use screen edges (infinite depth).",
+      "do": "Primary CTA large; destructive actions small + far from primary.",
+      "tags": ["interaction", "law"],
+      "source": {
+        "name": "NN/g — Fitts's Law",
+        "url": "https://www.nngroup.com/articles/fitts-law/",
+        "ref": "Fitts's Law"
+      }
+    },
+    {
+      "id": "hicks-law",
+      "title": "Hick's Law — choice overload",
+      "category": "interaction",
+      "severity": "low",
+      "rule": "Decision time grows with the number and complexity of choices. Reduce options, group, use progressive disclosure and sensible defaults.",
+      "tags": ["interaction", "law"],
+      "source": {
+        "name": "NN/g — Hick's Law",
+        "url": "https://www.nngroup.com/videos/hicks-law/",
+        "ref": "Hick's Law"
+      }
+    }
+  ]
+}

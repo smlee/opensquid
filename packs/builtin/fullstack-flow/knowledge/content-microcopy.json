@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "lens": "content-microcopy",
+  "description": "Primary-sourced UX-writing/microcopy rules — clarity, voice, error/empty/button copy, and scannability. Re-derived from NN/g UX-writing research and the plainlanguage.gov guidelines.",
+  "rules": [
+    {
+      "id": "copy-plain-language",
+      "title": "Plain, concise language",
+      "category": "clarity",
+      "severity": "high",
+      "rule": "Use short common words, active voice, and short sentences; cut filler. Write for the user's task, not the org chart. Aim for a low reading grade for broad audiences.",
+      "dont": "\"Utilize the aforementioned functionality.\"",
+      "do": "\"Use this.\"",
+      "tags": ["clarity", "voice"],
+      "source": {
+        "name": "plainlanguage.gov — Guidelines",
+        "url": "https://www.plainlanguage.gov/guidelines/",
+        "ref": "plain language"
+      }
+    },
+    {
+      "id": "copy-action-buttons",
+      "title": "Buttons name the action, not 'OK/Submit'",
+      "category": "buttons",
+      "severity": "high",
+      "rule": "Button labels state the specific outcome (verb + object) so the choice is clear out of context. Avoid generic 'Submit'/'OK'/'Yes'.",
+      "do": "\"Delete project\" / \"Save changes\".",
+      "dont": "\"OK\" on a delete confirm.",
+      "tags": ["buttons", "cta"],
+      "source": {
+        "name": "NN/g — Button text",
+        "url": "https://www.nngroup.com/articles/better-link-labels/",
+        "ref": "descriptive labels"
+      }
+    },
+    {
+      "id": "copy-error-messages",
+      "title": "Errors: what happened + how to fix",
+      "category": "errors",
+      "severity": "high",
+      "rule": "Error microcopy states the problem in plain terms, avoids blame, and gives a concrete next step. No raw codes, no 'invalid input'.",
+      "do": "\"Password needs 8+ characters.\"",
+      "dont": "\"Invalid value.\"",
+      "tags": ["errors"],
+      "source": {
+        "name": "NN/g — Error-message guidelines",
+        "url": "https://www.nngroup.com/articles/error-message-guidelines/",
+        "ref": "error messages"
+      }
+    },
+    {
+      "id": "copy-empty-states",
+      "title": "Empty states teach + invite action",
+      "category": "states",
+      "severity": "medium",
+      "rule": "Empty-state copy explains what goes here and offers the first action; don't leave a blank panel. Turn the void into onboarding.",
+      "do": "\"No projects yet — create your first.\" + CTA.",
+      "tags": ["states", "onboarding"],
+      "source": {
+        "name": "NN/g — Empty states",
+        "url": "https://www.nngroup.com/articles/empty-state-interface-design/",
+        "ref": "empty-state copy"
+      }
+    },
+    {
+      "id": "copy-scannable",
+      "title": "Front-load + make text scannable",
+      "category": "structure",
+      "severity": "medium",
+      "rule": "Users scan, not read — put the key info first (inverted pyramid), use meaningful headings, bullets, and bolded keywords. One idea per paragraph.",
+      "tags": ["structure", "scannability"],
+      "source": {
+        "name": "NN/g — How users read on the web",
+        "url": "https://www.nngroup.com/articles/how-users-read-on-the-web/",
+        "ref": "scannability"
+      }
+    },
+    {
+      "id": "copy-consistent-voice",
+      "title": "Consistent terminology + voice",
+      "category": "voice",
+      "severity": "medium",
+      "rule": "Use one term per concept everywhere (not 'delete' here, 'remove' there); keep a consistent, human voice and tone calibrated to context (calm in errors).",
+      "tags": ["voice", "consistency"],
+      "source": {
+        "name": "NN/g — Voice and tone",
+        "url": "https://www.nngroup.com/articles/tone-of-voice-dimensions/",
+        "ref": "voice & tone"
+      }
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "lens": "design-tokens",
+  "description": "Primary-sourced design-token rules — the W3C Design Tokens Community Group format + tiered token architecture. Re-derived from the DTCG spec and the primitive/semantic/component tiering it enables.",
+  "rules": [
+    {
+      "id": "dtcg-format",
+      "title": "Tokens follow the DTCG JSON format",
+      "category": "format",
+      "severity": "high",
+      "rule": "A design token is a JSON object with $value and $type; groups nest; $description documents intent. Use the standard format so tooling (Style Dictionary, Figma) interoperates.",
+      "good": "{ \"color\": { \"brand\": { \"$type\": \"color\", \"$value\": \"#2563eb\" } } }",
+      "tags": ["format", "tokens"],
+      "source": {
+        "name": "W3C Design Tokens Format Module",
+        "url": "https://tr.designtokens.org/format/",
+        "ref": "$value / $type"
+      }
+    },
+    {
+      "id": "token-tiers",
+      "title": "Three token tiers: primitive → semantic → component",
+      "category": "architecture",
+      "severity": "high",
+      "rule": "Primitives (raw values: blue-500) feed semantic/alias tokens (color-action, color-bg) which feed component tokens (button-bg). UI references SEMANTIC tokens, never raw primitives — so theming/rebrand changes one layer.",
+      "do": "button uses --color-action, which aliases --blue-600.",
+      "dont": "button uses --blue-600 directly (no theming seam).",
+      "tags": ["architecture", "theming"],
+      "source": {
+        "name": "W3C DTCG — Aliases/references",
+        "url": "https://tr.designtokens.org/format/#aliases-references",
+        "ref": "alias tokens"
+      }
+    },
+    {
+      "id": "token-theming-alias",
+      "title": "Theme by re-pointing alias tokens",
+      "category": "theming",
+      "severity": "medium",
+      "rule": "Light/dark and brand themes swap the SEMANTIC layer's values (or its primitive references); component and primitive layers stay constant. Drives a single source of truth for every mode.",
+      "tags": ["theming", "dark-mode"],
+      "source": {
+        "name": "W3C DTCG — Aliases/references",
+        "url": "https://tr.designtokens.org/format/#aliases-references",
+        "ref": "theming via aliases"
+      }
+    },
+    {
+      "id": "token-naming",
+      "title": "Consistent, intent-based token names",
+      "category": "naming",
+      "severity": "medium",
+      "rule": "Name semantic tokens by ROLE/intent (color-text-muted, space-inset-sm), not by appearance (color-grey-2). Names survive a visual rebrand; appearance names don't.",
+      "dont": "color-light-blue (breaks when the brand changes hue).",
+      "tags": ["naming"],
+      "source": {
+        "name": "W3C DTCG — Format Module",
+        "url": "https://tr.designtokens.org/format/#name-and-value",
+        "ref": "naming"
+      }
+    },
+    {
+      "id": "token-types-coverage",
+      "title": "Tokenize the whole system, not just color",
+      "category": "coverage",
+      "severity": "medium",
+      "rule": "Define tokens for the full scale: color, dimension (spacing/size), typography (family/size/weight/line-height), border, shadow, duration, cubic-bezier. Ad-hoc CSS values outside the token set are drift.",
+      "tags": ["coverage", "tokens"],
+      "source": {
+        "name": "W3C DTCG — Types",
+        "url": "https://tr.designtokens.org/format/#types",
+        "ref": "token types"
+      }
+    }
+  ]
+}

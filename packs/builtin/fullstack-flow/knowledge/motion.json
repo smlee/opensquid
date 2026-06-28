@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "lens": "motion",
+  "description": "Primary-sourced motion/animation rules — duration + easing guidance, performant properties, and the reduced-motion contract. Re-derived from Material Design motion, MDN, and WCAG.",
+  "rules": [
+    {
+      "id": "motion-duration-band",
+      "title": "UI transition durations 150–500ms",
+      "category": "timing",
+      "severity": "medium",
+      "rule": "Most UI transitions land 150–300ms; larger/complex surfaces up to ~500ms. Too fast feels abrupt, too slow feels sluggish. Small elements move faster than large ones.",
+      "do": "Hover/toggle ~150ms; dialog/page ~300ms.",
+      "tags": ["timing"],
+      "source": {
+        "name": "Material Design — Motion duration",
+        "url": "https://m2.material.io/design/motion/speed.html",
+        "ref": "duration guidance"
+      }
+    },
+    {
+      "id": "motion-easing",
+      "title": "Use asymmetric easing, not linear",
+      "category": "easing",
+      "severity": "medium",
+      "rule": "Natural motion uses ease-out for entering (fast→slow, decelerate) and ease-in for exiting; linear() reads mechanical. Standard curve ~cubic-bezier(0.2, 0, 0, 1).",
+      "dont": "transition-timing-function: linear on UI affordances.",
+      "tags": ["easing"],
+      "source": {
+        "name": "Material Design — Easing",
+        "url": "https://m2.material.io/design/motion/speed.html#easing",
+        "ref": "easing curves"
+      }
+    },
+    {
+      "id": "motion-performant-props",
+      "title": "Animate only transform + opacity",
+      "category": "performance",
+      "severity": "high",
+      "rule": "Animate compositor-friendly properties (transform, opacity) to stay at 60fps; animating layout properties (width, top, margin) triggers layout/paint and jank. Promote with will-change sparingly.",
+      "dont": "transition: width / left (forces reflow each frame).",
+      "tags": ["performance", "60fps"],
+      "source": {
+        "name": "web.dev — Animations guide",
+        "url": "https://web.dev/articles/animations-guide",
+        "ref": "transform/opacity only"
+      }
+    },
+    {
+      "id": "motion-reduced",
+      "title": "Honor prefers-reduced-motion",
+      "category": "accessibility",
+      "severity": "high",
+      "rule": "Under @media (prefers-reduced-motion: reduce), remove or strongly reduce non-essential motion (parallax, large transitions, autoplay); vestibular disorders are triggered by motion. Cross-references WCAG 2.3.3.",
+      "good": "@media (prefers-reduced-motion: reduce){ *,*::before,*::after{ animation-duration:.01ms!important; transition-duration:.01ms!important } }",
+      "tags": ["accessibility", "reduced-motion"],
+      "source": {
+        "name": "MDN — prefers-reduced-motion",
+        "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-reduced-motion",
+        "ref": "prefers-reduced-motion"
+      }
+    },
+    {
+      "id": "motion-purposeful",
+      "title": "Motion is functional, not decorative",
+      "category": "purpose",
+      "severity": "low",
+      "rule": "Animation should direct attention, show relationships/continuity (where a thing came from), and give feedback — not decorate. Gratuitous motion adds cognitive load.",
+      "tags": ["purpose"],
+      "source": {
+        "name": "Material Design — Understanding motion",
+        "url": "https://m2.material.io/design/motion/understanding-motion.html",
+        "ref": "motion principles"
+      }
+    }
+  ]
+}

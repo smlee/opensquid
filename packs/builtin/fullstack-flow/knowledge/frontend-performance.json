@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "lens": "frontend-performance",
+  "description": "Primary-sourced web performance rules — Core Web Vitals thresholds + the highest-leverage loading techniques. Re-derived from web.dev / Chrome's Core Web Vitals docs.",
+  "rules": [
+    {
+      "id": "cwv-lcp",
+      "title": "Largest Contentful Paint (LCP)",
+      "category": "loading",
+      "severity": "critical",
+      "rule": "LCP <= 2.5s is 'good' (at the 75th percentile, field). 2.5–4.0s needs improvement; >4.0s poor. Measures loading of the largest content element.",
+      "do": "Preload the LCP image, fetchpriority=high, no lazy-loading above the fold, fast TTFB.",
+      "tags": ["loading", "core-web-vitals"],
+      "source": {
+        "name": "web.dev — LCP",
+        "url": "https://web.dev/articles/lcp",
+        "ref": "LCP <= 2.5s good"
+      }
+    },
+    {
+      "id": "cwv-inp",
+      "title": "Interaction to Next Paint (INP)",
+      "category": "responsiveness",
+      "severity": "critical",
+      "rule": "INP <= 200ms is 'good' (replaced FID as a Core Web Vital in Mar 2024). 200–500ms needs improvement; >500ms poor. Measures responsiveness to all interactions.",
+      "do": "Break up long tasks, yield to main thread, defer non-critical JS, avoid heavy event handlers.",
+      "tags": ["responsiveness", "core-web-vitals", "js"],
+      "source": {
+        "name": "web.dev — INP",
+        "url": "https://web.dev/articles/inp",
+        "ref": "INP <= 200ms good"
+      }
+    },
+    {
+      "id": "cwv-cls",
+      "title": "Cumulative Layout Shift (CLS)",
+      "category": "stability",
+      "severity": "high",
+      "rule": "CLS <= 0.1 is 'good'. 0.1–0.25 needs improvement; >0.25 poor. Measures unexpected layout shifts.",
+      "do": "Set width/height (or aspect-ratio) on media; reserve space for ads/embeds; avoid inserting content above existing content; use font-display + size-adjust.",
+      "tags": ["stability", "core-web-vitals", "layout"],
+      "source": {
+        "name": "web.dev — CLS",
+        "url": "https://web.dev/articles/cls",
+        "ref": "CLS <= 0.1 good"
+      }
+    },
+    {
+      "id": "img-modern-formats",
+      "title": "Responsive, modern-format images",
+      "category": "assets",
+      "severity": "high",
+      "rule": "Serve AVIF/WebP with srcset/sizes for the device; images are usually the heaviest bytes. Lazy-load below-the-fold (loading=lazy) but NEVER the LCP image.",
+      "tags": ["assets", "images"],
+      "source": {
+        "name": "web.dev — Optimize images",
+        "url": "https://web.dev/articles/optimize-cls#images_without_dimensions",
+        "ref": "responsive images"
+      }
+    },
+    {
+      "id": "js-ship-less",
+      "title": "Ship less JavaScript (code-split + tree-shake)",
+      "category": "js",
+      "severity": "high",
+      "rule": "JS is the most expensive byte (parse+compile+execute). Code-split by route, lazy-import heavy components, tree-shake, and prefer the platform over large libs.",
+      "do": "Dynamic import() for routes/modals; analyze the bundle; budget the main bundle.",
+      "tags": ["js", "bundle"],
+      "source": {
+        "name": "web.dev — Reduce JavaScript payloads",
+        "url": "https://web.dev/articles/reduce-javascript-payloads-with-code-splitting",
+        "ref": "code splitting"
+      }
+    },
+    {
+      "id": "perf-budget",
+      "title": "Set + enforce a performance budget",
+      "category": "process",
+      "severity": "medium",
+      "rule": "Define quantitative budgets (e.g. JS <= 170KB compressed, LCP <= 2.5s) and fail CI when exceeded; performance regresses silently without a gate.",
+      "tags": ["process", "ci"],
+      "source": {
+        "name": "web.dev — Performance budgets 101",
+        "url": "https://web.dev/articles/performance-budgets-101",
+        "ref": "performance budgets"
+      }
+    },
+    {
+      "id": "font-display-swap",
+      "title": "Avoid invisible/shifting text from fonts",
+      "category": "assets",
+      "severity": "medium",
+      "rule": "Use font-display: swap (or optional), preload the critical font, and set size-adjust/fallback metrics to cut FOIT/FOUT and the CLS it causes.",
+      "tags": ["assets", "fonts", "cls"],
+      "source": {
+        "name": "web.dev — font-display",
+        "url": "https://web.dev/articles/font-display",
+        "ref": "font-display"
+      }
+    }
+  ]
+}

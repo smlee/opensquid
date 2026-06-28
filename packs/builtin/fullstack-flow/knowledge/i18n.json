@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "lens": "i18n",
+  "description": "Primary-sourced internationalization/localization rules — externalized strings, ICU plurals, locale-aware formatting, bidi, and layout that survives translation. Re-derived from W3C i18n, Unicode CLDR/ICU, and MDN Intl.",
+  "rules": [
+    {
+      "id": "i18n-externalize-strings",
+      "title": "Externalize all user-facing strings",
+      "category": "strings",
+      "severity": "high",
+      "rule": "No hardcoded UI text in components; all copy lives in resource catalogs keyed for translation. Never concatenate sentence fragments — word order differs by language.",
+      "dont": "\"You have \" + n + \" items\" (untranslatable order).",
+      "do": "Use a full templated message with named placeholders.",
+      "tags": ["strings"],
+      "source": {
+        "name": "W3C — Localization",
+        "url": "https://www.w3.org/International/questions/qa-i18n",
+        "ref": "externalize text"
+      }
+    },
+    {
+      "id": "i18n-icu-plurals",
+      "title": "Pluralization via ICU MessageFormat / Intl.PluralRules",
+      "category": "grammar",
+      "severity": "high",
+      "rule": "Use ICU plural categories (zero/one/two/few/many/other) — many languages have >2 forms; never branch on n===1. Same for gendered/select messages.",
+      "good": "{count, plural, one {# item} other {# items}}",
+      "tags": ["grammar", "plurals"],
+      "source": {
+        "name": "Unicode CLDR — Plural Rules",
+        "url": "https://cldr.unicode.org/index/cldr-spec/plural-rules",
+        "ref": "plural categories"
+      }
+    },
+    {
+      "id": "i18n-locale-formatting",
+      "title": "Locale-aware number/date/currency formatting",
+      "category": "formatting",
+      "severity": "high",
+      "rule": "Format dates, numbers, and currency with Intl.* (DateTimeFormat, NumberFormat) by locale — never hand-roll. Decimal/grouping separators, date order, and currency placement vary.",
+      "dont": "`${d.getMonth()+1}/${d.getDate()}` (US-only order).",
+      "tags": ["formatting", "intl"],
+      "source": {
+        "name": "MDN — Intl",
+        "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl",
+        "ref": "Intl APIs"
+      }
+    },
+    {
+      "id": "i18n-bidi-rtl",
+      "title": "Support bidirectional (RTL) text + layout",
+      "category": "layout",
+      "severity": "medium",
+      "rule": "Set dir on the document/region; use CSS logical properties (margin-inline-start, inset-inline) instead of left/right so layout mirrors for Arabic/Hebrew.",
+      "dont": "margin-left fixed (won't mirror in RTL).",
+      "tags": ["layout", "rtl", "bidi"],
+      "source": {
+        "name": "W3C — Structural markup and right-to-left text",
+        "url": "https://www.w3.org/International/questions/qa-html-dir",
+        "ref": "dir + logical props"
+      }
+    },
+    {
+      "id": "i18n-text-expansion",
+      "title": "Allow for text expansion",
+      "category": "layout",
+      "severity": "medium",
+      "rule": "Translations can be 30–200% longer than English (German/Finnish long; short source strings expand most). Avoid fixed-width text containers and truncation that hides meaning.",
+      "tags": ["layout", "expansion"],
+      "source": {
+        "name": "W3C — Text size in translation",
+        "url": "https://www.w3.org/International/articles/article-text-size",
+        "ref": "expansion factors"
+      }
+    },
+    {
+      "id": "i18n-lang-attr",
+      "title": "Declare language with lang",
+      "category": "semantics",
+      "severity": "medium",
+      "rule": "Set the lang attribute on <html> (and on any inline foreign-language passage) so screen readers pronounce correctly and hyphenation/typography adapt.",
+      "tags": ["semantics", "accessibility"],
+      "source": {
+        "name": "W3C — Declaring language in HTML",
+        "url": "https://www.w3.org/International/questions/qa-html-language-declarations",
+        "ref": "lang attribute"
+      }
+    }
+  ]
+}

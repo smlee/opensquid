@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "lens": "data-viz",
+  "description": "Primary-sourced data-visualization rules — encoding accuracy, axis integrity, chart choice, color, and chartjunk. Re-derived from Cleveland & McGill's encoding ranking, Tufte, and the Datawrapper/colorbrewer accessibility work.",
+  "rules": [
+    {
+      "id": "viz-encoding-ranking",
+      "title": "Encode by perceptual accuracy",
+      "category": "encoding",
+      "severity": "high",
+      "rule": "Position on a common scale is judged most accurately, then length, then angle/slope, then area, then color/volume (Cleveland & McGill). Prefer bar/line (position+length) over pie (angle) and bubble (area) for precise comparison.",
+      "dont": "A pie chart for >3 categories or close values.",
+      "tags": ["encoding"],
+      "source": {
+        "name": "Cleveland & McGill — Graphical Perception (1984)",
+        "url": "https://www.jstor.org/stable/2288400",
+        "ref": "elementary perceptual tasks"
+      }
+    },
+    {
+      "id": "viz-axis-zero",
+      "title": "Bar charts start the value axis at zero",
+      "category": "integrity",
+      "severity": "high",
+      "rule": "Bars encode value by LENGTH, so a truncated baseline lies about ratios — start bar axes at 0. Line charts (encoding position/trend) may use a non-zero, clearly-labeled range.",
+      "dont": "A bar chart with a y-axis starting at 90 exaggerating tiny diffs.",
+      "tags": ["integrity", "axis"],
+      "source": {
+        "name": "Datawrapper — bar-chart baselines",
+        "url": "https://blog.datawrapper.de/bar-chart-baselines/",
+        "ref": "zero baseline for bars"
+      }
+    },
+    {
+      "id": "viz-chart-choice",
+      "title": "Match chart type to the question",
+      "category": "choice",
+      "severity": "high",
+      "rule": "Comparison→bar; trend over time→line; part-to-whole→stacked bar/treemap (rarely pie); correlation→scatter; distribution→histogram/box. Pick by the relationship, not aesthetics.",
+      "tags": ["choice"],
+      "source": {
+        "name": "Financial Times — Visual Vocabulary",
+        "url": "https://ft-interactive.github.io/visual-vocabulary/",
+        "ref": "chart selection"
+      }
+    },
+    {
+      "id": "viz-data-ink",
+      "title": "Maximize data-ink, remove chartjunk",
+      "category": "clarity",
+      "severity": "medium",
+      "rule": "Erase non-data ink — heavy gridlines, 3D effects, gradients, redundant legends. Every mark should carry information (Tufte's data-ink ratio).",
+      "dont": "3D pie with drop shadows.",
+      "tags": ["clarity", "tufte"],
+      "source": {
+        "name": "Tufte — The Visual Display of Quantitative Information",
+        "url": "https://www.edwardtufte.com/book/the-visual-display-of-quantitative-information/",
+        "ref": "data-ink ratio"
+      }
+    },
+    {
+      "id": "viz-color-accessible",
+      "title": "Accessible, meaningful color scales",
+      "category": "color",
+      "severity": "high",
+      "rule": "Use colorblind-safe palettes (ColorBrewer/viridis); choose sequential for ordered data, diverging for a midpoint, categorical (<= ~7 hues) for nominal. Never rely on color alone — add labels/patterns. Maintain contrast.",
+      "tags": ["color", "accessibility"],
+      "source": {
+        "name": "ColorBrewer",
+        "url": "https://colorbrewer2.org/",
+        "ref": "colorblind-safe scales"
+      }
+    },
+    {
+      "id": "viz-direct-label",
+      "title": "Label directly; minimize lookups",
+      "category": "clarity",
+      "severity": "medium",
+      "rule": "Place labels next to the data (line ends, bar tips) instead of forcing eyes to a separate legend; reduce the cognitive round-trip. Annotate the insight.",
+      "tags": ["clarity", "labels"],
+      "source": {
+        "name": "Datawrapper — direct labeling",
+        "url": "https://blog.datawrapper.de/text-in-data-visualizations/",
+        "ref": "direct labels"
+      }
+    }
+  ]
+}
