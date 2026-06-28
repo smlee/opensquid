@@ -811,7 +811,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     });
   }
 
-  it('CODE report fires HERE now (loop_driver was never wired) — with the 7-phase chart', async () => {
+  it('CODE report fires from v2_supply INTERACTIVELY — with the 7-phase chart', async () => {
     const sid = 'sess-t212-code-chart';
     const root = await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
@@ -825,6 +825,25 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     expect(body).toContain('[x] pre_research');
     expect(body).toContain('[x] fix');
     expect(body).toContain('Evidence:'); // the CODE gate predicates
+  });
+
+  it('T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1) v2_supply SKIPS the CODE report (loop_driver owns it)', async () => {
+    const prev = process.env.OPENSQUID_AUTOMATION;
+    process.env.OPENSQUID_AUTOMATION = '1';
+    try {
+      const sid = 'sess-t212-code-auto';
+      const root = await newProjectRoot(sid);
+      await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-auto' });
+      mockLoad.mockResolvedValue([stageGatePack('code')]);
+      await runV2Cartridges(sid, writeCall(), NOW);
+      // the CODE report is NOT written here (the orchestrator's onPhasesComplete emits it autonomously)
+      await expect(
+        readFile(join(root, 'docs', 'reports', 'code-T-auto-2026-06-22.md'), 'utf8'),
+      ).rejects.toThrow();
+    } finally {
+      if (prev === undefined) delete process.env.OPENSQUID_AUTOMATION;
+      else process.env.OPENSQUID_AUTOMATION = prev;
+    }
   });
 
   // T2.10 — the SCOPE report's goal-alignment line is now the LIVE consumer of goalConsult.

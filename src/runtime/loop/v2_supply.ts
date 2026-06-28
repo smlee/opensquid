@@ -392,7 +392,11 @@ export async function runV2Cartridges(
           // T2.12 — the LIVE per-stage report trigger. On each transition LEAVING a stage (SCOPE/PLAN/AUTHOR/
           // CODE/DEPLOY — see STAGE), emit that stage's report (dated docs/reports/ file + memory mirror +
           // in-session injection + best-effort chat). FAIL-OPEN: a report failure must NEVER break the hook.
-          const stage = STAGE[p.from];
+          // T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1) the loop-driver
+          // (orchestrator-level onPhasesComplete) owns the CODE report, so skip it HERE to avoid a duplicate;
+          // interactively (no env) v2_supply remains the CODE emitter. The other 4 stages always emit here.
+          let stage = STAGE[p.from];
+          if (stage === 'CODE' && process.env.OPENSQUID_AUTOMATION === '1') stage = undefined;
           if (stage !== undefined) {
             try {
               const root = await readSessionCwd(sessionId);

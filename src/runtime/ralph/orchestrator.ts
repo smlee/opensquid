@@ -54,6 +54,12 @@ export interface RalphDeps {
   runLap: (item: Issue) => Promise<LapResult>;
   /** The undroppable escalation transport (GR.3) — the CLI wires `escalateSeverity`. */
   escalate: LapEscalator;
+  /**
+   * T2.9 loop-driver hook — called after a lap SHIPS a task (phases_complete). The CLI wires this to
+   * `onPhasesComplete` (emit the CODE stage report + compute the next run-group via batchDecide). Optional +
+   * fail-open: a report/grouping error must never break the drain loop.
+   */
+  onShipped?: (taskId: string) => Promise<void>;
 }
 
 /** Resource pauses END the run; everything else is per-item decision-residual that parks + continues. */
@@ -102,6 +108,13 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     if (outcome.kind === 'SHIPPED') {
       await wg.updateIssue(item.id, { status: 'closed' });
       closed.push(item.id);
+      // T2.9: the loop-driver lives here — on phases_complete (a SHIPPED lap) emit the CODE report + compute the
+      // next run-group. Fail-open: a report/grouping error must never break the drain.
+      try {
+        await deps.onShipped?.(item.id);
+      } catch {
+        /* fail-open: never break the loop over the report/next-group hook */
+      }
     } else {
       // Non-SHIPPED → the ONE uniform path. HUMAN_REQUIRED carries its reason; WEDGE (and the
       // post-supervision CRASH/TIMEOUT the type allows but superviseLap never returns — it exhausts

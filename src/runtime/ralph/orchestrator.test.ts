@@ -106,6 +106,26 @@ describe('runRalphLoop', () => {
     expect(r.spent).toBeCloseTo(0.04);
   });
 
+  it('T2.9: calls onShipped(taskId) after a SHIPPED lap (the loop-driver live caller)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const onShipped = vi.fn(() => P(undefined));
+    await runRalphLoop(cfg({ once: true }), {
+      ...deps(mockStore(['a']), runLap),
+      onShipped,
+    });
+    expect(onShipped).toHaveBeenCalledWith('a');
+  });
+
+  it('T2.9: a throwing onShipped does NOT break the drain — the item still closes (fail-open)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const onShipped = vi.fn(() => Promise.reject(new Error('report boom')));
+    const r = await runRalphLoop(cfg({ once: true }), {
+      ...deps(mockStore(['a']), runLap),
+      onShipped,
+    });
+    expect(r.closed).toEqual(['a']); // closed despite the hook throwing
+  });
+
   it('lap HUMAN_REQUIRED{SCOPE_FORK} → escalate + wedge-mark, loop proceeds then BOARD_EMPTY', async () => {
     const esc = vi.fn(() => P({ escalated: true }));
     const runLap = lap({ kind: 'HUMAN_REQUIRED', reason: 'SCOPE_FORK', costUsd: 0.01 });

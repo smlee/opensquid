@@ -27,6 +27,7 @@ import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
+import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
 import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
@@ -192,11 +193,28 @@ export function registerRalph(program: Command): Command {
         ...(opts.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: Number(opts.maxBudgetUsd) }),
       });
       const wg = await openRalphWorkGraph();
+      const sid = process.env.CLAUDE_SESSION_ID ?? '<cli>';
+      const root = process.cwd();
       const result = await runRalphLoop(cfg, {
         wg,
         claimAudience,
         runLap: makeSpawnLap(cfg, file),
         escalate: chatEscalator({ send: daemonChatSend, channel: 'project:telegram' }),
+        // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
+        // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
+        onShipped: async (taskId) => {
+          const { next } = await onPhasesComplete(
+            sid,
+            root,
+            taskId,
+            {
+              listReadyIds: async () => (await wg.listReady()).map((i) => i.id),
+              listEdges: () => wg.listEdges(),
+            },
+            new Date().toISOString(),
+          );
+          process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
+        },
       });
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     });
