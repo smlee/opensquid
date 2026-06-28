@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { enforceV2GatesPre, runToDoneStopBlock } from './v2_enforce.js';
 import { setAutomationFlag } from '../automation_state.js';
-import { writeActiveTask } from '../session_state.js';
+import { writeActiveTask, recordSessionCwd } from '../session_state.js';
 import { persistActorState } from '../fsm_state.js';
 import type { Event } from '../types.js';
 
@@ -234,5 +234,68 @@ describe('scope-before-code entry-guard (force-into-the-loop)', () => {
   it('PASSES a source Write when fullstack-flow is NOT active (opt-in only)', async () => {
     await activate([]);
     expect((await enforceV2GatesPre('sess-ebg-inactive', srcWrite())).exitCode).toBe(0);
+  });
+});
+
+describe('mandatory reporting gates (V2-ENF.2)', () => {
+  const T = '2026-06-28T00:00:00.000Z';
+  let proj: string;
+  beforeEach(async () => {
+    proj = await mkdtemp(join(tmpdir(), 'osq-rep-proj-'));
+  });
+  afterEach(async () => {
+    await rm(proj, { recursive: true, force: true });
+  });
+  const srcWrite = (): Event =>
+    ({
+      kind: 'tool_call',
+      tool: 'Write',
+      args: { file_path: 'src/foo.ts', content: 'x' },
+    }) as unknown as Event;
+  const commitE = (): Event =>
+    ({ kind: 'tool_call', tool: 'Bash', args: { command: 'git commit -m x' } }) as unknown as Event;
+  async function writeReport(prefix: string, taskId: string): Promise<void> {
+    await mkdir(join(proj, 'docs', 'reports'), { recursive: true });
+    await writeFile(
+      join(proj, 'docs', 'reports', `${prefix}-${taskId}-2026-06-28.md`),
+      'x',
+      'utf8',
+    );
+  }
+  async function seed(sid: string): Promise<void> {
+    await activate(['fullstack-flow']);
+    await recordSessionCwd(sid, proj);
+    await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: T });
+    await persistActorState(sid, 'fullstack-flow', 'plan', T, 'T-r'); // past SCOPE so the entry-guard passes
+  }
+
+  it('BLOCKS a source edit (past SCOPE) until the action-plan report exists', async () => {
+    const sid = 'sess-rep-plan-block';
+    await seed(sid);
+    const r = await enforceV2GatesPre(sid, srcWrite());
+    expect(r.exitCode).toBe(2);
+    expect(r.message).toMatch(/plan-report gate/i);
+  });
+
+  it('PASSES the source edit once the action-plan report exists', async () => {
+    const sid = 'sess-rep-plan-pass';
+    await seed(sid);
+    await writeReport('plan', 'T-r');
+    expect((await enforceV2GatesPre(sid, srcWrite())).exitCode).toBe(0);
+  });
+
+  it('BLOCKS a commit until the completion report exists', async () => {
+    const sid = 'sess-rep-done-block';
+    await seed(sid);
+    const r = await enforceV2GatesPre(sid, commitE());
+    expect(r.exitCode).toBe(2);
+    expect(r.message).toMatch(/completion-report gate/i);
+  });
+
+  it('PASSES the commit once the completion report exists', async () => {
+    const sid = 'sess-rep-done-pass';
+    await seed(sid);
+    await writeReport('completion', 'T-r');
+    expect((await enforceV2GatesPre(sid, commitE())).exitCode).toBe(0);
   });
 });

@@ -19,10 +19,13 @@
  * Cheap by construction: the (expensive) `buildGuardCtx` is built ONLY when the pending action is the SCOPE
  * advance-action — every other tool returns PASS immediately. FAIL-OPEN: any error never blocks.
  */
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import type { Event } from '../types.js';
 import { readFsmStateFile, readFsmState } from '../fsm_state.js';
-import { readActiveTaskId } from '../session_state.js';
+import { readActiveTaskId, readSessionCwd } from '../session_state.js';
 
 import { buildGuardCtx } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
@@ -71,6 +74,67 @@ async function scopeBeforeCodeBlock(sessionId: string, event: Event): Promise<st
   } catch {
     return null; // fail-open: an enforcement error must never break the hook
   }
+}
+
+/** Is fullstack-flow the active discipline for this session? (the report gates are opt-in like the entry-guard) */
+async function fullstackActive(sessionId: string): Promise<boolean> {
+  try {
+    return (await loadActiveV2Cartridges(sessionId)).some((c) => c.pack.name === 'fullstack-flow');
+  } catch {
+    return false;
+  }
+}
+
+/** Does a report `docs/reports/<prefix>-<taskId>-*.md` exist for the active task? Deterministic, satisfiable. */
+async function reportExists(sessionId: string, taskId: string, prefix: string): Promise<boolean> {
+  try {
+    const root = await readSessionCwd(sessionId);
+    if (root === null) return true; // can't resolve the project → do not block (fail-open on context)
+    const files = await readdir(join(root, 'docs', 'reports')).catch(() => [] as string[]);
+    return files.some((f) => f.startsWith(`${prefix}-${taskId}-`) && f.endsWith('.md'));
+  } catch {
+    return true; // fail-open: an unexpected error must never break the hook
+  }
+}
+
+/**
+ * V2-ENF.2 — MANDATORY REPORTING (non-optional, part of the loop). Two pre-gates so reporting is enforced by the
+ * machinery, not the AI's memory:
+ *   - PLAN report before code: block a source Write/Edit (once SCOPE is cleared) until
+ *     `docs/reports/plan-<taskId>-*.md` exists — the action-plan-before-acting requirement.
+ *   - COMPLETION report before commit: block `git commit` until `docs/reports/completion-<taskId>-*.md` exists —
+ *     the 7-layer report-after requirement.
+ * Both: only when fullstack-flow is active + there is an active task; detection by file existence (satisfiable —
+ * write the report → gate clears); FAIL-OPEN on missing context. Returns the block message, or null to allow.
+ */
+async function reportingBlock(sessionId: string, event: Event): Promise<string | null> {
+  if (!('tool' in event)) return null;
+  const args = 'args' in event ? event.args : undefined;
+  // COMPLETION report before a commit.
+  const command = typeof args?.command === 'string' ? args.command : '';
+  if (event.tool === 'Bash' && /\bgit\s+(?:-[cC]\s+\S+\s+)*commit\b/.test(command)) {
+    if (!(await fullstackActive(sessionId))) return null;
+    const taskId = await readActiveTaskId(sessionId);
+    if (taskId === null) return null;
+    if (await reportExists(sessionId, taskId, 'completion')) return null;
+    return (
+      `🦑 completion-report gate: write the 7-layer completion report (docs/reports/completion-${taskId}-<date>.md) ` +
+      'before committing — reporting after a task is mandatory, not optional.'
+    );
+  }
+  // PLAN report before code (after SCOPE is cleared; the entry-guard owns the pre-SCOPE block).
+  const filePath = typeof args?.file_path === 'string' ? args.file_path : '';
+  if ((event.tool === 'Write' || event.tool === 'Edit') && SOURCE_EXT.test(filePath)) {
+    if (!(await fullstackActive(sessionId))) return null;
+    const taskId = await readActiveTaskId(sessionId);
+    if (taskId === null) return null; // the entry-guard handles the no-task / pre-scope case
+    if (await reportExists(sessionId, taskId, 'plan')) return null;
+    return (
+      `🦑 plan-report gate: write the action-plan report (docs/reports/plan-${taskId}-<date>.md) before editing ` +
+      'code — the plan-before-acting report is mandatory, not optional.'
+    );
+  }
+  return null;
 }
 
 /**
@@ -125,6 +189,10 @@ export async function enforceV2GatesPre(sessionId: string, event: Event): Promis
   // ENTRY-GUARD first: source code may not be written until SCOPE is cleared (force-into-the-loop).
   const entry = await scopeBeforeCodeBlock(sessionId, event);
   if (entry !== null) return { exitCode: 2, message: entry };
+
+  // MANDATORY REPORTING: plan report before code, completion report before commit (non-optional).
+  const reporting = await reportingBlock(sessionId, event);
+  if (reporting !== null) return { exitCode: 2, message: reporting };
 
   const match = gateForAction(event);
   if (match === null) return PASS;
