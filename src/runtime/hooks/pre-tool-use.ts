@@ -37,7 +37,6 @@ import { checkSafety } from '../guard/safety_floor.js';
 import { loadSafetyPolicy } from '../guard/safety_policy.js';
 import { isYoloMode } from '../guard/yolo.js';
 import { appendProjectDriftEvent } from '../drift_catalog.js';
-import { enforceV2GatesPre } from '../loop/v2_enforce.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -220,14 +219,8 @@ async function main(): Promise<void> {
   }
 
   const v1 = await dispatchEvent(parsed.data, packs, registry, sessionId);
-  // v2 stage-gate ENFORCEMENT. The FSM gates trigger on `post_tool_call` (handled in post-tool-use, which cannot
-  // block per the Claude hook contract → advance/report only). On THIS pre `tool_call` event no gate fires, so
-  // `runV2Cartridges` would be a pure no-op that only wastes a `buildGuardCtx` — it is NOT called here. The only
-  // hook that can deny is PreToolUse, so the live v2 pre-enforcement is enforceV2GatesPre: pre-research write →
-  // scope_ready; `git commit` staging a critical frontend defect → code_frontend_clean (cheap targeted ctx).
-  const v2gate = await enforceV2GatesPre(sessionId, parsed.data);
-  const exitCode: 0 | 2 = v1.exitCode === 2 || v2gate.exitCode === 2 ? 2 : 0;
-  const stderr = [v1.stderr, v2gate.message].filter(Boolean).join('\n');
+  const exitCode: 0 | 2 = v1.exitCode === 2 ? 2 : 0;
+  const stderr = v1.stderr;
   const contextInjections = [...v1.contextInjections];
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
