@@ -21,7 +21,8 @@
  */
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import type { Event } from '../types.js';
-import { readFsmStateFile } from '../fsm_state.js';
+import { readFsmStateFile, readFsmState } from '../fsm_state.js';
+import { readActiveTaskId } from '../session_state.js';
 
 import { buildGuardCtx } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
@@ -33,6 +34,44 @@ export interface V2EnforceResult {
   message: string;
 }
 const PASS: V2EnforceResult = { exitCode: 0, message: '' };
+
+/** Source-code extensions the scope-before-code entry-guard covers (NOT docs/config/research). */
+const SOURCE_EXT =
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|vue|svelte|astro|c|cc|cpp|h|hpp|cs|kt|swift|scala|sql)$/i;
+
+/**
+ * THE ENTRY-GUARD (the force-into-the-loop enforcement — T-entry-guard / design §1 "discipline in the
+ * machinery, not the AI's good intentions"). Blocks a SOURCE-CODE Write/Edit when the active task has NOT
+ * cleared SCOPE. This is what makes the discipline non-bypassable: you cannot write code until you've scoped
+ * (passed the scope_ready evidence/anti-drift gate). Without it, a task can sit at SCOPE forever while code is
+ * written ungated — the dormant-bypass that let drift in.
+ *
+ * Scoped to be safe + satisfiable: fires ONLY when fullstack-flow is active (opt-in), ONLY on source files
+ * (docs/config/research pass), and ONLY while the task's FSM is still at `scope` (once scoped → code allowed).
+ * Satisfiable: write the pre-research, pass the scope gate → FSM leaves `scope` → edits allowed. FAIL-OPEN:
+ * any error never blocks. Returns the block message, or null to allow.
+ */
+async function scopeBeforeCodeBlock(sessionId: string, event: Event): Promise<string | null> {
+  if (!('tool' in event) || (event.tool !== 'Write' && event.tool !== 'Edit')) return null;
+  const args = 'args' in event ? event.args : undefined;
+  const filePath = typeof args?.file_path === 'string' ? args.file_path : '';
+  if (!SOURCE_EXT.test(filePath)) return null; // docs / config / pre-research are not gated here
+  try {
+    const cartridges = await loadActiveV2Cartridges(sessionId);
+    const fsf = cartridges.find((c) => c.pack.name === 'fullstack-flow' && c.compiled.fsm);
+    if (fsf?.compiled.fsm === undefined) return null; // discipline not active → do not enforce
+    const taskId = await readActiveTaskId(sessionId);
+    const state = await readFsmState(sessionId, 'fullstack-flow', fsf.compiled.fsm, taskId);
+    if (state !== 'scope') return null; // SCOPE already cleared → code allowed
+    return (
+      '🦑 scope-before-code (entry-guard): this work has NOT cleared SCOPE, so code edits are blocked. ' +
+      'The discipline must run before code — write the pre-research (anchored to the captured ask, ≥3 research ' +
+      'touches, no open question) so the scope gate passes, then edit source. No evidence → no code.'
+    );
+  } catch {
+    return null; // fail-open: an enforcement error must never break the hook
+  }
+}
 
 /**
  * The pending action → the gate guard that enforces it, or null when no gate applies. `ctx: 'full'` builds the
@@ -83,6 +122,10 @@ async function frontendGateCtx(event: Event): Promise<Map<string, unknown>> {
  * deny as a PreToolUse `permissionDecision: "deny"`.
  */
 export async function enforceV2GatesPre(sessionId: string, event: Event): Promise<V2EnforceResult> {
+  // ENTRY-GUARD first: source code may not be written until SCOPE is cleared (force-into-the-loop).
+  const entry = await scopeBeforeCodeBlock(sessionId, event);
+  if (entry !== null) return { exitCode: 2, message: entry };
+
   const match = gateForAction(event);
   if (match === null) return PASS;
   try {

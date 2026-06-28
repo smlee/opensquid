@@ -184,3 +184,55 @@ describe('runToDoneStopBlock (AF.6/AF.7 — the run-to-done pause-gate)', () => 
     expect(await runToDoneStopBlock(sid)).toBeNull();
   });
 });
+
+describe('scope-before-code entry-guard (force-into-the-loop)', () => {
+  const T = '2026-06-28T00:00:00.000Z';
+  const srcWrite = (): Event =>
+    ({
+      kind: 'tool_call',
+      tool: 'Write',
+      args: { file_path: 'src/foo.ts', content: 'x' },
+    }) as unknown as Event;
+  const docWrite = (): Event =>
+    ({
+      kind: 'tool_call',
+      tool: 'Write',
+      args: { file_path: 'docs/notes.md', content: 'x' },
+    }) as unknown as Event;
+
+  it('BLOCKS a source Write while the active task FSM is at SCOPE', async () => {
+    await activate(['fullstack-flow']);
+    const sid = 'sess-ebg-block';
+    await writeActiveTask(sid, { id: 'T-e', subject: 'e', started_at: T });
+    await persistActorState(sid, 'fullstack-flow', 'scope', T, 'T-e');
+    const r = await enforceV2GatesPre(sid, srcWrite());
+    expect(r.exitCode).toBe(2);
+    expect(r.message).toMatch(/scope-before-code/i);
+  });
+
+  it('BLOCKS a source Write when there is NO active task (must enter the loop)', async () => {
+    await activate(['fullstack-flow']);
+    expect((await enforceV2GatesPre('sess-ebg-notask', srcWrite())).exitCode).toBe(2);
+  });
+
+  it('PASSES a source Write once the task has cleared SCOPE (FSM=plan)', async () => {
+    await activate(['fullstack-flow']);
+    const sid = 'sess-ebg-plan';
+    await writeActiveTask(sid, { id: 'T-e', subject: 'e', started_at: T });
+    await persistActorState(sid, 'fullstack-flow', 'plan', T, 'T-e');
+    expect((await enforceV2GatesPre(sid, srcWrite())).exitCode).toBe(0);
+  });
+
+  it('PASSES a docs Write at SCOPE (only source code is gated)', async () => {
+    await activate(['fullstack-flow']);
+    const sid = 'sess-ebg-docs';
+    await writeActiveTask(sid, { id: 'T-e', subject: 'e', started_at: T });
+    await persistActorState(sid, 'fullstack-flow', 'scope', T, 'T-e');
+    expect((await enforceV2GatesPre(sid, docWrite())).exitCode).toBe(0);
+  });
+
+  it('PASSES a source Write when fullstack-flow is NOT active (opt-in only)', async () => {
+    await activate([]);
+    expect((await enforceV2GatesPre('sess-ebg-inactive', srcWrite())).exitCode).toBe(0);
+  });
+});
