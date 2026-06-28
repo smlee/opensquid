@@ -19,15 +19,19 @@ rules:
         as: tool
       - call: read_fsm_state
         as: st
+      # BUG-FIX (wg-96e35185572a): at phases_complete with the backlog DEPLETED a new question is
+      # legitimate — so the block must switch OFF then, exactly like the sibling no-pause-language rule.
+      - call: open_task_count
+        as: open
       # GF.6 (F8): HARD-BLOCK the question — it's a real-time pause ACTION, so exit-2 deny
       # actually prevents it (the agent must answer from the principles, not stall).
       # CFD.3/PG.4: inject the phase bundle (procedure + rubric) on this hard-blocked pause,
       # GATED by the same condition so the I/O only runs when the block fires.
       - call: phase_bundle_text
-        if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
+        if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched" && (open.count > 0 || st != "phases_complete")'
         as: bundle
       - call: verdict
-        if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
+        if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched" && (open.count > 0 || st != "phases_complete")'
         args:
           level: block
           message: >-
