@@ -28,6 +28,7 @@ import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { maybeDriveInbound, maybePeekInbound, extractCwd } from './stop_drive.js';
 import { maybeStreamOutput } from './stop_stream.js';
 import { maybeIngestTurn } from './stop_ingest.js';
+import { runToDoneStopBlock } from '../loop/v2_enforce.js';
 import { readLastAssistantText } from './transcript.js';
 
 interface StopPayload {
@@ -144,6 +145,16 @@ async function main(): Promise<void> {
   if (driveReason !== null) {
     if (stderr.length > 0) process.stderr.write(squidPrefix(stderr) + '\n');
     process.stdout.write(JSON.stringify({ decision: 'block', reason: driveReason }) + '\n');
+    process.exit(0);
+  }
+
+  // V2 (AF.6/AF.7) — the run-to-done pause-gate: in AUTOMATION mode, if the active task's fullstack-flow FSM is
+  // past SCOPE and not terminal, BLOCK the turn-end so the autonomous lap continues to DEPLOY instead of pausing.
+  // No-op interactively (never traps the human). This is the gate for the behavioral pause (turn-end).
+  const runToDone = await runToDoneStopBlock(sessionId);
+  if (runToDone !== null) {
+    if (stderr.length > 0) process.stderr.write(squidPrefix(stderr) + '\n');
+    process.stdout.write(JSON.stringify({ decision: 'block', reason: runToDone }) + '\n');
     process.exit(0);
   }
 

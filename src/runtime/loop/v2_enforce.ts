@@ -22,6 +22,8 @@
  */
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import type { Event } from '../types.js';
+import { isAutomationFlagSet } from '../automation_state.js';
+import { readFsmStateFile } from '../fsm_state.js';
 
 import { buildGuardCtx } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
@@ -85,4 +87,29 @@ export async function enforceV2GatesPre(sessionId: string, event: Event): Promis
     process.stderr.write(`[v2-enforce] gate enforcement error (ignored): ${String(err)}\n`);
   }
   return PASS;
+}
+
+/**
+ * V2 — the run-to-done STOP gate (AF.6/AF.7 "past SCOPE there are no pauses; run to done").
+ *
+ * In AUTOMATION mode, if the active task's fullstack-flow FSM is PAST SCOPE and not terminal, return a reason
+ * to BLOCK the turn-end (the caller emits `{decision:"block",reason}` so the autonomous lap CONTINUES to DEPLOY
+ * instead of pausing mid-run). Returns null to allow the stop.
+ *
+ * AUTOMATION-SCOPED on purpose: blocking turn-end in an INTERACTIVE session would trap the human (they could
+ * never reply) — "it runs by itself" is the autonomous-run model. FAIL-OPEN: any error → allow the stop.
+ */
+export async function runToDoneStopBlock(sessionId: string): Promise<string | null> {
+  try {
+    if (!(await isAutomationFlagSet(sessionId))) return null; // interactive: the human drives — never trap
+    const taskId = await defaultCodeEvidenceDeps.activeTaskId(sessionId);
+    if (taskId === null) return null; // nothing in flight
+    const state = (await readFsmStateFile(sessionId, 'fullstack-flow', taskId))?.state;
+    // Allow the stop only at the interactive boundary (scope) or a terminal (done/accept); else: run to done.
+    if (state === undefined || state === 'scope' || state === 'done' || state === 'accept')
+      return null;
+    return `🦑 run to done — past SCOPE there are no pauses (AF.6/AF.7); continue task ${taskId} (stage: ${state}) to DEPLOY.`;
+  } catch {
+    return null; // fail-open: never trap the turn on an error
+  }
 }

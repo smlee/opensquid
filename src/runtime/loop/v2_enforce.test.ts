@@ -8,7 +8,10 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { enforceV2GatesPre } from './v2_enforce.js';
+import { enforceV2GatesPre, runToDoneStopBlock } from './v2_enforce.js';
+import { setAutomationFlag } from '../automation_state.js';
+import { writeActiveTask } from '../session_state.js';
+import { persistActorState } from '../fsm_state.js';
 import type { Event } from '../types.js';
 
 const PRIOR_HOME = process.env.OPENSQUID_HOME;
@@ -62,5 +65,38 @@ describe('enforceV2GatesPre', () => {
     await activate([]); // no v2 cartridge
     const r = await enforceV2GatesPre('sess-enf-inactive', commit());
     expect(r.exitCode).toBe(0);
+  });
+});
+
+describe('runToDoneStopBlock (AF.6/AF.7 — the run-to-done pause-gate)', () => {
+  const NOW = '2026-06-27T00:00:00.000Z';
+
+  it('BLOCKS turn-end in automation mode when the FSM is past SCOPE + not terminal', async () => {
+    const sid = 'sess-r2d-block';
+    await setAutomationFlag(sid);
+    await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
+    await persistActorState(sid, 'fullstack-flow', 'plan', NOW, 'T-r');
+    expect(await runToDoneStopBlock(sid)).toMatch(/run to done/i);
+  });
+
+  it('ALLOWS turn-end in INTERACTIVE mode (no automation flag — never traps the human)', async () => {
+    const sid = 'sess-r2d-interactive';
+    await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
+    await persistActorState(sid, 'fullstack-flow', 'plan', NOW, 'T-r');
+    expect(await runToDoneStopBlock(sid)).toBeNull();
+  });
+
+  it('ALLOWS turn-end at SCOPE (the interactive boundary) even in automation mode', async () => {
+    const sid = 'sess-r2d-scope';
+    await setAutomationFlag(sid);
+    await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
+    await persistActorState(sid, 'fullstack-flow', 'scope', NOW, 'T-r');
+    expect(await runToDoneStopBlock(sid)).toBeNull();
+  });
+
+  it('ALLOWS turn-end when there is no active task', async () => {
+    const sid = 'sess-r2d-notask';
+    await setAutomationFlag(sid);
+    expect(await runToDoneStopBlock(sid)).toBeNull();
   });
 });
