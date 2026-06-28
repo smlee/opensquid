@@ -14,6 +14,8 @@ import { enforceV2GatesPre, runToDoneStopBlock } from './v2_enforce.js';
 import { setAutomationFlag } from '../automation_state.js';
 import { writeActiveTask, recordSessionCwd } from '../session_state.js';
 import { persistActorState } from '../fsm_state.js';
+import { workGraphStore, bindProject } from '../../workgraph/store.js';
+import { OPENSQUID_HOME } from '../paths.js';
 import type { Event } from '../types.js';
 
 const PRIOR_HOME = process.env.OPENSQUID_HOME;
@@ -141,9 +143,8 @@ describe('FD5/FD6 — frontend pre-delivery gate (a commit BLOCKS on a staged CR
   });
 });
 
-describe('runToDoneStopBlock (AF.6/AF.7 — the run-to-done pause-gate)', () => {
-  const NOW = '2026-06-27T00:00:00.000Z';
-  // F6: the signal is the PER-PROCESS env OPENSQUID_AUTOMATION=1 (a real lap), NOT the persistent flag-file.
+describe('runToDoneStopBlock — run-to-done = drain the kanban (V2-ENF.5)', () => {
+  // Signal = the PER-PROCESS env OPENSQUID_AUTOMATION=1 (a real lap), NOT the persistent flag-file (F6).
   const PRIOR_AUTO = process.env.OPENSQUID_AUTOMATION;
   const setLap = (): void => {
     process.env.OPENSQUID_AUTOMATION = '1';
@@ -152,36 +153,32 @@ describe('runToDoneStopBlock (AF.6/AF.7 — the run-to-done pause-gate)', () => 
     if (PRIOR_AUTO === undefined) delete process.env.OPENSQUID_AUTOMATION;
     else process.env.OPENSQUID_AUTOMATION = PRIOR_AUTO;
   });
+  // Seed one READY issue into the per-test HOME work-graph (legacy-global — the marker-less session's project).
+  async function seedReady(): Promise<void> {
+    const store = workGraphStore({
+      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
+      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+    });
+    await store.init();
+    await bindProject(store, 'legacy-global').createIssue({ title: 'ready work', body: '' });
+  }
 
-  it('BLOCKS turn-end in an autonomous lap when the FSM is past SCOPE + not terminal', async () => {
-    const sid = 'sess-r2d-block';
+  it('BLOCKS the stop in an autonomous lap while the kanban has READY work', async () => {
     setLap();
-    await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
-    await persistActorState(sid, 'fullstack-flow', 'plan', NOW, 'T-r');
-    expect(await runToDoneStopBlock(sid)).toMatch(/run to done/i);
+    await seedReady();
+    expect(await runToDoneStopBlock('sess-r2d-ready')).toMatch(/run to done/i);
   });
 
-  it('ALLOWS turn-end in INTERACTIVE mode (no automation env — never traps the human)', async () => {
-    const sid = 'sess-r2d-interactive';
-    delete process.env.OPENSQUID_AUTOMATION; // interactive: even with a stale flag-file, no per-process env
-    await setAutomationFlag(sid); // the persistent flag-file MUST NOT trigger the turn-end block (the F6 bug)
-    await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
-    await persistActorState(sid, 'fullstack-flow', 'plan', NOW, 'T-r');
-    expect(await runToDoneStopBlock(sid)).toBeNull();
+  it('ALLOWS the stop when the kanban is empty (board drained)', async () => {
+    setLap();
+    expect(await runToDoneStopBlock('sess-r2d-empty')).toBeNull();
   });
 
-  it('ALLOWS turn-end at SCOPE (the interactive boundary) even in an autonomous lap', async () => {
-    const sid = 'sess-r2d-scope';
-    setLap();
-    await writeActiveTask(sid, { id: 'T-r', subject: 'r', started_at: NOW });
-    await persistActorState(sid, 'fullstack-flow', 'scope', NOW, 'T-r');
-    expect(await runToDoneStopBlock(sid)).toBeNull();
-  });
-
-  it('ALLOWS turn-end when there is no active task', async () => {
-    const sid = 'sess-r2d-notask';
-    setLap();
-    expect(await runToDoneStopBlock(sid)).toBeNull();
+  it('ALLOWS the stop INTERACTIVELY (no automation env) even with ready work — never traps the human', async () => {
+    delete process.env.OPENSQUID_AUTOMATION;
+    await setAutomationFlag('sess-r2d-interactive'); // a stale flag-file must NOT trigger the block (F6)
+    await seedReady();
+    expect(await runToDoneStopBlock('sess-r2d-interactive')).toBeNull();
   });
 });
 

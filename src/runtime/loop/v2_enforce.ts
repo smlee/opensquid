@@ -24,12 +24,12 @@ import { join } from 'node:path';
 
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import type { Event } from '../types.js';
-import { readFsmStateFile, readFsmState } from '../fsm_state.js';
+import { readFsmState } from '../fsm_state.js';
 import { readActiveTaskId, readSessionCwd } from '../session_state.js';
 
 import { buildGuardCtx } from './v2_supply.js';
+import { openWg } from './plan_evidence.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
-import { defaultCodeEvidenceDeps } from './code_evidence.js';
 import { frontendEvidenceForEvent } from './frontend_evidence.js';
 
 export interface V2EnforceResult {
@@ -246,13 +246,14 @@ export async function enforceV2GatesPre(sessionId: string, event: Event): Promis
 export async function runToDoneStopBlock(sessionId: string): Promise<string | null> {
   try {
     if (process.env.OPENSQUID_AUTOMATION !== '1') return null; // interactive: the human drives — never trap
-    const taskId = await defaultCodeEvidenceDeps.activeTaskId(sessionId);
-    if (taskId === null) return null; // nothing in flight
-    const state = (await readFsmStateFile(sessionId, 'fullstack-flow', taskId))?.state;
-    // Allow the stop only at the interactive boundary (scope) or a terminal (done/accept); else: run to done.
-    if (state === undefined || state === 'scope' || state === 'done' || state === 'accept')
-      return null;
-    return `🦑 run to done — past SCOPE there are no pauses (AF.6/AF.7); continue task ${taskId} (stage: ${state}) to DEPLOY.`;
+    // V2-ENF.5 — run-to-done = DRAIN THE KANBAN. Once past SCOPE there are no pauses (AF.6/AF.7): block the
+    // turn-end while the work-graph still has READY work (listReady = open + unblocked + unclaimed; excludes
+    // wedged/parked so stale work can't trap the loop forever). RALPH's BOARD_EMPTY, as a Stop-gate.
+    const ready = await openWg(sessionId)
+      .then((wg) => wg.listReady())
+      .catch(() => [] as { id: string }[]);
+    if (ready.length === 0) return null; // kanban depleted → the run is done → allow the stop
+    return `🦑 run to done — the kanban is NOT empty (${ready.length} ready issue${ready.length === 1 ? '' : 's'}). Past SCOPE there are no pauses (AF.6/AF.7): keep working the board until it is drained.`;
   } catch {
     return null; // fail-open: never trap the turn on an error
   }
