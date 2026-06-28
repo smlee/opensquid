@@ -27,7 +27,6 @@ import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
 import { dispatchEvent } from './dispatch.js';
-import { runV2Cartridges } from '../loop/v2_supply.js';
 import {
   buildPreToolUseContext,
   buildPreToolUseDeny,
@@ -221,16 +220,15 @@ async function main(): Promise<void> {
   }
 
   const v1 = await dispatchEvent(parsed.data, packs, registry, sessionId);
-  // FAC-CUT.5b.2: run the v2 cartridges in-process + merge most-severe. ADDITIVE — ZERO (no-op) until an
-  // active v2 pack exists, so v1 behavior is unchanged today. Fail-open inside runV2Cartridges.
-  const v2 = await runV2Cartridges(sessionId, parsed.data, new Date().toISOString());
-  // v2 stage-gate ENFORCEMENT — the gates trigger on `post_tool_call` (which cannot block per the Claude hook
-  // contract), so they advance/report but never deny. enforceV2GatesPre evaluates the action's gate guard HERE,
-  // before the tool runs (the only hook that can block): `git commit`→code_ready, pre-research write→scope_ready.
+  // v2 stage-gate ENFORCEMENT. The FSM gates trigger on `post_tool_call` (handled in post-tool-use, which cannot
+  // block per the Claude hook contract → advance/report only). On THIS pre `tool_call` event no gate fires, so
+  // `runV2Cartridges` would be a pure no-op that only wastes a `buildGuardCtx` — it is NOT called here. The only
+  // hook that can deny is PreToolUse, so the live v2 pre-enforcement is enforceV2GatesPre: pre-research write →
+  // scope_ready; `git commit` staging a critical frontend defect → code_frontend_clean (cheap targeted ctx).
   const v2gate = await enforceV2GatesPre(sessionId, parsed.data);
-  const exitCode: 0 | 2 = v1.exitCode === 2 || v2.exitCode === 2 || v2gate.exitCode === 2 ? 2 : 0;
-  const stderr = [v1.stderr, ...v2.messages, v2gate.message].filter(Boolean).join('\n');
-  const contextInjections = [...v1.contextInjections, ...v2.injections];
+  const exitCode: 0 | 2 = v1.exitCode === 2 || v2gate.exitCode === 2 ? 2 : 0;
+  const stderr = [v1.stderr, v2gate.message].filter(Boolean).join('\n');
+  const contextInjections = [...v1.contextInjections];
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
   // under `--dangerously-skip-permissions` (= bypassPermissions) Claude Code
