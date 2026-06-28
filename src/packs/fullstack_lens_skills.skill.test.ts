@@ -1,8 +1,12 @@
 /**
- * T2.13 — schema-validation + lens-SELECT test for fullstack-flow's TEN engineering lens skills.
+ * T2.13 + FD4 — schema-validation + lens-SELECT test for fullstack-flow's lens skills (10 engineering + 8 frontend).
  *
  * The engineering lens bucket (design §8): coding-principles · system-design · architecture · testing ·
- * observability · security · performance · accessibility · versioning · compliance. Each is a LAZY lens skill
+ * observability · security · performance · accessibility · versioning · compliance. FD4 integrates the frontend
+ * (UI/UX) capability INTO the same pack as 8 net-new lenses (visual-design · ux-heuristics · frontend-performance
+ * · design-tokens · motion · i18n · content-microcopy · data-viz), each backed by a primary-sourced
+ * knowledge/<lens>.json dataset (FD3); accessibility (engineering bucket) was deepened in FD2 to query its
+ * dataset too. Every lens shares one shape. Each is a LAZY lens skill
  * (NO runtime cost unless selected, design §4.3) that surfaces 2 substantive lines of engineering guidance for
  * its lens. Mirrors `fullstack_pause_guard.skill.test.ts`: every skill.yaml parses against the REAL `Skill`
  * schema; the SELECT predicate picks the lens-bearing pack for a coding work-type and NOT for a non-coding one.
@@ -36,7 +40,7 @@ const PACK_DIR = resolve(HERE, '../../../packs/builtin/fullstack-flow');
 const SKILLS_DIR = resolve(PACK_DIR, 'skills');
 
 // The engineering lens bucket verbatim (design §8) — the 10 skills T2.13 authors.
-const LENSES = [
+const ENGINEERING_LENSES = [
   'coding-principles',
   'system-design',
   'architecture',
@@ -48,6 +52,23 @@ const LENSES = [
   'versioning',
   'compliance',
 ] as const;
+
+// The frontend lens bucket (FD4) — the UI/UX capability integrated INTO fullstack-flow as tier-0 lenses, each
+// backed by a primary-sourced knowledge/<lens>.json dataset (FD3). `accessibility` lives in the engineering
+// bucket above (it was deepened in FD2 to also query its dataset); the other 8 are net-new frontend lenses.
+const FRONTEND_LENSES = [
+  'visual-design',
+  'ux-heuristics',
+  'frontend-performance',
+  'design-tokens',
+  'motion',
+  'i18n',
+  'content-microcopy',
+  'data-viz',
+] as const;
+
+// Every lens skill (both buckets) shares the identical lazy/tool_call/single-<lens>-lens/verdict-surface shape.
+const LENSES = [...ENGINEERING_LENSES, ...FRONTEND_LENSES] as const;
 
 function skillPath(lens: string): string {
   return resolve(SKILLS_DIR, lens, 'skill.yaml');
@@ -67,10 +88,11 @@ const f = (over: Partial<Facets> & Pick<Facets, 'intent'>): Facets => ({
 });
 
 describe('fullstack-flow engineering lens skills (T2.13)', () => {
-  it('the skills/ dir contains exactly the 10 engineering lenses (engineering bucket only — §5 OUT)', async () => {
+  it('the skills/ dir contains exactly the 10 engineering + 8 frontend lenses (FD4 integration)', async () => {
     const dirents = await readdir(SKILLS_DIR, { withFileTypes: true });
     const dirs = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    // pause-guard (T2.9) co-exists; the 10 lenses must all be present and no OTHER lens (no frontend/business).
+    // pause-guard (T2.9) co-exists; the 18 lenses (10 engineering + 8 frontend; accessibility counts once in
+    // the engineering bucket) must all be present and no OTHER lens beyond them + pause-guard.
     for (const lens of LENSES) expect(dirs, `missing lens dir: ${lens}`).toContain(lens);
     const lensDirs = dirs.filter((d) => d !== 'pause-guard');
     expect(new Set(lensDirs)).toEqual(new Set(LENSES));
