@@ -11,7 +11,6 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { enforceV2GatesPre, runToDoneStopBlock } from './v2_enforce.js';
-import { setAutomationFlag } from '../automation_state.js';
 import { writeActiveTask, recordSessionCwd } from '../session_state.js';
 import { persistActorState } from '../fsm_state.js';
 import { workGraphStore, bindProject } from '../../workgraph/store.js';
@@ -143,16 +142,8 @@ describe('FD5/FD6 — frontend pre-delivery gate (a commit BLOCKS on a staged CR
   });
 });
 
-describe('runToDoneStopBlock — run-to-done = drain the kanban (V2-ENF.5)', () => {
-  // Signal = the PER-PROCESS env OPENSQUID_AUTOMATION=1 (a real lap), NOT the persistent flag-file (F6).
-  const PRIOR_AUTO = process.env.OPENSQUID_AUTOMATION;
-  const setLap = (): void => {
-    process.env.OPENSQUID_AUTOMATION = '1';
-  };
-  afterEach(() => {
-    if (PRIOR_AUTO === undefined) delete process.env.OPENSQUID_AUTOMATION;
-    else process.env.OPENSQUID_AUTOMATION = PRIOR_AUTO;
-  });
+describe('runToDoneStopBlock — run-to-done = drain the kanban (V2-ENF.5, live interactively)', () => {
+  // The gate fires whenever the DISCIPLINE is ON (fullstack-flow active) — interactively too, NOT env-scoped.
   // Seed one READY issue into the per-test HOME work-graph (legacy-global — the marker-less session's project).
   async function seedReady(): Promise<void> {
     const store = workGraphStore({
@@ -163,22 +154,21 @@ describe('runToDoneStopBlock — run-to-done = drain the kanban (V2-ENF.5)', () 
     await bindProject(store, 'legacy-global').createIssue({ title: 'ready work', body: '' });
   }
 
-  it('BLOCKS the stop in an autonomous lap while the kanban has READY work', async () => {
-    setLap();
+  it('BLOCKS the stop while the discipline is ON and the kanban has READY work (interactive too)', async () => {
+    await activate(['fullstack-flow']);
     await seedReady();
     expect(await runToDoneStopBlock('sess-r2d-ready')).toMatch(/run to done/i);
   });
 
   it('ALLOWS the stop when the kanban is empty (board drained)', async () => {
-    setLap();
+    await activate(['fullstack-flow']);
     expect(await runToDoneStopBlock('sess-r2d-empty')).toBeNull();
   });
 
-  it('ALLOWS the stop INTERACTIVELY (no automation env) even with ready work — never traps the human', async () => {
-    delete process.env.OPENSQUID_AUTOMATION;
-    await setAutomationFlag('sess-r2d-interactive'); // a stale flag-file must NOT trigger the block (F6)
+  it('ALLOWS the stop when the discipline is OFF (fullstack-flow not active), even with ready work', async () => {
+    await activate([]);
     await seedReady();
-    expect(await runToDoneStopBlock('sess-r2d-interactive')).toBeNull();
+    expect(await runToDoneStopBlock('sess-r2d-off')).toBeNull();
   });
 });
 

@@ -245,15 +245,18 @@ export async function enforceV2GatesPre(sessionId: string, event: Event): Promis
  */
 export async function runToDoneStopBlock(sessionId: string): Promise<string | null> {
   try {
-    if (process.env.OPENSQUID_AUTOMATION !== '1') return null; // interactive: the human drives — never trap
-    // V2-ENF.5 — run-to-done = DRAIN THE KANBAN. Once past SCOPE there are no pauses (AF.6/AF.7): block the
-    // turn-end while the work-graph still has READY work (listReady = open + unblocked + unclaimed; excludes
-    // wedged/parked so stale work can't trap the loop forever). RALPH's BOARD_EMPTY, as a Stop-gate.
+    // The pause-gate applies whenever the DISCIPLINE is ON (fullstack-flow active) — INTERACTIVELY too, so it
+    // actually stops the agent from pausing. Blocking the STOP forces the agent to CONTINUE; it does NOT trap
+    // the human (the user can always interrupt to redirect). NOT automation-env-scoped — that made it inert in
+    // interactive sessions (= not "live"), which was the whole bug.
+    if (!(await fullstackActive(sessionId))) return null; // discipline off → no pause-gate
+    // run-to-done = DRAIN THE KANBAN: block while the work-graph has READY work (listReady = open + unblocked +
+    // unclaimed; excludes wedged/parked so stale work can't trap it). RALPH's BOARD_EMPTY, as a Stop-gate (AF.6/7).
     const ready = await openWg(sessionId)
       .then((wg) => wg.listReady())
       .catch(() => [] as { id: string }[]);
     if (ready.length === 0) return null; // kanban depleted → the run is done → allow the stop
-    return `🦑 run to done — the kanban is NOT empty (${ready.length} ready issue${ready.length === 1 ? '' : 's'}). Past SCOPE there are no pauses (AF.6/AF.7): keep working the board until it is drained.`;
+    return `🦑 run to done — the kanban is NOT empty (${ready.length} ready issue${ready.length === 1 ? '' : 's'}); do not pause until the board is drained (AF.6/AF.7). Keep working — the human will interrupt to redirect.`;
   } catch {
     return null; // fail-open: never trap the turn on an error
   }
