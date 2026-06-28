@@ -32,6 +32,7 @@ import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
 import { reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
+import { sessionEndIndication } from './session_end_indication.js';
 
 /** RSW.1 (wg-9e4f4eb2a40f): demoted memory is hard-deleted after this quiet window. */
 const RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -84,6 +85,16 @@ async function main(): Promise<void> {
   const registry = await buildRegistry();
   const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
   if (stderr) process.stderr.write(stderr + '\n');
+
+  // T-session-end-indication (wg-a9af600828fe) — name the session that ended (+ its task), so `/exit`
+  // is unambiguous (the user runs one session; the "phantom sibling" confusion was identity-invisible).
+  // Read the active task BEFORE archiveActiveTask below destroys it. Fail-open — never block session close.
+  try {
+    const ended = await readActiveTask(sessionId);
+    process.stderr.write(sessionEndIndication(sessionId, ended) + '\n');
+  } catch {
+    process.stderr.write(`[opensquid] session ${sessionId.slice(0, 8)} ended\n`);
+  }
 
   // MAU.3 — flush authored memories to the long-term RAG at the session boundary.
   await reconcileMemoryOnSessionEnd(sessionId);
