@@ -4,9 +4,11 @@
  * Uses the vitest globalSetup OPENSQUID_HOME temp dir (precedent: scope_evidence.test.ts) for session-state
  * writes; the target file goes to an OS temp dir. Unique sid per test.
  */
+import { execFile } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
@@ -15,7 +17,13 @@ import { appendPhase } from '../workflow_phases.js';
 import { writeActiveTask } from '../session_state.js';
 
 import { codeEvidenceForSession } from './code_evidence.js';
-import { readinessResult, recordReadiness, runReadiness, type Readiness } from './readiness.js';
+import {
+  gatherReadiness,
+  readinessResult,
+  recordReadiness,
+  runReadiness,
+  type Readiness,
+} from './readiness.js';
 
 let n = 0;
 const sid = (): string => `readiness-test-${String(n++)}`;
@@ -150,5 +158,38 @@ describe('codeEvidenceForSession (T2.7 bridge)', () => {
       readinessRan: false,
       deprecatedClean: false,
     });
+  });
+});
+
+describe('gatherReadiness — cheap staged-file deprecated scan (T2.7 live wiring)', () => {
+  const execFileP = promisify(execFile);
+  async function repoWith(file: string, content: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'osq-readiness-'));
+    await execFileP('git', ['init', '-q'], { cwd: dir });
+    await execFileP('git', ['config', 'user.email', 't@t'], { cwd: dir });
+    await execFileP('git', ['config', 'user.name', 't'], { cwd: dir });
+    await writeFile(join(dir, file), content, 'utf8');
+    await execFileP('git', ['add', file], { cwd: dir });
+    return dir;
+  }
+
+  it('flags a staged source file carrying a deprecated pattern (the BLOCKING facet)', async () => {
+    const dir = await repoWith('a.ts', 'export const x = "abc".substr(1);');
+    expect((await gatherReadiness(dir)).deprecated.length).toBeGreaterThan(0);
+  });
+
+  it('clean staged source → no deprecated hits', async () => {
+    const dir = await repoWith('a.ts', 'export const x = "abc".slice(1);');
+    expect((await gatherReadiness(dir)).deprecated).toEqual([]);
+  });
+
+  it('ignores non-source staged files (only scans code)', async () => {
+    const dir = await repoWith('notes.md', 'x.substr(1) in prose, not code');
+    expect((await gatherReadiness(dir)).deprecated).toEqual([]);
+  });
+
+  it('FAIL-OPEN: a non-repo cwd → empty (never a false block)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'osq-norepo-'));
+    expect((await gatherReadiness(dir)).deprecated).toEqual([]);
   });
 });

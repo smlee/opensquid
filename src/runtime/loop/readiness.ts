@@ -22,10 +22,14 @@
  *
  * Spec: docs/tasks/T-v2-track2-discipline.md T2.7 ("Key code shapes" / "Test fixtures").
  */
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 
 import { atomicWriteFile } from '../atomic_write.js';
 import { sessionStateFile } from '../paths.js';
+
+const execFileP = promisify(execFile);
 
 import type { CodeIndex } from '../coverage/check.js';
 
@@ -65,6 +69,45 @@ export async function runReadiness(targetFile: string, index: CodeIndex): Promis
   const text = await readFile(targetFile, 'utf8').catch(() => '');
   const deprecated = DEPRECATED.filter((re) => re.test(text)).map((re) => re.source);
   return { affected: [...new Set(affected)], existingDefs, deprecated };
+}
+
+/** Pure deprecated-pattern scan of a file's text (the BLOCKING facet, no CodeIndex needed). */
+export function scanDeprecated(text: string): string[] {
+  return DEPRECATED.filter((re) => re.test(text)).map((re) => re.source);
+}
+
+const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|vue|svelte|astro)$/i;
+
+/**
+ * CHEAP readiness (no CodeIndex) — the live-wiring scanner: read the STAGED source files via fixed-argv git and
+ * scan each for deprecated patterns. The `affected`/`existingDefs` informational facets need the CodeIndex
+ * (`runReadiness`) and are intentionally left empty here; the gate blocks on `deprecated` only (T2.7). FAIL
+ * toward EMPTY (a non-repo / git error → no deprecated hits → never a false block); the caller still records
+ * `ran:true` so the gate's `readiness_ran` facet reflects that the scan happened.
+ */
+export async function gatherReadiness(cwd: string): Promise<Readiness> {
+  const deprecated = new Set<string>();
+  try {
+    const { stdout } = await execFileP('git', ['diff', '--cached', '--name-only'], { cwd });
+    const files = stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((p) => p !== '' && SOURCE_EXT.test(p));
+    for (const f of files) {
+      try {
+        const { stdout: content } = await execFileP('git', ['show', `:${f}`], {
+          cwd,
+          maxBuffer: 8_000_000,
+        });
+        for (const d of scanDeprecated(content)) deprecated.add(d);
+      } catch {
+        // a deleted/binary staged path → skip (cannot scan)
+      }
+    }
+  } catch {
+    // not a repo / git error → empty (never a false block)
+  }
+  return { affected: [], existingDefs: [], deprecated: [...deprecated] };
 }
 
 /**

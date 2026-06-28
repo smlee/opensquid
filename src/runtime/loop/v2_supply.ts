@@ -94,7 +94,9 @@ import { planEvidence, openWg } from './plan_evidence.js';
 import { autoDecompose } from './auto_decompose.js';
 import { buildCoveredBy } from './plan_audit.js';
 import { extractScope } from './scope_extract.js';
+import { gatherReadiness, recordReadiness, readinessResult } from './readiness.js';
 import { scopeEvidence } from './scope_evidence.js';
+import { isComplete, readPhaseState } from '../workflow_phases.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
 
 import type { Envelope } from '../bus/types.js';
@@ -321,6 +323,27 @@ export async function runV2Cartridges(
     } catch (err) {
       // FAIL-OPEN: capture plumbing must never break the hook (observe-never-breaks).
       process.stderr.write(`[v2-supply] captured-ask append failed (ignored): ${String(err)}\n`);
+    }
+  }
+  // T2.7 LIVE WIRING (the fix for the FSM stalling at CODE): once the active task's 7 phases are complete, RECORD
+  // the readiness result so `code.readiness_ran` + `code.deprecated_clean` become real and the CODE gate can
+  // advance CODE→DEPLOY. Cheap (staged-file deprecated scan, NO CodeIndex) + FAIL-OPEN. Re-scans while a
+  // deprecated hit remains (so a fix clears it — no permanent block); skips once recorded clean.
+  if (event.kind === 'post_tool_call') {
+    try {
+      const taskId = await readActiveTaskId(sessionId);
+      const cwd = 'cwd' in event ? (event as { cwd?: unknown }).cwd : undefined;
+      if (taskId !== null && typeof cwd === 'string' && cwd !== '') {
+        const cur = await readinessResult(sessionId, taskId);
+        if (
+          !(cur.ran && cur.deprecatedClean) &&
+          isComplete(await readPhaseState(sessionId), taskId)
+        ) {
+          await recordReadiness(sessionId, taskId, await gatherReadiness(cwd));
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`[v2-supply] readiness record failed (ignored): ${String(err)}\n`);
     }
   }
   let exitCode: 0 | 2 = 0;

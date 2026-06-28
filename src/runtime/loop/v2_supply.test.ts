@@ -1,9 +1,11 @@
 /** FAC-CUT.5b.2 — runV2Cartridges: in-process v2 host supply (inert / gate-fires+persist / non-trigger / fail-open). */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import { execFile } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { compilePackV2 } from '../../packs/compile_v2.js';
 import { PackV2 } from '../../packs/schemas/pack_v2.js';
@@ -21,6 +23,8 @@ import {
   writeActiveTask,
 } from '../session_state.js';
 import { pendingLessonsDir } from '../wedge/capture.js';
+import { appendPhase, REQUIRED_PHASES } from '../workflow_phases.js';
+import { readinessResult } from './readiness.js';
 import type { Event } from '../event.js';
 import type { Fsm } from '../fsm.js';
 
@@ -865,5 +869,52 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     const body = await readFile(join(root, 'docs', 'reports', 'plan-T-rep-2026-06-22.md'), 'utf8');
     expect(body).not.toContain('## Goal alignment');
+  });
+});
+
+describe('runV2Cartridges — T2.7 readiness live wiring', () => {
+  const execFileP = promisify(execFile);
+  async function repo(file: string, content: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'osq-rdy-'));
+    await execFileP('git', ['init', '-q'], { cwd: dir });
+    await execFileP('git', ['config', 'user.email', 't@t'], { cwd: dir });
+    await execFileP('git', ['config', 'user.name', 't'], { cwd: dir });
+    await writeFile(join(dir, file), content, 'utf8');
+    await execFileP('git', ['add', file], { cwd: dir });
+    return dir;
+  }
+  const postIn = (cwd: string): Event =>
+    ({ kind: 'post_tool_call', tool: 'Bash', args: {}, cwd, exit_code: 0 }) as unknown as Event;
+
+  it('RECORDS readiness when the active task 7 phases are complete + clean staged code', async () => {
+    const s = 'sess-rdy-clean';
+    mockLoad.mockResolvedValue([scopeGatePack()]);
+    await writeActiveTask(s, { id: 'T-r', subject: 'r', started_at: NOW, taskId: 'T-r' });
+    for (const p of REQUIRED_PHASES) await appendPhase(s, 'T-r', p);
+    const dir = await repo('a.ts', 'export const x = "abc".slice(1);');
+    await runV2Cartridges(s, postIn(dir), NOW);
+    expect(await readinessResult(s, 'T-r')).toEqual({ ran: true, deprecatedClean: true });
+  });
+
+  it('records deprecated_clean:false when staged code carries a deprecated pattern (CODE gate will block)', async () => {
+    const s = 'sess-rdy-dep';
+    mockLoad.mockResolvedValue([scopeGatePack()]);
+    await writeActiveTask(s, { id: 'T-d', subject: 'd', started_at: NOW, taskId: 'T-d' });
+    for (const p of REQUIRED_PHASES) await appendPhase(s, 'T-d', p);
+    const dir = await repo('a.ts', 'export const x = "abc".substr(1);');
+    await runV2Cartridges(s, postIn(dir), NOW);
+    const r = await readinessResult(s, 'T-d');
+    expect(r.ran).toBe(true);
+    expect(r.deprecatedClean).toBe(false);
+  });
+
+  it('does NOT record before the 7 phases are complete (fail-closed stays blocking)', async () => {
+    const s = 'sess-rdy-incomplete';
+    mockLoad.mockResolvedValue([scopeGatePack()]);
+    await writeActiveTask(s, { id: 'T-i', subject: 'i', started_at: NOW, taskId: 'T-i' });
+    await appendPhase(s, 'T-i', 'pre_research'); // only 1 of 7
+    const dir = await repo('a.ts', 'export const x = 1;');
+    await runV2Cartridges(s, postIn(dir), NOW);
+    expect((await readinessResult(s, 'T-i')).ran).toBe(false);
   });
 });
