@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "lens": "visual-design",
+  "description": "Primary-sourced visual-design rules — type scale, spacing/grid, color systems (OKLCH), hierarchy, depth. Re-derived from Refactoring UI, Modular Scale, the 8pt grid, and OKLCH primary sources.",
+  "rules": [
+    {
+      "id": "type-scale-single-ratio",
+      "title": "One modular type scale",
+      "category": "typography",
+      "severity": "high",
+      "rule": "Pick ONE ratio (1.125–1.333 for UI; 1.25 common) and derive ~5–7 sizes from a base; don't hand-pick arbitrary px.",
+      "do": "16 base x 1.25: 13, 16, 20, 25, 31, 39.",
+      "dont": "13/14/15/17/19/22/24 — too many near-identical sizes, no rhythm.",
+      "tags": ["typography", "scale"],
+      "source": {
+        "name": "Modular Scale",
+        "url": "https://www.modularscale.com/",
+        "ref": "modular type scale"
+      }
+    },
+    {
+      "id": "line-length-measure",
+      "title": "Line length (measure)",
+      "category": "typography",
+      "severity": "medium",
+      "rule": "Body measure 45–75 characters (~66 ideal); cap with max-width ~65ch. (Butterick allows up to 90ch.)",
+      "do": "p { max-width: 65ch }",
+      "tags": ["typography", "readability"],
+      "source": {
+        "name": "Butterick's Practical Typography",
+        "url": "https://practicaltypography.com/line-length.html",
+        "ref": "line length 45–90ch"
+      }
+    },
+    {
+      "id": "line-height-band",
+      "title": "Line height",
+      "category": "typography",
+      "severity": "medium",
+      "rule": "Body line-height 1.4–1.7; headings tighter 1.1–1.3. Longer measures need taller line-height.",
+      "tags": ["typography"],
+      "source": {
+        "name": "WCAG 2.2",
+        "url": "https://www.w3.org/TR/WCAG22/#text-spacing",
+        "ref": "SC 1.4.12 (line-height >= 1.5x supportable)"
+      }
+    },
+    {
+      "id": "spacing-8pt-grid",
+      "title": "8pt spacing grid",
+      "category": "spacing",
+      "severity": "high",
+      "rule": "Structural spacing is a multiple of 8px (4px fine sub-grid); pull values from a token ramp (4,8,12,16,24,32,48,64) — never arbitrary margins.",
+      "dont": "margin: 13px / 7px / 22px ad hoc.",
+      "tags": ["spacing", "layout", "tokens"],
+      "source": {
+        "name": "Material 3 / 8pt grid",
+        "url": "https://m3.material.io/foundations/layout/understanding-layout/spacing",
+        "ref": "spacing tokens"
+      }
+    },
+    {
+      "id": "grouping-proximity",
+      "title": "Group with spacing (proximity)",
+      "category": "spacing",
+      "severity": "medium",
+      "rule": "Intra-group gap < inter-group gap, so related items read as a unit; a label hugs its input, groups separate.",
+      "tags": ["spacing", "hierarchy"],
+      "source": {
+        "name": "Refactoring UI",
+        "url": "https://www.refactoringui.com/",
+        "ref": "spacing & grouping"
+      }
+    },
+    {
+      "id": "hierarchy-not-size-alone",
+      "title": "Hierarchy via weight/color, not size alone",
+      "category": "hierarchy",
+      "severity": "high",
+      "rule": "Establish emphasis with font-weight and color/contrast, not just larger text; de-emphasize secondary text with a softer color, not a tiny size.",
+      "do": "Secondary text: same size, muted color (>= 4.5:1).",
+      "tags": ["hierarchy", "typography"],
+      "source": {
+        "name": "Refactoring UI",
+        "url": "https://www.refactoringui.com/",
+        "ref": "visual hierarchy"
+      }
+    },
+    {
+      "id": "color-oklch-tokens",
+      "title": "Color in OKLCH tonal ramps",
+      "category": "color",
+      "severity": "medium",
+      "rule": "Define color tokens in oklch() (perceptually uniform), as tonal ramps (hue constant, lightness stepped evenly) + a neutral/grey ramp; 5–10 steps per hue. Avoid hand-mixed hex.",
+      "do": "--brand-500: oklch(0.62 0.17 256); ramp by L.",
+      "tags": ["color", "tokens"],
+      "source": {
+        "name": "Evil Martians — OKLCH in CSS",
+        "url": "https://evilmartians.com/chronicles/oklch-in-css-why-quit-rgb-hsl",
+        "ref": "OKLCH tonal ramps"
+      }
+    },
+    {
+      "id": "depth-consistent-light",
+      "title": "Consistent light source + two-part shadows",
+      "category": "depth",
+      "severity": "low",
+      "rule": "Shadows imply a single (top) light source — offset +y; use a larger soft shadow + a tight darker one for realistic elevation. Prefer shadow/background/spacing over borders to separate.",
+      "tags": ["depth", "elevation"],
+      "source": {
+        "name": "Refactoring UI",
+        "url": "https://www.refactoringui.com/",
+        "ref": "shadows & depth"
+      }
+    },
+    {
+      "id": "empty-states",
+      "title": "Design the empty + edge states",
+      "category": "states",
+      "severity": "medium",
+      "rule": "Every list/data view has a designed empty state (and loading + error); don't ship only the happy, full-of-data view.",
+      "tags": ["states", "ux"],
+      "source": {
+        "name": "Refactoring UI",
+        "url": "https://www.refactoringui.com/",
+        "ref": "empty states"
+      }
+    }
+  ]
+}
