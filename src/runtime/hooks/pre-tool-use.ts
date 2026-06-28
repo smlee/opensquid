@@ -19,7 +19,8 @@
  * the parent agent because of an opensquid bug. The `main().catch()` at the
  * bottom is the last line of defense.
  */
-import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
+import { buildRegistry, loadActivePacksForDispatch, loadActiveV2Cartridges } from '../bootstrap.js';
+import { runV2SkillHost } from '../loop/v2_skill_host.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { parseApplyPatch } from './apply_patch.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
@@ -219,9 +220,18 @@ async function main(): Promise<void> {
   }
 
   const v1 = await dispatchEvent(parsed.data, packs, registry, sessionId);
-  const exitCode: 0 | 2 = v1.exitCode === 2 ? 2 : 0;
-  const stderr = v1.stderr;
-  const contextInjections = [...v1.contextInjections];
+  // VS.2 (T-v2-skill-host): v1 dispatch walks only v1 Pack[]; the active v2 cartridges' SKILLS
+  // (pause-guard, lenses) run HERE through the same dispatch machinery, so they actually enforce —
+  // pause-guard (load:preload) blocks AskUserQuestion past SCOPE. FAIL-OPEN inside runV2SkillHost.
+  const skillHost = await runV2SkillHost(
+    await loadActiveV2Cartridges(sessionId),
+    parsed.data,
+    registry,
+    sessionId,
+  );
+  const exitCode: 0 | 2 = v1.exitCode === 2 || skillHost.exitCode === 2 ? 2 : 0;
+  const stderr = [v1.stderr, skillHost.stderr].filter((s) => s.length > 0).join('\n');
+  const contextInjections = [...v1.contextInjections, ...skillHost.contextInjections];
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
   // under `--dangerously-skip-permissions` (= bypassPermissions) Claude Code
