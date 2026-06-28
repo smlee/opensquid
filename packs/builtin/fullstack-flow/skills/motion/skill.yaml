@@ -1,0 +1,28 @@
+# motion — a lazy FRONTEND lens (FD4). Backed by knowledge/motion.json (Material motion + MDN + WCAG
+# reduced-motion).
+name: motion
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Motion/animation lens for UI work — duration, easing, performant properties, and the reduced-motion contract.
+  Selected for transitions, animations, micro-interactions, and any moving surface.
+rules:
+  - id: motion-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: motion
+          query: { severity: ['critical', 'high'] }
+        as: mo
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Motion lens (Material/MDN + WCAG, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=motion) for the cited set): keep UI transitions
+            ~150–300ms (up to ~500ms for large surfaces) with asymmetric easing (ease-out in, ease-in out), never
+            linear; animate ONLY transform + opacity to hold 60fps; honor prefers-reduced-motion for non-essential
+            motion; motion must be functional (direct attention, show continuity), not decorative.

@@ -1,0 +1,28 @@
+# content-microcopy — a lazy FRONTEND lens (FD4). Backed by knowledge/content-microcopy.json (NN/g UX-writing +
+# plainlanguage.gov).
+name: content-microcopy
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  UX-writing/microcopy lens — clarity, button + error + empty-state copy, scannability, and consistent voice.
+  Selected for any user-facing labels, messages, instructions, or interface text.
+rules:
+  - id: content-microcopy-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: content-microcopy
+          query: { severity: ['critical', 'high'] }
+        as: copy
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Content/microcopy lens (NN/g + plainlanguage.gov, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=content-microcopy) for the cited set): write plain,
+            concise, active copy; label buttons with the specific action (not OK/Submit); error messages state
+            what happened + how to fix in plain language (no codes); empty states teach + offer the first action;
+            front-load and make text scannable; use one term per concept with a consistent voice.

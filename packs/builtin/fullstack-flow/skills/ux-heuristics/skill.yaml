@@ -1,0 +1,28 @@
+# ux-heuristics — a lazy FRONTEND lens (FD4). Backed by knowledge/ux-heuristics.json (NN/g 10 heuristics +
+# Fitts's/Hick's laws, primary-sourced).
+name: ux-heuristics
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Usability/interaction lens for UI work — Nielsen's 10 heuristics plus Fitts's and Hick's laws. Selected for
+  flows, forms, navigation, feedback, error handling, and any interactive surface a human operates.
+rules:
+  - id: ux-heuristics-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: ux-heuristics
+          query: { severity: ['critical', 'high'] }
+        as: ux
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            UX-heuristics lens (NN/g 10 + Fitts/Hick, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=ux-heuristics) for the cited set): show system status
+            with timely feedback; give a clear exit/undo (user control); follow platform conventions (Jakob);
+            PREVENT errors before they happen and, on error, say what + how to fix in plain language; favor
+            recognition over recall; size + place targets by Fitts's law and cut choices per Hick's.

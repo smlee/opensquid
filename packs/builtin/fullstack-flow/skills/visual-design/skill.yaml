@@ -1,0 +1,29 @@
+# visual-design — a lazy FRONTEND lens (FD4). Same lens-skill shape as accessibility/performance (seo-aeo-expert
+# precedent): loaded ONLY when selected → NO runtime cost otherwise. Backed by knowledge/visual-design.json
+# (primary-sourced: Refactoring UI, Modular Scale, 8pt grid, OKLCH).
+name: visual-design
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Visual-design lens for UI work — type scale, spacing/grid rhythm, color systems (OKLCH tonal ramps), visual
+  hierarchy, depth, and designed empty/edge states. Selected for components, layouts, styling, and any rendered surface.
+rules:
+  - id: visual-design-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: visual-design
+          query: { severity: ['critical', 'high'] }
+        as: vd
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Visual-design lens (Refactoring UI + Modular Scale + 8pt grid + OKLCH, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=visual-design) for the cited set): derive type from ONE
+            modular scale; put structural spacing on the 8pt grid (proximity groups related items); establish
+            hierarchy with weight + color, not size alone; define color as OKLCH tonal ramps via tokens; design the
+            empty/loading/error states, not just the happy path.

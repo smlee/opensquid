@@ -1,0 +1,28 @@
+# design-tokens — a lazy FRONTEND lens (FD4). Backed by knowledge/design-tokens.json (W3C DTCG format + tiered
+# primitive/semantic/component token architecture).
+name: design-tokens
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Design-tokens lens for UI work — the W3C DTCG token format and a tiered primitive→semantic→component
+  architecture. Selected for theming, styling systems, design-system work, and any styling that should not be ad-hoc.
+rules:
+  - id: design-tokens-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: design-tokens
+          query: { severity: ['critical', 'high'] }
+        as: dt
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Design-tokens lens (W3C DTCG, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=design-tokens) for the cited set): express tokens in the
+            DTCG format ($value/$type); architect three tiers — primitive → semantic → component — and have UI
+            reference SEMANTIC tokens, never raw primitives; theme by re-pointing the semantic layer; name tokens
+            by intent/role (not appearance); tokenize the whole scale (color, space, type, border, shadow, motion).

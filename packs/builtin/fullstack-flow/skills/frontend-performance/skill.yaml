@@ -1,0 +1,28 @@
+# frontend-performance — a lazy FRONTEND lens (FD4). Distinct from the backend `performance` lens (algorithmic/
+# N+1): this is the loading/rendering/Core-Web-Vitals axis. Backed by knowledge/frontend-performance.json (web.dev).
+name: frontend-performance
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Frontend performance lens — Core Web Vitals (LCP/INP/CLS), image + JavaScript payload, fonts, and performance
+  budgets. Selected for client rendering, asset loading, bundling, and any user-perceived latency on the web.
+rules:
+  - id: frontend-performance-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: frontend-performance
+          query: { severity: ['critical', 'high'] }
+        as: fp
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Frontend-performance lens (Core Web Vitals / web.dev, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=frontend-performance) for the cited thresholds): target
+            LCP <= 2.5s (preload + fetchpriority the hero, never lazy-load it), INP <= 200ms (break up long
+            tasks, ship less JS via code-split/tree-shake), CLS <= 0.1 (size media, reserve space, font-display);
+            serve AVIF/WebP responsive images; set + enforce a performance budget in CI.

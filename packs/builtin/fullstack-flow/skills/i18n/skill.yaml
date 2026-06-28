@@ -1,0 +1,27 @@
+# i18n — a lazy FRONTEND lens (FD4). Backed by knowledge/i18n.json (W3C i18n + Unicode CLDR/ICU + MDN Intl).
+name: i18n
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Internationalization/localization lens — externalized strings, ICU plurals, locale-aware formatting, bidi/RTL,
+  text expansion, and language declaration. Selected for any user-facing text, formatting, or multi-locale UI.
+rules:
+  - id: i18n-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: i18n
+          query: { severity: ['critical', 'high'] }
+        as: i18n
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            i18n lens (W3C / Unicode CLDR / Intl, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=i18n) for the cited set): externalize every user-facing
+            string (never concatenate sentence fragments); pluralize via ICU MessageFormat / Intl.PluralRules (not
+            n===1); format dates/numbers/currency with Intl.* by locale; support bidi/RTL with logical CSS
+            properties; allow 30–200% text expansion; declare the language with the lang attribute.

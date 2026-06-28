@@ -1,0 +1,28 @@
+# data-viz — a lazy FRONTEND lens (FD4). Backed by knowledge/data-viz.json (Cleveland & McGill encoding ranking,
+# Tufte, Datawrapper, ColorBrewer).
+name: data-viz
+load: lazy
+requires: []
+triggers:
+  - kind: tool_call
+prose: |
+  Data-visualization lens — perceptual encoding accuracy, axis integrity, chart selection, chartjunk, accessible
+  color, and direct labeling. Selected for charts, dashboards, graphs, and any quantitative display.
+rules:
+  - id: data-viz-lens
+    process:
+      - call: knowledge_lookup
+        args:
+          pack: fullstack-flow
+          dataset: data-viz
+          query: { severity: ['critical', 'high'] }
+        as: dv
+      - call: verdict
+        args:
+          level: surface
+          message: >-
+            Data-viz lens (Cleveland-McGill / Tufte / ColorBrewer, primary-sourced — query
+            knowledge_lookup(pack=fullstack-flow, dataset=data-viz) for the cited set): encode by perceptual
+            accuracy (position+length over angle/area — bar/line over pie); start BAR value axes at zero; match
+            chart type to the question; maximize data-ink (kill 3D/chartjunk); use colorblind-safe scales and
+            never color alone; label directly to cut legend lookups.
