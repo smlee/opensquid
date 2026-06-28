@@ -62,9 +62,9 @@ describe('generateDesignSystem — coherence + enforcement', () => {
 
   it('emits a DTCG color ramp (50..900) for brand + neutral', () => {
     const color = sys.tokens.color as Record<string, Record<string, { $value: string }>>;
-    expect(Object.keys(color.brand)).toContain('500');
-    expect(color.brand['500']?.$value).toMatch(/^#[0-9a-f]{6}$/);
-    expect(Object.keys(color.neutral)).toHaveLength(10);
+    expect(Object.keys(color.brand ?? {})).toContain('500');
+    expect(color.brand?.['500']?.$value).toMatch(/^#[0-9a-f]{6}$/);
+    expect(Object.keys(color.neutral ?? {})).toHaveLength(10);
   });
 
   it('derives a modular type scale from base × ratio (base=16 → base token 16px)', () => {

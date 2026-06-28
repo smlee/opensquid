@@ -61,8 +61,8 @@ function srgbToLinear(c8: number): number {
 export function relativeLuminance(hex: string): number {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
   if (m === null) return 0;
-  const [r, g, b] = [m[1], m[2], m[3]].map((h) => srgbToLinear(parseInt(h, 16)));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const chan = (i: number): number => srgbToLinear(parseInt(m[i] ?? '0', 16));
+  return 0.2126 * chan(1) + 0.7152 * chan(2) + 0.0722 * chan(3);
 }
 
 /** WCAG contrast ratio between two #rrggbb colors (1..21). */
@@ -88,7 +88,9 @@ const DesignSystemArgs = z
   })
   .strict();
 
-type DesignSystemInput = z.infer<typeof DesignSystemArgs>;
+// The registry types `execute` args by the schema INPUT (defaults still optional), so accept the loose shape and
+// apply the same defaults internally — robust whether called pre- or post-parse.
+type DesignSystemInput = z.input<typeof DesignSystemArgs>;
 
 export interface DesignSystemResult {
   tokens: Record<string, unknown>; // DTCG-conformant
@@ -104,7 +106,7 @@ const RAMP_L = [0.98, 0.95, 0.89, 0.81, 0.71, 0.62, 0.53, 0.44, 0.35, 0.26] as c
 
 /** PURE — build the full token system + enforce contrast. Throws only on an unsatisfiable contrast (anti-pattern). */
 export function generateDesignSystem(input: DesignSystemInput): DesignSystemResult {
-  const { brandHue, scaleRatio, baseSize, density } = input;
+  const { brandHue, scaleRatio = 1.25, baseSize = 16, density = 'comfortable' } = input;
   const rationale: string[] = [];
   const warnings: string[] = [];
 
@@ -203,8 +205,17 @@ export function registerDesignSystemGenerate(registry: FunctionRegistry): void {
       try {
         return Promise.resolve(ok(generateDesignSystem(args) satisfies DesignSystemResult));
       } catch (err) {
-        // An unsatisfiable-contrast input is an enforced anti-pattern → fail-loud→null (caller surfaces it).
-        return Promise.resolve(ok({ error: String(err instanceof Error ? err.message : err) }));
+        // An unsatisfiable-contrast input is an enforced anti-pattern — surface it in `warnings` (the caller sees
+        // the empty token set + the reason) rather than throwing (a primitive must not throw inside execute).
+        const message = err instanceof Error ? err.message : String(err);
+        return Promise.resolve(
+          ok({
+            tokens: {},
+            rationale: [],
+            contrastChecks: [],
+            warnings: [message],
+          } satisfies DesignSystemResult),
+        );
       }
     },
   });
