@@ -90,7 +90,7 @@ export function auditContent(path: string, content: string): Finding[] {
   if (!isFrontendFile(path)) return [];
   const findings: Finding[] = [];
   const lines = content.split('\n');
-  const fileHasFocusVisible = /:focus-visible/.test(content);
+  const fileHasFocusVisible = content.includes(':focus-visible');
   lines.forEach((line, i) => {
     const lineNo = i + 1;
     const img = detectImgNoAlt(line);

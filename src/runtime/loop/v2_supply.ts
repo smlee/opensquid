@@ -88,6 +88,7 @@ async function surfaceReportToChat(cwd: string, body: string): Promise<void> {
 }
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
+import { frontendEvidenceForEvent, type FrontendEvidenceDeps } from './frontend_evidence.js';
 import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evidence.js';
 import { planEvidence } from './plan_evidence.js';
 import { scopeEvidence } from './scope_evidence.js';
@@ -155,6 +156,7 @@ export async function buildGuardCtx(
   authorInputs?: AuthorInputs,
   codeDeps?: CodeEvidenceDeps,
   deployDeps?: DeployEvidenceDeps,
+  frontendDeps?: FrontendEvidenceDeps,
 ): Promise<Map<string, unknown>> {
   const m = new Map<string, unknown>();
   m.set('event', event.kind);
@@ -270,6 +272,17 @@ export async function buildGuardCtx(
   m.set('deploy.capability_ok', dep.capabilityOk);
   m.set('deploy.accepted', dep.accepted);
   m.set('deploy', { capability_ok: dep.capabilityOk, accepted: dep.accepted });
+
+  // FD5/FD6 — FRONTEND pre-delivery gate evidence (the OUTPUT enforcement). `frontend.clean` = the staged
+  // frontend files carry NO CRITICAL accessibility defect (frontend_audit). DUAL-SHAPE like T2.4–T2.8: a nested
+  // `frontend` object (the path the guard `frontend.clean` resolves) PLUS flat `frontend.*` Map keys. FAIL-OPEN
+  // (frontend_evidence.ts): a non-frontend / non-repo / unanalyzable commit → clean:true (never bricked); only a
+  // PROVEN staged critical defect blocks. `frontendDeps` injectable; default reads the staged blobs via git.
+  const fe = await frontendEvidenceForEvent(event, frontendDeps);
+  m.set('frontend.clean', fe.clean);
+  m.set('frontend.critical', fe.critical);
+  m.set('frontend.high', fe.high);
+  m.set('frontend', { clean: fe.clean, critical: fe.critical, high: fe.high });
   return m;
 }
 

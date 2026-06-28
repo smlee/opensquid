@@ -27,6 +27,7 @@ import { readFsmStateFile } from '../fsm_state.js';
 import { buildGuardCtx } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
 import { defaultCodeEvidenceDeps } from './code_evidence.js';
+import { frontendEvidenceForEvent } from './frontend_evidence.js';
 
 export interface V2EnforceResult {
   exitCode: 0 | 2;
@@ -34,20 +35,47 @@ export interface V2EnforceResult {
 }
 const PASS: V2EnforceResult = { exitCode: 0, message: '' };
 
-/** The pending action → the gate guard that enforces it (its advance-action), or null when no gate applies. */
-function gateForAction(event: Event): { guardRef: string; state: string } | null {
+/**
+ * The pending action → the gate guard that enforces it, or null when no gate applies. `ctx: 'full'` builds the
+ * (expensive) buildGuardCtx; `ctx: 'frontend'` builds a CHEAP ctx with only the frontend audit fact (so a commit
+ * is not made expensive by the author/code CodeIndex build).
+ */
+function gateForAction(
+  event: Event,
+): { guardRef: string; state: string; ctx: 'full' | 'frontend' } | null {
   if (!('tool' in event)) return null;
   const args = 'args' in event ? event.args : undefined;
   const filePath = typeof args?.file_path === 'string' ? args.file_path : '';
   // SCOPE gate: writing a pre-research artifact (T2.4 is_advance); scope_ready short-circuits non-advances.
-  // (CODE commit-gating is intentionally left to v1's phase-logged-before-commit — see module doc.)
+  // (CODE phase/readiness commit-gating is left to v1's phase-logged-before-commit — see module doc.)
   if (
     (event.tool === 'Write' || event.tool === 'Edit') &&
     /docs\/research\/.*-pre-research-/.test(filePath)
   ) {
-    return { guardRef: 'scope_ready', state: 'scope' };
+    return { guardRef: 'scope_ready', state: 'scope', ctx: 'full' };
+  }
+  // FD5/FD6 FRONTEND pre-delivery gate: a `git commit` is the delivery moment. Evaluate `frontend.clean` over a
+  // CHEAP ctx (frontend evidence only). FAIL-OPEN — only a staged CRITICAL frontend defect blocks the commit.
+  const command = typeof args?.command === 'string' ? args.command : '';
+  if (event.tool === 'Bash' && /\bgit\s+(?:-[cC]\s+\S+\s+)*commit\b/.test(command)) {
+    return { guardRef: 'code_frontend_clean', state: 'code', ctx: 'frontend' };
   }
   return null;
+}
+
+/**
+ * Build the CHEAP ctx for the frontend pre-delivery gate: only the `frontend` audit fact (no CodeIndex build).
+ * Dual-shape (nested `frontend` object + flat `frontend.*` keys) so the guard expression `frontend.clean`
+ * path-resolves exactly as it does under buildGuardCtx.
+ */
+async function frontendGateCtx(event: Event): Promise<Map<string, unknown>> {
+  const fe = await frontendEvidenceForEvent(event);
+  const m = new Map<string, unknown>();
+  m.set('frontend.clean', fe.clean);
+  m.set('frontend.critical', fe.critical);
+  m.set('frontend.high', fe.high);
+  m.set('frontend', { clean: fe.clean, critical: fe.critical, high: fe.high });
+  return m;
 }
 
 /**
@@ -64,9 +92,22 @@ export async function enforceV2GatesPre(sessionId: string, event: Event): Promis
       const exprs = c.compiled.guardExprs;
       if (exprs === undefined) continue;
       if (!exprs.has(match.guardRef)) continue;
-      const ctx = await buildGuardCtx(event, sessionId, match.state);
+      // CHEAP ctx for the frontend gate (audit fact only); FULL ctx for the SCOPE advance gate.
+      const ctx =
+        match.ctx === 'frontend'
+          ? await frontendGateCtx(event)
+          : await buildGuardCtx(event, sessionId, match.state);
       const pass = new RegistryGuardEvaluator(exprs).eval(match.guardRef, ctx);
       if (!pass) {
+        if (match.guardRef === 'code_frontend_clean') {
+          return {
+            exitCode: 2,
+            message:
+              '🦑 [frontend pre-delivery gate] commit BLOCKED — staged frontend code has a CRITICAL ' +
+              'accessibility defect (e.g. <img> without alt → WCAG 1.1.1, or onClick on a non-interactive ' +
+              'element without role → WCAG 2.1.1). Run frontend_audit, fix the critical finding, then re-commit.',
+          };
+        }
         const msg =
           c.compiled.meta[match.state]?.onFail?.message ?? `${match.state} gate not ready`;
         return { exitCode: 2, message: `🦑 [${match.state} gate] ${msg}` };

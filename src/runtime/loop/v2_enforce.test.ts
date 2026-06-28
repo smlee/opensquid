@@ -2,9 +2,11 @@
  * V2 gate enforcement in PreToolUse — proves the gates can now BLOCK (the fix for "structurally incapable of
  * blocking"). A `git commit` with incomplete phases is denied; non-advance actions pass; an inactive pack passes.
  */
+import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -80,6 +82,62 @@ describe('enforceV2GatesPre', () => {
   it('PASSES when fullstack-flow is NOT active (no gate to enforce), even on a pre-research write', async () => {
     await activate([]); // no v2 cartridge
     expect((await enforceV2GatesPre('sess-enf-inactive', preResearchWrite())).exitCode).toBe(0);
+  });
+});
+
+describe('FD5/FD6 — frontend pre-delivery gate (a commit BLOCKS on a staged CRITICAL frontend defect)', () => {
+  const execFileP = promisify(execFile);
+  let repo: string;
+
+  async function git(args: string[]): Promise<void> {
+    await execFileP('git', args, { cwd: repo });
+  }
+  async function initRepo(): Promise<void> {
+    repo = await mkdtemp(join(tmpdir(), 'osq-v2enf-repo-'));
+    await git(['init', '-q']);
+    await git(['config', 'user.email', 't@t']);
+    await git(['config', 'user.name', 't']);
+  }
+  const commitInRepo = (): Event =>
+    ({
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'git commit -m x' },
+      cwd: repo,
+    }) as unknown as Event;
+
+  afterEach(async () => {
+    if (repo) await rm(repo, { recursive: true, force: true });
+  });
+
+  it('BLOCKS a commit that stages an <img> with no alt (WCAG 1.1.1 critical)', async () => {
+    await activate(['fullstack-flow']);
+    await initRepo();
+    await writeFile(join(repo, 'Card.tsx'), 'export const C = () => <img src="logo.png">;', 'utf8');
+    await git(['add', 'Card.tsx']);
+    const res = await enforceV2GatesPre('sess-fe-block', commitInRepo());
+    expect(res.exitCode).toBe(2);
+    expect(res.message).toMatch(/frontend pre-delivery gate/i);
+  });
+
+  it('PASSES a commit that stages a clean frontend file (img has alt)', async () => {
+    await activate(['fullstack-flow']);
+    await initRepo();
+    await writeFile(
+      join(repo, 'Card.tsx'),
+      'export const C = () => <img src="x" alt="ok" />;',
+      'utf8',
+    );
+    await git(['add', 'Card.tsx']);
+    expect((await enforceV2GatesPre('sess-fe-clean', commitInRepo())).exitCode).toBe(0);
+  });
+
+  it('PASSES a commit that stages only backend code (fail-open — nothing to audit)', async () => {
+    await activate(['fullstack-flow']);
+    await initRepo();
+    await writeFile(join(repo, 'server.ts'), 'export const x = 1;', 'utf8');
+    await git(['add', 'server.ts']);
+    expect((await enforceV2GatesPre('sess-fe-backend', commitInRepo())).exitCode).toBe(0);
   });
 });
 

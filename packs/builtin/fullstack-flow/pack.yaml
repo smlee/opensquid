@@ -61,6 +61,12 @@ guards:
   # `accepted`, acceptance.ts — survives a closed session, re-surfaces at start-up). UNACCEPTED/absent → the
   # accept decision's `else` branch fires → DEPLOY loops back to PLAN (NEVER auto-declare "shipped").
   accepted: 'deploy.accepted'
+  # FD5/FD6 — the FRONTEND pre-delivery gate: a deterministic, zero-LLM predicate over the OUTPUT enforcement.
+  # `frontend.clean` = the STAGED frontend files carry NO CRITICAL accessibility defect (frontend_audit:
+  # img-no-alt, keyboard-dead onClick). FAIL-OPEN (frontend_evidence.ts) — a non-frontend / non-repo / unanalyzable
+  # commit is clean:true, so this gate ONLY blocks a commit that stages a proven critical frontend defect. Enforced
+  # at PRE-commit time by v2_enforce (cheap ctx — frontend evidence only, NOT the full buildGuardCtx).
+  code_frontend_clean: 'frontend.clean'
 
 fsm:
   initial: scope
