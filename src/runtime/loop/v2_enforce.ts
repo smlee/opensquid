@@ -7,18 +7,17 @@
  * one — which is why the discipline never actually blocked anything. This module restores enforcement by
  * evaluating the relevant gate guard BEFORE the action, in pre-tool-use.
  *
- * It is ACTION-scoped (mirrors v1's pre-tool commit gate), not FSM-state-scoped — the two gates the spec says
- * block a specific action:
- *   - CODE  (`code_ready`)  on a `git commit` attempt  — T2.7: "blocks a commit attempt with incomplete phases
- *     … mirrors the v1 commit gate's `phases_complete`".
+ * It enforces the one v2 gate that blocks an action v1 does NOT already cover:
  *   - SCOPE (`scope_ready`) on a Write/Edit of `docs/research/*-pre-research-*` — T2.4 `is_advance`; the guard's
  *     own `!scope.is_advance` short-circuit means it only blocks the not-ready advance, never mid-scoping.
- * PLAN/AUTHOR/DEPLOY stay PROGRESSION gates (advance + report on post when ready) — the spec's "past SCOPE it
- * runs by itself", so they don't deny individual tools.
+ * The CODE commit gate is deliberately NOT enforced here: v1's `phase-logged-before-commit` already gates a
+ * commit on the 7-phase ledger (satisfiable via `log_phase`), whereas v2's `code_ready` additionally requires
+ * `readiness_ran` which has no interactive way to satisfy — enforcing it would brick every commit. PLAN/AUTHOR/
+ * DEPLOY stay PROGRESSION gates (advance + report on post). The run-to-done turn-end pause is the OTHER new v2
+ * enforcement (`runToDoneStopBlock`, below).
  *
- * Cheap by construction: the (expensive) `buildGuardCtx` is built ONLY when the pending action is one of the
- * two advance-actions — every other tool returns PASS immediately. FAIL-OPEN: any error never blocks
- * (observe-never-breaks).
+ * Cheap by construction: the (expensive) `buildGuardCtx` is built ONLY when the pending action is the SCOPE
+ * advance-action — every other tool returns PASS immediately. FAIL-OPEN: any error never blocks.
  */
 import { loadActiveV2Cartridges } from '../bootstrap.js';
 import type { Event } from '../types.js';
@@ -39,13 +38,9 @@ const PASS: V2EnforceResult = { exitCode: 0, message: '' };
 function gateForAction(event: Event): { guardRef: string; state: string } | null {
   if (!('tool' in event)) return null;
   const args = 'args' in event ? event.args : undefined;
-  const command = typeof args?.command === 'string' ? args.command : '';
   const filePath = typeof args?.file_path === 'string' ? args.file_path : '';
-  // CODE gate: a `git commit` attempt (T2.7 — mirrors the v1 commit gate).
-  if (event.tool === 'Bash' && /\bgit\s+commit\b/.test(command)) {
-    return { guardRef: 'code_ready', state: 'code' };
-  }
   // SCOPE gate: writing a pre-research artifact (T2.4 is_advance); scope_ready short-circuits non-advances.
+  // (CODE commit-gating is intentionally left to v1's phase-logged-before-commit — see module doc.)
   if (
     (event.tool === 'Write' || event.tool === 'Edit') &&
     /docs\/research\/.*-pre-research-/.test(filePath)
@@ -63,12 +58,6 @@ function gateForAction(event: Event): { guardRef: string; state: string } | null
 export async function enforceV2GatesPre(sessionId: string, event: Event): Promise<V2EnforceResult> {
   const match = gateForAction(event);
   if (match === null) return PASS;
-  // The CODE gate is per-active-task (mirrors the v1 commit gate): it gates a TASK's commit. With no active
-  // task there is nothing to gate, so an ad-hoc commit is NOT blocked (else every commit would fail-closed).
-  if (match.guardRef === 'code_ready') {
-    const taskId = await defaultCodeEvidenceDeps.activeTaskId(sessionId);
-    if (taskId === null) return PASS;
-  }
   try {
     const cartridges = await loadActiveV2Cartridges(sessionId);
     for (const c of cartridges) {

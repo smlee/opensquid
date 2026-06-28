@@ -47,24 +47,39 @@ const benign = (): Event =>
   ({ kind: 'tool_call', tool: 'Bash', args: { command: 'ls -la' } }) as unknown as Event;
 
 describe('enforceV2GatesPre', () => {
-  // The real CODE-gate BLOCK (active task + incomplete phases) is proven live in the repo where buildGuardCtx
-  // can build its CodeIndex; here we cover the over-strict FIX + the action classification deterministically.
-  it('PASSES a git commit when there is NO active task (mirrors v1 — ad-hoc commits not blocked)', async () => {
-    await activate(['fullstack-flow']); // active pack, but no active task
-    const r = await enforceV2GatesPre('sess-enf-noactive', commit());
-    expect(r.exitCode).toBe(0);
+  // The SCOPE block (a not-ready pre-research write) is proven live where buildGuardCtx can run; here we cover
+  // that NON-advance actions pass (commit is intentionally NOT gated here — v1 owns the commit gate).
+  const preResearchWrite = (): Event =>
+    ({
+      kind: 'tool_call',
+      tool: 'Write',
+      args: { file_path: 'docs/research/T-x-pre-research-2026-06-27.md', content: '#' },
+    }) as unknown as Event;
+  const docWrite = (): Event =>
+    ({
+      kind: 'tool_call',
+      tool: 'Write',
+      args: { file_path: 'docs/notes.md', content: '#' },
+    }) as unknown as Event;
+
+  it('does NOT gate a git commit (v1 phase-logged-before-commit owns the commit gate)', async () => {
+    await activate(['fullstack-flow']);
+    expect((await enforceV2GatesPre('sess-enf-commit', commit())).exitCode).toBe(0);
   });
 
   it('PASSES a non-advance action (ls) without evaluating any gate', async () => {
     await activate(['fullstack-flow']);
-    const r = await enforceV2GatesPre('sess-enf-pass', benign());
-    expect(r.exitCode).toBe(0);
+    expect((await enforceV2GatesPre('sess-enf-pass', benign())).exitCode).toBe(0);
   });
 
-  it('PASSES when fullstack-flow is NOT active (no gate to enforce)', async () => {
+  it('PASSES a non-pre-research Write (not a gate advance-action)', async () => {
+    await activate(['fullstack-flow']);
+    expect((await enforceV2GatesPre('sess-enf-docwrite', docWrite())).exitCode).toBe(0);
+  });
+
+  it('PASSES when fullstack-flow is NOT active (no gate to enforce), even on a pre-research write', async () => {
     await activate([]); // no v2 cartridge
-    const r = await enforceV2GatesPre('sess-enf-inactive', commit());
-    expect(r.exitCode).toBe(0);
+    expect((await enforceV2GatesPre('sess-enf-inactive', preResearchWrite())).exitCode).toBe(0);
   });
 });
 
