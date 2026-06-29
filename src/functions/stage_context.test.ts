@@ -5,7 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { FsmStateFile } from '../runtime/fsm_state.js';
 
-import { renderCheckpoint, stageWorkContext, type WorkContextDeps } from './stage_context.js';
+import {
+  buildStageBundle,
+  renderCheckpoint,
+  stageWorkContext,
+  type WorkContextDeps,
+} from './stage_context.js';
 
 describe('renderCheckpoint', () => {
   it('renders the current stage + the history path', () => {
@@ -60,5 +65,33 @@ describe('stageWorkContext — the per-stage input pointer', () => {
   });
   it('a terminal/decision/unknown stage → empty', async () => {
     expect(await stageWorkContext('done', 's', deps())).toBe('');
+  });
+});
+
+// PSL.2 — the 4-slot bundle is callable with ONLY (sessionId, packId, fsm): no EvalCtx, no hook event, so the
+// per-stage loop (PSL.3) can prime a lap before spawning. Runs against the REAL shipped fullstack-flow files.
+describe('buildStageBundle — directly callable (the per-stage loop seam)', () => {
+  const fsm = (state: string): FsmStateFile => ({
+    state,
+    started_at: '2026-06-29T00:00:00.000Z',
+    history: [{ state, at: 't1' }],
+  });
+
+  it('scope → CHECKPOINT + the scope PROCEDURE + the scope RUBRIC (audited stage)', async () => {
+    const text = await buildStageBundle('si-bundle', 'fullstack-flow', fsm('scope'));
+    expect(text).toContain('CHECKPOINT'); // slot 1
+    expect(text).toContain('stage: scope');
+    expect(text).toContain('SCOPE'); // slot 2: the procedure
+    expect(text).toContain('NEVER-GUESS'); // slot 3: the scope rubric
+  });
+
+  it('deploy → the PROCEDURE but NO rubric (deploy has none)', async () => {
+    const text = await buildStageBundle('si-bundle', 'fullstack-flow', fsm('deploy'));
+    expect(text).toContain('DEPLOY');
+    expect(text).not.toContain('NEVER-GUESS');
+  });
+
+  it('a terminal state with no procedure → empty bundle (caller injects nothing)', async () => {
+    expect(await buildStageBundle('si-bundle', 'fullstack-flow', fsm('done'))).toBe('');
   });
 });

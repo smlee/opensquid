@@ -17,9 +17,14 @@ import { readAcceptance } from '../runtime/loop/acceptance.js';
 import { sessionStateFile } from '../runtime/paths.js';
 import { readActiveTask, readSessionCwd } from '../runtime/session_state.js';
 
+import { readProcedureContent } from './read_procedure.js';
+import { readRubricContent, type RubricName } from './read_rubric.js';
 import { serializePlan } from './serialize_plan.js';
 
 const PRE_RESEARCH_PATH_KEY = 'fullstack-flow-pre-research-path';
+
+/** The stages that also carry an audit rubric (deploy has a procedure but no rubric). */
+export const RUBRIC_STAGES = new Set<string>(['scope', 'plan', 'author', 'code']);
 
 /** CHECKPOINT — where the run is: the current stage + the path taken (history). Empty when no FSM state. */
 export function renderCheckpoint(fsm: FsmStateFile | null): string {
@@ -101,4 +106,30 @@ export async function stageWorkContext(
     default:
       return '';
   }
+}
+
+/**
+ * The standardized 4-slot stage bundle [CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text, the SINGLE
+ * source both the hook path (`stage_inject`) and the per-stage loop (T-v2-per-stage-loop PSL.3) assemble. Takes
+ * the already-read `fsm` (the caller has it — the stage IS `fsm.state` + the checkpoint needs its history), so
+ * there is no event/EvalCtx coupling and no double-read. Returns '' when the stage has NO procedure (a
+ * terminal/decision FSM state) or every slot is empty → the caller injects nothing. Empty slots drop out.
+ */
+export async function buildStageBundle(
+  sessionId: string,
+  packId: string,
+  fsm: FsmStateFile,
+): Promise<string> {
+  const stage = fsm.state;
+  // NEED-TO-KNOW: only THIS stage's procedure. No file (terminal/decision state) → nothing to inject.
+  const procedure = await readProcedureContent(stage, packId);
+  if (procedure === null) return '';
+  const rubric = RUBRIC_STAGES.has(stage)
+    ? await readRubricContent(stage as RubricName, packId)
+    : null;
+  const checkpoint = renderCheckpoint(fsm);
+  const work = await stageWorkContext(stage, sessionId);
+  return [checkpoint, procedure, rubric, work]
+    .filter((s): s is string => typeof s === 'string' && s.length > 0)
+    .join('\n\n');
 }

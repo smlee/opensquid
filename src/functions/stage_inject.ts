@@ -22,12 +22,8 @@ import { ok } from '../runtime/result.js';
 
 import { buildInjectContext } from './inject_context.js';
 import { readProcedureContent } from './read_procedure.js';
-import { readRubricContent, type RubricName } from './read_rubric.js';
 import type { FunctionRegistry } from './registry.js';
-import { renderCheckpoint, stageWorkContext } from './stage_context.js';
-
-/** The stages that also carry an audit rubric (deploy has a procedure but no rubric). */
-const RUBRIC_STAGES = new Set<string>(['scope', 'plan', 'author', 'code']);
+import { buildStageBundle } from './stage_context.js';
 
 /** Per-(session,pack) dedup key: the stage last injected this session (channel b reads it to skip a re-inject). */
 const stageKey = (packId: string): string => `last-injected-stage-${packId}`;
@@ -67,25 +63,16 @@ export function registerStageInject(registry: FunctionRegistry): void {
       const fsm = await readFsmStateFile(ctx.sessionId, ctx.packId);
       if (fsm === null) return ok(null);
       const stage = fsm.state;
-      // The stage's procedure (need-to-know: only this stage). No file (terminal/decision state) → no inject.
-      const procedure = await readProcedureContent(stage, ctx.packId);
-      if (procedure === null) return ok(null);
+      // A terminal/decision state has no procedure → nothing to inject (cheap pre-check before the dedup read).
+      if ((await readProcedureContent(stage, ctx.packId)) === null) return ok(null);
       // Channel (b) dedup — same stage as the last inject on a tool_call → stay silent (avoids re-injecting
       // the same stage mid-turn). Channel (a) always refreshes.
       if (kind === 'tool_call' && stage === (await readLastStage(ctx.sessionId, ctx.packId))) {
         return ok(null);
       }
-      // The stage's rubric (only the four audited stages have one; deploy has a procedure but no rubric).
-      const rubric = RUBRIC_STAGES.has(stage)
-        ? await readRubricContent(stage as RubricName, ctx.packId)
-        : null;
-      // The standardized 4-slot bundle (need-to-know): CHECKPOINT (where you are) + PROCEDURE (what to do) +
-      // RUBRIC (the bar) + WORK-CONTEXT (the stage's input pointer). Empty slots drop out.
-      const checkpoint = renderCheckpoint(fsm);
-      const work = await stageWorkContext(stage, ctx.sessionId);
-      const text = [checkpoint, procedure, rubric, work]
-        .filter((s): s is string => typeof s === 'string' && s.length > 0)
-        .join('\n\n');
+      // The standardized 4-slot bundle [CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] — the SAME builder the
+      // per-stage loop (PSL.3) uses, so the hook path and the loop path inject identical context.
+      const text = await buildStageBundle(ctx.sessionId, ctx.packId, fsm);
       if (text.length === 0) return ok(null);
       await atomicWriteFile(
         sessionStateFile(ctx.sessionId, stageKey(ctx.packId)),
