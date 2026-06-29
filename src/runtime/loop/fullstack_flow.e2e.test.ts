@@ -42,6 +42,16 @@ const FSF = resolve(
 
 const PRE_RESEARCH_PATH_KEY = 'fullstack-flow-pre-research-path';
 
+/** Seed a stage's content-audit cache with a GUESS_FREE verdict (the flat `{verdict}` shape readVerdict reads),
+ *  so the live GFR.2 (own-stage) + GFR.3 (rolling prior-stage) guard clauses are satisfied without spawning the
+ *  real adversarial (LLM) audit producer — these tests exercise the deterministic gate spine, not the producer. */
+async function seedVerdict(sid: string, stage: string): Promise<void> {
+  await atomicWriteFile(
+    sessionStateFile(sid, `fullstack-flow-${stage}-audit-cache`),
+    JSON.stringify({ verdict: 'VERDICT: GUESS_FREE\n- seeded ok', hash: 'seed' }),
+  );
+}
+
 const postWrite = (filePath: string): Event =>
   ({
     kind: 'post_tool_call',
@@ -71,6 +81,7 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     const artifact = join(sub, 'T-e2e-pre-research-2026.md');
     await writeFile(artifact, '1. Login [ask: "add login screen"]\n', 'utf8');
     await atomicWriteFile(sessionStateFile(sid, PRE_RESEARCH_PATH_KEY), JSON.stringify(artifact));
+    await seedVerdict(sid, 'scope'); // GFR.2: the SCOPE gate now requires the guess-free verdict
 
     const d = await runV2Cartridges(sid, postWrite(artifact), NOW);
 
@@ -133,6 +144,8 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     // a minimal docs/ARCHITECTURE.md → extractRequirements returns [] → coverage vacuously complete + real_code
     await mkdir(join(root, 'docs'), { recursive: true });
     await writeFile(join(root, 'docs', 'ARCHITECTURE.md'), '# architecture\n', 'utf8');
+    await seedVerdict(sid, 'author'); // GFR.2: the AUTHOR verdict
+    await seedVerdict(sid, 'plan'); // GFR.3: the rolling re-assert of the prior PLAN verdict
 
     const d = await runV2Cartridges(sid, postBash(), NOW);
     expect(d.exitCode).toBe(0); // AUTHOR gate did not block
@@ -144,6 +157,8 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     const { sid, taskId } = await freshTaskSession('code');
     for (const p of REQUIRED_PHASES) await appendPhase(sid, taskId, p); // all 7 logged for the task
     await recordReadiness(sid, taskId, { affected: [], existingDefs: [], deprecated: [] }); // ran + deprecated_clean
+    await seedVerdict(sid, 'code'); // GFR.2: the CODE verdict
+    await seedVerdict(sid, 'author'); // GFR.3: the rolling re-assert of the prior AUTHOR verdict
 
     const d = await runV2Cartridges(sid, postBash(), NOW);
     expect(d.exitCode).toBe(0); // CODE gate did not block

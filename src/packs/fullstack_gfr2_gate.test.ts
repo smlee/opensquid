@@ -58,6 +58,27 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
     }
   });
 
+  // GFR.3 — the ROLLING re-audit: each post-SCOPE gate re-asserts the IMMEDIATELY-PRIOR stage's verdict, so a
+  // prior-stage artifact that drifted after its own gate passed (its content-hash-keyed audit re-evaluates to
+  // UNRESOLVED) blocks the NEXT boundary, even when the current stage's own verdict + deterministic facets pass.
+  it('GFR.3: a prior-stage drift BLOCKS the next gate (current stage GUESS_FREE + facets pass)', async () => {
+    const { pack } = await loadPackV2(PACK_DIR);
+    // each entry: the gate, and the immediately-prior stage whose drift must block it
+    const rollups = [
+      { gate: 'plan_ready', cur: 'plan', prior: 'scope' },
+      { gate: 'author_ready', cur: 'author', prior: 'plan' },
+      { gate: 'code_ready', cur: 'code', prior: 'author' },
+    ] as const;
+    for (const { gate, cur, prior } of rollups) {
+      // current stage's verdict GUESS_FREE, but the prior stage drifted (UNRESOLVED) → the rolling clause blocks.
+      const drifted = ctx({ [cur]: GUESS_FREE, [prior]: UNRESOLVED });
+      expect(evalCondition(pack.guards[gate] ?? '', drifted), `${gate} blocks on ${prior} drift`).toBe(false);
+      // sanity: with BOTH current + prior GUESS_FREE the same gate passes (proves it was the prior clause blocking).
+      const clean = ctx({ [cur]: GUESS_FREE, [prior]: GUESS_FREE });
+      expect(evalCondition(pack.guards[gate] ?? '', clean), `${gate} passes when ${prior} holds`).toBe(true);
+    }
+  });
+
   it('SCOPE short-circuit still holds: a non-advance event passes regardless of verdict', async () => {
     const { pack } = await loadPackV2(PACK_DIR);
     const m = new Map<string, unknown>([

@@ -33,16 +33,23 @@ function env(kind: MessageKind, extra: Record<string, unknown> = {}): Envelope {
   return { seq: 1, from: 'agent', to: 'pack:fullstack-flow', kind, payload: { ctx }, ts: 0 };
 }
 
-/** The bound ctx for a READY SCOPE advance (T2.4): the nested `scope` object the `scope_ready` guard reads. */
+/** The guess-free verdict text the content-audit producer caches (GFR.2 `contains(audit.<stage>, …)`). */
+const GF = 'VERDICT: GUESS_FREE';
+
+/** A READY SCOPE advance (T2.4): the deterministic `scope` facets + the GFR.2 guess-free verdict. */
 const scopeReady = {
   scope: { is_advance: true, anchors_ok: true, depth: 3, open_question: false },
+  audit: { scope: GF },
 };
 
-/** The bound ctx for a READY PLAN advance (T2.5): the nested `plan` object the `plan_ready` guard reads. */
-const planReady = { plan: { acyclic: true, complete: true } };
+/** A READY PLAN advance (T2.5): the `plan` facets + the PLAN verdict + (GFR.3 rolling) the prior SCOPE verdict. */
+const planReady = { plan: { acyclic: true, complete: true }, audit: { scope: GF, plan: GF } };
 
-/** The bound ctx for a READY AUTHOR advance (T2.6): the nested `author` object the `author_ready` guard reads. */
-const authorReady = { author: { coverage_complete: true, real_code: true } };
+/** A READY AUTHOR advance (T2.6): the `author` facets + the AUTHOR verdict + (GFR.3 rolling) the prior PLAN verdict. */
+const authorReady = {
+  author: { coverage_complete: true, real_code: true },
+  audit: { plan: GF, author: GF },
+};
 
 /** A V2ObservedActor over the compiled inner `code_cycle` flow (T2.7) — the per-task CODE machine, driven in
  *  isolation. The flow shares the parent's `guardExprs` (compile_v2.ts:181), so `code_ready` resolves. */
@@ -109,17 +116,25 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(coding?.kind).toBe('gate');
     expect(coding?.guard).toBe('code_ready');
     expect(coding?.onFail?.action).toBe('block'); // a not-ready CODE BLOCKS (never a warn pass-through)
-    // the guard predicates on ALL THREE results (proves results-gating, not just "ran").
-    expect(loaded.compiled.guardExprs?.get('code_ready')).toBe(
-      'code.phases_complete && code.readiness_ran && code.deprecated_clean',
-    );
+    // the guard predicates on ALL THREE results (proves results-gating, not just "ran") + the GFR.2 CODE verdict
+    // + the GFR.3 rolling re-assert of the prior AUTHOR verdict.
+    const codeExpr = loaded.compiled.guardExprs?.get('code_ready') ?? '';
+    expect(codeExpr).toContain('code.phases_complete');
+    expect(codeExpr).toContain('code.readiness_ran');
+    expect(codeExpr).toContain('code.deprecated_clean');
+    expect(codeExpr).toContain('contains(audit.code, "VERDICT: GUESS_FREE")'); // GFR.2
+    expect(codeExpr).toContain('contains(audit.author, "VERDICT: GUESS_FREE")'); // GFR.3 rolling
   });
 
   it('T2.7: the inner CODE gate PASSES on phases_complete ∧ readiness_ran ∧ deprecated_clean', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const child = childActor(loaded);
     expect(child.state.current).toBe('coding');
-    const ready = { code: { phases_complete: true, readiness_ran: true, deprecated_clean: true } };
+    // the three facets + the CODE verdict (GFR.2) + the prior AUTHOR verdict (GFR.3 rolling).
+    const ready = {
+      code: { phases_complete: true, readiness_ran: true, deprecated_clean: true },
+      audit: { author: GF, code: GF },
+    };
     await child.receive(env('post_tool_call', ready));
     expect(child.state.current).toBe('committed'); // gate passed → nested terminal (emits `coded`)
   });
