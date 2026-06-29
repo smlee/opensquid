@@ -145,6 +145,10 @@ rules:
           cache_key: fullstack-flow-code-audit-cache
           model: reasoning
           timeout_ms: 340000
+          # The raw diff as the freshness SUBJECT (GFR.2-hard staleness anchor): cached_audit records sha256(diff)
+          # so the commit-gate can re-derive `git diff HEAD` and prove this GUESS_FREE verdict still certifies the
+          # CURRENT diff — a verdict for a since-changed diff is rejected as stale (re-log audit on the new diff).
+          subject: '{{diff}}'
           prompt: >-
             You are an adversarial reviewer enforcing the GUESS-FREE CODE standard on a diff. Apply EXACTLY this
             rubric (the single canonical source, packs/builtin/fullstack-flow/rubric/code.md):\n\n{{rubric}}\n\n

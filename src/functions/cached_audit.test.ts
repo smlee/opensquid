@@ -17,7 +17,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ModelAliasConfig } from '../models/types.js';
 import type { Event } from '../runtime/types.js';
-import { sessionLogFile } from '../runtime/paths.js';
+import { sha256Hex } from '../runtime/durable/run_id.js';
+import { sessionLogFile, sessionStateFile } from '../runtime/paths.js';
 
 import { registerCachedAuditFunction } from './cached_audit.js';
 import { type EvalCtx, FunctionRegistry } from './registry.js';
@@ -131,6 +132,36 @@ describe('cached_audit', () => {
     );
     expect(changed.ok).toBe(true);
     if (changed.ok) expect(changed.value).toBe('VERDICT: UNRESOLVED'); // fresh spawn on changed content
+  });
+
+  it('records subjectHash = sha256(subject) when a subject is supplied (the staleness anchor)', async () => {
+    const ctx = createTestCtx();
+    installAlias('reasoning', await writeFakeEchoCli('VERDICT: GUESS_FREE'));
+    const reg = freshRegistry();
+    const subject = 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new\n';
+    const r = await reg.call(
+      'cached_audit',
+      { cache_key: 'k1', model: 'reasoning', prompt: PROMPT, subject },
+      ctx,
+    );
+    expect(r.ok).toBe(true);
+    const entry = JSON.parse(await readFile(sessionStateFile(ctx.sessionId, 'k1'), 'utf8')) as {
+      verdict: string;
+      subjectHash?: string;
+    };
+    expect(entry.verdict).toBe('VERDICT: GUESS_FREE');
+    expect(entry.subjectHash).toBe(sha256Hex(subject)); // the gate re-derives the diff + compares to this
+  });
+
+  it('omits subjectHash when no subject is supplied (backward compat with pre-anchor audits)', async () => {
+    const ctx = createTestCtx();
+    installAlias('reasoning', await writeFakeEchoCli('VERDICT: GUESS_FREE'));
+    const reg = freshRegistry();
+    await reg.call('cached_audit', { cache_key: 'k1', model: 'reasoning', prompt: PROMPT }, ctx);
+    const entry = JSON.parse(
+      await readFile(sessionStateFile(ctx.sessionId, 'k1'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect('subjectHash' in entry).toBe(false);
   });
 
   it('NO cache on a non-verdict output (AUDIT-UNAVAILABLE is retried, not pinned)', async () => {

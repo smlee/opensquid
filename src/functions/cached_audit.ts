@@ -49,12 +49,19 @@ const CachedAuditArgs = z
     model: z.string().min(1),
     prompt: z.string().min(1),
     timeout_ms: z.number().int().min(1).max(600_000).optional(),
+    // The raw ARTIFACT under audit (e.g. the staged diff), distinct from the instruction-laden `prompt`. When
+    // provided, its sha256 is recorded as `subjectHash` so a DOWNSTREAM consumer (the commit-gate, GFR.2-hard)
+    // can re-derive the artifact and prove the cached verdict still certifies the CURRENT content — closing the
+    // staleness window where a verdict for an OLD diff is read against a CHANGED one. Optional + additive.
+    subject: z.string().optional(),
   })
   .strict();
 
 interface CacheEntry {
   hash: string;
   verdict: string;
+  /** sha256 of the raw audited artifact (`subject`), when the caller supplied one — the freshness anchor. */
+  subjectHash?: string;
 }
 
 function isCacheEntry(v: unknown): v is CacheEntry {
@@ -128,8 +135,9 @@ export function registerCachedAuditFunction(registry: FunctionRegistry): void {
     durable: false,
     memoizable: false,
     costEstimateMs: 30_000,
-    execute: async ({ cache_key, model, prompt, timeout_ms }, ctx) => {
+    execute: async ({ cache_key, model, prompt, timeout_ms, subject }, ctx) => {
       const hash = sha256Hex(prompt);
+      const subjectHash = subject === undefined ? undefined : sha256Hex(subject);
       const hash8 = hash.slice(0, 8);
       const stamp = (outcome: LedgerOutcome, duration_ms: number): Promise<void> =>
         appendLedger(ctx.sessionId, {
@@ -165,7 +173,12 @@ export function registerCachedAuditFunction(registry: FunctionRegistry): void {
         // AUDIT-UNAVAILABLE result is retried next turn instead of being pinned.
         const hasVerdict = out.includes('VERDICT:');
         if (hasVerdict) {
-          await writeCache(ctx.sessionId, cache_key, { hash, verdict: out });
+          // Omit subjectHash entirely when no subject was supplied (exactOptionalPropertyTypes + backward compat).
+          await writeCache(
+            ctx.sessionId,
+            cache_key,
+            subjectHash === undefined ? { hash, verdict: out } : { hash, verdict: out, subjectHash },
+          );
         }
         await stamp(hasVerdict ? 'verdict' : 'no_verdict', Date.now() - t0);
         return ok(out);

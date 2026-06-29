@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { loadPack } from '../../packs/loader.js';
 import { advanceFsmState } from '../../runtime/fsm_state.js';
+import { sha256Hex } from '../../runtime/durable/run_id.js';
 import { sessionStateFile } from '../../runtime/paths.js';
-import { writeActiveTask } from '../../runtime/session_state.js';
+import { recordSessionCwd, writeActiveTask } from '../../runtime/session_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
 
 import { readAttestedShas } from './attestations.js';
@@ -25,11 +26,27 @@ const execFileP = promisify(execFile);
 const SID = 'gate-test-session';
 const NOW = '2026-06-04T00:00:00.000Z';
 
-/** GFR.2-hard fixture: write the CODE producer's verdict cache the commit-gate now requires (fullstack-flow). */
-async function writeCodeAudit(verdict: string): Promise<void> {
+/** GFR.2-hard fixture: write the CODE producer's verdict cache the commit-gate now requires (fullstack-flow).
+ *  An optional `subjectHash` is the staleness anchor (sha256 of the diff the verdict certified). */
+async function writeCodeAudit(verdict: string, subjectHash?: string): Promise<void> {
   const p = sessionStateFile(SID, 'fullstack-flow-code-audit-cache');
   await mkdir(dirname(p), { recursive: true });
-  await writeFile(p, JSON.stringify({ hash: 'x', verdict }), 'utf8');
+  const entry = subjectHash === undefined ? { hash: 'x', verdict } : { hash: 'x', verdict, subjectHash };
+  await writeFile(p, JSON.stringify(entry), 'utf8');
+}
+
+/** The sha256 of the repo's current `git diff HEAD` — what the CODE audit's `subjectHash` must equal for the
+ *  commit-gate to treat its verdict as certifying the CURRENT diff (needs a HEAD + recorded session cwd). */
+async function currentDiffHash(): Promise<string> {
+  const { stdout } = await execFileP('git', ['diff', 'HEAD'], { cwd: repo });
+  return sha256Hex(stdout);
+}
+
+/** Give the repo a HEAD (so `git diff HEAD` resolves) + point the session cwd at it (so the gate's stagedDiff
+ *  reads this repo) — the preconditions for the GFR.2-hard staleness check to run on the real diff. */
+async function armStalenessRepo(): Promise<void> {
+  await recordSessionCwd(SID, repo);
+  await git(['commit', '--allow-empty', '-q', '-m', 'init'], repo);
 }
 
 let tempHome: string;
@@ -367,13 +384,44 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
-  it('v2 + agent code commit + 7 phases + CODE audit GUESS_FREE → ALLOW (0)', async () => {
+  it('v2 + agent code commit + 7 phases + CODE audit GUESS_FREE (certifying the CURRENT diff) → ALLOW (0)', async () => {
     await makeGatedV2();
+    await armStalenessRepo();
     await stage('src/x.ts');
     await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
-    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good'); // GFR.2-hard: the external code verdict
+    // GFR.2-hard: the external verdict AND its subjectHash certifies exactly the diff being committed.
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', await currentDiffHash());
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('STALENESS: v2 + 7 phases + GUESS_FREE but the verdict certified a DIFFERENT diff → BLOCK (2)', async () => {
+    await makeGatedV2();
+    await armStalenessRepo();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    // GUESS_FREE, but subjectHash anchors a since-changed diff (the staleness window) → fail-closed.
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', sha256Hex('a stale, different diff'));
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((s: unknown) => {
+      writes.push(String(s));
+      return true;
+    });
+    const code = await runGate('commit', repo, AGENT_ENV);
+    spy.mockRestore();
+    expect(code).toBe(2);
+    expect(writes.join('')).toContain('changed since'); // the staleness-specific message, not the redo one
+  });
+
+  it('STALENESS: v2 + 7 phases + GUESS_FREE but NO recorded subjectHash (pre-anchor audit) → BLOCK (2, fail-closed)', async () => {
+    await makeGatedV2();
+    await armStalenessRepo();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good'); // no subjectHash → cannot prove freshness → block
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
   it('GFR.2-hard: v2 + 7 phases but NO code audit verdict → BLOCK (2)', async () => {

@@ -32,7 +32,9 @@ import { promisify } from 'node:util';
 
 import type { Command } from 'commander';
 
+import { stagedDiff } from '../../functions/staged_diff.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
+import { sha256Hex } from '../../runtime/durable/run_id.js';
 import { OPENSQUID_HOME, resolveProjectScopeRoot, sessionStateFile } from '../../runtime/paths.js';
 import { PROTECTED_PREFIXES, isDocsOnly } from '../../runtime/protected_paths.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
@@ -152,6 +154,31 @@ function isGuessFree(verdict: string | null): boolean {
   return verdict !== null && verdict.includes('VERDICT: GUESS_FREE');
 }
 
+/** GFR.2-hard staleness anchor: the sha256 of the diff the CODE audit certified (cached_audit `subjectHash`),
+ *  or null when absent/unreadable (an audit run before the subject was recorded, or no cache). */
+async function readCodeAuditSubjectHash(sid: string): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(sessionStateFile(sid, 'fullstack-flow-code-audit-cache'), 'utf8'),
+    ) as { subjectHash?: unknown };
+    return typeof parsed.subjectHash === 'string' ? parsed.subjectHash : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Closes the STALENESS WINDOW: a GUESS_FREE verdict only authorizes a commit if it certifies the diff being
+ *  committed NOW. Re-derive `git diff HEAD` and require its sha256 to equal the audit's recorded `subjectHash`.
+ *  FAIL-CLOSED: no recorded subject (a pre-anchor audit), no current diff (over-cap/empty/git error), or a
+ *  mismatch (the code changed since the audit) → false → block (re-log the `audit` phase on the current diff). */
+async function codeAuditCertifiesCurrentDiff(sid: string): Promise<boolean> {
+  const recorded = await readCodeAuditSubjectHash(sid);
+  if (recorded === null) return false;
+  const diff = await stagedDiff(sid);
+  if (diff === null) return false;
+  return sha256Hex(diff) === recorded;
+}
+
 export async function commitAllowedNow(
   sid: string | null,
   files: string[],
@@ -171,10 +198,13 @@ export async function commitAllowedNow(
   // Gating on the FSM reaching `deploy` would over-block while the stage gates only
   // ADVISE at PostToolUse (that tightening is E1/E4). v1 keeps the session-FSM check.
   if (pack === 'fullstack-flow') {
-    // GFR.2-hard: a code commit requires BOTH the 7-phase ledger AND the CODE producer's EXTERNAL guess-free
-    // verdict — so guess-free BINDS at the git boundary (PostToolUse is too late to block; the FSM gates only
-    // advise). FAIL-CLOSED: an unaudited or non-GUESS_FREE code change cannot be committed.
-    return isComplete(phases, active.id) && isGuessFree(await readCodeAuditVerdict(sid))
+    // GFR.2-hard: a code commit requires the 7-phase ledger AND the CODE producer's EXTERNAL guess-free verdict
+    // AND that the verdict certifies the CURRENT diff (staleness window) — so guess-free BINDS at the git
+    // boundary (PostToolUse is too late to block; the FSM gates only advise). FAIL-CLOSED: an unaudited,
+    // non-GUESS_FREE, or since-changed code change cannot be committed.
+    return isComplete(phases, active.id) &&
+      isGuessFree(await readCodeAuditVerdict(sid)) &&
+      (await codeAuditCertifiesCurrentDiff(sid))
       ? { allowed: true, reason: 'flow_complete' }
       : null;
   }
@@ -268,6 +298,15 @@ export async function runGate(
   // give the precise reason rather than the misleading "finish the flow".
   if (pack === 'fullstack-flow' && active !== null && isComplete(await readPhaseState(sid), active.id)) {
     const verdict = await readCodeAuditVerdict(sid);
+    // STALENESS branch: the verdict IS GUESS_FREE but it certified a DIFFERENT diff (the code changed since the
+    // audit). The fix is mechanical — re-run the audit on the current diff — not a content redo, so say so.
+    if (isGuessFree(verdict) && !(await codeAuditCertifiesCurrentDiff(sid))) {
+      return block(
+        `this ${boundary} is GUESS_FREE but the audit certified a DIFFERENT diff — the code changed since the ` +
+          `CODE audit ran (staleness window). Re-log the \`audit\` phase to re-run the audit on the CURRENT ` +
+          `diff, then retry. (Or pass --no-verify only with explicit authorization.)`,
+      );
+    }
     const findings =
       verdict ?? '(no verdict yet — log/re-log the `audit` phase to run the CODE audit, then retry)';
     // Force a GUIDED redo: surface the exact findings so the agent fixes those, re-logs audit → re-audit →
