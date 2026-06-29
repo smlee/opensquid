@@ -15,6 +15,8 @@ export { registerLlmFunctions } from './llm.js';
 export { registerRagFunctions } from './rag.js';
 export { registerRecallPreInjectFunction } from './recall_pre_inject.js';
 export { registerReadRubric, readRubricContent } from './read_rubric.js';
+export { registerReadProcedure, readProcedureContent } from './read_procedure.js';
+export { registerStageInject } from './stage_inject.js';
 export { registerPhaseInject } from './phase_inject.js';
 export { registerPhaseBundleText } from './phase_bundle_text.js';
 export { registerSetRequestType } from './set_request_type.js';

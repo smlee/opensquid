@@ -1,0 +1,29 @@
+# stage-inject — deliver the CURRENT stage's instructions BEFORE the agent acts (v2 context management).
+#
+# The generic-cartridge injection form for v2: on the events that precede an action, inject ONLY the current
+# FSM stage's procedure (+ its rubric for the 4 audited stages) so the agent follows that stage's
+# gate-satisfying flow instead of tripping the gate. Need-to-know + fresh: `stage_inject` reads just the active
+# stage's `procedure/<stage>.md` (+ `rubric/<stage>.md`) on demand — never the whole procedure — keyed off the
+# active pack's FSM state, so each stage starts with exactly its own instructions and nothing else.
+#
+# Two delivery channels (both handled inside `stage_inject`, which self-gates on the event kind + dedups):
+#   - prompt_submit / session_start — orient at turn start, before the first tool (survives compaction).
+#   - tool_call (PreToolUse) — the mid-turn catch: a tool call that crossed a stage boundary re-orients to the
+#     NEW stage before that action; deduped so a same-stage tool call injects nothing (cheap on the hot path).
+# `stage_inject` returns an inject_context envelope (non-blocking) — it never blocks a tool, only orients.
+name: stage-inject
+load: preload
+when_to_load: []
+triggers:
+  - kind: prompt_submit
+  - kind: session_start
+  - kind: tool_call
+rules:
+  - id: inject-current-stage
+    process:
+      - call: stage_inject
+prose: |
+  Before the agent acts, inject the current fullstack-flow stage's procedure (+ rubric) so it follows the
+  stage's gate-satisfying flow. Reads only the active stage's files on demand (need-to-know, fresh per stage),
+  keyed off the active pack's FSM state. Fires at turn start (prompt_submit/session_start) and on a mid-run
+  stage change (tool_call), deduped. Pure orientation — non-blocking inject_context, never a gate.
