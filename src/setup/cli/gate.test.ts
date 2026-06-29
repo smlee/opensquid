@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { loadPack } from '../../packs/loader.js';
 import { advanceFsmState } from '../../runtime/fsm_state.js';
@@ -392,6 +392,25 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
     await writeCodeAudit('VERDICT: UNRESOLVED\n- a guess found');
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('GFR.2-hard: the UNRESOLVED block SURFACES the findings (force a guided redo)', async () => {
+    await makeGatedV2();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writeCodeAudit('VERDICT: UNRESOLVED\n- unsourced claim at foo.ts:10');
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((s: unknown) => {
+      writes.push(String(s));
+      return true;
+    });
+    const code = await runGate('commit', repo, AGENT_ENV);
+    spy.mockRestore();
+    expect(code).toBe(2);
+    const msg = writes.join('');
+    expect(msg).toContain('unsourced claim at foo.ts:10'); // the exact finding is surfaced
+    expect(msg).toContain('REDO'); // and the redo instruction
   });
 
   it('v2 + docs-only commit → ALLOW (0) (non-code is never blocked)', async () => {

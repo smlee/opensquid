@@ -133,18 +133,23 @@ function block(msg: string): number {
 /** Does the LIVE session prove a completed flow / docs-only change right now?
  *  Shared by the commit boundary (block decision) and the attest boundary (record
  *  decision) so the two can never diverge. Null = not allowed. */
-/** GFR.2-hard: the fullstack-flow CODE producer's EXTERNAL verdict (`fullstack-flow-code-audit-cache`) must be
- *  `VERDICT: GUESS_FREE` for a code commit. Reads the flat `{verdict}` cache; absent / non-GUESS_FREE / any
- *  read error → false (FAIL-CLOSED — an unaudited or guessed code change cannot be committed). */
-async function codeAuditGuessFree(sid: string): Promise<boolean> {
+/** GFR.2-hard: the fullstack-flow CODE producer's EXTERNAL verdict text (`fullstack-flow-code-audit-cache`),
+ *  or null when absent/unreadable. The text carries the findings (the UNRESOLVED bullets) the block surfaces so
+ *  the agent redoes EXACTLY those (force a guided redo, not a bare refusal). */
+async function readCodeAuditVerdict(sid: string): Promise<string | null> {
   try {
     const parsed = JSON.parse(
       await readFile(sessionStateFile(sid, 'fullstack-flow-code-audit-cache'), 'utf8'),
     ) as { verdict?: unknown };
-    return typeof parsed.verdict === 'string' && parsed.verdict.includes('VERDICT: GUESS_FREE');
+    return typeof parsed.verdict === 'string' ? parsed.verdict : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** GUESS_FREE iff the verdict exists AND says so. FAIL-CLOSED: absent/UNRESOLVED → false (cannot commit). */
+function isGuessFree(verdict: string | null): boolean {
+  return verdict !== null && verdict.includes('VERDICT: GUESS_FREE');
 }
 
 export async function commitAllowedNow(
@@ -169,7 +174,7 @@ export async function commitAllowedNow(
     // GFR.2-hard: a code commit requires BOTH the 7-phase ledger AND the CODE producer's EXTERNAL guess-free
     // verdict — so guess-free BINDS at the git boundary (PostToolUse is too late to block; the FSM gates only
     // advise). FAIL-CLOSED: an unaudited or non-GUESS_FREE code change cannot be committed.
-    return isComplete(phases, active.id) && (await codeAuditGuessFree(sid))
+    return isComplete(phases, active.id) && isGuessFree(await readCodeAuditVerdict(sid))
       ? { allowed: true, reason: 'flow_complete' }
       : null;
   }
@@ -262,10 +267,15 @@ export async function runGate(
   // GFR.2-hard: if the 7-phase flow IS complete, the block is the CODE guess-free audit, not the flow —
   // give the precise reason rather than the misleading "finish the flow".
   if (pack === 'fullstack-flow' && active !== null && isComplete(await readPhaseState(sid), active.id)) {
+    const verdict = await readCodeAuditVerdict(sid);
+    const findings =
+      verdict ?? '(no verdict yet — log/re-log the `audit` phase to run the CODE audit, then retry)';
+    // Force a GUIDED redo: surface the exact findings so the agent fixes those, re-logs audit → re-audit →
+    // loop until GUESS_FREE (the self-continue pattern), rather than a bare refusal.
     return block(
-      `this ${boundary} has code changes but the CODE guess-free audit is not VERDICT: GUESS_FREE ` +
-        `(fullstack-flow-code-audit-cache). The external code audit must pass before commit — resolve its ` +
-        `findings and let it re-run (re-log the audit phase), or pass --no-verify only with explicit authorization.`,
+      `this ${boundary} has code changes but the CODE guess-free audit is not VERDICT: GUESS_FREE. ` +
+        `REDO the flagged work properly, then re-log the \`audit\` phase to re-run the audit — repeat until ` +
+        `GUESS_FREE. (Or pass --no-verify only with explicit authorization.)\n\nCODE audit findings:\n${findings}`,
     );
   }
   return block(
