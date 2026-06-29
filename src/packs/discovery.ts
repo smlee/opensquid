@@ -181,6 +181,15 @@ export function resolvePackStateDir(
 export interface ActiveJson {
   /** Pack names (folder names under `packs/`) declared active in this scope. */
   packs: string[];
+  /**
+   * PROJECT-SCOPE isolation switch. When `true` in a PROJECT `active.json`, the live pack set is THIS
+   * scope's declared packs ONLY — the resolver skips the user-scope (`~/.opensquid`) union AND the synthetic
+   * project-context pack (`loadActivePacksForDispatch`). Lets one project run a pure, isolated pack set (e.g.
+   * testing v2 fullstack-flow alone) WITHOUT editing the home config, so OTHER projects are unaffected (the
+   * flag lives only in this project's active.json; the resolver default is the union). Absent/false → the
+   * default user∪project union. Only meaningful at project scope.
+   */
+  exclusive?: boolean;
 }
 
 /**
@@ -312,6 +321,23 @@ export async function discoverActivePacks(
   builtinRoot: string | null = null,
 ): Promise<Pack[]> {
   return (await partitionActivePacks(scopeRoot, ctx, builtinRoot)).v1;
+}
+
+/**
+ * Read the `exclusive` switch from a scope's `active.json` (the project-scope isolation flag, see
+ * {@link ActiveJson.exclusive}). `true` ⇒ this scope runs in isolation (the caller skips the user-scope
+ * union). Lenient: absent scope / ENOENT / any read-or-parse fault → `false` (the safe default = the normal
+ * union); a genuinely malformed `active.json` still fails LOUD at the `partitionActivePacks` read that runs
+ * alongside this, so a config bug is never silently swallowed here.
+ */
+export async function readActiveExclusive(scopeRoot: string | null): Promise<boolean> {
+  if (scopeRoot === null) return false;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    return (JSON.parse(raw) as ActiveJson).exclusive === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

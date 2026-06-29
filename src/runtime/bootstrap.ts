@@ -103,7 +103,7 @@ import { registerCheckChatConnectionFunction } from '../functions/check_chat_con
 import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
-import { discoverActivePacks, partitionActivePacks } from '../packs/discovery.js';
+import { discoverActivePacks, partitionActivePacks, readActiveExclusive } from '../packs/discovery.js';
 import { loadProjectContextPack } from '../packs/project_context.js';
 import type { LoadedPackV2 } from '../packs/loader_v2.js';
 import { type DetectionContext } from './detection.js';
@@ -399,8 +399,12 @@ const realPacksPromise: Promise<Pack[]> = (async () => {
     // listing a built-in pack name in active.json (default-discipline,
     // scope-architect, focused-react-19, ...) ENOENT-crashes the hook.
     const builtinRoot = resolveBuiltinScopeRoot();
-    const user = await discoverActivePacks(resolveUserScopeRoot(), ctx, builtinRoot);
     const projectRoot = await resolveProjectScopeRoot(cwd);
+    // Project-scope isolation (ActiveJson.exclusive): an exclusive project runs ITS packs ONLY — skip the
+    // user-scope union, so a project can run an isolated pack set without editing the home config (other
+    // projects, whose active.json has no `exclusive`, keep the default union).
+    const exclusive = await readActiveExclusive(projectRoot);
+    const user = exclusive ? [] : await discoverActivePacks(resolveUserScopeRoot(), ctx, builtinRoot);
     const project = await discoverActivePacks(projectRoot, ctx, builtinRoot);
     // PT.1 — dedupe by name (user-wins) BEFORE sort: a pack declared active in
     // both scopes must load exactly once, not double-register + self-collide.
@@ -492,9 +496,13 @@ export async function loadActiveV2Cartridges(_sessionId: string): Promise<Loaded
   const cwd = process.cwd();
   const ctx = await buildDetectionContext(cwd);
   const builtinRoot = resolveBuiltinScopeRoot();
-  const user = await partitionActivePacks(resolveUserScopeRoot(), ctx, builtinRoot);
-  const project = await partitionActivePacks(await resolveProjectScopeRoot(cwd), ctx, builtinRoot);
-  return [...user.v2, ...project.v2];
+  const projectRoot = await resolveProjectScopeRoot(cwd);
+  // Project-scope isolation (ActiveJson.exclusive): skip the user-scope union for an exclusive project, so the
+  // v2-cartridge set matches the v1 path's isolation (both dispatch sites honor the flag).
+  const exclusive = await readActiveExclusive(projectRoot);
+  const userV2 = exclusive ? [] : (await partitionActivePacks(resolveUserScopeRoot(), ctx, builtinRoot)).v2;
+  const project = await partitionActivePacks(projectRoot, ctx, builtinRoot);
+  return [...userV2, ...project.v2];
 }
 
 /**
@@ -526,13 +534,18 @@ export function v2PackToPack(loaded: LoadedPackV2): Pack {
  * this for their `dispatchEvent` input; non-dispatch `loadActivePacks` callers are unchanged.
  */
 export async function loadActivePacksForDispatch(sessionId: string): Promise<Pack[]> {
+  const cwd = process.cwd();
+  // Project-scope isolation (ActiveJson.exclusive): an exclusive project runs ITS active.json packs ONLY —
+  // skip BOTH the user-scope union (handled in loadActivePacks/loadActiveV2Cartridges) AND the synthetic
+  // project-context pack, so the live set is purely the declared packs (e.g. v2 fullstack-flow alone).
+  const exclusive = await readActiveExclusive(await resolveProjectScopeRoot(cwd));
   const [v1, v2, projectContext] = await Promise.all([
     loadActivePacks(sessionId),
     loadActiveV2Cartridges(sessionId),
     // T-project-context: the project's own `.opensquid/context.md` (settings → block-guards +
     // prose → inject_context), auto-loaded as a synthetic project-scoped pack. ADDITIVE — null
-    // (no file / no project scope) leaves the dispatch set unchanged.
-    loadProjectContextPack(process.cwd()),
+    // (no file / no project scope / exclusive project) leaves the dispatch set unchanged.
+    exclusive ? Promise.resolve(null) : loadProjectContextPack(cwd),
   ]);
   return [...v1, ...v2.map(v2PackToPack), ...(projectContext !== null ? [projectContext] : [])];
 }

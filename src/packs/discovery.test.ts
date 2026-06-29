@@ -30,6 +30,7 @@ import {
   checkAndMergeUpgrades,
   clearMergeCache,
   discoverActivePacks,
+  readActiveExclusive,
   resolvePackStateDir,
   validatePackId,
 } from './discovery.js';
@@ -56,6 +57,36 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(scopeRoot, { recursive: true, force: true });
+});
+
+describe('readActiveExclusive — project-scope isolation flag', () => {
+  it('returns false when scopeRoot is null', async () => {
+    await expect(readActiveExclusive(null)).resolves.toBe(false);
+  });
+
+  it('returns false when active.json is absent (ENOENT → safe default)', async () => {
+    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('returns false when the exclusive key is absent (default = union)', async () => {
+    await writeActive({ packs: ['fullstack-flow'] });
+    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('returns true only for exclusive === true', async () => {
+    await writeActive({ packs: ['fullstack-flow'], exclusive: true });
+    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(true);
+  });
+
+  it('returns false for an explicit exclusive: false', async () => {
+    await writeActive({ packs: ['fullstack-flow'], exclusive: false });
+    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('is lenient on malformed JSON (the partition read fails loud elsewhere)', async () => {
+    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
+    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
+  });
 });
 
 describe('discoverActivePacks — absent / empty branches', () => {
