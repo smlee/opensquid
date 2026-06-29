@@ -27,10 +27,16 @@
 
 import { z } from 'zod';
 
+import { loadActiveV2Cartridges } from '../../runtime/bootstrap.js';
+import { readFsmStateFile } from '../../runtime/fsm_state.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { writePhaseLedger } from '../../runtime/phase_ledger.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { REQUIRED_PHASES, appendPhase, isComplete } from '../../runtime/workflow_phases.js';
+
+/** E4 — the FSM stages that PRECEDE `code`; logging a CODE phase while the task FSM is in one of these is the
+ *  self-report hole (phases logged without the upstream gates having passed). */
+const PRE_CODE_STAGES = new Set(['scope', 'plan', 'author']);
 
 export const LogPhaseSchema = z.object({
   phase: z.enum(REQUIRED_PHASES).describe('One of the 7 workflow phases'),
@@ -64,6 +70,29 @@ export async function handleLogPhase(args: LogPhaseArgs): Promise<LogPhaseOutput
   if (active === null) {
     throw new Error(
       'log_phase: no active task (active-task.json absent). Create a task and set it in_progress first (rule #1).',
+    );
+  }
+  // E4 (docs/design/v2-enforcement-implementation.md) — STAGE-COUPLE the ledger: when a v2 discipline pack is
+  // active, the 7 CODE phases may only be logged once the TASK's FSM has reached `code` (SCOPE→PLAN→AUTHOR
+  // passed). REJECT a positively pre-code stage (the self-report hole). FAIL-OPEN when the per-task FSM is
+  // absent/unreadable (the observed actor may not have run — the commit gate (E0) is the hard backstop) or no
+  // v2 pack is active (v1 unchanged).
+  let preCodeStage: string | null = null;
+  try {
+    const v2pack = (await loadActiveV2Cartridges(sessionId)).find(
+      (c) => c.compiled.fsm !== undefined,
+    )?.pack.name;
+    if (v2pack !== undefined) {
+      const fsm = await readFsmStateFile(sessionId, v2pack, active.id);
+      if (fsm !== null && PRE_CODE_STAGES.has(fsm.state)) preCodeStage = fsm.state;
+    }
+  } catch {
+    /* fail-open: an FSM/cartridge read error must never brick phase logging */
+  }
+  if (preCodeStage !== null) {
+    throw new Error(
+      `log_phase: the task FSM for "${active.id}" is at "${preCodeStage}", not the CODE stage — ` +
+        `complete SCOPE→PLAN→AUTHOR before logging the 7 CODE phases (E4 stage coupling).`,
     );
   }
   // (a) durable phase ledger — TS-owned filesystem YAML (retire-Rust: was

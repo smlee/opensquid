@@ -14,13 +14,27 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// E4: partial-mock bootstrap so `loadActiveV2Cartridges` is controllable. Default → [] (no active v2 pack →
+// fail-open), so the pre-existing tests are unaffected; E4 tests opt in by setting a fullstack-flow cartridge.
+vi.mock('../../runtime/bootstrap.js', async (orig) => ({
+  ...(await orig<typeof import('../../runtime/bootstrap.js')>()),
+  loadActiveV2Cartridges: vi.fn(async () => []),
+}));
+
+import { loadActiveV2Cartridges } from '../../runtime/bootstrap.js';
+import { persistActorState } from '../../runtime/fsm_state.js';
 import { recordCurrentSession } from '../../runtime/hooks/session_id.js';
 import { readPhaseLedger } from '../../runtime/phase_ledger.js';
 import { writeActiveTask } from '../../runtime/session_state.js';
 
 import { handleLogPhase } from './log_phase.js';
+
+// E4 — a minimal fake v2 cartridge (only the fields log_phase reads: a compiled FSM + the pack name).
+const FSF_CARTRIDGE = { pack: { name: 'fullstack-flow' }, compiled: { fsm: {} } } as unknown as Awaited<
+  ReturnType<typeof loadActiveV2Cartridges>
+>[number];
 
 let tempHome: string;
 let priorEnv: Record<string, string | undefined> = {};
@@ -39,6 +53,7 @@ beforeEach(async () => {
   process.env.OPENSQUID_HOME = tempHome;
   delete process.env.CLAUDE_SESSION_ID;
   delete process.env.OPENSQUID_SESSION_ID;
+  vi.mocked(loadActiveV2Cartridges).mockResolvedValue([]); // default: no active v2 pack (fail-open)
 });
 
 afterEach(async () => {
@@ -141,5 +156,32 @@ describe('handleLogPhase', () => {
     await recordCurrentSession(SID);
     // no writeActiveTask → active-task.json absent
     await expect(handleLogPhase({ phase: 'code' })).rejects.toThrow(/no active task/);
+  });
+
+  // E4 (docs/design/v2-enforcement-implementation.md) — couple the ledger to the per-task FSM stage.
+  it('E4: REJECTS a CODE phase when the task FSM is pre-code (plan) under an active v2 pack', async () => {
+    await recordCurrentSession(SID);
+    await writeActiveTask(SID, { id: 'tE4', subject: 'wip', started_at: 'z' });
+    vi.mocked(loadActiveV2Cartridges).mockResolvedValue([FSF_CARTRIDGE]);
+    await persistActorState(SID, 'fullstack-flow', 'plan', 'z', 'tE4');
+    await expect(handleLogPhase({ phase: 'code' })).rejects.toThrow(/not the CODE stage/);
+  });
+
+  it('E4: ALLOWS a phase once the task FSM has reached code', async () => {
+    await recordCurrentSession(SID);
+    await writeActiveTask(SID, { id: 'tE4b', subject: 'wip', started_at: 'z' });
+    vi.mocked(loadActiveV2Cartridges).mockResolvedValue([FSF_CARTRIDGE]);
+    await persistActorState(SID, 'fullstack-flow', 'code', 'z', 'tE4b');
+    const out = await handleLogPhase({ phase: 'code' });
+    expect(out.phases_logged).toEqual(['code']);
+  });
+
+  it('E4: FAIL-OPEN — v2 pack active but no per-task FSM yet → logging allowed (commit gate is the backstop)', async () => {
+    await recordCurrentSession(SID);
+    await writeActiveTask(SID, { id: 'tE4c', subject: 'wip', started_at: 'z' });
+    vi.mocked(loadActiveV2Cartridges).mockResolvedValue([FSF_CARTRIDGE]);
+    // no persistActorState → per-task FSM absent
+    const out = await handleLogPhase({ phase: 'code' });
+    expect(out.phases_logged).toEqual(['code']);
   });
 });
