@@ -1,0 +1,99 @@
+# content-audit — the GUESS-FREE content-audit RUNNER for v2 fullstack-flow (GFR.1). v2 kept the deterministic
+# facet-gates (scope.anchors_ok, plan.acyclic, …) but DROPPED the qualitative guess-free standard v1 ran via
+# read_rubric + a spawned adversarial audit. This skill restores that audit AS A PRODUCER ONLY: on the
+# advancing artifact write it reads the ACTIVE-pack rubric (read_rubric resolves ctx.packId → fullstack-flow,
+# GFR.1) and runs the synchronous, timeout-bounded, prompt-hash-memoized `cached_audit`, which PERSISTS the
+# verdict to `fullstack-flow-<stage>-audit-cache`. It does NOT advance the FSM or emit a verdict — the v2 GATE
+# (pack.yaml, GFR.2) reads the cache via buildGuardCtx and is what blocks. Clean separation: skill produces the
+# verdict, gate consumes it. Mirrors coding-flow/skills/scope-lifecycle/skill.yaml:86-105,205-258.
+#
+# STAGES: SCOPE (a `docs/research/*-pre-research-*` Write/Edit) and AUTHOR (a `docs/tasks/T-*.md` Write/Edit) are
+# the doc-artifact stages, audited here exactly as v1 did. PLAN + CODE have NO single doc artifact in v2 (PLAN =
+# the work-graph; CODE = the diff/7-phase ledger), so their guess-free audit needs a distinct artifact source —
+# tracked as the next GFR.1 increment (NOT silently skipped: read_rubric already resolves plan|code, and
+# buildGuardCtx already binds audit.plan/audit.code, so the producer is the only missing half for those two).
+#
+# FAIL-LOUD: never run rubric-less (read_rubric → null ⇒ the cached_audit `if` is false ⇒ no audit runs ⇒ the
+# cache stays absent ⇒ readVerdict → undefined ⇒ the GFR.2 gate's `contains(audit.<stage>, …)` is false ⇒ the
+# gate BLOCKS). A missing rubric can never masquerade as a pass. `on_error: continue` so a spawn timeout binds
+# the error to `audit` (uncached) and the NEXT write retries — never freezes the flow (v1 F0c discipline).
+name: content-audit
+load: preload
+when_to_load: []
+triggers:
+  - kind: tool_call
+rules:
+  # ── SCOPE: the guess-free audit of the pre-research artifact (NEVER-GUESS · BEST-SOLUTION · FULL-FIX ·
+  #    coverage · ON-TOPIC — fullstack-flow/rubric/scope.md). Mirrors scope-lifecycle:99-130.
+  - id: scope-guess-free-audit
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      # The EFFECTIVE post-write content (Write→content, Edit→file with old→new applied) so the audit sees the
+      # REAL resulting artifact, not the Edit-empty targs.content (T-FLOW-AUDIT-ARTIFACT).
+      - call: effective_content
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        as: effective
+      # read_rubric resolves the ACTIVE pack (ctx.packId = fullstack-flow, GFR.1) → fullstack-flow/rubric/scope.md.
+      - call: read_rubric
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        args: { name: scope }
+        as: rubric
+      # FAIL-LOUD: only spawn when the rubric loaded (rubric != null). A null rubric ⇒ no cache ⇒ the gate blocks.
+      - call: cached_audit
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && rubric != null'
+        on_error: continue
+        args:
+          cache_key: fullstack-flow-scope-audit-cache
+          model: reasoning
+          timeout_ms: 340000
+          prompt: >-
+            You are an adversarial reviewer enforcing the GUESS-FREE SCOPE standard on a pre-research / scope
+            artifact. Apply EXACTLY this rubric (the single canonical source,
+            packs/builtin/fullstack-flow/rubric/scope.md):\n\n{{rubric}}\n\n
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every claim is
+            cited-or-flagged-open AND the simplest-correct solution is justified against alternatives AND it is a
+            full fix (not a patch around a design that should be re-architected) AND coverage + on-topic hold;
+            otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved guess, un-weighed alternative,
+            un-rearchitected patch, coverage gap, or off-topic element. ARTIFACT:\n\n{{effective}}
+        as: audit
+  # ── AUTHOR: the guess-free audit of the task spec (SIMPLICITY · real-code · coverage —
+  #    fullstack-flow/rubric/author.md). Mirrors scope-lifecycle:206-258.
+  - id: author-guess-free-audit
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: effective_content
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        as: effective
+      - call: read_rubric
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md")'
+        args: { name: author }
+        as: rubric
+      - call: cached_audit
+        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/tasks/T-") && endsWith(targs.file_path, ".md") && rubric != null'
+        on_error: continue
+        args:
+          cache_key: fullstack-flow-author-audit-cache
+          model: reasoning
+          timeout_ms: 340000
+          prompt: >-
+            You are an adversarial reviewer enforcing the GUESS-FREE AUTHOR (tasking) standard on a task spec.
+            Apply EXACTLY this rubric (the single canonical source,
+            packs/builtin/fullstack-flow/rubric/author.md):\n\n{{rubric}}\n\n
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every task block carries
+            its required fields with REAL code (no pseudocode), the spec covers the scope with no gap, and the
+            design is the simplest correct one (no over-complection); otherwise `VERDICT: UNRESOLVED` + one
+            bullet per offending block, uncovered element, or over-complected smell. SPEC:\n\n{{effective}}
+        as: audit
+prose: |
+  The guess-free content-audit RUNNER for v2 fullstack-flow: on the advancing artifact write it reads the
+  active pack's stage rubric (read_rubric → ctx.packId) and runs the memoized, timeout-bounded cached_audit,
+  which persists `VERDICT: GUESS_FREE | UNRESOLVED` to `fullstack-flow-<stage>-audit-cache`. PRODUCER ONLY — the
+  pack.yaml GATE reads the verdict (buildGuardCtx) and is what blocks; this skill never advances the FSM. SCOPE
+  (pre-research write) + AUTHOR (task-spec write) are wired; PLAN + CODE audit their non-doc artifacts in the
+  next GFR.1 increment. FAIL-LOUD: a missing rubric ⇒ no cache ⇒ the gate blocks (never a silent pass).
