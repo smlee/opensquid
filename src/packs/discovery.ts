@@ -190,6 +190,13 @@ export interface ActiveJson {
    * default user∪project union. Only meaningful at project scope.
    */
   exclusive?: boolean;
+  /**
+   * DBL.1b — the per-project DEPLOY verification command (e.g. `pnpm typecheck && pnpm test && pnpm build`).
+   * The fullstack-flow deploy `verify` decision routes on whether THIS command passed: the deploy procedure runs
+   * exactly this command, a PostToolUse reaction records its real exit code (verification.ts), and `deployClean`
+   * reads it. ABSENT ⇒ no verification configured ⇒ `deployClean` SKIPs to true (the project ships as today).
+   */
+  verifyCommand?: string;
 }
 
 /**
@@ -337,6 +344,22 @@ export async function readActiveExclusive(scopeRoot: string | null): Promise<boo
     return (JSON.parse(raw) as ActiveJson).exclusive === true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * DBL.1b — read the per-project DEPLOY `verifyCommand` from a scope's `active.json` (see
+ * {@link ActiveJson.verifyCommand}), or `null` when absent/unconfigured/unreadable (→ `deployClean` SKIPs to
+ * true; the project ships as today). Lenient like {@link readActiveExclusive}.
+ */
+export async function readActiveVerifyCommand(scopeRoot: string | null): Promise<string | null> {
+  if (scopeRoot === null) return null;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const v = (JSON.parse(raw) as ActiveJson).verifyCommand;
+    return typeof v === 'string' && v.trim().length > 0 ? v : null;
+  } catch {
+    return null;
   }
 }
 

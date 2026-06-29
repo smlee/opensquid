@@ -22,7 +22,9 @@ import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
-import { sessionStateFile } from '../paths.js';
+import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
+import { readActiveVerifyCommand } from '../../packs/discovery.js';
+import { recordVerification } from './verification.js';
 import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
@@ -387,6 +389,24 @@ export async function runV2Cartridges(
       }
     } catch (err) {
       process.stderr.write(`[v2-supply] readiness record failed (ignored): ${String(err)}\n`);
+    }
+  }
+  // DBL.1b — record the DETERMINISTIC deploy verification: when the agent runs EXACTLY the project's configured
+  // `verifyCommand` (the deploy procedure dictates the exact command, so the match is reliable), capture its REAL
+  // exit code → `deployClean` (verification.ts). Never a self-report. FAIL-OPEN on any read error.
+  if (event.kind === 'post_tool_call' && 'tool' in event && event.tool === 'Bash') {
+    try {
+      const cwd = 'cwd' in event ? (event as { cwd?: unknown }).cwd : undefined;
+      const command = 'args' in event ? (event.args as { command?: unknown }).command : undefined;
+      if (typeof cwd === 'string' && cwd !== '' && typeof command === 'string') {
+        const verifyCmd = await readActiveVerifyCommand(await resolveProjectScopeRoot(cwd));
+        const taskId = await readActiveTaskId(sessionId);
+        if (verifyCmd !== null && command.trim() === verifyCmd.trim() && taskId !== null) {
+          await recordVerification(sessionId, taskId, (event as { exit_code?: number }).exit_code === 0);
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`[v2-supply] verify record failed (ignored): ${String(err)}\n`);
     }
   }
   let exitCode: 0 | 2 = 0;

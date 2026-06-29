@@ -21,6 +21,7 @@ import { appendTool, recordSessionCwd, writeActiveTask } from '../session_state.
 import { readFsmStateRaw, readFsmStateFile, persistActorState } from '../fsm_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../workflow_phases.js';
 import { recordReadiness } from './readiness.js';
+import { readVerification } from './verification.js';
 import { appendAcceptance, markAccepted } from './acceptance.js';
 import type { Event } from '../event.js';
 
@@ -174,7 +175,29 @@ describe('fullstack-flow E2E — real pack, live path', () => {
 
     const d = await runV2Cartridges(sid, postBash(), NOW);
     expect(d.exitCode).toBe(0); // DEPLOY gate did not block
-    // deploy → accept (decision) → done chains in one receive (decisions auto-chain to the next await-point)
+    // deploy → verify(clean: no verifyCommand → skip→true) → accept (decision) → done, chained in one receive
     expect((await readFsmStateFile(sid, 'fullstack-flow', taskId))?.state).toBe('done');
+  });
+
+  it('DBL.1b: running EXACTLY the configured verifyCommand records its real exit code → deployClean', async () => {
+    mockLoad.mockResolvedValue([await loadPackV2(FSF)]);
+    const { sid, root, taskId } = await freshTaskSession('deploy');
+    // configure the project verifyCommand (resolveProjectScopeRoot(root) → root/.opensquid/active.json)
+    await writeFile(
+      join(root, '.opensquid', 'active.json'),
+      JSON.stringify({ packs: ['fullstack-flow'], verifyCommand: 'pnpm verify' }),
+      'utf8',
+    );
+    const bash = (command: string, exit_code: number): Event =>
+      ({ kind: 'post_tool_call', tool: 'Bash', args: { command }, exit_code, cwd: root }) as unknown as Event;
+
+    await runV2Cartridges(sid, bash('pnpm verify', 0), NOW); // the agent ran it + it PASSED
+    expect(await readVerification(sid, taskId)).toBe(true);
+
+    await runV2Cartridges(sid, bash('pnpm verify', 1), NOW); // a later run FAILED → overwrites (→ bug-fix loop)
+    expect(await readVerification(sid, taskId)).toBe(false);
+
+    await runV2Cartridges(sid, bash('ls', 0), NOW); // a DIFFERENT command → no match → the record stands
+    expect(await readVerification(sid, taskId)).toBe(false);
   });
 });

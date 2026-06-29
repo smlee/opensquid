@@ -31,6 +31,7 @@ import {
   clearMergeCache,
   discoverActivePacks,
   readActiveExclusive,
+  readActiveVerifyCommand,
   resolvePackStateDir,
   validatePackId,
 } from './discovery.js';
@@ -86,6 +87,30 @@ describe('readActiveExclusive — project-scope isolation flag', () => {
   it('is lenient on malformed JSON (the partition read fails loud elsewhere)', async () => {
     await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
     await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
+  });
+});
+
+describe('readActiveVerifyCommand — the per-project DEPLOY verification command (DBL.1b)', () => {
+  it('null scopeRoot / absent active.json / unconfigured → null (skip → deployClean:true)', async () => {
+    await expect(readActiveVerifyCommand(null)).resolves.toBeNull();
+    await expect(readActiveVerifyCommand(scopeRoot)).resolves.toBeNull(); // ENOENT
+    await writeActive({ packs: ['fullstack-flow'] });
+    await expect(readActiveVerifyCommand(scopeRoot)).resolves.toBeNull(); // key absent
+  });
+
+  it('returns the configured command verbatim', async () => {
+    await writeActive({ packs: ['fullstack-flow'], verifyCommand: 'pnpm typecheck && pnpm test' });
+    await expect(readActiveVerifyCommand(scopeRoot)).resolves.toBe('pnpm typecheck && pnpm test');
+  });
+
+  it('treats a blank/whitespace command as unconfigured (null)', async () => {
+    await writeActive({ packs: ['fullstack-flow'], verifyCommand: '   ' });
+    await expect(readActiveVerifyCommand(scopeRoot)).resolves.toBeNull();
+  });
+
+  it('is lenient on malformed JSON → null', async () => {
+    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
+    await expect(readActiveVerifyCommand(scopeRoot)).resolves.toBeNull();
   });
 });
 

@@ -17,9 +17,12 @@
  *
  * Spec: docs/tasks/T-v2-track2-discipline.md T2.8.
  */
-import { readActiveTask } from '../session_state.js';
+import { readActiveVerifyCommand } from '../../packs/discovery.js';
+import { resolveProjectScopeRoot } from '../paths.js';
+import { readActiveTask, readSessionCwd } from '../session_state.js';
 
 import { readAcceptance } from './acceptance.js';
+import { readVerification } from './verification.js';
 
 export interface DeployEvidence {
   capabilityOk: boolean;
@@ -66,7 +69,19 @@ export const defaultDeployEvidenceDeps: DeployEvidenceDeps = {
   },
   capabilityCheck: () => Promise.resolve(null), // no deploy env wired → skip → capabilityOk:true
   acceptance: readAcceptance,
-  verificationResult: () => Promise.resolve(null), // DBL.1b binds the record; today: no verification → skip → clean
+  // DBL.1b — resolve the project's verifyCommand; UNCONFIGURED → null (SKIP → deployClean:true, ships as today).
+  // CONFIGURED → the recorded result (the agent's verifyCommand exit code, verification.ts); no record yet →
+  // false (FAIL-CLOSED: run the verify before shipping). Cheap (file reads only — never runs the command here).
+  async verificationResult(sessionId) {
+    const cwd = await readSessionCwd(sessionId);
+    if (cwd === null) return null;
+    const cmd = await readActiveVerifyCommand(await resolveProjectScopeRoot(cwd));
+    if (cmd === null) return null; // no verification configured → skip → clean
+    const t = await readActiveTask(sessionId);
+    const taskId = t === null ? null : (t.taskId ?? t.id);
+    if (taskId === null) return false; // configured but no active task → fail-closed
+    return (await readVerification(sessionId, taskId)) ?? false; // recorded pass/fail; no record → fail-closed
+  },
 };
 
 /**

@@ -5,19 +5,23 @@ ONE real action here — verify, and act on anything negative. Do not ship on re
 a verification + acceptance gate, not a content stage.)
 
 ## Do — verify, and act on the negative
-- Run the pre-ship verification: `pnpm typecheck` + lint + prettier + the test suite + `pnpm build` (the
-  pre-push checklist). All must be green.
-- ACT ON ANY NEGATIVE — DELEGATE TO THE TASK STAGE: a failing check is a STOP. Do NOT fix it ad-hoc here and
-  do NOT ship broken. HAND THE BUG BACK to the task (AUTHOR) stage — re-task the fix so it flows forward
-  through AUTHOR → CODE → DEPLOY and gets re-verified, rather than patched blind at the ship gate. (Today the
-  `accept` decision's non-accept branch routes to PLAN — routing the deploy-bug handover straight to AUTHOR is
-  an FSM-transition refinement for the architecture phase.) The git **pre-push gate is the hard backstop** — it
-  blocks a push that didn't complete the flow, so a bypassed in-session check still fails closed.
-- If all green, surface the work for the human accept. You CANNOT accept your own work — acceptance is recorded
-  ONLY by the human via `opensquid accept <taskId>` (the start-up handoff re-surfaces waiting items).
+- Run the pre-ship verification. If the project configures a `verifyCommand` in `.opensquid/active.json`, run
+  EXACTLY that command (verbatim — its real exit code is recorded deterministically as `deploy.clean`; an
+  ad-hoc variation will not be captured). Otherwise run the pre-push checklist: `pnpm typecheck` + lint +
+  prettier + the test suite + `pnpm build`. All must be green.
+- ACT ON ANY NEGATIVE — the FSM does this FOR you now (DBL.1): a failing verification sets `deploy.clean:false`,
+  and the `verify` decision routes `bugs_found → AUTHOR` automatically — re-task the fix so it flows forward
+  AUTHOR → CODE → DEPLOY and gets RE-VERIFIED, never patched blind at the ship gate. Do NOT fix it ad-hoc here
+  and do NOT ship broken. The git **pre-push gate is the hard backstop** (a push that didn't complete the flow
+  fails closed). This is the BUG loop — distinct from a SCOPE rejection (accept→plan).
+- If verification is green (`deploy.clean:true`), the `verify` decision routes to ACCEPT — surface the work for
+  the human. You CANNOT accept your own work — acceptance is recorded ONLY by the human via
+  `opensquid accept <taskId>` (the start-up handoff re-surfaces waiting items).
 
-## Gate to advance (deploy → accept → done)
-`deploy_ready` = `deploy.capability_ok` (the CapabilityGate; SKIPPED→true when no deploy env is wired). The
-`accept` decision then branches on `deploy.accepted` (the durable acceptance item): accepted → `done`
-(shipped); otherwise → loop back to PLAN (never auto-ship). Get verification green, surface for accept, and the
-human's `opensquid accept` finishes the run.
+## Gate to advance (deploy → verify → accept → done)
+`deploy_ready` = `deploy.capability_ok` (the CapabilityGate; SKIPPED→true when no deploy env is wired). Then the
+`verify` decision branches on `deploy.clean`: clean → `accept`; bugs → `author` (the bug-fix loop, DBL.1).
+`deploy.clean` SKIPs to true when no `verifyCommand` is configured (ships as today). The `accept` decision then
+branches on `deploy.accepted` (the durable acceptance item): accepted → `done` (shipped); otherwise → loop back
+to PLAN (never auto-ship). Get verification green, surface for accept, and the human's `opensquid accept`
+finishes the run.
