@@ -1,0 +1,34 @@
+# stop-guard — the `kind: stop` pause gate v2 fullstack-flow was MISSING. The `pause-guard` skill only
+# triggers on `tool_call` and matched the tool NAME against `^(AskUserQuestion|Stop)$`; `Stop` is a hook
+# EVENT (`kind: stop`), never a tool name, so that match was dead — the agent could stop mid-run ungated.
+# This guard has its OWN `kind: stop` trigger so the FSM-only condition can't cross-fire on tool_call /
+# prompt events (mirrors v1 coding-flow `pause-stop-guard`). PAST SCOPE, stopping while the backlog is
+# non-empty (`open_task_count > 0`) is HARD-BLOCKED; a SCOPE stop (awaiting a genuine answer) or a DEPLETED
+# run (zero open tasks) stops freely. Deterministic + zero-LLM (read_fsm_state + open_task_count + verdict).
+name: stop-guard
+load: preload
+when_to_load: []
+triggers:
+  - kind: stop
+rules:
+  - id: no-stop-mid-run
+    process:
+      # The fullstack-flow FSM state — `scope` while in the interactive SCOPE stage (the free zone).
+      - call: read_fsm_state
+        as: phase
+      # The OPEN (pending|in_progress) backlog — a run is active while > 0; a depleted run stops freely.
+      - call: open_task_count
+        as: open
+      # HARD-BLOCK a mid-run stop (past SCOPE AND backlog non-empty). Grammar: double-quoted literals.
+      - call: verdict
+        if: 'phase != "scope" && open.count > 0'
+        args:
+          level: block
+          message: >-
+            DRIFT: stopped mid-run past SCOPE with the backlog non-empty. Everything after SCOPE is
+            automated — do not stop: continue to the next phase/task until the backlog is depleted.
+prose: |
+  The fullstack-flow stop discipline (the missing half of the pause floor): SCOPE is free (a stop to await a
+  genuine user answer is allowed). PAST SCOPE every stop is HARD-BLOCKED while the backlog is non-empty —
+  continue to the next phase/task. A depleted run (zero open tasks) stops freely. Own `kind: stop` trigger so
+  the FSM-only block can never cross-fire on a tool_call or prompt event.
