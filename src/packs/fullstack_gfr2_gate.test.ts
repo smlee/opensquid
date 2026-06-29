@@ -36,7 +36,7 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
   it('every stage gate BLOCKS when its facets pass but the verdict is ABSENT (fail-closed)', async () => {
     const { pack } = await loadPackV2(PACK_DIR);
     for (const s of stages) {
-      const expr = pack.guards[`${s}_ready`];
+      const expr = (pack.guards[`${s}_ready`] ?? '');
       expect(expr, `${s}_ready exists`).toBeTruthy();
       expect(evalCondition(expr, ctx({})), `${s}_ready blocks without verdict`).toBe(false);
     }
@@ -46,7 +46,7 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
     const { pack } = await loadPackV2(PACK_DIR);
     for (const s of stages) {
       const all = { scope: GUESS_FREE, plan: GUESS_FREE, author: GUESS_FREE, code: GUESS_FREE };
-      expect(evalCondition(pack.guards[`${s}_ready`], ctx(all)), `${s}_ready passes`).toBe(true);
+      expect(evalCondition((pack.guards[`${s}_ready`] ?? ''), ctx(all)), `${s}_ready passes`).toBe(true);
     }
   });
 
@@ -54,7 +54,7 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
     const { pack } = await loadPackV2(PACK_DIR);
     for (const s of stages) {
       const m = ctx({ [s]: UNRESOLVED });
-      expect(evalCondition(pack.guards[`${s}_ready`], m), `${s}_ready blocks on UNRESOLVED`).toBe(false);
+      expect(evalCondition((pack.guards[`${s}_ready`] ?? ''), m), `${s}_ready blocks on UNRESOLVED`).toBe(false);
     }
   });
 
@@ -64,6 +64,6 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
       ['scope', { is_advance: false }],
       ['audit', {}],
     ]);
-    expect(evalCondition(pack.guards.scope_ready, m)).toBe(true); // !is_advance → pass (never blocks mid-scoping)
+    expect(evalCondition(pack.guards.scope_ready ?? '', m)).toBe(true); // !is_advance → pass (never blocks mid-scoping)
   });
 });

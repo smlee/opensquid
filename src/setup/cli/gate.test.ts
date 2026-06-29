@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { loadPack } from '../../packs/loader.js';
 import { advanceFsmState } from '../../runtime/fsm_state.js';
+import { sessionStateFile } from '../../runtime/paths.js';
 import { writeActiveTask } from '../../runtime/session_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
 
@@ -23,6 +24,13 @@ const HUMAN_ENV = {} as NodeJS.ProcessEnv;
 const execFileP = promisify(execFile);
 const SID = 'gate-test-session';
 const NOW = '2026-06-04T00:00:00.000Z';
+
+/** GFR.2-hard fixture: write the CODE producer's verdict cache the commit-gate now requires (fullstack-flow). */
+async function writeCodeAudit(verdict: string): Promise<void> {
+  const p = sessionStateFile(SID, 'fullstack-flow-code-audit-cache');
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify({ hash: 'x', verdict }), 'utf8');
+}
 
 let tempHome: string;
 let repo: string;
@@ -359,12 +367,31 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
-  it('v2 + agent code commit + all 7 phases logged for the active task → ALLOW (0)', async () => {
+  it('v2 + agent code commit + 7 phases + CODE audit GUESS_FREE → ALLOW (0)', async () => {
     await makeGatedV2();
     await stage('src/x.ts');
     await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good'); // GFR.2-hard: the external code verdict
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('GFR.2-hard: v2 + 7 phases but NO code audit verdict → BLOCK (2)', async () => {
+    await makeGatedV2();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    // no writeCodeAudit → the external verdict is absent → fail-closed
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('GFR.2-hard: v2 + 7 phases + code audit UNRESOLVED → BLOCK (2)', async () => {
+    await makeGatedV2();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writeCodeAudit('VERDICT: UNRESOLVED\n- a guess found');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
   it('v2 + docs-only commit → ALLOW (0) (non-code is never blocked)', async () => {

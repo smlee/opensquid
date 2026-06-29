@@ -33,7 +33,7 @@ import { promisify } from 'node:util';
 import type { Command } from 'commander';
 
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
-import { OPENSQUID_HOME, resolveProjectScopeRoot } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveProjectScopeRoot, sessionStateFile } from '../../runtime/paths.js';
 import { PROTECTED_PREFIXES, isDocsOnly } from '../../runtime/protected_paths.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
 import { readActiveTask } from '../../runtime/session_state.js';
@@ -133,6 +133,20 @@ function block(msg: string): number {
 /** Does the LIVE session prove a completed flow / docs-only change right now?
  *  Shared by the commit boundary (block decision) and the attest boundary (record
  *  decision) so the two can never diverge. Null = not allowed. */
+/** GFR.2-hard: the fullstack-flow CODE producer's EXTERNAL verdict (`fullstack-flow-code-audit-cache`) must be
+ *  `VERDICT: GUESS_FREE` for a code commit. Reads the flat `{verdict}` cache; absent / non-GUESS_FREE / any
+ *  read error → false (FAIL-CLOSED — an unaudited or guessed code change cannot be committed). */
+async function codeAuditGuessFree(sid: string): Promise<boolean> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(sessionStateFile(sid, 'fullstack-flow-code-audit-cache'), 'utf8'),
+    ) as { verdict?: unknown };
+    return typeof parsed.verdict === 'string' && parsed.verdict.includes('VERDICT: GUESS_FREE');
+  } catch {
+    return false;
+  }
+}
+
 export async function commitAllowedNow(
   sid: string | null,
   files: string[],
@@ -152,7 +166,12 @@ export async function commitAllowedNow(
   // Gating on the FSM reaching `deploy` would over-block while the stage gates only
   // ADVISE at PostToolUse (that tightening is E1/E4). v1 keeps the session-FSM check.
   if (pack === 'fullstack-flow') {
-    return isComplete(phases, active.id) ? { allowed: true, reason: 'flow_complete' } : null;
+    // GFR.2-hard: a code commit requires BOTH the 7-phase ledger AND the CODE producer's EXTERNAL guess-free
+    // verdict — so guess-free BINDS at the git boundary (PostToolUse is too late to block; the FSM gates only
+    // advise). FAIL-CLOSED: an unaudited or non-GUESS_FREE code change cannot be committed.
+    return isComplete(phases, active.id) && (await codeAuditGuessFree(sid))
+      ? { allowed: true, reason: 'flow_complete' }
+      : null;
   }
   const fsm = await readFsmStateRaw(sid, pack);
   const done = fsm === 'phases_complete' && isComplete(phases, active.id);
@@ -240,6 +259,15 @@ export async function runGate(
   }
   const active = await readActiveTask(sid);
   const fsm = await readFsmStateRaw(sid, pack);
+  // GFR.2-hard: if the 7-phase flow IS complete, the block is the CODE guess-free audit, not the flow —
+  // give the precise reason rather than the misleading "finish the flow".
+  if (pack === 'fullstack-flow' && active !== null && isComplete(await readPhaseState(sid), active.id)) {
+    return block(
+      `this ${boundary} has code changes but the CODE guess-free audit is not VERDICT: GUESS_FREE ` +
+        `(fullstack-flow-code-audit-cache). The external code audit must pass before commit — resolve its ` +
+        `findings and let it re-run (re-log the audit phase), or pass --no-verify only with explicit authorization.`,
+    );
+  }
   return block(
     `this ${boundary} has code changes but the active task has not completed the ` +
       `SCOPE→AUTHOR→7-phase flow (FSM=${fsm ?? 'none'}, active task=${active?.id ?? 'none'}). ` +
