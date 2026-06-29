@@ -24,6 +24,13 @@ import { readAcceptance } from './acceptance.js';
 export interface DeployEvidence {
   capabilityOk: boolean;
   accepted: boolean;
+  /**
+   * DBL.1 — the VERIFY decision's facet: the configured verification (verifyCommand) passed. The `verify`
+   * decision routes clean→ACCEPT / bugs→AUTHOR. SKIP semantics (mirroring `capabilityOk`): when NO verification
+   * is configured the result reader returns `null` → `deployClean:true` (an unconfigured project ships as today).
+   * FAIL-CLOSED once configured (no record / throw → false → the bug-fix loop; never ship an unverified build).
+   */
+  deployClean: boolean;
 }
 
 /** The injectable I/O the DEPLOY evidence reads — the default binds the shipped runtime readers. */
@@ -37,6 +44,12 @@ export interface DeployEvidenceDeps {
   capabilityCheck(sessionId: string): Promise<boolean | null>;
   /** The durable acceptance set for the session (acceptance.ts last-writer-wins read). */
   acceptance(sessionId: string): Promise<{ taskId: string; status: string }[]>;
+  /**
+   * DBL.1 — the recorded verification result for the session. `null` ⇒ NO verification configured (no
+   * verifyCommand) → SKIPPED (deployClean:true). A boolean ⇒ the recorded pass/fail of the configured
+   * verifyCommand. DBL.1b binds the deterministic record (the agent's verify-run exit code); today: `null`.
+   */
+  verificationResult(sessionId: string): Promise<boolean | null>;
 }
 
 /**
@@ -53,6 +66,7 @@ export const defaultDeployEvidenceDeps: DeployEvidenceDeps = {
   },
   capabilityCheck: () => Promise.resolve(null), // no deploy env wired → skip → capabilityOk:true
   acceptance: readAcceptance,
+  verificationResult: () => Promise.resolve(null), // DBL.1b binds the record; today: no verification → skip → clean
 };
 
 /**
@@ -81,5 +95,12 @@ export async function deployEvidenceForSession(
   } catch {
     accepted = false; // fail-closed: an unprovable acceptance loops back to PLAN (never auto-ship)
   }
-  return { capabilityOk, accepted };
+  let deployClean = true;
+  try {
+    const v = await deps.verificationResult(sessionId);
+    deployClean = v ?? true; // null = no verification configured → SKIP → clean (ships as today)
+  } catch {
+    deployClean = false; // fail-closed: a throwing verification reader routes to the bug-fix loop
+  }
+  return { capabilityOk, accepted, deployClean };
 }

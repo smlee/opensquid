@@ -10,6 +10,7 @@ const deps = (over: Partial<DeployEvidenceDeps>): DeployEvidenceDeps => ({
   activeTaskId: () => Promise.resolve('T2.8'),
   capabilityCheck: () => Promise.resolve(null),
   acceptance: () => Promise.resolve([]),
+  verificationResult: () => Promise.resolve(null), // DBL.1 — no verification configured → skip → deployClean:true
   ...over,
 });
 
@@ -36,6 +37,30 @@ describe('deployEvidenceForSession (T2.8)', () => {
       deps({ capabilityCheck: () => Promise.resolve(false) }),
     );
     expect(ev.capabilityOk).toBe(false);
+  });
+
+  // DBL.1 — the VERIFY facet (deployClean): skip→clean when unconfigured; the recorded result otherwise.
+  it('no verification configured (verificationResult → null) → deployClean:true (SKIP, ships as today)', async () => {
+    const ev = await deployEvidenceForSession('s', deps({ verificationResult: () => Promise.resolve(null) }));
+    expect(ev.deployClean).toBe(true);
+  });
+
+  it('verification PASSED (true) → deployClean:true (→ accept)', async () => {
+    const ev = await deployEvidenceForSession('s', deps({ verificationResult: () => Promise.resolve(true) }));
+    expect(ev.deployClean).toBe(true);
+  });
+
+  it('verification FAILED (false) → deployClean:false (→ the AUTHOR bug-fix loop)', async () => {
+    const ev = await deployEvidenceForSession('s', deps({ verificationResult: () => Promise.resolve(false) }));
+    expect(ev.deployClean).toBe(false);
+  });
+
+  it('verificationResult THROWS → deployClean:false (fail-closed: never ship an unverifiable build)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ verificationResult: () => Promise.reject(new Error('boom')) }),
+    );
+    expect(ev.deployClean).toBe(false);
   });
 
   it('FAIL-CLOSED: a throwing capability check → capabilityOk:false', async () => {

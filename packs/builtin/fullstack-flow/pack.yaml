@@ -87,6 +87,10 @@ guards:
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.
   deploy_ready: 'deploy.capability_ok'
+  # DBL.1 — the VERIFY decision's predicate: the recorded verification (the configured verifyCommand) passed.
+  # FAIL-CLOSED once a verification IS configured (no record → not clean → bug-fix loop); defaults CLEAN when
+  # none is configured (skip, mirroring capability_ok) so an unconfigured project ships as today (deploy→accept).
+  deploy_clean: 'deploy.clean'
   # T2.8 — the DURABLE human-acceptance signal (`deploy.accepted` = the active task's acceptance item is
   # `accepted`, acceptance.ts — survives a closed session, re-surfaces at start-up). UNACCEPTED/absent → the
   # accept decision's `else` branch fires → DEPLOY loops back to PLAN (NEVER auto-declare "shipped").
@@ -142,6 +146,17 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: deployed
       on_fail: { action: block, message: 'DEPLOY: capability gate' }
+    # ── VERIFY (DBL.1 — the bug-fix fork: deploy delegates bugs back to AUTHOR) ─────────────────────────────
+    # After DEPLOY's capability gate, a DECISION over `deploy_clean` (the recorded verification result): clean →
+    # ACCEPT (the human touchpoint); bugs → AUTHOR (re-spec the fix as task(s) → code → deploy → re-verify),
+    # looping until deployable. DISTINCT from accept→rejected→plan (a SCOPE rejection); this is the BUG loop.
+    # `deploy_clean` defaults CLEAN when no verification is configured (skip, mirroring capability_ok) — until
+    # DBL.1b wires the deterministic verify-record, this preserves today's deploy→accept exactly.
+    verify:
+      kind: decision
+      branches:
+        - { guard: deploy_clean, emits: verified } # verification passed → ACCEPT
+        - { else: true, emits: bugs_found } # bugs → AUTHOR (the bug-fix loop; never ship broken)
     # ── acceptance (the second/last human touchpoint) ──────────────────────
     accept:
       kind: decision
@@ -157,7 +172,9 @@ fsm:
     - { from: plan, on: planned, to: author }
     - { from: author, on: authored, to: code }
     - { from: code, on: coded, to: deploy }
-    - { from: deploy, on: deployed, to: accept }
+    - { from: deploy, on: deployed, to: verify } # DBL.1 — through VERIFY (was: straight to accept)
+    - { from: verify, on: verified, to: accept } # clean → the human-accept touchpoint
+    - { from: verify, on: bugs_found, to: author } # bugs → re-author the fix (the bug-fix loop)
     - { from: accept, on: accepted, to: done }
     - { from: accept, on: rejected, to: plan }
 

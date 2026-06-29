@@ -264,13 +264,27 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(loaded.compiled.guardExprs?.get('accepted')).toBe('deploy.accepted');
   });
 
-  it('T2.8: capability_ok PASSES the DEPLOY gate (does not block; the accept decision then decides)', async () => {
+  it('T2.8: capability_ok PASSES the DEPLOY gate, then VERIFY(clean)→accept→done (DBL.1)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = seedAt(loaded, 'deploy');
-    // capability_ok true → the gate passes (no block). The `accept` decision evaluates on entry in the SAME
-    // event: accepted:true → ships to done (proving the gate did NOT block at deploy).
-    await a.receive(env('post_tool_call', { deploy: { capability_ok: true, accepted: true } }));
+    // capability_ok true → the gate passes; VERIFY(deploy.clean true)→verified→accept; accepted:true → done.
+    await a.receive(
+      env('post_tool_call', { deploy: { capability_ok: true, clean: true, accepted: true } }),
+    );
     expect(a.state.current).toBe('done');
+  });
+
+  it('DBL.1: VERIFY routes a BUGGY deploy (deploy.clean:false) back to AUTHOR (the bug-fix loop)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const verify = loaded.compiled.meta.verify;
+    expect(verify?.kind).toBe('decision');
+    expect(loaded.compiled.guardExprs?.get('deploy_clean')).toBe('deploy.clean');
+    const a = seedAt(loaded, 'deploy');
+    // capability_ok passes the gate; VERIFY(deploy.clean false) → bugs_found → AUTHOR (not accept/plan).
+    await a.receive(
+      env('post_tool_call', { deploy: { capability_ok: true, clean: false, accepted: false } }),
+    );
+    expect(a.state.current).toBe('author'); // bug-fix loop: re-author the fix (NOT plan, NOT done)
   });
 
   it('T2.8: capability_ok:false BLOCKS the DEPLOY gate (stays at deploy)', async () => {

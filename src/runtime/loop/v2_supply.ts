@@ -294,7 +294,12 @@ export async function buildGuardCtx(
   const dep = await deployEvidenceForSession(sessionId, deployDeps);
   m.set('deploy.capability_ok', dep.capabilityOk);
   m.set('deploy.accepted', dep.accepted);
-  m.set('deploy', { capability_ok: dep.capabilityOk, accepted: dep.accepted });
+  m.set('deploy.clean', dep.deployClean); // DBL.1 — the VERIFY decision's facet (skip→clean until DBL.1b wires the record)
+  m.set('deploy', {
+    capability_ok: dep.capabilityOk,
+    accepted: dep.accepted,
+    clean: dep.deployClean,
+  });
 
   // FD5/FD6 — FRONTEND pre-delivery gate evidence (the OUTPUT enforcement). `frontend.clean` = the staged
   // frontend files carry NO CRITICAL accessibility defect (frontend_audit). DUAL-SHAPE like T2.4–T2.8: a nested

@@ -566,6 +566,7 @@ const deployDeps = (
   activeTaskId: () => Promise.resolve('T2.8'),
   capabilityCheck: () => Promise.resolve(capabilityCheck),
   acceptance: () => Promise.resolve(acceptance),
+  verificationResult: () => Promise.resolve(null), // DBL.1 — no verification configured → skip → deployClean:true
 });
 
 // The real `deploy_ready` + `accepted` guard expressions, evaluated over the nested `deploy` object.
