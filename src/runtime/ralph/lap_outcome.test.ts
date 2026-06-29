@@ -25,6 +25,19 @@ describe('extractTypedExit', () => {
     expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED"}')).toEqual({ kind: 'SHIPPED' });
   });
 
+  it('PSL.3: a SHIPPED tag carries the optional resulting `stage` when a per-stage lap reports it', () => {
+    expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED","stage":"plan"}')).toEqual({
+      kind: 'SHIPPED',
+      stage: 'plan',
+    });
+    // backward compat: a bare SHIPPED (per-item lap) has no stage key
+    expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED"}')).toEqual({ kind: 'SHIPPED' });
+    // a non-string stage is ignored (defensive) → bare SHIPPED
+    expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED","stage":42}')).toEqual({
+      kind: 'SHIPPED',
+    });
+  });
+
   it('returns null when there is no tag', () => {
     expect(extractTypedExit('just some normal output, all done')).toBeNull();
   });

@@ -24,7 +24,11 @@ export type HumanRequiredReason =
   | 'BOARD_EMPTY';
 
 export type LapOutcome =
-  | { kind: 'SHIPPED' }
+  // `stage` (T-v2-per-stage-loop PSL.3): the lap's RESULTING FSM stage at exit, reported by a per-stage lap so
+  // the orchestrator can prime the NEXT stage's lap WITHOUT reading the lap's session FSM (the lap is a separate
+  // subprocess; cross-session FSM reads are not guaranteed). Optional + backward-compatible: a per-ITEM lap (v1
+  // coding-flow, or a fullstack-flow lap not driven per-stage) omits it → the orchestrator's open-ended path.
+  | { kind: 'SHIPPED'; stage?: string }
   | { kind: 'HUMAN_REQUIRED'; reason: HumanRequiredReason; item?: string; payload?: unknown }
   | { kind: 'WEDGE' }
   | { kind: 'TIMEOUT' }
@@ -65,7 +69,8 @@ export function extractTypedExit(resultText: string): LapOutcome | null {
   const rec = obj as Record<string, unknown>;
   switch (rec.kind) {
     case 'SHIPPED':
-      return { kind: 'SHIPPED' };
+      // Carry the optional resulting `stage` when a per-stage lap reports it (PSL.3); else a bare SHIPPED.
+      return { kind: 'SHIPPED', ...(typeof rec.stage === 'string' ? { stage: rec.stage } : {}) };
     case 'WEDGE':
       return { kind: 'WEDGE' };
     case 'TIMEOUT':
