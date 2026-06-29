@@ -23,7 +23,7 @@ import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { sessionStateFile } from '../paths.js';
-import { readActiveTaskId, readSessionCwd } from '../session_state.js';
+import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
@@ -325,6 +325,26 @@ async function readPreResearchPath(sessionId: string): Promise<string | null> {
  * Run every ACTIVE v2 cartridge over `event` and return the merged decision (most-severe exit wins). ADDITIVE:
  * returns ZERO when there are no active v2 cartridges, so a caller merging this into the v1 decision is a no-op.
  */
+/** #12 — claim the right to emit the CODE report ONCE per task (DURABLE marker, cross-event). Returns true on
+ *  the FIRST call for `taskId` (writing `complete-reported-<taskId>`), false thereafter — so the transition
+ *  path and the completion fallback never both emit a CODE report, regardless of which fires first or on which
+ *  event. Best-effort write (a marker failure degrades emit-once → emit, never blocks the report). */
+async function claimCodeReport(sessionId: string, taskId: string, now: string): Promise<boolean> {
+  const path = sessionStateFile(sessionId, `complete-reported-${taskId}`);
+  try {
+    await readFile(path, 'utf8');
+    return false; // already claimed → the other path emitted it
+  } catch {
+    /* not yet claimed */
+  }
+  try {
+    await atomicWriteFile(path, now);
+  } catch {
+    /* best-effort */
+  }
+  return true;
+}
+
 export async function runV2Cartridges(
   sessionId: string,
   event: Event,
@@ -415,10 +435,19 @@ export async function runV2Cartridges(
           // interactively (no env) v2_supply remains the CODE emitter. The other 4 stages always emit here.
           let stage = STAGE[p.from];
           if (stage === 'CODE' && process.env.OPENSQUID_AUTOMATION === '1') stage = undefined;
+          // #12 — the CODE report is emitted at most ONCE per task across BOTH paths (this transition + the
+          // completion fallback after the loop) via the durable claim; non-CODE stages emit once per their own
+          // transition (no claim). So a fallback emit on the completing log_phase suppresses a later
+          // code→deploy transition emit, and vice-versa.
           if (stage !== undefined) {
             try {
               const root = await readSessionCwd(sessionId);
-              if (root !== null) {
+              // #12 — claim the CODE report only when we WILL emit (root available), so a null-cwd path never
+              // burns the once-per-task claim and silently suppresses the completion fallback below.
+              if (
+                root !== null &&
+                (stage !== 'CODE' || (await claimCodeReport(sessionId, taskId ?? 'no-active-task', now)))
+              ) {
                 // T2.10 — the SCOPE report's goal-alignment line (the live consumer of goalConsult). Only the
                 // SCOPE stage carries it (the destination check belongs at scope-time); other stages leave it
                 // undefined → no `## Goal alignment` line. ADVISORY (surfaced, never a block — the anti-drift
@@ -445,6 +474,7 @@ export async function runV2Cartridges(
                 // additionalContext) + a best-effort chat push (fail-open). Was file+memory only → invisible.
                 injections.push(body);
                 await surfaceReportToChat(root, body);
+
                 // The caller mirrors `body` into memory (session-scoped wedge buffer — the real in-runtime
                 // memory write available here; no ToolContext/RagBackend at this layer). FAIL-OPEN.
                 await capturePendingLesson(sessionId, {
@@ -533,6 +563,73 @@ export async function runV2Cartridges(
     } catch (err) {
       // FAIL-OPEN: a v2 cartridge bug must NEVER break the hook (observe-never-breaks discipline).
       process.stderr.write(`[v2-supply] cartridge error (ignored): ${String(err)}\n`);
+    }
+  }
+  // #12 — the per-task COMPLETION report (the in-band fallback). The transition-based CODE report above fires
+  // ONLY on the code→deploy FSM transition; when the session FSM is parked (in-band, no loop driving it) it
+  // never fires, so reporting is invisible in Claude Code. So: on the POST_TOOL_CALL of a `log_phase` that has
+  // COMPLETED the active task, emit the CODE report HERE (the PostToolUse hook re-execs fresh → shows without
+  // an MCP-server restart; injected as additionalContext like the checkpoint). Gated on `post_tool_call` (the
+  // tool already ran → the phase is written, isComplete can be true; mirrors the readiness block) +
+  // non-automation (loop_driver owns CODE there) + the SAME durable claim the transition uses → emitted at
+  // most ONCE per task across both paths and across events. FAIL-OPEN: a report failure never breaks the hook.
+  if (
+    event.kind === 'post_tool_call' &&
+    process.env.OPENSQUID_AUTOMATION !== '1' &&
+    'tool' in event &&
+    typeof event.tool === 'string' &&
+    /log_phase/.test(event.tool)
+  ) {
+    try {
+      // isComplete + the phase ledger key on the harness `active.id` (log_phase: appendPhase(…, active.id)),
+      // while the claim + report LABEL use the track id (`taskId ?? id` via readActiveTaskId) to match the
+      // transition path. For an untracked task the two coincide; for a tracked one they must not be conflated.
+      const trackId = await readActiveTaskId(sessionId);
+      const active = await readActiveTask(sessionId);
+      const root = await readSessionCwd(sessionId);
+      if (
+        trackId !== null &&
+        active !== null &&
+        root !== null &&
+        isComplete(await readPhaseState(sessionId), active.id) &&
+        (await claimCodeReport(sessionId, trackId, now))
+      ) {
+        // The Evidence proof line must be MEASURED, not asserted — read the real code-gate facts (the same
+        // reader buildGuardCtx/the gate use), so a deprecated/failed-readiness task never gets a false
+        // guess-free certificate. phases_complete is already true here (the isComplete guard above).
+        const code = await codeEvidenceForSession(sessionId);
+        const { body } = await emitStageReport(
+          root,
+          {
+            stage: 'CODE',
+            taskId: trackId,
+            summary: 'task complete — all 7 phases logged',
+            nextDirective: 'deploy',
+            evidence: [
+              { label: 'phases_complete', ok: code.phasesComplete },
+              { label: 'readiness_ran', ok: code.readinessRan },
+              { label: 'deprecated_clean', ok: code.deprecatedClean },
+            ],
+            phases: CODE_PHASES.map((name) => ({ name, done: true })),
+          },
+          now,
+        );
+        // All FOUR standardized sinks (stage_report.ts:4-6), matching the transition path: file (emitStageReport)
+        // + injection + chat + the memory mirror — so an in-band CODE completion reaches the wedge buffer too.
+        injections.push(body);
+        await surfaceReportToChat(root, body);
+        await capturePendingLesson(sessionId, {
+          id: `stage-report-code-${trackId}-${now.replaceAll(':', '-')}`,
+          type: 'workflow',
+          content: body,
+          sourceContext: `v2 per-task completion (task ${trackId})`,
+          confidence: 1,
+          proposedAt: now,
+          author: 'agent',
+        });
+      }
+    } catch (err) {
+      process.stderr.write(`[v2-supply] completion report failed (ignored): ${String(err)}\n`);
     }
   }
   return { exitCode, messages, injections, boundSkills };

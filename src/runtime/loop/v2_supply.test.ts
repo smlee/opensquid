@@ -828,6 +828,45 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     expect(body).toContain('Evidence:'); // the CODE gate predicates
   });
 
+  it('#12 — CODE report fires on a COMPLETING log_phase (in-band fallback), ONCE per task', async () => {
+    const sid = 'sess-12-fallback';
+    await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-fb' });
+    for (const p of REQUIRED_PHASES) await appendPhase(sid, '1', p); // complete (keyed on active.id='1')
+    mockLoad.mockResolvedValue([gatePack('warn')]); // a cartridge so the loop runs; inert on a log_phase event
+    const logDone = {
+      kind: 'post_tool_call',
+      tool: 'mcp__opensquid__log_phase',
+      args: { phase: 'fix' },
+    } as unknown as Event;
+
+    const d = await runV2Cartridges(sid, logDone, NOW);
+    const body = d.injections.join('\n');
+    // label is the TRACK id (T-fb), proving isComplete keyed on active.id ('1') while the report uses the track id
+    expect(body).toContain('🦑 Phase report — CODE complete · T-fb');
+    expect(body).toContain('Evidence:'); // full-fidelity: the CODE gate proof line (not a reduced report)
+    expect(body).toContain('[x] fix'); // the 7-phase chart
+
+    // cross-event dedup: a SECOND completing log_phase → NO second report (durable claim marker)
+    const d2 = await runV2Cartridges(sid, logDone, NOW);
+    expect(d2.injections.join('\n')).not.toContain('🦑 Phase report');
+  });
+
+  it('#12 — no completion report when the task is INCOMPLETE', async () => {
+    const sid = 'sess-12-incomplete';
+    await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-inc' });
+    await appendPhase(sid, '1', 'pre_research'); // only 1 of 7 → incomplete
+    mockLoad.mockResolvedValue([gatePack('warn')]);
+    const logEv = {
+      kind: 'post_tool_call',
+      tool: 'mcp__opensquid__log_phase',
+      args: { phase: 'pre_research' },
+    } as unknown as Event;
+    const d = await runV2Cartridges(sid, logEv, NOW);
+    expect(d.injections.join('\n')).not.toContain('🦑 Phase report');
+  });
+
   it('T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1) v2_supply SKIPS the CODE report (loop_driver owns it)', async () => {
     const prev = process.env.OPENSQUID_AUTOMATION;
     process.env.OPENSQUID_AUTOMATION = '1';
