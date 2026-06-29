@@ -2,9 +2,11 @@
  * `read_rubric` primitive + the bare `readRubricContent` reader (T-transfer-audit-rubric TR.A,
  * wg-2d1d8698f563).
  *
- * Single-sources the coding-flow audit rubric: the canonical criteria live IN the pack at
- * `packs/builtin/coding-flow/rubric/{scope,author}.md` (the cartridge owns its own gate; shipped via the
- * `packs/builtin` entry in package.json `files[]`), read WHOLE by name. The guess/spec audits interpolate `{{rubric}}`
+ * Single-sources EACH pack's audit rubric: the canonical criteria live IN the pack at
+ * `packs/builtin/<pack>/rubric/<name>.md` (the cartridge owns its own gate; shipped via the
+ * `packs/builtin` entry in package.json `files[]`), read WHOLE by name. The pack is resolved from the active
+ * `ctx.packId` (v1 `coding-flow` has `{scope,author}`; v2 `fullstack-flow` has `{scope,plan,author,code}`); the
+ * bare reader defaults to `coding-flow` for back-compat with non-primitive callers. The guess/spec audits interpolate `{{rubric}}`
  * from this (de-duping the former hardcoded prompt copy — docs/lexicon.md:40), and `rubric_pre_inject` (TR.B)
  * delivers the same content to the agent before authoring. Edit a fragment → both reflect it (the audit's
  * sha256(prompt) cache invalidates because the rubric content is interpolated INTO the prompt).
@@ -32,19 +34,25 @@ import type { FunctionRegistry } from './registry.js';
 /** Generous sanity ceiling, well above the few-KB prose rubric; over-cap → null (never a partial read). */
 const MAX_RUBRIC = 64_000;
 
-const ReadRubricArgs = z.object({ name: z.enum(['scope', 'author']) }).strict();
+// v1 coding-flow has scope|author; v2 fullstack-flow adds plan|code (the guess-free standard at every stage).
+const ReadRubricArgs = z.object({ name: z.enum(['scope', 'plan', 'author', 'code']) }).strict();
+export type RubricName = 'scope' | 'plan' | 'author' | 'code';
 
-// dist/functions/read_rubric.js → ../.. = the package root; the rubric lives in the coding-flow pack dir.
+// dist/functions/read_rubric.js → ../.. = the package root; rubrics live in `packs/builtin/<pack>/rubric/`.
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
- * Bare reader — reused by `rubric_pre_inject` (TR.B) and wrapped by the primitive below. Returns the whole
- * fragment, or `null` on file-miss / path-misresolve / over-cap. Never throws, never truncates.
+ * Bare reader — reused by `rubric_pre_inject` (TR.B) and wrapped by the primitive below. Resolves the rubric
+ * for `pack` (default `coding-flow` for back-compat). Returns the whole fragment, or `null` on file-miss /
+ * path-misresolve / over-cap. Never throws, never truncates.
  */
-export async function readRubricContent(name: 'scope' | 'author'): Promise<string | null> {
+export async function readRubricContent(
+  name: RubricName,
+  pack = 'coding-flow',
+): Promise<string | null> {
   try {
     const content = await readFile(
-      join(PKG_ROOT, 'packs', 'builtin', 'coding-flow', 'rubric', `${name}.md`),
+      join(PKG_ROOT, 'packs', 'builtin', pack, 'rubric', `${name}.md`),
       'utf8',
     );
     return content.length > MAX_RUBRIC ? null : content;
@@ -60,6 +68,7 @@ export function registerReadRubric(registry: FunctionRegistry): void {
     durable: false,
     memoizable: false, // re-read each call so a rubric edit is reflected (S-C)
     costEstimateMs: 1,
-    execute: async ({ name }) => ok(await readRubricContent(name)),
+    // resolve by the ACTIVE pack (ctx.packId) so v2 fullstack-flow reads ITS rubric, v1 coding-flow reads its own.
+    execute: async ({ name }, ctx) => ok(await readRubricContent(name, ctx.packId)),
   });
 }
