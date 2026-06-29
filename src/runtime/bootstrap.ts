@@ -98,6 +98,8 @@ import { registerPhaseBundleText } from '../functions/phase_bundle_text.js';
 import { registerProjectContextInject } from '../functions/project_context_inject.js';
 import { registerReadProcedure } from '../functions/read_procedure.js';
 import { registerStageInject } from '../functions/stage_inject.js';
+import { registerSerializePlan } from '../functions/serialize_plan.js';
+import { registerStagedDiff } from '../functions/staged_diff.js';
 import { registerClaimEvidenceGate } from '../functions/claim_evidence_gate.js';
 import { registerSetRequestType } from '../functions/set_request_type.js';
 import { registerSubagentFunction } from '../functions/subagent.js';
@@ -156,6 +158,8 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerProjectContextInject(r); // T-project-context: echoes context.md prose (baked in args) as inject_context
   registerReadProcedure(r); // v2: per-stage on-demand procedure reader (need-to-know; stage_inject reuses it)
   registerStageInject(r); // v2: inject the CURRENT stage's procedure + rubric before the action (generic-cartridge form)
+  registerSerializePlan(r); // GFR.1b: render the work-graph + scope as the PLAN audit artifact
+  registerStagedDiff(r); // GFR.1c: read the uncommitted diff as the CODE audit artifact
   registerClaimEvidenceGate(r); // evidence-prerequisite block: tool_call side of verify-before-claiming
   registerSetRequestType(r); // wg-3d175ec06767: RTC.5 llm refinement writes the refined request-type
   // Phase 4: `check_destination` is the destination-side anti-drift

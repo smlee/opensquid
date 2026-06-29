@@ -7,11 +7,13 @@
 # (pack.yaml, GFR.2) reads the cache via buildGuardCtx and is what blocks. Clean separation: skill produces the
 # verdict, gate consumes it. Mirrors coding-flow/skills/scope-lifecycle/skill.yaml:86-105,205-258.
 #
-# STAGES: SCOPE (a `docs/research/*-pre-research-*` Write/Edit) and AUTHOR (a `docs/tasks/T-*.md` Write/Edit) are
-# the doc-artifact stages, audited here exactly as v1 did. PLAN + CODE have NO single doc artifact in v2 (PLAN =
-# the work-graph; CODE = the diff/7-phase ledger), so their guess-free audit needs a distinct artifact source —
-# tracked as the next GFR.1 increment (NOT silently skipped: read_rubric already resolves plan|code, and
-# buildGuardCtx already binds audit.plan/audit.code, so the producer is the only missing half for those two).
+# STAGES — all four audited, each by its OWN artifact + trigger:
+#   SCOPE  — a `docs/research/*-pre-research-*` Write/Edit (the artifact is the doc).
+#   AUTHOR — a `docs/tasks/T-*.md` Write/Edit (the artifact is the doc).
+#   PLAN   — a work-graph mutation (GFR.1b): the artifact is the serialized work-graph + scope (`serialize_plan`).
+#   CODE   — the audit-phase log (GFR.1c): the artifact is the uncommitted diff (`staged_diff`), EXTERNAL review
+#            distinct from the agent-side fan-out in procedure/code.md (anti-self-grading).
+# Each writes `fullstack-flow-<stage>-audit-cache`, read by buildGuardCtx; read_rubric resolves all four.
 #
 # FAIL-LOUD: never run rubric-less (read_rubric → null ⇒ the cached_audit `if` is false ⇒ no audit runs ⇒ the
 # cache stays absent ⇒ readVerdict → undefined ⇒ the GFR.2 gate's `contains(audit.<stage>, …)` is false ⇒ the
@@ -89,6 +91,67 @@ rules:
             its required fields with REAL code (no pseudocode), the spec covers the scope with no gap, and the
             design is the simplest correct one (no over-complection); otherwise `VERDICT: UNRESOLVED` + one
             bullet per offending block, uncovered element, or over-complected smell. SPEC:\n\n{{effective}}
+        as: audit
+  # ── PLAN: the guess-free audit of the work-graph decomposition (no-guess deps · on-topic · re-audit-scope —
+  #    fullstack-flow/rubric/plan.md). Artifact is the WORK-GRAPH (serialize_plan), NOT a doc write; the trigger
+  #    is a work-graph mutation. MCP tool names carry the mcp__opensquid__ prefix → match by substring. (GFR.1b)
+  - id: plan-guess-free-audit
+    process:
+      - call: tool_name
+        as: tool
+      - call: serialize_plan
+        if: 'contains(tool, "workgraph_create_issue") || contains(tool, "workgraph_add_edge") || contains(tool, "workgraph_update_issue")'
+        as: plan_artifact
+      - call: read_rubric
+        if: '(contains(tool, "workgraph_create_issue") || contains(tool, "workgraph_add_edge") || contains(tool, "workgraph_update_issue")) && plan_artifact != null'
+        args: { name: plan }
+        as: rubric
+      - call: cached_audit
+        if: '(contains(tool, "workgraph_create_issue") || contains(tool, "workgraph_add_edge") || contains(tool, "workgraph_update_issue")) && plan_artifact != null && rubric != null'
+        on_error: continue
+        args:
+          cache_key: fullstack-flow-plan-audit-cache
+          model: reasoning
+          timeout_ms: 340000
+          prompt: >-
+            You are an adversarial reviewer enforcing the GUESS-FREE PLAN standard on a work-graph
+            decomposition. Apply EXACTLY this rubric (the single canonical source,
+            packs/builtin/fullstack-flow/rubric/plan.md):\n\n{{rubric}}\n\n
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every dependency edge is
+            DERIVED (not asserted), every task traces to the captured ask, and the SCOPE still holds guess-free;
+            otherwise `VERDICT: UNRESOLVED` + one bullet per un-derived edge, off-topic task, or scope drift.
+            PLAN:\n\n{{plan_artifact}}
+        as: audit
+  # ── CODE: the guess-free audit of the DIFF (alignment · doc-use · existing-solution · full-fix · re-audit —
+  #    fullstack-flow/rubric/code.md). Artifact is the git diff (staged_diff); the trigger is the audit-phase
+  #    log. EXTERNAL reviewer — distinct from the agent-side fan-out in procedure/code.md (anti-self-grading). (GFR.1c)
+  - id: code-guess-free-audit
+    process:
+      - call: tool_name
+        as: tool
+      - call: tool_args
+        as: targs
+      - call: staged_diff
+        if: 'contains(tool, "log_phase") && targs.phase == "audit"'
+        as: diff
+      - call: read_rubric
+        if: 'contains(tool, "log_phase") && targs.phase == "audit" && diff != null'
+        args: { name: code }
+        as: rubric
+      - call: cached_audit
+        if: 'contains(tool, "log_phase") && targs.phase == "audit" && diff != null && rubric != null'
+        on_error: continue
+        args:
+          cache_key: fullstack-flow-code-audit-cache
+          model: reasoning
+          timeout_ms: 340000
+          prompt: >-
+            You are an adversarial reviewer enforcing the GUESS-FREE CODE standard on a diff. Apply EXACTLY this
+            rubric (the single canonical source, packs/builtin/fullstack-flow/rubric/code.md):\n\n{{rubric}}\n\n
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if the diff aligns to the
+            scoped element, uses APIs per their docs (no deprecated/misused), reinvents nothing, is a full fix
+            (not a band-aid, not an MVP/reduced subset), and the AUTHOR spec still holds; otherwise
+            `VERDICT: UNRESOLVED` + one bullet per offending hunk. DIFF:\n\n{{diff}}
         as: audit
 prose: |
   The guess-free content-audit RUNNER for v2 fullstack-flow: on the advancing artifact write it reads the
