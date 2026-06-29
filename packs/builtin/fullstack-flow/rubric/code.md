@@ -23,7 +23,9 @@ CODE has two halves; BOTH must hold for `VERDICT: GUESS_FREE`.
    no misused signatures) — verified against the primary source, not assumed.
 7. **EXISTING-SOLUTION DOUBLE-CHECK** — a final check that no existing solution was reinvented (the AUTHOR
    search re-confirmed against what was actually built).
-8. **FULL-FIX** — the shipped code is the full fix, not a band-aid/special-case that dodges the real rework.
+8. **FULL-FIX — NO MVP** — the shipped code is the full fix, not a band-aid/special-case that dodges the real
+   rework, AND it implements the FULL scoped design — not a reduced / MVP / phase-1 subset. A design element
+   left unimplemented with no tracked, named deferral = INCOMPLETE (treated like a failing test, not "done").
 9. **EXTERNAL REQUIRED** — the audit reached the external rung (recorded consultation); local-only cannot audit
    "what did I miss / is this the best / does this match the docs." 100% confidence is unreachable from local.
    Exempt only a genuinely external-dependency-free change (diff-derived, not agent-asserted).

@@ -35,9 +35,12 @@ A pre-research / scope artifact passes (`VERDICT: GUESS_FREE`) ONLY if ALL SIX h
    external check below.
 3. **FULL-FIX** — the chosen solution is the FULL fix: when the existing shape is the cause it is
    re-architected, never a local patch that bolts a special-case on to dodge the rework.
-4. **FULL-SCOPE CAPTURE** — the artifact enumerates the COMPLETE scope against the umbrella design it cites
-   (every affected tier / element / wiring obligation) so a downstream plan can cover 100% of the real
+4. **FULL-SCOPE CAPTURE — NO MVP** — the artifact enumerates the COMPLETE scope against the umbrella design it
+   cites (every affected tier / element / wiring obligation) so a downstream plan can cover 100% of the real
    end-state. Silently narrowing to a convenient slice with no flagged `- [ ] OPEN QUESTION` fails NEVER-GUESS.
+   An **MVP / phase-1 / "simplest-that-passes" reduction of a fully-specified design IS such a silent
+   narrowing** — the deliverable is the full end-state, not a convenient subset. Scoping to less than the cited
+   design (without a tracked, named deferral) fails here.
 5. **ON-TOPIC / NO UNASKED ADDITION** — every scoped element TRACES TO THE CAPTURED USER ASK. An
    evidence-derived element outside the ask is an ADDITION → route it (backlog / ask / reject), never fold it
    in silently. Citing a `file:line` does NOT make an unasked element on-topic.
