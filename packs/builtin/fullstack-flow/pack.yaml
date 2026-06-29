@@ -91,6 +91,9 @@ guards:
   # FAIL-CLOSED once a verification IS configured (no record → not clean → bug-fix loop); defaults CLEAN when
   # none is configured (skip, mirroring capability_ok) so an unconfigured project ships as today (deploy→accept).
   deploy_clean: 'deploy.clean'
+  # DBL.2 — the bug-fix loop has hit its round cap (deploy.bugfix_rounds ≥ MAX) without reaching clean → escalate
+  # to the human ACCEPT touchpoint instead of looping to AUTHOR again. Bounds a genuinely-unfixable bug.
+  deploy_bugfix_exhausted: 'deploy.bugfix_exhausted'
   # T2.8 — the DURABLE human-acceptance signal (`deploy.accepted` = the active task's acceptance item is
   # `accepted`, acceptance.ts — survives a closed session, re-surfaces at start-up). UNACCEPTED/absent → the
   # accept decision's `else` branch fires → DEPLOY loops back to PLAN (NEVER auto-declare "shipped").
@@ -156,7 +159,11 @@ fsm:
       kind: decision
       branches:
         - { guard: deploy_clean, emits: verified } # verification passed → ACCEPT
-        - { else: true, emits: bugs_found } # bugs → AUTHOR (the bug-fix loop; never ship broken)
+        # DBL.2 — BOUND the loop: too many bug-fix rounds without reaching clean → escalate to the human (ACCEPT
+        # touchpoint), never an infinite deploy→author grind. Checked AFTER clean (a now-clean item ships
+        # regardless of past rounds) and BEFORE bugs_found (so the cap actually stops the loop).
+        - { guard: deploy_bugfix_exhausted, emits: bugfix_exhausted } # cap hit → human review
+        - { else: true, emits: bugs_found } # bugs, under cap → AUTHOR (the bug-fix loop; never ship broken)
     # ── acceptance (the second/last human touchpoint) ──────────────────────
     accept:
       kind: decision
@@ -175,6 +182,7 @@ fsm:
     - { from: deploy, on: deployed, to: verify } # DBL.1 — through VERIFY (was: straight to accept)
     - { from: verify, on: verified, to: accept } # clean → the human-accept touchpoint
     - { from: verify, on: bugs_found, to: author } # bugs → re-author the fix (the bug-fix loop)
+    - { from: verify, on: bugfix_exhausted, to: accept } # DBL.2 — cap hit → human review (bounded, never infinite)
     - { from: accept, on: accepted, to: done }
     - { from: accept, on: rejected, to: plan }
 

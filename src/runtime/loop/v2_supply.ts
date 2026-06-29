@@ -24,7 +24,12 @@ import { persistActorState, readFsmState } from '../fsm_state.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
 import { readActiveVerifyCommand } from '../../packs/discovery.js';
-import { recordVerification } from './verification.js';
+import {
+  bumpBugfixRounds,
+  readBugfixRounds,
+  recordVerification,
+  resetBugfixRounds,
+} from './verification.js';
 import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_state.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
@@ -137,6 +142,10 @@ const STAGE: Record<string, Stage> = {
 // (a Write/Edit of a `docs/research/*-pre-research-*` file) so the later PLAN gate can `extractScope` the SAME
 // artifact (the INDEPENDENT design-element universe) without a live advance event in hand.
 const PRE_RESEARCH_PATH_KEY = 'fullstack-flow-pre-research-path';
+
+/** DBL.2 — the bug-fix loop's round cap: after this many deploy→author cycles without reaching clean, the VERIFY
+ *  decision escalates to the human (ACCEPT) instead of looping again. Bounds a genuinely-unfixable bug. */
+const MAX_BUGFIX_ROUNDS = 3;
 
 /** FAIL-OPEN read of a coding-flow audit-cache verdict (mirrors handoff/collect.ts readJsonState+auditHead):
  *  the flat `{ verdict: string }` shape; ANY error → undefined (observe-never-breaks). */
@@ -294,13 +303,24 @@ export async function buildGuardCtx(
   // jsonl. FAIL-CLOSED on `accepted`: no active task / unaccepted item → false → the `accept` decision loops to
   // PLAN (NEVER auto-ship).
   const dep = await deployEvidenceForSession(sessionId, deployDeps);
+  // DBL.2 — bug-fix loop bound: exhausted once the recorded round count hits the cap (the VERIFY decision then
+  // escalates to ACCEPT instead of looping to AUTHOR). Cheap (a small state-file read), FAIL-OPEN to NOT-exhausted.
+  let bugfixExhausted = false;
+  try {
+    const dTaskId = await readActiveTaskId(sessionId);
+    bugfixExhausted = dTaskId !== null && (await readBugfixRounds(sessionId, dTaskId)) >= MAX_BUGFIX_ROUNDS;
+  } catch {
+    bugfixExhausted = false; // fail-open: a read error keeps the loop going (the lap budget still backstops)
+  }
   m.set('deploy.capability_ok', dep.capabilityOk);
   m.set('deploy.accepted', dep.accepted);
-  m.set('deploy.clean', dep.deployClean); // DBL.1 — the VERIFY decision's facet (skip→clean until DBL.1b wires the record)
+  m.set('deploy.clean', dep.deployClean); // DBL.1 — the VERIFY decision's facet (skip→clean when no verifyCommand)
+  m.set('deploy.bugfix_exhausted', bugfixExhausted); // DBL.2
   m.set('deploy', {
     capability_ok: dep.capabilityOk,
     accepted: dep.accepted,
     clean: dep.deployClean,
+    bugfix_exhausted: bugfixExhausted,
   });
 
   // FD5/FD6 — FRONTEND pre-delivery gate evidence (the OUTPUT enforcement). `frontend.clean` = the staged
@@ -452,6 +472,20 @@ export async function runV2Cartridges(
             at: now,
             via: -1,
           });
+          // DBL.2 — bug-fix loop round accounting on the VERIFY decision's transitions: bugs_found (verify→author)
+          // is one round (bump → the cap eventually flips deploy.bugfix_exhausted); a verify→accept (clean OR
+          // exhausted) resets so a future re-open starts fresh. FAIL-OPEN (never break the hook).
+          if (p.from === 'verify') {
+            try {
+              const bfTask = await readActiveTaskId(sessionId);
+              if (bfTask !== null) {
+                if (p.to === 'author') await bumpBugfixRounds(sessionId, bfTask);
+                else if (p.to === 'accept') await resetBugfixRounds(sessionId, bfTask);
+              }
+            } catch (err) {
+              process.stderr.write(`[v2-supply] bugfix-rounds accounting failed (ignored): ${String(err)}\n`);
+            }
+          }
           // T2.12 — the LIVE per-stage report trigger. On each transition LEAVING a stage (SCOPE/PLAN/AUTHOR/
           // CODE/DEPLOY — see STAGE), emit that stage's report (dated docs/reports/ file + memory mirror +
           // in-session injection + best-effort chat). FAIL-OPEN: a report failure must NEVER break the hook.

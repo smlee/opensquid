@@ -48,3 +48,36 @@ export async function readVerification(sid: string, taskId: string): Promise<boo
     return null; // never-run / unreadable / malformed
   }
 }
+
+// DBL.2 — bound the bug-fix loop. The `verify` decision routes bugs→AUTHOR; an UNFIXABLE bug would cycle
+// deploy→author→code→deploy forever. Count the rounds (durable, per-task) and escalate at the cap, so a stuck
+// bug becomes a genuine human residual instead of an infinite grind (integrity over an endless loop).
+const bugfixRoundsKey = (taskId: string): string => `fullstack-flow-bugfix-rounds-${taskId}`;
+
+/** The recorded bug-fix round count for the task (0 when none/unreadable). */
+export async function readBugfixRounds(sid: string, taskId: string): Promise<number> {
+  try {
+    const p = JSON.parse(await readFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), 'utf8')) as {
+      rounds?: unknown;
+    };
+    return typeof p.rounds === 'number' && Number.isFinite(p.rounds) ? p.rounds : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Increment the bug-fix round count (called on each bugs_found deploy→author transition); returns the new count. */
+export async function bumpBugfixRounds(sid: string, taskId: string): Promise<number> {
+  const next = (await readBugfixRounds(sid, taskId)) + 1;
+  await atomicWriteFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), JSON.stringify({ rounds: next }));
+  return next;
+}
+
+/** Reset the bug-fix round count (on a clean verification or when the item leaves the flow). Best-effort. */
+export async function resetBugfixRounds(sid: string, taskId: string): Promise<void> {
+  try {
+    await atomicWriteFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), JSON.stringify({ rounds: 0 }));
+  } catch {
+    /* best-effort: a stale count at worst escalates one round early — never a correctness hole */
+  }
+}

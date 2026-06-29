@@ -287,6 +287,19 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(a.state.current).toBe('author'); // bug-fix loop: re-author the fix (NOT plan, NOT done)
   });
 
+  it('DBL.2: an EXHAUSTED bug-fix loop routes to the human (accept→plan), NOT another author loop', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    expect(loaded.compiled.guardExprs?.get('deploy_bugfix_exhausted')).toBe('deploy.bugfix_exhausted');
+    const a = seedAt(loaded, 'deploy');
+    // bugs (clean:false) BUT the round cap is hit → verify emits bugfix_exhausted → accept → (unaccepted) → plan.
+    await a.receive(
+      env('post_tool_call', {
+        deploy: { capability_ok: true, clean: false, bugfix_exhausted: true, accepted: false },
+      }),
+    );
+    expect(a.state.current).toBe('plan'); // bounded: human re-plan after exhaustion — NOT an endless author loop
+  });
+
   it('T2.8: capability_ok:false BLOCKS the DEPLOY gate (stays at deploy)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = seedAt(loaded, 'deploy');
