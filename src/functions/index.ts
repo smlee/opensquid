@@ -17,6 +17,7 @@ export { registerRecallPreInjectFunction } from './recall_pre_inject.js';
 export { registerReadRubric, readRubricContent } from './read_rubric.js';
 export { registerReadProcedure, readProcedureContent } from './read_procedure.js';
 export { registerStageInject } from './stage_inject.js';
+export { renderCheckpoint, stageWorkContext } from './stage_context.js';
 export { registerSerializePlan, serializePlan } from './serialize_plan.js';
 export { registerStagedDiff, stagedDiff } from './staged_diff.js';
 export { registerPhaseInject } from './phase_inject.js';

@@ -36,8 +36,10 @@ describe('stage_inject', () => {
     const res = await reg().call('stage_inject', {}, ctx(sid, ev('prompt_submit')));
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(content(res.value)).toContain('SCOPE'); // the procedure
-      expect(content(res.value)).toContain('NEVER-GUESS'); // the scope rubric (audited stage)
+      expect(content(res.value)).toContain('CHECKPOINT'); // slot 1: where you are
+      expect(content(res.value)).toContain('stage: scope');
+      expect(content(res.value)).toContain('SCOPE'); // slot 2: the procedure
+      expect(content(res.value)).toContain('NEVER-GUESS'); // slot 3: the scope rubric (audited stage)
     }
   });
 

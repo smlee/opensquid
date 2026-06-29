@@ -16,7 +16,7 @@
 import { z } from 'zod';
 
 import { atomicWriteFile } from '../runtime/atomic_write.js';
-import { readFsmStateRaw } from '../runtime/fsm_state.js';
+import { readFsmStateFile } from '../runtime/fsm_state.js';
 import { sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
 
@@ -24,6 +24,7 @@ import { buildInjectContext } from './inject_context.js';
 import { readProcedureContent } from './read_procedure.js';
 import { readRubricContent, type RubricName } from './read_rubric.js';
 import type { FunctionRegistry } from './registry.js';
+import { renderCheckpoint, stageWorkContext } from './stage_context.js';
 
 /** The stages that also carry an audit rubric (deploy has a procedure but no rubric). */
 const RUBRIC_STAGES = new Set<string>(['scope', 'plan', 'author', 'code']);
@@ -62,14 +63,15 @@ export function registerStageInject(registry: FunctionRegistry): void {
       if (kind !== 'prompt_submit' && kind !== 'session_start' && kind !== 'tool_call') {
         return ok(null);
       }
-      // The CURRENT stage = the active pack's FSM state. Null (unstarted) → nothing to inject.
-      const stage = await readFsmStateRaw(ctx.sessionId, ctx.packId);
-      if (stage === null) return ok(null);
+      // The CURRENT stage = the active pack's FSM state (the file also carries history for the checkpoint).
+      const fsm = await readFsmStateFile(ctx.sessionId, ctx.packId);
+      if (fsm === null) return ok(null);
+      const stage = fsm.state;
       // The stage's procedure (need-to-know: only this stage). No file (terminal/decision state) → no inject.
       const procedure = await readProcedureContent(stage, ctx.packId);
       if (procedure === null) return ok(null);
-      // Channel (b) dedup — same stage as the last inject on a tool_call → stay silent (skip the reads below
-      // were already cheap; this avoids re-injecting the same stage mid-turn). Channel (a) always refreshes.
+      // Channel (b) dedup — same stage as the last inject on a tool_call → stay silent (avoids re-injecting
+      // the same stage mid-turn). Channel (a) always refreshes.
       if (kind === 'tool_call' && stage === (await readLastStage(ctx.sessionId, ctx.packId))) {
         return ok(null);
       }
@@ -77,7 +79,11 @@ export function registerStageInject(registry: FunctionRegistry): void {
       const rubric = RUBRIC_STAGES.has(stage)
         ? await readRubricContent(stage as RubricName, ctx.packId)
         : null;
-      const text = [procedure, rubric]
+      // The standardized 4-slot bundle (need-to-know): CHECKPOINT (where you are) + PROCEDURE (what to do) +
+      // RUBRIC (the bar) + WORK-CONTEXT (the stage's input pointer). Empty slots drop out.
+      const checkpoint = renderCheckpoint(fsm);
+      const work = await stageWorkContext(stage, ctx.sessionId);
+      const text = [checkpoint, procedure, rubric, work]
         .filter((s): s is string => typeof s === 'string' && s.length > 0)
         .join('\n\n');
       if (text.length === 0) return ok(null);
