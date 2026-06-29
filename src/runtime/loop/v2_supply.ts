@@ -171,6 +171,24 @@ export async function buildGuardCtx(
   m.set('verdict.guess', verdictGuess); // R-AUDIT-CTX: keep the flat key (ARCHITECTURE.md:290) — stays MET
   m.set('verdict.spec', verdictSpec);
   m.set('verdict', { guess: verdictGuess, spec: verdictSpec }); // T2.3 — nested, so `verdict.guess` path-resolves too
+  // GFR.1 — the guess-free CONTENT-AUDIT verdict per stage (scope|plan|author|code). The `content-audit` skill
+  // (packs/builtin/fullstack-flow/skills/content-audit) runs read_rubric → cached_audit on each stage's
+  // advancing artifact and persists the verdict to `fullstack-flow-<stage>-audit-cache` (the SAME flat
+  // `{verdict}` shape readVerdict reads). FAIL-OPEN read (readVerdict → undefined on any error;
+  // observe-never-breaks) — the GATE (GFR.2) is what fails CLOSED on a non-GUESS_FREE verdict, not this read.
+  // The stored verdict is the RAW audit output (contains "VERDICT: GUESS_FREE") — mirrors v1 cached_audit, so
+  // the GFR.2 guards key on `contains(audit.<stage>, "VERDICT: GUESS_FREE")` (NOT `== "GUESS_FREE"`).
+  // DUAL-SHAPE like the gate evidence below: a nested `audit` object (the path the guards `audit.scope ...`
+  // resolve) PLUS flat `audit.*` Map keys (the coverage binding-extractor sees the literal `.set` keys).
+  const auditScope = await readVerdict(sessionId, 'fullstack-flow-scope-audit-cache');
+  const auditPlan = await readVerdict(sessionId, 'fullstack-flow-plan-audit-cache');
+  const auditAuthor = await readVerdict(sessionId, 'fullstack-flow-author-audit-cache');
+  const auditCode = await readVerdict(sessionId, 'fullstack-flow-code-audit-cache');
+  m.set('audit.scope', auditScope);
+  m.set('audit.plan', auditPlan);
+  m.set('audit.author', auditAuthor);
+  m.set('audit.code', auditCode);
+  m.set('audit', { scope: auditScope, plan: auditPlan, author: auditAuthor, code: auditCode });
   m.set('phase', phase);
   // T2.4 — SCOPE gate evidence. The advance event is a Write/Edit whose target is a pre-research artifact; only
   // then is the SCOPE gate "advancing" (the short-circuit `!scope.is_advance` passes every other event, so a
