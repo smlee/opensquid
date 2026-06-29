@@ -50,22 +50,29 @@ guards:
   #   anchors_ok    — every scoped element traces to the captured ask (anti-drift verdict, zero drift)
   #   depth >= 3    — at least 3 research tool-calls (recall/Read/Grep) in the since_scope_start window
   #   !open_question — no unchecked `- [ ] OPEN QUESTION` remains in the artifact
-  scope_ready: '!scope.is_advance || (scope.anchors_ok && scope.depth >= 3 && !scope.open_question)'
+  # GFR.2 — + the guess-free verdict: the SCOPE content-audit (content-audit skill) must have judged the
+  # artifact GUESS_FREE. `contains` (not `==`) because cached_audit stores the full verdict text; `audit.scope`
+  # path-resolves the nested `audit` object (buildGuardCtx). Undefined verdict → contains→false → block
+  # (FAIL-CLOSED, loop-back until the producer's verdict lands) — a stage never advances on a guessed artifact.
+  scope_ready: '!scope.is_advance || (scope.anchors_ok && scope.depth >= 3 && !scope.open_question && contains(audit.scope, "VERDICT: GUESS_FREE"))'
   # T2.5 — the PLAN gate: a deterministic, zero-LLM predicate over the work-graph. `plan.acyclic` (no cycle in
   # the `blocks`+`parent-child` edges, Kahn) ∧ `plan.complete` (every design element of the INDEPENDENT
   # `extractScope` universe has ≥1 covering issue). Bound by buildGuardCtx; FAIL-CLOSED with no captured scope.
-  plan_ready: 'plan.acyclic && plan.complete'
+  # GFR.2 — + the guess-free verdict (the PLAN producer, GFR.1b, judged the work-graph GUESS_FREE).
+  plan_ready: 'plan.acyclic && plan.complete && contains(audit.plan, "VERDICT: GUESS_FREE")'
   # T2.6 — the AUTHOR gate: a deterministic, zero-LLM predicate over the SHIPPED coverage checker.
   # `author.coverage_complete` (no gated export lacks a covering requirement — `report.orphans.length === 0`) ∧
   # `author.real_code` (every requirement MET — where met for reachable/binding REQUIRES its proof-test to pass,
   # so a stub with no passing proof fails). Bound dual-shape by buildGuardCtx; FAIL-CLOSED on a build error.
-  author_ready: 'author.coverage_complete && author.real_code'
+  # GFR.2 — + the guess-free verdict (the AUTHOR content-audit judged the task spec GUESS_FREE).
+  author_ready: 'author.coverage_complete && author.real_code && contains(audit.author, "VERDICT: GUESS_FREE")'
   # T2.7 — the CODE gate (inner gate of the `code_cycle` sub_flow): a deterministic, zero-LLM predicate.
   # `code.phases_complete` (the shipped 7-phase ledger `isComplete` for the active task) ∧ `code.readiness_ran`
   # (the three readiness surfacers ran + were recorded) ∧ `code.deprecated_clean` (the recorded readiness found
   # NO known-deprecated call — the BLOCKING result: a deprecated hit BLOCKS, not merely "the surfacer ran").
   # Bound dual-shape by buildGuardCtx; FAIL-CLOSED (never-run readiness / no active task → blocks).
-  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean'
+  # GFR.2 — + the guess-free verdict (the CODE producer, GFR.1c, judged the diff GUESS_FREE).
+  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && contains(audit.code, "VERDICT: GUESS_FREE")'
   # T2.8 — the DEPLOY gate: a deterministic, zero-LLM predicate. `deploy.capability_ok` = the shipped
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.
