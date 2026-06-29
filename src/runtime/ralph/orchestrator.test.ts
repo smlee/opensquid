@@ -210,3 +210,120 @@ describe('resolveParked (human-override residual-shrink path)', () => {
     expect(rec).not.toHaveBeenCalled();
   });
 });
+
+// ---- PSL.3 — the per-stage subprocess loop (each automated stage = its own fresh-context lap) ----
+const AUTOMATED = new Set(['scope', 'plan', 'author', 'code']);
+/** A stageLoop driver over an in-memory durable-stage store; stagePrompt = `DO <stage>` (the test reads it back). */
+function stageLoopStub(
+  store = new Map<string, string>(),
+): NonNullable<RalphDeps['stageLoop']> {
+  return {
+    initialStage: 'scope',
+    isAutomated: (s: string) => AUTOMATED.has(s),
+    stagePrompt: (_item: Issue, stage: string) => P(`DO ${stage}`),
+    readStage: (id: string) => P(store.get(id) ?? null),
+    writeStage: (id: string, s: string) => {
+      store.set(id, s);
+      return P(undefined);
+    },
+    clearStage: (id: string) => {
+      store.delete(id);
+      return P(undefined);
+    },
+  };
+}
+
+describe('runRalphLoop — PSL.3 per-stage loop', () => {
+  it('drives each automated stage as its own lap (advancing via the reported stage), then the boundary lap', async () => {
+    const advance: Record<string, string> = {
+      scope: 'plan',
+      plan: 'author',
+      author: 'code',
+      code: 'deploy',
+    };
+    const calls: (string | undefined)[] = [];
+    const store = new Map<string, string>();
+    const runLap = vi.fn((_item: Issue, sp?: string) => {
+      calls.push(sp);
+      if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.01 }); // the boundary/tail lap
+      const next = advance[sp.replace('DO ', '')];
+      return P<LapResult>(
+        next === undefined ? { kind: 'SHIPPED', costUsd: 0.01 } : { kind: 'SHIPPED', stage: next, costUsd: 0.01 },
+      );
+    });
+    const r = await runRalphLoop(cfg({ once: true }), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(store),
+    });
+    // 4 automated stage laps (scope→plan→author→code) + 1 open-ended boundary lap (deploy/accept) = 5
+    expect(calls).toEqual(['DO scope', 'DO plan', 'DO author', 'DO code', undefined]);
+    expect(r.closed).toEqual(['a']);
+    expect(r.spent).toBeCloseTo(0.05);
+    expect(store.has('a')).toBe(false); // clearStage on close
+  });
+
+  it('resumes from the DURABLE stage, not the pack initial', async () => {
+    const store = new Map<string, string>([['a', 'author']]); // a prior run left it at author
+    const calls: (string | undefined)[] = [];
+    const advance: Record<string, string> = { author: 'code', code: 'deploy' };
+    const runLap = vi.fn((_item: Issue, sp?: string) => {
+      calls.push(sp);
+      if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+      const next = advance[sp.replace('DO ', '')];
+      return P<LapResult>(
+        next === undefined ? { kind: 'SHIPPED', costUsd: 0 } : { kind: 'SHIPPED', stage: next, costUsd: 0 },
+      );
+    });
+    await runRalphLoop(cfg({ once: true }), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(store),
+    });
+    expect(calls).toEqual(['DO author', 'DO code', undefined]); // started at author, NOT scope
+  });
+
+  it('an item already past the automated stages goes straight to the open-ended boundary lap', async () => {
+    const store = new Map<string, string>([['a', 'deploy']]);
+    const calls: (string | undefined)[] = [];
+    const runLap = vi.fn((_item: Issue, sp?: string) => {
+      calls.push(sp);
+      return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+    });
+    await runRalphLoop(cfg({ once: true }), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(store),
+    });
+    expect(calls).toEqual([undefined]); // no per-stage laps — just the boundary/tail lap
+  });
+
+  it('a lap that never advances the stage is retried (bounded) then escalated UNRECOVERABLE_WEDGE', async () => {
+    const runLap = vi.fn(() => P<LapResult>({ kind: 'SHIPPED', stage: 'scope', costUsd: 0 })); // never advances
+    const r = await runRalphLoop(cfg({ once: true }), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(),
+    });
+    expect(runLap).toHaveBeenCalledTimes(3); // MAX_STAGE_RETRIES
+    expect(r.parked).toEqual([{ id: 'a', reason: 'UNRECOVERABLE_WEDGE' }]);
+  });
+
+  it('a mid-stage HUMAN_REQUIRED bubbles up to the uniform park+escalate handler', async () => {
+    const runLap = vi.fn(() =>
+      P<LapResult>({ kind: 'HUMAN_REQUIRED', reason: 'SCOPE_FORK', costUsd: 0 }),
+    );
+    const r = await runRalphLoop(cfg({ once: true }), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(),
+    });
+    expect(runLap).toHaveBeenCalledTimes(1); // escalated on the first stage lap
+    expect(r.parked).toEqual([{ id: 'a', reason: 'SCOPE_FORK' }]);
+  });
+
+  it('without a stageLoop driver, an item runs as ONE open-ended per-item lap (unchanged)', async () => {
+    const calls: (string | undefined)[] = [];
+    const runLap = vi.fn((_item: Issue, sp?: string) => {
+      calls.push(sp);
+      return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+    });
+    await runRalphLoop(cfg({ once: true }), deps(mockStore(['a']), runLap));
+    expect(calls).toEqual([undefined]); // single lap, no per-stage prompt
+  });
+});

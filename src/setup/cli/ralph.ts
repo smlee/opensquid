@@ -27,7 +27,9 @@ import { bindProject, workGraphStore } from '../../workgraph/store.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
+import { clearItemStage, readItemStage, writeItemStage } from '../../runtime/ralph/item_stage.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
+import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
 import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
@@ -76,8 +78,8 @@ export function makeSpawnLap(
   cfg: RalphConfig,
   file: RalphConfigFile,
   runCli: typeof runOneShotCli = runOneShotCli,
-): (item: Issue) => Promise<LapResult> {
-  return async (item: Issue) => {
+): (item: Issue, stagePrompt?: string) => Promise<LapResult> {
+  return async (item: Issue, stagePrompt?: string) => {
     // wg-5729c7afafad: deliver the RALPH.md CONTENT (not its path) as the stdin prompt, with the item id
     // appended — `claude -p` reads the prompt from stdin (empirically verified). Fail loud if the directive
     // is missing (a setup problem, not a retryable lap CRASH).
@@ -91,7 +93,12 @@ export function makeSpawnLap(
     }
     const prompt =
       ralphMd +
-      `\n\n---\nYour assigned work-item id: ${item.id}\n(Read it with workgraph_get("${item.id}").)\n`;
+      `\n\n---\nYour assigned work-item id: ${item.id}\n(Read it with workgraph_get("${item.id}").)\n` +
+      // PSL.3 — the per-stage directive (when the orchestrator drives this item per-stage). Appended LAST so it
+      // is the most-specific instruction (it narrows RALPH.md's "do the whole item" to "do ONLY this stage").
+      // The lap's OWN stage_inject hook supplies the stage's checkpoint/procedure/rubric/work-context (its own
+      // session) — the directive only constrains scope + asks for the resulting-stage report.
+      (stagePrompt === undefined ? '' : `\n---\n${stagePrompt}\n`);
     let stdout: string;
     try {
       stdout = await runCli({
@@ -164,6 +171,24 @@ export const daemonChatSend: ChatSend = (params) =>
     );
   });
 
+/** PSL.3 — the fullstack-flow stages the per-stage loop drives as its own laps (the human boundary is past these). */
+const AUTOMATED_STAGES = new Set<string>(['scope', 'plan', 'author', 'code']);
+
+/** The per-stage directive appended to a lap's prompt: do ONLY this stage + report the resulting stage. The lap's
+ *  own stage_inject hook supplies the stage's procedure/rubric/checkpoint/work-context (its own session). */
+function perStageDirective(stage: string): string {
+  return [
+    `## Per-stage assignment (the orchestrator runs ONE stage per lap, for fresh context per stage)`,
+    `You are assigned ONLY the **${stage}** stage of this item — NOT the whole flow.`,
+    `Complete exactly that stage's gate (your in-session stage guidance supplies its procedure + rubric), then STOP.`,
+    `Do NOT proceed into later stages — the orchestrator spawns the next stage's lap with fresh context.`,
+    `Exit by reporting the stage the flow is AT after you finish, so the orchestrator can prime the next lap:`,
+    `  RALPH-EXIT: {"kind":"SHIPPED","stage":"<your current FSM stage after completing ${stage} — verify with read_state>"}`,
+    `If you genuinely cannot complete ${stage} (an irreversible boundary or a product fork the principles cannot`,
+    `settle), escalate as usual: RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"IRREVERSIBLE_BOUNDARY|SCOPE_FORK"}.`,
+  ].join('\n');
+}
+
 export function registerRalph(program: Command): Command {
   const loop = program
     .command('loop')
@@ -195,11 +220,27 @@ export function registerRalph(program: Command): Command {
       const wg = await openRalphWorkGraph();
       const sid = process.env.CLAUDE_SESSION_ID ?? '<cli>';
       const root = process.cwd();
+      // PSL.3 — drive a fullstack-flow item per-stage (one fresh-context lap per automated stage); any other
+      // pack (v1 coding-flow) keeps the open-ended per-item lap. Detected from the project's active discipline.
+      const pack = await activeDisciplinePack(root);
+      const stageLoop =
+        pack === 'fullstack-flow'
+          ? {
+              initialStage: 'scope',
+              isAutomated: (s: string): boolean => AUTOMATED_STAGES.has(s),
+              stagePrompt: async (_item: Issue, stage: string): Promise<string> =>
+                perStageDirective(stage),
+              readStage: readItemStage,
+              writeStage: writeItemStage,
+              clearStage: clearItemStage,
+            }
+          : undefined;
       const result = await runRalphLoop(cfg, {
         wg,
         claimAudience,
         runLap: makeSpawnLap(cfg, file),
         escalate: chatEscalator({ send: daemonChatSend, channel: 'project:telegram' }),
+        ...(stageLoop === undefined ? {} : { stageLoop }),
         // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
         // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
         onShipped: async (taskId) => {

@@ -50,8 +50,13 @@ export interface RalphDeps {
   wg: WorkGraphFacade;
   /** Env-derived claim audience (GR.1 — never caller input). */
   claimAudience: () => ClaimAudience;
-  /** Run ONE lap for an item → its typed outcome + cost. The CLI wraps `claude -p RALPH.md` + parseLapOutcome. */
-  runLap: (item: Issue) => Promise<LapResult>;
+  /**
+   * Run ONE lap for an item → its typed outcome + cost. The CLI wraps `claude -p RALPH.md` + parseLapOutcome.
+   * `stagePrompt` (T-v2-per-stage-loop PSL.3): when present, the per-stage bundle + directive prepended to the
+   * lap's prompt so the lap completes ONLY that stage and reports its resulting `stage` in RALPH-EXIT. Absent →
+   * the open-ended per-item lap (unchanged).
+   */
+  runLap: (item: Issue, stagePrompt?: string) => Promise<LapResult>;
   /** The undroppable escalation transport (GR.3) — the CLI wires `escalateSeverity`. */
   escalate: LapEscalator;
   /**
@@ -60,12 +65,73 @@ export interface RalphDeps {
    * fail-open: a report/grouping error must never break the drain loop.
    */
   onShipped?: (taskId: string) => Promise<void>;
+  /**
+   * T-v2-per-stage-loop PSL.3 — present ONLY for a stage-gated pack (fullstack-flow). When present, the
+   * orchestrator drives each AUTOMATED stage as its OWN fresh-context lap (priming `stagePrompt` per stage,
+   * advancing via the lap's reported resulting stage), then falls back to the open-ended per-item lap for the
+   * deploy/accept HUMAN boundary (never-auto-ship). Absent → the open-ended per-item lap for the whole item
+   * (unchanged — v1 coding-flow + any non-per-stage pack).
+   */
+  stageLoop?: {
+    /** The pack's initial stage (seeded for a FRESH item when no durable stage is recorded). */
+    initialStage: string;
+    /** True while `stage` is an AUTOMATED stage the loop drives; false at the human boundary (deploy/accept/done). */
+    isAutomated: (stage: string) => boolean;
+    /** The per-stage prompt (bundle + 'do only this stage' directive) to prepend for `stage`. */
+    stagePrompt: (item: Issue, stage: string) => Promise<string>;
+    /** Read the item's durable loop stage (null → seed `initialStage`). */
+    readStage: (itemId: string) => Promise<string | null>;
+    /** Persist the item's loop stage (from a lap's reported resulting stage). */
+    writeStage: (itemId: string, stage: string) => Promise<void>;
+    /** Drop the item's durable stage once it leaves the loop (closed). */
+    clearStage: (itemId: string) => Promise<void>;
+  };
 }
+
+/** PSL.3 — a stage that reports the SAME stage this many times in a row (no advance) is genuinely stuck. */
+const MAX_STAGE_RETRIES = 3;
 
 /** Resource pauses END the run; everything else is per-item decision-residual that parks + continues. */
 const RESOURCE_PAUSES: readonly HumanRequiredReason[] = ['BUDGET', 'RATE_BUDGET', 'BOARD_EMPTY'];
 const isResourcePause = (r: HumanRequiredReason): r is RalphStop & HumanRequiredReason =>
   (RESOURCE_PAUSES as readonly string[]).includes(r);
+
+/**
+ * PSL.3 — run ONE work-item to its outcome. With `stageLoop`, each AUTOMATED stage is its OWN fresh-context lap
+ * (primed per stage; advanced via the lap's reported resulting `stage`; a no-advance lap retried up to
+ * MAX_STAGE_RETRIES then escalated), and the deploy/accept HUMAN boundary runs as the open-ended per-item lap
+ * (never-auto-ship). Without `stageLoop`, ONE open-ended per-item lap drives the whole item (unchanged).
+ * Costs accumulate across the per-stage laps so the caller's budget accounting is unaffected.
+ */
+async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Promise<LapResult> {
+  const sl = deps.stageLoop;
+  if (sl === undefined) return superviseLap(() => deps.runLap(item), cfg.supervise);
+
+  // Seed from the DURABLE stage (resume-correct) or the pack initial (fresh item) — never a cross-session FSM read.
+  let stage = (await sl.readStage(item.id)) ?? sl.initialStage;
+  let cost = 0;
+  let sameStage = 0;
+  while (sl.isAutomated(stage)) {
+    const sp = await sl.stagePrompt(item, stage);
+    const res = await superviseLap(() => deps.runLap(item, sp), cfg.supervise);
+    cost += res.costUsd;
+    if (res.kind !== 'SHIPPED') return { ...res, costUsd: cost }; // escalation/wedge → the uniform handler parks it
+    const next = res.stage;
+    if (next === undefined || next === stage) {
+      // The lap shipped but did NOT advance the stage (no resulting stage reported, or the same one) → stuck.
+      if (++sameStage >= MAX_STAGE_RETRIES)
+        return { kind: 'HUMAN_REQUIRED', reason: 'UNRECOVERABLE_WEDGE', costUsd: cost };
+      continue; // retry the same stage with a fresh lap (bounded)
+    }
+    sameStage = 0;
+    stage = next;
+    await sl.writeStage(item.id, stage); // durable: a loop restart resumes HERE, not at initialStage
+  }
+  // Automated stages complete → the deploy/accept HUMAN boundary uses the UNCHANGED open-ended per-item lap
+  // (never-auto-ship: it drives deploy + escalates HUMAN_REQUIRED for the human accept, exactly as today).
+  const tail = await superviseLap(() => deps.runLap(item), cfg.supervise);
+  return { ...tail, costUsd: cost + tail.costUsd };
+}
 
 export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<RalphResult> {
   const { wg } = deps;
@@ -102,11 +168,12 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     const { won } = await wg.claimIssue(item.id, deps.claimAudience(), cfg.claimTtlSec); // GR.1 atomic CAS
     if (!won) continue; // another runner/harness won it — it now carries a live claim, excluded next pass
 
-    const outcome = await superviseLap(() => deps.runLap(item), cfg.supervise); // GR.3 → LapResult
+    const outcome = await runItemLaps(item, deps, cfg); // GR.3 → LapResult (PSL.3: per-stage when stageLoop present)
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
     if (outcome.kind === 'SHIPPED') {
       await wg.updateIssue(item.id, { status: 'closed' });
+      await deps.stageLoop?.clearStage(item.id); // PSL.3 — the item left the loop; drop its durable stage
       closed.push(item.id);
       // T2.9: the loop-driver lives here — on phases_complete (a SHIPPED lap) emit the CODE report + compute the
       // next run-group. Fail-open: a report/grouping error must never break the drain.
