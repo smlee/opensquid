@@ -338,6 +338,42 @@ describe('GDC.1 — human passthrough (the gate gates agents, never humans)', ()
   });
 });
 
+// E0 (docs/design/v2-enforcement-implementation.md §0) — pinning v2 must NOT disable the gate.
+async function makeGatedV2(): Promise<void> {
+  await mkdir(join(repo, '.opensquid'), { recursive: true });
+  await writeFile(
+    join(repo, '.opensquid', 'active.json'),
+    JSON.stringify({ packs: ['fullstack-flow'] }),
+    'utf8',
+  );
+}
+describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 coding-flow', () => {
+  it('v2 pinned → isGatedRepo true (pre-E0 the literal coding-flow constant returned false → gate OFF)', async () => {
+    await makeGatedV2();
+    expect(await isGatedRepo(repo)).toBe(true);
+  });
+
+  it('v2 + agent code commit + NO phases logged → BLOCK (2)', async () => {
+    await makeGatedV2();
+    await stage('src/x.ts');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('v2 + agent code commit + all 7 phases logged for the active task → ALLOW (0)', async () => {
+    await makeGatedV2();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('v2 + docs-only commit → ALLOW (0) (non-code is never blocked)', async () => {
+    await makeGatedV2();
+    await stage('README.md');
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+});
+
 describe('GDC.2 — activation binds to the AGENT (user scope), never to locations', () => {
   async function makeRepoWithoutProjectActivation(): Promise<void> {
     await mkdir(join(repo, '.opensquid'), { recursive: true });

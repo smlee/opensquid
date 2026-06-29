@@ -42,7 +42,29 @@ import { isComplete, readPhaseState } from '../../runtime/workflow_phases.js';
 import { appendAttestation, readAttestedShas } from './attestations.js';
 
 const execFileP = promisify(execFile);
-const GATED_PACK = 'coding-flow';
+/** E0 (docs/design/v2-enforcement-implementation.md §0): the discipline packs whose presence
+ *  in active.json ARMS the commit gate. Before E0 this was the literal constant `'coding-flow'`,
+ *  so pinning v2 (`fullstack-flow`) made `isGatedRepo` return false and silently DISABLED the gate. */
+const DISCIPLINE_PACKS = ['coding-flow', 'fullstack-flow'] as const;
+type DisciplinePack = (typeof DISCIPLINE_PACKS)[number];
+
+/** The active discipline pack (user scope then project scope), or null if none is pinned. */
+export async function activeDisciplinePack(cwd: string): Promise<DisciplinePack | null> {
+  const candidates: string[] = [join(OPENSQUID_HOME(), 'active.json')];
+  const scopeRoot = await resolveProjectScopeRoot(cwd);
+  if (scopeRoot !== null) candidates.push(join(scopeRoot, 'active.json'));
+  for (const path of candidates) {
+    try {
+      const parsed = JSON.parse(await readFile(path, 'utf8')) as { packs?: unknown };
+      const packs = Array.isArray(parsed.packs) ? parsed.packs : [];
+      const hit = DISCIPLINE_PACKS.find((p) => packs.includes(p));
+      if (hit !== undefined) return hit;
+    } catch {
+      /* absent/malformed scope → not active here */
+    }
+  }
+  return null;
+}
 
 /** GDC.2 — is this invocation gated? The gate binds to the AGENT, not to a
  *  location (user directive 2026-06-11: "all agents in any harness; git on
@@ -52,18 +74,7 @@ const GATED_PACK = 'coding-flow';
  *  one repo for all agents). Humans pass upstream regardless
  *  (isAgentInvocation, GDC.1). */
 export async function isGatedRepo(cwd: string): Promise<boolean> {
-  const candidates: string[] = [join(OPENSQUID_HOME(), 'active.json')];
-  const scopeRoot = await resolveProjectScopeRoot(cwd);
-  if (scopeRoot !== null) candidates.push(join(scopeRoot, 'active.json'));
-  for (const path of candidates) {
-    try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as { packs?: unknown };
-      if (Array.isArray(parsed.packs) && parsed.packs.includes(GATED_PACK)) return true;
-    } catch {
-      /* absent/malformed scope → not active here */
-    }
-  }
-  return false;
+  return (await activeDisciplinePack(cwd)) !== null;
 }
 
 /** The files a `commit` would record (staged) or a `push` would publish (HEAD vs upstream).
@@ -126,6 +137,7 @@ export async function commitAllowedNow(
   sid: string | null,
   files: string[],
   env: NodeJS.ProcessEnv = process.env,
+  pack: DisciplinePack = 'coding-flow',
 ): Promise<{ allowed: true; reason: 'docs_only' | 'flow_complete' | 'human' } | null> {
   // GDC.1: the gate's subject is the AGENT — a human terminal (no host marker
   // env) uses git naturally; the attestation trail still records provenance.
@@ -133,9 +145,17 @@ export async function commitAllowedNow(
   if (isDocsOnly(files)) return { allowed: true, reason: 'docs_only' };
   if (sid === null) return null;
   const active = await readActiveTask(sid);
-  const fsm = await readFsmStateRaw(sid, GATED_PACK);
+  if (active === null) return null;
   const phases = await readPhaseState(sid);
-  const done = active !== null && fsm === 'phases_complete' && isComplete(phases, active.id);
+  // E0: v2 `fullstack-flow` gates on the 7-phase LEDGER for the active task — the
+  // agent-controllable completion signal (matching v1's `phases_complete` intent).
+  // Gating on the FSM reaching `deploy` would over-block while the stage gates only
+  // ADVISE at PostToolUse (that tightening is E1/E4). v1 keeps the session-FSM check.
+  if (pack === 'fullstack-flow') {
+    return isComplete(phases, active.id) ? { allowed: true, reason: 'flow_complete' } : null;
+  }
+  const fsm = await readFsmStateRaw(sid, pack);
+  const done = fsm === 'phases_complete' && isComplete(phases, active.id);
   return done ? { allowed: true, reason: 'flow_complete' } : null;
 }
 
@@ -179,7 +199,8 @@ export async function runGate(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-  if (!(await isGatedRepo(cwd))) return 0; // unrelated repo → never block
+  const pack = await activeDisciplinePack(cwd);
+  if (pack === null) return 0; // no discipline pack pinned → never block
   const files = await changedFiles(boundary, cwd);
   if (files.length === 0) return 0; // nothing to gate (amend / empty / undetermined)
   if (isDocsOnly(files)) return 0; // flow artifacts only → allow
@@ -208,7 +229,7 @@ export async function runGate(
   // blocked by the old early sid-null check, the most natural human case);
   // the no-session block below is agent-only by construction.
   const sid = await resolveMcpSessionId();
-  const verdict = await commitAllowedNow(sid, files, env);
+  const verdict = await commitAllowedNow(sid, files, env, pack);
   if (verdict !== null) return 0;
   if (sid === null) {
     return block(
@@ -218,7 +239,7 @@ export async function runGate(
     );
   }
   const active = await readActiveTask(sid);
-  const fsm = await readFsmStateRaw(sid, GATED_PACK);
+  const fsm = await readFsmStateRaw(sid, pack);
   return block(
     `this ${boundary} has code changes but the active task has not completed the ` +
       `SCOPE→AUTHOR→7-phase flow (FSM=${fsm ?? 'none'}, active task=${active?.id ?? 'none'}). ` +
@@ -245,14 +266,15 @@ export async function runAttest(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
   try {
-    if (!(await isGatedRepo(cwd))) return 0;
+    const pack = await activeDisciplinePack(cwd);
+    if (pack === null) return 0;
     const scopeRoot = await resolveProjectScopeRoot(cwd);
     const sha = await headSha(cwd);
     if (scopeRoot === null || sha === null) return 0;
     const files = await commitFiles(cwd, sha);
     if (files.length === 0) return 0; // empty/merge/undetermined → nothing to attest
     const sid = await resolveMcpSessionId();
-    const verdict = await commitAllowedNow(sid, files, env);
+    const verdict = await commitAllowedNow(sid, files, env, pack);
     if (verdict !== null) {
       await appendAttestation(scopeRoot, {
         sha,
