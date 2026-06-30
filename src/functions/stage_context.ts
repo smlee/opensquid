@@ -129,7 +129,25 @@ const PROCEDURE_INTEGRITY = [
 ].join('\n');
 
 /**
- * The standardized stage bundle [PROCEDURE-INTEGRITY, CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text,
+ * THE 3× 100% — the standing TARGET prepended to every stage bundle (paired with PROCEDURE_INTEGRITY: that one
+ * says don't fake done-ness, this one says what done genuinely means). #1 + #2 are GATE-ENFORCED (zero-LLM
+ * predicates — you cannot pass without them); #3 a hard gate cannot fully verify (reaching the RIGHT external
+ * source / "is this the best" is content-judgment, not a token-check), so it is on the agent to always drive it —
+ * "the gate didn't force it" is NEVER permission to skip it. The audit checks #3 reached the external rung.
+ */
+const THE_3X_100 = [
+  '🎯 THE 3× 100% — drive EVERY task toward all three, always:',
+  '  1. 100% EVIDENCE — every load-bearing claim carries a citation (`file:line` / the design-of-record / the',
+  "     user's words); nothing asserted. [GATE-ENFORCED: evidence-or-flag + the anchors check]",
+  '  2. 100% COVERAGE — the work covers EVERY scoped/design element, no silent gaps (or a NAMED, tracked',
+  '     deferral). [GATE-ENFORCED: the coverage checker]',
+  '  3. 100% CONFIDENCE — reach the primary EXTERNAL sources to answer "what did I miss / is this the best /',
+  '     does this match the docs"; local-only cannot. [NOT fully gateable — YOU must drive it every task; the',
+  '     audit checks you reached the external rung. "The gate did not force it" is NEVER permission to skip it.]',
+].join('\n');
+
+/**
+ * The standardized stage bundle [PROCEDURE-INTEGRITY, 3×100%, CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text,
  * the SINGLE source both the hook path (`stage_inject`) and the per-stage loop (T-v2-per-stage-loop PSL.3)
  * assemble. Takes the already-read `fsm` (the caller has it — the stage IS `fsm.state` + the checkpoint needs its
  * history), so there is no event/EvalCtx coupling and no double-read. Returns '' when the stage has NO procedure
@@ -149,8 +167,8 @@ export async function buildStageBundle(
     : null;
   const checkpoint = renderCheckpoint(fsm);
   const work = await stageWorkContext(stage, sessionId);
-  // PROCEDURE_INTEGRITY leads every bundle — the standing anti-gaming invariant is the first thing read each stage.
-  return [PROCEDURE_INTEGRITY, checkpoint, procedure, rubric, work]
+  // PROCEDURE_INTEGRITY (don't fake done-ness) + THE_3X_100 (what done means) lead every bundle — read first.
+  return [PROCEDURE_INTEGRITY, THE_3X_100, checkpoint, procedure, rubric, work]
     .filter((s): s is string => typeof s === 'string' && s.length > 0)
     .join('\n\n');
 }
