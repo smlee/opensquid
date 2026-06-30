@@ -71,6 +71,31 @@ export function planAudit(p: PlanInput): PlanReport {
 }
 
 /**
+ * Scope a project's issues+edges to the DECOMPOSITION of the captured scope — the issues stamped with a
+ * `sourceElementId` in the scope's element universe, plus the edges whose BOTH endpoints are such issues.
+ *
+ * This is what makes the PLAN gate a PROPER evaluation: it judges THIS task's decomposition, not the whole
+ * project namespace. Auditing the namespace conflates unrelated backlog + foreign/un-ported nodes into the
+ * plan audit (every un-derived edge + untraceable node fails NEVER-GUESS, blocking forever as the backlog
+ * grows). The `sourceElementId:<id>` stamp is the existing deterministic linkage (`buildCoveredBy`), so the
+ * scoping reuses it — no new mechanism, no fuzzy match.
+ */
+export function scopeToDecomposition<I extends { id: string; body: string }>(
+  issues: I[],
+  edges: { from: string; to: string; type: string }[],
+  scopeElementIds: string[],
+): { issues: I[]; edges: { from: string; to: string; type: string }[] } {
+  const universe = new Set(scopeElementIds);
+  const inScope = issues.filter((i) => {
+    const m = /sourceElementId:(\S+)/.exec(i.body);
+    return m?.[1] !== undefined && universe.has(m[1]);
+  });
+  const ids = new Set(inScope.map((i) => i.id));
+  const scopedEdges = edges.filter((e) => ids.has(e.from) && ids.has(e.to));
+  return { issues: inScope, edges: scopedEdges };
+}
+
+/**
  * The deterministic coverage JOIN feeding `planAudit`: group issues by their stamped `sourceElementId`. The
  * `designElementIds` are the INDEPENDENT universe (`extractScope`, NOT autoDecompose's issue list) — so an
  * element auto-decompose dropped is absent from any issue body, stays `[]`, and the gate blocks. No LLM, no

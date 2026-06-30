@@ -1,10 +1,12 @@
 /**
  * `serialize_plan` (GFR.1b) — render the PLAN artifact for the guess-free PLAN producer.
  *
- * PLAN has no doc-write artifact; its artifact is the WORK-GRAPH (issues + dependency edges) decomposing the
- * captured SCOPE. This renders that to a STABLE (sorted) text block the content-audit interpolates, so the
- * audit can judge the qualitative plan-rubric criteria (no-guess deps, on-topic, re-audit-scope) the
- * deterministic `plan_ready` facets (acyclic/complete) cannot.
+ * PLAN has no doc-write artifact; its artifact is the captured SCOPE's decomposition — the IN-SCOPE work-graph
+ * ISSUES + the authored scope-element DEPENDENCIES (with their derived reasons). This renders that to a STABLE
+ * (sorted) text block the content-audit interpolates, so the audit can judge the qualitative plan-rubric
+ * criteria (no-guess deps, on-topic, re-audit-scope) the deterministic `plan_ready` facets cannot. (Work-graph
+ * EDGE acyclicity is the deterministic gate's job via `plan_evidence`, not this artifact's — so edges are not
+ * rendered here; the dependency info the audit judges is the authored scope-element deps below.)
  *
  * REUSES the shipped PLAN-evidence readers (no reinvention): `openWg` (project-bound facade) +
  * `extractScope` (the captured pre-research universe) — the same sources the deterministic PLAN gate reads.
@@ -21,6 +23,7 @@ import { openWg } from '../runtime/loop/plan_evidence.js';
 import { sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
 import { extractScope } from '../runtime/loop/scope_extract.js';
+import { scopeToDecomposition } from '../runtime/loop/plan_audit.js';
 
 import type { FunctionRegistry } from './registry.js';
 
@@ -43,10 +46,13 @@ async function readPreResearchPath(sessionId: string): Promise<string | null> {
 /** Injectable readers (tests pass pure stubs); defaults open the HOME store + read the captured artifact. */
 export interface PlanSerializeDeps {
   scopePath: (sessionId: string) => Promise<string | null>;
-  extract: (path: string) => Promise<{ authoredElements: { id: string }[] } | null>;
+  extract: (path: string) => Promise<{
+    authoredElements: { id: string }[];
+    scopeElements: { designId: string; askSpan: string; text: string }[];
+    deps: { element: string; dependsOn: string; reason: string }[];
+  } | null>;
   wg: (sessionId: string) => Promise<{
-    listIssues: () => Promise<{ id: string; title: string }[]>;
-    listEdges: () => Promise<{ from: string; to: string; type: string }[]>;
+    listIssues: () => Promise<{ id: string; title: string; body: string }[]>;
   }>;
 }
 
@@ -66,17 +72,33 @@ export async function serializePlan(
   const ext = await deps.extract(path);
   if (ext === null) return null;
   const facade = await deps.wg(sessionId);
-  const issues = [...(await facade.listIssues())].sort((a, b) => a.id.localeCompare(b.id));
-  const edges = [...(await facade.listEdges())].sort((a, b) =>
-    `${a.from}|${a.to}|${a.type}`.localeCompare(`${b.from}|${b.to}|${b.type}`),
-  );
-  const scopeBlock = ext.authoredElements
-    .map((e) => `- ${e.id}`)
-    .sort((a, b) => a.localeCompare(b))
+  // PROPER evaluation: render only THIS scope's decomposition — the issues stamped with a sourceElementId in
+  // the universe, not the whole project namespace (the same issue-scoping the deterministic plan_evidence
+  // applies, so the content-audit and the gate see the identical node set). Edges are NOT rendered (the audit
+  // judges the authored scope-element deps below; work-graph edge acyclicity is the gate's job) — so pass `[]`
+  // and use only `.issues`.
+  const scoped = scopeToDecomposition(await facade.listIssues(), [], ext.authoredElements.map((e) => e.id));
+  const issues = [...scoped.issues].sort((a, b) => a.id.localeCompare(b.id));
+  // SUBSTANCE (not bare ids): render each scope element's AUTHORED TEXT + ask-anchor so the content-audit can
+  // judge on-topic + coverage; flag any element missing its ask-anchor (an un-traceable element = a guess).
+  const scopeBlock = [...ext.scopeElements]
+    .sort((a, b) => a.designId.localeCompare(b.designId))
+    .map(
+      (e) =>
+        `- ${e.designId}: ${e.text}${e.askSpan ? '' : '  [⚠ NO ask-anchor — untraceable to the captured ask]'}`,
+    )
     .join('\n');
   const issueBlock = issues.map((i) => `- ${i.id}: ${i.title}`).join('\n');
-  const edgeBlock = edges.map((e) => `- ${e.from} --${e.type}--> ${e.to}`).join('\n');
-  const text = `SCOPE ELEMENTS (the universe the plan must cover):\n${scopeBlock}\n\nWORK-GRAPH ISSUES:\n${issueBlock}\n\nDEPENDENCY EDGES:\n${edgeBlock}\n`;
+  // DEPENDENCIES with their DERIVED reason (what the depended-on element produces that this one consumes) — a
+  // dependency with no reason is rendered as an explicit guess so the audit fails it (NEVER-GUESS).
+  const depBlock = [...ext.deps]
+    .sort((a, b) => `${a.element}|${a.dependsOn}`.localeCompare(`${b.element}|${b.dependsOn}`))
+    .map(
+      (d) =>
+        `- ${d.element} depends on ${d.dependsOn} — ${d.reason || '⚠ NO REASON CITED (a guess — derive what the upstream produces that this consumes)'}`,
+    )
+    .join('\n');
+  const text = `SCOPE ELEMENTS (the universe the plan must cover — authored text):\n${scopeBlock}\n\nDECOMPOSITION (work-graph issues covering the scope):\n${issueBlock}\n\nDEPENDENCIES (with derived reasons):\n${depBlock}\n`;
   return text.length > MAX_PLAN ? null : text; // over-cap → null (never a partial artifact)
 }
 

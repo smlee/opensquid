@@ -1,7 +1,7 @@
 /** T2.5 — planAudit (Kahn acyclic + completeness over the independent universe) + buildCoveredBy JOIN. */
 import { describe, expect, it } from 'vitest';
 
-import { buildCoveredBy, planAudit, type PlanInput } from './plan_audit.js';
+import { buildCoveredBy, planAudit, scopeToDecomposition, type PlanInput } from './plan_audit.js';
 
 const base: PlanInput = { issueIds: [], edges: [], designElementIds: [], coveredBy: {} };
 
@@ -114,5 +114,35 @@ describe('buildCoveredBy — the deterministic JOIN', () => {
   it('a stamp for an element NOT in the universe is ignored (independent universe)', () => {
     const cov = buildCoveredBy(['scope-1'], [{ id: 'wg-y', body: 'sourceElementId:scope-7' }]);
     expect(cov).toEqual({ 'scope-1': [] });
+  });
+});
+
+describe('scopeToDecomposition — PROPER evaluation (this scope, not the namespace)', () => {
+  const issues = [
+    { id: 'wg-a', body: 'work. sourceElementId:scope-1' }, // in-scope
+    { id: 'wg-b', body: 'work. sourceElementId:scope-2' }, // in-scope
+    { id: 'wg-f', body: 'foreign. sourceElementId:scope-99' }, // off-universe (other task / foreign)
+    { id: 'wg-u', body: 'unrooted handoff, no stamp' }, // no stamp at all
+  ];
+  const edges = [
+    { from: 'wg-a', to: 'wg-b', type: 'blocks' }, // internal → kept
+    { from: 'wg-f', to: 'wg-a', type: 'blocks' }, // crosses boundary → dropped
+    { from: 'wg-u', to: 'wg-b', type: 'parent-child' }, // unrooted endpoint → dropped
+  ];
+
+  it('keeps only issues stamped within the scope universe', () => {
+    const { issues: kept } = scopeToDecomposition(issues, edges, ['scope-1', 'scope-2']);
+    expect(kept.map((i) => i.id).sort()).toEqual(['wg-a', 'wg-b']);
+  });
+
+  it('keeps only edges whose BOTH endpoints are in-scope (no boundary leakage)', () => {
+    const { edges: kept } = scopeToDecomposition(issues, edges, ['scope-1', 'scope-2']);
+    expect(kept).toEqual([{ from: 'wg-a', to: 'wg-b', type: 'blocks' }]);
+  });
+
+  it('an empty universe yields an empty decomposition (fail-closed, not the whole namespace)', () => {
+    const r = scopeToDecomposition(issues, edges, []);
+    expect(r.issues).toEqual([]);
+    expect(r.edges).toEqual([]);
   });
 });

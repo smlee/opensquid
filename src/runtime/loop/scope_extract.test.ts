@@ -38,8 +38,16 @@ describe('extractScope (T2.4)', () => {
       { id: 'scope-2', anchor: { kind: 'ask_span', ref: 'keep me signed in' } },
     ]);
     expect(ext?.scopeElements).toEqual([
-      { designId: 'scope-1', askSpan: 'add a login screen' },
-      { designId: 'scope-2', askSpan: 'keep me signed in' },
+      {
+        designId: 'scope-1',
+        askSpan: 'add a login screen',
+        text: 'Build the login form [ask: "add a login screen"] src/auth/login.ts:12 wg-abc123',
+      },
+      {
+        designId: 'scope-2',
+        askSpan: 'keep me signed in',
+        text: 'Wire the session store [ask: "keep me signed in"] src/auth/session.ts:40',
+      },
     ]);
     expect(ext?.tasks).toEqual([
       { designId: 'scope-1', fileLines: ['src/auth/login.ts:12'], wgIds: ['wg-abc123'] },
@@ -51,15 +59,29 @@ describe('extractScope (T2.4)', () => {
     const p = await writeArtifact('1. An unanchored addition src/x.ts:1');
     const ext = await extractScope(p);
     expect(ext?.authoredElements).toEqual([{ id: 'scope-1', anchor: null }]);
-    expect(ext?.scopeElements).toEqual([{ designId: 'scope-1', askSpan: '' }]);
+    expect(ext?.scopeElements).toEqual([
+      { designId: 'scope-1', askSpan: '', text: 'An unanchored addition src/x.ts:1' },
+    ]);
   });
 
-  it('parses [needs: M] dependency refs into deps edges', async () => {
+  it('parses [needs: M] dependency refs into deps edges (reason empty when undeclared)', async () => {
     const p = await writeArtifact(
       ['1. Root [ask: "root"]', '2. Leaf [ask: "leaf"] [needs: 1]'].join('\n'),
     );
     const ext = await extractScope(p);
-    expect(ext?.deps).toEqual([{ element: 'scope-2', dependsOn: 'scope-1' }]);
+    expect(ext?.deps).toEqual([{ element: 'scope-2', dependsOn: 'scope-1', reason: '' }]);
+  });
+
+  it('captures the DERIVED reason from `[needs: M — <reason>]`', async () => {
+    const p = await writeArtifact(
+      ['1. Root [ask: "root"]', '2. Leaf [ask: "leaf"] [needs: 1 — Leaf consumes Root output]'].join(
+        '\n',
+      ),
+    );
+    const ext = await extractScope(p);
+    expect(ext?.deps).toEqual([
+      { element: 'scope-2', dependsOn: 'scope-1', reason: 'Leaf consumes Root output' },
+    ]);
   });
 
   it('is deterministic — same artifact twice → identical extract', async () => {

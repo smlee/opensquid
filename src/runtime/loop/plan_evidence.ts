@@ -21,7 +21,7 @@ import { resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
 import { resolveActorId } from '../actor_id.js';
 import { bindProject, workGraphStore } from '../../workgraph/store.js';
 
-import { buildCoveredBy, planAudit } from './plan_audit.js';
+import { buildCoveredBy, planAudit, scopeToDecomposition } from './plan_audit.js';
 import { extractScope } from './scope_extract.js';
 
 import type { WorkGraphFacade } from '../../workgraph/types.js';
@@ -74,9 +74,15 @@ export async function planEvidence(
   const ext = await extractScope(artifactPath);
   if (ext === null) return { acyclic: false, complete: false }; // fail-closed: no captured scope
   const reader = wg ?? (await openWg(sessionId));
-  const issues = await reader.listIssues();
-  const edges = await reader.listEdges();
   const designElementIds = ext.authoredElements.map((e) => e.id); // the INDEPENDENT universe (extractScope)
+  // PROPER evaluation: scope to THIS scope's decomposition (issues stamped with a sourceElementId in the
+  // universe + the edges among them) — NOT the whole project namespace. Auditing the namespace conflates
+  // unrelated backlog + foreign/un-ported nodes into the gate, blocking it indefinitely as the backlog grows.
+  const { issues, edges } = scopeToDecomposition(
+    await reader.listIssues(),
+    await reader.listEdges(),
+    designElementIds,
+  );
   const coveredBy = buildCoveredBy(designElementIds, issues);
   const report = planAudit({
     issueIds: issues.map((i) => i.id),
