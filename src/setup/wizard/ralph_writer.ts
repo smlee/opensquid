@@ -60,7 +60,9 @@ export function defaultRalphConfig(home: string = OPENSQUID_HOME()): RalphConfig
     maxBudgetUsd: 10,
     claimTtlSec: 3600, // T = 1h claim TTL — MUST exceed wallClockMs (W = 30m deadline) per S7 (T > W)
     wallClockMs: 30 * 60 * 1000,
-    maxRetries: 2,
+    // Retry cap: 3 supervised re-attempts per lap. Kept low deliberately — beyond a few, retries waste
+    // budget/wall-clock on a lap that's structurally stuck rather than flaky (user call, 2026-06-28).
+    maxRetries: 3,
     backoffBaseMs: 2000,
     harness: { cli: 'claude', ralphMdPath: ralphMdPath(home) },
   };
