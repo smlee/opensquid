@@ -147,9 +147,12 @@ const THE_3X_100 = [
 ].join('\n');
 
 /**
- * The standardized stage bundle [PROCEDURE-INTEGRITY, 3×100%, CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text,
- * the SINGLE source both the hook path (`stage_inject`) and the per-stage loop (T-v2-per-stage-loop PSL.3)
- * assemble. Takes the already-read `fsm` (the caller has it — the stage IS `fsm.state` + the checkpoint needs its
+ * The standardized stage bundle [PROCEDURE-INTEGRITY, 3×100%, CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text.
+ * The hook path (`stage_inject`, the only direct caller) assembles it — and that is ALSO how it reaches the
+ * per-stage subprocess loop (T-v2-per-stage-loop PSL.3): the loop does NOT assemble this bundle itself (it primes
+ * each lap with only the narrow `perStageDirective`); each lap is a fresh `claude` session whose OWN `stage_inject`
+ * hook injects this bundle. So it is the single source that backs both surfaces, via the one `stage_inject` caller.
+ * Takes the already-read `fsm` (the caller has it — the stage IS `fsm.state` + the checkpoint needs its
  * history), so there is no event/EvalCtx coupling and no double-read. Returns '' when the stage has NO procedure
  * (a terminal/decision FSM state) or every slot is empty → the caller injects nothing. Empty slots drop out.
  */
