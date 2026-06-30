@@ -82,7 +82,7 @@ OpenSquid treats those as continuity problems. Memory, task state, workflow phas
 | The agent picks the next task from chat context. | `workgraph_ready` returns unblocked work.                               |
 | The agent claims tests or research happened.     | `log_phase` writes a phase ledger that gates can read.                  |
 | The agent promotes its own lesson.               | `store_lesson` captures a candidate; promotion stays gated.             |
-| Rules live in one long prompt.                   | Packs make rules, skills, state machines, and drift policy inspectable. |
+| Rules live in one long prompt.                   | Packs make rules, skills, state machines, and gates inspectable. |
 | Work is trapped on one machine.                  | Synced state can let another device resume the same agent workspace.    |
 
 ## The Operating Model
@@ -93,8 +93,8 @@ OpenSquid is built from six pieces that work together.
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Memory         | `recall`, `memorize`, and `forget` over a durable local store, with user-authored memories protected from quiet eviction.      |
 | Workgraph      | Issues, blockers, dependency edges, ready queues, and append-only event history for task state.                                |
-| Workflow gates | Phase logging and hook-enforced process checks, including the seven-phase coding flow when that pack is active.                |
-| Packs          | Portable rules, skills, state machines, models, drift policies, and chat-agent bindings.                                       |
+| Workflow gates | A gated state machine per discipline pack. For coding (`fullstack-flow`): **SCOPE → PLAN → AUTHOR → CODE → DEPLOY**, each an enforcing gate (see "The Gated Flow" below).            |
+| Packs          | Portable rules, skills, state machines, models, and chat-agent bindings.                                                       |
 | MCP + hooks    | Agent-facing tools through MCP, plus optional hooks (Claude Code and codex) that catch drift even when no tool is called.      |
 | Handoffs       | Deterministic session handoffs: `opensquid handoff`, a session-end backup, and lazy generation that survives a killed session. |
 | Sync + devices | A path for multi-device memory/workgraph continuity and future routing to device-specific capabilities.                        |
@@ -108,6 +108,25 @@ recall context -> inspect packs -> claim ready work -> log phases -> publish res
      memory         packs          workgraph       gates       chat/reporting
         \______________ synced agent workspace / device fabric _____________/
 ```
+
+## The Gated Flow
+
+A discipline pack drives the agent through an explicit, gated state machine — not a process it has to remember in prose. For coding, the `fullstack-flow` pack runs five stages, each an **enforcing gate**: the agent cannot advance until the stage's gate passes, and a commit is blocked until the whole flow is complete.
+
+| Stage      | The gate passes when…                                                                                                                     |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **SCOPE**  | the pre-research artifact anchors every scoped element to the captured ask, the research depth threshold is met, and a content-audit returns `GUESS_FREE`. |
+| **PLAN**   | the work-graph decomposition of the scope is acyclic and covers every scope element, and its content-audit returns `GUESS_FREE`.          |
+| **AUTHOR** | the task spec covers every gated export with a passing proof-test (coverage + real-code), and its content-audit returns `GUESS_FREE`.     |
+| **CODE**   | all seven phases are logged, the readiness checks ran clean, and the diff content-audit returns `GUESS_FREE`.                             |
+| **DEPLOY** | the deploy capability gate allows it, the recorded verification passed, and a human accepts the result.                                   |
+
+Two principles run through it:
+
+- **One standard — "guess-free" — at every stage.** Each claim must trace to cited evidence (a `file:line`, a memory, or the user's words); an asserted-not-derived claim fails the gate. The same standard applies to SCOPE, PLAN, AUTHOR, and CODE.
+- **Rolling re-audit.** Each stage re-asserts the previous stage's verdict, so drift is caught at the next boundary instead of only at the end. Edit a scope artifact after its gate passed, and the PLAN gate re-fires the scope audit and blocks if it regressed.
+
+The gates are deterministic where they can be (cycle checks, coverage joins, phase ledgers) and back them with a constrained content-audit where judgment is needed — never a free-form "looks good." A pre-commit hook (`opensquid gate commit`) refuses a code commit until the active task has cleared the whole flow.
 
 ## First Loop
 
@@ -184,7 +203,7 @@ There is intentionally no agent-callable `promote` MCP tool. The agent may propo
 | `log_phase`         | Record completed workflow phases for the active task.      |
 | `list_packs`        | List loaded packs.                                         |
 | `list_skills`       | List skills, optionally scoped to a pack.                  |
-| `inspect_skill`     | Show one skill's rules, load conditions, and drift policy. |
+| `inspect_skill`     | Show one skill's rules, load conditions, and verdict levels. |
 | `read_state`        | Read session state.                                        |
 | `read_violations`   | Read the session violation log.                            |
 | `list_drift_events` | List drift events across packs and session state.          |
@@ -213,7 +232,7 @@ Packs are the unit of behavior. A pack is a self-contained bundle of:
   guard each transition. This is the core; the workflow is inspectable, not hidden in prose.
 - **skills** — the rules and tools bound to each stage.
 - **memory** — the validated lessons it carries.
-- plus optional model aliases, notification routing, drift policy, and always-on chat behavior.
+- plus optional model aliases, notification routing, and always-on chat behavior.
 
 A pack's files mirror those parts (e.g. identity and metadata, the workflow state machine, a `skills/`
 directory, a `lessons/` directory). The on-disk layout is an implementation detail OpenSquid reads for you;
@@ -350,7 +369,7 @@ Works today:
 - Primary MCP server with memory, lesson capture, workgraph, pack inspection, drift inspection, and workflow phase tools.
 - Chat bridge MCP server with send and inbox polling.
 - Local workgraph with ready queries and event history.
-- Pack runtime with YAML schemas, skills, drift policies, state-machine support, and chat-agent bindings.
+- Pack runtime with YAML schemas, skills, state-machine support, and chat-agent bindings.
 - Optional hooks for workflow and drift enforcement in Claude Code and codex CLI.
 - Deterministic session handoffs with automatic backup and recovery triggers.
 - Git gates that bind to the agent and pass humans through, with commit provenance.
