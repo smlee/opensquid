@@ -8,6 +8,9 @@
 #   - `rules[].inject[]` is not a schema field; the registered surface primitive is `verdict` with
 #     `level: surface` (the seo-aeo-expert precedent's mechanism). The two guidance lines are the message.
 name: coding-principles
+# ORCH/fractal — a cross-cutting ENGINEERING lens: fires on every coding turn (no area gate).
+serves:
+  domain: coding
 load: lazy
 requires: []
 triggers:

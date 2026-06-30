@@ -22,7 +22,9 @@ import { orchestrate } from '../loop/orchestrate.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
 import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
-import { resetTurnLedger, writeRequestType } from '../session_state.js';
+import { resetTurnLedger, writeClassifiedFacets, writeRequestType } from '../session_state.js';
+import { classify } from '../classify.js';
+import { readSettings } from '../orchestrator_settings.js';
 import { classifyRequestType } from '../request_type.js';
 import { sha256Hex } from '../durable/run_id.js';
 import { Event } from '../types.js';
@@ -211,6 +213,28 @@ async function main(): Promise<void> {
       new Date().toISOString(),
     );
     orchInjections = orch.injections;
+    // PA-a — SURFACE the activated pack (previously discarded). When the orchestrator routes this turn to a
+    // discipline pack, make that observable in the agent's context instead of silently activating — so the
+    // activation decision is visible (debuggable + auditable), not a hidden side-effect of writing active.json.
+    if (orch.activatedPack !== undefined) {
+      orchInjections = [
+        ...orchInjections,
+        `🦑 orchestrator → activated discipline pack \`${orch.activatedPack}\` for this turn (on-demand, task-classified).`,
+      ];
+    }
+    // ORCH/fractal — persist the classified facets so the tool_call dispatcher can gate intra-pack lens skills
+    // by `serves` (only the task-relevant lenses fire, not all 18). Independent of pack activation + fail-open:
+    // a classify/settings error simply leaves no facets → the dispatcher gates nothing (back-compat).
+    try {
+      const settings = await readSettings(process.cwd());
+      const facets = classify(parsed.data.prompt, {
+        project: true,
+        ...(settings.domain ? { domain: settings.domain } : {}),
+      });
+      await writeClassifiedFacets(sessionId, facets);
+    } catch {
+      /* fail-open — no facets persisted → dispatcher fires every lens (today's behavior) */
+    }
   }
 
   const contextParts: string[] = [];

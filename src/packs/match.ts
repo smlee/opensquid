@@ -10,20 +10,37 @@
  * Imported by: src/runtime/loop/orchestrate.ts (ORCH.5).
  */
 import { normalizeServes, servesFacets } from './serves.js';
+import { contains } from './taxonomy.js';
 
 import type { PackV2 } from './schemas/pack_v2.js';
 import type { Facets } from '../runtime/classify.js';
 
-/** Subset match: every key in `block` must equal the same key in `f`; returns the specificity (key count) or null. */
+/**
+ * Subset match with HIERARCHICAL containment on the taxonomy axes. Every key the `block` sets must be satisfied by
+ * the turn `f`: the `domain` (and other dotted axes) match by CONTAINMENT — the block's node must contain the
+ * turn's path (at-or-below it: a `coding` pack fires a `coding.frontend` turn, never the reverse); every other key
+ * matches by equality. Returns the specificity (key count + the matched domain's DEPTH, so a deeper node outranks
+ * a shallower one for most-specific-wins) or null.
+ */
+const HIERARCHICAL = new Set(['domain', 'lang', 'framework']);
 function blockMatch(block: Record<string, string>, f: Record<string, string>): number | null {
-  for (const [k, v] of Object.entries(block)) if (f[k] !== v) return null;
-  return Object.keys(block).length;
+  let depth = 0;
+  for (const [k, v] of Object.entries(block)) {
+    if (HIERARCHICAL.has(k)) {
+      const path = f[k];
+      if (path === undefined || !contains(v, path)) return null;
+      depth += v.split('.').length; // deeper declared node ⇒ more specific
+    } else if (f[k] !== v) {
+      return null;
+    }
+  }
+  return Object.keys(block).length + depth;
 }
 
 /** The turn's facets as a plain string map (undefined optionals omitted — no phantom keys). */
 function facetMap(f: Facets): Record<string, string> {
   const m: Record<string, string> = { intent: f.intent };
-  if (f.domain !== undefined) m.domain = f.domain;
+  if (f.domain !== undefined) m.domain = f.domain; // a DOTTED path (root + derived sub-domain)
   if (f.stakes !== undefined) m.stakes = f.stakes;
   return m;
 }

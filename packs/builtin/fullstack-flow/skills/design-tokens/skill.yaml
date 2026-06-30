@@ -1,6 +1,9 @@
 # design-tokens — a lazy FRONTEND lens (FD4). Backed by knowledge/design-tokens.json (W3C DTCG format + tiered
 # primitive/semantic/component token architecture).
 name: design-tokens
+# ORCH/pack-taxonomy — a FRONTEND lens at node coding.frontend: fires only when the turn deepens to coding.frontend.
+serves:
+  domain: coding.frontend
 load: lazy
 requires: []
 triggers:

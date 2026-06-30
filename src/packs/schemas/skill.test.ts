@@ -243,3 +243,30 @@ describe('Skill schema — AUTO.1 triggers block', () => {
     ]);
   });
 });
+
+describe('Skill — fractal `serves` lens gating (ORCH/fractal)', () => {
+  it('a serves-less skill parses (the always-on core spine — ungated)', () => {
+    expect(Skill.parse({ name: 'stop-guard' }).serves).toBeUndefined();
+  });
+
+  it('a lens declares a dotted coding sub-domain node (a frontend lens)', () => {
+    const s = Skill.parse({ name: 'visual-design', serves: { domain: 'coding.frontend' } });
+    expect(s.serves).toEqual({ domain: 'coding.frontend' });
+  });
+
+  it('a lens may be INTENT-AGNOSTIC (no intent required, unlike a pack ServesBlock)', () => {
+    expect(Skill.safeParse({ name: 'testing', serves: { domain: 'coding' } }).success).toBe(true);
+  });
+
+  it('a domain OFF the closed dictionary is rejected (no typo-drift)', () => {
+    expect(Skill.safeParse({ name: 'x', serves: { domain: 'webdev' } }).success).toBe(false);
+  });
+
+  it('serves accepts a list of facet-cells (OR semantics)', () => {
+    const s = Skill.parse({
+      name: 'multi',
+      serves: [{ domain: 'coding.frontend' }, { domain: 'coding.backend' }],
+    });
+    expect(Array.isArray(s.serves)).toBe(true);
+  });
+});

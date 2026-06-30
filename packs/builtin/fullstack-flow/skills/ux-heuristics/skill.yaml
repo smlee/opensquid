@@ -1,6 +1,9 @@
 # ux-heuristics — a lazy FRONTEND lens (FD4). Backed by knowledge/ux-heuristics.json (NN/g 10 heuristics +
 # Fitts's/Hick's laws, primary-sourced).
 name: ux-heuristics
+# ORCH/pack-taxonomy — a FRONTEND lens at node coding.frontend: fires only when the turn deepens to coding.frontend.
+serves:
+  domain: coding.frontend
 load: lazy
 requires: []
 triggers:

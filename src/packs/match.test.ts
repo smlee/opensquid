@@ -45,6 +45,17 @@ describe('matchPacks (ORCH.3)', () => {
     expect(r.candidates.map((c) => c.name).sort()).toEqual(['coding-flow', 'coding-flow-2']);
   });
 
+  it('hierarchical domain: a deeper serves.domain outranks a shallower one; a shallow turn does not match a deeper pack', () => {
+    const frontendFlow = pack('frontend-flow', { intent: 'produce', domain: 'coding.frontend' });
+    // a `coding.frontend` turn → both `coding` (depth 1) and `coding.frontend` (depth 2) CONTAIN it; deeper wins.
+    const deep = matchPacks(f({ intent: 'produce', domain: 'coding.frontend' }), [codingFlow, frontendFlow]);
+    expect(deep.pack?.name).toBe('frontend-flow');
+    // a shallow `coding` turn → `coding.frontend` does NOT contain it (graceful depth); coding-flow is sole match.
+    const shallow = matchPacks(f({ intent: 'produce', domain: 'coding' }), [codingFlow, frontendFlow]);
+    expect(shallow.pack?.name).toBe('coding-flow');
+    expect(shallow.candidates.map((c) => c.name)).toEqual(['coding-flow']);
+  });
+
   it('a pack serving via a list matches on its best block', () => {
     const multi = pack('multi', [
       { intent: 'produce', domain: 'coding' },

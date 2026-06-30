@@ -30,7 +30,13 @@ export interface ClassifyCtx {
 
 export interface Facets {
   intent: MacroIntent;
-  domain?: DomainDict;
+  // ORCH/pack-taxonomy — a DOTTED domain PATH (`src/packs/taxonomy.ts`): the project's declared root domain plus a
+  // classifier-DERIVED sub-domain, with GRACEFUL DEPTH. `coding` (full-stack/ambiguous) deepens to
+  // `coding.frontend` / `coding.backend` ONLY on a clear single-side signal. The matcher gates by HIERARCHICAL
+  // CONTAINMENT — a discipline at node N fires when this path is at-or-below N (a `coding` lens fires on a
+  // `coding.frontend` turn; a `coding.frontend` lens does NOT fire on a shallow `coding` turn — no false depth).
+  // Replaces the flat two-value `area` axis with the design's dotted-path mechanism (completeness law).
+  domain?: string;
   stakes?: 'low' | 'high';
   project: boolean;
   confidence: 'high' | 'low';
@@ -47,14 +53,26 @@ const DECIDE = /\b(should i|which|scope|plan|design|decide|choose|approach|archi
 const LOCATE = /\b(where is|find the|locate|which file)\b/i;
 const INVESTIGATE =
   /\b(why|investigate|explain|compare|review|understand|how does|what is|what'?s|whats|look|check)\b/i;
+// ORCH/fractal — coding sub-domain (AREA) signals. Used ONLY when domain==coding, and only on a CLEAR
+// single-side signal (frontend XOR backend) — ambiguous/both/neither → no area (full-stack default, no gating).
+const FRONTEND =
+  /\b(css|ui|component|style|layout|button|form|page|render|frontend|react|vue|svelte|tailwind|a11y|accessib|responsive|modal|animation|design.?token)\b/i;
+const BACKEND =
+  /\b(api|endpoint|server|database|\bdb\b|query|schema|migration|backend|auth|route|service|queue|cron|sql|orm)\b/i;
 
 /** Cheap-first deterministic classification; `domain` mirrors ctx, `stakes:'high'` only on side-effects. */
 export function classify(prompt: string, ctx: ClassifyCtx): Facets {
   const has = (re: RegExp): boolean => re.test(prompt);
-  // Builder: add domain/stakes only when present (exactOptionalPropertyTypes — no present-undefined keys).
+  // GRACEFUL DEPTH — the coding sub-domain DEEPENS the domain path only on a CLEAR single side (frontend XOR
+  // backend); an ambiguous/both/neither coding turn stays at the shallow `coding` root (vague → broad nodes only).
+  const fe = has(FRONTEND);
+  const be = has(BACKEND);
+  const sub = ctx.domain === 'coding' && fe !== be ? (fe ? '.frontend' : '.backend') : '';
+  // Builder: add domain/stakes only when present (exactOptionalPropertyTypes — no present-undefined keys). The
+  // domain facet is the DOTTED PATH (root + derived sub-domain).
   const mk = (intent: MacroIntent, confidence: 'high' | 'low', stakes?: 'high'): Facets => {
     const f: Facets = { intent, project: ctx.project, confidence };
-    if (ctx.domain !== undefined) f.domain = ctx.domain;
+    if (ctx.domain !== undefined) f.domain = `${ctx.domain}${sub}`;
     if (stakes !== undefined) f.stakes = stakes;
     return f;
   };

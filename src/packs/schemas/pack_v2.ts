@@ -15,6 +15,7 @@
 import { z } from 'zod';
 
 import { Transition } from '../../runtime/fsm.js';
+import { isNode, TAXONOMY } from '../taxonomy.js';
 
 export const StateKind = z.enum(['executor', 'gate', 'decision', 'sub_flow', 'terminal']);
 export type StateKind = z.infer<typeof StateKind>;
@@ -137,24 +138,28 @@ export const MacroIntent = z.enum([
 ]);
 export type MacroIntent = z.infer<typeof MacroIntent>;
 
-// The domain dictionary — seeded from Anthropic Clio's empirical usage clusters; project-declared, never coined.
-export const DomainDict = z.enum([
-  'coding',
-  'writing',
-  'research',
-  'data',
-  'devops',
-  'design',
-  'business',
-]);
+// The ROOT domain a project/classifier declares — the TOP-LEVEL nodes of the ONE canonical dictionary
+// (`src/packs/taxonomy.ts`), derived from it so there is no second enum to drift (the single-source discipline
+// taxonomy.ts:8-11 mandates). A dotted sub-domain (`coding.frontend`) is DERIVED by `classify` from this root.
+const DOMAIN_ROOTS = Object.keys(TAXONOMY.domain ?? {}) as [string, ...string[]];
+export const DomainDict = z.enum(DOMAIN_ROOTS);
 export type DomainDict = z.infer<typeof DomainDict>;
 
+// ORCH/pack-taxonomy — a `domain` COORDINATE is a DOTTED dictionary node (`coding`, `coding.frontend`,
+// `coding.frontend.react`), validated against the canonical dictionary (`src/packs/taxonomy.ts`) at LOAD time:
+// an off-dictionary node FAILS LOUD (you cannot declare a made-up category — the guess-free discipline). The
+// flat roots ARE the `DomainDict` values above (same `TAXONOMY.domain` keys), so every root-only `domain: coding`
+// parses identically as both a root and a node; deeper nodes (`coding.frontend`) address sub-domains.
+const DomainNode = z
+  .string()
+  .refine((s) => isNode('domain', s), { message: 'off-dictionary domain node (see src/packs/taxonomy.ts)' });
+
 // NOT `.strict()`: `.catchall(z.string())` admits free qualifiers (`lang`, `framework`) as string→string while
-// the two LOAD-BEARING keys (`intent`, `domain`) stay closed enums (cannot typo-drift silently).
+// the LOAD-BEARING keys (`intent`, `domain`) stay validated (cannot typo-drift silently).
 const ServesBlock = z
   .object({
     intent: MacroIntent,
-    domain: DomainDict.optional(),
+    domain: DomainNode.optional(),
     stakes: z.enum(['low', 'high']).optional(),
   })
   .catchall(z.string());
@@ -162,6 +167,24 @@ export type ServesBlock = z.infer<typeof ServesBlock>;
 
 /** A pack may serve one cell (a block) or several (a non-empty list). */
 export const Serves = z.union([ServesBlock, z.array(ServesBlock).min(1)]);
+
+// ORCH/fractal — a SKILL's `serves`: the SAME closed facet vocabulary a pack declares, but EVERY key optional.
+// A lens discipline gates by only the facets it cares about — chiefly the dotted `domain` node, whose coding
+// sub-domains (`coding.frontend`, `coding.backend`) are how a sub-domain lens addresses its slice — and is
+// INTENT-AGNOSTIC: a frontend lens applies whether the turn is `produce` or `inform`. Hierarchical subset-match
+// (the same `blockMatch` the pack matcher uses): the skill fires only when every key it declares CONTAINS the
+// classified turn's facet. A skill with NO `serves` is the always-on core spine (ungated).
+const SkillServesBlock = z
+  .object({
+    intent: MacroIntent.optional(),
+    domain: DomainNode.optional(),
+    stakes: z.enum(['low', 'high']).optional(),
+  })
+  .catchall(z.string());
+export type SkillServesBlock = z.infer<typeof SkillServesBlock>;
+/** A skill may gate on one facet-cell or several (a non-empty list — OR semantics, like the pack `Serves`). */
+export const SkillServes = z.union([SkillServesBlock, z.array(SkillServesBlock).min(1)]);
+export type SkillServes = z.infer<typeof SkillServes>;
 
 export const PackV2 = z
   .object({

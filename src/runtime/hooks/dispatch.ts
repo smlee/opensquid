@@ -69,7 +69,8 @@ import { appendProjectDriftEvent } from '../drift_catalog.js';
 import { evaluateProcess } from '../evaluator.js';
 import { Matcher, matchesEvent } from '../load_matchers.js';
 import { partitionSkills } from '../pinned_skills.js';
-import { advanceSkillTicks, type SkillTicks } from '../session_state.js';
+import { advanceSkillTicks, readClassifiedFacets, type SkillTicks } from '../session_state.js';
+import { skillServesMatches } from '../../packs/skill_serves.js';
 import { RequiresCache, skillRequiresHold } from '../skill_requires.js';
 import { UnloadCondition, shouldUnload, type TickState } from '../unload_conditions.js';
 import type { ActivationScope } from '../../packs/schemas/manifest.js';
@@ -331,6 +332,11 @@ export async function dispatchEvent(
   // scope amortizes within one fire across N skills sharing a precondition).
   const requiresCache = new RequiresCache();
 
+  // ORCH/fractal — the turn's classified facets (intent/domain/…), persisted at the last prompt_submit. Read ONCE
+  // per fire so the intra-pack lens-gating filter can subset-match each `serves`-bearing skill without re-reading.
+  // `null` (no prompt classified yet) → the filter fails OPEN (every lens fires, today's behavior).
+  const classifiedFacets = await readClassifiedFacets(sessionId);
+
   for (const pack of packs) {
     // IDF.4 — activation_scope dispatch routing. `pack.activationScope ??
     // 'project'` covers IDF.1's optional Pack runtime field for test
@@ -373,6 +379,17 @@ export async function dispatchEvent(
       if (skill.requires.length > 0) {
         const hold = await skillRequiresHold(skill.requires, sessionId, requiresCache);
         if (!hold) continue;
+      }
+      // ORCH/fractal — intra-pack lens gating. A skill that DECLARES `serves` is a task-gated lens discipline:
+      // it fires ONLY when the turn's classified facets subset-match (e.g. `{domain:'coding.frontend'}` →
+      // only on a frontend coding turn). A `serves`-LESS skill is the always-on core spine (FSM/gates/guards) and
+      // is never gated. Fail-OPEN: when no facets are classified yet, every lens fires (back-compat).
+      if (
+        skill.serves !== undefined &&
+        classifiedFacets !== null &&
+        !skillServesMatches(skill.serves, classifiedFacets)
+      ) {
+        continue;
       }
       for (const rule of skill.rules) {
         // Phase 4: destination_check rules fire on the scheduler tick

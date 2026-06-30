@@ -48,6 +48,7 @@ import {
 } from '../packs/schemas/manifest.js';
 import { Team } from '../packs/schemas/team.js';
 import { ModelsConfig } from '../packs/schemas/models.js';
+import { SkillServes } from '../packs/schemas/pack_v2.js';
 import { Fsm } from './fsm.js';
 
 // ---------------------------------------------------------------------------
@@ -306,6 +307,11 @@ export const Skill = z.object({
   // env-var test seam (which feeds pre-parsed pack JSON) from sneaking an
   // empty list past the YAML loader.
   triggers: z.array(Trigger).min(1).default(defaultTriggers),
+  // ORCH/fractal — the runtime view of the YAML-side `serves:` block (same `SkillServes` vocabulary). A skill
+  // with `serves` is a task-gated lens discipline (the dispatcher fires it only when the classified turn facets
+  // subset-match); a `serves`-less skill is the always-on core spine. Optional → every Phase 1+ pack parses
+  // identically.
+  serves: SkillServes.optional(),
   rules: z.array(Rule).default([]),
   prose: z.string().optional(),
 });

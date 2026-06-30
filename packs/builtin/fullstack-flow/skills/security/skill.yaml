@@ -16,6 +16,9 @@
 #     precedent's mechanism (those lenses `verdict` at warn/block; a lens HINT surfaces). The spec's two
 #     substantive guidance lines are the surface `message`.
 name: security
+# ORCH/fractal — a cross-cutting ENGINEERING lens: fires on every coding turn (no area gate).
+serves:
+  domain: coding
 load: lazy # NO runtime cost unless selected (design §4.3)
 requires: [] # coding-domain select is at the PACK level (serves.domain) — see header
 triggers:

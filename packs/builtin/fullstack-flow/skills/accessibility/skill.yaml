@@ -6,6 +6,9 @@
 #     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
 #   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
 name: accessibility
+# ORCH/fractal — a cross-cutting ENGINEERING lens: fires on every coding turn (no area gate).
+serves:
+  domain: coding
 load: lazy
 requires: []
 triggers:

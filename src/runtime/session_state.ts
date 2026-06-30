@@ -41,6 +41,7 @@ import { readFile, rename, unlink } from 'node:fs/promises';
 import { atomicWriteFile } from './atomic_write.js';
 
 import { activeTaskArchiveFile, activeTaskFile, sessionStateFile } from './paths.js';
+import type { Facets } from './classify.js';
 import type { RequestTypeRecord } from './request_type.js';
 import { advanceTick, createTick } from './tick.js';
 import type { Event } from './types.js';
@@ -241,6 +242,30 @@ export async function readRequestType(sessionId: string): Promise<RequestTypeRec
     return JSON.parse(
       await readFile(sessionStateFile(sessionId, REQUEST_TYPE_KEY), 'utf8'),
     ) as RequestTypeRecord;
+  } catch {
+    return null;
+  }
+}
+
+// ORCH/fractal — the per-prompt classified facets, written once at the pre-dispatch chokepoint and read by the
+// dispatcher's intra-pack lens-gating filter (so a `tool_call` knows the turn's domain/area without re-classifying
+// per skill). Keyed `'classified-facets'`.
+const CLASSIFIED_FACETS_KEY = 'classified-facets';
+
+/** Persist the per-prompt classified facets (called by UPS at prompt_submit, before the turn's tool_calls). */
+export async function writeClassifiedFacets(sessionId: string, facets: Facets): Promise<void> {
+  await atomicWriteFile(
+    sessionStateFile(sessionId, CLASSIFIED_FACETS_KEY),
+    JSON.stringify(facets, null, 2),
+  );
+}
+
+/** Read the current turn's classified facets, or `null` if absent/unreadable (→ the dispatcher fails OPEN). */
+export async function readClassifiedFacets(sessionId: string): Promise<Facets | null> {
+  try {
+    return JSON.parse(
+      await readFile(sessionStateFile(sessionId, CLASSIFIED_FACETS_KEY), 'utf8'),
+    ) as Facets;
   } catch {
     return null;
   }

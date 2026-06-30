@@ -1,6 +1,9 @@
 # content-microcopy — a lazy FRONTEND lens (FD4). Backed by knowledge/content-microcopy.json (NN/g UX-writing +
 # plainlanguage.gov).
 name: content-microcopy
+# ORCH/pack-taxonomy — a FRONTEND lens at node coding.frontend: fires only when the turn deepens to coding.frontend.
+serves:
+  domain: coding.frontend
 load: lazy
 requires: []
 triggers:

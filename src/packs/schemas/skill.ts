@@ -29,6 +29,7 @@
 import { z } from 'zod';
 
 import { parseExpression } from '../../runtime/evaluator/expression/index.js';
+import { SkillServes } from './pack_v2.js';
 import { Matcher } from '../../runtime/load_matchers.js';
 import { SkillRequires } from '../../runtime/skill_requires.js';
 import { EventKind, Trigger, defaultTriggers } from '../../runtime/types.js';
@@ -316,6 +317,13 @@ export const Skill = z.object({
     .array(Trigger)
     .min(1, 'triggers must not be empty — omit the block to default to tool_call')
     .default(defaultTriggers),
+  // ORCH/fractal lens gating: the SAME `serves` vocabulary a pack declares, applied INTRA-pack so only the
+  // task-relevant lenses load (not all 18 on every tool_call). A skill with `serves` is a GATED lens discipline
+  // (fires only when the classified turn's facets subset-match — e.g. `{domain:'coding.frontend'}` for a
+  // frontend lens); a skill WITHOUT `serves` is the always-on CORE spine (FSM/gates/guards — never gated).
+  // Additive + optional: every Phase 1+ skill parses byte-identically; only the dispatch containment filter
+  // reads it. The classified facets are persisted at prompt_submit so the tool_call dispatch can match them.
+  serves: SkillServes.optional(),
   rules: z.array(Rule).default([]),
   tools: z.array(z.string()).default([]),
   prose: z.string().optional(),
