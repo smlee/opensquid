@@ -275,8 +275,12 @@ Found during this mapping; each is a real disconnect to clean (drives the cleanu
 The 0.6.0 discipline rebuild's **in-repo requirement manifest**, verified deterministically by
 `src/runtime/coverage/` (report-only today). Each entry is checked against the code: `reachable`/`binding` are
 gated by their `proof`-test (the authority; static checks advisory), `absent` is the negative requirement
-(exact-token). The five seeds are the current, expected-unmet gaps Track 1 closes. Spec:
-`loop/docs/tasks/T-v2-coverage-foundation.md`.
+(exact-token). The author gate also reads `docs/coverage-allowlist.txt` (the adoption BASELINE — pre-existing
+gated exports are grandfathered; new exports need a covering requirement: a forward ratchet). The two dead-cluster
+deletion seeds (`skill_router`, `skill_prefilter`) are now MET. (`drift_response` is intentionally NOT a deletion
+target: the per-pack-configurable drift system — each pack declares its policy via `drift_response.yaml`, resolved
+per-rule by the dispatcher — IS the v2 design, documented in `docs/pack-system-guide.md`. An earlier seed wrongly
+slated it for deletion; removed 2026-06-29.) Spec: `loop/docs/tasks/T-v2-coverage-foundation.md`.
 
 ```yaml requirements
 requirements:
@@ -295,7 +299,4 @@ requirements:
   - id: R-DELETE-SKILL-PREFILTER
     intent: 'the skill prefilter MODULE is gone'
     assert: { kind: absent, symbol: skill_prefilter }
-  - id: R-DELETE-DRIFT-RESPONSE
-    intent: 'the v1 6-policy drift_response MODULE is gone (incl. its auto_correct/escalate policies)'
-    assert: { kind: absent, symbol: drift_response }
 ```

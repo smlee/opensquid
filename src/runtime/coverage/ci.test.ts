@@ -18,10 +18,12 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     // Track 1 (T-v2-track1-finish) closed the two non-deletion seeds — they are now MET via the live path:
     expect(byId['R-SKILLS-PER-STATE']).toBe('met'); // onStateEntry reachable from hooks + live proof present
     expect(byId['R-AUDIT-CTX']).toBe('met'); // verdict.guess bound in buildGuardCtx + proof present
-    // The three deletion seeds remain UNMET (their modules are removed in Track 4; v1 stays the live fallback):
-    expect(byId['R-DELETE-SKILL-ROUTER']).toBe('unmet'); // module still present
-    expect(byId['R-DELETE-SKILL-PREFILTER']).toBe('unmet');
-    expect(byId['R-DELETE-DRIFT-RESPONSE']).toBe('unmet');
-    expect(a.results.length).toBe(5);
+    // skill_router + skill_prefilter were a DEAD cluster (routeSkills/prefilterSkills unused) → deleted, now MET.
+    expect(byId['R-DELETE-SKILL-ROUTER']).toBe('met'); // module deleted
+    expect(byId['R-DELETE-SKILL-PREFILTER']).toBe('met'); // module deleted
+    // drift_response is NOT a deletion target — the per-pack-configurable drift system is the v2 design (restored
+    // 2026-06-29; R-DELETE-DRIFT-RESPONSE removed from the manifest). 4 seeds remain.
+    expect(byId['R-DELETE-DRIFT-RESPONSE']).toBeUndefined(); // requirement removed (config drift kept)
+    expect(a.results.length).toBe(4);
   }, 30_000);
 });

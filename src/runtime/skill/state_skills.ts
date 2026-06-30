@@ -9,10 +9,10 @@
  * cross-state bleed.
  *
  * Pure injection logic over an injected `SkillRuntime` (the host applies the actual
- * load/unload). The eventual deletion of `skill_router.ts` + `skill_prefilter.ts`
- * is the V1→V2 cutover step (they are still imported by the live V1 dispatch path;
- * removing them before the FSM runtime is the live router would break the running
- * gate) — this module is the additive replacement that makes that deletion safe.
+ * load/unload). This module is the FSM-state-binding REPLACEMENT for the now-deleted
+ * `skill_router.ts` + `skill_prefilter.ts` (the V1 relevance-guessing selection):
+ * the FSM STATE is the router — skills bind on state entry and unload on leave, so
+ * there is no separate prefilter/router step to guess relevance.
  */
 import type { StateMeta } from '../../packs/compile_v2.js';
 
