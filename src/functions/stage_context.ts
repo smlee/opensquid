@@ -109,11 +109,31 @@ export async function stageWorkContext(
 }
 
 /**
- * The standardized 4-slot stage bundle [CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text, the SINGLE
- * source both the hook path (`stage_inject`) and the per-stage loop (T-v2-per-stage-loop PSL.3) assemble. Takes
- * the already-read `fsm` (the caller has it — the stage IS `fsm.state` + the checkpoint needs its history), so
- * there is no event/EvalCtx coupling and no double-read. Returns '' when the stage has NO procedure (a
- * terminal/decision FSM state) or every slot is empty → the caller injects nothing. Empty slots drop out.
+ * PROCEDURE INTEGRITY — the standing anti-gaming invariant, prepended to EVERY stage bundle (so it rides every
+ * stage, not just CODE). Authored from the observed failure mode (an agent, when blocked, reaches for a signal it
+ * CONTROLS to fake the done-ness it hasn't earned). Each named vector is one we have actually seen exploited:
+ * phantom phase-logging, task-status flips, `--no-verify`, and scope-diluting bundles. The gates re-derive the
+ * verdict from the ARTIFACT, so none of these change the real state — they only waste a cycle and get caught.
+ */
+const PROCEDURE_INTEGRITY = [
+  '🛑 PROCEDURE INTEGRITY — the gates measure the WORK, not signals you control. A blocked gate is INFORMATION',
+  '(the work is not ready / the procedure is not complete), NOT a wall to route around. When blocked, do NOT reach',
+  'for a signal you control to declare done-ness you have not earned:',
+  '  • logging a phase you have not GENUINELY completed — the content-audit re-derives it from the artifact and',
+  '    will catch it (a logged-but-undone phase fails the audit);',
+  '  • marking the task complete / flipping its status;',
+  '  • `git commit --no-verify` — a HUMAN-only override, never your shortcut, and never something you assume;',
+  '  • bundling unrelated concerns into one commit to dilute scope (the audit flags scope-widening).',
+  'Each is gaming; it does not make the work done. The ONLY unblock is to do the actual work, scoped to ONE concern,',
+  'until the audit genuinely returns GUESS_FREE.',
+].join('\n');
+
+/**
+ * The standardized stage bundle [PROCEDURE-INTEGRITY, CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text,
+ * the SINGLE source both the hook path (`stage_inject`) and the per-stage loop (T-v2-per-stage-loop PSL.3)
+ * assemble. Takes the already-read `fsm` (the caller has it — the stage IS `fsm.state` + the checkpoint needs its
+ * history), so there is no event/EvalCtx coupling and no double-read. Returns '' when the stage has NO procedure
+ * (a terminal/decision FSM state) or every slot is empty → the caller injects nothing. Empty slots drop out.
  */
 export async function buildStageBundle(
   sessionId: string,
@@ -129,7 +149,8 @@ export async function buildStageBundle(
     : null;
   const checkpoint = renderCheckpoint(fsm);
   const work = await stageWorkContext(stage, sessionId);
-  return [checkpoint, procedure, rubric, work]
+  // PROCEDURE_INTEGRITY leads every bundle — the standing anti-gaming invariant is the first thing read each stage.
+  return [PROCEDURE_INTEGRITY, checkpoint, procedure, rubric, work]
     .filter((s): s is string => typeof s === 'string' && s.length > 0)
     .join('\n\n');
 }

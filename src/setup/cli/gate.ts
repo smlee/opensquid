@@ -312,15 +312,19 @@ export async function runGate(
     // Force a GUIDED redo: surface the exact findings so the agent fixes those, re-logs audit → re-audit →
     // loop until GUESS_FREE (the self-continue pattern), rather than a bare refusal.
     return block(
-      `this ${boundary} has code changes but the CODE guess-free audit is not VERDICT: GUESS_FREE. ` +
-        `REDO the flagged work properly, then re-log the \`audit\` phase to re-run the audit — repeat until ` +
-        `GUESS_FREE. (Or pass --no-verify only with explicit authorization.)\n\nCODE audit findings:\n${findings}`,
+      `this ${boundary} has code changes but the CODE guess-free audit is not VERDICT: GUESS_FREE — the ` +
+        `procedure is NOT complete (this is information, not a wall to route around). REDO the flagged work ` +
+        `properly, then re-log the \`audit\` phase to re-run the audit ON THE ARTIFACT — repeat until GUESS_FREE. ` +
+        `Re-logging \`audit\` WITHOUT fixing the work just re-surfaces these findings; \`--no-verify\` is a ` +
+        `human-only override, never your unblock.\n\nCODE audit findings:\n${findings}`,
     );
   }
   return block(
     `this ${boundary} has code changes but the active task has not completed the ` +
       `SCOPE→AUTHOR→7-phase flow (FSM=${fsm ?? 'none'}, active task=${active?.id ?? 'none'}). ` +
-      `Finish the flow (log all 7 phases), or pass --no-verify only with explicit authorization.`,
+      `GENUINELY complete each of the 7 phases, THEN log it — the content-audit re-derives each from the ` +
+      `artifact, so a phase logged-but-not-done fails the audit, it does not pass the gate. \`--no-verify\` is a ` +
+      `human-only override, never your unblock.`,
   );
 }
 
