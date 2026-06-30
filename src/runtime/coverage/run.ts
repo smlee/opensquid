@@ -14,6 +14,23 @@ import { checkCoverage, type CoverageReport } from './check.js';
 
 export const GATED_PREFIXES = ['src/', 'packs/']; // PROTECTED_PREFIXES minus test/
 export const MANIFEST_FILE = 'docs/ARCHITECTURE.md';
+// The grandfathered coverage BASELINE — pre-existing gated exports exempt from a covering requirement, so the
+// AUTHOR gate is a forward RATCHET (new/changed exports need coverage; legacy is baselined) rather than an
+// unsatisfiable "cover all ~2000 exports now" (the report-only seed gaps the manifest never covered). Regenerate
+// deliberately when adopting coverage deeper.
+export const ALLOWLIST_FILE = 'docs/coverage-allowlist.txt';
+
+/** Read the baseline allowlist (one symbol per line; `#`-comments + blanks ignored). Absent file → []. */
+export function readAllowlist(repoRoot: string): string[] {
+  try {
+    return readFileSync(join(repoRoot, ALLOWLIST_FILE), 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('#'));
+  } catch {
+    return [];
+  }
+}
 
 export function runCoverageReport(repoRoot: string): CoverageReport {
   const reqs = extractRequirements(
@@ -21,5 +38,5 @@ export function runCoverageReport(repoRoot: string): CoverageReport {
     readFileSync(join(repoRoot, MANIFEST_FILE), 'utf8'),
   );
   const index = buildCodeIndex(repoRoot, GATED_PREFIXES);
-  return checkCoverage(reqs, { gatedPrefixes: GATED_PREFIXES, index });
+  return checkCoverage(reqs, { gatedPrefixes: GATED_PREFIXES, index, allowlist: readAllowlist(repoRoot) });
 }

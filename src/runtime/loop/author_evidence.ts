@@ -19,7 +19,7 @@
  * Spec: docs/tasks/T-v2-track2-discipline.md T2.6.
  */
 import type { checkCoverage } from '../coverage/check.js';
-import { GATED_PREFIXES, MANIFEST_FILE } from '../coverage/run.js';
+import { GATED_PREFIXES, MANIFEST_FILE, readAllowlist } from '../coverage/run.js';
 import { extractRequirements } from '../coverage/schema.js';
 import { buildCodeIndex } from '../coverage/index_build.js';
 import { readSessionCwd } from '../session_state.js';
@@ -42,7 +42,7 @@ export function authorInputsForRepo(repoRoot: string): AuthorInputs {
     readFileSync(join(repoRoot, MANIFEST_FILE), 'utf8'),
   );
   const index = buildCodeIndex(repoRoot, GATED_PREFIXES);
-  return { reqs, opts: { gatedPrefixes: GATED_PREFIXES, index } };
+  return { reqs, opts: { gatedPrefixes: GATED_PREFIXES, index, allowlist: readAllowlist(repoRoot) } };
 }
 
 /**
