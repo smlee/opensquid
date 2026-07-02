@@ -33,6 +33,7 @@ import { Event } from '../types.js';
 import { dispatchEvent } from './dispatch.js';
 import { reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
 import { sessionEndIndication } from './session_end_indication.js';
+import { notifyRetentionSweep } from './session_end_sweep_notify.js';
 
 /** RSW.1 (wg-9e4f4eb2a40f): demoted memory is hard-deleted after this quiet window. */
 const RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -180,8 +181,15 @@ async function main(): Promise<void> {
       );
     const cutoff = new Date(Date.now() - RETENTION_WINDOW_MS).toISOString();
     const swept = (await backend.sweepRetired?.(cutoff)) ?? [];
-    if (swept.length > 0)
+    if (swept.length > 0) {
       process.stderr.write(`opensquid: retention sweep — ${String(swept.length)} reclaimed\n`);
+      try {
+        await notifyRetentionSweep(swept, process.cwd());
+      } catch {
+        // fail-open — a notify failure must never break session-end;
+        // the stderr line above is the unconditional fallback.
+      }
+    }
   } catch (e) {
     process.stderr.write(`opensquid: retention sweep skipped — ${String(e)}\n`);
   }
