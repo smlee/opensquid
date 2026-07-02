@@ -3,7 +3,7 @@
  *
  * Wraps the shipped, deterministic `checkCoverage` (`coverage/check.ts:49`) into the two facets the
  * `fullstack-flow` AUTHOR gate predicates on:
- *   coverageComplete = `report.orphans.length === 0` — no gated export lacks a covering requirement.
+ *   manifestComplete = `report.orphans.length === 0` — no gated export lacks a covering requirement.
  *   realCode         = `report.results.every(r => r.met)` — every requirement is MET, where `met` for the
  *                      reachable/binding kinds REQUIRES the proof-test to pass (`check.ts:54-73`). A stub with
  *                      no passing proof fails → `realCode:false` (kills "declared ≠ wired").
@@ -16,7 +16,7 @@
 import { checkCoverage } from '../coverage/check.js';
 
 export interface AuthorEvidence {
-  coverageComplete: boolean;
+  manifestComplete: boolean;
   realCode: boolean;
 }
 
@@ -27,7 +27,7 @@ export function authorEvidence(
 ): AuthorEvidence {
   const r = checkCoverage(reqs, opts);
   return {
-    coverageComplete: r.orphans.length === 0,
+    manifestComplete: r.orphans.length === 0,
     realCode: r.results.every((x) => x.status === 'met'),
   };
 }

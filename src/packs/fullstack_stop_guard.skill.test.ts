@@ -28,8 +28,9 @@ const STATES = ['scope', 'plan', 'author', 'code', 'deploy', 'accept', 'done'];
 const fsmAt = (initial: string): Fsm => ({ initial, states: STATES, transitions: [] });
 
 let n = 0;
-// A CONTROLLED open_task_count stub: the predicate branches on `.count`, so we drive it per case.
-function registry(count: number): FunctionRegistry {
+// CONTROLLED stubs: the predicate branches on `open.count` and `automation.value`, so we drive both
+// per case (open_task_count by `count`, is_automation_mode by `automation`).
+function registry(count: number, automation: boolean): FunctionRegistry {
   const reg = new FunctionRegistry();
   registerFsmFunctions(reg); // read_fsm_state
   registerVerdictFunctions(reg); // verdict
@@ -40,6 +41,15 @@ function registry(count: number): FunctionRegistry {
     memoizable: false,
     costEstimateMs: 1,
     execute: async () => ({ ok: true, value: { count } }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
+  reg.register({
+    name: 'is_automation_mode',
+    argSchema: z.object({}),
+    durable: false,
+    memoizable: false,
+    costEstimateMs: 1,
+    execute: async () => ({ ok: true, value: { value: automation, source: automation ? 'flag' : 'none' } }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
   return reg;
@@ -59,11 +69,11 @@ async function ruleSteps(): Promise<ProcessStep[]> {
   return rule.process;
 }
 
-function run(steps: ProcessStep[], count: number, packFsm: Fsm): Promise<RuleResult> {
+function run(steps: ProcessStep[], count: number, packFsm: Fsm, automation = true): Promise<RuleResult> {
   return evaluateProcess(
     steps,
     { event: stopEvent(), bindings: new Map(), sessionId: `stop-guard-${String(n++)}`, packId: 'fullstack-flow', packFsm },
-    registry(count),
+    registry(count, automation),
   );
 }
 
@@ -77,13 +87,8 @@ describe('fullstack-flow stop-guard', () => {
     expect(skill.rules[0]?.id).toBe('no-stop-mid-run');
   });
 
-  it('stop IN SCOPE (phase == scope) → ALLOWED (no verdict), even with open tasks', async () => {
-    const r = await run(await ruleSteps(), 2, fsmAt('scope'));
-    expect(r.kind).toBe('no_verdict');
-  });
-
-  it('stop MID-RUN (phase != scope, backlog non-empty) → BLOCKED', async () => {
-    const r = await run(await ruleSteps(), 2, fsmAt('code'));
+  it('AUTOMATION + stop MID-RUN (phase != scope, backlog non-empty) → BLOCKED', async () => {
+    const r = await run(await ruleSteps(), 2, fsmAt('code'), true);
     expect(r.kind).toBe('verdict');
     if (r.kind === 'verdict') {
       expect(r.verdict.level).toBe('block');
@@ -91,8 +96,18 @@ describe('fullstack-flow stop-guard', () => {
     }
   });
 
-  it('stop on a DEPLETED run (phase != scope, zero open tasks) → ALLOWED (no verdict)', async () => {
-    const r = await run(await ruleSteps(), 0, fsmAt('code'));
+  it('INTERACTIVE (automation.value=false) + stop MID-RUN → ALLOWED (the misfire this fixes)', async () => {
+    const r = await run(await ruleSteps(), 2, fsmAt('code'), false);
+    expect(r.kind).toBe('no_verdict');
+  });
+
+  it('AUTOMATION + stop IN SCOPE (phase == scope) → ALLOWED (no verdict), even with open tasks', async () => {
+    const r = await run(await ruleSteps(), 2, fsmAt('scope'), true);
+    expect(r.kind).toBe('no_verdict');
+  });
+
+  it('AUTOMATION + stop on a DEPLETED run (phase != scope, zero open tasks) → ALLOWED (no verdict)', async () => {
+    const r = await run(await ruleSteps(), 0, fsmAt('code'), true);
     expect(r.kind).toBe('no_verdict');
   });
 });

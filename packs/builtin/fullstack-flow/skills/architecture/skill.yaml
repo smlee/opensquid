@@ -6,9 +6,15 @@
 #     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
 #   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
 name: architecture
-# ORCH/fractal — a cross-cutting ENGINEERING lens: fires on every coding turn (no area gate).
+# ORCH/fractal — a phase-scoped ENGINEERING lens: fires on decide (structural decisions, choosing
+# layering/coupling trade-offs) + produce (structural refactors, new modules) coding turns. NOT
+# wired for inform/act/locate/transform — architectural guidance belongs at design and authoring
+# time, not when deploying, finding files, or reformatting code.
 serves:
-  domain: coding
+  - domain: coding
+    intent: decide
+  - domain: coding
+    intent: produce
 load: lazy
 requires: []
 triggers:

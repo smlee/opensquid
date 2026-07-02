@@ -15,7 +15,16 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
 - Resolve every open question here (ask the user only if it is unanswerable after research OR an
   architecture-changing fork). CHECK the box / remove the item before you leave SCOPE.
 
-## Gate to advance (scope → plan): `scope_ready`
+## Gate during SCOPE (scope → scope_write): `scope_ready`
 Passes only when the pre-research write is: `anchors_ok` (every scoped element traces to the captured ask)
-∧ `depth ≥ 3` (≥3 research calls this turn) ∧ `!open_question` (no unchecked `- [ ] OPEN QUESTION` remains).
-Satisfy all three IN the artifact and the gate advances you automatically.
+∧ `!open_question` (no unchecked `- [ ] OPEN QUESTION` remains).
+Satisfy both in the artifact (the FSM transitions scope → scope_write on the next advance event).
+
+## Exit SCOPE (the human permission to advance)
+SCOPE is interactive and human-paced — it does NOT end automatically.
+When your research is complete and the artifact quality checks above hold:
+1. Present a summary of the gathered scope to the user: "Here is the scope I gathered — does this look correct?"
+2. Wait for the user's explicit confirmation.
+3. On confirmation, emit: `RALPH-EXIT: {"kind":"SHIPPED","stage":"scope_write"}`
+The user's confirmation IS the human permission.
+The next automated lap (SCOPE_WRITE) will write the formal pre-research artifact.

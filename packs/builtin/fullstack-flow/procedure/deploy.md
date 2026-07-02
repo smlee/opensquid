@@ -25,3 +25,10 @@ a verification + acceptance gate, not a content stage.)
 branches on `deploy.accepted` (the durable acceptance item): accepted → `done` (shipped); otherwise → loop back
 to PLAN (never auto-ship). Get verification green, surface for accept, and the human's `opensquid accept`
 finishes the run.
+
+**Exception — reversible deploys (`reversible: true` in `.opensquid/active.json`):** when the project declares its
+deploy reversible (e.g. a feature-flag roll-out, a preview-channel push, or any change with an instant rollback
+path), the `accept` decision auto-advances to `accepted` without a human `opensquid accept <taskId>`. The
+acceptance audit item is still created (the trail is preserved — the auto-advance is visible in the log).
+FAIL-CLOSED: absent or `false` ⇒ irreversible ⇒ the human gate holds as usual. Do NOT set `reversible: true`
+for deploys that cannot be cheaply undone.

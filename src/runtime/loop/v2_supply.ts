@@ -59,6 +59,15 @@ function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string
         { label: 'no open question', ok: ctx.get('scope.open_question') === false },
       ];
     }
+    case 'scope_write': {
+      // GS1 — same facets as scope (scope_evidence.ts computes them for any pre-research artifact write).
+      const depth = Number(ctx.get('scope.depth') ?? 0);
+      return [
+        { label: 'anchors_ok', ok: isTrue('scope.anchors_ok') },
+        { label: `depth ${depth}≥3`, ok: depth >= 3 },
+        { label: 'no open question', ok: ctx.get('scope.open_question') === false },
+      ];
+    }
     case 'plan':
       return [
         { label: 'acyclic', ok: isTrue('plan.acyclic') },
@@ -66,7 +75,7 @@ function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string
       ];
     case 'author':
       return [
-        { label: 'coverage_complete', ok: isTrue('author.coverage_complete') },
+        { label: 'manifest_complete', ok: isTrue('author.manifest_complete') },
         { label: 'real_code', ok: isTrue('author.real_code') },
       ];
     case 'code':
@@ -76,7 +85,10 @@ function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string
         { label: 'deprecated_clean', ok: isTrue('code.deprecated_clean') },
       ];
     case 'deploy':
-      return [{ label: 'capability_ok', ok: isTrue('deploy.capability_ok') }];
+      return [
+        { label: 'capability_ok', ok: isTrue('deploy.capability_ok') },
+        { label: 'reversible', ok: isTrue('deploy.reversible') },
+      ];
     default:
       return [];
   }
@@ -107,8 +119,12 @@ import { scopeEvidence } from './scope_evidence.js';
 import { isComplete, readPhaseState } from '../workflow_phases.js';
 import { V2ObservedActor } from './v2_observed_actor.js';
 
-import type { Envelope } from '../bus/types.js';
+import { applyAction } from '../gate/kernel.js';
+import type { Action } from '../gate/kernel.js';
+import type { Bus } from '../bus/bus.js';
+import type { Envelope, MessageKind } from '../bus/types.js';
 import type { Event } from '../event.js';
+import { isMutatingCall } from '../guard/orchestrator_guard.js';
 
 export interface V2Decision {
   exitCode: 0 | 2;
@@ -126,12 +142,22 @@ export interface V2Decision {
 
 const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkills: [] };
 
-// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition. SCOPE/PLAN/
-// AUTHOR/DEPLOY always emit here. CODE emits here too INTERACTIVELY, but in an autonomous lap
+/**
+ * F1 (fork decision): NO-OP Bus stub for kernel.applyAction gate decisions.
+ * There is no live Bus in a hook subprocess (`host.ts:131`).
+ * `bus.publish` is a no-op until a real Bus is reachable; durable INV2 observability stays via `appendTransition`.
+ */
+const NOOP_BUS = { publish: () => undefined } as unknown as Bus;
+
+// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition. SCOPE/SCOPE_WRITE/
+// PLAN/AUTHOR/DEPLOY always emit here. CODE emits here too INTERACTIVELY, but in an autonomous lap
 // (OPENSQUID_AUTOMATION=1) the orchestrator's loop_driver.onPhasesComplete owns the CODE report — the emit site
 // below skips CODE under that env to avoid a double emit (T2.9 wiring).
+// GS1: scope_write is the NEW automated stage (writes the pre-research artifact) — its report emits on
+// scope_write → plan, with the same evidence facets as scope.
 const STAGE: Record<string, Stage> = {
   scope: 'SCOPE',
+  scope_write: 'SCOPE_WRITE',
   plan: 'PLAN',
   author: 'AUTHOR',
   code: 'CODE',
@@ -159,6 +185,13 @@ async function readVerdict(sessionId: string, key: string): Promise<string | und
     return undefined;
   }
 }
+
+/**
+ * T2.4 — the pre-research artifact path pattern used by `buildGuardCtx` (scope.is_advance, ~line 235).
+ * Extracted as a named constant so there is one canonical definition with no duplicate pattern string.
+ * Matches a Write/Edit whose `file_path` is a `docs/research/*-pre-research-*` artifact.
+ */
+const PRE_RESEARCH_REGEX = /docs\/research\/.*-pre-research-/;
 
 /**
  * Guard ctx for a v2 cartridge event (R-AUDIT-CTX) — binds the THREE pieces a discipline guard reads: the
@@ -209,7 +242,7 @@ export async function buildGuardCtx(
     'tool' in event && /(?:Write|Edit)/.test(event.tool) && typeof filePath === 'string'
       ? filePath
       : '';
-  const isAdvance = /docs\/research\/.*-pre-research-/.test(fp);
+  const isAdvance = PRE_RESEARCH_REGEX.test(fp); // reuses the named const — no duplicate pattern
   // DIVERGENCE FROM THE SPEC'S FLAT-KEY SHAPE (noted): the guard grammar lexes `scope.is_advance` as a PATH
   // (target `scope`, prop `is_advance`), so it resolves against a NESTED `scope` object — a flat `scope.x` Map
   // key is invisible to the expression (it path-resolves `scope`→undefined→`!undefined`→true, defeating the
@@ -263,17 +296,17 @@ export async function buildGuardCtx(
   m.set('plan', pl); // nested object — the shape the guard expression path-resolves
 
   // T2.6 — AUTHOR gate evidence. The two facets come from the SHIPPED coverage checker (`checkCoverage`) over
-  // the in-repo requirement manifest + the gated-tree CodeIndex: `coverage_complete` (no orphaned gated export)
+  // the in-repo requirement manifest + the gated-tree CodeIndex: `manifest_complete` (no orphaned gated export)
   // ∧ `real_code` (every requirement MET — where met for reachable/binding REQUIRES its proof-test to pass,
   // check.ts:54-73, so a stub with no passing proof fails). DUAL-SHAPE like T2.4/T2.5: a nested `author` object
-  // (the path the guard `author.coverage_complete && author.real_code` resolves) PLUS flat `author.*` Map keys
+  // (the path the guard `author.manifest_complete && author.real_code` resolves) PLUS flat `author.*` Map keys
   // (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `authorInputs` is
   // injectable (tests pass pure {reqs,opts}); the default builds the index from the session repo root.
   // FAIL-CLOSED on any resolve/build error → {false,false}: an unprovable AUTHOR blocks (never auto-"real").
   const au = await authorEvidenceForSession(sessionId, authorInputs);
-  m.set('author.coverage_complete', au.coverageComplete);
+  m.set('author.manifest_complete', au.manifestComplete);
   m.set('author.real_code', au.realCode);
-  m.set('author', { coverage_complete: au.coverageComplete, real_code: au.realCode });
+  m.set('author', { manifest_complete: au.manifestComplete, real_code: au.realCode });
 
   // T2.7 — CODE gate evidence. THREE facets: `phases_complete` (the shipped 7-phase ledger `isComplete` for the
   // active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧ `deprecated_clean` (the
@@ -316,11 +349,13 @@ export async function buildGuardCtx(
   m.set('deploy.accepted', dep.accepted);
   m.set('deploy.clean', dep.deployClean); // DBL.1 — the VERIFY decision's facet (skip→clean when no verifyCommand)
   m.set('deploy.bugfix_exhausted', bugfixExhausted); // DBL.2
+  m.set('deploy.reversible', dep.reversible); // REVERSIBLE-DEPLOY: true → auto-advance accept; false → human gate
   m.set('deploy', {
     capability_ok: dep.capabilityOk,
     accepted: dep.accepted,
     clean: dep.deployClean,
     bugfix_exhausted: bugfixExhausted,
+    reversible: dep.reversible,
   });
 
   // FD5/FD6 — FRONTEND pre-delivery gate evidence (the OUTPUT enforcement). `frontend.clean` = the staged
@@ -376,7 +411,24 @@ export async function runV2Cartridges(
   sessionId: string,
   event: Event,
   now: string,
+  options?: {
+    /**
+     * F2: when true, evaluate gates WITHOUT advancing state or logging transitions — enforcement-only mode.
+     * Use from PreToolUse to block BEFORE the tool runs; PostToolUse still advances + records observability.
+     * Bypasses the `post_tool_call` trigger filter (v2_observed_actor.ts:67) by overriding env.kind to the
+     * gate's declared trigger, so guards evaluate on a PreToolUse `tool_call` event. SKIP `write_state` and
+     * `transition`/`appendTransition` effects. block/halt → exitCode 2 + messages; warn → no-op (PostToolUse owns it).
+     */
+    enforceOnly?: boolean;
+    /**
+     * Hole 1 — executor exemption: when a `agent_id` is present in the PreToolUse payload, the caller is a
+     * Task/Agent executor subagent (never the main orchestrator loop). Executor subagents must never be blocked
+     * by the gate — they implement what the orchestrator planned. Pass `agentId` extracted from the hook stdin.
+     */
+    agentId?: string;
+  },
 ): Promise<V2Decision> {
+  const enforceOnly = options?.enforceOnly ?? false;
   const cartridges = await loadActiveV2Cartridges(sessionId);
   if (cartridges.length === 0) return ZERO; // INERT — the nothing-breaks path (no active v2 pack today)
   // AD.1 capture (coordinated with T2.4): when a v2 cartridge is active, every user prompt appends to the
@@ -445,11 +497,22 @@ export async function runV2Cartridges(
       const taskId = await readActiveTaskId(sessionId);
       actor.state.current = await readFsmState(sessionId, name, actor.fsm, taskId);
       const ctx = await buildGuardCtx(event, sessionId, actor.state.current);
+      // F2 enforceOnly: bypass the trigger filter (v2_observed_actor.ts:67) by overriding env.kind to match
+      // the gate's declared trigger, so the gate evaluates on a PreToolUse `tool_call` event. The guard ctx
+      // already carries the real event's `tool` and `event` keys (set above by buildGuardCtx), so the guard
+      // decision is accurate. In normal mode, env.kind == event.kind (unchanged behavior).
+      const curMeta = loaded.compiled.meta[actor.state.current];
+      const envKind: MessageKind =
+        enforceOnly &&
+        curMeta?.kind === 'gate' &&
+        (curMeta.trigger?.length ?? 0) > 0
+          ? (curMeta.trigger![0] as MessageKind)
+          : event.kind;
       const env: Envelope = {
         seq: 0,
         from: `pack:${name}`,
         to: `pack:${name}`,
-        kind: event.kind,
+        kind: envKind,
         // R-AUDIT-CTX: phase = the cartridge's current FSM state (pre-receive); verdicts read fail-open.
         payload: { ctx },
         ts: Date.parse(now),
@@ -459,8 +522,9 @@ export async function runV2Cartridges(
       const skillRuntime = new InMemorySkillRuntime();
       for (const e of await actor.receive(env)) {
         if (e.kind === 'write_state') {
-          await persistActorState(sessionId, name, e.state, now, taskId); // T2.2 — same per-task key as the read
-        } else if (e.kind === 'emit' && e.messageKind === 'transition') {
+          // enforceOnly: NO state persistence (gate-check-only — PreToolUse; PostToolUse owns the advance).
+          if (!enforceOnly) await persistActorState(sessionId, name, e.state, now, taskId); // T2.2 — same per-task key as the read
+        } else if (!enforceOnly && e.kind === 'emit' && e.messageKind === 'transition') {
           // INV2 in-process observability — the cited v1 durable equivalent of the bus transition.
           const p = e.payload as { from: string; to: string };
           await appendTransition({
@@ -552,24 +616,28 @@ export async function runV2Cartridges(
               );
             }
           }
-          // AD.1 capture lifecycle (fail-open): LEAVING `scope` (SCOPE complete) → FREEZE the captured ask so a
-          // frozen scope cannot be silently widened — it stays available for PLAN/AUTHOR's anti-drift checks.
-          // ENTERING `scope` (a new task's re-arm) → RESET to a fresh ask (else the next task inherits the prior
-          // frozen ask). Reset on ENTRY, NOT leave — so the ask survives the rest of the flow.
+          // AD.1 capture lifecycle (fail-open): LEAVING `scope_write` (SCOPE_WRITE complete, GS1) → FREEZE the
+          // captured ask so a frozen scope cannot be silently widened — it stays available for PLAN/AUTHOR's
+          // anti-drift checks. ENTERING `scope` (a new task's re-arm) → RESET to a fresh ask (else the next task
+          // inherits the prior frozen ask). Reset on ENTRY to scope, NOT on leave — so the ask survives the flow.
+          // GS1: moved from `p.from === 'scope'` to `p.from === 'scope_write'` so the ask is frozen after the
+          // automated artifact-write, not after the interactive confirmation lap.
           try {
-            if (p.from === 'scope') await freezeAsk(sessionId);
+            if (p.from === 'scope_write') await freezeAsk(sessionId);
             if (p.to === 'scope') await resetAsk(sessionId);
           } catch (err) {
             process.stderr.write(
               `[v2-supply] captured-ask freeze/reset failed (ignored): ${String(err)}\n`,
             );
           }
-          // T2.5 LIVE WIRING (the fix for "FSM stalls at PLAN"): on SCOPE→PLAN, POPULATE the work-graph from the
-          // captured pre-research artifact so `plan.complete` can hold and the PLAN gate can advance. Without this
-          // caller, autoDecompose never runs live → the work-graph is empty → plan_ready never passes → stall.
+          // T2.5 LIVE WIRING (the fix for "FSM stalls at PLAN"): on SCOPE_WRITE→PLAN, POPULATE the work-graph from
+          // the captured pre-research artifact so `plan.complete` can hold and the PLAN gate can advance. Without
+          // this caller, autoDecompose never runs live → the work-graph is empty → plan_ready never passes → stall.
           // IDEMPOTENT: skip if any of the artifact's elements are already covered (don't duplicate issues on a
           // re-fire). FAIL-OPEN: a work-graph error must never break the hook.
-          if (p.from === 'scope') {
+          // GS1: moved from `p.from === 'scope'` to `p.from === 'scope_write'` — decompose fires on the automated
+          // artifact-write stage leaving, not on the interactive scope confirmation lap leaving.
+          if (p.from === 'scope_write') {
             try {
               const artifact = await readPreResearchPath(sessionId);
               const ext = artifact === null ? null : await extractScope(artifact);
@@ -608,11 +676,32 @@ export async function runV2Cartridges(
           }
           onStateLeave(p.from, skillRuntime); // SKILL.1: unloaded on leave
         } else if (e.kind === 'emit' && e.messageKind === 'gate_action') {
-          const p = e.payload as { action: 'warn' | 'block' | 'halt'; message: string };
-          if (p.action === 'warn') injections.push(p.message);
-          else {
-            exitCode = 2; // block | halt → ENFORCE (gate/kernel.ts:37-38); the deny IS the observation
-            messages.push(p.message);
+          // PART B — route through the ONE kernel (gate/kernel.ts) instead of the duplicate inline table.
+          // F1: bus is the NOOP_BUS stub (no live Bus in a hook subprocess); durable INV2 stays via appendTransition.
+          const p = e.payload as { action: Action; failureType: string; message: string };
+          const effect = applyAction(
+            p.action,
+            p.failureType,
+            { [p.failureType]: p.message },
+            { bus: NOOP_BUS, from: `pack:${name}` },
+          );
+          if (effect.exitCode === 2) {
+            // Blanket-block-with-exemptions for enforceOnly (PreToolUse) mode:
+            // block a MUTATING call at a failing gate EXCEPT when (a) it's read-only
+            // (isMutatingCall → false, so reads always pass — #22 read-only bypass) or
+            // (b) it's an executor subagent (agentId present — Hole 1, the lane model).
+            // Non-enforceOnly (PostToolUse) is UNCHANGED — block always applies there.
+            const evTool =
+              'tool' in event && typeof event.tool === 'string' ? event.tool : '';
+            const evArgs = ('args' in event ? event.args : {}) as Record<string, unknown>;
+            if (!enforceOnly || (isMutatingCall(evTool, evArgs) && options?.agentId === undefined)) {
+              exitCode = 2; // block | halt → ENFORCE; the deny IS the observation (gate/kernel.ts:37-43)
+              if (effect.message !== undefined) messages.push(effect.message);
+            }
+          } else if (effect.message !== undefined && !enforceOnly) {
+            // warn nudge (exitCode 0): in observational mode (PostToolUse) surface as additionalContext.
+            // enforceOnly skips warn — PostToolUse owns the observational warn injection.
+            injections.push(effect.message);
           }
         }
       }

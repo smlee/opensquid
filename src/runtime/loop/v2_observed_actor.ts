@@ -11,8 +11,9 @@
  * the shared `evalGate`), and `BaseActor.receive` is sync (`port.ts:57`) — a sync method cannot be overridden
  * by an async one, so the small lifecycle (state/restart/toWedge) is reimplemented here.
  *
- * The audit-running + ctx-binding + effect-application (publish gate_action via kernel.applyAction, inject the
- * message, persist state, register the actor) is the HOST SUPPLY — FAC-CUT.5b.2. This slice is the pure actor.
+ * The audit-running + ctx-binding + effect-application is the HOST SUPPLY — FAC-CUT.5b.2. This slice is the pure actor.
+ * The host calls `kernel.applyAction` for the DECISION (its `GateEffect`); `bus.publish` (INV2) is a NO-OP stub
+ * until a real Bus is reachable in a hook subprocess. Durable INV2 observability is via `appendTransition`.
  *
  * Spec: loop/docs/tasks/T-fac-cut-5b1-v2-conformance-actor.md.
  */
@@ -110,10 +111,11 @@ export class V2ObservedActor implements ActorPort {
 }
 
 /**
- * The gate-fail Effect the HOST (FAC-CUT.5b.2) applies via `kernel.applyAction(action, failureType, {
- * [failureType]: message }, {bus, from})` → publishes the canonical `gate_action{action, failureType}` (INV2)
- * + returns the `GateEffect` (exitCode/message/verdict) to inject. The actor stays PURE (no bus); this payload
- * is the bridge data (the v2 inline `onFail.message` → the kernel's failure-typed API).
+ * The gate-fail Effect that the HOST (FAC-CUT.5b.2) applies via `kernel.applyAction(action, failureType,
+ * { [failureType]: message }, { bus: NOOP_BUS, from })`.
+ * Reality: `kernel.applyAction` IS called for the DECISION (its `GateEffect` — the exitCode/message/verdict).
+ * `bus.publish` (INV2) is a NO-OP stub until a real Bus is reachable; durable INV2 is via `appendTransition`.
+ * The actor stays PURE (no bus); this payload is the bridge data (the v2 inline `onFail.message` → kernel API).
  */
 function gateFail(state: string, action: 'warn' | 'block' | 'halt', message: string): Effect {
   return {

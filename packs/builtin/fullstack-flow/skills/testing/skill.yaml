@@ -6,9 +6,14 @@
 #     fullstack-flow/pack.yaml `serves.domain`, matched by src/packs/match.ts); router shortlist via `prose:`.
 #   - `rules[].inject[]` → `verdict` with `level: surface` (the registered, seo-aeo-expert-precedent primitive).
 name: testing
-# ORCH/fractal — a cross-cutting ENGINEERING lens: fires on every coding turn (no area gate).
+# ORCH/fractal — a phase-scoped ENGINEERING lens: fires on produce (test authoring/modification) +
+# act (test execution) coding turns. NOT wired for inform/decide/locate/transform — testing advice
+# is only useful when authoring code that needs proof or when running the test suite.
 serves:
-  domain: coding
+  - domain: coding
+    intent: produce
+  - domain: coding
+    intent: act
 load: lazy
 requires: []
 triggers:

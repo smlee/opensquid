@@ -112,12 +112,19 @@ describe('live dispatch fires the v2 pack skills (S1 integration, real path)', (
   }
 
   it('post-scope AskUserQuestion is BLOCKED by the pause-guard (exit 2)', async () => {
-    const sid = 'sess-disp-block';
-    await seedPostScope(sid);
-    const packs = await loadActivePacksForDispatch(sid);
-    const r = await dispatchEvent(toolCall('AskUserQuestion'), packs, await buildRegistry(), sid);
-    expect(r.exitCode).toBe(2);
-    expect(r.stderr).toContain('Past SCOPE there are no pauses');
+    // The pause-guard's `no-pause-past-scope` rule is automation-gated (is_automation_mode must be
+    // true for the verdict to fire). Turn automation ON for this test so the block engages.
+    process.env.OPENSQUID_AUTOMATION = '1';
+    try {
+      const sid = 'sess-disp-block';
+      await seedPostScope(sid);
+      const packs = await loadActivePacksForDispatch(sid);
+      const r = await dispatchEvent(toolCall('AskUserQuestion'), packs, await buildRegistry(), sid);
+      expect(r.exitCode).toBe(2);
+      expect(r.stderr).toContain('Past SCOPE there are no pauses');
+    } finally {
+      delete process.env.OPENSQUID_AUTOMATION;
+    }
   });
 
   it('a tool_call surfaces the engineering lenses (verdict:surface → stderr)', async () => {

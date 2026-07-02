@@ -36,10 +36,14 @@ rules:
           text_field: tool
           patterns:
             - '^(AskUserQuestion|Stop)$'
-      # HARD-BLOCK a pause action PAST SCOPE. Questions belong to SCOPE; past it the run is automated.
-      # Gated by the same condition so the verdict only fires when a pause is actually attempted post-scope.
+      # The automation signal (env or per-session flag) — the guard is INERT outside the driven loop.
+      - call: is_automation_mode
+        as: automation
+      # HARD-BLOCK a pause action PAST SCOPE, but ONLY in automation mode (never fires in interactive sessions).
+      # In an interactive session (OPENSQUID_AUTOMATION unset) the model may legitimately ask the user a question;
+      # the block must only engage when the driven loop is running and there are no legitimate pauses.
       - call: verdict
-        if: 'len(is_pause.matched) > 0 && phase != "scope"'
+        if: 'automation.value == true && len(is_pause.matched) > 0 && phase != "scope"'
         args:
           level: block
           message: >-
@@ -51,3 +55,7 @@ prose: |
   The fullstack-flow pause discipline (the ≥v1 floor): pauses/questions are allowed ONLY in the
   interactive SCOPE stage. A real-time pause ACTION (AskUserQuestion / Stop) past SCOPE is HARD-BLOCKED
   over the fullstack-flow FSM state — the automated stages (PLAN/AUTHOR/CODE/DEPLOY) take no pauses.
+  The block is AUTOMATION-GATED (mirrors stop-guard and d9-guard): `is_automation_mode` is checked and
+  the verdict only fires when `automation.value == true`. In an interactive session (no
+  OPENSQUID_AUTOMATION env / no automation.flag) the guard is a true no-op — legitimate clarifying
+  questions to the user are never blocked.

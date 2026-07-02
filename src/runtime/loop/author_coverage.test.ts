@@ -1,4 +1,4 @@
-/** T2.6 — authorEvidence: the pure AUTHOR facets (coverageComplete ∧ realCode) over checkCoverage. */
+/** T2.6 — authorEvidence: the pure AUTHOR facets (manifestComplete ∧ realCode) over checkCoverage. */
 import { describe, expect, it } from 'vitest';
 
 import type { CodeIndex } from '../coverage/check.js';
@@ -32,10 +32,10 @@ describe('authorEvidence (T2.6)', () => {
         }),
       ),
     );
-    expect(ev).toEqual({ coverageComplete: true, realCode: true });
+    expect(ev).toEqual({ manifestComplete: true, realCode: true });
   });
 
-  it('a gated export with no requirement → an orphan → coverageComplete:false (realCode untouched)', () => {
+  it('a gated export with no requirement → an orphan → manifestComplete:false (realCode untouched)', () => {
     const reqs = [proofReq('R-A', 'src/a.test.ts')];
     const ev = authorEvidence(
       reqs,
@@ -46,7 +46,7 @@ describe('authorEvidence (T2.6)', () => {
         }),
       ),
     );
-    expect(ev.coverageComplete).toBe(false); // orphans.length > 0
+    expect(ev.manifestComplete).toBe(false); // orphans.length > 0
     expect(ev.realCode).toBe(true); // results still all met — the two facets are DISTINCT fields
   });
 
@@ -54,7 +54,7 @@ describe('authorEvidence (T2.6)', () => {
     const reqs = [proofReq('R-STUB', 'src/stub.test.ts')];
     const ev = authorEvidence(reqs, opts(idx({}))); // no tests recorded → proof absent → unmet
     expect(ev.realCode).toBe(false);
-    expect(ev.coverageComplete).toBe(true); // no gated exports → no orphans (distinct from realCode)
+    expect(ev.manifestComplete).toBe(true); // no gated exports → no orphans (distinct from realCode)
   });
 
   it('a reachable requirement whose proof-test is failing/absent → realCode:false (proof is the authority)', () => {

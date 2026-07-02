@@ -47,7 +47,7 @@ const planReady = { plan: { acyclic: true, complete: true }, audit: { scope: GF,
 
 /** A READY AUTHOR advance (T2.6): the `author` facets + the AUTHOR verdict + (GFR.3 rolling) the prior PLAN verdict. */
 const authorReady = {
-  author: { coverage_complete: true, real_code: true },
+  author: { manifest_complete: true, real_code: true },
   audit: { plan: GF, author: GF },
 };
 
@@ -81,20 +81,25 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(validateFsm(fsm!)).toEqual([]); // every emit routed, targets declared, decision totality
   });
 
-  it('advances SCOPE → PLAN → AUTHOR → CODE; CODE is the T2.7 sub_flow await-point (observed mode)', async () => {
+  it('advances SCOPE → SCOPE_WRITE → PLAN → AUTHOR → CODE; CODE is the T2.7 sub_flow await-point (observed mode)', async () => {
+    // GS1: scope now advances to scope_write (not directly to plan). scope_write advances to plan.
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
     expect(a.state.current).toBe('scope'); // initial
 
-    // SCOPE is now the T2.4 ENFORCING gate (post_tool_call-triggered, blocking). A READY advance passes → PLAN.
-    await a.receive(env('post_tool_call', scopeReady)); // SCOPE gate fires → PLAN
+    // SCOPE is the T2.4 ENFORCING gate (post_tool_call-triggered, blocking). A READY advance passes → SCOPE_WRITE.
+    await a.receive(env('post_tool_call', scopeReady)); // SCOPE gate fires → SCOPE_WRITE
+    expect(a.state.current).toBe('scope_write');
+
+    // SCOPE_WRITE is the GS1 automated gate (write the pre-research artifact). A READY advance passes → PLAN.
+    await a.receive(env('post_tool_call', scopeReady)); // SCOPE_WRITE gate fires → PLAN
     expect(a.state.current).toBe('plan');
 
     // PLAN is now the T2.5 ENFORCING gate (acyclic ∧ complete). A READY plan passes → AUTHOR.
     await a.receive(env('post_tool_call', planReady)); // PLAN → AUTHOR
     expect(a.state.current).toBe('author');
 
-    // AUTHOR is now the T2.6 ENFORCING gate (coverage_complete ∧ real_code). A READY author passes → CODE.
+    // AUTHOR is now the T2.6 ENFORCING gate (manifest_complete ∧ real_code). A READY author passes → CODE.
     await a.receive(env('post_tool_call', authorReady)); // AUTHOR → CODE
     expect(a.state.current).toBe('code');
 
@@ -202,6 +207,8 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
   it('T2.5: an incomplete/cyclic PLAN BLOCKS (stays at plan, emits the block action)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
+    // GS1: scope → scope_write → plan (two advances needed before reaching plan).
+    await a.receive(env('post_tool_call', scopeReady)); // → scope_write
     await a.receive(env('post_tool_call', scopeReady)); // → plan
     expect(a.state.current).toBe('plan');
     // plan.complete false (an uncovered element) → predicate fails → on_fail block.
@@ -220,11 +227,13 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
   it('T2.6: an AUTHOR with orphans or a failing proof BLOCKS (stays at author, emits the block action)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
+    // GS1: scope → scope_write → plan → author (three advances needed before reaching author).
+    await a.receive(env('post_tool_call', scopeReady)); // → scope_write
     await a.receive(env('post_tool_call', scopeReady)); // → plan
     await a.receive(env('post_tool_call', planReady)); // → author
     expect(a.state.current).toBe('author');
     // real_code false (a failing/absent proof-test) → predicate fails → on_fail block.
-    const notReady = { author: { coverage_complete: true, real_code: false } };
+    const notReady = { author: { manifest_complete: true, real_code: false } };
     const effects = await a.receive(env('post_tool_call', notReady));
     expect(a.state.current).toBe('author'); // blocked → stayed
     const blocked = effects.some(
@@ -240,8 +249,9 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
     // is_advance false → `!scope.is_advance` short-circuits true → gate passes without inspecting anchors.
+    // GS1: scope → scope_write (not scope → plan), so non-advance still lands at scope_write.
     await a.receive(env('post_tool_call', { scope: { is_advance: false } }));
-    expect(a.state.current).toBe('plan');
+    expect(a.state.current).toBe('scope_write');
   });
 
   // ── T2.8 — the DEPLOY capability gate + the durable acceptance decision (never auto-ship) ──────────────────

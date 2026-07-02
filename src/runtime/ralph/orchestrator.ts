@@ -97,11 +97,14 @@ const isResourcePause = (r: HumanRequiredReason): r is RalphStop & HumanRequired
   (RESOURCE_PAUSES as readonly string[]).includes(r);
 
 /**
- * PSL.3 — run ONE work-item to its outcome. With `stageLoop`, each AUTOMATED stage is its OWN fresh-context lap
- * (primed per stage; advanced via the lap's reported resulting `stage`; a no-advance lap retried up to
- * MAX_STAGE_RETRIES then escalated), and the deploy/accept HUMAN boundary runs as the open-ended per-item lap
- * (never-auto-ship). Without `stageLoop`, ONE open-ended per-item lap drives the whole item (unchanged).
- * Costs accumulate across the per-stage laps so the caller's budget accounting is unaffected.
+ * PSL.3 / GS1 — run ONE work-item to its outcome. With `stageLoop`, a unified per-iteration loop handles BOTH
+ * automated and human-boundary stages: AUTOMATED stages (scope_write, plan, author, code) run a per-stage lap
+ * (stagePrompt); HUMAN-BOUNDARY stages (scope, deploy/accept) run the open-ended per-item lap (no stagePrompt).
+ * Two human boundaries exist: the interactive `scope` stage first, then the deploy/accept stage last. A SHIPPED
+ * human-boundary lap with no resulting `stage` = item complete (the final human lap reported nothing to advance
+ * to). A no-advance lap (automated or human-boundary) retries up to MAX_STAGE_RETRIES then escalates
+ * UNRECOVERABLE_WEDGE. Costs accumulate so the caller's budget accounting is unaffected.
+ * Without `stageLoop`, ONE open-ended per-item lap drives the whole item (unchanged — v1 coding-flow).
  */
 async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Promise<LapResult> {
   const sl = deps.stageLoop;
@@ -111,14 +114,18 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
   let stage = (await sl.readStage(item.id)) ?? sl.initialStage;
   let cost = 0;
   let sameStage = 0;
-  while (sl.isAutomated(stage)) {
-    const sp = await sl.stagePrompt(item, stage);
+  for (;;) {
+    const isAuto = sl.isAutomated(stage);
+    const sp = isAuto ? await sl.stagePrompt(item, stage) : undefined;
     const res = await superviseLap(() => deps.runLap(item, sp), cfg.supervise);
     cost += res.costUsd;
     if (res.kind !== 'SHIPPED') return { ...res, costUsd: cost }; // escalation/wedge → the uniform handler parks it
     const next = res.stage;
+    // A SHIPPED human-boundary lap with no resulting stage = item complete (deploy/accept done, or the scope lap
+    // when the agent reports no stage to advance to). Return the lap result as the item's final outcome.
+    if (!isAuto && next === undefined) return { ...res, costUsd: cost };
+    // No advance (stage didn't change, or undefined for an automated lap) → bounded retry.
     if (next === undefined || next === stage) {
-      // The lap shipped but did NOT advance the stage (no resulting stage reported, or the same one) → stuck.
       if (++sameStage >= MAX_STAGE_RETRIES)
         return { kind: 'HUMAN_REQUIRED', reason: 'UNRECOVERABLE_WEDGE', costUsd: cost };
       continue; // retry the same stage with a fresh lap (bounded)
@@ -127,10 +134,6 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
     stage = next;
     await sl.writeStage(item.id, stage); // durable: a loop restart resumes HERE, not at initialStage
   }
-  // Automated stages complete → the deploy/accept HUMAN boundary uses the UNCHANGED open-ended per-item lap
-  // (never-auto-ship: it drives deploy + escalates HUMAN_REQUIRED for the human accept, exactly as today).
-  const tail = await superviseLap(() => deps.runLap(item), cfg.supervise);
-  return { ...tail, costUsd: cost + tail.costUsd };
 }
 
 export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<RalphResult> {

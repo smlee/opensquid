@@ -3,7 +3,7 @@
  *
  * The runtime side of the pure `authorEvidence` wrapper: it computes the requirements + `CheckOpts`
  * (manifest + CodeIndex) the coverage CI uses, runs the pure checker, and returns the two AUTHOR facets
- * (`coverageComplete`, `realCode`). Mirrors `scope_evidence.ts`/`plan_evidence.ts`: a small, deterministic
+ * (`manifestComplete`, `realCode`). Mirrors `scope_evidence.ts`/`plan_evidence.ts`: a small, deterministic
  * producer `buildGuardCtx` binds dual-shape onto the guard ctx.
  *
  * Reuses the SHIPPED coverage substrate exactly as `coverage/run.ts` does (the report-only CI runner):
@@ -14,7 +14,7 @@
  * INJECTABLE (like plan_evidence's `wg` reader): the `inputs` provider is the only I/O. The default resolves
  * the repo root from the session cwd and builds the full index; tests inject a pure `{ reqs, opts }` so they
  * never touch `~/.opensquid` or build the live index. FAIL-CLOSED: an unresolvable/throwing provider →
- * `{ coverageComplete:false, realCode:false }` (the gate blocks — an unprovable AUTHOR is not "real code").
+ * `{ manifestComplete:false, realCode:false }` (the gate blocks — an unprovable AUTHOR is not "real code").
  *
  * Spec: docs/tasks/T-v2-track2-discipline.md T2.6.
  */
@@ -57,11 +57,11 @@ export async function authorEvidenceForSession(
     let resolved = inputs;
     if (resolved === undefined) {
       const cwd = await readSessionCwd(sessionId);
-      if (cwd === null) return { coverageComplete: false, realCode: false }; // fail-closed: no repo
+      if (cwd === null) return { manifestComplete: false, realCode: false }; // fail-closed: no repo
       resolved = authorInputsForRepo(cwd);
     }
     return authorEvidence(resolved.reqs, resolved.opts);
   } catch {
-    return { coverageComplete: false, realCode: false }; // fail-closed: an unprovable AUTHOR blocks
+    return { manifestComplete: false, realCode: false }; // fail-closed: an unprovable AUTHOR blocks
   }
 }

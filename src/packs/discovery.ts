@@ -197,6 +197,14 @@ export interface ActiveJson {
    * reads it. ABSENT ⇒ no verification configured ⇒ `deployClean` SKIPs to true (the project ships as today).
    */
   verifyCommand?: string;
+  /**
+   * REVERSIBLE-DEPLOY — when `true`, the project's deploy is reversible (e.g. a feature-flag roll-out, a
+   * preview-channel push, a staged infra change with an instant rollback path). A reversible deploy auto-advances
+   * the `accept` decision to `accepted` without a human `opensquid accept <taskId>` (the acceptance audit item
+   * is still created — the trail is preserved). ABSENT/false (default) ⇒ IRREVERSIBLE ⇒ human gate required.
+   * FAIL-CLOSED: unknown or absent ⇒ irreversible ⇒ the human must accept.
+   */
+  reversible?: boolean;
 }
 
 /**
@@ -348,6 +356,22 @@ export async function readActiveExclusive(scopeRoot: string | null): Promise<boo
 }
 
 /**
+ * #36 — project-local discipline predicate: does THIS scope's active.json list at least one pack?
+ * false when: scopeRoot is null (no .opensquid/ found), active.json absent (ENOENT), or packs empty.
+ * Lenient: any read/parse error → false (fail-open). Unlike readActiveExclusive this checks pack presence.
+ */
+export async function hasActiveProjectPacks(scopeRoot: string | null): Promise<boolean> {
+  if (scopeRoot === null) return false;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const json = JSON.parse(raw) as ActiveJson;
+    return Array.isArray(json.packs) && json.packs.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * DBL.1b — read the per-project DEPLOY `verifyCommand` from a scope's `active.json` (see
  * {@link ActiveJson.verifyCommand}), or `null` when absent/unconfigured/unreadable (→ `deployClean` SKIPs to
  * true; the project ships as today). Lenient like {@link readActiveExclusive}.
@@ -360,6 +384,23 @@ export async function readActiveVerifyCommand(scopeRoot: string | null): Promise
     return typeof v === 'string' && v.trim().length > 0 ? v : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * REVERSIBLE-DEPLOY — read the per-project `deploy.reversible` flag from a scope's `active.json` (see
+ * {@link ActiveJson.reversible}). Returns `true` ONLY when the flag is explicitly `true`; all other cases
+ * (absent, false, unreadable, malformed) return `false` (FAIL-CLOSED: unknown ⇒ irreversible ⇒ human gate).
+ * Mirrors {@link readActiveVerifyCommand}.
+ */
+export async function readActiveDeployReversible(scopeRoot: string | null): Promise<boolean> {
+  if (scopeRoot === null) return false;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const json = JSON.parse(raw) as ActiveJson;
+    return json.reversible === true;
+  } catch {
+    return false; // fail-closed: unreadable / malformed ⇒ treat as irreversible
   }
 }
 

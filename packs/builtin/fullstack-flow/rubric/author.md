@@ -9,7 +9,7 @@ A task spec passes (`VERDICT: GUESS_FREE` / `SPEC_COMPLETE`) ONLY if ALL SIX hol
 
 1. **11-FIELD CONTRACT** — every `### Task` block has all 11 fields; every Key-code-shapes block is REAL code
    (not pseudocode); every 7-phase step names concrete files/decisions.
-2. **100% SCOPE COVERAGE — no silent gaps, no drift** — the task set covers EVERY scoped element OR a NAMED,
+2. **100% SPEC COMPLETENESS — no silent gaps, no drift** — the task set covers EVERY scoped element OR a NAMED,
    TRACKED deferral; every task traces to the captured ask AND the scope (never the pre-research alone, so a
    drift cannot launder itself into the spec).
 3. **WIRED / END-TO-END RELIABILITY** — each Deliverable's Acceptance criteria prove the artifact works IN ITS

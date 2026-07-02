@@ -79,6 +79,9 @@ const gatePack = (onFailAction: 'block' | 'warn') =>
   });
 
 const bashCall = (): Event => ({ kind: 'tool_call', tool: 'Bash', args: {} }) as unknown as Event;
+/** A Bash tool_call with a file-writing redirect — always mutating (isMutatingCall → true). */
+const mutatingBashCall = (): Event =>
+  ({ kind: 'tool_call', tool: 'Bash', args: { command: 'echo x > /tmp/out.txt' } }) as unknown as Event;
 
 const NOW = '2026-06-22T00:00:00.000Z';
 
@@ -135,6 +138,179 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
   });
 });
 
+// ── PART A — enforceOnly mode: gate-check-only, no state advance ─────────────────────────────────────────────
+// Tests for the `enforceOnly: true` flag added to `runV2Cartridges`.
+// A gate with `trigger: ['post_tool_call']` whose guard fails on a `Bash` tool_call is used throughout.
+// enforceOnly bypasses the trigger filter (v2_observed_actor.ts:67) so the gate evaluates on the `tool_call`
+// event from PreToolUse. Blanket-block-with-exemptions: MUTATING + no agentId → exitCode 2; read-only or
+// executor (agentId) → exitCode 0. block/halt + NO state advance.
+//
+// NOTE: advance-only tests from a prior pass (task #33) are superseded here. That design blocked only the
+// "advance-triggering action" per stage; the lane-model redesign (task #35) will handle that. The current
+// design is blanket-block-mutating-with-exemptions (read-only bypass + executor exemption), which is simpler
+// and correct for the automation-enforcement use case.
+
+describe('runV2Cartridges — enforceOnly mode (PART A)', () => {
+  it('enforceOnly + guard FAIL + block + MUTATING + no agentId → exitCode 2 (blanket-block)', async () => {
+    // mutatingBashCall() has command: 'echo x > /tmp/out.txt' — isMutatingCall → true.
+    // No agentId → no executor exemption. Failing gate + enforceOnly → exitCode 2.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-enforce-block';
+    const d = await runV2Cartridges(sid, mutatingBashCall(), NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(2); // mutating + no agentId + failing gate → blocked
+    expect(d.messages).toContain('resolve it');
+    expect(d.injections).toEqual([]); // enforceOnly: warn injections discarded (PostToolUse owns them)
+    // No state advance: enforceOnly skips write_state.
+    expect(await readFsmStateRaw(sid, 'observed-gate')).toBeNull();
+  });
+
+  it('enforceOnly + guard FAIL + warn → exitCode 0, NO injection (PostToolUse owns warn), no advance', async () => {
+    mockLoad.mockResolvedValue([gatePack('warn')]);
+    const sid = 'sess-enforce-warn';
+    const d = await runV2Cartridges(sid, bashCall(), NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(0); // warn does NOT block in enforceOnly
+    expect(d.injections).toEqual([]); // warn injection skipped in enforceOnly
+    expect(d.messages).toEqual([]);
+    // No advance: warn in enforceOnly skips write_state (PostToolUse owns the advance).
+    expect(await readFsmStateRaw(sid, 'observed-gate')).toBeNull();
+  });
+
+  it('enforceOnly + guard PASS → exitCode 0, no deny, no state advance', async () => {
+    // A Write event satisfies the guard (tool == "Write" → pass).
+    const writeEvent = { kind: 'tool_call', tool: 'Write', args: { file_path: '/tmp/x.ts' } } as unknown as Event;
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-enforce-pass';
+    const d = await runV2Cartridges(sid, writeEvent, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(0); // guard passed → no deny
+    expect(d.messages).toEqual([]);
+    // No advance: even a passing gate skips write_state in enforceOnly.
+    expect(await readFsmStateRaw(sid, 'observed-gate')).toBeNull();
+  });
+
+  it('enforceOnly false/absent → existing block behavior UNCHANGED (write_state + advance)', async () => {
+    // Regression: enforceOnly:false must behave identically to the prior code path.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-enforce-absent';
+    const d = await runV2Cartridges(sid, bashCall(), NOW);
+    expect(d.exitCode).toBe(2);
+    expect(d.messages).toContain('resolve it');
+    // Block with no enforceOnly → still no state advance (block keeps FSM at gate).
+    expect(await readFsmStateRaw(sid, 'observed-gate')).toBeNull();
+  });
+
+  it('kernel.applyAction is the decision path — NOOP_BUS does not throw, action is honored', async () => {
+    // Verify that routing through kernel.applyAction (PART B) produces correct pass/block/warn decisions.
+    // Blanket-block: a READ-ONLY call (git status) at a failing gate is NOT mutating → exitCode 0 (read-only
+    // bypass). This proves NOOP_BUS doesn't throw AND the exemption fires correctly.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-kernel-path';
+    const gitStatus = { kind: 'tool_call', tool: 'Bash', args: { command: 'git status' } } as unknown as Event;
+    const d = await runV2Cartridges(sid, gitStatus, NOW, { enforceOnly: true });
+    // Read-only → isMutatingCall false → NOT blocked (read-only bypass).
+    expect(d.exitCode).toBe(0);
+    // Confirm warn in normal (non-enforceOnly) mode still surfaces as an injection via the kernel path.
+    mockLoad.mockResolvedValue([gatePack('warn')]);
+    const sid2 = 'sess-kernel-warn';
+    const d2 = await runV2Cartridges(sid2, bashCall(), NOW);
+    expect(d2.exitCode).toBe(0);
+    expect(d2.injections).toContain('resolve it'); // warn → injection via kernel.applyAction
+  });
+});
+
+// ── #22 — read-only bypass + executor exemption (blanket-block-with-exemptions) ──────────────────────────────
+// enforceOnly mode blocks MUTATING calls at a failing gate EXCEPT: (a) read-only (isMutatingCall → false),
+// (b) executor subagent (agentId present — Hole 1). Non-enforceOnly (PostToolUse) always enforces.
+//
+// NOTE: the advance-only design from task #33 (which blocked ONLY the stage's advance-triggering action)
+// is superseded here. That design is being replaced by the lane model (task #35). The current design is
+// blanket-block-mutating-with-exemptions: simpler, correct for automation enforcement, and free of the
+// per-stage detection logic that couldn't handle plan/author/deploy cleanly.
+
+describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + Hole 1)', () => {
+  it('enforceOnly + failing gate + MUTATING Edit + no agentId → exitCode 2 (blocked — Hole 1 NOT exempt)', async () => {
+    // Edit is always mutating; no agentId present → the executor exemption does not apply.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-bb-edit-noagent';
+    const editCall = {
+      kind: 'tool_call',
+      tool: 'Edit',
+      args: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' },
+    } as unknown as Event;
+    const d = await runV2Cartridges(sid, editCall, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(2); // mutating + no agentId → blocked
+    expect(d.messages).toContain('resolve it');
+  });
+
+  it('enforceOnly + failing gate + MUTATING Edit + agentId present → exitCode 0 (executor exempt — Hole 1)', async () => {
+    // Same Edit but with agentId → executor exemption fires → NOT blocked.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-bb-edit-agent';
+    const editCall = {
+      kind: 'tool_call',
+      tool: 'Edit',
+      args: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' },
+    } as unknown as Event;
+    const d = await runV2Cartridges(sid, editCall, NOW, { enforceOnly: true, agentId: 'executor-1' });
+    expect(d.exitCode).toBe(0); // executor exempt (agentId present) → not blocked
+    expect(d.messages).toEqual([]);
+  });
+
+  it('enforceOnly + failing gate + Bash "git status" → exitCode 0 (read-only bypass — #22)', async () => {
+    // git status is not mutating (isMutatingCall → false) → read-only bypass → never blocked.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-bb-git-status';
+    const gitStatus = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'git status' },
+    } as unknown as Event;
+    const d = await runV2Cartridges(sid, gitStatus, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(0); // read-only → not blocked
+    expect(d.messages).toEqual([]);
+  });
+
+  it('enforceOnly + failing gate + Bash "grep -r foo ." → exitCode 0 (read-only bypass)', async () => {
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-bb-grep';
+    const grepCall = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'grep -r foo .' },
+    } as unknown as Event;
+    const d = await runV2Cartridges(sid, grepCall, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(0); // grep is not mutating → passes
+    expect(d.messages).toEqual([]);
+  });
+
+  it('enforceOnly + failing gate + MUTATING Bash "sed -i" + no agentId → exitCode 2 (blocked)', async () => {
+    // sed -i is mutating (matches the file-writing deny-list); no agentId → blocked.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-bb-sed-noagent';
+    const sedCall = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: "sed -i 's/a/b/' f.ts" },
+    } as unknown as Event;
+    const d = await runV2Cartridges(sid, sedCall, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(2); // mutating + no agentId → blocked
+    expect(d.messages).toContain('resolve it');
+  });
+
+  it('enforceOnly + failing gate + MUTATING Bash + agentId → exitCode 0 (executor exempt)', async () => {
+    // Same sed -i but with agentId → executor exempt → not blocked.
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-bb-sed-agent';
+    const sedCall = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: "sed -i 's/a/b/' f.ts" },
+    } as unknown as Event;
+    const d = await runV2Cartridges(sid, sedCall, NOW, { enforceOnly: true, agentId: 'executor-2' });
+    expect(d.exitCode).toBe(0); // executor exempt → not blocked
+    expect(d.messages).toEqual([]);
+  });
+});
+
 // ── T2.4 — the SCOPE gate over runV2Cartridges (short-circuit + block + capture) ──────────────────────────
 
 /** A single-gate fullstack-like pack whose `scope` state carries the real T2.4 `scope_ready` guard. */
@@ -160,6 +336,35 @@ const scopeGatePack = (): LoadedPackV2 =>
         scoped: { kind: 'terminal', outcome: 'shipped' },
       },
       transitions: [{ from: 'scope', on: 'scoped', to: 'scoped' }],
+    },
+  });
+
+/**
+ * GS1 — a single-gate pack whose `scope_write` state carries the real T2 `scope_write_ready` guard (minus the
+ * audit clause, so the test does not need to seed a content-audit cache). Used by the autoDecompose tests:
+ * autoDecompose now fires on `p.from === 'scope_write'`, not `p.from === 'scope'`.
+ */
+const scopeWriteGatePack = (): LoadedPackV2 =>
+  load({
+    name: 'fsf-scope-write',
+    version: '1.0.0',
+    scope: 'workflow',
+    guards: {
+      scope_write_ready: 'scope.is_advance && scope.anchors_ok && !scope.open_question',
+    },
+    fsm: {
+      initial: 'scope_write',
+      states: {
+        scope_write: {
+          kind: 'gate',
+          guard: 'scope_write_ready',
+          trigger: ['post_tool_call'],
+          on_pass_emits: 'scope_written',
+          on_fail: { action: 'block', message: 'SCOPE_WRITE: write the scope artifact' },
+        },
+        plan: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: 'scope_write', on: 'scope_written', to: 'plan' }],
     },
   });
 
@@ -250,12 +455,13 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
   const countScope1 = async (): Promise<number> =>
     (await readWgIssues()).filter((i) => i.body.includes('sourceElementId:scope-1')).length;
 
-  it('READY advance AUTO-DECOMPOSES: SCOPE→PLAN populates the work-graph (autoDecompose live caller)', async () => {
+  // GS1: autoDecompose now fires on `p.from === 'scope_write'` (not `p.from === 'scope'`). These tests use
+  // `scopeWriteGatePack` (starts at scope_write, transitions to plan on pass) to trigger the right side-effect.
+  it('READY advance AUTO-DECOMPOSES: SCOPE_WRITE→PLAN populates the work-graph (autoDecompose live caller)', async () => {
     await withFreshHome(async () => {
       const sid = 'sess-scope-decompose';
-      mockLoad.mockResolvedValue([scopeGatePack()]);
-      await appendAsk(sid, 'add login screen');
-      for (let i = 0; i < 3; i++) await appendTool(sid, 'Read');
+      mockLoad.mockResolvedValue([scopeWriteGatePack()]);
+      await appendAsk(sid, 'add login screen'); // still needed: scope.anchors_ok checks against captured ask
       expect(await countScope1()).toBe(0); // clean baseline
       const p = await writePreResearch('1. Login [ask: "add login screen"]');
       await runV2Cartridges(sid, advanceWrite(p), NOW);
@@ -264,12 +470,11 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
     });
   });
 
-  it('auto-decompose is IDEMPOTENT: a SCOPE pass over an already-covered element does not duplicate', async () => {
+  it('auto-decompose is IDEMPOTENT: a SCOPE_WRITE pass over an already-covered element does not duplicate', async () => {
     await withFreshHome(async () => {
       const sid = 'sess-scope-idem';
-      mockLoad.mockResolvedValue([scopeGatePack()]);
+      mockLoad.mockResolvedValue([scopeWriteGatePack()]);
       await appendAsk(sid, 'add login screen');
-      for (let i = 0; i < 3; i++) await appendTool(sid, 'Read');
       await populateWg([{ title: 'pre', body: 'sourceElementId:scope-1' }]); // already covered
       const before = await countScope1();
       const p = await writePreResearch('1. Login [ask: "add login screen"]');
@@ -351,7 +556,7 @@ describe('buildGuardCtx — T2.5 PLAN binding', () => {
   });
 });
 
-// ── T2.6 — the AUTHOR gate binding over buildGuardCtx (coverage_complete ∧ real_code) ──────────────────────
+// ── T2.6 — the AUTHOR gate binding over buildGuardCtx (manifest_complete ∧ real_code) ──────────────────────
 
 const authorEv = {
   kind: 'post_tool_call',
@@ -377,20 +582,20 @@ const authorInputs = (reqs: Requirement[], index: CodeIndex): AuthorInputs => ({
 
 // The real `author_ready` guard expression, evaluated over the nested `author` object buildGuardCtx binds.
 const AUTHOR_GUARD = new RegistryGuardEvaluator(
-  new Map([['author_ready', 'author.coverage_complete && author.real_code']]),
+  new Map([['author_ready', 'author.manifest_complete && author.real_code']]),
 );
 
 describe('buildGuardCtx — T2.6 AUTHOR binding', () => {
-  it('binds author.coverage_complete/author.real_code dual-shape (flat + nested)', async () => {
+  it('binds author.manifest_complete/author.real_code dual-shape (flat + nested)', async () => {
     const ai = authorInputs(
       [proofReq('R-A', 'src/a.test.ts')],
       idx({ tests: { 'src/a.test.ts': { activeCount: 1 } } }),
     );
     const ctx = await buildGuardCtx(authorEv, 'sess-author-shape', 'author', ai);
-    expect(ctx.has('author.coverage_complete')).toBe(true);
+    expect(ctx.has('author.manifest_complete')).toBe(true);
     expect(ctx.has('author.real_code')).toBe(true);
-    const nested = ctx.get('author') as { coverage_complete: boolean; real_code: boolean };
-    expect(typeof nested.coverage_complete).toBe('boolean');
+    const nested = ctx.get('author') as { manifest_complete: boolean; real_code: boolean };
+    expect(typeof nested.manifest_complete).toBe('boolean');
     expect(typeof nested.real_code).toBe('boolean');
   });
 
@@ -400,12 +605,12 @@ describe('buildGuardCtx — T2.6 AUTHOR binding', () => {
       idx({ tests: { 'src/a.test.ts': { activeCount: 1 } } }),
     );
     const ctx = await buildGuardCtx(authorEv, 'sess-author-pass', 'author', ai);
-    expect(ctx.get('author.coverage_complete')).toBe(true);
+    expect(ctx.get('author.manifest_complete')).toBe(true);
     expect(ctx.get('author.real_code')).toBe(true);
     expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(true); // gate would advance
   });
 
-  it('an ORPHAN → coverage_complete:false → author_ready BLOCKS', async () => {
+  it('an ORPHAN → manifest_complete:false → author_ready BLOCKS', async () => {
     const ai = authorInputs(
       [proofReq('R-A', 'src/a.test.ts')],
       idx({
@@ -414,7 +619,7 @@ describe('buildGuardCtx — T2.6 AUTHOR binding', () => {
       }),
     );
     const ctx = await buildGuardCtx(authorEv, 'sess-author-orphan', 'author', ai);
-    expect(ctx.get('author.coverage_complete')).toBe(false);
+    expect(ctx.get('author.manifest_complete')).toBe(false);
     expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(false); // gate would block (on_fail: block)
   });
 
@@ -427,7 +632,7 @@ describe('buildGuardCtx — T2.6 AUTHOR binding', () => {
 
   it('FAIL-CLOSED: unresolvable repo (no injected inputs, no session cwd) → both false → BLOCKS', async () => {
     const ctx = await buildGuardCtx(authorEv, 'sess-author-noscope-xyz', 'author');
-    expect(ctx.get('author.coverage_complete')).toBe(false);
+    expect(ctx.get('author.manifest_complete')).toBe(false);
     expect(ctx.get('author.real_code')).toBe(false);
     expect(AUTHOR_GUARD.eval('author_ready', ctx)).toBe(false);
   });
@@ -567,6 +772,7 @@ const deployDeps = (
   capabilityCheck: () => Promise.resolve(capabilityCheck),
   acceptance: () => Promise.resolve(acceptance),
   verificationResult: () => Promise.resolve(null), // DBL.1 — no verification configured → skip → deployClean:true
+  reversible: () => Promise.resolve(false), // REVERSIBLE-DEPLOY — fail-closed default (irreversible)
 });
 
 // The real `deploy_ready` + `accepted` guard expressions, evaluated over the nested `deploy` object.

@@ -17,7 +17,7 @@
  *
  * Spec: docs/tasks/T-v2-track2-discipline.md T2.8.
  */
-import { readActiveVerifyCommand } from '../../packs/discovery.js';
+import { readActiveDeployReversible, readActiveVerifyCommand } from '../../packs/discovery.js';
 import { resolveProjectScopeRoot } from '../paths.js';
 import { readActiveTask, readSessionCwd } from '../session_state.js';
 
@@ -34,6 +34,13 @@ export interface DeployEvidence {
    * FAIL-CLOSED once configured (no record / throw → false → the bug-fix loop; never ship an unverified build).
    */
   deployClean: boolean;
+  /**
+   * REVERSIBLE-DEPLOY — `true` iff the project's `.opensquid/active.json` declares `reversible: true`. When
+   * true, the `accept` decision auto-advances to `accepted` without a human `opensquid accept <taskId>`. The
+   * acceptance audit item is still created (the trail is preserved). FAIL-CLOSED: absent/false/unreadable ⇒
+   * `false` ⇒ irreversible ⇒ the human gate holds.
+   */
+  reversible: boolean;
 }
 
 /** The injectable I/O the DEPLOY evidence reads — the default binds the shipped runtime readers. */
@@ -53,6 +60,11 @@ export interface DeployEvidenceDeps {
    * verifyCommand. DBL.1b binds the deterministic record (the agent's verify-run exit code); today: `null`.
    */
   verificationResult(sessionId: string): Promise<boolean | null>;
+  /**
+   * REVERSIBLE-DEPLOY — whether this project's deploy is declared reversible in `.opensquid/active.json`.
+   * FAIL-CLOSED default: absent / unreadable / false ⇒ `false` ⇒ human gate holds.
+   */
+  reversible(sessionId: string): Promise<boolean>;
 }
 
 /**
@@ -81,6 +93,13 @@ export const defaultDeployEvidenceDeps: DeployEvidenceDeps = {
     const taskId = t === null ? null : (t.taskId ?? t.id);
     if (taskId === null) return false; // configured but no active task → fail-closed
     return (await readVerification(sessionId, taskId)) ?? false; // recorded pass/fail; no record → fail-closed
+  },
+  // REVERSIBLE-DEPLOY — read `reversible` from the project's active.json. FAIL-CLOSED: absent/false/unreadable
+  // → false → irreversible → human gate holds.
+  async reversible(sessionId) {
+    const cwd = await readSessionCwd(sessionId);
+    if (cwd === null) return false;
+    return readActiveDeployReversible(await resolveProjectScopeRoot(cwd));
   },
 };
 
@@ -117,5 +136,11 @@ export async function deployEvidenceForSession(
   } catch {
     deployClean = false; // fail-closed: a throwing verification reader routes to the bug-fix loop
   }
-  return { capabilityOk, accepted, deployClean };
+  let reversible = false;
+  try {
+    reversible = await deps.reversible(sessionId);
+  } catch {
+    reversible = false; // fail-closed: a throwing reader treats the deploy as irreversible → human gate
+  }
+  return { capabilityOk, accepted, deployClean, reversible };
 }

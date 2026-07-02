@@ -55,3 +55,29 @@ export function skillServesMatches(serves: SkillServes, facets: Facets): boolean
   const fm = facetMap(facets);
   return blocks.some((b) => blockMatches(b, fm));
 }
+
+/**
+ * LAYER-3 #37 — domain-only match for the null-classifiedFacets fallback in dispatch.ts.
+ *
+ * When the turn's classified facets are null (no prompt classified yet) but the project's declared
+ * `domain` is known (from orchestrator_settings), checks whether a `serves`-bearing skill's domain
+ * constraint allows this project domain. A block MATCHES (skill fires) iff it either
+ * (a) declares no `domain` field, or (b) its declared `domain` CONTAINS the project domain via
+ * hierarchical containment (`contains(declaredDomain, projectDomain)`): `coding` contains `coding`,
+ * but `coding.frontend` does NOT contain `coding` — no false depth. OR-over-blocks: any matching
+ * block fires the skill.
+ *
+ * Does NOT gate on `intent` or `stakes` — those axes are unconstrained in the null-classification
+ * fallback (only the project domain is known, not the current turn's intent). A serves-less skill
+ * (the always-on spine) never reaches this function; the dispatcher handles that upstream.
+ *
+ * PURE — no I/O. Imported only by dispatch.ts.
+ */
+export function skillServesDomainMatches(serves: SkillServes, projectDomain: string): boolean {
+  const blocks = Array.isArray(serves) ? serves : [serves];
+  return blocks.some((b) => {
+    const dom = (b as Record<string, unknown>).domain;
+    if (typeof dom !== 'string') return true; // no domain constraint in this block → matches
+    return contains(dom, projectDomain);
+  });
+}

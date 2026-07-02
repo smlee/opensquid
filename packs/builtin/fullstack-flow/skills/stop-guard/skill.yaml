@@ -19,9 +19,13 @@ rules:
       # The OPEN (pending|in_progress) backlog — a run is active while > 0; a depleted run stops freely.
       - call: open_task_count
         as: open
-      # HARD-BLOCK a mid-run stop (past SCOPE AND backlog non-empty). Grammar: double-quoted literals.
+      # The automation signal (env or per-session flag) — the guard is INERT outside the driven loop.
+      - call: is_automation_mode
+        as: automation
+      # HARD-BLOCK a mid-run stop (past SCOPE AND backlog non-empty), but ONLY in automation mode.
+      # Grammar: double-quoted literals.
       - call: verdict
-        if: 'phase != "scope" && open.count > 0'
+        if: 'automation.value == true && phase != "scope" && open.count > 0'
         args:
           level: block
           message: >-

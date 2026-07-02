@@ -15,7 +15,7 @@
  * full verdict-primitive process.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile as fsWriteFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,7 +26,7 @@ import { FunctionRegistry } from '../../functions/registry.js';
 import { ok } from '../result.js';
 import type { TickState } from '../unload_conditions.js';
 import { setAutomationFlag } from '../automation_state.js';
-import { writeActiveTask } from '../session_state.js';
+import { writeActiveTask, writeClassifiedFacets } from '../session_state.js';
 import type { SkillRequires } from '../skill_requires.js';
 import type {
   Pack,
@@ -1408,5 +1408,151 @@ describe('dispatchEvent — inject_context surfacing on session_start (HH6.1)', 
     expect(result.contextInjections).toEqual([]);
     expect(result.stderr).toContain('emitted inject_context on event kind "stop"');
     expect(result.stderr).toContain('surface injections (drop)');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER-3 #37 — null-classifiedFacets domain-fallback gate
+//
+// When classifiedFacets is null (no prompt classified yet), the dispatcher must
+// gate serves-bearing lens skills on the project's declared domain (read from
+// .opensquid/orchestrator.json) instead of firing ALL lenses.
+//
+// Acceptance criteria:
+//   #37.1  null facets + domain=coding + coding.frontend lens → does NOT fire
+//   #37.2  null facets + domain=coding + coding lens → fires
+//   #37.3  null facets + domain=null (no orchestrator.json) → fires (fail-safe)
+//   #37.4  non-null classifiedFacets → existing serves behavior UNCHANGED
+//   #37.5  serves-less skill (always-on spine) → always fires
+// ─────────────────────────────────────────────────────────────────────────────
+describe('LAYER-3 #37: null-classifiedFacets domain-fallback gate', () => {
+  let tempHome: string;
+  let priorHome: string | undefined;
+  let tempProjectDir: string;
+
+  beforeEach(async () => {
+    priorHome = process.env.OPENSQUID_HOME;
+    tempHome = await mkdtemp(join(tmpdir(), 'opensquid-l3-test-'));
+    process.env.OPENSQUID_HOME = tempHome;
+    // Separate temp dir simulating the project root (where .opensquid/orchestrator.json lives).
+    tempProjectDir = await mkdtemp(join(tmpdir(), 'opensquid-l3-proj-'));
+  });
+
+  afterEach(async () => {
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    await rm(tempHome, { recursive: true, force: true });
+    await rm(tempProjectDir, { recursive: true, force: true });
+  });
+
+  /** Write a minimal orchestrator.json with the given domain to the temp project dir. */
+  async function writeOrchestratorDomain(projectDir: string, domain: string): Promise<void> {
+    await mkdir(join(projectDir, '.opensquid'), { recursive: true });
+    await fsWriteFile(
+      join(projectDir, '.opensquid', 'orchestrator.json'),
+      JSON.stringify({
+        version: 1,
+        domain,
+        routes: [],
+        policy: { onTie: 'ask', onLowConfidence: 'ground', onlineSearch: false },
+      }),
+    );
+  }
+
+  /**
+   * Build a pack with a single `serves`-bearing skill that emits a block verdict when it fires.
+   * The skill's serves block declares only `domain: servesDomain`; no intent/stakes constraint.
+   */
+  function makeServingPack(name: string, servesDomain: string): Pack {
+    const skill: Skill = {
+      name: `${name}-skill`,
+      load: 'preload',
+      when_to_load: [],
+      requires: [],
+      unloads_when: [],
+      triggers: [{ kind: 'tool_call' }],
+      // Cast required: `serves` is typed as SkillServes in the runtime Skill; a plain object matches
+      // the shape at runtime (the dispatcher only reads `serves` as-is into skillServesMatches).
+      serves: { domain: servesDomain } as unknown as NonNullable<Skill['serves']>,
+      rules: [verdictRule],
+    };
+    return {
+      name,
+      version: '0.0.0',
+      scope: 'workflow',
+      goal: 'test',
+      description: '',
+      requires: [],
+      conflicts: [],
+      evolves: true,
+      skills: [skill],
+      activationScope: 'project',
+      detectedBy: [],
+    };
+  }
+
+  /**
+   * A tool_call event whose `cwd` points to the given project directory.
+   * dispatch.ts reads `event.cwd` (when present) to locate orchestrator.json.
+   * Cast needed because `cwd` is not in the public ToolCallEvent type but IS
+   * read at runtime via the `'cwd' in event` guard (same pattern as line ~510 in dispatch.ts).
+   */
+  const eventInProject = (projectDir: string): ToolCallEvent =>
+    ({ kind: 'tool_call' as const, tool: 'Bash', args: {}, cwd: projectDir }) as unknown as ToolCallEvent;
+
+  it('#37.1: null facets + domain=coding + coding.frontend lens → does NOT fire (domain mismatch)', async () => {
+    await writeOrchestratorDomain(tempProjectDir, 'coding');
+    // classifiedFacets is null (no writeClassifiedFacets call → file absent → readClassifiedFacets returns null)
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'should-not-fire' });
+    const pack = makeServingPack('fe-lens', 'coding.frontend');
+    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-1');
+    expect(result.exitCode).toBe(0); // coding.frontend lens blocked by domain fallback (coding ≠ coding.frontend)
+    expect(result.stderr).toBe('');
+  });
+
+  it('#37.2: null facets + domain=coding + coding lens → fires', async () => {
+    await writeOrchestratorDomain(tempProjectDir, 'coding');
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'coding lens fired' });
+    const pack = makeServingPack('be-lens', 'coding');
+    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-2');
+    expect(result.exitCode).toBe(2); // coding lens fires: contains('coding', 'coding') = true
+    expect(result.stderr).toBe('coding lens fired');
+  });
+
+  it('#37.3: null facets + domain=null (no orchestrator.json) → fires (fail-safe preserved)', async () => {
+    // No orchestrator.json in tempProjectDir → readSettings returns default → domain undefined
+    // → fallbackDomain null → fail-open (existing behavior preserved)
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'fail-open fired' });
+    const pack = makeServingPack('fe-lens-failsafe', 'coding.frontend');
+    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-3');
+    expect(result.exitCode).toBe(2); // fail-open: no domain → skill fires
+    expect(result.stderr).toBe('fail-open fired');
+  });
+
+  it('#37.4: non-null classifiedFacets → existing serves behavior UNCHANGED (regression guard)', async () => {
+    await writeOrchestratorDomain(tempProjectDir, 'coding');
+    // Write classified facets (coding.frontend) → classifiedFacets !== null → dispatcher uses them
+    await writeClassifiedFacets('sess-l3-4', {
+      intent: 'produce',
+      domain: 'coding.frontend',
+      project: true,
+      confidence: 'high',
+    } as Parameters<typeof writeClassifiedFacets>[1]);
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'classified path fired' });
+    const pack = makeServingPack('fe-lens-classified', 'coding.frontend');
+    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-4');
+    // Classified facets say coding.frontend → coding.frontend lens matches → fires
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toBe('classified path fired');
+  });
+
+  it('#37.5: serves-less skill (always-on spine) always fires regardless of domain or facets', async () => {
+    await writeOrchestratorDomain(tempProjectDir, 'coding');
+    // Use makePack which creates a Skill with NO serves field → always-on spine, never gated
+    const registry = buildRegistryWithVerdict({ level: 'block', message: 'spine fired' });
+    const pack = makePack('spine', [verdictRule]);
+    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-5');
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toBe('spine fired');
   });
 });

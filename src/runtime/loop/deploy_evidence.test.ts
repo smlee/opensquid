@@ -11,6 +11,7 @@ const deps = (over: Partial<DeployEvidenceDeps>): DeployEvidenceDeps => ({
   capabilityCheck: () => Promise.resolve(null),
   acceptance: () => Promise.resolve([]),
   verificationResult: () => Promise.resolve(null), // DBL.1 — no verification configured → skip → deployClean:true
+  reversible: () => Promise.resolve(false), // REVERSIBLE-DEPLOY — fail-closed default (irreversible)
   ...over,
 });
 
@@ -121,5 +122,24 @@ describe('deployEvidenceForSession (T2.8)', () => {
       deps({ acceptance: () => Promise.reject(new Error('boom')) }),
     );
     expect(ev.accepted).toBe(false);
+  });
+
+  // REVERSIBLE-DEPLOY — auto-advance the accept decision; fail-closed on unknown/absent.
+  it('reversible: false → reversible:false (irreversible; human gate holds)', async () => {
+    const ev = await deployEvidenceForSession('s', deps({ reversible: () => Promise.resolve(false) }));
+    expect(ev.reversible).toBe(false);
+  });
+
+  it('reversible: true → reversible:true (auto-ship; no human gate needed)', async () => {
+    const ev = await deployEvidenceForSession('s', deps({ reversible: () => Promise.resolve(true) }));
+    expect(ev.reversible).toBe(true);
+  });
+
+  it('FAIL-CLOSED: reversible reader throws → reversible:false (unknown = irreversible = human gate)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ reversible: () => Promise.reject(new Error('boom')) }),
+    );
+    expect(ev.reversible).toBe(false);
   });
 });

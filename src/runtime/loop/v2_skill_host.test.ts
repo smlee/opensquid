@@ -58,9 +58,16 @@ afterEach(async () => {
 
 describe('v2 skill host — pause-guard executes under fullstack-flow (T-v2-skill-host VS.1)', () => {
   it('BLOCKS a post-scope AskUserQuestion (the pause gate goes live)', async () => {
-    await setFsmState('plan'); // past SCOPE → pause-guard fires
-    const r = await runV2SkillHost([cart], ask, registry, SID);
-    expect(r.exitCode).toBe(2);
+    // The pause-guard's `no-pause-past-scope` rule is automation-gated (is_automation_mode must be
+    // true for the verdict to fire). Turn automation ON for this test so the block engages.
+    process.env.OPENSQUID_AUTOMATION = '1';
+    try {
+      await setFsmState('plan'); // past SCOPE → pause-guard fires
+      const r = await runV2SkillHost([cart], ask, registry, SID);
+      expect(r.exitCode).toBe(2);
+    } finally {
+      delete process.env.OPENSQUID_AUTOMATION;
+    }
   });
 
   it('ALLOWS an AskUserQuestion in the SCOPE stage (the interactive phase)', async () => {

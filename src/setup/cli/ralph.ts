@@ -171,8 +171,10 @@ export const daemonChatSend: ChatSend = (params) =>
     );
   });
 
-/** PSL.3 — the fullstack-flow stages the per-stage loop drives as its own laps (the human boundary is past these). */
-const AUTOMATED_STAGES = new Set<string>(['scope', 'plan', 'author', 'code']);
+/** PSL.3 — the fullstack-flow stages the per-stage loop drives as its own laps (the human boundary is past these).
+ *  GS1: `scope` is removed (interactive / human-paced; the agent confirms with the user and emits RALPH-EXIT with
+ *  stage:'scope_write'); `scope_write` is added (automated: writes the pre-research artifact + triggers decompose). */
+const AUTOMATED_STAGES = new Set<string>(['scope_write', 'plan', 'author', 'code']);
 
 /** The per-stage directive appended to a lap's prompt: do ONLY this stage + report the resulting stage. The lap's
  *  own stage_inject hook supplies the stage's procedure/rubric/checkpoint/work-context (its own session). */

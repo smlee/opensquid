@@ -21,6 +21,7 @@
  */
 import { buildRegistry, loadActivePacksForDispatch, loadActiveV2Cartridges } from '../bootstrap.js';
 import { runV2SkillHost } from '../loop/v2_skill_host.js';
+import { runV2Cartridges, type V2Decision } from '../loop/v2_supply.js';
 import { exitIfSubagent } from './subagent_guard.js';
 import { parseApplyPatch } from './apply_patch.js';
 import { appendTool, recordSessionCwd } from '../session_state.js';
@@ -37,7 +38,10 @@ import { extractSessionId } from './session_id.js';
 import { checkSafety } from '../guard/safety_floor.js';
 import { loadSafetyPolicy } from '../guard/safety_policy.js';
 import { isYoloMode } from '../guard/yolo.js';
+import { checkOrchestratorGuard } from '../guard/orchestrator_guard.js';
 import { appendProjectDriftEvent } from '../drift_catalog.js';
+import { resolveProjectScopeRoot } from '../paths.js';
+import { hasActiveProjectPacks } from '../../packs/discovery.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -47,6 +51,8 @@ interface PreToolUsePayload {
   cwd?: string;
   transcript_path?: string;
   transcriptPath?: string;
+  /** GS1: present ONLY inside a Task/Agent subagent (per Claude Code hook docs). */
+  agent_id?: string;
 }
 
 /** ATM.1: the session transcript path (where THIS CC version stores the task list). */
@@ -55,6 +61,20 @@ function extractTranscriptPath(raw: string): string | undefined {
     const obj = JSON.parse(raw) as PreToolUsePayload;
     const p = obj.transcript_path ?? obj.transcriptPath;
     return typeof p === 'string' && p.length > 0 ? p : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * GS1: extract the optional `agent_id` from the raw hook payload. Claude Code populates this
+ * field in the PreToolUse stdin JSON ONLY when the hook runs inside a Task/Agent subagent, so
+ * its presence marks the caller as an executor (exempt from the orchestrator guard).
+ */
+function extractAgentId(raw: string): string | undefined {
+  try {
+    const obj = JSON.parse(raw) as PreToolUsePayload;
+    return typeof obj.agent_id === 'string' && obj.agent_id.length > 0 ? obj.agent_id : undefined;
   } catch {
     return undefined;
   }
@@ -101,6 +121,9 @@ async function main(): Promise<void> {
   }
 
   const sessionId = extractSessionId(raw);
+  // GS1: extracted once here so both the orchestrator guard block and the v2 gate call share
+  // the same value. extractAgentId handles all parse errors internally (fail-open → undefined).
+  const agentId = extractAgentId(raw);
   // G.5 — append this tool name to the session's per-turn ledger BEFORE
   // dispatching. Best-effort: a ledger-write failure must never block the
   // pending tool call (fail-open guarantee of the hook bin). The Stop-event
@@ -141,6 +164,12 @@ async function main(): Promise<void> {
     // through the dispatcher and advances its lifecycle FSM. See
     // T-FSM-UNIFY.
   }
+  // #36 — cwd computed once, shared by the safety floor and the orchestrator guard below.
+  // The kind check is part of the expression so it remains valid outside the tool_call branch.
+  const cwd =
+    parsed.data.kind === 'tool_call' && 'cwd' in parsed.data && typeof parsed.data.cwd === 'string'
+      ? parsed.data.cwd
+      : process.cwd();
   // T2 — the Safety FLOOR: an absolute, always-on forbidden-action policy checked BEFORE the tool runs
   // (a SECOND blocking check beside the coding-flow gate below — deny if EITHER blocks). Substrate, not
   // a pack: it fires under every agent regardless of pack. FAIL-OPEN: any error here must NEVER block.
@@ -148,10 +177,6 @@ async function main(): Promise<void> {
     try {
       // Resolve YOLO for THIS project (env → project config → global config). The event cwd selects the
       // project so a per-repo override applies; YOLO downgrades the DANGEROUS tier block→warn (hardline never).
-      const cwd =
-        'cwd' in parsed.data && typeof parsed.data.cwd === 'string'
-          ? parsed.data.cwd
-          : process.cwd();
       const verdict = checkSafety(
         { tool: parsed.data.tool, args: parsed.data.args },
         await loadSafetyPolicy(),
@@ -183,6 +208,40 @@ async function main(): Promise<void> {
       }
     } catch {
       /* fail-open: a Safety-floor error never blocks the call (the hook's fail-open contract) */
+    }
+  }
+
+  // GS1 — the Orchestrator guard: the main (orchestrator) loop is a PLANNER; it must not directly
+  // implement — deny CODE-EDITING (Write/Edit/NotebookEdit, or a file-writing Bash: sed -i, `>`/`>>`,
+  // tee, cp/mv) in the main loop and require an executor subagent instead. It sits AFTER the safety
+  // floor and BEFORE pack dispatch, using the same FU.11 deny-envelope + exit(0) pattern.
+  //
+  // #36 — PROJECT-LOCAL GATE: the guard only fires when the project running at `cwd` has at least one
+  // pack declared in its local .opensquid/active.json. Projects that only see GLOBAL packs (or have no
+  // .opensquid/ at all) are never gated — this was the root cause of the 2-day interactive deadlock.
+  // resolveProjectScopeRoot walks up from cwd (never reads ~/.opensquid), so global packs cannot trigger
+  // this path. fail-open: any error from the scope-check or the guard itself never blocks the call.
+  //
+  // Executor exemption: a Task/Agent subagent's PreToolUse payload carries `agent_id` (per the CC hook
+  // docs) — `checkOrchestratorGuard` passes those calls through untouched. `exitIfSubagent` (above,
+  // ~line 82) has already terminated OPENSQUID_SUBAGENT=1 laps/reviewers, so this guard only sees the
+  // main loop and CC-native Task/Agent children. Orchestration commands (git, pnpm, grep, cd, Read,
+  // Agent, mcp__*) are NOT mutating → always allowed. FAIL-OPEN: any error here never blocks the call.
+  if (parsed.data.kind === 'tool_call') {
+    try {
+      if (await hasActiveProjectPacks(await resolveProjectScopeRoot(cwd))) {
+        const verdict = checkOrchestratorGuard(
+          parsed.data.tool,
+          parsed.data.args,
+          agentId !== undefined ? { agent_id: agentId } : undefined,
+        );
+        if (verdict.deny) {
+          process.stdout.write(JSON.stringify(buildPreToolUseDeny(verdict.message ?? '', '')));
+          process.exit(0);
+        }
+      }
+    } catch {
+      /* fail-open: an orchestrator-guard error never blocks the call */
     }
   }
 
@@ -229,8 +288,29 @@ async function main(): Promise<void> {
     registry,
     sessionId,
   );
-  const exitCode: 0 | 2 = v1.exitCode === 2 || skillHost.exitCode === 2 ? 2 : 0;
-  const stderr = [v1.stderr, skillHost.stderr].filter((s) => s.length > 0).join('\n');
+  // PART A — v2 FSM gate enforcement (enforceOnly: true): evaluate gates BEFORE the tool runs without
+  // advancing state. PostToolUse advances state + records observability; this is ONLY the blocking check.
+  // Blast radius today = zero (no active v2 cartridges — runV2Cartridges returns ZERO immediately).
+  // FAIL-OPEN: runV2Cartridges is already fail-open per-cartridge; a total crash here exits 0 (below).
+  //
+  // PART 1 — automation gate: only invoke enforceOnly enforcement under automation. In an interactive
+  // session (no OPENSQUID_AUTOMATION=1 env), skip the enforce call entirely (return ZERO decision)
+  // so the hook NEVER blocks legitimate interactive work. ENV-ONLY (Hole 2): the per-session flag
+  // file is deliberately NOT checked here — a stale flag from a prior automation lap would bleed
+  // into interactive sessions sharing the same session id, blocking human tool calls. Only the env
+  // var (set by the orchestrator for its subprocess) is used. The PostToolUse (non-enforceOnly) path
+  // is UNCHANGED — advances state + observes regardless.
+  const isAutomation = process.env.OPENSQUID_AUTOMATION === '1';
+  const v2Gate: V2Decision = isAutomation
+    ? await runV2Cartridges(sessionId, parsed.data, new Date().toISOString(), {
+        enforceOnly: true,
+        ...(agentId !== undefined ? { agentId } : {}),
+      })
+    : { exitCode: 0, messages: [], injections: [], boundSkills: [] };
+  const exitCode: 0 | 2 = v1.exitCode === 2 || skillHost.exitCode === 2 || v2Gate.exitCode === 2 ? 2 : 0;
+  // v2Gate.messages are the block/halt instructions; only include them in the deny when v2Gate triggered.
+  const gateMessages = v2Gate.exitCode === 2 ? v2Gate.messages : [];
+  const stderr = [v1.stderr, skillHost.stderr, ...gateMessages].filter((s) => s.length > 0).join('\n');
   const contextInjections = [...v1.contextInjections, ...skillHost.contextInjections];
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:

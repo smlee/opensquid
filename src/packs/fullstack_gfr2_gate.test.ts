@@ -21,7 +21,7 @@ function ctx(audit: Record<string, unknown>): Map<string, unknown> {
     // SCOPE advance branch satisfied (is_advance true so the short-circuit doesn't mask the audit clause).
     ['scope', { is_advance: true, anchors_ok: true, depth: 3, open_question: false }],
     ['plan', { acyclic: true, complete: true }],
-    ['author', { coverage_complete: true, real_code: true }],
+    ['author', { manifest_complete: true, real_code: true }],
     ['code', { phases_complete: true, readiness_ran: true, deprecated_clean: true }],
     ['audit', audit],
   ]);

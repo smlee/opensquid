@@ -41,7 +41,7 @@
  *      `auto_correct` policies can look up their corrective skill name.
  *
  * Pack-agnostic discipline: the dispatcher does NOT special-case
- * sangmin-personal-rules or any other named pack. It reads whatever each
+ * a-user-pack or any other named pack. It reads whatever each
  * pack's `driftResponse` field contains; missing/empty/absent all flow
  * through the same `??` chain.
  *
@@ -70,12 +70,13 @@ import { evaluateProcess } from '../evaluator.js';
 import { Matcher, matchesEvent } from '../load_matchers.js';
 import { partitionSkills } from '../pinned_skills.js';
 import { advanceSkillTicks, readClassifiedFacets, type SkillTicks } from '../session_state.js';
-import { skillServesMatches } from '../../packs/skill_serves.js';
+import { skillServesDomainMatches, skillServesMatches } from '../../packs/skill_serves.js';
 import { RequiresCache, skillRequiresHold } from '../skill_requires.js';
 import { UnloadCondition, shouldUnload, type TickState } from '../unload_conditions.js';
 import type { ActivationScope } from '../../packs/schemas/manifest.js';
 import type { Directive, DriftPolicy, Event, Pack, Skill } from '../types.js';
 
+import { readSettings } from '../orchestrator_settings.js';
 import { formatProfessionError, resolveProfessionDirective } from './profession_resolver.js';
 
 export interface DispatchResult {
@@ -334,8 +335,24 @@ export async function dispatchEvent(
 
   // ORCH/fractal — the turn's classified facets (intent/domain/…), persisted at the last prompt_submit. Read ONCE
   // per fire so the intra-pack lens-gating filter can subset-match each `serves`-bearing skill without re-reading.
-  // `null` (no prompt classified yet) → the filter fails OPEN (every lens fires, today's behavior).
+  // `null` (no prompt classified yet) → see fallbackDomain below.
   const classifiedFacets = await readClassifiedFacets(sessionId);
+
+  // LAYER-3 #37 — null-classifiedFacets fallback: when no prompt has been classified yet (classifiedFacets is
+  // null), gate on the project's declared domain instead of firing ALL serves-bearing lenses. Read ONCE per fire,
+  // outside the skill loop. `null` means the project domain is also unknown → the serves filter below preserves
+  // the original fail-open behavior (every lens fires). FAIL-SAFE: any read error leaves this null → fail-open.
+  let fallbackDomain: string | null = null;
+  if (classifiedFacets === null) {
+    try {
+      const projectDir =
+        'cwd' in event && typeof event.cwd === 'string' ? event.cwd : process.cwd();
+      const { domain } = await readSettings(projectDir);
+      if (domain !== undefined) fallbackDomain = domain;
+    } catch {
+      /* fail-open: a read error must never break dispatch */
+    }
+  }
 
   for (const pack of packs) {
     // IDF.4 — activation_scope dispatch routing. `pack.activationScope ??
@@ -383,13 +400,16 @@ export async function dispatchEvent(
       // ORCH/fractal — intra-pack lens gating. A skill that DECLARES `serves` is a task-gated lens discipline:
       // it fires ONLY when the turn's classified facets subset-match (e.g. `{domain:'coding.frontend'}` →
       // only on a frontend coding turn). A `serves`-LESS skill is the always-on core spine (FSM/gates/guards) and
-      // is never gated. Fail-OPEN: when no facets are classified yet, every lens fires (back-compat).
-      if (
-        skill.serves !== undefined &&
-        classifiedFacets !== null &&
-        !skillServesMatches(skill.serves, classifiedFacets)
-      ) {
-        continue;
+      // is never gated. LAYER-3 #37: when classifiedFacets is null (null-fallback path), match against the
+      // project-domain fallback via skillServesDomainMatches. If the project domain is ALSO null, the guard
+      // fails OPEN — every lens fires (preserves the pre-fix behavior). This is the ONE canonical filter site.
+      if (skill.serves !== undefined) {
+        if (classifiedFacets !== null) {
+          if (!skillServesMatches(skill.serves, classifiedFacets)) continue;
+        } else if (fallbackDomain !== null) {
+          if (!skillServesDomainMatches(skill.serves, fallbackDomain)) continue;
+        }
+        // else: classifiedFacets === null AND fallbackDomain === null → fail-open (skill fires)
       }
       for (const rule of skill.rules) {
         // Phase 4: destination_check rules fire on the scheduler tick

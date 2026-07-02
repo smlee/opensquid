@@ -211,8 +211,9 @@ describe('resolveParked (human-override residual-shrink path)', () => {
   });
 });
 
-// ---- PSL.3 — the per-stage subprocess loop (each automated stage = its own fresh-context lap) ----
-const AUTOMATED = new Set(['scope', 'plan', 'author', 'code']);
+// ---- PSL.3 / GS1 — the per-stage subprocess loop (each automated stage = its own fresh-context lap) ----
+// GS1: `scope` is human-boundary (interactive); `scope_write` is the first AUTOMATED stage.
+const AUTOMATED = new Set(['scope_write', 'plan', 'author', 'code']);
 /** A stageLoop driver over an in-memory durable-stage store; stagePrompt = `DO <stage>` (the test reads it back). */
 function stageLoopStub(
   store = new Map<string, string>(),
@@ -235,17 +236,28 @@ function stageLoopStub(
 
 describe('runRalphLoop — PSL.3 per-stage loop', () => {
   it('drives each automated stage as its own lap (advancing via the reported stage), then the boundary lap', async () => {
+    // GS1: scope is now a HUMAN-BOUNDARY (interactive) lap; scope_write is the first AUTOMATED stage.
+    // Flow: scope (human, advances to scope_write) → scope_write/plan/author/code (automated) → deploy (human, done)
     const advance: Record<string, string> = {
-      scope: 'plan',
+      scope_write: 'plan',
       plan: 'author',
       author: 'code',
       code: 'deploy',
     };
     const calls: (string | undefined)[] = [];
     const store = new Map<string, string>();
+    let humanLapCount = 0;
     const runLap = vi.fn((_item: Issue, sp?: string) => {
       calls.push(sp);
-      if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.01 }); // the boundary/tail lap
+      if (sp === undefined) {
+        humanLapCount++;
+        if (humanLapCount === 1) {
+          // The interactive scope lap: confirms with user, advances to scope_write.
+          return P<LapResult>({ kind: 'SHIPPED', stage: 'scope_write', costUsd: 0.01 });
+        }
+        // The deploy/accept boundary lap: no stage = item complete.
+        return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.01 });
+      }
       const next = advance[sp.replace('DO ', '')];
       return P<LapResult>(
         next === undefined ? { kind: 'SHIPPED', costUsd: 0.01 } : { kind: 'SHIPPED', stage: next, costUsd: 0.01 },
@@ -255,10 +267,10 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
-    // 4 automated stage laps (scope→plan→author→code) + 1 open-ended boundary lap (deploy/accept) = 5
-    expect(calls).toEqual(['DO scope', 'DO plan', 'DO author', 'DO code', undefined]);
+    // 1 human scope lap + 4 automated laps (scope_write/plan/author/code) + 1 human deploy lap = 6
+    expect(calls).toEqual([undefined, 'DO scope_write', 'DO plan', 'DO author', 'DO code', undefined]);
     expect(r.closed).toEqual(['a']);
-    expect(r.spent).toBeCloseTo(0.05);
+    expect(r.spent).toBeCloseTo(0.06);
     expect(store.has('a')).toBe(false); // clearStage on close
   });
 

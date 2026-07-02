@@ -1,4 +1,4 @@
-# AUTHOR — author the task spec(s): 11 fields, real code, full coverage
+# AUTHOR — author the task spec(s): 11 fields, real code, full spec
 
 You are in the AUTHOR (tasking) stage. Turn the plan into self-contained task specs a fresh lap can execute.
 
@@ -19,6 +19,6 @@ You are in the AUTHOR (tasking) stage. Turn the plan into self-contained task sp
   task, else it is INCOMPLETE. Simplest correct design; no MVP/reduced subset of the scoped design.
 
 ## Gate to advance (author → code): `author_ready`
-Passes when `author.coverage_complete` (no gated export lacks a covering requirement) ∧ `author.real_code`
+Passes when `author.manifest_complete` (no gated export lacks a covering requirement) ∧ `author.real_code`
 (every requirement MET — a reachable/binding one requires its proof-test to pass; a stub with no passing proof
 fails). Satisfy both and the gate advances you.

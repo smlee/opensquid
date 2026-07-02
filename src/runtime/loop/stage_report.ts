@@ -22,7 +22,8 @@ import { join } from 'node:path';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 
 // 'CODE' is included (emitted by T2.9's loop_driver on phases_complete).
-export type Stage = 'SCOPE' | 'PLAN' | 'AUTHOR' | 'CODE' | 'DEPLOY';
+// 'SCOPE_WRITE' is the GS1 automated stage that writes the pre-research artifact after interactive SCOPE confirms.
+export type Stage = 'SCOPE' | 'SCOPE_WRITE' | 'PLAN' | 'AUTHOR' | 'CODE' | 'DEPLOY';
 
 /** The canonical 7-phase coding cycle the CODE stage runs (the `log_phase` enum order). */
 export const CODE_PHASES = [

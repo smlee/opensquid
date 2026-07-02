@@ -30,6 +30,8 @@ import {
   checkAndMergeUpgrades,
   clearMergeCache,
   discoverActivePacks,
+  hasActiveProjectPacks,
+  readActiveDeployReversible,
   readActiveExclusive,
   readActiveVerifyCommand,
   resolvePackStateDir,
@@ -114,6 +116,36 @@ describe('readActiveVerifyCommand — the per-project DEPLOY verification comman
   });
 });
 
+describe('readActiveDeployReversible — reversible deploy flag (REVERSIBLE-DEPLOY)', () => {
+  it('null scopeRoot → false (fail-closed)', async () => {
+    await expect(readActiveDeployReversible(null)).resolves.toBe(false);
+  });
+
+  it('absent active.json (ENOENT) → false (fail-closed)', async () => {
+    await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('active.json without reversible key → false (absent = irreversible)', async () => {
+    await writeActive({ packs: ['fullstack-flow'] });
+    await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('active.json with reversible: true → true (auto-advance accept; no human gate)', async () => {
+    await writeActive({ packs: ['fullstack-flow'], reversible: true });
+    await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(true);
+  });
+
+  it('active.json with reversible: false → false (explicit false = irreversible)', async () => {
+    await writeActive({ packs: ['fullstack-flow'], reversible: false });
+    await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('malformed JSON → false (fail-closed: unreadable = irreversible)', async () => {
+    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
+    await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(false);
+  });
+});
+
 describe('discoverActivePacks — absent / empty branches', () => {
   it('returns [] when scopeRoot is null (project-scope absent case)', async () => {
     await expect(discoverActivePacks(null)).resolves.toEqual([]);
@@ -164,12 +196,12 @@ describe('discoverActivePacks — malformed input fails LOUD', () => {
 
 describe('discoverActivePacks — happy path', () => {
   it('loads a single valid pack referenced in active.json', async () => {
-    await writeValidPack('sangmin-personal-rules', 'workflow');
-    await writeActive({ packs: ['sangmin-personal-rules'] });
+    await writeValidPack('a-user-pack', 'workflow');
+    await writeActive({ packs: ['a-user-pack'] });
 
     const packs = await discoverActivePacks(scopeRoot);
     expect(packs).toHaveLength(1);
-    expect(packs[0]?.name).toBe('sangmin-personal-rules');
+    expect(packs[0]?.name).toBe('a-user-pack');
     expect(packs[0]?.scope).toBe('workflow');
   });
 
@@ -628,5 +660,40 @@ describe('LP.5 checkAndMergeUpgrades', () => {
     expect(_mergeCacheSize()).toBeGreaterThan(0);
     clearMergeCache();
     expect(_mergeCacheSize()).toBe(0);
+  });
+});
+
+describe('hasActiveProjectPacks — #36 project-local discipline predicate', () => {
+  it('null scopeRoot → false (no .opensquid/ found)', async () => {
+    await expect(hasActiveProjectPacks(null)).resolves.toBe(false);
+  });
+
+  it('absent active.json (ENOENT) → false (fail-open)', async () => {
+    await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('active.json with non-empty packs array → true', async () => {
+    await writeActive({ packs: ['some-pack'] });
+    await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(true);
+  });
+
+  it('active.json with multiple packs → true', async () => {
+    await writeActive({ packs: ['pack-a', 'pack-b'] });
+    await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(true);
+  });
+
+  it('active.json with empty packs array → false (the deadlock case)', async () => {
+    await writeActive({ packs: [] });
+    await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('malformed JSON → false (fail-open, never throws)', async () => {
+    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
+    await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('active.json with packs: null → false (not an array)', async () => {
+    await writeActive({ packs: null });
+    await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(false);
   });
 });
