@@ -74,12 +74,20 @@ makes "don't guess" a checkable rule, not a hope.
 ## 4. What's inside a pack (the files)
 
 A pack is a folder. The example below uses `workflow-fsm` to illustrate the FSM
-mechanism. **As of T-FSM-UNIFY, `workflow-fsm` + `scope-fsm` have been merged into
-the single live `coding-flow` pack** — one behavior-pattern FSM with three gated
-stages (SCOPE → TASK AUTHORING → CODE, 9 states, with the restored spec-audit
-task-authoring gate). The mechanics shown here are identical; for the current
-machine see `docs/pack-runtime.md` §6.3 and `docs/tasks/T-fsm-unify.md`. Here is the
-(illustrative) pack folder:
+mechanism. The mechanics shown here are identical across every pack — only the YAML
+differs.
+
+> **Which pack is the live coding discipline?** The v2 **design-of-record is
+> `fullstack-flow`** (`packs/builtin/fullstack-flow/pack.yaml`) — an FSM-primary pack
+> (the machine is inline in `pack.yaml`, no separate `fsm.yaml`) with **five** gated
+> stages, SCOPE → PLAN → AUTHOR → CODE → DEPLOY, each a deterministic zero-LLM gate
+> plus a guess-free content-audit. It is what opensquid itself runs (pinned in
+> `.opensquid/active.json`). The earlier `coding-flow` pack (T-FSM-UNIFY merged
+> `workflow-fsm` + `scope-fsm` into it — one 9-state FSM, three gated stages SCOPE →
+> TASK-AUTHORING → CODE with the restored spec-audit gate) is the still-shipped opt-in
+> **legacy default**. For the current machine + gate detail see `docs/flows.md` §3.
+
+Here is the (illustrative) pack folder:
 
 ```
 workflow-fsm/
@@ -200,9 +208,10 @@ within a working session and resets cleanly when the session ends.
 
 ## 6. A complete walkthrough: the engineering workflow
 
-This is the real `workflow-fsm` pack, end to end (now merged into the live
-`coding-flow` pack — see the note in §4; the mechanics are identical). Activate it and the agent's
-7-phase discipline is enforced by the machine:
+This walkthrough uses the `workflow-fsm` pack, end to end (its 7-phase discipline was
+folded into the v1 `coding-flow` pack, and the v2 rebuild is `fullstack-flow` — see the
+note in §4; the mechanics are identical regardless of which pack is active). Activate a
+discipline pack and the machine enforces its stages:
 
 | The agent does this…                       | which fires this event…         | moving the workflow to…         |
 | ------------------------------------------ | ------------------------------- | ------------------------------- |
@@ -283,6 +292,15 @@ For the precise schemas, the primitive catalog, and the loader contract, see
   incoming event, walks `packs × skills × rules`, threads each pack's `fsm`/
   `models` into the eval context, and maps verdicts to host exit codes. It is the
   _only_ executor; there is no per-pack or per-workflow special case.
+- **v2 supply + observed actor** (`src/runtime/loop/v2_supply.ts`,
+  `src/runtime/loop/v2_observed_actor.ts`) — the v2 `fullstack-flow` machine runs in
+  **observed mode**: opensquid watches the host's hook events and advances the FSM only
+  at gate/decision states (an executor / `sub_flow` state is inert in observed mode,
+  `v2_observed_actor.ts:74`), because the agent does the work in its own harness. This
+  is why every v2 stage is modelled as a gate whose trigger is a hook event, not an
+  executor that runs the work itself. Enforcement is fail-closed at the git gate
+  (`src/setup/cli/gate.ts`); the PreToolUse block path fires only under
+  `OPENSQUID_AUTOMATION=1` (`pre-tool-use.ts:328`).
 
 ### Model selection (an aside worth knowing)
 

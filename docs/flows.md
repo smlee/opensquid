@@ -1,9 +1,9 @@
 # OpenSquid — App Flows (the end-to-end map)
 
 The single reference that traces every major flow from a cold install to a running, gated session.
-Every claim is cited `file:line` against the tree at the time of writing (2026-06-10). Where a flow has a
-KNOWN GAP, it is marked **⚠ GAP** with the audit evidence. Where a step is NOT yet fully traced, it says
-so — no guesswork.
+Every claim is cited `file:line` against the tree at the time of writing (2026-06-10; §3 reconciled to the
+v2 `fullstack-flow` design-of-record 2026-07-03). Where a flow has a KNOWN GAP, it is marked **⚠ GAP** with
+the audit evidence. Where a step is NOT yet fully traced, it says so — no guesswork.
 
 > Maintenance rule: when a flow changes, update the cited line here. A drift between this doc and the code
 > is itself a finding. (This doc exists because the first-run audit found NO flows map — only
@@ -13,15 +13,15 @@ so — no guesswork.
 
 ## 0. The layers (what state lives where)
 
-| Surface                 | Path                                                | Written by                                                     | Read by                                             |
-| ----------------------- | --------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------- |
-| Claude Code hooks + MCP | `~/.claude/settings.json`                           | wizard: `src/setup/wizard/settings-writer.ts`, `mcp-writer.ts` | Claude Code at session start                        |
-| git gates               | `<repo>/.git/hooks/pre-commit,pre-push`             | `src/setup/wizard/git-hooks.ts` (`opensquid gate install`)     | git on commit/push                                  |
-| pack activation         | `<scope>/.opensquid/active.json` `{packs:[]}`       | **⚠ nothing — user hand-authors**                              | `bootstrap.ts:321-347` → `discovery.ts:218`         |
-| project identity        | `<cwd>/.opensquid/project.json` `{version,id,uuid}` | **⚠ nothing (paths.ts:130-168 READ-only)**                     | `resolveProjectUuid` (paths.ts:187)                 |
-| chat routing            | `~/.opensquid/channels.json`                        | **⚠ wizard omits it**                                          | `routing.ts:133-148 loadChannelsConfig` (null-safe) |
-| memory store            | `~/.opensquid/rag.sqlite` + `store/lessons/`        | `memorize` / importer / compression                            | `recall(query,k,scope)` (scoped)                    |
-| FSM / phase state       | `~/.opensquid/sessions/<id>/state/*.json`           | the coding-flow gate skills                                    | the gates + `read_state`                            |
+| Surface                 | Path                                                                     | Written by                                                     | Read by                                             |
+| ----------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------- | --------------------------------------------------- |
+| Claude Code hooks + MCP | `~/.claude/settings.json`                                                | wizard: `src/setup/wizard/settings-writer.ts`, `mcp-writer.ts` | Claude Code at session start                        |
+| git gates               | `<repo>/.git/hooks/pre-commit,pre-push`                                  | `src/setup/wizard/git-hooks.ts` (`opensquid gate install`)     | git on commit/push                                  |
+| pack activation         | `<scope>/.opensquid/active.json` `{packs:[]}`                            | **⚠ nothing — user hand-authors**                              | `bootstrap.ts:321-347` → `discovery.ts:218`         |
+| project identity        | `<cwd>/.opensquid/project.json` `{version,id,uuid}`                      | **⚠ nothing (paths.ts:130-168 READ-only)**                     | `resolveProjectUuid` (paths.ts:187)                 |
+| chat routing            | `~/.opensquid/channels.json`                                             | **⚠ wizard omits it**                                          | `routing.ts:133-148 loadChannelsConfig` (null-safe) |
+| memory store            | `~/.opensquid/rag.sqlite` + `store/lessons/`                             | `memorize` / importer / compression                            | `recall(query,k,scope)` (scoped)                    |
+| FSM / phase state       | `~/.opensquid/sessions/<id>/state/{fsm-<pack>,*-audit-cache,phase}.json` | the flow gates (fullstack-flow v2 / coding-flow v1)            | the gates + `gate.ts` + `read_state`                |
 
 ---
 
@@ -79,56 +79,111 @@ chat` yields a fully wired, optionally-gated agent. Track: `docs/tasks/T-fix-fir
 
 ---
 
-## 3. The 3-stage coding flow (SCOPE → TASK-AUTHORING → CODE)
+## 3. The gated coding flow — v2 (SCOPE → PLAN → AUTHOR → CODE → DEPLOY)
 
-The flagship gate. ONE total FSM (`packs/builtin/coding-flow/fsm.yaml`), three gated stages, each with a
-CONTENT gate. **✅ the audit found NO real holes here — the FSM is total + tested, gates fail closed.**
+**Design-of-record: `fullstack-flow`** (`packs/builtin/fullstack-flow/pack.yaml`) — the v2 rebuild of the
+coding flow as a single FSM-primary pack. It is what **opensquid itself runs** (`.opensquid/active.json`
+pins `fullstack-flow`). Each stage is a **deterministic, zero-LLM gate** (a pure predicate over
+`buildGuardCtx`, every `on_fail: block` — no always-true pass-through) LAYERED with a guess-free
+**content-audit** (a `cached_audit` that must emit `VERDICT: GUESS_FREE`). `validateFsm` proves the machine
+total (every emit routed, decision totality); it LOADS + ADVANCES on hook events through the live v2 runtime
+(`V2ObservedActor` / `v2_supply`). Spec: `loop/docs/tasks/T-v2-track2-discipline.md` (T2.1); design:
+`loop/docs/design/opensquid-v2-coding-flow-design.md`.
 
-**FSM states** (fsm.yaml:18-26): `idle → scoping → researching → researched → spec_authored → spec_complete
-→ tasks_loaded → phases_in_flight → phases_complete`.
+> **Implemented vs. intended.** fullstack-flow is **additive + opt-in**: it activates ONLY when pinned in
+> `active.json` (pack.yaml:6). The v1 `coding-flow` pack (§3a) **stays the shipped out-of-box default** —
+> neither discipline is auto-loaded; a fresh install is inert until one is pinned (`CHARTER.md` §"Make it the
+> starting intent"). Promoting fullstack-flow to the default is an **OPEN QUESTION** for the user, not yet
+> decided.
 
-### Stage 1 — SCOPE (`scoping/researching → researched`)
+**FSM states** (pack.yaml:117-210): `scope → scope_write → plan → author → code → deploy → verify(decision)
+→ accept(decision) → done(terminal)`. The five user-facing STAGES map onto the gate states; `scope_write`,
+`verify`, and `accept` are internal helper states (the automated scope-artifact write, the deploy bug-fix
+fork, and the human-acceptance touchpoint).
 
-- Gate: **guess-audit** (`skills/scope-lifecycle/skill.yaml`). On a `docs/research/*-pre-research-*.md`
-  write, a `cached_audit` (skill.yaml:89; model `reasoning`, 170s) audits the artifact for NEVER-GUESS +
-  BEST-SOLUTION + FULL-FIX and must emit `VERDICT: GUESS_FREE`. The verdict is memoized by
-  sha256(prompt) in cross-turn session state (0.5.373): a re-fire on UNCHANGED content is a cache HIT —
-  no spawn; only `VERDICT:`-bearing output is ever cached.
-- Preconditions BEFORE the audit string is judged: **open-question block** (artifact contains
-  `OPEN QUESTION` → block: answer it in SCOPE) and **depth block** (`depth.count < 3` → "do real research");
-  then the trichotomy `{GUESS_FREE → advance, UNRESOLVED → warn+loopback, no-verdict}`.
-- The loop-back `researched --guess_found--> researching` is a `loopback_gate` FLOW template
-  (`manifest.yaml:27-29` → `flows_compiler.ts:37-49`).
-- **F0c note:** when the audit spawn times out (long session → spawn exhaustion), `on_error: continue`
-  binds the error to the audit var → the AUDIT-UNAVAILABLE branch **blocks** (fails CLOSED), it does not
-  advance; timeouts are never cached, so the next write retries. Since 0.5.373 (`cached_audit`) re-fires
-  on unchanged content no longer spawn at all — the dominant exhaustion cause. A genuinely spent budget
-  still recovers only via a fresh session.
+**Why gates, not executors:** the live observed actor advances only at gate/decision states — an executor
+state is inert in observed mode (`v2_observed_actor.ts:74`). coding-flow is OBSERVED (the agent works in its
+own harness; opensquid watches hook events), so the faithful translation of v1's pure states+transitions is a
+gate chain whose triggers are hook events (pack.yaml:15-18).
 
-### Stage 2 — TASK-AUTHORING (`spec_authored → spec_complete → tasks_loaded`)
+### Stage 1 — SCOPE (`scope → scope_write → plan`)
 
-- Gate: **spec-audit** (`scope-lifecycle/skill.yaml:186-268`). On a `docs/tasks/T-*.md` write, a
-  `cached_audit` (skill.yaml:207, same memoization as the SCOPE audit) audits the 11-field contract +
-  100% design coverage + Simplicity and must emit `VERDICT: SPEC_COMPLETE` (contract at
-  skill.yaml:226-230) to fire `advance_fsm(spec_verified)`. INCOMPLETE only warns;
-  audit-unavailable blocks (both stay `spec_authored`).
-- **taskcreate-spec-required** (skill.yaml:319-346) BLOCKS `TaskCreate` unless `st == spec_complete`
-  (or already past), except `track ∈ {fix, doc, trivial}`.
-- A separate pack, **scope-architect / inline-spec-block**, blocks a spec write with NO pre-research on disk
-  (its `base_file` cwd-anchor bug was fixed 0.5.372, c7b3cbd).
+- **Gate `scope_ready`** (pack.yaml:57): `!scope.is_advance || (scope.anchors_ok && !scope.open_question &&
+contains(audit.scope, "VERDICT: GUESS_FREE"))`. The `!is_advance` short-circuit passes every non-advance
+  event (the gate never blocks mid-scoping); only a Write/Edit of a `docs/research/*-pre-research-*` artifact
+  is an advance, and then all three facets must hold: `anchors_ok` (every scoped element traces to the
+  captured ask — the anti-drift verdict, `src/runtime/coverage/anchors.ts`), `!open_question` (no unchecked
+  `- [ ] OPEN QUESTION` remains), and the GUESS_FREE content-audit verdict. Undefined verdict → `contains`→false
+  → **block** (FAIL-CLOSED; loop-back until the producer's verdict lands).
+- `scope_write` (pack.yaml:128) is the AUTOMATED state — its one job is to write the pre-research artifact +
+  trigger the PLAN decompose; unlike `scope_ready` it has no short-circuit, so every non-advance event blocks
+  until the artifact lands correctly.
 
-### Stage 3 — CODE (`tasks_loaded → phases_in_flight → phases_complete`)
+### Stage 2 — PLAN (`plan → author`) — new top-level region vs v1
 
-- **scope-before-code**: `src/`∪`packs/`∪`test/` writes are BLOCKED before `spec_complete`
-  (scope-lifecycle, the `scope-before-code` rule).
-- **7-phase ledger**: `log_phase` (`mcp/tools/log_phase.ts`) records pre_research→learn→code→test→audit→
-  post_research→fix against the active task; needs an active task (`active-task.json`, mirrored from the
-  harness `TaskUpdate(in_progress)` by `active_task_mirror.ts`).
-- **execute-gate** (`skills/execute-gate/skill.yaml:16-71`): the git **pre-commit/pre-push** hooks
-  (`opensquid gate install`) read REAL session FSM state + the active-task phase ledger and BLOCK a commit
-  when mid-flow or with phases incomplete. The matcher `\bgit\s+(?:-[cC]\s+\S+\s+)*commit\b` (skill.yaml:27)
-  catches `cd <dir> && git commit` (the FU.1 fix). Both backing reads **fail closed**.
-- On task completion the FSM re-arms (`phases_complete --scope_start--> scoping`) so a NEW track is re-gated.
+- **Gate `plan_ready`** (pack.yaml:67): `plan.acyclic && plan.complete && contains(audit.plan, "VERDICT:
+GUESS_FREE") && contains(audit.scope, "VERDICT: GUESS_FREE")`. A deterministic check over the work-graph:
+  `acyclic` (no cycle in the `blocks`+`parent-child` edges, Kahn) ∧ `complete` (every design element of the
+  independent `extractScope` universe has ≥1 covering issue) ∧ the PLAN content-audit's GUESS_FREE verdict.
+- **GFR.3 rolling re-audit:** the clause re-asserts the immediately-prior stage's verdict (SCOPE) still holds.
+  Editing the scope artifact re-fires its content-audit (the cache is sha256(prompt)-keyed; a changed artifact
+  re-evaluates), so drift is caught at the NEXT boundary, not only at the end. Only the immediately-prior
+  stage is re-asserted — the cascade is transitive across gates.
+
+### Stage 3 — AUTHOR (`author → code`)
+
+- **Gate `author_ready`** (pack.yaml:75): `author.manifest_complete && author.real_code && contains(audit.author,
+"VERDICT: GUESS_FREE") && contains(audit.plan, "VERDICT: GUESS_FREE")`. A deterministic check over the
+  SHIPPED coverage checker (`src/runtime/coverage/check.ts`): `manifest_complete` (no gated export lacks a
+  covering requirement — `report.orphans.length === 0`) ∧ `real_code` (every requirement MET — for
+  reachable/binding this REQUIRES its proof-test to pass, so a stub with no passing proof fails). FAIL-CLOSED
+  on a build error. Rolling re-audit re-asserts PLAN.
+
+### Stage 4 — CODE (`code → deploy`)
+
+- **Gate `code_ready`** (pack.yaml:85): `code.phases_complete && code.readiness_ran && code.deprecated_clean &&
+contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE")`.
+  `phases_complete` = the shipped 7-phase ledger `isComplete` for the active task
+  (pre_research→learn→code→test→audit→post_research→fix); `readiness_ran` = the three readiness surfacers ran +
+  were recorded; `deprecated_clean` = the recorded readiness found NO known-deprecated call (a deprecated hit
+  BLOCKS). FAIL-CLOSED (never-run readiness / no active task → block). Rolling re-audit re-asserts AUTHOR.
+- The `flows.code_cycle` sub_flow (pack.yaml:217) is the §5-DEFERRED driven per-task region (one isolated
+  machine per task); on the live OBSERVED path CODE is a plain gate (a sub_flow would park the flow and never
+  reach DEPLOY, v2_observed_actor.ts:74).
+
+### Stage 5 — DEPLOY (`deploy → verify → accept → done`)
+
+- **Gate `deploy_ready`** (pack.yaml:89): `deploy.capability_ok` — the shipped `CapabilityGate` ALLOWS the
+  deploy capability (SKIPPED→true when there is no deploy env, so a flow with nothing to deploy is not blocked).
+- **`verify` decision** (DBL.1, pack.yaml:173): over `deploy.clean` (the recorded result of the configured
+  `verifyCommand`). Clean → `accept`; **bugs → `author`** (re-spec the fix → code → deploy → re-verify — the
+  bounded bug-fix loop, never ship broken); **DBL.2** `deploy.bugfix_exhausted` (round cap hit) → escalate to
+  the human `accept` touchpoint instead of looping forever. `deploy.clean` defaults CLEAN when no verify is
+  configured (mirroring `capability_ok`), preserving today's deploy→accept for unconfigured projects.
+- **`accept` decision** (pack.yaml:183): `deploy.accepted` (the active task's durable acceptance item —
+  survives a closed session, re-surfaces at start-up) → `done`. `deploy.reversible` (`active.json`
+  `reversible: true`) → auto-accept (a reversible deploy can be undone). Else → loop back to `plan` (NEVER
+  auto-declare "shipped").
+- **FRONTEND enforcement** (FD5/FD6, `code_frontend_clean`, pack.yaml:105) is DEFINED but currently **UNWIRED**
+  — its only evaluator (a bespoke `v2_enforce` PreToolUse hook) was removed as drift; re-wiring via the
+  canonical commit-gate is deferred to the frontend slice (build order: frontend last).
+
+### The git-owned hard boundary (both v1 and v2)
+
+- **execute-gate / `gate.ts`**: the git **pre-commit/pre-push** hooks (`opensquid gate install`) read REAL
+  session FSM state + the active-task phase ledger and BLOCK a commit when mid-flow or with phases incomplete.
+  The matcher catches `cd <dir> && git commit` (the FU.1 fix); both backing reads **fail closed**;
+  `isDocsOnly` lets a docs-only commit pass. This is the fail-closed floor beneath the in-session NUDGE gates
+  (two-layer design), harness-agnostic, so `--no-verify` is futile.
+
+### 3a. v1 `coding-flow` (the shipped default, legacy)
+
+The proven v1 discipline: ONE total FSM (`packs/builtin/coding-flow/fsm.yaml`), three gated stages —
+SCOPE → TASK-AUTHORING → CODE (`idle → scoping → researched → spec_authored → spec_complete → tasks_loaded →
+phases_in_flight → phases_complete`), each with a `cached_audit` content gate (`VERDICT: GUESS_FREE` for
+SCOPE, `VERDICT: SPEC_COMPLETE` for the 11-field task spec). It remains the shipped out-of-box default and the
+grounding reference the v2 rubrics cite (`coding-flow/rubric/*.md`). fullstack-flow is its v2 rebuild — same
+observed-mode semantics, PLAN + DEPLOY added, gates hardened to zero-LLM deterministic predicates.
 
 ---
 
