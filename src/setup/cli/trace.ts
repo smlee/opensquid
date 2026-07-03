@@ -19,6 +19,8 @@
  */
 
 import { createClient } from '@libsql/client';
+
+import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import pc from 'picocolors';
 
 import { TraceReader } from '../../runtime/observability/index.js';
@@ -159,7 +161,9 @@ function defaultDbPath(): string {
 
 function defaultOpen(dbPath: string): Client {
   const url = dbPath.startsWith('file:') || dbPath === ':memory:' ? dbPath : `file:${dbPath}`;
-  return createClient({ url });
+  const client = createClient({ url });
+  void applyConcurrencyPragmas(client); // WAL + busy_timeout posture (fire-and-forget; helper never throws)
+  return client;
 }
 
 /**

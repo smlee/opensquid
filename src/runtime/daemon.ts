@@ -25,6 +25,8 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { createClient, type Client } from '@libsql/client';
+
+import { applyConcurrencyPragmas } from '../storage/sqlite_concurrency.js';
 import cron from 'node-cron';
 import { lock as acquireLock } from 'proper-lockfile';
 
@@ -178,6 +180,9 @@ export class OpenSquidDaemon {
         this.auditClientOwned = false;
       } else {
         this.auditClient = createClient({ url: `file:${join(OPENSQUID_HOME(), 'opensquid.db')}` });
+        // Concurrency posture (WAL + busy_timeout) so the always-on daemon never trips SQLITE_BUSY against a
+        // concurrent lap / CLI writing opensquid.db. Awaited: in force before the first audit-log write.
+        await applyConcurrencyPragmas(this.auditClient);
         this.auditClientOwned = true;
       }
       this.auditLogInstance = new AuditLog(this.auditClient);

@@ -23,8 +23,10 @@ import {
   writeActiveTask,
 } from '../session_state.js';
 import { pendingLessonsDir } from '../wedge/capture.js';
+import { withTaskCheckpointStore } from '../ralph/loop_stage.js';
 import { appendPhase, REQUIRED_PHASES } from '../workflow_phases.js';
 import { readinessResult } from './readiness.js';
+import { recordExternalConsult } from './external_consult.js';
 import { appendAcceptance, readAcceptance } from './acceptance.js';
 import type { Event } from '../event.js';
 import type { Fsm } from '../fsm.js';
@@ -311,6 +313,98 @@ describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + H
   });
 });
 
+// ── LANE MODEL — per-stage write-lane enforcement (the #33 successor to advance-action detection) ──────────
+
+/** A gate whose stage declares a write-lane. `ok: 'true'` so the completeness gate always PASSES — proving the
+ *  lane block is INDEPENDENT of the gate (it blocks an out-of-lane write even when the gate would advance). */
+const lanePack = (writes: string[]): LoadedPackV2 =>
+  load({
+    name: 'lane-gate',
+    version: '1.0.0',
+    scope: 'workflow',
+    guards: { ok: 'true' },
+    fsm: {
+      initial: 'stage0',
+      states: {
+        stage0: {
+          kind: 'gate',
+          guard: 'ok',
+          trigger: ['tool_call'],
+          on_pass_emits: 'done',
+          on_fail: { action: 'block', message: 'gate' },
+          writes,
+        },
+        shipped: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: 'stage0', on: 'done', to: 'shipped' }],
+    },
+  });
+
+const writeCallTo = (file_path: string): Event =>
+  ({ kind: 'tool_call', tool: 'Write', args: { file_path } }) as unknown as Event;
+
+describe('runV2Cartridges — LANE MODEL write-lane enforcement', () => {
+  it('enforceOnly + OUT-of-lane Write + no agentId → exitCode 2 (blocked with a lane message)', async () => {
+    mockLoad.mockResolvedValue([lanePack(['docs/research/*pre-research*'])]);
+    const d = await runV2Cartridges('sess-lane-oob', writeCallTo('src/foo.ts'), NOW, {
+      enforceOnly: true,
+    });
+    expect(d.exitCode).toBe(2);
+    expect(d.messages.join('\n')).toContain('write-lane');
+    expect(d.messages.join('\n')).toContain('src/foo.ts');
+  });
+
+  it('enforceOnly + IN-lane Write → exitCode 0 (the lane allows it; the passing gate would advance)', async () => {
+    mockLoad.mockResolvedValue([lanePack(['docs/research/*pre-research*'])]);
+    const d = await runV2Cartridges(
+      'sess-lane-in',
+      writeCallTo('docs/research/T-x-pre-research-2026.md'),
+      NOW,
+      { enforceOnly: true },
+    );
+    expect(d.exitCode).toBe(0);
+    expect(d.messages).toEqual([]);
+  });
+
+  it('enforceOnly + OUT-of-lane Write + agentId → exitCode 0 (executor exempt — Hole 1)', async () => {
+    mockLoad.mockResolvedValue([lanePack(['docs/research/*pre-research*'])]);
+    const d = await runV2Cartridges('sess-lane-exec', writeCallTo('src/foo.ts'), NOW, {
+      enforceOnly: true,
+      agentId: 'executor-9',
+    });
+    expect(d.exitCode).toBe(0);
+    expect(d.messages).toEqual([]);
+  });
+
+  it('enforceOnly + OUT-of-lane READ → exitCode 0 (reads never block)', async () => {
+    mockLoad.mockResolvedValue([lanePack(['docs/research/*pre-research*'])]);
+    const readCall = {
+      kind: 'tool_call',
+      tool: 'Read',
+      args: { file_path: 'src/foo.ts' },
+    } as unknown as Event;
+    const d = await runV2Cartridges('sess-lane-read', readCall, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(0);
+    expect(d.messages).toEqual([]);
+  });
+
+  it('laneless stage (`**`) → INERT: an out-of-scope Write passes (explicitly-unrestricted stage)', async () => {
+    mockLoad.mockResolvedValue([lanePack(['**'])]);
+    const d = await runV2Cartridges('sess-lane-star', writeCallTo('src/anything.ts'), NOW, {
+      enforceOnly: true,
+    });
+    expect(d.exitCode).toBe(0);
+    expect(d.messages).toEqual([]);
+  });
+
+  it('NON-enforceOnly (interactive/PostToolUse) + OUT-of-lane Write → NOT blocked by the lane', async () => {
+    // The lane is agents-only: it fires only under enforceOnly (automation PreToolUse). PostToolUse observes.
+    mockLoad.mockResolvedValue([lanePack(['docs/research/*pre-research*'])]);
+    const d = await runV2Cartridges('sess-lane-observe', writeCallTo('src/foo.ts'), NOW);
+    expect(d.exitCode).toBe(0);
+  });
+});
+
 // ── T2.4 — the SCOPE gate over runV2Cartridges (short-circuit + block + capture) ──────────────────────────
 
 /** A single-gate fullstack-like pack whose `scope` state carries the real T2.4 `scope_ready` guard. */
@@ -332,6 +426,9 @@ const scopeGatePack = (): LoadedPackV2 =>
           trigger: ['post_tool_call'],
           on_pass_emits: 'scoped',
           on_fail: { action: 'block', message: 'SCOPE: anchors∧depth≥3∧!open_question' },
+          // LANE MODEL: `scope.is_advance` is now lane-membership (replacing PRE_RESEARCH_REGEX). The lane
+          // matches the pre-research artifact `writePreResearch` creates → an advance write is is_advance:true.
+          writes: ['docs/research/*pre-research*'],
         },
         scoped: { kind: 'terminal', outcome: 'shipped' },
       },
@@ -361,6 +458,8 @@ const scopeWriteGatePack = (): LoadedPackV2 =>
           trigger: ['post_tool_call'],
           on_pass_emits: 'scope_written',
           on_fail: { action: 'block', message: 'SCOPE_WRITE: write the scope artifact' },
+          // LANE MODEL: the scope-artifact lane feeds `scope.is_advance` (see scopeGatePack).
+          writes: ['docs/research/*pre-research*'],
         },
         plan: { kind: 'terminal', outcome: 'shipped' },
       },
@@ -419,6 +518,56 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
     expect(d.exitCode).toBe(0);
     expect(d.messages).toEqual([]);
     expect(await readFsmStateRaw(sid, 'fsf-scope')).toBe('scoped'); // ready → advanced
+  });
+
+  it('GS1: the FSM write-through creates the task checkpoint keyed by the wg issue id (stage + scope proof)', async () => {
+    const prevItem = process.env.OPENSQUID_ITEM_ID;
+    const prevHome = process.env.OPENSQUID_HOME;
+    process.env.OPENSQUID_HOME = await mkdtemp(join(tmpdir(), 'osq-cp-mirror-'));
+    process.env.OPENSQUID_ITEM_ID = 'wg-mirror-1'; // the wg issue id the ralph loop publishes at spawn
+    try {
+      const sid = 'sess-mirror';
+      mockLoad.mockResolvedValue([scopeGatePack()]);
+      await appendAsk(sid, 'add login screen');
+      for (let i = 0; i < 3; i++) await appendTool(sid, 'Read'); // depth = 3
+      const p = await writePreResearch('1. Login [ask: "add login screen"]');
+      const d = await runV2Cartridges(sid, advanceWrite(p), NOW);
+      expect(d.exitCode).toBe(0);
+      // The single writer created the durable task checkpoint keyed by the CANONICAL wg id (OPENSQUID_ITEM_ID):
+      // the advanced FSM stage + the on-disk scope-proof artifact (PRE_RESEARCH_PATH_KEY) the orchestrator reads.
+      const cp = await withTaskCheckpointStore((s) => s.getTaskCheckpoint('wg-mirror-1'));
+      expect(cp).toEqual({ stage: 'scoped', scopeArtifacts: [p] });
+    } finally {
+      if (prevItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
+      else process.env.OPENSQUID_ITEM_ID = prevItem;
+      if (prevHome === undefined) delete process.env.OPENSQUID_HOME;
+      else process.env.OPENSQUID_HOME = prevHome;
+    }
+  });
+
+  it('GS1: NO OPENSQUID_ITEM_ID and no active task → null-skip (no checkpoint fabricated)', async () => {
+    const prevItem = process.env.OPENSQUID_ITEM_ID;
+    const prevHome = process.env.OPENSQUID_HOME;
+    process.env.OPENSQUID_HOME = await mkdtemp(join(tmpdir(), 'osq-cp-none-'));
+    delete process.env.OPENSQUID_ITEM_ID;
+    try {
+      const sid = 'sess-no-item';
+      mockLoad.mockResolvedValue([scopeGatePack()]);
+      await appendAsk(sid, 'add login screen');
+      for (let i = 0; i < 3; i++) await appendTool(sid, 'Read'); // depth = 3
+      const p = await writePreResearch('1. Login [ask: "add login screen"]');
+      const d = await runV2Cartridges(sid, advanceWrite(p), NOW); // FSM advances, but no active task → no key
+      expect(d.exitCode).toBe(0);
+      // resolveCheckpointKey → no OPENSQUID_ITEM_ID + no active task → null → the checkpoint write is SKIPPED
+      // (never a fabricated checkpoint). The task_checkpoints table stays empty.
+      const cp = await withTaskCheckpointStore((s) => s.getTaskCheckpoint('sess-no-item'));
+      expect(cp).toBeNull();
+    } finally {
+      if (prevItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
+      else process.env.OPENSQUID_ITEM_ID = prevItem;
+      if (prevHome === undefined) delete process.env.OPENSQUID_HOME;
+      else process.env.OPENSQUID_HOME = prevHome;
+    }
   });
 
   it('AD.1 capture: a prompt_submit populates the captured ask when a v2 cartridge is active', async () => {
@@ -754,6 +903,94 @@ describe('buildGuardCtx — T2.7 CODE binding', () => {
   });
 });
 
+// ── GFR.4 / E2 — the CONDITIONAL external-consultation binding over buildGuardCtx (E2a/E2c/E2d) ──────────────
+// The external rung is a SUPPLEMENT that fires ONLY WHEN NECESSARY: `external_needed` (diff-derived) decides
+// whether a consult is required at all, and the `consult` buckets (windowed before/after CODE) are the "did it
+// happen" signal. These tests bind the facets through buildGuardCtx (dual-shape) and evaluate the pack's real
+// external sub-clauses. `external_needed` is FAIL-OPEN false here (no session cwd recorded → git read exempt),
+// which is exactly the "only when necessary" default — a change with no proven external dependency never demands
+// a web consult. The consult buckets flip true only after a recorded WebSearch/WebFetch (recordExternalConsult).
+
+// The external sub-clauses lifted VERBATIM from pack.yaml's author_ready / code_ready (the conditional rung).
+const EXTERNAL_GUARD = new RegistryGuardEvaluator(
+  new Map([
+    ['ext_author', '!author.external_needed || author.searched_existing'], // E2d
+    ['ext_code_before', '!code.external_needed || code.consulted_before'], // E2c
+    ['ext_code_audited', '!code.external_needed || code.audited'], // E2a
+  ]),
+);
+
+describe('buildGuardCtx — E2 external-consultation binding (GFR.4)', () => {
+  it('binds author/code external facets dual-shape (flat + nested)', async () => {
+    const aCtx = await buildGuardCtx(authorEv, 'sess-ext-shape-a', 'author');
+    expect(aCtx.has('author.searched_existing')).toBe(true);
+    expect(aCtx.has('author.external_needed')).toBe(true);
+    const aNested = aCtx.get('author') as { searched_existing: boolean; external_needed: boolean };
+    expect(typeof aNested.searched_existing).toBe('boolean');
+    expect(typeof aNested.external_needed).toBe('boolean');
+
+    const cCtx = await buildGuardCtx(codeEv, 'sess-ext-shape-c', 'code');
+    expect(cCtx.has('code.consulted_before')).toBe(true);
+    expect(cCtx.has('code.audited')).toBe(true);
+    expect(cCtx.has('code.external_needed')).toBe(true);
+    const cNested = cCtx.get('code') as {
+      consulted_before: boolean;
+      audited: boolean;
+      external_needed: boolean;
+    };
+    expect(typeof cNested.consulted_before).toBe('boolean');
+    expect(typeof cNested.audited).toBe('boolean');
+    expect(typeof cNested.external_needed).toBe('boolean');
+  });
+
+  it('ONLY WHEN NECESSARY: no external dependency → external_needed:false → clauses PASS with NO consult', async () => {
+    // No session cwd recorded ⇒ externalNeededForSession fail-opens to false ⇒ the rung is exempt. A trivial
+    // internal change must NOT be forced to consult the web — the sub-clauses pass despite no recorded consult.
+    const aCtx = await buildGuardCtx(authorEv, 'sess-ext-exempt-a', 'author');
+    expect(aCtx.get('author.external_needed')).toBe(false);
+    expect(aCtx.get('author.searched_existing')).toBe(false); // no consult recorded…
+    expect(EXTERNAL_GUARD.eval('ext_author', aCtx)).toBe(true); // …yet the clause PASSES (exempt)
+
+    const cCtx = await buildGuardCtx(codeEv, 'sess-ext-exempt-c', 'code');
+    expect(cCtx.get('code.external_needed')).toBe(false);
+    expect(EXTERNAL_GUARD.eval('ext_code_before', cCtx)).toBe(true);
+    expect(EXTERNAL_GUARD.eval('ext_code_audited', cCtx)).toBe(true);
+  });
+
+  it('a recorded consult flips the buckets: before→searched_existing/consulted_before, after→audited', async () => {
+    const sid = 'sess-ext-recorded';
+    await writeActiveTask(sid, { id: '1', subject: 'x', started_at: NOW, taskId: 'T-ext' });
+    await recordExternalConsult(sid, 'T-ext', 'before');
+    await recordExternalConsult(sid, 'T-ext', 'after');
+
+    const aCtx = await buildGuardCtx(authorEv, sid, 'author');
+    expect(aCtx.get('author.searched_existing')).toBe(true);
+    const cCtx = await buildGuardCtx(codeEv, sid, 'code');
+    expect(cCtx.get('code.consulted_before')).toBe(true); // the `before` bucket (E2c)
+    expect(cCtx.get('code.audited')).toBe(true); // the `after` bucket (E2a)
+  });
+
+  it('CONDITIONAL semantics: external_needed:true + no consult BLOCKS; + consult PASSES (synthetic ctx)', () => {
+    // The diff-derived external_needed is not injectable into buildGuardCtx, so drive the pack sub-clauses over a
+    // synthetic ctx to prove the block-when-required half (the exempt/recorded halves above cover the wiring).
+    const needMissing = new Map<string, unknown>([
+      ['author', { external_needed: true, searched_existing: false }],
+      ['code', { external_needed: true, consulted_before: false, audited: false }],
+    ]);
+    expect(EXTERNAL_GUARD.eval('ext_author', needMissing)).toBe(false); // needed + unproven ⇒ BLOCK
+    expect(EXTERNAL_GUARD.eval('ext_code_before', needMissing)).toBe(false);
+    expect(EXTERNAL_GUARD.eval('ext_code_audited', needMissing)).toBe(false);
+
+    const needSatisfied = new Map<string, unknown>([
+      ['author', { external_needed: true, searched_existing: true }],
+      ['code', { external_needed: true, consulted_before: true, audited: true }],
+    ]);
+    expect(EXTERNAL_GUARD.eval('ext_author', needSatisfied)).toBe(true); // needed + proven ⇒ PASS
+    expect(EXTERNAL_GUARD.eval('ext_code_before', needSatisfied)).toBe(true);
+    expect(EXTERNAL_GUARD.eval('ext_code_audited', needSatisfied)).toBe(true);
+  });
+});
+
 // ── T2.8 — the DEPLOY gate binding over buildGuardCtx (capability_ok ∧ the durable accept decision) ──────────
 
 const deployEv = {
@@ -944,12 +1181,15 @@ const stageGatePack = (stage: string): LoadedPackV2 =>
     fsm: {
       initial: stage,
       states: {
+        // CADENCE-IN-PACK — the fixture declares its reporting cadence (`report:`) exactly as the real
+        // fullstack-flow pack.yaml does; v2_supply reads it (the hardcoded core STAGE map is gone).
         [stage]: {
           kind: 'gate',
           guard: 'always',
           trigger: ['tool_call'],
           on_pass_emits: 'next',
           on_fail: { action: 'warn', message: 'n/a' },
+          report: stage.toUpperCase(),
         },
         done: { kind: 'terminal', outcome: 'shipped' },
       },
@@ -1135,6 +1375,97 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     const body = await readFile(join(root, 'docs', 'reports', 'plan-T-rep-2026-06-22.md'), 'utf8');
     expect(body).not.toContain('## Goal alignment');
+  });
+
+  // CADENCE-IN-PACK — the before-stage SUMMARY fires on the ENTRY-EDGE of a transition (once per stage entry),
+  // NOT on every event. A two-gate fixture: leaving `plan` ENTERS `author` (which declares `summary: true`).
+  it('the before-stage SUMMARY fires ONCE on stage ENTRY (entry-edge), not per event', async () => {
+    const sid = 'sess-cadence-summary';
+    const root = await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-sum' });
+    const pack = load({
+      name: 'fsf-summary',
+      version: '1.0.0',
+      scope: 'workflow',
+      guards: { always: 'tool == "Write"' },
+      fsm: {
+        initial: 'plan',
+        states: {
+          plan: {
+            kind: 'gate',
+            guard: 'always',
+            trigger: ['tool_call'],
+            on_pass_emits: 'next',
+            on_fail: { action: 'warn', message: 'n/a' },
+            report: 'PLAN',
+          },
+          author: {
+            kind: 'gate',
+            guard: 'always',
+            trigger: ['tool_call'],
+            on_pass_emits: 'done_ev',
+            on_fail: { action: 'warn', message: 'n/a' },
+            report: 'AUTHOR',
+            summary: true, // ← the ENTRY-edge summary declared in the pack
+          },
+          done: { kind: 'terminal', outcome: 'shipped' },
+        },
+        transitions: [
+          { from: 'plan', on: 'next', to: 'author' },
+          { from: 'author', on: 'done_ev', to: 'done' },
+        ],
+      },
+    });
+    mockLoad.mockResolvedValue([pack]);
+
+    // event 1: a Write advances plan → author. Entering author fires its before-summary exactly once.
+    const d1 = await runV2Cartridges(sid, writeCall(), NOW);
+    expect(d1.injections.join('\n')).toContain('🦑 Starting AUTHOR · T-sum');
+    expect(d1.injections.join('\n')).toContain('Will: author the spec'); // NEXT_STAGE_WORK['author']
+    // exactly one entry-edge summary this event (not duplicated).
+    const starts1 = d1.injections.join('\n').match(/🦑 Starting AUTHOR/g) ?? [];
+    expect(starts1.length).toBe(1);
+
+    // event 2: a Bash FAILS the `author` gate (guard `tool=="Write"`) → NO transition → the actor STAYS in
+    // author. Proof the summary is per-ENTRY, not per-event: no second "Starting AUTHOR" fires while parked.
+    const d2 = await runV2Cartridges(sid, bashCall(), NOW);
+    expect(d2.injections.join('\n')).not.toContain('🦑 Starting AUTHOR');
+  });
+
+  // CADENCE-IN-PACK — the cadence is PACK DATA: a gate state that declares NO `report:` emits nothing on leave
+  // (the old hardcoded core STAGE map is gone — no report is fabricated for an undeclared state).
+  it('a stage with NO `report:` in the pack emits NO after-report (cadence is pack-driven)', async () => {
+    const sid = 'sess-cadence-noreport';
+    const root = await newProjectRoot(sid);
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-nr' });
+    const pack = load({
+      name: 'fsf-noreport',
+      version: '1.0.0',
+      scope: 'workflow',
+      guards: { always: 'tool == "Write"' },
+      fsm: {
+        initial: 'silent',
+        states: {
+          silent: {
+            kind: 'gate',
+            guard: 'always',
+            trigger: ['tool_call'],
+            on_pass_emits: 'next',
+            on_fail: { action: 'warn', message: 'n/a' },
+            // NO `report:` and NO `summary:` — the pack declares this stage is not a reporting boundary.
+          },
+          done: { kind: 'terminal', outcome: 'shipped' },
+        },
+        transitions: [{ from: 'silent', on: 'next', to: 'done' }],
+      },
+    });
+    mockLoad.mockResolvedValue([pack]);
+
+    const d = await runV2Cartridges(sid, writeCall(), NOW); // FSM DOES advance (silent → done)
+    expect(d.exitCode).toBe(0);
+    expect(d.injections.join('\n')).not.toContain('🦑 Phase report'); // no after-report
+    expect(d.injections.join('\n')).not.toContain('🦑 Starting'); // no before-summary
+    expect(await exists(join(root, 'docs', 'reports'))).toBe(false); // no dated report file at all
   });
 });
 

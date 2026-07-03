@@ -28,6 +28,7 @@ import { appendTool, recordSessionCwd } from '../session_state.js';
 import { Event } from '../types.js';
 
 import { mirrorActiveTask } from './active_task_mirror.js';
+import { runHarnessGraphSync } from './harness_graph_sync.js';
 import { dispatchEvent } from './dispatch.js';
 import {
   buildPreToolUseContext,
@@ -124,6 +125,9 @@ async function main(): Promise<void> {
   // GS1: extracted once here so both the orchestrator guard block and the v2 gate call share
   // the same value. extractAgentId handles all parse errors internally (fail-open → undefined).
   const agentId = extractAgentId(raw);
+  // #26 — the outbound work-graph→harness reconcile nudge (a bound wg issue closed ahead of its still-open
+  // task). Captured at the mirror seam below, delivered via the non-deny `additionalContext` path further down.
+  let harnessSyncInstruction: string | null = null;
   // G.5 — append this tool name to the session's per-turn ledger BEFORE
   // dispatching. Best-effort: a ledger-write failure must never block the
   // pending tool call (fail-open guarantee of the hook bin). The Stop-event
@@ -157,6 +161,20 @@ async function main(): Promise<void> {
       );
     } catch (e) {
       process.stderr.write(`opensquid: active-task mirror failed — ${String(e)}\n`);
+    }
+    // #26 — materialize the harness task list into the work-graph (the harness list is authoritative; the
+    // work-graph is its view). Reuses the SAME (sessionId, tool, args, transcriptPath) seam as the mirror
+    // above; internally gated to Task* ticks + fully fail-open (returns null on any error). The returned
+    // one-line nudge (a wg issue closed ahead of its still-open task) is surfaced on the non-deny path below.
+    try {
+      harnessSyncInstruction = await runHarnessGraphSync(
+        sessionId,
+        parsed.data.tool,
+        parsed.data.args ?? {},
+        extractTranscriptPath(raw),
+      );
+    } catch (e) {
+      process.stderr.write(`opensquid: harness→work-graph sync failed — ${String(e)}\n`);
     }
     // Workflow stage advancement is no longer hardcoded here — the opt-in
     // `coding-flow` pack's scope-lifecycle skill catches these same
@@ -311,7 +329,12 @@ async function main(): Promise<void> {
   // v2Gate.messages are the block/halt instructions; only include them in the deny when v2Gate triggered.
   const gateMessages = v2Gate.exitCode === 2 ? v2Gate.messages : [];
   const stderr = [v1.stderr, skillHost.stderr, ...gateMessages].filter((s) => s.length > 0).join('\n');
-  const contextInjections = [...v1.contextInjections, ...skillHost.contextInjections];
+  const contextInjections = [
+    ...v1.contextInjections,
+    ...skillHost.contextInjections,
+    // #26 — the outbound harness-reconcile nudge rides the same non-blocking additionalContext channel.
+    ...(harnessSyncInstruction !== null ? [harnessSyncInstruction] : []),
+  ];
   // T-RJ-FOLLOWUPS FU.11: a block must be signalled as a PreToolUse
   // `permissionDecision: "deny"` JSON decision, NOT a bare `exit 2`. Proven live:
   // under `--dangerously-skip-permissions` (= bypassPermissions) Claude Code

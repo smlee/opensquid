@@ -242,3 +242,37 @@ export async function readOpenTasksFromTranscript(
   }
   return open;
 }
+
+/** A full transcript task row — subject + latest status + generator provenance (structurally the
+ *  `HarnessTaskLike` the #26 work-graph sync consumes). Unlike {@link OpenTask} this INCLUDES closed
+ *  tasks, since the sync must see a `completed`/`deleted` task to close its materialized work-graph issue. */
+export interface FullTask {
+  id: string;
+  subject: string;
+  status: string;
+  metadata?: { taskId?: string; spec?: string };
+}
+
+/**
+ * EVERY task from the transcript (open AND closed), each with its `metadata.{taskId,spec}` provenance if
+ * present. This is the authoritative harness task-list projection the #26 sync materializes into the
+ * work-graph — it needs the closed tasks too so their bound issues get closed (monotonically). Empty on an
+ * unreadable transcript (fail-open). Shares the ATM.1 walk via `parseTranscriptTasks`.
+ */
+export async function readAllTasksFromTranscript(
+  transcriptPath: string,
+  pending?: PendingUpdate,
+): Promise<FullTask[]> {
+  const { taskById } = await parseTranscriptTasks(transcriptPath, pending);
+  const tasks: FullTask[] = [];
+  for (const [id, t] of taskById) {
+    const taskId = typeof t.metadata.taskId === 'string' ? t.metadata.taskId : undefined;
+    const spec = typeof t.metadata.spec === 'string' ? t.metadata.spec : undefined;
+    const metadata =
+      taskId !== undefined || spec !== undefined
+        ? { ...(taskId !== undefined ? { taskId } : {}), ...(spec !== undefined ? { spec } : {}) }
+        : undefined;
+    tasks.push({ id, subject: t.subject, status: t.status, ...(metadata !== undefined ? { metadata } : {}) });
+  }
+  return tasks;
+}

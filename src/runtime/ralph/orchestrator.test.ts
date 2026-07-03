@@ -213,31 +213,31 @@ describe('resolveParked (human-override residual-shrink path)', () => {
 
 // ---- PSL.3 / GS1 — the per-stage subprocess loop (each automated stage = its own fresh-context lap) ----
 // GS1: `scope` is human-boundary (interactive); `scope_write` is the first AUTOMATED stage.
+// T-active-task-mirror E: a fresh item now seeds at `scope_write` (the FSM write-through owns the durable stage,
+// so the stub no longer takes a `writeStage`; the scope gate defaults to 'drive').
 const AUTOMATED = new Set(['scope_write', 'plan', 'author', 'code']);
 /** A stageLoop driver over an in-memory durable-stage store; stagePrompt = `DO <stage>` (the test reads it back). */
 function stageLoopStub(
   store = new Map<string, string>(),
+  scopeGate: (item: Issue) => Promise<'drive' | 'hold'> = () => P('drive'),
 ): NonNullable<RalphDeps['stageLoop']> {
   return {
-    initialStage: 'scope',
+    initialStage: 'scope_write',
     isAutomated: (s: string) => AUTOMATED.has(s),
     stagePrompt: (_item: Issue, stage: string) => P(`DO ${stage}`),
     readStage: (id: string) => P(store.get(id) ?? null),
-    writeStage: (id: string, s: string) => {
-      store.set(id, s);
-      return P(undefined);
-    },
     clearStage: (id: string) => {
       store.delete(id);
       return P(undefined);
     },
+    scopeGate,
   };
 }
 
 describe('runRalphLoop — PSL.3 per-stage loop', () => {
   it('drives each automated stage as its own lap (advancing via the reported stage), then the boundary lap', async () => {
-    // GS1: scope is now a HUMAN-BOUNDARY (interactive) lap; scope_write is the first AUTOMATED stage.
-    // Flow: scope (human, advances to scope_write) → scope_write/plan/author/code (automated) → deploy (human, done)
+    // T-active-task-mirror E: a fresh item seeds at `scope_write` (the first AUTOMATED stage) — no initial human
+    // scope lap. Flow: scope_write/plan/author/code (automated) → deploy (human boundary, no stage = done).
     const advance: Record<string, string> = {
       scope_write: 'plan',
       plan: 'author',
@@ -246,18 +246,10 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     };
     const calls: (string | undefined)[] = [];
     const store = new Map<string, string>();
-    let humanLapCount = 0;
     const runLap = vi.fn((_item: Issue, sp?: string) => {
       calls.push(sp);
-      if (sp === undefined) {
-        humanLapCount++;
-        if (humanLapCount === 1) {
-          // The interactive scope lap: confirms with user, advances to scope_write.
-          return P<LapResult>({ kind: 'SHIPPED', stage: 'scope_write', costUsd: 0.01 });
-        }
-        // The deploy/accept boundary lap: no stage = item complete.
-        return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.01 });
-      }
+      // The deploy/accept boundary lap (sp undefined): no stage = item complete.
+      if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.01 });
       const next = advance[sp.replace('DO ', '')];
       return P<LapResult>(
         next === undefined ? { kind: 'SHIPPED', costUsd: 0.01 } : { kind: 'SHIPPED', stage: next, costUsd: 0.01 },
@@ -267,10 +259,10 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
-    // 1 human scope lap + 4 automated laps (scope_write/plan/author/code) + 1 human deploy lap = 6
-    expect(calls).toEqual([undefined, 'DO scope_write', 'DO plan', 'DO author', 'DO code', undefined]);
+    // 4 automated laps (scope_write/plan/author/code) + 1 human deploy boundary lap = 5
+    expect(calls).toEqual(['DO scope_write', 'DO plan', 'DO author', 'DO code', undefined]);
     expect(r.closed).toEqual(['a']);
-    expect(r.spent).toBeCloseTo(0.06);
+    expect(r.spent).toBeCloseTo(0.05);
     expect(store.has('a')).toBe(false); // clearStage on close
   });
 
@@ -308,7 +300,8 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
   });
 
   it('a lap that never advances the stage is retried (bounded) then escalated UNRECOVERABLE_WEDGE', async () => {
-    const runLap = vi.fn(() => P<LapResult>({ kind: 'SHIPPED', stage: 'scope', costUsd: 0 })); // never advances
+    // Seeds at `scope_write` (the pack initial); the lap keeps reporting the SAME stage → never advances.
+    const runLap = vi.fn(() => P<LapResult>({ kind: 'SHIPPED', stage: 'scope_write', costUsd: 0 }));
     const r = await runRalphLoop(cfg({ once: true }), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(),
@@ -327,6 +320,66 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     });
     expect(runLap).toHaveBeenCalledTimes(1); // escalated on the first stage lap
     expect(r.parked).toEqual([{ id: 'a', reason: 'SCOPE_FORK' }]);
+  });
+
+  it('scopeGate HOLD on the only ready item → skipped (no claim/lap), loop drains to BOARD_EMPTY (no spin)', async () => {
+    // GS1 corrected semantics: an unscoped item is fixed-to-scope + held, NEVER auto-redriven. When it is the
+    // only ready item, the picker finds nothing automation-eligible and the loop STOPS (drained) — it must not
+    // re-pick the same held item forever (the old-design spin).
+    const gate = (_item: Issue): Promise<'drive' | 'hold'> => P('hold');
+    const runLap = vi.fn((_item: Issue, _sp?: string) => P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }));
+    const wg = mockStore(['a']);
+    const r = await runRalphLoop(cfg(), {
+      ...deps(wg, runLap),
+      stageLoop: stageLoopStub(new Map([['a', 'deploy']]), gate),
+    });
+    expect(runLap).not.toHaveBeenCalled(); // held → never claimed/driven
+    expect(r.closed).toEqual([]);
+    expect(r.stopped).toBe('BOARD_EMPTY'); // no automation-eligible item → drained (no spin)
+  });
+
+  it('scopeGate skips a held item and drives the NEXT eligible one (loop advances, no spin)', async () => {
+    // ready = [a (held/unscoped), b (drivable)]: within the pass the gate passes OVER `a` and drives `b`; the
+    // next pass has only the held `a` left → BOARD_EMPTY. `a` is never claimed/driven; the loop advanced past it.
+    const gate = (item: Issue): Promise<'drive' | 'hold'> => P(item.id === 'a' ? 'hold' : 'drive');
+    const driven: string[] = [];
+    const runLap = vi.fn((item: Issue, _sp?: string) => {
+      driven.push(item.id);
+      return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+    });
+    const wg = mockStore(['a', 'b']);
+    const r = await runRalphLoop(cfg(), {
+      ...deps(wg, runLap),
+      stageLoop: stageLoopStub(new Map([['b', 'deploy']]), gate),
+    });
+    expect(driven).toEqual(['b']); // only the eligible item ran; `a` was passed over
+    expect(r.closed).toEqual(['b']);
+    expect(r.stopped).toBe('BOARD_EMPTY'); // `a` remains held (awaits interactive scope) → drained
+  });
+
+  it('re-admission: a held item is driven on a later pass once the gate reports it scoped', async () => {
+    // Model the FSM write-through re-admitting the item across passes. A second item (`b`) keeps the loop alive:
+    //   pass 1 — ready=[a,b]: gate holds `a` (unscoped), drives `b` (→closed).
+    //   pass 2 — ready=[a]:   the gate now reports `a` scoped (interactive human scope advanced its checkpoint +
+    //                         recorded the artifact between passes) → `a` is driven (→closed).
+    let aAsks = 0;
+    const gate = (item: Issue): Promise<'drive' | 'hold'> => {
+      if (item.id !== 'a') return P('drive'); // `b` is always eligible
+      return P(++aAsks === 1 ? 'hold' : 'drive'); // `a`: held first, re-admitted after
+    };
+    const driven: string[] = [];
+    const runLap = vi.fn((item: Issue, _sp?: string) => {
+      driven.push(item.id);
+      return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+    });
+    const wg = mockStore(['a', 'b']);
+    const r = await runRalphLoop(cfg(), {
+      ...deps(wg, runLap),
+      stageLoop: stageLoopStub(new Map([['a', 'deploy'], ['b', 'deploy']]), gate),
+    });
+    expect(driven).toEqual(['b', 'a']); // `a` held on pass 1 (drove `b`), re-admitted + driven on pass 2
+    expect(r.closed).toEqual(['b', 'a']);
+    expect(r.stopped).toBe('BOARD_EMPTY');
   });
 
   it('without a stageLoop driver, an item runs as ONE open-ended per-item lap (unchanged)', async () => {

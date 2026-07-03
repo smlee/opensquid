@@ -35,6 +35,7 @@ export {
   type CheckpointWrite,
   type InterruptedSummary,
   type RunManifest,
+  type TaskCheckpoint,
 } from './checkpoint_store.js';
 export { runIdFor, sha256Hex, type RunIdInput } from './run_id.js';
 export { canonicalJsonStringify, canonicalJsonParse } from './canonical_json.js';

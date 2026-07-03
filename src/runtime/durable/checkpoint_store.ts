@@ -168,6 +168,33 @@ const CREATE_TABLE_TERMINALS_SQL = `
   );
 `;
 
+// ---------------------------------------------------------------------------
+// `task_checkpoints` — the durable per-TASK flow checkpoint (GS1). ADDITIVE:
+// one row per task, keyed by the canonical work-graph issue id, recording the
+// task's current FSM stage + the on-disk scope-proof artifacts. The v2 FSM's
+// deterministic stage fn is the SINGLE WRITER (create-if-absent / update-stage
+// / set-artifacts); the ralph loop's scope gate is a READER (+ a corrective
+// stage reset). Deliberately its OWN table — NOT overloaded onto run_manifests
+// (which records durable-execution RUNS, a different lifecycle) — so the two
+// concerns never collide.
+// ---------------------------------------------------------------------------
+
+const CREATE_TABLE_TASK_CHECKPOINTS_SQL = `
+  CREATE TABLE IF NOT EXISTS task_checkpoints (
+    task_id TEXT PRIMARY KEY,
+    stage TEXT NOT NULL,
+    scope_artifacts_json TEXT NOT NULL DEFAULT '[]',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+  );
+`;
+
+/** One row read back from `task_checkpoints` — the task's current stage + its recorded scope-proof paths. */
+export interface TaskCheckpoint {
+  stage: string;
+  scopeArtifacts: string[];
+}
+
 export class CheckpointStore {
   private initialized = false;
 
@@ -186,7 +213,74 @@ export class CheckpointStore {
     await this.db.execute(CREATE_TABLE_MANIFESTS_SQL);
     await this.db.execute(CREATE_INDEX_MANIFEST_STARTED_AT_SQL);
     await this.db.execute(CREATE_TABLE_TERMINALS_SQL);
+    await this.db.execute(CREATE_TABLE_TASK_CHECKPOINTS_SQL);
     this.initialized = true;
+  }
+
+  // -------------------------------------------------------------------------
+  // task_checkpoints — the durable per-task flow checkpoint (GS1).
+  // -------------------------------------------------------------------------
+
+  /**
+   * CREATE-ONCE: insert the task's first checkpoint at `stage`. `ON CONFLICT DO NOTHING` makes a second call
+   * for the same `taskId` a no-op — the row's `created_at_ms` + any recorded artifacts survive, and the stage
+   * is only ever moved by {@link updateTaskStage}. Mirrors the `INSERT OR REPLACE` idempotency posture of
+   * `append`/`recordRunStart`, but non-destructive (a re-create never clobbers an in-flight checkpoint).
+   */
+  async createTaskCheckpoint(taskId: string, stage: string, nowMs: number): Promise<void> {
+    await this.init();
+    await this.db.execute({
+      sql: `INSERT INTO task_checkpoints (task_id, stage, scope_artifacts_json, created_at_ms, updated_at_ms)
+            VALUES (?, ?, '[]', ?, ?)
+            ON CONFLICT(task_id) DO NOTHING`,
+      args: [taskId, stage, nowMs, nowMs],
+    });
+  }
+
+  /**
+   * UPDATE-ONLY: move an EXISTING task's stage (+ bump `updated_at_ms`). Never creates — a `WHERE task_id = ?`
+   * that matches zero rows is a silent no-op (the caller that needs create semantics uses
+   * {@link createTaskCheckpoint} first). This is what lets the loop's scope gate RESET a bogus checkpoint to
+   * `scope` without resurrecting a checkpoint that was never created.
+   */
+  async updateTaskStage(taskId: string, stage: string, nowMs: number): Promise<void> {
+    await this.init();
+    await this.db.execute({
+      sql: `UPDATE task_checkpoints SET stage = ?, updated_at_ms = ? WHERE task_id = ?`,
+      args: [stage, nowMs, taskId],
+    });
+  }
+
+  /**
+   * UPDATE-ONLY: replace an EXISTING task's recorded scope-proof artifact paths (canonical JSON array).
+   * Never creates (same 0-row no-op as {@link updateTaskStage}) — artifacts are only ever set on a task that
+   * already has a checkpoint. The scope gate reads these back + verifies each path still exists on disk.
+   */
+  async setTaskArtifacts(taskId: string, files: string[], nowMs: number): Promise<void> {
+    await this.init();
+    await this.db.execute({
+      sql: `UPDATE task_checkpoints SET scope_artifacts_json = ?, updated_at_ms = ? WHERE task_id = ?`,
+      args: [JSON.stringify(files), nowMs, taskId],
+    });
+  }
+
+  /** Read a task's checkpoint (stage + scope-proof paths), or `null` when the task has none. */
+  async getTaskCheckpoint(taskId: string): Promise<TaskCheckpoint | null> {
+    await this.init();
+    const rs = await this.db.execute({
+      sql: `SELECT stage, scope_artifacts_json FROM task_checkpoints WHERE task_id = ?`,
+      args: [taskId],
+    });
+    const row = rs.rows[0];
+    if (!row) return null;
+    let scopeArtifacts: string[] = [];
+    try {
+      const parsed = JSON.parse(String(row.scope_artifacts_json)) as unknown;
+      if (Array.isArray(parsed)) scopeArtifacts = parsed.filter((x): x is string => typeof x === 'string');
+    } catch {
+      /* malformed json → treat as no recorded artifacts (the gate then holds until proof reappears) */
+    }
+    return { stage: String(row.stage), scopeArtifacts };
   }
 
   /**

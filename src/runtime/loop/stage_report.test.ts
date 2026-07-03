@@ -14,10 +14,31 @@ import {
   CODE_PHASES,
   emitStageReport,
   renderStageReport,
+  renderStageSummary,
   type StageReport,
 } from './stage_report.js';
 
 const ISO = '2026-06-22T13:45:07.000Z';
+
+describe('renderStageSummary (before-stage summary — pure)', () => {
+  it('renders the "Starting <STAGE> · will do <work>" orientation line from NEXT_STAGE_WORK', () => {
+    const { body } = renderStageSummary('AUTHOR', 'T-x', ISO);
+    expect(body).toContain('🦑 Starting AUTHOR · T-x · 2026-06-22');
+    expect(body).toContain('Will: author the spec + real code covering every scoped element');
+  });
+
+  it('covers scope_write (the GS1 automated stage NEXT_STAGE_WORK now describes)', () => {
+    const { body } = renderStageSummary('SCOPE_WRITE', 'T-x', ISO);
+    expect(body).toContain('🦑 Starting SCOPE_WRITE · T-x · 2026-06-22');
+    expect(body).toContain('Will: write the pre-research artifact');
+  });
+
+  it('renders the CODE entry summary (the 7-phase cycle it will run)', () => {
+    const { body } = renderStageSummary('CODE', 'T-x', ISO);
+    expect(body).toContain('🦑 Starting CODE · T-x · 2026-06-22');
+    expect(body).toContain('Will: run the 7-phase coding cycle');
+  });
+});
 
 describe('renderStageReport (pure, standardized format)', () => {
   it('standardized header + Summary + Next-with-work; NO goal line / NO phases when absent', () => {

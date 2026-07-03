@@ -62,6 +62,8 @@ export interface OneShotOpts {
   errorPrefix?: string;
   /** Grace before the group SIGKILL. Default 5_000. */
   graceMs?: number;
+  /** Extra env vars merged OVER the inherited process env for the child (e.g. OPENSQUID_ITEM_ID for a ralph lap). */
+  env?: NodeJS.ProcessEnv;
 }
 
 type LifecyclePhase =
@@ -88,6 +90,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       ...process.env,
       OPENSQUID_SUPERVISED: '1',
       ...(opts.markSubagent ? { OPENSQUID_SUBAGENT: '1' } : {}),
+      ...(opts.env ?? {}), // per-spawn overrides (e.g. OPENSQUID_ITEM_ID) — last so they win
     };
     const proc = spawn(opts.cli, opts.args, {
       stdio: ['pipe', 'pipe', 'pipe'],

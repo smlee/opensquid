@@ -34,9 +34,7 @@ import { dispatchEvent } from './dispatch.js';
 import { reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
 import { sessionEndIndication } from './session_end_indication.js';
 import { notifyRetentionSweep } from './session_end_sweep_notify.js';
-
-/** RSW.1 (wg-9e4f4eb2a40f): demoted memory is hard-deleted after this quiet window. */
-const RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+import { sweepRetiredIfAllowed } from './session_end_retention.js';
 
 interface SessionEndPayload {
   sessionId?: string;
@@ -179,8 +177,11 @@ async function main(): Promise<void> {
       process.stderr.write(
         `opensquid: retention — ${String(restored.length)} user mem(s) restored\n`,
       );
-    const cutoff = new Date(Date.now() - RETENTION_WINDOW_MS).toISOString();
-    const swept = (await backend.sweepRetired?.(cutoff)) ?? [];
+    // #16 gate: the destructive 30-day sweep runs ONLY when the cwd project's work-graph cycle is
+    // complete AND its git tree is clean (retentionPruneAllowed) — never hard-delete while work is
+    // in-flight or uncommitted. The gate is fail-closed; a gate throw propagates to this block's
+    // try/catch (fail-open teardown). The restore above (Part 1b) stays unconditional.
+    const swept = await sweepRetiredIfAllowed(backend, process.cwd());
     if (swept.length > 0) {
       process.stderr.write(`opensquid: retention sweep — ${String(swept.length)} reclaimed\n`);
       try {

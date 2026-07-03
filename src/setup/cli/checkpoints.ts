@@ -32,6 +32,7 @@
 import { createClient } from '@libsql/client';
 
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 
 import { actClean, actList, actResume, actShow, type ActionDeps } from './checkpoints_actions.js';
 
@@ -70,7 +71,9 @@ function defaultDbPath(): string {
 
 function defaultOpen(dbPath: string): Client {
   const url = dbPath.startsWith('file:') || dbPath === ':memory:' ? dbPath : `file:${dbPath}`;
-  return createClient({ url });
+  const client = createClient({ url });
+  void applyConcurrencyPragmas(client); // WAL + busy_timeout posture (fire-and-forget; helper never throws)
+  return client;
 }
 
 function buildDeps(deps: CheckpointsCliDeps): ActionDeps {

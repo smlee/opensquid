@@ -8,7 +8,11 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { readActiveTaskFromTranscript, readOpenTasksFromTranscript } from './transcript_tasks.js';
+import {
+  readActiveTaskFromTranscript,
+  readAllTasksFromTranscript,
+  readOpenTasksFromTranscript,
+} from './transcript_tasks.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -247,6 +251,58 @@ describe('readOpenTasksFromTranscript (ATM.2 — Gate B open-task list)', () => 
     // pending overlay moves 16 → in_progress before it is in the transcript.
     expect(await readOpenTasksFromTranscript(p, { taskId: '16', status: 'in_progress' })).toEqual([
       { id: '16', status: 'in_progress', taskId: 'ATM.1' },
+    ]);
+  });
+});
+
+describe('readAllTasksFromTranscript (#26 — the full harness projection the work-graph sync consumes)', () => {
+  it('carries subject + status + {taskId,spec} provenance for an open task', async () => {
+    const p = await tx([
+      create('tu1', 'Task A', { taskId: 'A', spec: '/abs/a.md' }),
+      createResult('tu1', '16', 'Task A'),
+      update('16', 'in_progress'),
+    ]);
+    expect(await readAllTasksFromTranscript(p)).toEqual([
+      { id: '16', subject: 'Task A', status: 'in_progress', metadata: { taskId: 'A', spec: '/abs/a.md' } },
+    ]);
+  });
+
+  it('INCLUDES completed/deleted tasks (unlike the open-only reader — the sync closes their issues)', async () => {
+    const p = await tx([
+      create('tu1', 'A', { taskId: 'A' }),
+      createResult('tu1', '16', 'A'),
+      update('16', 'in_progress'),
+      update('16', 'completed'),
+      create('tu2', 'B', { taskId: 'B' }),
+      createResult('tu2', '17', 'B'),
+      update('17', 'deleted'),
+    ]);
+    expect(await readAllTasksFromTranscript(p)).toEqual([
+      { id: '16', subject: 'A', status: 'completed', metadata: { taskId: 'A' } },
+      { id: '17', subject: 'B', status: 'deleted', metadata: { taskId: 'B' } },
+    ]);
+  });
+
+  it('omits metadata entirely when a task carries no provenance', async () => {
+    const p = await tx([
+      create('tu1', 'smuggled'),
+      createResult('tu1', '18', 'smuggled'),
+      update('18', 'in_progress'),
+    ]);
+    expect(await readAllTasksFromTranscript(p)).toEqual([
+      { id: '18', subject: 'smuggled', status: 'in_progress' },
+    ]);
+  });
+
+  it('returns [] for an absent transcript (fail-open)', async () => {
+    expect(await readAllTasksFromTranscript(join(dir, 'nope.jsonl'))).toEqual([]);
+  });
+
+  it('H4a: the in-flight pending TaskUpdate is overlaid onto the full projection', async () => {
+    const p = await tx([create('tu1', 'A', { taskId: 'A' }), createResult('tu1', '16', 'A')]);
+    // pending overlay closes 16 before it is in the transcript — the sync must see the completion.
+    expect(await readAllTasksFromTranscript(p, { taskId: '16', status: 'completed' })).toEqual([
+      { id: '16', subject: 'A', status: 'completed', metadata: { taskId: 'A' } },
     ]);
   });
 });

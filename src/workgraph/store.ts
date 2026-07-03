@@ -7,7 +7,7 @@
  * ordering (never wall-clock), beads' deterministic content-derived edge keys (#4259).
  *
  * Imports from: node:crypto, node:fs/promises, node:path, @libsql/client,
- *   ../storage/atomic_file.js, ./events.js, ./types.js.
+ *   ../storage/sqlite_concurrency.js, ../storage/atomic_file.js, ./events.js, ./types.js.
  */
 import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -15,6 +15,7 @@ import { join } from 'node:path';
 
 import { type Client, type Row, createClient } from '@libsql/client';
 
+import { applyConcurrencyPragmas } from '../storage/sqlite_concurrency.js';
 import { atomicWriteFile, safeRecordId } from '../storage/atomic_file.js';
 
 import { applyOp, canonicalJson, makeOpId } from './events.js';
@@ -210,6 +211,9 @@ export function workGraphStore(opts: {
   return {
     async init() {
       client = createClient({ url: opts.dbUrl });
+      // Concurrency posture (WAL + busy_timeout) so a ralph lap draining workgraph.db never trips SQLITE_BUSY
+      // against a concurrent lap. Awaited: in force before the first schema/backfill write.
+      await applyConcurrencyPragmas(client);
       await createSchema(client);
       await backfillTuple(client); // WGD.1 — fill the (lamport, actor-id) tuple on pre-existing rows
       const rs = await client.execute('SELECT COALESCE(MAX(lamport), 0) AS hwm FROM wg_ops');
@@ -384,6 +388,9 @@ export async function rebuildWorkGraph(opts: {
   sourceDir: string;
 }): Promise<number> {
   const client = createClient({ url: opts.dbUrl });
+  // Concurrency posture (WAL + busy_timeout) so a rebuild never trips SQLITE_BUSY against a concurrent
+  // workgraph.db writer. Awaited: in force before the first DROP/schema write.
+  await applyConcurrencyPragmas(client);
   await client.execute('DROP TABLE IF EXISTS wg_ops');
   await client.execute('DROP TABLE IF EXISTS wg_issues');
   await client.execute('DROP TABLE IF EXISTS wg_edges');

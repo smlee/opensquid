@@ -41,7 +41,7 @@ export interface PlanWgReader {
  * Resolve the work-graph project for a session the SAME way the MCP server does (session→cwd→marker, then
  * env), degrading a null at any step to `'legacy-global'` (the read-must-not-break default).
  */
-async function resolveWgProject(sessionId: string): Promise<string> {
+export async function resolveWgProject(sessionId: string): Promise<string> {
   const cwd = await readSessionCwd(sessionId);
   const markerUuid = cwd === null ? null : ((await resolveProjectMarker(cwd))?.uuid ?? null);
   return markerUuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';

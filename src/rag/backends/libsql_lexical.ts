@@ -29,6 +29,7 @@
 import { type Client, type Row, createClient } from '@libsql/client';
 
 import { inScope, UserAuthoredImmunityError } from '../types.js';
+import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 
 import type { DeleteResult, Lesson, MemoryTier, RagBackend } from '../types.js';
 
@@ -42,6 +43,7 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
   return {
     async init() {
       client = createClient({ url: opts.dbUrl });
+      void applyConcurrencyPragmas(client); // WAL + busy_timeout posture (fire-and-forget; helper never throws)
       // CREATE TABLE IF NOT EXISTS makes this safe to call on a db that
       // libsql-qwen3 already initialized — the existing `embedding` column
       // is just unused here, never read, never written.

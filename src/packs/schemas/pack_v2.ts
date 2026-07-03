@@ -52,6 +52,23 @@ const GateState = z
     on_fail: z
       .object({ action: z.enum(['warn', 'block', 'halt']), message: z.string().min(1) })
       .strict(), // 4-action model (kernel.ts:17): warn = proceed+nudge (advance+notice); block/halt = stop
+    // LANE MODEL (the #33 successor to advance-action detection) — the stage's WRITE-LANE: a path-glob
+    // allowlist (minimatch, repo-relative) of the ONLY paths a mutating file-write may target while this
+    // stage is current. Under automation, an out-of-lane write BLOCKS; reads never block; a stage that omits
+    // `writes` declares no lane (INERT — all writes pass). Behavior-as-data: change the lane by editing YAML,
+    // not TypeScript. This is SEPARATE from the completeness `guard` (which decides when the FSM advances).
+    writes: z.array(z.string().min(1)).optional(),
+    // STAGE-REPORTING CADENCE (behavior-as-data, moved out of core — the user's architecture: the FLOW's
+    // reporting cadence lives in the PACK, opensquid provides the emit FUNCTIONS). Replaces the hardcoded
+    // `STAGE` map in v2_supply.
+    //   `report`  — the display label (a Stage: SCOPE / SCOPE_WRITE / PLAN / AUTHOR / CODE / DEPLOY) of the
+    //               AFTER-stage report emitted when the FSM LEAVES this state. Absent ⇒ this state emits no
+    //               report. The transition-precise emit + the emit functions stay in core (v2_supply).
+    //   `summary` — when true, a BEFORE-stage SUMMARY ("what will be done") is emitted when the FSM ENTERS this
+    //               state (the entry-edge of a transition — once per entry, not per event). Reuses `report` as
+    //               its label, so a `summary:true` with no `report` is inert.
+    report: z.string().min(1).optional(),
+    summary: z.boolean().optional(),
   })
   .strict();
 

@@ -81,10 +81,16 @@ export interface RalphDeps {
     stagePrompt: (item: Issue, stage: string) => Promise<string>;
     /** Read the item's durable loop stage (null → seed `initialStage`). */
     readStage: (itemId: string) => Promise<string | null>;
-    /** Persist the item's loop stage (from a lap's reported resulting stage). */
-    writeStage: (itemId: string, stage: string) => Promise<void>;
     /** Drop the item's durable stage once it leaves the loop (closed). */
     clearStage: (itemId: string) => Promise<void>;
+    /**
+     * GS1 — the SCOPE GATE (automation must NEVER scope). Before an item is claimed/driven, verify it is really
+     * scoped: 'drive' → automation-eligible (checkpoint past the human `scope` stage WITH on-disk artifact proof);
+     * 'hold' → NOT scoped (no checkpoint / stage `scope` / no-or-missing artifact), so its checkpoint has been
+     * FIXED back to `scope` and it is skipped this pass. A held item is non-blocking — the picker passes over it
+     * (never re-picked → no spin) and awaits interactive human scope, which re-admits it via the FSM write-through.
+     */
+    scopeGate: (item: Issue) => Promise<'drive' | 'hold'>;
   };
 }
 
@@ -131,8 +137,8 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
       continue; // retry the same stage with a fresh lap (bounded)
     }
     sameStage = 0;
-    stage = next;
-    await sl.writeStage(item.id, stage); // durable: a loop restart resumes HERE, not at initialStage
+    stage = next; // in-run priming only; the DURABLE projection is written THROUGH by the FSM (v2_supply),
+    // the single writer — a loop restart resumes from that FSM-written stage via `readStage`.
   }
 }
 
@@ -162,12 +168,24 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
 
   for (;;) {
     const ready = await wg.listReady(); // GR.1 ordering, claim+wedge aware (live-claimed items excluded)
-    if (ready.length === 0) {
-      await parkAndEscalate('BOARD_EMPTY'); // resource pause → escalate + STOP
+    // GS1 — THE SCOPE GATE, as the PICKER's eligibility filter (automation must NEVER scope). Iterate the ready
+    // list oldest-first and drive the first AUTOMATION-ELIGIBLE (really-scoped) item. An unscoped item is NON-
+    // BLOCKING: the gate fixes its checkpoint back to `scope` and returns 'hold', so it is PASSED OVER within the
+    // pass (never re-picked — no spin) and the loop advances to the next. A held item awaits interactive human
+    // scope, which advances its checkpoint past `scope` + records the artifact (v2_supply write-through) and
+    // re-admits it on a later pass. Without a stageLoop (v1 coding-flow) every item is eligible (no gate).
+    let item: Issue | undefined;
+    for (const cand of ready) {
+      if (deps.stageLoop !== undefined && (await deps.stageLoop.scopeGate(cand)) === 'hold') continue;
+      item = cand; // oldest-first eligible (listReady ORDER BY created_lamport ASC; no priority column)
+      break;
+    }
+    if (item === undefined) {
+      // Nothing automation-eligible (an empty board, OR every ready item is unscoped/held) → automation is
+      // drained. Escalate + STOP (not a silent stop); the held items await interactive human scope.
+      await parkAndEscalate('BOARD_EMPTY');
       return { stopped: 'BOARD_EMPTY', spent, closed, parked };
     }
-    const item = ready[0]; // oldest-first (listReady ORDER BY created_lamport ASC; no priority column)
-    if (item === undefined) continue; // unreachable (length checked) — narrows for strict indexing
     const { won } = await wg.claimIssue(item.id, deps.claimAudience(), cfg.claimTtlSec); // GR.1 atomic CAS
     if (!won) continue; // another runner/harness won it — it now carries a live claim, excluded next pass
 

@@ -14,6 +14,7 @@
 import { type Client, type Row, createClient } from '@libsql/client';
 
 import { rrfFuse } from '../rrf.js';
+import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 
 import { deleteRecord, readRecords, writeRecord } from './perfile_source.js';
 
@@ -41,6 +42,7 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
   return {
     async init() {
       client = createClient({ url: opts.dbUrl });
+      void applyConcurrencyPragmas(client); // WAL + busy_timeout posture (fire-and-forget; helper never throws)
       await client.execute(`
         CREATE TABLE IF NOT EXISTS lessons (
           id TEXT PRIMARY KEY,

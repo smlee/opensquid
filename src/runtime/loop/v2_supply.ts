@@ -21,6 +21,8 @@ import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
+import { withTaskCheckpointStore } from '../ralph/loop_stage.js';
+import { resolveCheckpointKey } from './checkpoint_key.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
 import { readActiveVerifyCommand } from '../../packs/discovery.js';
@@ -34,9 +36,13 @@ import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_sta
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
-import { CODE_PHASES, emitStageReport, type Stage } from './stage_report.js';
+import { CODE_PHASES, emitStageReport, renderStageSummary, type Stage } from './stage_report.js';
 import { sendChat } from '../../chat_daemon/client.js';
-import { loadChannelsConfig, resolveUmbrellaForCwd } from '../../channels/routing.js';
+import {
+  loadChannelsConfig,
+  resolveTelegramChannel,
+  resolveUmbrellaForCwd,
+} from '../../channels/routing.js';
 
 /**
  * T2.12-surface — best-effort push of a phase report to the project's chat. FAIL-OPEN in every branch: no
@@ -52,19 +58,17 @@ function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string
   const isTrue = (k: string): boolean => ctx.get(k) === true;
   switch (from) {
     case 'scope': {
-      const depth = Number(ctx.get('scope.depth') ?? 0);
+      // GS1/#24 — `depth >= 3` was REMOVED from the scope_ready gate (research depth is human-paced procedure,
+      // not a machine-enforced bar); the evidence line no longer advertises an unenforced criterion.
       return [
         { label: 'anchors_ok', ok: isTrue('scope.anchors_ok') },
-        { label: `depth ${depth}≥3`, ok: depth >= 3 },
         { label: 'no open question', ok: ctx.get('scope.open_question') === false },
       ];
     }
     case 'scope_write': {
       // GS1 — same facets as scope (scope_evidence.ts computes them for any pre-research artifact write).
-      const depth = Number(ctx.get('scope.depth') ?? 0);
       return [
         { label: 'anchors_ok', ok: isTrue('scope.anchors_ok') },
-        { label: `depth ${depth}≥3`, ok: depth >= 3 },
         { label: 'no open question', ok: ctx.get('scope.open_question') === false },
       ];
     }
@@ -94,13 +98,23 @@ function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string
   }
 }
 
-async function surfaceReportToChat(cwd: string, body: string): Promise<void> {
+export async function surfaceReportToChat(cwd: string, body: string): Promise<void> {
   try {
     const cfg = await loadChannelsConfig().catch(() => null);
     if (cfg === null) return;
     const umbrellaId = resolveUmbrellaForCwd(cfg, cwd);
     if (umbrellaId === null || umbrellaId === '') return;
-    await sendChat({ channel: 'project:telegram', text: body });
+    // Resolve cwd → the daemon's LITERAL wire channel (`telegram:<chat_id>` + string threadId) BEFORE
+    // sending. The old `project:telegram` shorthand is REJECTED by the daemon's gateway.parseChannel
+    // (platform `project` is not a wire platform), so every push silently failed (swallowed by the catch).
+    // Reuse the shared resolver (routing.ts) — the same formatting the MCP chat-bridge's resolveProjectChannel uses.
+    const resolved = resolveTelegramChannel(cfg, umbrellaId);
+    if (resolved === null) return;
+    await sendChat({
+      channel: resolved.channel,
+      text: body,
+      ...(resolved.threadId !== undefined ? { threadId: resolved.threadId } : {}),
+    });
   } catch {
     /* fail-open: chat is optional — never break the hook over it */
   }
@@ -114,6 +128,13 @@ import { autoDecompose } from './auto_decompose.js';
 import { buildCoveredBy } from './plan_audit.js';
 import { extractScope } from './scope_extract.js';
 import { gatherReadiness, recordReadiness, readinessResult } from './readiness.js';
+import { externalNeededForSession } from './external_dependency_evidence.js';
+import {
+  externalConsultResult,
+  isExternalConsultTool,
+  recordExternalConsult,
+  type ExternalConsult,
+} from './external_consult.js';
 import { appendAcceptance, readAcceptance } from './acceptance.js';
 import { scopeEvidence } from './scope_evidence.js';
 import { isComplete, readPhaseState } from '../workflow_phases.js';
@@ -125,6 +146,7 @@ import type { Bus } from '../bus/bus.js';
 import type { Envelope, MessageKind } from '../bus/types.js';
 import type { Event } from '../event.js';
 import { isMutatingCall } from '../guard/orchestrator_guard.js';
+import { evaluateLane, laneBlockMessage, matchesLane } from './write_lane.js';
 
 export interface V2Decision {
   exitCode: 0 | 2;
@@ -149,20 +171,14 @@ const ZERO: V2Decision = { exitCode: 0, messages: [], injections: [], boundSkill
  */
 const NOOP_BUS = { publish: () => undefined } as unknown as Bus;
 
-// T2.12 — the live trigger map: the FSM stages whose report is emitted on the LEAVING transition. SCOPE/SCOPE_WRITE/
-// PLAN/AUTHOR/DEPLOY always emit here. CODE emits here too INTERACTIVELY, but in an autonomous lap
-// (OPENSQUID_AUTOMATION=1) the orchestrator's loop_driver.onPhasesComplete owns the CODE report — the emit site
-// below skips CODE under that env to avoid a double emit (T2.9 wiring).
-// GS1: scope_write is the NEW automated stage (writes the pre-research artifact) — its report emits on
-// scope_write → plan, with the same evidence facets as scope.
-const STAGE: Record<string, Stage> = {
-  scope: 'SCOPE',
-  scope_write: 'SCOPE_WRITE',
-  plan: 'PLAN',
-  author: 'AUTHOR',
-  code: 'CODE',
-  deploy: 'DEPLOY',
-};
+// T2.12 / CADENCE-IN-PACK — the reporting cadence (WHICH stages report, entry-summary vs leave-report) is now
+// PACK DATA, not a hardcoded core map. Each gate state declares `report:` (the after-stage report label emitted
+// on LEAVE) and `summary: true` (a before-stage summary emitted on ENTRY-edge) in pack.yaml. This module keeps
+// only the transition-precise EXECUTOR + the emit FUNCTIONS (emitStageReport / renderStageSummary /
+// surfaceReportToChat) — opensquid provides the functions; the pack owns the cadence. The former hardcoded
+// `STAGE` map was deleted; `meta[state].report` is its per-state, in-pack replacement.
+// CODE double-emit: under an autonomous lap (OPENSQUID_AUTOMATION=1) loop_driver.onPhasesComplete owns the CODE
+// after-report, so the emit site below still skips the CODE report (not the summary) under that env (T2.9 wiring).
 
 // T2.5 — the session-state key holding the CAPTURED pre-research artifact path. Stamped on the SCOPE advance
 // (a Write/Edit of a `docs/research/*-pre-research-*` file) so the later PLAN gate can `extractScope` the SAME
@@ -187,13 +203,6 @@ async function readVerdict(sessionId: string, key: string): Promise<string | und
 }
 
 /**
- * T2.4 — the pre-research artifact path pattern used by `buildGuardCtx` (scope.is_advance, ~line 235).
- * Extracted as a named constant so there is one canonical definition with no duplicate pattern string.
- * Matches a Write/Edit whose `file_path` is a `docs/research/*-pre-research-*` artifact.
- */
-const PRE_RESEARCH_REGEX = /docs\/research\/.*-pre-research-/;
-
-/**
  * Guard ctx for a v2 cartridge event (R-AUDIT-CTX) — binds the THREE pieces a discipline guard reads: the
  * `event`/`tool`, the guess/spec audit verdicts (FAIL-OPEN), and the `phase` (the cartridge's current FSM
  * state). Literal `.set` keys so the coverage binding-extractor sees them (coverage/index_build.ts).
@@ -206,6 +215,10 @@ export async function buildGuardCtx(
   codeDeps?: CodeEvidenceDeps,
   deployDeps?: DeployEvidenceDeps,
   frontendDeps?: FrontendEvidenceDeps,
+  // LANE MODEL — the SCOPE stage's declared write-lane (`writes:` globs). `scope.is_advance` is now
+  // "the write targets the scope lane" (data-driven), REPLACING the hard-coded PRE_RESEARCH_REGEX. Absent
+  // (a pack with no scope lane) → the scope-advance facets never fire (is_advance false), same as no advance.
+  scopeWrites?: readonly string[],
 ): Promise<Map<string, unknown>> {
   const m = new Map<string, unknown>();
   m.set('event', event.kind);
@@ -234,15 +247,17 @@ export async function buildGuardCtx(
   m.set('audit.code', auditCode);
   m.set('audit', { scope: auditScope, plan: auditPlan, author: auditAuthor, code: auditCode });
   m.set('phase', phase);
-  // T2.4 — SCOPE gate evidence. The advance event is a Write/Edit whose target is a pre-research artifact; only
-  // then is the SCOPE gate "advancing" (the short-circuit `!scope.is_advance` passes every other event, so a
-  // gate never blocks mid-scoping). The artifact path comes from the LIVE event (no read-after-write).
+  // T2.4 — SCOPE gate evidence. The advance event is a Write/Edit whose target is IN the SCOPE stage's declared
+  // write-lane (`scopeWrites`); only then is the SCOPE gate "advancing" (the short-circuit `!scope.is_advance`
+  // passes every other event, so a gate never blocks mid-scoping). LANE MODEL: this replaces the hard-coded
+  // PRE_RESEARCH_REGEX — `is_advance` is now "the write targets the scope lane" (behavior-as-data, per pack).
+  // The artifact path comes from the LIVE event (no read-after-write).
   const filePath = 'args' in event ? event.args?.file_path : undefined;
   const fp =
     'tool' in event && /(?:Write|Edit)/.test(event.tool) && typeof filePath === 'string'
       ? filePath
       : '';
-  const isAdvance = PRE_RESEARCH_REGEX.test(fp); // reuses the named const — no duplicate pattern
+  const isAdvance = fp !== '' && matchesLane(fp, scopeWrites ?? []); // lane-membership, not a hard-coded regex
   // DIVERGENCE FROM THE SPEC'S FLAT-KEY SHAPE (noted): the guard grammar lexes `scope.is_advance` as a PATH
   // (target `scope`, prop `is_advance`), so it resolves against a NESTED `scope` object — a flat `scope.x` Map
   // key is invisible to the expression (it path-resolves `scope`→undefined→`!undefined`→true, defeating the
@@ -303,10 +318,40 @@ export async function buildGuardCtx(
   // (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `authorInputs` is
   // injectable (tests pass pure {reqs,opts}); the default builds the index from the session repo root.
   // FAIL-CLOSED on any resolve/build error → {false,false}: an unprovable AUTHOR blocks (never auto-"real").
+  // GFR.4 / E2 — the CONDITIONAL external-consultation rung. `externalNeeded` (DIFF-DERIVED: a new third-party
+  // import or a dependency-manifest change — external_dependency.ts) decides WHETHER a consultation is REQUIRED;
+  // the `consult` buckets are the deterministic "did it happen" signal, windowed before/after the CODE phase
+  // (external_consult.ts). Shared by AUTHOR (`searched_existing` = a pre-code consult, E2d) and CODE
+  // (`consulted_before` = E2c · `audited` = the post-code AUDIT run, E2a). FAIL-OPEN `externalNeeded` (a git /
+  // infra error → not-needed, never a false block — the rung is a SUPPLEMENT); FAIL-CLOSED `consult` (an
+  // unproven consultation reads false → the guard blocks WHEN `externalNeeded`). Computed ONCE (one diff read)
+  // and reused across the AUTHOR + CODE facets below. The GUARDS carry the conditionality
+  // (`!external_needed || <facet>`) so the exemption is visible in the pack, not baked into a boolean here.
+  let externalNeeded = false;
+  let consult: ExternalConsult = { before: false, after: false };
+  try {
+    externalNeeded = await externalNeededForSession(sessionId);
+    const ecTaskId = await readActiveTaskId(sessionId);
+    if (ecTaskId !== null) consult = await externalConsultResult(sessionId, ecTaskId);
+  } catch (err) {
+    process.stderr.write(
+      `[v2-supply] external-consult evidence failed (ignored): ${String(err)}\n`,
+    );
+  }
+
   const au = await authorEvidenceForSession(sessionId, authorInputs);
   m.set('author.manifest_complete', au.manifestComplete);
   m.set('author.real_code', au.realCode);
-  m.set('author', { manifest_complete: au.manifestComplete, real_code: au.realCode });
+  // E2d — `searched_existing` = a pre-code external/existing-solution consult (the `before` bucket). Required
+  // only when `external_needed` (the guard: `!author.external_needed || author.searched_existing`).
+  m.set('author.searched_existing', consult.before);
+  m.set('author.external_needed', externalNeeded);
+  m.set('author', {
+    manifest_complete: au.manifestComplete,
+    real_code: au.realCode,
+    searched_existing: consult.before,
+    external_needed: externalNeeded,
+  });
 
   // T2.7 — CODE gate evidence. THREE facets: `phases_complete` (the shipped 7-phase ledger `isComplete` for the
   // active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧ `deprecated_clean` (the
@@ -320,10 +365,21 @@ export async function buildGuardCtx(
   m.set('code.phases_complete', co.phasesComplete);
   m.set('code.readiness_ran', co.readinessRan);
   m.set('code.deprecated_clean', co.deprecatedClean);
+  // E2c/E2a — the external half of the CODE gate, CONDITIONAL on `external_needed` (same diff-derived predicate
+  // as AUTHOR). `consulted_before` (E2c: read the task's APIs in the official docs BEFORE coding — the `before`
+  // bucket) ∧ `audited` (E2a: the CODE·after AUDIT is a SECOND research run reaching EXTERNAL — the `after`
+  // bucket, recorded only once the `code` phase is logged). Guards: `!code.external_needed || code.consulted_before`
+  // ∧ `!code.external_needed || code.audited`. Exempt (docs-only / no-new-dep) → both pass with no consult.
+  m.set('code.consulted_before', consult.before);
+  m.set('code.audited', consult.after);
+  m.set('code.external_needed', externalNeeded);
   m.set('code', {
     phases_complete: co.phasesComplete,
     readiness_ran: co.readinessRan,
     deprecated_clean: co.deprecatedClean,
+    consulted_before: consult.before,
+    audited: consult.after,
+    external_needed: externalNeeded,
   });
 
   // T2.8 — DEPLOY gate evidence. TWO facets: `capability_ok` (the shipped CapabilityGate ALLOWS the deploy
@@ -341,7 +397,8 @@ export async function buildGuardCtx(
   let bugfixExhausted = false;
   try {
     const dTaskId = await readActiveTaskId(sessionId);
-    bugfixExhausted = dTaskId !== null && (await readBugfixRounds(sessionId, dTaskId)) >= MAX_BUGFIX_ROUNDS;
+    bugfixExhausted =
+      dTaskId !== null && (await readBugfixRounds(sessionId, dTaskId)) >= MAX_BUGFIX_ROUNDS;
   } catch {
     bugfixExhausted = false; // fail-open: a read error keeps the loop going (the lap budget still backstops)
   }
@@ -463,6 +520,25 @@ export async function runV2Cartridges(
       process.stderr.write(`[v2-supply] readiness record failed (ignored): ${String(err)}\n`);
     }
   }
+  // GFR.4 / E2 LIVE WIRING — record an external CONSULTATION when the just-run tool is an external-source tool
+  // (WebSearch / WebFetch / an MCP web-fetcher, `isExternalConsultTool`). The WINDOW is derived from the 7-phase
+  // ledger: once the `code` phase is logged the consult is a POST-code AUDIT (`after`, E2a); before that it is a
+  // pre-code read (`before`, E2c/E2d). This is what makes the audit a genuine SECOND research run — a consult
+  // can only land in `after` after coding. Cheap (a state read + write) + FAIL-OPEN (observe-never-breaks).
+  if (event.kind === 'post_tool_call' && 'tool' in event && isExternalConsultTool(event.tool)) {
+    try {
+      const taskId = await readActiveTaskId(sessionId);
+      if (taskId !== null) {
+        const st = await readPhaseState(sessionId);
+        const window = st?.task_id === taskId && st.phases.includes('code') ? 'after' : 'before';
+        await recordExternalConsult(sessionId, taskId, window);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[v2-supply] external-consult record failed (ignored): ${String(err)}\n`,
+      );
+    }
+  }
   // DBL.1b — record the DETERMINISTIC deploy verification: when the agent runs EXACTLY the project's configured
   // `verifyCommand` (the deploy procedure dictates the exact command, so the match is reliable), capture its REAL
   // exit code → `deployClean` (verification.ts). Never a self-report. FAIL-OPEN on any read error.
@@ -474,7 +550,11 @@ export async function runV2Cartridges(
         const verifyCmd = await readActiveVerifyCommand(await resolveProjectScopeRoot(cwd));
         const taskId = await readActiveTaskId(sessionId);
         if (verifyCmd !== null && command.trim() === verifyCmd.trim() && taskId !== null) {
-          await recordVerification(sessionId, taskId, (event as { exit_code?: number }).exit_code === 0);
+          await recordVerification(
+            sessionId,
+            taskId,
+            (event as { exit_code?: number }).exit_code === 0,
+          );
         }
       }
     } catch (err) {
@@ -485,6 +565,14 @@ export async function runV2Cartridges(
   const messages: string[] = [];
   const injections: string[] = [];
   const boundSkills: string[] = [];
+  // GS1 — the CANONICAL task-checkpoint key (the wg issue id) for THIS event, resolved once + memoized. In a
+  // lap it is `OPENSQUID_ITEM_ID` (no I/O); interactively it forward-maps the active harness task → its wg id
+  // (null → skip the checkpoint write). Shared by the FSM scope_write seed (below) + the single-writer trigger.
+  let cachedKey: string | null | undefined;
+  const checkpointKey = async (): Promise<string | null> => {
+    if (cachedKey === undefined) cachedKey = await resolveCheckpointKey(sessionId);
+    return cachedKey;
+  };
   for (const loaded of cartridges) {
     try {
       if (loaded.compiled.fsm === undefined) continue; // foundation cartridge → not an observed actor
@@ -495,17 +583,68 @@ export async function runV2Cartridges(
       // key `fsm-<pack>-<taskId>` that STARTS at the FSM initial state — activating task B never rewinds
       // task A's FSM ([[coding-flow-task-start-reset-trap]]). The persist below uses the SAME taskId.
       const taskId = await readActiveTaskId(sessionId);
-      actor.state.current = await readFsmState(sessionId, name, actor.fsm, taskId);
-      const ctx = await buildGuardCtx(event, sessionId, actor.state.current);
+      let seededState = await readFsmState(sessionId, name, actor.fsm, taskId);
+      // GS1 FSM #2 — in a LAP (OPENSQUID_AUTOMATION=1) the interactive `scope` stage was already completed
+      // before the loop, so boot the pack FSM at `scope_write` (the first AUTOMATED stage) instead of the pack
+      // initial. ONLY when a task checkpoint EXISTS (real scope proof) — with NO checkpoint the lap must NOT
+      // fabricate a scoped state, so it stays at the pack initial and genuinely scopes (its first transition
+      // then CREATES the checkpoint; the next lap boots at scope_write). Guarded to a pack that declares a
+      // `scope_write` state + only when the resolved state is still the pack initial (a resumed lap keeps its
+      // persisted, already-advanced state). Interactive sessions (no automation) always start at the initial.
+      // FAIL-OPEN: a checkpoint-read error never breaks the hook (the seed stays at the pack initial).
+      if (
+        process.env.OPENSQUID_AUTOMATION === '1' &&
+        seededState === actor.fsm.initial &&
+        actor.fsm.states.includes('scope_write')
+      ) {
+        try {
+          const key = await checkpointKey();
+          const cp = key === null ? null : await withTaskCheckpointStore((s) => s.getTaskCheckpoint(key));
+          if (cp !== null) seededState = 'scope_write';
+        } catch (err) {
+          process.stderr.write(`[v2-supply] scope_write seed check failed (ignored): ${String(err)}\n`);
+        }
+      }
+      actor.state.current = seededState;
+      // LANE MODEL — the SCOPE stage's write-lane feeds `scope.is_advance` (data-driven, replacing the
+      // hard-coded PRE_RESEARCH_REGEX). `scope_write` shares the same artifact lane; either state's `writes`
+      // resolves it (a pack that declares neither → undefined → no scope-advance facets, as before).
+      const scopeWrites =
+        loaded.compiled.meta.scope?.writes ?? loaded.compiled.meta.scope_write?.writes;
+      const ctx = await buildGuardCtx(
+        event,
+        sessionId,
+        actor.state.current,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        scopeWrites,
+      );
       // F2 enforceOnly: bypass the trigger filter (v2_observed_actor.ts:67) by overriding env.kind to match
       // the gate's declared trigger, so the gate evaluates on a PreToolUse `tool_call` event. The guard ctx
       // already carries the real event's `tool` and `event` keys (set above by buildGuardCtx), so the guard
       // decision is accurate. In normal mode, env.kind == event.kind (unchanged behavior).
       const curMeta = loaded.compiled.meta[actor.state.current];
+      // LANE MODEL enforcement (the #33 successor to advance-action detection). Under enforceOnly (PreToolUse
+      // + automation), a MUTATING file-write whose target falls OUTSIDE the CURRENT stage's declared `writes:`
+      // lane is BLOCKED — "stay in your stage's lane." This is SEPARATE from the completeness gate below (the
+      // gate decides WHEN the FSM advances; the lane decides WHERE a stage may write, per tool call). The three
+      // #33 holes hold: reads never block (evaluateLane → checked:false), a laneless stage is INERT, and an
+      // executor subagent (agentId — Hole 1) is exempt. A blocked lane write short-circuits the gate eval below
+      // (the tool never runs, so there is nothing to advance on).
+      if (enforceOnly && options?.agentId === undefined && exitCode !== 2) {
+        const evTool = 'tool' in event && typeof event.tool === 'string' ? event.tool : '';
+        const evArgs: Record<string, unknown> = 'args' in event ? event.args : {};
+        const lane = evaluateLane(curMeta?.writes, evTool, evArgs);
+        if (lane.checked && lane.outOfLane && lane.path !== null) {
+          exitCode = 2;
+          messages.push(laneBlockMessage(actor.state.current, lane.path, curMeta?.writes ?? []));
+          continue; // out-of-lane write denied — skip this cartridge's gate eval (the tool won't run)
+        }
+      }
       const envKind: MessageKind =
-        enforceOnly &&
-        curMeta?.kind === 'gate' &&
-        (curMeta.trigger?.length ?? 0) > 0
+        enforceOnly && curMeta?.kind === 'gate' && (curMeta.trigger?.length ?? 0) > 0
           ? (curMeta.trigger![0] as MessageKind)
           : event.kind;
       const env: Envelope = {
@@ -523,7 +662,34 @@ export async function runV2Cartridges(
       for (const e of await actor.receive(env)) {
         if (e.kind === 'write_state') {
           // enforceOnly: NO state persistence (gate-check-only — PreToolUse; PostToolUse owns the advance).
-          if (!enforceOnly) await persistActorState(sessionId, name, e.state, now, taskId); // T2.2 — same per-task key as the read
+          if (!enforceOnly) {
+            await persistActorState(sessionId, name, e.state, now, taskId); // T2.2 — same per-task key as the read
+            // GS1 — the deterministic stage fn is the SINGLE WRITER of the durable TASK CHECKPOINT, keyed by
+            // the CANONICAL wg issue id (resolveCheckpointKey: a lap's OPENSQUID_ITEM_ID, else the active
+            // harness task forward-mapped to its wg id). The orchestrator (a different process) reads it back
+            // by `item.id` to gate the loop on real scope. UNIVERSAL: fires interactively AND in a lap (the old
+            // OPENSQUID_ITEM_ID-only gate is GONE). Create-if-absent / else update the stage; and when a
+            // pre-research artifact is stamped (PRE_RESEARCH_PATH_KEY) record it as the on-disk SCOPE PROOF
+            // (set AFTER create so the row exists). NULL key → SKIP (never fabricate a checkpoint). FAIL-OPEN:
+            // a checkpoint write must never break the hook — but a missing key is a skip, not a silent drive.
+            try {
+              const key = await checkpointKey();
+              if (key !== null) {
+                await withTaskCheckpointStore(async (store) => {
+                  const nowMs = Date.parse(now);
+                  const existing = await store.getTaskCheckpoint(key);
+                  if (existing === null) await store.createTaskCheckpoint(key, e.state, nowMs);
+                  else await store.updateTaskStage(key, e.state, nowMs);
+                  const artifact = await readPreResearchPath(sessionId);
+                  if (artifact !== null) await store.setTaskArtifacts(key, [artifact], nowMs);
+                });
+              }
+            } catch (err) {
+              process.stderr.write(
+                `[v2-supply] task-checkpoint write failed (ignored): ${String(err)}\n`,
+              );
+            }
+          }
         } else if (!enforceOnly && e.kind === 'emit' && e.messageKind === 'transition') {
           // INV2 in-process observability — the cited v1 durable equivalent of the bus transition.
           const p = e.payload as { from: string; to: string };
@@ -547,16 +713,19 @@ export async function runV2Cartridges(
                 else if (p.to === 'accept') await resetBugfixRounds(sessionId, bfTask);
               }
             } catch (err) {
-              process.stderr.write(`[v2-supply] bugfix-rounds accounting failed (ignored): ${String(err)}\n`);
+              process.stderr.write(
+                `[v2-supply] bugfix-rounds accounting failed (ignored): ${String(err)}\n`,
+              );
             }
           }
-          // T2.12 — the LIVE per-stage report trigger. On each transition LEAVING a stage (SCOPE/PLAN/AUTHOR/
-          // CODE/DEPLOY — see STAGE), emit that stage's report (dated docs/reports/ file + memory mirror +
-          // in-session injection + best-effort chat). FAIL-OPEN: a report failure must NEVER break the hook.
-          // T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1) the loop-driver
-          // (orchestrator-level onPhasesComplete) owns the CODE report, so skip it HERE to avoid a duplicate;
-          // interactively (no env) v2_supply remains the CODE emitter. The other 4 stages always emit here.
-          let stage = STAGE[p.from];
+          // T2.12 / CADENCE-IN-PACK — the LIVE per-stage report trigger. On each transition LEAVING a stage, emit
+          // that stage's after-report (dated docs/reports/ file + memory mirror + in-session injection +
+          // best-effort chat) — but ONLY when the pack declares `report:` for the LEAVING state (`meta[p.from].report`).
+          // The cadence (which stages report) is PACK DATA now, not the deleted core `STAGE` map. FAIL-OPEN: a report
+          // failure must NEVER break the hook. T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1)
+          // loop_driver.onPhasesComplete owns the CODE report, so skip the CODE report HERE to avoid a duplicate;
+          // interactively (no env) v2_supply remains the CODE emitter. Other reporting stages always emit here.
+          let stage = loaded.compiled.meta[p.from]?.report as Stage | undefined;
           if (stage === 'CODE' && process.env.OPENSQUID_AUTOMATION === '1') stage = undefined;
           // #12 — the CODE report is emitted at most ONCE per task across BOTH paths (this transition + the
           // completion fallback after the loop) via the durable claim; non-CODE stages emit once per their own
@@ -569,7 +738,8 @@ export async function runV2Cartridges(
               // burns the once-per-task claim and silently suppresses the completion fallback below.
               if (
                 root !== null &&
-                (stage !== 'CODE' || (await claimCodeReport(sessionId, taskId ?? 'no-active-task', now)))
+                (stage !== 'CODE' ||
+                  (await claimCodeReport(sessionId, taskId ?? 'no-active-task', now)))
               ) {
                 // T2.10 — the SCOPE report's goal-alignment line (the live consumer of goalConsult). Only the
                 // SCOPE stage carries it (the destination check belongs at scope-time); other stages leave it
@@ -613,6 +783,31 @@ export async function runV2Cartridges(
             } catch (err) {
               process.stderr.write(
                 `[v2-supply] stage report emit/mirror failed (ignored): ${String(err)}\n`,
+              );
+            }
+          }
+          // CADENCE-IN-PACK — the BEFORE-stage SUMMARY (§6.1's "tell me what you'll be working on"). On the
+          // ENTRY-EDGE of a transition (entering `p.to`), when the pack declares `summary: true` for that state,
+          // emit a lightweight "Starting <STAGE> · will: <what it does>" note. TRANSITION-PRECISE: this fires
+          // exactly ONCE per stage ENTRY (it is inside the per-transition effect loop, keyed on `p.to`) — NOT on
+          // every event like onStateEntry (which re-binds skills each hook). The label reuses the entered state's
+          // `report:` (so `summary:true` with no `report` is inert). Lightweight orientation: injection + chat,
+          // NOT a durable dated file (the after-report is the durable artifact). FAIL-OPEN in its own try/catch.
+          const enteringLabel =
+            loaded.compiled.meta[p.to]?.summary === true
+              ? (loaded.compiled.meta[p.to]?.report as Stage | undefined)
+              : undefined;
+          if (enteringLabel !== undefined) {
+            try {
+              const root = await readSessionCwd(sessionId);
+              if (root !== null) {
+                const { body } = renderStageSummary(enteringLabel, taskId ?? 'no-active-task', now);
+                injections.push(body);
+                await surfaceReportToChat(root, body);
+              }
+            } catch (err) {
+              process.stderr.write(
+                `[v2-supply] stage summary emit failed (ignored): ${String(err)}\n`,
               );
             }
           }
@@ -691,10 +886,12 @@ export async function runV2Cartridges(
             // (isMutatingCall → false, so reads always pass — #22 read-only bypass) or
             // (b) it's an executor subagent (agentId present — Hole 1, the lane model).
             // Non-enforceOnly (PostToolUse) is UNCHANGED — block always applies there.
-            const evTool =
-              'tool' in event && typeof event.tool === 'string' ? event.tool : '';
+            const evTool = 'tool' in event && typeof event.tool === 'string' ? event.tool : '';
             const evArgs = ('args' in event ? event.args : {}) as Record<string, unknown>;
-            if (!enforceOnly || (isMutatingCall(evTool, evArgs) && options?.agentId === undefined)) {
+            if (
+              !enforceOnly ||
+              (isMutatingCall(evTool, evArgs) && options?.agentId === undefined)
+            ) {
               exitCode = 2; // block | halt → ENFORCE; the deny IS the observation (gate/kernel.ts:37-43)
               if (effect.message !== undefined) messages.push(effect.message);
             }

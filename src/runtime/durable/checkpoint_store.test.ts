@@ -321,3 +321,62 @@ describe('CheckpointStore — fail-mode', () => {
     await expect(store.append(write({ stepIdx: 0 }))).rejects.toThrow();
   });
 });
+
+// ── GS1 — task_checkpoints (the durable per-task flow checkpoint) ─────────────────────────────────────────
+describe('CheckpointStore — task_checkpoints (GS1)', () => {
+  let client: Client;
+  beforeEach(() => {
+    client = createClient({ url: ':memory:' });
+  });
+  afterEach(() => {
+    client.close();
+  });
+
+  it('createTaskCheckpoint is CREATE-ONCE: a 2nd call is a no-op (stage + created_at survive)', async () => {
+    const store = new CheckpointStore(client);
+    await store.createTaskCheckpoint('wg-1', 'scope', 1000);
+    await store.updateTaskStage('wg-1', 'plan', 2000); // advance
+    await store.createTaskCheckpoint('wg-1', 'scope', 9999); // 2nd create → ON CONFLICT DO NOTHING
+    expect(await store.getTaskCheckpoint('wg-1')).toEqual({ stage: 'plan', scopeArtifacts: [] });
+  });
+
+  it('updateTaskStage is UPDATE-ONLY: a no-op when the task has no checkpoint (never creates)', async () => {
+    const store = new CheckpointStore(client);
+    await store.updateTaskStage('wg-absent', 'plan', 1000);
+    expect(await store.getTaskCheckpoint('wg-absent')).toBeNull();
+  });
+
+  it('setTaskArtifacts is UPDATE-ONLY: no-op when absent; sets the array when present', async () => {
+    const store = new CheckpointStore(client);
+    await store.setTaskArtifacts('wg-absent', ['docs/research/x-pre-research.md'], 1000);
+    expect(await store.getTaskCheckpoint('wg-absent')).toBeNull(); // never created
+
+    await store.createTaskCheckpoint('wg-2', 'scope_write', 1000);
+    await store.setTaskArtifacts('wg-2', ['docs/research/a-pre-research.md'], 2000);
+    expect(await store.getTaskCheckpoint('wg-2')).toEqual({
+      stage: 'scope_write',
+      scopeArtifacts: ['docs/research/a-pre-research.md'],
+    });
+  });
+
+  it('getTaskCheckpoint round-trips stage + scopeArtifacts; null when the task is unknown', async () => {
+    const store = new CheckpointStore(client);
+    expect(await store.getTaskCheckpoint('nope')).toBeNull();
+    await store.createTaskCheckpoint('wg-3', 'author', 1000);
+    await store.setTaskArtifacts('wg-3', ['p1', 'p2'], 1000);
+    await store.updateTaskStage('wg-3', 'code', 3000);
+    expect(await store.getTaskCheckpoint('wg-3')).toEqual({ stage: 'code', scopeArtifacts: ['p1', 'p2'] });
+  });
+
+  it('trigger shape: create-if-absent then update-on-second-transition (the v2_supply write path)', async () => {
+    const store = new CheckpointStore(client);
+    // 1st transition: absent → create
+    expect(await store.getTaskCheckpoint('wg-4')).toBeNull();
+    await store.createTaskCheckpoint('wg-4', 'scope_write', 1000);
+    // 2nd transition: present → update
+    const existing = await store.getTaskCheckpoint('wg-4');
+    expect(existing).not.toBeNull();
+    await store.updateTaskStage('wg-4', 'plan', 2000);
+    expect(await store.getTaskCheckpoint('wg-4')).toEqual({ stage: 'plan', scopeArtifacts: [] });
+  });
+});

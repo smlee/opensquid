@@ -72,7 +72,12 @@ guards:
   # GFR.2 — + the guess-free verdict (the AUTHOR content-audit judged the task spec GUESS_FREE).
   # GFR.3 — + the ROLLING re-audit clause: re-assert the immediately-prior stage's verdict (PLAN) still holds, so
   # a work-graph that drifted after the PLAN gate (re-mutating it re-fires the plan content-audit) blocks AUTHOR.
-  author_ready: 'author.manifest_complete && author.real_code && contains(audit.author, "VERDICT: GUESS_FREE") && contains(audit.plan, "VERDICT: GUESS_FREE")'
+  # GFR.4/E2d — + the CONDITIONAL external rung: when the change touches an external fact (`author.external_needed`
+  # = diff-derived — a new third-party import / dependency-manifest change, external_dependency.ts), AUTHOR must
+  # have a recorded pre-code existing-solution consultation (`author.searched_existing` = the `before` bucket,
+  # external_consult.ts). Docs-only / no-new-dependency change → `external_needed` false → the clause passes with
+  # NO consult (the user's "only when necessary" — never force it on a trivial edit). REQUIRED, not urged.
+  author_ready: 'author.manifest_complete && author.real_code && contains(audit.author, "VERDICT: GUESS_FREE") && contains(audit.plan, "VERDICT: GUESS_FREE") && (!author.external_needed || author.searched_existing)'
   # T2.7 — the CODE gate (inner gate of the `code_cycle` sub_flow): a deterministic, zero-LLM predicate.
   # `code.phases_complete` (the shipped 7-phase ledger `isComplete` for the active task) ∧ `code.readiness_ran`
   # (the three readiness surfacers ran + were recorded) ∧ `code.deprecated_clean` (the recorded readiness found
@@ -82,7 +87,13 @@ guards:
   # GFR.3 — + the ROLLING re-audit clause: re-assert the immediately-prior stage's verdict (AUTHOR) still holds,
   # so a task spec that drifted after the AUTHOR gate (re-editing docs/tasks/T-*.md re-fires the author content-
   # audit) blocks CODE. The CODE producer (GFR.1c) ALSO audits alignment-to-the-task-spec on the diff directly.
-  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE")'
+  # GFR.4/E2c+E2a — + the CONDITIONAL external rung, same diff-derived predicate (`code.external_needed`): a
+  # pre-code doc read (`code.consulted_before` = E2c, the `before` bucket) AND a post-code AUDIT consultation
+  # (`code.audited` = E2a, the `after` bucket — a SECOND research run reaching EXTERNAL, recorded only once the
+  # `code` phase is logged). Both REQUIRED only when the change touches an external fact; a docs-only /
+  # no-new-dependency change is exempt (both clauses pass with no consult). Gate the ACT (a recorded consult),
+  # never the QUALITY (was it the primary source) — quality stays advisory (the content-audit, GFR.1/GFR.2).
+  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
   # T2.8 — the DEPLOY gate: a deterministic, zero-LLM predicate. `deploy.capability_ok` = the shipped
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.
@@ -124,6 +135,15 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: scoped
       on_fail: { action: block, message: 'SCOPE: anchors∧!open_question' }
+      # CADENCE (behavior-as-data) — SCOPE emits its after-stage report on LEAVE (scope → scope_write). No
+      # `summary`: `scope` is the FSM initial state, never entered via a transition, so an entry-edge summary
+      # here could never fire.
+      report: SCOPE
+      # LANE MODEL — the SCOPE stage may write ONLY the pre-research artifact. `scope.is_advance` is derived
+      # from this lane (data-driven, replacing the old PRE_RESEARCH_REGEX); an out-of-lane write blocks under
+      # automation (no coding while still scoping). The glob is filename-scoped (`*pre-research*`) so a stray
+      # non-artifact write into docs/research is out of lane too.
+      writes: ['docs/research/*pre-research*']
     # ── SCOPE_WRITE (GS1 — automated: write the pre-research artifact + trigger decompose) ────────────────────
     scope_write:
       kind: gate
@@ -131,6 +151,11 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: scope_written
       on_fail: { action: block, message: 'SCOPE_WRITE: write the scope artifact — anchors_ok ∧ !open_question ∧ GUESS_FREE' }
+      # CADENCE — after-stage report on LEAVE (scope_write → plan) + before-stage summary on ENTRY (scope → scope_write).
+      report: SCOPE_WRITE
+      summary: true
+      # Same artifact lane as SCOPE — this automated stage's one job is to land the pre-research artifact.
+      writes: ['docs/research/*pre-research*']
     # ── PLAN (new top-level region vs v1) ──────────────────────────────────
     plan:
       kind: gate
@@ -138,6 +163,13 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: planned
       on_fail: { action: block, message: 'PLAN: acyclic∧complete' }
+      # CADENCE — after-stage report on LEAVE (plan → author) + before-stage summary on ENTRY.
+      report: PLAN
+      summary: true
+      # LANE MODEL — PLAN decomposes into the work-graph (via MCP `workgraph_*` tools, which are not
+      # file-writes and so are never lane-checked) and may write only docs (plan notes/reports). A source-file
+      # write during PLAN is out of lane → blocked (planning does not implement).
+      writes: ['docs/**']
     # ── AUTHOR (T2.6 — the ENFORCING coverage gate) ────────────────────────
     author:
       kind: gate
@@ -145,6 +177,13 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: authored
       on_fail: { action: block, message: 'AUTHOR: manifest_complete∧real_code' }
+      # CADENCE — after-stage report on LEAVE (author → code) + before-stage summary on ENTRY (also re-fires when
+      # the VERIFY bug-fix loop re-enters author).
+      report: AUTHOR
+      summary: true
+      # LANE MODEL — AUTHOR writes the task spec + requirement manifest (docs), not the implementation. A
+      # source-file write during AUTHOR is out of lane → blocked (the code belongs to the CODE stage).
+      writes: ['docs/**']
     # ── CODE (T2.7 — ENFORCING gate on the live OBSERVED path) ──────────────
     # A `sub_flow` is INERT in observed mode (V2ObservedActor advances only at gate/decision,
     # v2_observed_actor.ts:74) → it would PARK the live flow at CODE and never reach DEPLOY. So the live observed
@@ -157,6 +196,16 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: coded
       on_fail: { action: block, message: 'CODE: log all 7 phases + readiness clean' }
+      # CADENCE — after-stage report on LEAVE (code → deploy) + before-stage summary on ENTRY (author → code). The
+      # CODE after-report is the long, stand-out one (7-phase chart); under automation loop_driver owns it, so
+      # v2_supply suppresses the CODE report (not the summary) under OPENSQUID_AUTOMATION=1 (unchanged double-emit guard).
+      report: CODE
+      summary: true
+      # LANE MODEL — CODE is the implementation stage: it writes source, tests, and configs. Its lane is
+      # intentionally UNRESTRICTED (`**` matches every path) — declared explicitly (not omitted) so the pack
+      # documents that CODE's freedom is a decision, not an oversight. Enforcement here is the completeness
+      # gate (7 phases + readiness), not the lane.
+      writes: ['**']
     # ── DEPLOY (T2.8 — the ENFORCING capability gate) ──────────────────────
     deploy:
       kind: gate
@@ -164,6 +213,12 @@ fsm:
       trigger: [post_tool_call]
       on_pass_emits: deployed
       on_fail: { action: block, message: 'DEPLOY: capability gate' }
+      # CADENCE — after-stage report on LEAVE (deploy → verify) + before-stage summary on ENTRY (code → deploy).
+      report: DEPLOY
+      summary: true
+      # LANE MODEL — DEPLOY runs verification + release steps that may touch varied paths; its lane is
+      # UNRESTRICTED (`**`), declared explicitly for the same documentation reason as CODE.
+      writes: ['**']
     # ── VERIFY (DBL.1 — the bug-fix fork: deploy delegates bugs back to AUTHOR) ─────────────────────────────
     # After DEPLOY's capability gate, a DECISION over `deploy_clean` (the recorded verification result): clean →
     # ACCEPT (the human touchpoint); bugs → AUTHOR (re-spec the fix as task(s) → code → deploy → re-verify),

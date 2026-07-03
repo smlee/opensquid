@@ -241,6 +241,24 @@ export function resolveOutbound(
 }
 
 /**
+ * Format a resolved umbrella/general target's outbound Telegram binding into the DAEMON WIRE FORM:
+ * `telegram:<chat_id>` (+ a string `threadId` for the forum topic), or null when the target has no
+ * telegram binding. The daemon's `gateway.parseChannel` REQUIRES this `<platform>:<native_id>` shape —
+ * the bare `chat_id` (no colon) and the `project:<platform>` shorthand are both rejected as malformed.
+ * This is the ONE place that formatting lives; shared by the MCP chat-bridge's `resolveProjectChannel`
+ * and the runtime report→chat delivery (`v2_supply.surfaceReportToChat`). Pure — no I/O.
+ */
+export function resolveTelegramChannel(
+  cfg: ChannelsConfig,
+  target: UmbrellaTarget,
+): { channel: string; threadId?: string } | null {
+  const tg = resolveOutbound(cfg, target);
+  if (tg === null) return null;
+  const channel = `telegram:${tg.chat_id}`;
+  return tg.topic_id !== undefined ? { channel, threadId: String(tg.topic_id) } : { channel };
+}
+
+/**
  * Resolve a session's cwd → its umbrella id (or general). Longest-prefix
  * match over every umbrella's `members`, so a nested member cwd wins over a
  * shorter sibling. Returns null when no umbrella claims the cwd (the session

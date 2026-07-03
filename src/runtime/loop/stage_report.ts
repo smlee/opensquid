@@ -39,6 +39,7 @@ export const CODE_PHASES = [
 /** What the NEXT stage will work on — the "tell me what you'll be working on" line. Keyed by the FSM state. */
 const NEXT_STAGE_WORK: Record<string, string> = {
   scope: 'capture + scope the next task (anchors resolve, depth, no open question)',
+  scope_write: 'write the pre-research artifact for the scoped task (anchors resolved, guess-free)',
   plan: 'decompose the scope into a dependency-ordered, acyclic plan',
   author: 'author the spec + real code covering every scoped element',
   code: 'run the 7-phase coding cycle: pre_research → learn → code → test → audit → post_research → fix',
@@ -101,6 +102,23 @@ export function renderStageReport(r: StageReport, iso: string): { path: string; 
     path: join('docs/reports', `${r.stage.toLowerCase()}-${r.taskId}-${date}.md`),
     body,
   };
+}
+
+/**
+ * Render the BEFORE-stage SUMMARY body — the "tell me what you'll be working on" line delivered on stage ENTRY
+ * (the entry-edge of a transition), the counterpart to the after-stage report. Lightweight orientation: surfaced
+ * in-session + chat, NOT a dated durable file (the after-report is the durable artifact). Pure (`iso` injected).
+ * `stage.toLowerCase()` is the FSM state name — the key into `NEXT_STAGE_WORK` (which describes what that stage does).
+ */
+export function renderStageSummary(stage: Stage, taskId: string, iso: string): { body: string } {
+  const date = iso.slice(0, 10);
+  const work = NEXT_STAGE_WORK[stage.toLowerCase()];
+  const lines = [
+    `🦑 Starting ${stage} · ${taskId} · ${date}`,
+    '',
+    `Will: ${work ?? 'begin this stage'}`,
+  ];
+  return { body: lines.join('\n') + '\n' };
 }
 
 /**

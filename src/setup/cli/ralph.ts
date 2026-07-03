@@ -24,10 +24,11 @@ import {
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
 import { bindProject, workGraphStore } from '../../workgraph/store.js';
+import { resolveWgNamespace } from '../../workgraph/project_scope.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
-import { clearItemStage, readItemStage, writeItemStage } from '../../runtime/ralph/item_stage.js';
+import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
@@ -37,9 +38,27 @@ import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
 
 /**
+ * T-WORKGRAPH-PROJECT-SCOPE (lap/loop agreement): resolve the loop's project from the cwd's
+ * `.opensquid/project.json` marker (degrading marker-less → env-fallback → 'legacy-global' via the ONE
+ * `resolveWgNamespace` coalesce the MCP server's `resolveWgProject` also runs) AND PUBLISH it into
+ * `process.env.OPENSQUID_PROJECT_UUID`. `runOneShotCli` spawns each lap with `...process.env`, so a lap
+ * whose OWN session→cwd marker is unresolvable inherits this env and resolves the SAME project as the loop —
+ * instead of landing on the empty `legacy-global` board (BOARD_EMPTY). Returns the resolved uuid.
+ */
+export async function resolveAndPublishLoopProject(): Promise<string> {
+  const cwd = process.cwd();
+  const project = resolveWgNamespace(
+    (await resolveProjectMarker(cwd))?.uuid ?? null,
+    resolveProjectUuidFromEnv(),
+  );
+  process.env.OPENSQUID_PROJECT_UUID = project;
+  return project;
+}
+
+/**
  * T-WORKGRAPH-PROJECT-SCOPE: the ralph loop drains THIS project's ready queue. Init the shared base store,
- * resolve the cwd's namespace (degrade marker-less → 'legacy-global', mirroring the server's resolveWgProject),
- * and return a per-project facade so runRalphLoop/resolveParked operate on one project.
+ * resolve+publish the cwd's namespace (so spawned laps inherit it), and return a per-project facade so
+ * runRalphLoop/resolveParked operate on one project.
  */
 async function openRalphWorkGraph() {
   const base = workGraphStore({
@@ -48,9 +67,7 @@ async function openRalphWorkGraph() {
     actorId: await resolveActorId(), // WGD.1 — stamp the per-HOME replica id on ops
   });
   await base.init();
-  const cwd = process.cwd();
-  const project =
-    (await resolveProjectMarker(cwd))?.uuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';
+  const project = await resolveAndPublishLoopProject();
   return bindProject(base, project);
 }
 
@@ -116,6 +133,10 @@ export function makeSpawnLap(
         prompt,
         timeoutMs: file.wallClockMs,
         markSubagent: true,
+        // T-active-task-mirror — publish the lap's item id so the lap's FSM hook (v2_supply) can WRITE THROUGH to
+        // the item-keyed loop-stage projection. claude inherits this env → its hook bins inherit it (mirrors how
+        // OPENSQUID_AUTOMATION reaches the hooks). This is the ONLY channel that tells the lap process its item id.
+        env: { OPENSQUID_ITEM_ID: item.id },
         timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),
       });
     } catch (e) {
@@ -228,13 +249,19 @@ export function registerRalph(program: Command): Command {
       const stageLoop =
         pack === 'fullstack-flow'
           ? {
-              initialStage: 'scope',
+              // GS1/T-active-task-mirror E — a fresh item starts at the AUTOMATED `scope_write` (writes the
+              // pre-research artifact), NOT the human `scope` lap. SAFE because `scopeGate` (below, design D)
+              // holds back any item that reaches PAST scope without a real, on-disk scope artifact.
+              initialStage: 'scope_write',
               isAutomated: (s: string): boolean => AUTOMATED_STAGES.has(s),
               stagePrompt: async (_item: Issue, stage: string): Promise<string> =>
                 perStageDirective(stage),
-              readStage: readItemStage,
-              writeStage: writeItemStage,
-              clearStage: clearItemStage,
+              readStage: readLoopStage,
+              // No writeStage — the FSM transition (v2_supply write-through) is the SINGLE writer of the
+              // durable task checkpoint; the orchestrator only READS it (+ scopeGate's corrective reset).
+              clearStage: clearLoopStage,
+              // D — the scope gate: verify real scope proof before an item is driven past scope.
+              scopeGate: (item: Issue): Promise<'drive' | 'hold'> => scopeGate(item.id),
             }
           : undefined;
       const result = await runRalphLoop(cfg, {

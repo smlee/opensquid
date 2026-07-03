@@ -59,9 +59,10 @@ import { ensureChatDaemonRunning } from '../channels/daemon/autospawn.js';
 import {
   GENERAL_UMBRELLA,
   loadChannelsConfig,
-  resolveOutbound,
+  resolveTelegramChannel,
   resolveUmbrellaForCwd,
 } from '../channels/routing.js';
+import { ensureHeadlessRespondersForBoot } from '../runtime/agent_bridge/autospawn.js';
 import { type InboxRow } from '../runtime/chat/inbox.js';
 
 import { daemonSocketPath } from '../chat_daemon/client.js';
@@ -328,14 +329,9 @@ async function resolveProjectChannel(
   if (cfg === null) return null;
   const cwd = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
   const umbrella = resolveUmbrellaForCwd(cfg, cwd) ?? GENERAL_UMBRELLA;
-  const tg = resolveOutbound(cfg, umbrella);
-  if (tg === null) return null;
-  // The daemon's `send` RPC / gateway parseChannel require the
-  // `<platform>:<native_id>` wire form — bare `chat_id` has no colon and is
-  // rejected as malformed. Prefix the platform.
-  const channel = `telegram:${tg.chat_id}`;
-  const threadId = tg.topic_id !== undefined ? String(tg.topic_id) : undefined;
-  return threadId === undefined ? { channel } : { channel, threadId };
+  // The daemon's `send` RPC / gateway parseChannel require the `<platform>:<native_id>` wire form —
+  // bare `chat_id` has no colon and is rejected as malformed. The shared formatter owns that.
+  return resolveTelegramChannel(cfg, umbrella);
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +570,35 @@ async function main(): Promise<void> {
     }
     // already_running / no_config → silent
   })();
+
+  // CAT.5.1 — also ensure the ALWAYS-ON HEADLESS RESPONDERS: (a) the
+  // project-less GENERAL session (always), and (b) the headless responder for
+  // the umbrella the cwd resolves to (if any). Fire-and-forget — never block
+  // the stdio loop. Autospawning the project headless while a terminal is live
+  // is SAFE: CAT.5's lease-ownership guard makes it stand down (it answers only
+  // while it owns a fresh umbrella lease), idling at zero token cost until the
+  // terminal's chat-watch lease lapses. Resolution failures are no-ops.
+  void (async () => {
+    const umbrellaForCwd = await resolveActiveUmbrella();
+    const { general, umbrella } = await ensureHeadlessRespondersForBoot({ umbrellaForCwd });
+    logAgentBridgeResult('general', general);
+    if (umbrella !== null) logAgentBridgeResult(umbrellaForCwd ?? 'umbrella', umbrella);
+  })();
+}
+
+/** stderr log for an agent-bridge autospawn result (mirrors the chat-daemon block). */
+function logAgentBridgeResult(
+  label: string,
+  res: { status: string; pid?: number; error?: string },
+): void {
+  if (res.status === 'spawned' || res.status === 'waited_for_peer') {
+    process.stderr.write(
+      `[opensquid] agent-bridge[${label}] ${res.status === 'spawned' ? 'started' : 'found peer'} (pid ${String(res.pid)})\n`,
+    );
+  } else if (res.status === 'error') {
+    process.stderr.write(`[opensquid] agent-bridge[${label}] autospawn error: ${String(res.error)}\n`);
+  }
+  // already_running / no_config → silent
 }
 
 main().catch((e: unknown) => {

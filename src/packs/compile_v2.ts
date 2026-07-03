@@ -35,6 +35,10 @@ export interface StateMeta {
   guard?: string;
   trigger?: string[]; // observed events that evaluate the gate (conformance); absent = driver-evaluated
   onFail?: { action: 'warn' | 'block' | 'halt'; message: string };
+  writes?: string[]; // LANE MODEL: the stage's write-lane (path-glob allowlist); absent = no lane (INERT)
+  // STAGE-REPORTING CADENCE (behavior-as-data — the pack owns the cadence, core owns the emit functions):
+  report?: string; // after-stage report label (a Stage) emitted on LEAVE; absent = this state emits no report
+  summary?: boolean; // when true, a before-stage summary is emitted on ENTRY-edge (reuses `report` as its label)
   // decision
   branches?: DecisionBranch[];
   // sub_flow
@@ -97,6 +101,11 @@ function compileMachine(pack: PackV2): CompiledPack {
             onFail: s.on_fail,
             emits: s.on_pass_emits,
             ...(s.trigger !== undefined ? { trigger: s.trigger } : {}),
+            ...(s.writes !== undefined ? { writes: s.writes } : {}), // LANE MODEL: the stage's write-lane
+            // STAGE-REPORTING CADENCE (behavior-as-data): the after-stage report label (on leave) + the
+            // before-stage summary flag (on entry-edge). Read by v2_supply's transition-precise emit.
+            ...(s.report !== undefined ? { report: s.report } : {}),
+            ...(s.summary !== undefined ? { summary: s.summary } : {}),
           };
           emitted.add(s.on_pass_emits);
           break;

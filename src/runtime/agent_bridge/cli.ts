@@ -37,8 +37,10 @@ import { OPENSQUID_HOME, resolveProjectUuid } from '../paths.js';
 import {
   AgentBridgeDaemon,
   agentBridgePidPath,
+  agentBridgeScope,
   resolveGeneralPackRoot,
   resolvePackRootFromEnv,
+  type AgentBridgeScopeKey,
 } from './daemon.js';
 
 export interface AgentBridgeCliDeps {
@@ -106,19 +108,33 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
     .command('agent-bridge')
     .description('Warm-pool chat-agent daemon (start | stop | status | restart | run-foreground)');
 
+  // CAT.5.1 — resolve the side-file SCOPE for a verb. `--general` pins the
+  // project-less general scope; otherwise the cwd's umbrella (via channels.json)
+  // → its projectUuid → the legacy unscoped path. So `agent-bridge status` in
+  // the loop tree targets `agent-bridge-loop.pid`, never the global one.
+  const scopeKeyFor = async (general: boolean): Promise<AgentBridgeScopeKey> => {
+    if (general) return { umbrellaId: GENERAL_UMBRELLA };
+    const umbrellaId = await resolveUmbrellaForCwdSafe(cwd());
+    if (umbrellaId !== null) return { umbrellaId };
+    const projectUuid = await resolveProjectUuid({ cwd: cwd(), env });
+    return projectUuid !== null ? { projectUuid } : {};
+  };
+
   group
     .command('status')
     .description('Report agent-bridge daemon status (running pid or "not running").')
-    .action(async () => {
-      const result = await readLivePid(env, killFn);
+    .option('--general', 'target the project-less general session instance')
+    .action(async (opts: { general?: boolean }) => {
+      const scope = await scopeKeyFor(opts.general === true);
+      const result = await readLivePid(env, killFn, scope);
       if (result.alive) {
         out(`agent-bridge: running (pid=${String(result.pid)})\n`);
       } else if (result.stalePid !== undefined) {
         out(
-          `agent-bridge: not running (stale pid=${String(result.stalePid)} at ${pidPathFor(env)})\n`,
+          `agent-bridge: not running (stale pid=${String(result.stalePid)} at ${pidPathFor(env, scope)})\n`,
         );
       } else {
-        out(`agent-bridge: not running (no pid file at ${pidPathFor(env)})\n`);
+        out(`agent-bridge: not running (no pid file at ${pidPathFor(env, scope)})\n`);
       }
     });
 
@@ -144,14 +160,15 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
     // the built-in `general` pack) instead of the cwd's project-scoped daemon.
     .option('--general', 'run the project-less general session (DM + General + All)')
     .action(async (opts: { general?: boolean }) => {
-      const live = await readLivePid(env, killFn);
+      const scope = await scopeKeyFor(opts.general === true);
+      const live = await readLivePid(env, killFn, scope);
       if (live.alive) {
         err(`agent-bridge: already running (pid=${String(live.pid)})\n`);
         exit(2);
         return;
       }
       if (live.stalePid !== undefined) {
-        await rm(pidPathFor(env), { force: true }).catch(() => undefined);
+        await rm(pidPathFor(env, scope), { force: true }).catch(() => undefined);
       }
       doSpawn('spawned', opts.general === true);
     });
@@ -159,11 +176,13 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
   group
     .command('stop')
     .description('Send SIGTERM to the running agent-bridge daemon.')
-    .action(async () => {
-      const live = await readLivePid(env, killFn);
+    .option('--general', 'target the project-less general session instance')
+    .action(async (opts: { general?: boolean }) => {
+      const scope = await scopeKeyFor(opts.general === true);
+      const live = await readLivePid(env, killFn, scope);
       if (!live.alive) {
         if (live.stalePid !== undefined) {
-          await rm(pidPathFor(env), { force: true }).catch(() => undefined);
+          await rm(pidPathFor(env, scope), { force: true }).catch(() => undefined);
         }
         out('agent-bridge: not running\n');
         return;
@@ -180,8 +199,11 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
   group
     .command('restart')
     .description('Stop + brief wait for pid file removal + start.')
-    .action(async () => {
-      const live = await readLivePid(env, killFn);
+    .option('--general', 'target the project-less general session instance')
+    .action(async (opts: { general?: boolean }) => {
+      const general = opts.general === true;
+      const scope = await scopeKeyFor(general);
+      const live = await readLivePid(env, killFn, scope);
       if (live.alive) {
         try {
           killFn(live.pid, 'SIGTERM');
@@ -189,9 +211,9 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
           /* already gone */
         }
         // 2s is generous — start's stale-pid cleanup handles the miss too.
-        await waitForPidfileGone(env, 2000);
+        await waitForPidfileGone(env, 2000, scope);
       }
-      doSpawn('restarted');
+      doSpawn('restarted', general);
     });
 
   group
@@ -262,9 +284,18 @@ export function registerAgentBridge(parent: Command, deps: AgentBridgeCliDeps = 
   return group;
 }
 
-function pidPathFor(env: NodeJS.ProcessEnv): string {
+/**
+ * CAT.5.1 — scope-aware pidfile path. Builds the `agent-bridge[-<scope>].pid`
+ * basename from the resolved scope and joins it under the env-resolved home
+ * (test-injected `env.OPENSQUID_HOME` wins so unit tests stay isolated; the
+ * scope-keyed helpers in daemon.ts use `OPENSQUID_HOME()` and would not see a
+ * dep-injected env). Empty scope ⇒ the legacy `agent-bridge.pid`.
+ */
+function pidPathFor(env: NodeJS.ProcessEnv, scope: AgentBridgeScopeKey = {}): string {
   const home = env.OPENSQUID_HOME ?? OPENSQUID_HOME();
-  return join(home, 'agent-bridge.pid');
+  const sc = agentBridgeScope(scope);
+  const stem = sc.length > 0 ? `agent-bridge-${sc}` : 'agent-bridge';
+  return join(home, `${stem}.pid`);
 }
 
 type PidResult = { alive: true; pid: number } | { alive: false; stalePid?: number };
@@ -273,8 +304,9 @@ type PidResult = { alive: true; pid: number } | { alive: false; stalePid?: numbe
 async function readLivePid(
   env: NodeJS.ProcessEnv,
   killFn: (pid: number, sig: NodeJS.Signals | 0) => void,
+  scope: AgentBridgeScopeKey = {},
 ): Promise<PidResult> {
-  const p = pidPathFor(env);
+  const p = pidPathFor(env, scope);
   let raw: string;
   try {
     raw = await readFile(p, 'utf8');
@@ -295,8 +327,12 @@ async function readLivePid(
 }
 
 /** Wait up to `timeoutMs` for the agent-bridge pidfile to disappear. */
-async function waitForPidfileGone(env: NodeJS.ProcessEnv, timeoutMs: number): Promise<void> {
-  const p = pidPathFor(env);
+async function waitForPidfileGone(
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+  scope: AgentBridgeScopeKey = {},
+): Promise<void> {
+  const p = pidPathFor(env, scope);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {

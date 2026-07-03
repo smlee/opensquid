@@ -37,6 +37,8 @@ import { join } from 'node:path';
 
 import { createClient } from '@libsql/client';
 
+import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
+
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 import { resolveRecallScope } from '../../rag/scope.js';
 import { resolveBackendConfig } from '../../rag/config.js';
@@ -201,6 +203,7 @@ export function registerMemory(parent: Command, deps: MemoryCliDeps = {}): Comma
       let total = 0;
       for (const p of paths) {
         const client = createClient({ url: `file:${p}` });
+        void applyConcurrencyPragmas(client); // WAL + busy_timeout posture (fire-and-forget; helper never throws)
         try {
           const before = Number(
             (await client.execute(`SELECT count(*) n FROM lessons WHERE source = 'turn-ingest'`))
