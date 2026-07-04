@@ -32,6 +32,7 @@ import {
 import { type ActiveTask, readActiveTask } from '../session_state.js';
 import { readGoalMap } from '../goal_map/goal_map.js';
 import { waitingItems } from '../loop/acceptance.js';
+import { readCheckpointBySession } from '../ralph/loop_stage.js';
 
 const execFileP = promisify(execFile);
 
@@ -140,6 +141,40 @@ async function artifactOf(
   }
 }
 
+/** Build a HandoffArtifact from a RAW path (the pack-agnostic checkpoint stores paths directly, not via a
+ *  session key). Mirrors `artifactOf`'s content hash; null for a blank path. */
+async function artifactFromPath(
+  p: string,
+  kind: HandoffArtifact['kind'],
+): Promise<HandoffArtifact | null> {
+  if (p.trim() === '') return null;
+  try {
+    const sha8 = createHash('sha256')
+      .update(await readFile(p, 'utf8'))
+      .digest('hex')
+      .slice(0, 8);
+    return { kind, path: p, sha8 };
+  } catch {
+    return { kind, path: p, sha8: null };
+  }
+}
+
+/**
+ * The FSM field for the handoff. Prefer the v1 `fsm-<pack>` object (carries state + history); when it is
+ * absent — a v2 (fullstack-flow) session, whose pack-named key differs — fall back to the PACK-AGNOSTIC
+ * checkpoint stage so the handoff shows WHERE the flow is instead of `<unreadable>`. Additive: v1 unchanged.
+ */
+async function resolveFsmField(
+  sessionId: string,
+  cp: { stage: string } | null,
+): Promise<Record<string, unknown> | string> {
+  const v1 = await readJsonState(sessionId, 'fsm-coding-flow');
+  const hasState = typeof v1 !== 'string' && typeof (v1 as { state?: unknown }).state === 'string';
+  if (hasState) return v1;
+  if (cp !== null) return { state: cp.stage, source: 'checkpoint' };
+  return v1;
+}
+
 async function gitRepo(dir: string): Promise<HandoffGitRepo | null> {
   try {
     const { stdout: status } = await execFileP('git', ['status', '--short'], {
@@ -181,12 +216,26 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
           }));
         });
 
+  // The PACK-AGNOSTIC checkpoint (stage + scope-artifact paths), read once and reused for the fsm + artifacts
+  // fields so a v2 (fullstack-flow) session — invisible to the v1 pack-named keys below — still resumes. FAIL-OPEN.
+  const checkpoint = await readCheckpointBySession(sessionId).catch(() => null);
+
   const artifacts = (
     await Promise.all([
       artifactOf(sessionId, 'coding-flow-pre-research-path', 'pre_research'),
       artifactOf(sessionId, 'coding-flow-spec-path', 'spec'),
     ])
   ).filter((a): a is HandoffArtifact => a !== null);
+  // Enrich with the checkpoint's recorded scope artifacts (v2's on-disk proof), deduped by path — additive, so
+  // a v1 artifact already found is untouched and a v2 session's artifact is no longer dropped.
+  if (checkpoint !== null) {
+    for (const p of checkpoint.scopeArtifacts) {
+      if (!artifacts.some((a) => a.path === p)) {
+        const built = await artifactFromPath(p, 'pre_research');
+        if (built !== null) artifacts.push(built);
+      }
+    }
+  }
 
   // Git sweep: the single project root only (UCC.2 — de-umbrella'd). No member
   // discovery: umbrella grouping is a chat concern, not a process-scope one.
@@ -235,7 +284,7 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
     generatedAt: new Date().toISOString(),
     cwd,
     root,
-    fsm: await readJsonState(sessionId, 'fsm-coding-flow'),
+    fsm: await resolveFsmField(sessionId, checkpoint),
     activeTask,
     phaseSet: await readJsonState(sessionId, 'workflow.phases_logged'),
     phaseLedger,

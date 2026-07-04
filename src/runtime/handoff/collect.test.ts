@@ -7,10 +7,12 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { collectHandoffState, handoverDocPath } from './collect.js';
 import { sessionLogFile, sessionStateFile } from '../paths.js';
+import { CheckpointStore } from '../durable/checkpoint_store.js';
 
 let home: string;
 let cwd: string;
@@ -105,6 +107,34 @@ describe('collectHandoffState — populated home (real shapes)', () => {
     const art = state.artifacts.find((a) => a.kind === 'pre_research');
     expect(art?.path).toBe(preResearch);
     expect(art?.sha8).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('v2 (fullstack-flow) session: fsm + artifact come from the pack-agnostic checkpoint (no v1 keys)', async () => {
+    // A v2 session writes fullstack-flow-* keys (NONE of the v1 coding-flow-* keys exist here). The
+    // pack-agnostic checkpoint (keyed by wg id) carries the stage + the scope-artifact path — the handoff
+    // must surface both instead of dropping them (the key-drift bug's content half).
+    const artifactPath = join(cwd, 'v2-pre.md');
+    await writeFile(artifactPath, '# v2 pre-research', 'utf8');
+
+    const client = createClient({ url: `file:${join(home, 'opensquid.db')}` });
+    const store = new CheckpointStore(client);
+    await store.init();
+    await store.createTaskCheckpoint('wg-collect-v2', 'author', Date.now());
+    await store.setTaskArtifacts('wg-collect-v2', [artifactPath], Date.now());
+    client.close();
+
+    const prevItem = process.env.OPENSQUID_ITEM_ID;
+    process.env.OPENSQUID_ITEM_ID = 'wg-collect-v2'; // resolveCheckpointKey → this id directly (lap path)
+    try {
+      const state = await collectHandoffState(SID, cwd);
+      expect((state.fsm as { state: string }).state).toBe('author'); // stage from the checkpoint
+      const art = state.artifacts.find((a) => a.kind === 'pre_research');
+      expect(art?.path).toBe(artifactPath);
+      expect(art?.sha8).toMatch(/^[0-9a-f]{8}$/);
+    } finally {
+      if (prevItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
+      else process.env.OPENSQUID_ITEM_ID = prevItem;
+    }
   });
 
   it('a cleared (empty-string) artifact-path key yields NO artifact, not a broken one (wg-4c48ef1b9969)', async () => {
