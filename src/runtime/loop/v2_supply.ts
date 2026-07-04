@@ -32,7 +32,14 @@ import {
   recordVerification,
   resetBugfixRounds,
 } from './verification.js';
-import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_state.js';
+import {
+  readActiveTask,
+  readActiveTaskId,
+  readClassifiedFacets,
+  readSessionCwd,
+} from '../session_state.js';
+import { readSettings } from '../orchestrator_settings.js';
+import { skillServesDomainMatches } from '../../packs/skill_serves.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
@@ -550,10 +557,46 @@ export async function runV2Cartridges(
     if (cachedKey === undefined) cachedKey = await resolveCheckpointKey(sessionId);
     return cachedKey;
   };
+  // LAYER-1 #37 (project-only-operation.md:139-147) — resolve the CURRENT task's classified DOMAIN once, used to
+  // serves-gate each FSM cartridge below. Two sources, mirroring dispatch.ts's Layer-3 lens gate so pack
+  // governance (Layer 1) and lens firing (Layer 3) select consistently: (a) the turn's classified facets,
+  // persisted at prompt_submit (writeClassifiedFacets); (b) when none carry a domain yet — first tool_call /
+  // read error — the project's DECLARED domain (orchestrator_settings). `null` (neither known) → the gate below
+  // FAILS OPEN (every cartridge runs, today's behavior). Read ONCE, outside the cartridge loop.
+  let turnDomain: string | null = null;
+  try {
+    const facets = await readClassifiedFacets(sessionId);
+    if (facets?.domain !== undefined) {
+      turnDomain = facets.domain;
+    } else {
+      const projectDir = (await readSessionCwd(sessionId)) ?? process.cwd();
+      const { domain } = await readSettings(projectDir);
+      if (domain !== undefined) turnDomain = domain;
+    }
+  } catch (err) {
+    // FAIL-OPEN: a settings/facets read error must never break the hook → turnDomain stays null (every pack runs).
+    process.stderr.write(`[v2-supply] task-domain resolve failed (ignored): ${String(err)}\n`);
+  }
   for (const loaded of cartridges) {
     try {
       if (loaded.compiled.fsm === undefined) continue; // foundation cartridge → not an observed actor
       const name = loaded.pack.name;
+      // LAYER-1 #37 — serves-gate the FSM cartridge to the current task's DOMAIN. A serves-bearing FSM pack
+      // (fullstack-flow: `serves.domain = coding`) governs ONLY when the task's classified domain is at-or-below
+      // its served domain (hierarchical `contains`); a task OUTSIDE that domain selects it NOT — no FSM, no gate,
+      // no enforcement (the doc's Layer-1 correction: "a task that matches no pack's serves selects nothing").
+      // DOMAIN-ONLY (intent-agnostic, like the Layer-3 lens gate) so governance holds across a coding task's
+      // mixed-intent turns (produce/inform/decide), not just the produce turn that ACTIVATED the pack. A
+      // serves-LESS FSM pack is the always-on governance spine (never gated). `turnDomain` null → FAIL OPEN
+      // (runs — today's behavior). This SUBSUMES #34: a non-coding task now selects NEITHER fullstack-flow NOR
+      // its frontend lenses (the lens half is the same containment gate one layer down, dispatch.ts).
+      if (
+        loaded.pack.serves !== undefined &&
+        turnDomain !== null &&
+        !skillServesDomainMatches(loaded.pack.serves, turnDomain)
+      ) {
+        continue;
+      }
       const actor = new V2ObservedActor(`pack:${name}`, loaded);
       // T2.2 (principle 9) — key the FSM PER-TASK. `taskId` is null until a task is active, so SCOPE/PLAN
       // share the session-level key `fsm-<pack>`; once a task is active, AUTHOR/CODE run on the isolated

@@ -21,6 +21,7 @@ import {
   clearActiveTask,
   recordSessionCwd,
   writeActiveTask,
+  writeClassifiedFacets,
 } from '../session_state.js';
 import { pendingLessonsDir } from '../wedge/capture.js';
 import { withTaskCheckpointStore } from '../ralph/loop_stage.js';
@@ -30,6 +31,7 @@ import { recordExternalConsult } from './external_consult.js';
 import { appendAcceptance, readAcceptance } from './acceptance.js';
 import type { Event } from '../event.js';
 import type { Fsm } from '../fsm.js';
+import type { Facets } from '../classify.js';
 
 // Mock the cartridge loader so each test controls the active v2 set.
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
@@ -73,6 +75,32 @@ const gatePack = (onFailAction: 'block' | 'warn') =>
           trigger: ['tool_call'],
           on_pass_emits: 'done',
           on_fail: { action: onFailAction, message: 'resolve it' },
+        },
+        shipped: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: 'g0', on: 'done', to: 'shipped' }],
+    },
+  });
+
+/** LAYER-1 #37 — a serves-bearing FSM gate pack (`serves.domain = coding`). ORCH.8 requires a serves+fsm pack to
+ *  start at a `gate` state (g0 is a gate). Its gate BLOCKS a `Bash` tool_call (guard `tool == "Write"` fails), so
+ *  a block proves the cartridge was SELECTED + evaluated; a ZERO/no-advance proves it was NOT selected. */
+const codingGatePack = () =>
+  load({
+    name: 'coding-gate',
+    version: '1.0.0',
+    scope: 'workflow',
+    serves: { intent: 'produce', domain: 'coding' },
+    guards: { ok: 'tool == "Write"' },
+    fsm: {
+      initial: 'g0',
+      states: {
+        g0: {
+          kind: 'gate',
+          guard: 'ok',
+          trigger: ['tool_call'],
+          on_pass_emits: 'done',
+          on_fail: { action: 'block', message: 'coding gate' },
         },
         shipped: { kind: 'terminal', outcome: 'shipped' },
       },
@@ -137,6 +165,49 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
     mockLoad.mockResolvedValue([broken]);
     const d = await runV2Cartridges('sess-fo', bashCall(), NOW);
     expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] }); // swallowed, fail-open
+  });
+});
+
+// ── LAYER-1 #37 — serves-gated FSM selection (project-only-operation.md:139-147) ─────────────────────────────
+// The FSM gate path selects a serves-bearing cartridge ONLY when the current task's classified domain is
+// at-or-below the pack's served domain (hierarchical containment); a task outside that domain selects NOTHING
+// (no gate, no enforcement). Domain-only (intent-agnostic). A serves-LESS FSM pack is the always-on spine.
+describe('runV2Cartridges — LAYER-1 #37 serves-gated FSM selection', () => {
+  const facets = (domain?: string): Facets =>
+    ({ intent: 'produce', project: true, confidence: 'high', ...(domain ? { domain } : {}) }) as Facets;
+
+  it('a CODING task selects the serves-bearing pack → its gate evaluates + BLOCKS', async () => {
+    mockLoad.mockResolvedValue([codingGatePack()]);
+    const sid = 'sess-l1-coding';
+    await writeClassifiedFacets(sid, facets('coding'));
+    const d = await runV2Cartridges(sid, bashCall(), NOW);
+    expect(d.exitCode).toBe(2); // selected → the gate ran + blocked
+    expect(d.messages).toContain('coding gate');
+  });
+
+  it('a FRONTEND task (coding.frontend) selects it by hierarchical containment', async () => {
+    mockLoad.mockResolvedValue([codingGatePack()]);
+    const sid = 'sess-l1-fe';
+    await writeClassifiedFacets(sid, facets('coding.frontend'));
+    const d = await runV2Cartridges(sid, bashCall(), NOW);
+    expect(d.exitCode).toBe(2); // coding.frontend ⊑ coding → selected
+  });
+
+  it('a NON-coding task selects NOTHING → no gate, no enforcement (exit 0, no advance)', async () => {
+    mockLoad.mockResolvedValue([codingGatePack()]);
+    const sid = 'sess-l1-design';
+    await writeClassifiedFacets(sid, facets('design')); // a real non-coding root
+    const d = await runV2Cartridges(sid, bashCall(), NOW);
+    expect(d).toEqual({ exitCode: 0, messages: [], injections: [], boundSkills: [] });
+    expect(await readFsmStateRaw(sid, 'coding-gate')).toBeNull(); // never ran → no state written
+  });
+
+  it('a serves-LESS FSM pack is the always-on spine (runs + enforces even on a non-coding task)', async () => {
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const sid = 'sess-l1-spine';
+    await writeClassifiedFacets(sid, facets('design'));
+    const d = await runV2Cartridges(sid, bashCall(), NOW);
+    expect(d.exitCode).toBe(2); // serves-less → never gated → still enforces
   });
 });
 
