@@ -237,9 +237,12 @@ describe('hook subprocess integration', () => {
  * project-only-operation Step 1a — orchestrator guard PACK-DECLARED DISCIPLINE gate integration tests.
  *
  * The guard's MECHANISM lives in opensquid; its ACTIVATION is a POLICY a project pack declares
- * (`discipline: { orchestrator_only: true }`). The guard fires ONLY when an activated PROJECT pack at `cwd`
- * declares that discipline — NOT on the coarse "any active project pack" it replaced. So:
- *   - a project running `fullstack-flow` (which declares it) → guard FIRES;
+ * (`discipline: { orchestrator_only: true }`). The guard fires ONLY when (a) the session is the DRIVEN
+ * automation loop (`OPENSQUID_AUTOMATION=1` — the stand-in for a missing supervisor; an interactive human IS
+ * the supervisor and gets NO guard) AND (b) an activated PROJECT pack at `cwd` declares that discipline — NOT
+ * on the coarse "any active project pack" it replaced. So:
+ *   - `fullstack-flow` (declares it) + AUTOMATION → guard FIRES;
+ *   - `fullstack-flow` (declares it) + INTERACTIVE (no OPENSQUID_AUTOMATION) → guard does NOT fire (human is supervisor);
  *   - a project whose only pack is content/SEO (no declaration) → guard does NOT fire (the RaumPilates fix);
  *   - a pack-less project → no guard (the interactive-deadlock fix stays).
  * The catastrophic SAFETY FLOOR is UNCHANGED — it stays universal substrate and fires in ALL of these cases.
@@ -263,8 +266,9 @@ describe('pre-tool-use: orchestrator guard — pack-declared discipline gate (pr
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  it('project running fullstack-flow (declares orchestrator_only) + mutating tool in main session → guard FIRES (deny)', async () => {
-    // fullstack-flow's pack.yaml declares `discipline: { orchestrator_only: true }` → the guard must deny Write.
+  it('project running fullstack-flow (declares orchestrator_only) + mutating tool in an AUTOMATION session (OPENSQUID_AUTOMATION=1) → guard FIRES (deny)', async () => {
+    // fullstack-flow's pack.yaml declares `discipline: { orchestrator_only: true }` → in the DRIVEN automation
+    // loop the guard must deny Write. FIX 1: the guard is automation-gated, so this proof sets OPENSQUID_AUTOMATION=1.
     await mkdir(join(projectDir, '.opensquid'), { recursive: true });
     await writeFile(
       join(projectDir, '.opensquid', 'active.json'),
@@ -276,10 +280,31 @@ describe('pre-tool-use: orchestrator guard — pack-declared discipline gate (pr
       args: { file_path: join(projectDir, 'foo.ts'), content: 'x' },
       cwd: projectDir,
     });
-    const r = await runHook('pre-tool-use.ts', stdin);
+    const r = await runHook('pre-tool-use.ts', stdin, { OPENSQUID_AUTOMATION: '1' });
     expect(r.exitCode).toBe(0); // deny rides the JSON envelope (FU.11), never bare exit 2
     expect(r.stdout).toContain('deny');
     expect(r.stdout.toLowerCase()).toContain('orchestrator guard');
+  }, 15000);
+
+  it('project running fullstack-flow (declares orchestrator_only) + mutating tool in an INTERACTIVE session (no OPENSQUID_AUTOMATION) → guard does NOT fire (ALLOWED)', async () => {
+    // FIX 1 (T-orchestrator-only-gate): the discipline guard is the stand-in for a MISSING supervisor. In an
+    // interactive session the HUMAN is the supervisor, so the guard must NOT fire even though the project's
+    // active pack DECLARES orchestrator_only. Without OPENSQUID_AUTOMATION=1 the human's own SCOPE-stage Write
+    // (a `docs/research/*pre-research*` artifact) must be ALLOWED — the interactive-block this fix removes.
+    await mkdir(join(projectDir, '.opensquid'), { recursive: true });
+    await writeFile(
+      join(projectDir, '.opensquid', 'active.json'),
+      JSON.stringify({ packs: ['fullstack-flow'] }),
+      'utf-8',
+    );
+    const stdin = JSON.stringify({
+      tool: 'Write',
+      args: { file_path: join(projectDir, 'docs/research/x-pre-research-y.md'), content: 'x' },
+      cwd: projectDir,
+    });
+    const r = await runHook('pre-tool-use.ts', stdin); // no OPENSQUID_AUTOMATION → interactive → human is supervisor
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toLowerCase()).not.toContain('orchestrator guard'); // guard does NOT fire in an interactive session
   }, 15000);
 
   it('project whose only pack is content/SEO (NO orchestrator_only declaration) + mutating tool → guard does NOT fire (RaumPilates fix)', async () => {
@@ -362,9 +387,11 @@ describe('pre-tool-use: orchestrator guard — pack-declared discipline gate (pr
     expect(r.stdout.toLowerCase()).not.toContain('orchestrator guard');
   }, 15000);
 
-  it('executor (agent_id present) + orchestrator_only pack active → never denied (exemption intact)', async () => {
-    // Even with a pack that DECLARES orchestrator_only active, an executor subagent (agent_id present) must
-    // pass through — the declaration turns the guard ON, and the executor exemption still exempts it.
+  it('executor (agent_id present) + orchestrator_only pack active + AUTOMATION → never denied (exemption intact)', async () => {
+    // The exemption ANDs with the automation gate: OPENSQUID_AUTOMATION=1 + a pack that DECLARES
+    // orchestrator_only turns the guard fully ON, yet an executor subagent (agent_id present) must still pass
+    // through — the executor exemption exempts it. (Setting automation is what makes this a real exemption proof:
+    // without it the guard is off anyway.)
     await mkdir(join(projectDir, '.opensquid'), { recursive: true });
     await writeFile(
       join(projectDir, '.opensquid', 'active.json'),
@@ -377,19 +404,21 @@ describe('pre-tool-use: orchestrator guard — pack-declared discipline gate (pr
       args: { file_path: join(projectDir, 'foo.ts'), content: 'x' },
       cwd: projectDir,
     });
-    const r = await runHook('pre-tool-use.ts', stdin);
+    const r = await runHook('pre-tool-use.ts', stdin, { OPENSQUID_AUTOMATION: '1' });
     expect(r.exitCode).toBe(0);
     expect(r.stdout.toLowerCase()).not.toContain('orchestrator guard');
   }, 15000);
 
-  it('safety floor still fires regardless of packs (always-on, unchanged)', async () => {
-    // No packs (guard disabled) but a hardline forbidden action → safety floor still blocks.
+  it('safety floor still fires regardless of packs AND under AUTOMATION (always-on, unchanged)', async () => {
+    // No packs (guard disabled) but a hardline forbidden action → safety floor still blocks. Runs under
+    // OPENSQUID_AUTOMATION=1 to prove the floor is UNIVERSAL: it is unchanged by FIX 1's automation gate and
+    // fires in the driven loop too (the floor sits BEFORE and independent of the automation-gated guard).
     const stdin = JSON.stringify({
       tool: 'Bash',
       args: { command: 'rm -rf / --no-preserve-root' },
       cwd: projectDir, // no .opensquid/ → guard off
     });
-    const r = await runHook('pre-tool-use.ts', stdin);
+    const r = await runHook('pre-tool-use.ts', stdin, { OPENSQUID_AUTOMATION: '1' });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('deny');
     expect(r.stdout.toLowerCase()).toContain('safety floor');

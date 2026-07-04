@@ -250,6 +250,14 @@ async function main(): Promise<void> {
   // NOTE the safety FLOOR above is UNCHANGED — it stays universal substrate and fires unconditionally regardless
   // of packs (machine-protection, not discipline). Only this DISCIPLINE guard became pack-declared.
   //
+  // AUTOMATION gate (mirrors the v2-enforce cartridge gate at "Hole 2" below): enforcement is the stand-in for a
+  // MISSING supervisor — the intended target is the DRIVEN orchestrator loop, NOT every human. In an INTERACTIVE
+  // session the human IS the supervisor, so the discipline guard must NOT fire (it would block the human's own
+  // SCOPE-stage writes, e.g. a `docs/research/*pre-research*` artifact). `OPENSQUID_AUTOMATION=1` is the per-lap
+  // "am I the driven loop" signal the orchestrator sets on its subprocess (ralph.ts). ENV-ONLY: the per-session
+  // flag file is deliberately NOT consulted (a stale flag would bleed into an interactive session sharing the id).
+  // The safety FLOOR above stays universal (machine-protection) — only this discipline guard is automation-gated.
+  //
   // Executor exemption: a Task/Agent subagent's PreToolUse payload carries `agent_id` (per the CC hook
   // docs) — `checkOrchestratorGuard` passes those calls through untouched. `exitIfSubagent` (above,
   // ~line 82) has already terminated OPENSQUID_SUBAGENT=1 laps/reviewers, so this guard only sees the
@@ -257,7 +265,7 @@ async function main(): Promise<void> {
   // Agent, mcp__*) are NOT mutating → always allowed. FAIL-OPEN: any error here never blocks the call.
   if (parsed.data.kind === 'tool_call') {
     try {
-      if (await projectDeclaresOrchestratorOnly(cwd)) {
+      if (process.env.OPENSQUID_AUTOMATION === '1' && (await projectDeclaresOrchestratorOnly(cwd))) {
         const verdict = checkOrchestratorGuard(
           parsed.data.tool,
           parsed.data.args,

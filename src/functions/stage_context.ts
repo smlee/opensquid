@@ -129,14 +129,16 @@ const PROCEDURE_INTEGRITY = [
 ].join('\n');
 
 /**
- * THE 3× 100% — the standing TARGET prepended to every stage bundle (paired with PROCEDURE_INTEGRITY: that one
+ * THE 4× 100% — the standing TARGET prepended to every stage bundle (paired with PROCEDURE_INTEGRITY: that one
  * says don't fake done-ness, this one says what done genuinely means). #1 + #2 are GATE-ENFORCED (zero-LLM
- * predicates — you cannot pass without them); #3 a hard gate cannot fully verify (reaching the RIGHT external
- * source / "is this the best" is content-judgment, not a token-check), so it is on the agent to always drive it —
- * "the gate didn't force it" is NEVER permission to skip it. The audit checks #3 reached the external rung.
+ * predicates — you cannot pass without them); #3 + #4 a hard gate cannot fully verify (reaching the RIGHT external
+ * source / "is this the best solution" is content-judgment, not a token-check), so it is on the agent to always
+ * drive them — "the gate didn't force it" is NEVER permission to skip it. The audit checks #3 reached the external
+ * rung. #4 (BEST-SOLUTION) is the substrate-generic form of the per-stage rubric's BEST-SOLUTION criterion — it
+ * stays domain-neutral here; the pack's rubric layer adds any domain phrasing.
  */
-const THE_3X_100 = [
-  '🎯 THE 3× 100% — drive EVERY task toward all three, always:',
+const THE_4X_100 = [
+  '🎯 THE 4× 100% — drive EVERY task toward all four, always:',
   '  1. 100% EVIDENCE — every load-bearing claim carries a citation (`file:line` / the design-of-record / the',
   "     user's words); nothing asserted. [GATE-ENFORCED: evidence-or-flag + the anchors check]",
   '  2. 100% COVERAGE — the work covers EVERY scoped/design element, no silent gaps (or a NAMED, tracked',
@@ -144,6 +146,9 @@ const THE_3X_100 = [
   '  3. 100% CONFIDENCE — reach the primary EXTERNAL sources to answer "what did I miss / is this the best /',
   '     does this match the docs"; local-only cannot. [NOT fully gateable — YOU must drive it every task; the',
   '     audit checks you reached the external rung. "The gate did not force it" is NEVER permission to skip it.]',
+  '  4. 100% BEST-SOLUTION — weigh the alternatives against the criteria and choose the SIMPLEST correct one (no',
+  '     proliferating special-cases); "it works" is not the bar, "it is the best of the real options" is. [NOT',
+  '     fully gateable — YOU must drive it; "the gate did not force it" is NEVER permission to skip it.]',
 ].join('\n');
 
 /**
@@ -168,8 +173,8 @@ export async function buildStageBundle(
   const rubric = RUBRIC_STAGES.has(stage) ? await readRubricContent(stage, packId) : null;
   const checkpoint = renderCheckpoint(fsm);
   const work = await stageWorkContext(stage, sessionId);
-  // PROCEDURE_INTEGRITY (don't fake done-ness) + THE_3X_100 (what done means) lead every bundle — read first.
-  return [PROCEDURE_INTEGRITY, THE_3X_100, checkpoint, procedure, rubric, work]
+  // PROCEDURE_INTEGRITY (don't fake done-ness) + THE_4X_100 (what done means) lead every bundle — read first.
+  return [PROCEDURE_INTEGRITY, THE_4X_100, checkpoint, procedure, rubric, work]
     .filter((s): s is string => typeof s === 'string' && s.length > 0)
     .join('\n\n');
 }
