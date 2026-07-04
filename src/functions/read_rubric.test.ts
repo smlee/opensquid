@@ -21,9 +21,9 @@ const ctx = (packId = 'coding-flow'): EvalCtx => ({
 });
 
 describe('readRubricContent', () => {
-  it('reads the real coding-flow scope + author fragments whole (default pack)', async () => {
-    expect(await readRubricContent('scope')).toContain('NEVER-GUESS');
-    expect(await readRubricContent('author')).toContain('11-FIELD');
+  it('reads the real coding-flow scope + author fragments whole (explicit pack)', async () => {
+    expect(await readRubricContent('scope', 'coding-flow')).toContain('NEVER-GUESS');
+    expect(await readRubricContent('author', 'coding-flow')).toContain('11-FIELD');
   });
 
   it('resolves the rubric for an explicit pack (v2 fullstack-flow has all 4 stages)', async () => {
@@ -41,7 +41,7 @@ describe('readRubricContent', () => {
 
   it('returns null (fail-loud, never throws) when the fragment is unreadable', async () => {
     // A name with no fragment file → real ENOENT → the catch returns null (the packaging-fault path).
-    await expect(readRubricContent('__nonexistent__' as 'scope')).resolves.toBeNull();
+    await expect(readRubricContent('__nonexistent__', 'coding-flow')).resolves.toBeNull();
   });
 });
 
@@ -70,10 +70,21 @@ describe('read_rubric primitive', () => {
     );
   });
 
-  it('rejects an unknown name (.strict() enum)', async () => {
+  // GENERIC RUNTIME — the arg is NOT a closed coding enum: the ACTIVE pack's own gate name resolves against its
+  // own rubric dir. An arbitrary name is ACCEPTED (no arg rejection) and resolves to null when the pack ships no
+  // such fragment — so a non-coding pack can name a gate outside scope/plan/author/code.
+  it('accepts any rubric name (keys off the active pack, not a coding enum) → null when the fragment is absent', async () => {
     const reg = new FunctionRegistry();
     registerReadRubric(reg);
-    const res = await reg.call('read_rubric', { name: 'bogus' }, ctx());
+    const res = await reg.call('read_rubric', { name: 'triage' }, ctx('fullstack-flow'));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value).toBeNull();
+  });
+
+  it('still rejects a non-string / empty name (.strict() shape holds)', async () => {
+    const reg = new FunctionRegistry();
+    registerReadRubric(reg);
+    const res = await reg.call('read_rubric', { name: '' }, ctx());
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.kind).toBe('arg_invalid');
   });

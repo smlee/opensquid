@@ -3,9 +3,10 @@
  * the live dispatch path. Constructs the exact rule shape the personal pack's
  * `scope-before-code` YAML compiles to, registers the real primitives it
  * needs (is_automation_mode, has_generated_spec, tool_name, tool_args,
- * verdict), seeds the on-disk state the primitives read (active-task.json
- * + automation.flag), then dispatches a synthetic Write event and asserts
- * the verdict outcome.
+ * verdict), seeds the on-disk state the primitives read (active-task.json)
+ * + turns automation ON via the OPENSQUID_AUTOMATION env var (env-only — the
+ * automation.flag file OR was retired), then dispatches a synthetic Write
+ * event and asserts the verdict outcome.
  *
  * Four cases — block path + three NEGATIVE controls so we know the gate
  * isn't over-blocking:
@@ -32,7 +33,6 @@ import { registerEventFunctions } from '../../functions/event.js';
 import { IsAutomationMode } from '../../functions/is_automation_mode.js';
 import { FunctionRegistry } from '../../functions/registry.js';
 import { registerVerdictFunctions } from '../../functions/verdict.js';
-import { setAutomationFlag } from '../automation_state.js';
 import { activeTaskFile } from '../paths.js';
 import type { Pack, Rule, Skill, ToolCallEvent } from '../types.js';
 
@@ -40,9 +40,12 @@ import { dispatchEvent } from './dispatch.js';
 
 let tempHome: string;
 let priorHome: string | undefined;
+let priorAutomation: string | undefined;
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
+  priorAutomation = process.env.OPENSQUID_AUTOMATION;
+  delete process.env.OPENSQUID_AUTOMATION;
   tempHome = await mkdtemp(join(tmpdir(), 'opensquid-gate-a-e2e-'));
   process.env.OPENSQUID_HOME = tempHome;
 });
@@ -50,6 +53,8 @@ beforeEach(async () => {
 afterEach(async () => {
   if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = priorHome;
+  if (priorAutomation === undefined) delete process.env.OPENSQUID_AUTOMATION;
+  else process.env.OPENSQUID_AUTOMATION = priorAutomation;
   await rm(tempHome, { recursive: true, force: true });
 });
 
@@ -169,7 +174,7 @@ describe('Gate A (scope-before-code) end-to-end through dispatchEvent', () => {
   it('BLOCKS a Write to src/ when automation is ON + active task has NO spec', async () => {
     const sessionId = 'asg3-block';
     await seedActiveTask(sessionId, false, '');
-    await setAutomationFlag(sessionId);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
 
     const result = await dispatchEvent(
       writeSrcEvent(),
@@ -186,7 +191,7 @@ describe('Gate A (scope-before-code) end-to-end through dispatchEvent', () => {
     const sessionId = 'asg3-pass-spec';
     const specPath = join(tempHome, 'docs', 'tasks', 'T-asg3.md');
     await seedActiveTask(sessionId, true, specPath);
-    await setAutomationFlag(sessionId);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
 
     const result = await dispatchEvent(
       writeSrcEvent(),
@@ -218,7 +223,7 @@ describe('Gate A (scope-before-code) end-to-end through dispatchEvent', () => {
   it('PASSES a Write to docs/ (path mismatch — gate scoped to src/ only)', async () => {
     const sessionId = 'asg3-non-src';
     await seedActiveTask(sessionId, false, '');
-    await setAutomationFlag(sessionId);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
 
     const result = await dispatchEvent(
       writeDocsEvent(),

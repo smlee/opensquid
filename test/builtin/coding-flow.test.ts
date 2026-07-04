@@ -36,6 +36,7 @@ import {
 } from '../../src/functions/active_task.js';
 import { appendTool, writeActiveTask, writeRequestType } from '../../src/runtime/session_state.js';
 import { EffectiveContent } from '../../src/functions/effective_content.js';
+import { IsAutomationMode } from '../../src/functions/is_automation_mode.js';
 import { SessionToolHistory } from '../../src/functions/session_tool_history.js';
 import { TextPatternMatch } from '../../src/functions/text_pattern_match.js';
 import { appendPhase, REQUIRED_PHASES } from '../../src/runtime/workflow_phases.js';
@@ -58,6 +59,7 @@ function registry(): FunctionRegistry {
   r.register(SessionToolHistory); // AF.1: scope-advance consults research depth
   r.register(EffectiveContent); // AF.1/FU.4: scope-advance + spec-audit read the post-write artifact
   r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
+  r.register(IsAutomationMode); // AF.6: the pause/stop hard-blocks are automation-gated (env-only)
   return r;
 }
 
@@ -403,6 +405,7 @@ function registryWithAudit(specVerdict: string): FunctionRegistry {
   r.register(HasGeneratedSpec); // scope-before-code consults the active task's spec
   r.register(OpenTaskCount); // AF.6: pause-prevention derives run-active
   r.register(TextPatternMatch); // GF.1: enter-scoping classifies the track / advances scope_start
+  r.register(IsAutomationMode); // AF.6: the pause/stop hard-blocks are automation-gated (env-only)
   return r;
 }
 
@@ -728,19 +731,29 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
   let tempTasks: string;
   let priorHome: string | undefined;
   let priorTasks: string | undefined;
+  let priorAutomation: string | undefined;
   beforeEach(async () => {
     priorHome = process.env.OPENSQUID_HOME;
     priorTasks = process.env.OPENSQUID_HARNESS_TASKS_DIR;
+    priorAutomation = process.env.OPENSQUID_AUTOMATION;
     tempHome = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-af6-'));
     tempTasks = await mkdtemp(join(tmpdir(), 'opensquid-coding-flow-af6-tasks-'));
     process.env.OPENSQUID_HOME = tempHome;
     process.env.OPENSQUID_HARNESS_TASKS_DIR = tempTasks; // isolate open_task_count from ~/.claude/tasks
+    // The GF.6 hard-blocks (AskUserQuestion past scope / Stop mid-run) are now AUTOMATION-GATED
+    // (`is_automation_mode`, env-only) — they engage only inside the driven loop, mirroring v2
+    // fullstack-flow's pause/stop-guard. This block asserts the BLOCK behavior, so it runs under
+    // automation. The interactive no-op (the guards inert with OPENSQUID_AUTOMATION unset) is proven
+    // by the dedicated "interactive (no automation)" cases below, which delete the env var.
+    process.env.OPENSQUID_AUTOMATION = '1';
   });
   afterEach(async () => {
     if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
     else process.env.OPENSQUID_HOME = priorHome;
     if (priorTasks === undefined) delete process.env.OPENSQUID_HARNESS_TASKS_DIR;
     else process.env.OPENSQUID_HARNESS_TASKS_DIR = priorTasks;
+    if (priorAutomation === undefined) delete process.env.OPENSQUID_AUTOMATION;
+    else process.env.OPENSQUID_AUTOMATION = priorAutomation;
     await rm(tempHome, { recursive: true, force: true });
     await rm(tempTasks, { recursive: true, force: true });
   });
@@ -822,6 +835,18 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     expect(r.stderr).toMatch(/DRIFT/);
   });
 
+  it('INTERACTIVE (no automation): AskUserQuestion past SCOPE → ALLOWED (guard is a no-op)', async () => {
+    // The env-only automation gate: with OPENSQUID_AUTOMATION unset the hard-block never engages, so a
+    // legitimate clarifying question to the user is never walled interactively. Mirrors v2 pause-guard.
+    delete process.env.OPENSQUID_AUTOMATION;
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-q-interactive';
+    const reg = await toSpecAuthored(pack, sid); // → spec_authored (past SCOPE)
+    const r = await dispatchEvent(askQuestion, [pack], reg, sid);
+    expect(r.exitCode).toBe(0); // interactive → the AskUserQuestion hard-block is inert
+    expect(r.stderr).not.toMatch(/DRIFT: AskUserQuestion/);
+  });
+
   it('AskUserQuestion DURING SCOPE → allowed (no drift)', async () => {
     const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
     const reg = registry();
@@ -881,6 +906,17 @@ describe('builtin coding-flow pack — pause-gates (AF.6 + GF.6 hard-block)', ()
     const r = await dispatchEvent(stop, [pack], reg, sid);
     expect(r.exitCode).toBe(2);
     expect(r.stderr).toMatch(/DRIFT/);
+  });
+
+  it('INTERACTIVE (no automation): Stop mid-run (spec_authored) → ALLOWED (guard is a no-op)', async () => {
+    // Env-only automation gate: with OPENSQUID_AUTOMATION unset the mid-run Stop block is inert, so a
+    // stop to await a genuine user answer is never walled interactively. Mirrors v2 stop-guard.
+    delete process.env.OPENSQUID_AUTOMATION;
+    const pack = await loadPack(resolve('packs/builtin', 'coding-flow'));
+    const sid = 'cf-af6-stop-interactive';
+    const reg = await toSpecAuthored(pack, sid); // → spec_authored
+    const r = await dispatchEvent(stop, [pack], reg, sid);
+    expect(r.exitCode).toBe(0); // interactive → the mid-run Stop hard-block is inert
   });
 
   // SIMPLIFY: `researched` is in the FREE scope region — a researched stop is allowed (with or without a

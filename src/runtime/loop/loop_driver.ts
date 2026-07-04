@@ -64,6 +64,9 @@ export async function onPhasesComplete(
       taskId,
       summary: 'all 7 coding phases logged + readiness surfacers ran',
       nextDirective: 'deploy',
+      // The CODE phase-ledger emitter (bound to CODE_PHASES, the CORE 7-phase ledger); its next-work text is
+      // carried inline to preserve the report content the deleted NEXT_STAGE_WORK core map used to supply.
+      nextWork: 'verify deploy capability, then the human-accept gate',
       phases: CODE_PHASES.map((name) => ({ name, done: true })),
       // At phases_complete the CODE gate (phases_complete ∧ readiness_ran ∧ deprecated_clean) has passed.
       evidence: [

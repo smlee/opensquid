@@ -93,6 +93,7 @@ export function skeletonFromGraph(dot: string): PackV2 {
     name: 'sketch',
     version: '0.0.0',
     scope: 'project',
+    activation: 'on-demand',
     detected_by: [],
     fsm: { initial, states, transitions },
     guards: {},

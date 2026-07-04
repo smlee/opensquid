@@ -18,7 +18,7 @@ import { sessionStateFile } from '../runtime/paths.js';
 import { readActiveTask, readSessionCwd } from '../runtime/session_state.js';
 
 import { readProcedureContent } from './read_procedure.js';
-import { readRubricContent, type RubricName } from './read_rubric.js';
+import { readRubricContent } from './read_rubric.js';
 import { serializePlan } from './serialize_plan.js';
 
 const PRE_RESEARCH_PATH_KEY = 'fullstack-flow-pre-research-path';
@@ -165,9 +165,7 @@ export async function buildStageBundle(
   // NEED-TO-KNOW: only THIS stage's procedure. No file (terminal/decision state) → nothing to inject.
   const procedure = await readProcedureContent(stage, packId);
   if (procedure === null) return '';
-  const rubric = RUBRIC_STAGES.has(stage)
-    ? await readRubricContent(stage as RubricName, packId)
-    : null;
+  const rubric = RUBRIC_STAGES.has(stage) ? await readRubricContent(stage, packId) : null;
   const checkpoint = renderCheckpoint(fsm);
   const work = await stageWorkContext(stage, sessionId);
   // PROCEDURE_INTEGRITY (don't fake done-ness) + THE_3X_100 (what done means) lead every bundle — read first.

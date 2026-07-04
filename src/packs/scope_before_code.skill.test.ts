@@ -27,7 +27,6 @@ import { registerEventFunctions } from '../functions/event.js';
 import { IsAutomationMode } from '../functions/is_automation_mode.js';
 import { FunctionRegistry } from '../functions/registry.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
-import { setAutomationFlag } from '../runtime/automation_state.js';
 import type { Event } from '../runtime/event.js';
 import { evaluateProcess } from '../runtime/evaluator.js';
 import { writeActiveTask, type ActiveTask } from '../runtime/session_state.js';
@@ -65,12 +64,14 @@ let gateBSteps: ProcessStep[]; // task-list-generated (Gate B)
 let tempHome: string;
 let priorHome: string | undefined;
 let priorTasksDir: string | undefined;
+let priorAutomation: string | undefined;
 let tasksDir: string;
 let specPath: string;
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
   priorTasksDir = process.env.OPENSQUID_HARNESS_TASKS_DIR;
+  priorAutomation = process.env.OPENSQUID_AUTOMATION;
   delete process.env.OPENSQUID_AUTOMATION;
   tempHome = await mkdtemp(join(tmpdir(), 'ap5-gateA-'));
   tasksDir = await mkdtemp(join(tmpdir(), 'ap5-tasks-'));
@@ -94,6 +95,8 @@ afterEach(async () => {
   else process.env.OPENSQUID_HOME = priorHome;
   if (priorTasksDir === undefined) delete process.env.OPENSQUID_HARNESS_TASKS_DIR;
   else process.env.OPENSQUID_HARNESS_TASKS_DIR = priorTasksDir;
+  if (priorAutomation === undefined) delete process.env.OPENSQUID_AUTOMATION;
+  else process.env.OPENSQUID_AUTOMATION = priorAutomation;
   await rm(tempHome, { recursive: true, force: true });
   await rm(tasksDir, { recursive: true, force: true });
 });
@@ -129,7 +132,7 @@ const GENERATED: ActiveTask = { id: '15', subject: 'x', started_at: 'z', taskId:
 
 describe('scope→task Gate A (fixture) / scope-before-code', () => {
   it('BLOCKS a src/ write when automation + no active task (anti-fail-open anchor)', async () => {
-    await setAutomationFlag(SID);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
     // no active task → no provenance → block "scope it first"
     const r = await run(codeWrite('src/foo.ts'));
     expect(r.kind).toBe('verdict');
@@ -137,7 +140,7 @@ describe('scope→task Gate A (fixture) / scope-before-code', () => {
   });
 
   it('BLOCKS a src/ write when the active task has no generated spec', async () => {
-    await setAutomationFlag(SID);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
     await writeActiveTask(SID, { id: '15', subject: 'x', started_at: 'z' }); // no spec
     const r = await run(codeWrite('src/foo.ts'));
     expect(r.kind).toBe('verdict');
@@ -145,19 +148,19 @@ describe('scope→task Gate A (fixture) / scope-before-code', () => {
   });
 
   it('PASSES a src/ write when the active task has a resolving spec (generated)', async () => {
-    await setAutomationFlag(SID);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
     await writeActiveTask(SID, { ...GENERATED, spec: specPath });
     expect((await run(codeWrite('src/foo.ts'))).kind).toBe('no_verdict');
   });
 
   it('does NOT block writing the spec itself (docs/tasks) — scoping is never gated', async () => {
-    await setAutomationFlag(SID);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
     // no active task, but this is a docs/tasks write (the act of scoping)
     expect((await run(codeWrite('docs/tasks/T-track.md'))).kind).toBe('no_verdict');
   });
 
   it('does NOT block writing pre-research (docs/research) — scoping is never gated', async () => {
-    await setAutomationFlag(SID);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
     expect((await run(codeWrite('docs/research/T-track-pre-research-2026-05-27.md'))).kind).toBe(
       'no_verdict',
     );
@@ -172,7 +175,7 @@ describe('scope→task Gate A (fixture) / scope-before-code', () => {
 
 describe('scope→task Gate B (fixture) / task-list-generated', () => {
   it('WARNS when an open task lacks provenance (smuggled in)', async () => {
-    await setAutomationFlag(SID);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
     await putHarnessTask({
       id: '1',
       subject: 'ok',
@@ -187,7 +190,7 @@ describe('scope→task Gate B (fixture) / task-list-generated', () => {
   });
 
   it('is SILENT when every open task carries provenance', async () => {
-    await setAutomationFlag(SID);
+    process.env.OPENSQUID_AUTOMATION = '1'; // automation ON (env-only signal)
     await putHarnessTask({
       id: '1',
       subject: 'a',

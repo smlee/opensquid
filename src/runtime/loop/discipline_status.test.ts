@@ -19,9 +19,14 @@ let neutralCwd: string;
 let prevCwd: string;
 const NOW = '2026-06-27T00:00:00.000Z';
 
+// Project-only operation: the active pack set is the PROJECT scope's (the user/home scope enforces
+// nothing). So activate the pack at PROJECT scope — `<cwd>/.opensquid/active.json` — under the neutral
+// cwd we chdir into. `disciplineStatus` → `loadActiveV2Cartridges` reads this project scope; fullstack-flow
+// resolves via the builtin-root fallback. OPENSQUID_HOME (= home) still isolates on-disk state.
 async function activate(packs: string[]): Promise<void> {
-  await mkdir(home, { recursive: true });
-  await writeFile(join(home, 'active.json'), JSON.stringify({ packs }), 'utf8');
+  const dotDir = join(neutralCwd, '.opensquid');
+  await mkdir(dotDir, { recursive: true });
+  await writeFile(join(dotDir, 'active.json'), JSON.stringify({ packs }), 'utf8');
 }
 
 beforeEach(async () => {

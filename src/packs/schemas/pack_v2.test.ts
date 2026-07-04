@@ -107,6 +107,55 @@ describe('PackV2 schema (PFV2.1)', () => {
   });
 });
 
+// PACK-TAXONOMY (pack-taxonomy.md:32-40) — the `activation` CLASS + the DISCIPLINE-DECLARATION.
+describe('PackV2 schema — activation class + discipline declaration (project-only-operation Step 1a)', () => {
+  it('defaults `activation` to on-demand when omitted (pack-taxonomy.md:39)', () => {
+    const p = PackV2.parse({ name: 'p', version: '1.0.0', scope: 'workflow', fsm: baseFsm });
+    expect(p.activation).toBe('on-demand');
+  });
+
+  it('parses each activation class value', () => {
+    for (const activation of ['always-on', 'on-demand', 'project-scoped'] as const) {
+      const p = PackV2.parse({ name: 'p', version: '1.0.0', scope: 'workflow', activation, fsm: baseFsm });
+      expect(p.activation).toBe(activation);
+    }
+  });
+
+  it('rejects an off-enum activation value (fail-loud)', () => {
+    expect(() =>
+      PackV2.parse({ name: 'p', version: '1.0.0', scope: 'workflow', activation: 'always', fsm: baseFsm }),
+    ).toThrow();
+  });
+
+  it('parses `discipline: { orchestrator_only: true }` (the pack-declared policy)', () => {
+    const p = PackV2.parse({
+      name: 'coding',
+      version: '1.0.0',
+      scope: 'workflow',
+      discipline: { orchestrator_only: true },
+      fsm: baseFsm,
+    });
+    expect(p.discipline?.orchestrator_only).toBe(true);
+  });
+
+  it('a pack with no `discipline` block declares no orchestrator-only policy (undefined)', () => {
+    const p = PackV2.parse({ name: 'content', version: '1.0.0', scope: 'domain' });
+    expect(p.discipline).toBeUndefined();
+  });
+
+  it('rejects an unknown key inside `discipline` (.strict — no silent drop)', () => {
+    expect(() =>
+      PackV2.parse({
+        name: 'p',
+        version: '1.0.0',
+        scope: 'workflow',
+        discipline: { orchestrator_only: true, bogus: true },
+        fsm: baseFsm,
+      }),
+    ).toThrow();
+  });
+});
+
 // CONFORMANCE-RECONCILE — the fsm-less `gates` form is retired (gates live IN the fsm as gate-states).
 describe('PackV2 schema — `gates` form retired; fsm | foundation are independent optionals', () => {
   it('REJECTS a top-level `gates:` key (unknown key via .strict())', () => {

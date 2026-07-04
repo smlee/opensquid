@@ -32,7 +32,6 @@ import {
   discoverActivePacks,
   hasActiveProjectPacks,
   readActiveDeployReversible,
-  readActiveExclusive,
   readActiveVerifyCommand,
   resolvePackStateDir,
   validatePackId,
@@ -62,35 +61,10 @@ afterEach(async () => {
   await rm(scopeRoot, { recursive: true, force: true });
 });
 
-describe('readActiveExclusive — project-scope isolation flag', () => {
-  it('returns false when scopeRoot is null', async () => {
-    await expect(readActiveExclusive(null)).resolves.toBe(false);
-  });
-
-  it('returns false when active.json is absent (ENOENT → safe default)', async () => {
-    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
-  });
-
-  it('returns false when the exclusive key is absent (default = union)', async () => {
-    await writeActive({ packs: ['fullstack-flow'] });
-    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
-  });
-
-  it('returns true only for exclusive === true', async () => {
-    await writeActive({ packs: ['fullstack-flow'], exclusive: true });
-    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(true);
-  });
-
-  it('returns false for an explicit exclusive: false', async () => {
-    await writeActive({ packs: ['fullstack-flow'], exclusive: false });
-    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
-  });
-
-  it('is lenient on malformed JSON (the partition read fails loud elsewhere)', async () => {
-    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
-    await expect(readActiveExclusive(scopeRoot)).resolves.toBe(false);
-  });
-});
+// `exclusive` retired by project-only operation: the resolver already loads the project scope ONLY
+// (global enforces nothing), so the `readActiveExclusive` opt-out is obsolete and was removed. The
+// field is still parsed tolerantly (ignored) — proven by the "tolerantly ignores obsolete exclusive
+// field" case in the hasActiveProjectPacks block below.
 
 describe('readActiveVerifyCommand — the per-project DEPLOY verification command (DBL.1b)', () => {
   it('null scopeRoot / absent active.json / unconfigured → null (skip → deployClean:true)', async () => {
@@ -695,5 +669,12 @@ describe('hasActiveProjectPacks — #36 project-local discipline predicate', () 
   it('active.json with packs: null → false (not an array)', async () => {
     await writeActive({ packs: null });
     await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(false);
+  });
+
+  it('tolerantly ignores the obsolete `exclusive` field (still parses; packs decide)', async () => {
+    // `exclusive` was retired by project-only operation. An old active.json still carrying it must
+    // still parse — the pack presence alone decides, the field has no effect.
+    await writeActive({ packs: ['some-pack'], exclusive: true });
+    await expect(hasActiveProjectPacks(scopeRoot)).resolves.toBe(true);
   });
 });

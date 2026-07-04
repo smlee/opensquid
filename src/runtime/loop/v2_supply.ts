@@ -36,7 +36,8 @@ import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_sta
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
-import { CODE_PHASES, emitStageReport, renderStageSummary, type Stage } from './stage_report.js';
+import { CODE_PHASES, emitStageReport, renderStageSummary } from './stage_report.js';
+import type { EvidenceRef } from '../../packs/schemas/pack_v2.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import {
   loadChannelsConfig,
@@ -50,52 +51,28 @@ import {
  * the hook, and chat is optional). The daemon resolves `project:telegram` to the cwd-umbrella's channel.
  */
 /**
- * T2.12-evidence — the deterministic gate predicates that backed a stage, read from the just-evaluated guard
- * ctx (flat dotted keys). Rendered as the report's `Evidence:` line so a phase report is a readable proof.
- * The phase already passed (the transition fired), so these are the checks that made it pass.
+ * T2.12-evidence — GENERIC render of a gate's `Evidence:` proof line from its DECLARED `reads:` keys (pack
+ * data), resolved out of the just-evaluated guard ctx (flat dotted keys). The phase already passed (the
+ * transition fired), so these are the checks that made it pass — a readable proof.
+ *
+ * The former hardcoded per-stage switch (scope/plan/author/code/deploy) is DELETED: each gate declares the ctx
+ * keys it reads in pack.yaml, so a non-coding pack renders its own evidence and core carries ZERO stage
+ * vocabulary. A BARE STRING key → the display label is the key minus its `<state>.` prefix and it reads
+ * TRUE-is-good; the OBJECT form carries an explicit `label` and/or `expect` polarity (e.g. `open_question` is
+ * GOOD when false → `{ key, label: 'no open question', expect: false }`).
  */
-function stageEvidence(ctx: Map<string, unknown>, from: string): { label: string; ok: boolean }[] {
-  const isTrue = (k: string): boolean => ctx.get(k) === true;
-  switch (from) {
-    case 'scope': {
-      // GS1/#24 — `depth >= 3` was REMOVED from the scope_ready gate (research depth is human-paced procedure,
-      // not a machine-enforced bar); the evidence line no longer advertises an unenforced criterion.
-      return [
-        { label: 'anchors_ok', ok: isTrue('scope.anchors_ok') },
-        { label: 'no open question', ok: ctx.get('scope.open_question') === false },
-      ];
-    }
-    case 'scope_write': {
-      // GS1 — same facets as scope (scope_evidence.ts computes them for any pre-research artifact write).
-      return [
-        { label: 'anchors_ok', ok: isTrue('scope.anchors_ok') },
-        { label: 'no open question', ok: ctx.get('scope.open_question') === false },
-      ];
-    }
-    case 'plan':
-      return [
-        { label: 'acyclic', ok: isTrue('plan.acyclic') },
-        { label: 'complete', ok: isTrue('plan.complete') },
-      ];
-    case 'author':
-      return [
-        { label: 'manifest_complete', ok: isTrue('author.manifest_complete') },
-        { label: 'real_code', ok: isTrue('author.real_code') },
-      ];
-    case 'code':
-      return [
-        { label: 'phases_complete', ok: isTrue('code.phases_complete') },
-        { label: 'readiness_ran', ok: isTrue('code.readiness_ran') },
-        { label: 'deprecated_clean', ok: isTrue('code.deprecated_clean') },
-      ];
-    case 'deploy':
-      return [
-        { label: 'capability_ok', ok: isTrue('deploy.capability_ok') },
-        { label: 'reversible', ok: isTrue('deploy.reversible') },
-      ];
-    default:
-      return [];
-  }
+function stageEvidence(
+  ctx: Map<string, unknown>,
+  reads: readonly EvidenceRef[],
+): { label: string; ok: boolean }[] {
+  return reads.map((r) => {
+    const key = typeof r === 'string' ? r : r.key;
+    const expect = typeof r === 'string' ? true : r.expect ?? true;
+    const dot = key.indexOf('.');
+    const shortLabel = dot >= 0 ? key.slice(dot + 1) : key; // key minus its `<state>.` prefix
+    const label = typeof r === 'string' ? shortLabel : r.label ?? shortLabel;
+    return { label, ok: ctx.get(key) === expect };
+  });
 }
 
 export async function surfaceReportToChat(cwd: string, body: string): Promise<void> {
@@ -725,7 +702,7 @@ export async function runV2Cartridges(
           // failure must NEVER break the hook. T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1)
           // loop_driver.onPhasesComplete owns the CODE report, so skip the CODE report HERE to avoid a duplicate;
           // interactively (no env) v2_supply remains the CODE emitter. Other reporting stages always emit here.
-          let stage = loaded.compiled.meta[p.from]?.report as Stage | undefined;
+          let stage: string | undefined = loaded.compiled.meta[p.from]?.report;
           if (stage === 'CODE' && process.env.OPENSQUID_AUTOMATION === '1') stage = undefined;
           // #12 — the CODE report is emitted at most ONCE per task across BOTH paths (this transition + the
           // completion fallback after the loop) via the durable claim; non-CODE stages emit once per their own
@@ -745,13 +722,19 @@ export async function runV2Cartridges(
                 // SCOPE stage carries it (the destination check belongs at scope-time); other stages leave it
                 // undefined → no `## Goal alignment` line. ADVISORY (surfaced, never a block — the anti-drift
                 // gate is checkAnchors). FAIL-OPEN is the surrounding try/catch.
+                // STAGE-WORK (generic): the next state's pack-declared `does:` text (pack data, NOT a core map).
+                const nextWork = loaded.compiled.meta[p.to]?.does;
                 const r = {
                   stage,
                   taskId: taskId ?? 'no-active-task',
                   summary: `${p.from} complete`,
                   nextDirective: p.to,
-                  // T2.12-evidence — the deterministic gate predicates that backed this phase.
-                  evidence: stageEvidence(ctx, p.from),
+                  // T2.12-evidence — GENERIC: the leaving gate's DECLARED `reads:` keys (pack data), rendered
+                  // from the just-evaluated guard ctx (was a hardcoded per-stage switch, now deleted from core).
+                  evidence: stageEvidence(ctx, loaded.compiled.meta[p.from]?.reads ?? []),
+                  // `Next → <state>: <work>` — the next stage's `does:` (exactOptionalPropertyTypes: present only
+                  // when defined, never an explicit `undefined`).
+                  ...(nextWork !== undefined ? { nextWork } : {}),
                   // CODE is the long, stand-out report: the 7-phase chart (all logged — the gate passed).
                   ...(p.from === 'code'
                     ? { phases: CODE_PHASES.map((name) => ({ name, done: true })) }
@@ -795,13 +778,19 @@ export async function runV2Cartridges(
           // NOT a durable dated file (the after-report is the durable artifact). FAIL-OPEN in its own try/catch.
           const enteringLabel =
             loaded.compiled.meta[p.to]?.summary === true
-              ? (loaded.compiled.meta[p.to]?.report as Stage | undefined)
+              ? loaded.compiled.meta[p.to]?.report
               : undefined;
           if (enteringLabel !== undefined) {
             try {
               const root = await readSessionCwd(sessionId);
               if (root !== null) {
-                const { body } = renderStageSummary(enteringLabel, taskId ?? 'no-active-task', now);
+                // STAGE-WORK (generic): the entered state's pack-declared `does:` text (pack data, NOT a core map).
+                const { body } = renderStageSummary(
+                  enteringLabel,
+                  loaded.compiled.meta[p.to]?.does,
+                  taskId ?? 'no-active-task',
+                  now,
+                );
                 injections.push(body);
                 await surfaceReportToChat(root, body);
               }
@@ -950,6 +939,10 @@ export async function runV2Cartridges(
             taskId: trackId,
             summary: 'task complete — all 7 phases logged',
             nextDirective: 'deploy',
+            // This is the CODE phase-ledger completion emitter (bound to log_phase/isComplete/CODE_PHASES, the
+            // CORE 7-phase ledger — see stage_report.ts); its next-work text is carried inline to preserve the
+            // report content that the deleted NEXT_STAGE_WORK map used to supply.
+            nextWork: 'verify deploy capability, then the human-accept gate',
             evidence: [
               { label: 'phases_complete', ok: code.phasesComplete },
               { label: 'readiness_ran', ok: code.readinessRan },

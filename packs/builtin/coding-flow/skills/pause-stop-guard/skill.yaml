@@ -15,6 +15,12 @@ rules:
         as: st
       - call: open_task_count
         as: open
+      # The automation signal (env-only) — this HARD-BLOCK is INERT outside the driven loop, mirroring
+      # v2 fullstack-flow's stop-guard (packs/builtin/fullstack-flow/skills/stop-guard). Interactively
+      # (OPENSQUID_AUTOMATION unset) a mid-work Stop to await a genuine user answer must never be walled;
+      # the block engages only inside the driven loop.
+      - call: is_automation_mode
+        as: automation
       # GF.6 (F8): HARD-BLOCK the stop PAST SCOPE only. The whole scope region
       # (scoping/researching/researched) is FREE — no in-scope pause guard (user 2026-06-25:
       # "reject all pauses post scoping; no guard needed in scope"). Depletion auto-OFF preserved:
@@ -22,10 +28,10 @@ rules:
       # phase bundle (procedure + rubric) via `phase_bundle_text` — GATED by the same condition so
       # the I/O only runs when the pause actually fires.
       - call: phase_bundle_text
-        if: 'st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight" || (st == "phases_complete" && open.count > 0)'
+        if: 'automation.value == true && (st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight" || (st == "phases_complete" && open.count > 0))'
         as: bundle
       - call: verdict
-        if: 'st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight" || (st == "phases_complete" && open.count > 0)'
+        if: 'automation.value == true && (st == "spec_authored" || st == "spec_complete" || st == "tasks_loaded" || st == "phases_in_flight" || (st == "phases_complete" && open.count > 0))'
         args:
           level: block
           message: >-
@@ -41,5 +47,7 @@ prose: |
   Scope is FREE — no in-scope pause guard (pauses/questions are fine during the interactive SCOPE
   phase: scoping/researching/researched). PAST SCOPE every stop is HARD-BLOCKED (GF.6) until the
   backlog is depleted — do not pause, continue to the next phase/task. A depleted run (idle, or
-  phases_complete with zero open tasks) stops freely. On any post-scope pause the phase bundle
-  (procedure + rubric) is injected so the agent resumes with the full how-to-complete context.
+  phases_complete with zero open tasks) stops freely. The block is AUTOMATION-GATED
+  (`is_automation_mode`, env-only, mirrors v2 fullstack-flow's stop-guard): interactively it is a true
+  no-op so a mid-work Stop is never walled; it engages only inside the driven loop. On any post-scope
+  pause the phase bundle (procedure + rubric) is injected so the agent resumes with the full context.

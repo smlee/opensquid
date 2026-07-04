@@ -1190,6 +1190,7 @@ const stageGatePack = (stage: string): LoadedPackV2 =>
           on_pass_emits: 'next',
           on_fail: { action: 'warn', message: 'n/a' },
           report: stage.toUpperCase(),
+          reads: ['scope.is_advance'], // EVIDENCE-DECLARATION: the report's proof-line keys (pack data)
         },
         done: { kind: 'terminal', outcome: 'shipped' },
       },
@@ -1407,6 +1408,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
             on_fail: { action: 'warn', message: 'n/a' },
             report: 'AUTHOR',
             summary: true, // ← the ENTRY-edge summary declared in the pack
+            does: 'author the spec + real code covering every scoped element', // ← the summary's Will-text (pack data)
           },
           done: { kind: 'terminal', outcome: 'shipped' },
         },
@@ -1421,7 +1423,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     // event 1: a Write advances plan → author. Entering author fires its before-summary exactly once.
     const d1 = await runV2Cartridges(sid, writeCall(), NOW);
     expect(d1.injections.join('\n')).toContain('🦑 Starting AUTHOR · T-sum');
-    expect(d1.injections.join('\n')).toContain('Will: author the spec'); // NEXT_STAGE_WORK['author']
+    expect(d1.injections.join('\n')).toContain('Will: author the spec'); // from the pack's author `does:`
     // exactly one entry-edge summary this event (not duplicated).
     const starts1 = d1.injections.join('\n').match(/🦑 Starting AUTHOR/g) ?? [];
     expect(starts1.length).toBe(1);

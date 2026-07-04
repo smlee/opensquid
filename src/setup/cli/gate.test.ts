@@ -468,13 +468,14 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
   });
 });
 
-describe('GDC.2 — activation binds to the AGENT (user scope), never to locations', () => {
+describe('project-only operation — the user/home scope (~/.opensquid) no longer arms the gate', () => {
   async function makeRepoWithoutProjectActivation(): Promise<void> {
     await mkdir(join(repo, '.opensquid'), { recursive: true });
     // deliberately NO active.json at project scope
   }
 
-  it('user-scope coding-flow → gated even with NO project active.json', async () => {
+  it('user-scope coding-flow but NO project active.json → UNGATED (0) (global enforces nothing)', async () => {
+    // Pre-project-only this armed the gate in EVERY repo; now the user/home scope enforces nothing.
     await makeRepoWithoutProjectActivation();
     await writeFile(
       join(tempHome, 'active.json'),
@@ -482,7 +483,8 @@ describe('GDC.2 — activation binds to the AGENT (user scope), never to locatio
       'utf8',
     );
     await stage('src/x.ts');
-    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+    expect(await isGatedRepo(repo)).toBe(false);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
   });
 
   it('neither scope active → ungated', async () => {
@@ -491,20 +493,10 @@ describe('GDC.2 — activation binds to the AGENT (user scope), never to locatio
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
   });
 
-  it('project-only activation still gates (back-compat)', async () => {
+  it('PROJECT-scope activation gates (the sole arming scope)', async () => {
     await makeGated();
     await stage('src/x.ts');
+    expect(await isGatedRepo(repo)).toBe(true);
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
-  });
-
-  it('user-scope gating never touches a human terminal (the composed model)', async () => {
-    await makeRepoWithoutProjectActivation();
-    await writeFile(
-      join(tempHome, 'active.json'),
-      JSON.stringify({ packs: ['coding-flow'] }),
-      'utf8',
-    );
-    await stage('src/x.ts');
-    expect(await runGate('commit', repo, HUMAN_ENV)).toBe(0);
   });
 });

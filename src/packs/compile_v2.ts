@@ -20,7 +20,7 @@
  * Spec: loop/docs/tasks/T-fsm-actor-rescope.md §T1.
  */
 import { validateFsm, type Fsm } from '../runtime/fsm.js';
-import type { PackV2, StateKind, DecisionBranch } from './schemas/pack_v2.js';
+import type { PackV2, StateKind, DecisionBranch, EvidenceRef } from './schemas/pack_v2.js';
 
 export interface StateMeta {
   kind: StateKind;
@@ -39,6 +39,8 @@ export interface StateMeta {
   // STAGE-REPORTING CADENCE (behavior-as-data — the pack owns the cadence, core owns the emit functions):
   report?: string; // after-stage report label (a Stage) emitted on LEAVE; absent = this state emits no report
   summary?: boolean; // when true, a before-stage summary is emitted on ENTRY-edge (reuses `report` as its label)
+  reads?: EvidenceRef[]; // EVIDENCE-DECLARATION (generic runtime): ctx keys rendered as the report's proof line
+  does?: string; // STAGE-WORK: "what this stage works on" — the report's Next-line + summary Will-line text
   // decision
   branches?: DecisionBranch[];
   // sub_flow
@@ -106,6 +108,8 @@ function compileMachine(pack: PackV2): CompiledPack {
             // before-stage summary flag (on entry-edge). Read by v2_supply's transition-precise emit.
             ...(s.report !== undefined ? { report: s.report } : {}),
             ...(s.summary !== undefined ? { summary: s.summary } : {}),
+            ...(s.reads !== undefined ? { reads: s.reads } : {}), // EVIDENCE-DECLARATION: the report's proof keys
+            ...(s.does !== undefined ? { does: s.does } : {}), // STAGE-WORK: the Next-line / summary Will-line text
           };
           emitted.add(s.on_pass_emits);
           break;

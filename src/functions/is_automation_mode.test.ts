@@ -1,15 +1,15 @@
 /**
  * Tests for `is_automation_mode` primitive (G.12).
  *
- * Coverage per spec test fixtures (G.12 lines 1832–1836):
+ * ENV-ONLY coverage (the per-session `automation.flag` file OR was retired — Hole 2):
  *   - env var OPENSQUID_AUTOMATION=1 → returns true, source='env'
- *   - env var set + flag also set → still 'env' (env wins the source label)
- *   - flag file present (env unset) → returns true, source='flag'
+ *   - a flag file present but env unset → returns FALSE (flag no longer consulted)
  *   - neither → returns false, source='none'
+ *   - values other than "1" → false (strict equality)
  *   - empty args object is accepted; non-empty args rejected (strict schema)
  *
- * Isolation: per-test temp OPENSQUID_HOME so the on-disk flag never leaks
- * across cases; env var saved + restored.
+ * Isolation: per-test temp OPENSQUID_HOME so any on-disk flag stays isolated;
+ * env var saved + restored.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -71,7 +71,7 @@ describe('is_automation_mode', () => {
     }
   });
 
-  it('returns env source when env=1 AND flag set (env wins the label)', async () => {
+  it('env=1 wins even when a flag file also exists (env is the only signal)', async () => {
     process.env.OPENSQUID_AUTOMATION = '1';
     await setAutomationFlag('sess-both');
     const reg = freshRegistry();
@@ -82,13 +82,14 @@ describe('is_automation_mode', () => {
     }
   });
 
-  it('returns {value:true, source:"flag"} when flag file present and env unset', async () => {
+  it('flag file present but env unset → FALSE (env-only; the flag OR was retired, Hole 2)', async () => {
     await setAutomationFlag('sess-flag');
     const reg = freshRegistry();
     const result = await reg.call('is_automation_mode', {}, ctxFor('sess-flag'));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toEqual({ value: true, source: 'flag' });
+      // The old code returned {value:true, source:'flag'} here; env-only makes the flag a no-op.
+      expect(result.value).toEqual({ value: false, source: 'none' });
     }
   });
 

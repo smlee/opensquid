@@ -21,11 +21,14 @@ import { join } from 'node:path';
 
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 
-// 'CODE' is included (emitted by T2.9's loop_driver on phases_complete).
-// 'SCOPE_WRITE' is the GS1 automated stage that writes the pre-research artifact after interactive SCOPE confirms.
-export type Stage = 'SCOPE' | 'SCOPE_WRITE' | 'PLAN' | 'AUTHOR' | 'CODE' | 'DEPLOY';
+// GENERIC RUNTIME — a stage LABEL is any string (the gate's declared `report:` field in pack.yaml), NOT a
+// closed core enum. So a non-coding pack can name a stage outside SCOPE/PLAN/AUTHOR/CODE (e.g. REVIEW, TRIAGE)
+// and the renderer is agnostic. The alias is retained for readability at the call sites.
+export type Stage = string;
 
-/** The canonical 7-phase coding cycle the CODE stage runs (the `log_phase` enum order). */
+/** The canonical 7-phase coding cycle the CODE stage runs (the `log_phase` enum order, src/runtime/workflow_phases.ts).
+ *  This mirrors the CORE phase ledger (not per-pack vocabulary), so it stays a core constant; a pack that has no
+ *  phase chart simply omits `phases` from its report. */
 export const CODE_PHASES = [
   'pre_research',
   'learn',
@@ -36,24 +39,15 @@ export const CODE_PHASES = [
   'fix',
 ] as const;
 
-/** What the NEXT stage will work on — the "tell me what you'll be working on" line. Keyed by the FSM state. */
-const NEXT_STAGE_WORK: Record<string, string> = {
-  scope: 'capture + scope the next task (anchors resolve, depth, no open question)',
-  scope_write: 'write the pre-research artifact for the scoped task (anchors resolved, guess-free)',
-  plan: 'decompose the scope into a dependency-ordered, acyclic plan',
-  author: 'author the spec + real code covering every scoped element',
-  code: 'run the 7-phase coding cycle: pre_research → learn → code → test → audit → post_research → fix',
-  deploy: 'verify deploy capability, then the human-accept gate',
-  accepted: 'task accepted — complete',
-  done: 'task complete',
-};
-
 export interface StageReport {
   stage: Stage;
   taskId: string;
   summary: string;
-  /** The next FSM state (e.g. `plan`). Rendered with its NEXT_STAGE_WORK description. */
+  /** The next FSM state (e.g. `plan`). */
   nextDirective: string;
+  /** What the next stage works on (the next state's pack-declared `does:` text) — rendered after `nextDirective`.
+   *  From pack data, NOT a core map; absent ⇒ the `Next →` line names the state with no work suffix. */
+  nextWork?: string;
   /** Only the SCOPE report carries the goal-alignment line (T2.10's live consumer). Omitted → no line. */
   goalAligned?: boolean;
   /** CODE-stage step chart: which of the 7 coding phases ran. Omitted → no Phases section. */
@@ -87,7 +81,7 @@ export function renderStageReport(r: StageReport, iso: string): { path: string; 
     lines.push('');
   }
 
-  const work = NEXT_STAGE_WORK[r.nextDirective];
+  const work = r.nextWork; // pack-declared (the next state's `does:`), not a core map
   lines.push(`Next → ${r.nextDirective}${work !== undefined ? `: ${work}` : ''}`);
 
   if (r.goalAligned !== undefined) {
@@ -108,11 +102,16 @@ export function renderStageReport(r: StageReport, iso: string): { path: string; 
  * Render the BEFORE-stage SUMMARY body — the "tell me what you'll be working on" line delivered on stage ENTRY
  * (the entry-edge of a transition), the counterpart to the after-stage report. Lightweight orientation: surfaced
  * in-session + chat, NOT a dated durable file (the after-report is the durable artifact). Pure (`iso` injected).
- * `stage.toLowerCase()` is the FSM state name — the key into `NEXT_STAGE_WORK` (which describes what that stage does).
+ * `work` is the entered stage's pack-declared `does:` text (from pack data, NOT a core map) — absent ⇒ a generic
+ * "begin this stage".
  */
-export function renderStageSummary(stage: Stage, taskId: string, iso: string): { body: string } {
+export function renderStageSummary(
+  stage: Stage,
+  work: string | undefined,
+  taskId: string,
+  iso: string,
+): { body: string } {
   const date = iso.slice(0, 10);
-  const work = NEXT_STAGE_WORK[stage.toLowerCase()];
   const lines = [
     `🦑 Starting ${stage} · ${taskId} · ${date}`,
     '',

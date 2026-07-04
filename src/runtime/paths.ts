@@ -106,14 +106,22 @@ export const resolveBuiltinScopeRoot = (): string => {
  * 64-level cap discipline.
  */
 export const resolveProjectScopeRoot = async (cwd: string): Promise<string | null> => {
+  // Project-only operation: the user/home scope (`~/.opensquid` == resolveUserScopeRoot()) is NEVER
+  // a project scope. A pack-less cwd under $HOME must resolve to NO project scope (null) rather than
+  // leaking into the home root — otherwise `~/.opensquid`'s active.json would be treated as
+  // project-local policy and enforce globally (global = mechanism, project = policy). So a candidate
+  // whose resolved path equals the user-scope root is rejected (skipped) and the walk continues.
+  const userScope = resolve(resolveUserScopeRoot());
   let dir = resolve(cwd);
   for (let i = 0; i < 64; i++) {
     const candidate = join(dir, '.opensquid');
-    try {
-      const st = await stat(candidate);
-      if (st.isDirectory()) return candidate;
-    } catch {
-      /* keep walking */
+    if (resolve(candidate) !== userScope) {
+      try {
+        const st = await stat(candidate);
+        if (st.isDirectory()) return candidate;
+      } catch {
+        /* keep walking */
+      }
     }
     const parent = dirname(dir);
     if (parent === dir) break;

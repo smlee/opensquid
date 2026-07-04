@@ -34,6 +34,10 @@ const amazonClone = PackV2.parse({
         guard: 'bundle_size_ok',
         on_pass_emits: 'size_passed',
         on_fail: { action: 'block', message: 'size_too_big' },
+        // EVIDENCE-DECLARATION + STAGE-WORK (generic runtime) — a non-coding gate declares its own report proof
+        // keys + work text; the compiler must thread both onto StateMeta (mirrors writes/report/summary).
+        reads: ['bundle.under_budget', { key: 'bundle.bloated', label: 'no bloat', expect: false }],
+        does: 'confirm the shipped bundle is under budget',
       },
       es_gate: { kind: 'terminal', outcome: 'shipped' },
       sealed_holdout: {
@@ -122,6 +126,9 @@ describe('compilePackV2 (T1)', () => {
       guard: 'bundle_size_ok',
       onFail: { action: 'block', message: 'size_too_big' },
       emits: 'size_passed', // on_pass_emits
+      // EVIDENCE-DECLARATION + STAGE-WORK threaded onto StateMeta (generic runtime — pack data, not core).
+      reads: ['bundle.under_budget', { key: 'bundle.bloated', label: 'no bloat', expect: false }],
+      does: 'confirm the shipped bundle is under budget',
     });
     expect(meta.sealed_holdout?.branches).toHaveLength(2);
     expect(meta.build).toMatchObject({

@@ -226,25 +226,33 @@ describe('hook subprocess integration', () => {
       // No OPENSQUID_AUTOMATION — env gate is off. OPENSQUID_HOME is already tempHome (no flag file).
     });
     expect(r.exitCode).toBe(0); // no env → not automation → no enforceOnly block
-    // #36: the payload has no `cwd` field, so the hook uses process.cwd() = tmpdir(), which has no
-    // .opensquid/ → resolveProjectScopeRoot → null → hasActiveProjectPacks → false → orchestrator
+    // project-only Step 1a: the payload has no `cwd` field, so the hook uses process.cwd() = tmpdir(), which has
+    // no .opensquid/ → resolveProjectScopeRoot → null → projectDeclaresOrchestratorOnly → false → orchestrator
     // guard does NOT fire. The automation gate is also off (no OPENSQUID_AUTOMATION). Exit 0 is clean.
     // The assertion here is that the automation gate did NOT add a SECOND block path.
   }, 15000);
 });
 
 /**
- * #36 — orchestrator guard project-local gate integration tests.
+ * project-only-operation Step 1a — orchestrator guard PACK-DECLARED DISCIPLINE gate integration tests.
  *
- * The guard must ONLY fire when the project at `cwd` has at least one pack
- * declared in its local .opensquid/active.json. Tests create a real tmpdir
- * with or without .opensquid/ and pass it as `cwd` in the hook payload so
- * resolveProjectScopeRoot finds (or doesn't find) the scope root.
+ * The guard's MECHANISM lives in opensquid; its ACTIVATION is a POLICY a project pack declares
+ * (`discipline: { orchestrator_only: true }`). The guard fires ONLY when an activated PROJECT pack at `cwd`
+ * declares that discipline — NOT on the coarse "any active project pack" it replaced. So:
+ *   - a project running `fullstack-flow` (which declares it) → guard FIRES;
+ *   - a project whose only pack is content/SEO (no declaration) → guard does NOT fire (the RaumPilates fix);
+ *   - a pack-less project → no guard (the interactive-deadlock fix stays).
+ * The catastrophic SAFETY FLOOR is UNCHANGED — it stays universal substrate and fires in ALL of these cases.
  *
- * Each test spawns from tmpdir() (the hook binary's own process.cwd() is
- * irrelevant — the guard uses the payload's `cwd` field via resolveProjectScopeRoot).
+ * Tests create a real tmpdir with or without .opensquid/ and pass it as `cwd` in the hook payload so
+ * `projectDeclaresOrchestratorOnly` resolves (or doesn't find) the scope root. `fullstack-flow` resolves via the
+ * builtin pack root (resolveBuiltinScopeRoot, from the spawned hook's own module path); a content pack is
+ * authored inline as a project-scope pack.yaml.
+ *
+ * Each test spawns from tmpdir() (the hook binary's own process.cwd() is irrelevant — the guard uses the
+ * payload's `cwd` field).
  */
-describe('pre-tool-use: orchestrator guard — project-local gate (#36)', () => {
+describe('pre-tool-use: orchestrator guard — pack-declared discipline gate (project-only Step 1a)', () => {
   let projectDir: string;
 
   beforeEach(async () => {
@@ -255,12 +263,12 @@ describe('pre-tool-use: orchestrator guard — project-local gate (#36)', () => 
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  it('project-local active.json with packs + mutating tool in main session → guard FIRES (deny)', async () => {
-    // The loop-repo case: .opensquid/active.json declares a pack → orchestrator guard must deny Write.
+  it('project running fullstack-flow (declares orchestrator_only) + mutating tool in main session → guard FIRES (deny)', async () => {
+    // fullstack-flow's pack.yaml declares `discipline: { orchestrator_only: true }` → the guard must deny Write.
     await mkdir(join(projectDir, '.opensquid'), { recursive: true });
     await writeFile(
       join(projectDir, '.opensquid', 'active.json'),
-      JSON.stringify({ packs: ['some-discipline-pack'] }),
+      JSON.stringify({ packs: ['fullstack-flow'] }),
       'utf-8',
     );
     const stdin = JSON.stringify({
@@ -272,6 +280,56 @@ describe('pre-tool-use: orchestrator guard — project-local gate (#36)', () => 
     expect(r.exitCode).toBe(0); // deny rides the JSON envelope (FU.11), never bare exit 2
     expect(r.stdout).toContain('deny');
     expect(r.stdout.toLowerCase()).toContain('orchestrator guard');
+  }, 15000);
+
+  it('project whose only pack is content/SEO (NO orchestrator_only declaration) + mutating tool → guard does NOT fire (RaumPilates fix)', async () => {
+    // A project-scope content pack with no `discipline` block → no declared orchestrator-only policy → the guard
+    // must NOT fire (the content-project misfire this step fixes). Authored inline so it resolves project-first.
+    await mkdir(join(projectDir, '.opensquid', 'packs', 'content-seo'), { recursive: true });
+    await writeFile(
+      join(projectDir, '.opensquid', 'packs', 'content-seo', 'pack.yaml'),
+      'name: content-seo\nversion: 0.1.0\nscope: domain\nactivation: on-demand\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(projectDir, '.opensquid', 'active.json'),
+      JSON.stringify({ packs: ['content-seo'] }),
+      'utf-8',
+    );
+    const stdin = JSON.stringify({
+      tool: 'Write',
+      args: { file_path: join(projectDir, 'post.md'), content: 'x' },
+      cwd: projectDir,
+    });
+    const r = await runHook('pre-tool-use.ts', stdin);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toLowerCase()).not.toContain('orchestrator guard');
+  }, 15000);
+
+  it('SAFETY FLOOR still fires unconditionally with a content pack active (guard off, floor on)', async () => {
+    // The content pack does NOT declare orchestrator_only (guard off) — but the catastrophic safety floor is
+    // universal substrate and must STILL block a hardline forbidden action regardless of packs.
+    await mkdir(join(projectDir, '.opensquid', 'packs', 'content-seo'), { recursive: true });
+    await writeFile(
+      join(projectDir, '.opensquid', 'packs', 'content-seo', 'pack.yaml'),
+      'name: content-seo\nversion: 0.1.0\nscope: domain\nactivation: on-demand\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(projectDir, '.opensquid', 'active.json'),
+      JSON.stringify({ packs: ['content-seo'] }),
+      'utf-8',
+    );
+    const stdin = JSON.stringify({
+      tool: 'Bash',
+      args: { command: 'rm -rf / --no-preserve-root' },
+      cwd: projectDir,
+    });
+    const r = await runHook('pre-tool-use.ts', stdin);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('deny');
+    expect(r.stdout.toLowerCase()).toContain('safety floor');
+    expect(r.stdout.toLowerCase()).not.toContain('orchestrator guard'); // guard off (no declaration)
   }, 15000);
 
   it('project-local active.json = {"packs":[]} (empty) + mutating tool → guard does NOT fire (deadlock fix)', async () => {
@@ -304,12 +362,13 @@ describe('pre-tool-use: orchestrator guard — project-local gate (#36)', () => 
     expect(r.stdout.toLowerCase()).not.toContain('orchestrator guard');
   }, 15000);
 
-  it('executor (agent_id present) + packs active → never denied (exemption intact)', async () => {
-    // Even with packs declared, an executor subagent (agent_id present) must pass through.
+  it('executor (agent_id present) + orchestrator_only pack active → never denied (exemption intact)', async () => {
+    // Even with a pack that DECLARES orchestrator_only active, an executor subagent (agent_id present) must
+    // pass through — the declaration turns the guard ON, and the executor exemption still exempts it.
     await mkdir(join(projectDir, '.opensquid'), { recursive: true });
     await writeFile(
       join(projectDir, '.opensquid', 'active.json'),
-      JSON.stringify({ packs: ['some-discipline-pack'] }),
+      JSON.stringify({ packs: ['fullstack-flow'] }),
       'utf-8',
     );
     const stdin = JSON.stringify({

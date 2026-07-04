@@ -95,8 +95,8 @@ export function registerPhaseInject(registry: FunctionRegistry): void {
         return ok(null);
       }
       const rubrics = {
-        scope: await readRubricContent('scope'),
-        author: await readRubricContent('author'),
+        scope: await readRubricContent('scope', 'coding-flow'),
+        author: await readRubricContent('author', 'coding-flow'),
       };
       const { phase, text } = selectPhaseBundle(st, ctx.packProcedure, rubrics);
       if (text.length === 0) return ok(null);

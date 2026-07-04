@@ -21,22 +21,28 @@ import {
 const ISO = '2026-06-22T13:45:07.000Z';
 
 describe('renderStageSummary (before-stage summary — pure)', () => {
-  it('renders the "Starting <STAGE> · will do <work>" orientation line from NEXT_STAGE_WORK', () => {
-    const { body } = renderStageSummary('AUTHOR', 'T-x', ISO);
+  // GENERIC — the `Will:` text is the entered stage's pack-declared `does:` (passed in), NOT a core map.
+  it('renders the "Starting <STAGE> · Will: <work>" orientation line from the passed-in work text', () => {
+    const { body } = renderStageSummary(
+      'AUTHOR',
+      'author the spec + real code covering every scoped element',
+      'T-x',
+      ISO,
+    );
     expect(body).toContain('🦑 Starting AUTHOR · T-x · 2026-06-22');
     expect(body).toContain('Will: author the spec + real code covering every scoped element');
   });
 
-  it('covers scope_write (the GS1 automated stage NEXT_STAGE_WORK now describes)', () => {
-    const { body } = renderStageSummary('SCOPE_WRITE', 'T-x', ISO);
-    expect(body).toContain('🦑 Starting SCOPE_WRITE · T-x · 2026-06-22');
-    expect(body).toContain('Will: write the pre-research artifact');
+  it('renders a non-coding stage label + its work (the label/work are pack data, not a closed enum)', () => {
+    const { body } = renderStageSummary('TRIAGE', 'sort the inbound reports by severity', 'T-x', ISO);
+    expect(body).toContain('🦑 Starting TRIAGE · T-x · 2026-06-22');
+    expect(body).toContain('Will: sort the inbound reports by severity');
   });
 
-  it('renders the CODE entry summary (the 7-phase cycle it will run)', () => {
-    const { body } = renderStageSummary('CODE', 'T-x', ISO);
+  it('falls back to a generic "begin this stage" when no work text is supplied', () => {
+    const { body } = renderStageSummary('CODE', undefined, 'T-x', ISO);
     expect(body).toContain('🦑 Starting CODE · T-x · 2026-06-22');
-    expect(body).toContain('Will: run the 7-phase coding cycle');
+    expect(body).toContain('Will: begin this stage');
   });
 });
 
@@ -47,6 +53,7 @@ describe('renderStageReport (pure, standardized format)', () => {
       taskId: 'T-x',
       summary: 'plan complete',
       nextDirective: 'author',
+      nextWork: 'author the spec + real code covering every scoped element', // pack data (the next state's `does:`)
     };
     const { path, body } = renderStageReport(r, ISO);
     expect(path).toBe(join('docs/reports', 'plan-T-x-2026-06-22.md'));
@@ -60,12 +67,26 @@ describe('renderStageReport (pure, standardized format)', () => {
     expect(body).not.toContain('Phases:');
   });
 
+  it('a non-coding stage label + no work text renders a bare `Next → <state>` line', () => {
+    // GENERIC — `stage` is any string (a non-coding pack names its own stage); with no `nextWork` the
+    // `Next →` line names the state with no work suffix (no core map to consult).
+    const { path, body } = renderStageReport(
+      { stage: 'TRIAGE', taskId: 'T-t', summary: 'triaged', nextDirective: 'remediate' },
+      ISO,
+    );
+    expect(path).toBe(join('docs/reports', 'triage-T-t-2026-06-22.md'));
+    expect(body).toContain('🦑 Phase report — TRIAGE complete · T-t · 2026-06-22');
+    expect(body).toContain('Next → remediate');
+    expect(body).not.toContain('Next → remediate:'); // no work suffix when nextWork is absent
+  });
+
   it('CODE report renders the 7-phase step chart (the long, stand-out report)', () => {
     const r: StageReport = {
       stage: 'CODE',
       taskId: 'T-c',
       summary: 'all 7 phases logged',
       nextDirective: 'deploy',
+      nextWork: 'verify deploy capability, then the human-accept gate',
       phases: CODE_PHASES.map((name) => ({ name, done: true })),
     };
     const { body } = renderStageReport(r, ISO);

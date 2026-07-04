@@ -40,6 +40,24 @@ const ExecutorState = z
   })
   .strict();
 
+// EVIDENCE-DECLARATION (generic runtime) — a single entry in a gate's `reads:` list: the ctx key this gate
+// reads, rendered as the report's `Evidence:` proof line. A BARE STRING is the ctx key (its display label is
+// the key minus its `<state>.` prefix, and it reads TRUE-is-good); the OBJECT form carries an explicit `label`
+// and/or `expect` polarity (e.g. an `open_question` key that is GOOD when false). This moves the former
+// hardcoded per-stage evidence switch out of core (v2_supply) into pack data — a non-coding pack declares its
+// own evidence keys, and the runtime renders whatever the current gate declares (nothing coding-specific).
+const EvidenceRef = z.union([
+  z.string().min(1),
+  z
+    .object({
+      key: z.string().min(1),
+      label: z.string().min(1).optional(),
+      expect: z.boolean().optional(), // the value that reads as "ok" (default true); false for a negated facet
+    })
+    .strict(),
+]);
+export type EvidenceRef = z.infer<typeof EvidenceRef>;
+
 /** Pure guard evaluation; pass → emit `on_pass_emits`, fail → an action (block/halt) carrying a failure-type key.
  *  `trigger` (optional) names the OBSERVED events that evaluate this gate (the conformance case); absent =
  *  driver-evaluated (the execution case). */
@@ -69,6 +87,14 @@ const GateState = z
     //               its label, so a `summary:true` with no `report` is inert.
     report: z.string().min(1).optional(),
     summary: z.boolean().optional(),
+    // EVIDENCE-DECLARATION (generic runtime): the ctx keys this gate reads, rendered as the after-stage
+    // report's `Evidence:` proof line. Absent ⇒ no evidence line. Replaces the deleted hardcoded per-stage
+    // `stageEvidence` switch in core — the pack, not core, owns which keys prove a stage.
+    reads: z.array(EvidenceRef).optional(),
+    // STAGE-WORK DESCRIPTION (behavior-as-data): "what this stage works on" — rendered as the report's
+    // `Next → <stage>: <does>` line and the before-stage summary's `Will: <does>`. Replaces the hardcoded
+    // `NEXT_STAGE_WORK` core map — the pack owns the per-stage work text, not a closed coding-state map.
+    does: z.string().min(1).optional(),
   })
   .strict();
 
@@ -126,6 +152,30 @@ export type DecisionBranch = z.infer<typeof DecisionBranch>;
 
 export const PackScope = z.enum(['universal', 'domain', 'specialty', 'workflow', 'project']);
 export type PackScope = z.infer<typeof PackScope>;
+
+// PACK-TAXONOMY — the activation CLASS (pack-taxonomy.md:32-40): HOW a pack is chosen to be active, orthogonal
+// to `scope`. `always-on` = cross-cutting governance/safety (NEVER taxonomy-gated); `on-demand` = a discipline /
+// lens / expert, gated by the classified request coordinates (the bulk of packs + all lenses); `project-scoped`
+// = a pack bound to a project marker. A pack declares `activation:`; a pack that omits it defaults to `on-demand`
+// (pack-taxonomy.md:39). Additive metadata surfaced on the loaded pack; the on-demand CLASSIFIER that consumes it
+// for containment-gated activation is a later step (#37) — for now the field validates at load and is threaded
+// through as a property of PackV2.
+export const Activation = z.enum(['always-on', 'on-demand', 'project-scoped']);
+export type Activation = z.infer<typeof Activation>;
+
+// DISCIPLINE-DECLARATION (project-only-operation §"substrate = plumbing", opensquid-project-only-operation.md:86-93):
+// opensquid provides the guard MECHANISM (the pure `checkOrchestratorGuard` in runtime/guard/orchestrator_guard.ts);
+// a PACK declares the POLICY that turns it on. `orchestrator_only: true` = "this pack imposes orchestrator-only
+// discipline: the main loop PLANS and dispatches executors; it must not directly implement." The pre-tool-use
+// orchestrator-guard gate fires ONLY when an activated PROJECT pack declares this (so a content/SEO project with
+// no such declaration never misfires — the RaumPilates fix). This is DISCIPLINE (machine-behaviour policy), NOT
+// the catastrophic SAFETY FLOOR — the safety floor stays universal substrate and is never declared here.
+const Discipline = z
+  .object({
+    orchestrator_only: z.boolean().default(false),
+  })
+  .strict();
+export type Discipline = z.infer<typeof Discipline>;
 
 // CONFORMANCE-RECONCILE: the fsm-less `gates` form is GONE. Gates belong IN the execution FSM as
 // `GateState` nodes (a gate on a transition — the `trigger`=conformance / no-trigger=execution contract
@@ -208,6 +258,12 @@ export const PackV2 = z
     name: z.string().min(1),
     version: z.string().min(1),
     scope: PackScope,
+    // PACK-TAXONOMY activation class (default `on-demand`, pack-taxonomy.md:39). Validated at load (Zod enum).
+    activation: Activation.default('on-demand'),
+    // DISCIPLINE-DECLARATION — the machine-behaviour policy this pack imposes (currently: orchestrator-only).
+    // Optional; absent ⇒ no declared discipline ⇒ the substrate's orchestrator guard does NOT fire for a project
+    // whose packs are all declaration-less (e.g. a content/SEO project).
+    discipline: Discipline.optional(),
     detected_by: z.array(z.unknown()).default([]),
     // ORCH.1: additive optional — a `serves`-less pack parses byte-identically (only the orchestrator reads it).
     serves: Serves.optional(),

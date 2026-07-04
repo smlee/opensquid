@@ -35,7 +35,7 @@ import type { Command } from 'commander';
 import { stagedDiff } from '../../functions/staged_diff.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { sha256Hex } from '../../runtime/durable/run_id.js';
-import { OPENSQUID_HOME, resolveProjectScopeRoot, sessionStateFile } from '../../runtime/paths.js';
+import { resolveProjectScopeRoot, sessionStateFile } from '../../runtime/paths.js';
 import { PROTECTED_PREFIXES, isDocsOnly } from '../../runtime/protected_paths.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
 import { readActiveTask } from '../../runtime/session_state.js';
@@ -50,31 +50,30 @@ const execFileP = promisify(execFile);
 const DISCIPLINE_PACKS = ['coding-flow', 'fullstack-flow'] as const;
 type DisciplinePack = (typeof DISCIPLINE_PACKS)[number];
 
-/** The active discipline pack (user scope then project scope), or null if none is pinned. */
+/** The active discipline pack, or null if none is pinned. Project-only operation: this reads the
+ *  PROJECT scope's `active.json` ONLY (via `resolveProjectScopeRoot(cwd)`, which never resolves to the
+ *  user/home root). The user/home scope (`~/.opensquid`) no longer arms the gate — global enforces
+ *  nothing; a project with no discipline pack has no commit gate. This keeps the commit gate consulting
+ *  the SAME project-only scope as the GS1 guard + the pack loaders. */
 export async function activeDisciplinePack(cwd: string): Promise<DisciplinePack | null> {
-  const candidates: string[] = [join(OPENSQUID_HOME(), 'active.json')];
   const scopeRoot = await resolveProjectScopeRoot(cwd);
-  if (scopeRoot !== null) candidates.push(join(scopeRoot, 'active.json'));
-  for (const path of candidates) {
-    try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as { packs?: unknown };
-      const packs = Array.isArray(parsed.packs) ? parsed.packs : [];
-      const hit = DISCIPLINE_PACKS.find((p) => packs.includes(p));
-      if (hit !== undefined) return hit;
-    } catch {
-      /* absent/malformed scope → not active here */
-    }
+  if (scopeRoot === null) return null;
+  try {
+    const parsed = JSON.parse(await readFile(join(scopeRoot, 'active.json'), 'utf8')) as {
+      packs?: unknown;
+    };
+    const packs = Array.isArray(parsed.packs) ? parsed.packs : [];
+    const hit = DISCIPLINE_PACKS.find((p) => packs.includes(p));
+    if (hit !== undefined) return hit;
+  } catch {
+    /* absent/malformed project scope → not active here */
   }
   return null;
 }
 
-/** GDC.2 — is this invocation gated? The gate binds to the AGENT, not to a
- *  location (user directive 2026-06-11: "all agents in any harness; git on
- *  the terminal behaves normally"): `coding-flow` in the USER scope
- *  (~/.opensquid/active.json — the agent's own config) gates the agent in
- *  EVERY repo; a project-scope opt-in still works too (e.g. a team gating
- *  one repo for all agents). Humans pass upstream regardless
- *  (isAgentInvocation, GDC.1). */
+/** Is this invocation gated? Project-only operation: the gate arms iff the PROJECT at `cwd` pins a
+ *  discipline pack in its own `.opensquid/active.json` (global enforces nothing — a repo the agent
+ *  hasn't opted into is never blocked). Humans pass upstream regardless (isAgentInvocation, GDC.1). */
 export async function isGatedRepo(cwd: string): Promise<boolean> {
   return (await activeDisciplinePack(cwd)) !== null;
 }

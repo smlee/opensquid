@@ -15,6 +15,7 @@ import { discoverActivePacks, partitionActivePacks } from './discovery.js';
 
 let scopeRoot: string;
 let builtinRoot: string;
+let userScopeRoot: string;
 
 async function writeActiveJson(root: string, names: string[]): Promise<void> {
   await writeFile(join(root, 'active.json'), JSON.stringify({ packs: names }), 'utf8');
@@ -60,10 +61,12 @@ async function writeV2Pack(root: string, name: string): Promise<void> {
 beforeEach(async () => {
   scopeRoot = await mkdtemp(join(tmpdir(), 'osq-partition-scope-'));
   builtinRoot = await mkdtemp(join(tmpdir(), 'osq-partition-builtin-'));
+  userScopeRoot = await mkdtemp(join(tmpdir(), 'osq-partition-user-'));
 });
 afterEach(async () => {
   await rm(scopeRoot, { recursive: true, force: true });
   await rm(builtinRoot, { recursive: true, force: true });
+  await rm(userScopeRoot, { recursive: true, force: true });
 });
 
 describe('partitionActivePacks — v1/v2 split + v1-resolution preservation', () => {
@@ -140,6 +143,52 @@ describe('partitionActivePacks — v1/v2 split + v1-resolution preservation', ()
       'utf8',
     );
     await expect(partitionActivePacks(scopeRoot, null, builtinRoot)).rejects.toThrow();
+  });
+});
+
+describe('partitionActivePacks — user scope as a NAME-resolution SOURCE (project → user → builtin)', () => {
+  it('a project-LISTED name that lives ONLY at user scope resolves from user scope', async () => {
+    // The `sangmin-personal-rules` case: an always-on governance pack installed only at user scope,
+    // but explicitly LISTED by the project's active.json. Project scope has no such folder → the
+    // resolver falls through to user scope and loads it (no fail-loud).
+    await writeActiveJson(scopeRoot, ['user-only']);
+    await writeV1Pack(userScopeRoot, 'user-only');
+    const { v1 } = await partitionActivePacks(scopeRoot, null, builtinRoot, userScopeRoot);
+    expect(v1.map((p) => p.name)).toEqual(['user-only']);
+  });
+
+  it('a v2 cartridge that lives ONLY at user scope resolves from user scope when LISTED', async () => {
+    await writeActiveJson(scopeRoot, ['user-v2']);
+    await writeV2Pack(userScopeRoot, 'user-v2');
+    const { v1, v2 } = await partitionActivePacks(scopeRoot, null, builtinRoot, userScopeRoot);
+    expect(v1).toEqual([]);
+    expect(v2.map((c) => c.pack.name)).toEqual(['user-v2']);
+  });
+
+  it('a user-scope pack NOT listed by the project does NOT load (no home∪project union)', async () => {
+    // The core project-only guarantee: user scope is a SOURCE for opt-in names, never an
+    // auto-enforcer. `unlisted` exists at user scope but is absent from the project's active.json →
+    // it must never appear in the loaded set. Only the LISTED `a` (from project scope) loads.
+    await writeActiveJson(scopeRoot, ['a']);
+    await writeV1Pack(scopeRoot, 'a');
+    await writeV1Pack(userScopeRoot, 'unlisted');
+    const { v1 } = await partitionActivePacks(scopeRoot, null, builtinRoot, userScopeRoot);
+    expect(v1.map((p) => p.name)).toEqual(['a']);
+  });
+
+  it('project scope WINS over user scope for a colliding name (project → user precedence)', async () => {
+    // Same name present at both scopes; the project copy resolves. Distinguished by the `scope` field.
+    await writeActiveJson(scopeRoot, ['dup']);
+    await writeV1Pack(scopeRoot, 'dup', 'workflow');
+    await writeV1Pack(userScopeRoot, 'dup', 'domain');
+    const { v1 } = await partitionActivePacks(scopeRoot, null, builtinRoot, userScopeRoot);
+    expect(v1.map((p) => p.scope)).toEqual(['workflow']);
+  });
+
+  it('user scope absent (null) → project-only NAME resolution (back-compat: user is opt-in threading)', async () => {
+    await writeActiveJson(scopeRoot, ['ghost']);
+    await writeV1Pack(userScopeRoot, 'ghost'); // present at user scope, but userScopeRoot NOT passed
+    await expect(partitionActivePacks(scopeRoot, null, builtinRoot)).rejects.toThrow(/not found/i);
   });
 });
 

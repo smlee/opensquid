@@ -19,7 +19,12 @@
  * the parent agent because of an opensquid bug. The `main().catch()` at the
  * bottom is the last line of defense.
  */
-import { buildRegistry, loadActivePacksForDispatch, loadActiveV2Cartridges } from '../bootstrap.js';
+import {
+  buildRegistry,
+  loadActivePacksForDispatch,
+  loadActiveV2Cartridges,
+  projectDeclaresOrchestratorOnly,
+} from '../bootstrap.js';
 import { runV2SkillHost } from '../loop/v2_skill_host.js';
 import { runV2Cartridges, type V2Decision } from '../loop/v2_supply.js';
 import { exitIfSubagent } from './subagent_guard.js';
@@ -41,8 +46,6 @@ import { loadSafetyPolicy } from '../guard/safety_policy.js';
 import { isYoloMode } from '../guard/yolo.js';
 import { checkOrchestratorGuard } from '../guard/orchestrator_guard.js';
 import { appendProjectDriftEvent } from '../drift_catalog.js';
-import { resolveProjectScopeRoot } from '../paths.js';
-import { hasActiveProjectPacks } from '../../packs/discovery.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -234,11 +237,18 @@ async function main(): Promise<void> {
   // tee, cp/mv) in the main loop and require an executor subagent instead. It sits AFTER the safety
   // floor and BEFORE pack dispatch, using the same FU.11 deny-envelope + exit(0) pattern.
   //
-  // #36 — PROJECT-LOCAL GATE: the guard only fires when the project running at `cwd` has at least one
-  // pack declared in its local .opensquid/active.json. Projects that only see GLOBAL packs (or have no
-  // .opensquid/ at all) are never gated — this was the root cause of the 2-day interactive deadlock.
-  // resolveProjectScopeRoot walks up from cwd (never reads ~/.opensquid), so global packs cannot trigger
-  // this path. fail-open: any error from the scope-check or the guard itself never blocks the call.
+  // project-only-operation Step 1a — PACK-DECLARED DISCIPLINE GATE: the guard's MECHANISM lives in opensquid
+  // (`checkOrchestratorGuard`); its ACTIVATION is a POLICY a project pack declares. The guard fires ONLY when
+  // an activated PROJECT pack at `cwd` declares `discipline: { orchestrator_only: true }` (pack_v2.ts) — NOT on
+  // the coarse "any active project pack" it replaced. A content/SEO project (packs without the declaration) does
+  // NOT get the guard (the RaumPilates content-project misfire fix); a project running fullstack-flow (which
+  // DOES declare it) keeps the guard. `projectDeclaresOrchestratorOnly` resolves the project from `cwd`
+  // (walks up from cwd, rejecting the user/home scope root — the home-scope-leak fix), loads its project-scope
+  // pack set (project-only: global enforces nothing), and checks the declaration. A pack-less cwd → no project
+  // scope → false → no guard (the interactive-deadlock fix stays). fail-open: any error never blocks the call.
+  //
+  // NOTE the safety FLOOR above is UNCHANGED — it stays universal substrate and fires unconditionally regardless
+  // of packs (machine-protection, not discipline). Only this DISCIPLINE guard became pack-declared.
   //
   // Executor exemption: a Task/Agent subagent's PreToolUse payload carries `agent_id` (per the CC hook
   // docs) — `checkOrchestratorGuard` passes those calls through untouched. `exitIfSubagent` (above,
@@ -247,7 +257,7 @@ async function main(): Promise<void> {
   // Agent, mcp__*) are NOT mutating → always allowed. FAIL-OPEN: any error here never blocks the call.
   if (parsed.data.kind === 'tool_call') {
     try {
-      if (await hasActiveProjectPacks(await resolveProjectScopeRoot(cwd))) {
+      if (await projectDeclaresOrchestratorOnly(cwd)) {
         const verdict = checkOrchestratorGuard(
           parsed.data.tool,
           parsed.data.args,

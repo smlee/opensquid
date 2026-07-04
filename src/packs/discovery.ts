@@ -182,12 +182,11 @@ export interface ActiveJson {
   /** Pack names (folder names under `packs/`) declared active in this scope. */
   packs: string[];
   /**
-   * PROJECT-SCOPE isolation switch. When `true` in a PROJECT `active.json`, the live pack set is THIS
-   * scope's declared packs ONLY — the resolver skips the user-scope (`~/.opensquid`) union AND the synthetic
-   * project-context pack (`loadActivePacksForDispatch`). Lets one project run a pure, isolated pack set (e.g.
-   * testing v2 fullstack-flow alone) WITHOUT editing the home config, so OTHER projects are unaffected (the
-   * flag lives only in this project's active.json; the resolver default is the union). Absent/false → the
-   * default user∪project union. Only meaningful at project scope.
+   * OBSOLETE (retired by project-only operation). This was the project-scope isolation opt-out back when
+   * the resolver unioned the user/home scope with the project scope; setting it `true` skipped that union.
+   * Under project-only operation the resolver ALREADY loads the project scope ONLY (global enforces
+   * nothing), so `exclusive` is a no-op — it is parsed tolerantly (an old active.json carrying it still
+   * loads) but has NO effect. The field is retained solely so existing configs keep parsing.
    */
   exclusive?: boolean;
   /**
@@ -232,12 +231,7 @@ type ActiveEntry = { format: 'v1'; pack: Pack } | { format: 'v2'; loaded: Loaded
  * a base ⇒ next base; none ⇒ throw. Only an ENOENT advances the search — a MALFORMED pack (non-ENOENT, e.g.
  * a bad YAML or a failed `PackV2.parse`) propagates (fail-loud, never silently skipped).
  */
-async function loadActiveEntry(
-  name: string,
-  scopePacksDir: string,
-  builtinRoot: string | null,
-): Promise<ActiveEntry> {
-  const bases = builtinRoot === null ? [scopePacksDir] : [scopePacksDir, builtinRoot];
+async function loadActiveEntry(name: string, bases: string[]): Promise<ActiveEntry> {
   for (const base of bases) {
     const dir = join(base, name);
     try {
@@ -251,10 +245,7 @@ async function loadActiveEntry(
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; // malformed v1 → fail loud
     }
   }
-  const tried =
-    builtinRoot === null
-      ? join(scopePacksDir, name)
-      : `${join(scopePacksDir, name)} OR built-in (${join(builtinRoot, name)})`;
+  const tried = bases.map((b) => join(b, name)).join(' OR ');
   throw new Error(
     `opensquid: pack "${name}" listed in active.json was not found (v2 pack.yaml or v1 manifest.yaml) at ` +
       `${tried}. Either install the pack via \`opensquid pack install\` or drop the entry from active.json.`,
@@ -271,6 +262,7 @@ export async function partitionActivePacks(
   scopeRoot: string | null,
   ctx: DetectionContext | null = null,
   builtinRoot: string | null = null,
+  userScopeRoot: string | null = null,
 ): Promise<{ v1: Pack[]; v2: LoadedPackV2[] }> {
   if (scopeRoot === null) return { v1: [], v2: [] };
 
@@ -306,10 +298,23 @@ export async function partitionActivePacks(
   // fallback was removed in T-CHAT-AS-TERMINAL's codex→pack standardization —
   // `packs/` is the sole, standard layout.)
   const packsDir = join(scopeRoot, 'packs');
+  // Pack-NAME resolution order (project-only operation): project scope → user scope → builtin.
+  // Only names the project LISTED in its active.json are resolved through this chain. The user scope
+  // (`<userScopeRoot>/packs/`) is a SOURCE for an opt-in name that lives only at user scope — e.g. an
+  // always-on governance pack such as `sangmin-personal-rules` — NOT an auto-enforcer: a user-scope
+  // pack the project did NOT list is never iterated here, so no home∪project union is reintroduced
+  // (that union is retired). Builtin is the final supply fallback (a listed-but-uninstalled name).
+  // Both `userScopeRoot` and `builtinRoot` are absent (null) in isolated unit paths → project-only.
+  const resolutionBases = [packsDir];
+  if (userScopeRoot !== null) {
+    const userPacksDir = join(userScopeRoot, 'packs');
+    if (userPacksDir !== packsDir) resolutionBases.push(userPacksDir);
+  }
+  if (builtinRoot !== null) resolutionBases.push(builtinRoot);
   const v1: Pack[] = [];
   const v2: LoadedPackV2[] = [];
   for (const name of active.packs) {
-    const entry = await loadActiveEntry(name, packsDir, builtinRoot);
+    const entry = await loadActiveEntry(name, resolutionBases);
     if (entry.format === 'v2') {
       v2.push(entry.loaded);
     } else if (ctx === null || matchesDetectedBy(entry.pack.detectedBy ?? [], ctx)) {
@@ -334,31 +339,18 @@ export async function discoverActivePacks(
   scopeRoot: string | null,
   ctx: DetectionContext | null = null,
   builtinRoot: string | null = null,
+  userScopeRoot: string | null = null,
 ): Promise<Pack[]> {
-  return (await partitionActivePacks(scopeRoot, ctx, builtinRoot)).v1;
-}
-
-/**
- * Read the `exclusive` switch from a scope's `active.json` (the project-scope isolation flag, see
- * {@link ActiveJson.exclusive}). `true` ⇒ this scope runs in isolation (the caller skips the user-scope
- * union). Lenient: absent scope / ENOENT / any read-or-parse fault → `false` (the safe default = the normal
- * union); a genuinely malformed `active.json` still fails LOUD at the `partitionActivePacks` read that runs
- * alongside this, so a config bug is never silently swallowed here.
- */
-export async function readActiveExclusive(scopeRoot: string | null): Promise<boolean> {
-  if (scopeRoot === null) return false;
-  try {
-    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
-    return (JSON.parse(raw) as ActiveJson).exclusive === true;
-  } catch {
-    return false;
-  }
+  return (await partitionActivePacks(scopeRoot, ctx, builtinRoot, userScopeRoot)).v1;
 }
 
 /**
  * #36 — project-local discipline predicate: does THIS scope's active.json list at least one pack?
  * false when: scopeRoot is null (no .opensquid/ found), active.json absent (ENOENT), or packs empty.
- * Lenient: any read/parse error → false (fail-open). Unlike readActiveExclusive this checks pack presence.
+ * Lenient: any read/parse error → false (fail-open). This is the ONE shared "is discipline active for
+ * this cwd project" predicate: the GS1 orchestrator guard consults it directly, and the pack loaders +
+ * commit gate key off the SAME project-only `resolveProjectScopeRoot(cwd)` scope so a cwd with no
+ * project packs gets zero discipline from every surface.
  */
 export async function hasActiveProjectPacks(scopeRoot: string | null): Promise<boolean> {
   if (scopeRoot === null) return false;
@@ -374,7 +366,7 @@ export async function hasActiveProjectPacks(scopeRoot: string | null): Promise<b
 /**
  * DBL.1b — read the per-project DEPLOY `verifyCommand` from a scope's `active.json` (see
  * {@link ActiveJson.verifyCommand}), or `null` when absent/unconfigured/unreadable (→ `deployClean` SKIPs to
- * true; the project ships as today). Lenient like {@link readActiveExclusive}.
+ * true; the project ships as today). Lenient: absent scope / ENOENT / any read-or-parse fault → `null`.
  */
 export async function readActiveVerifyCommand(scopeRoot: string | null): Promise<string | null> {
   if (scopeRoot === null) return null;

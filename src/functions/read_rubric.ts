@@ -6,7 +6,7 @@
  * `packs/builtin/<pack>/rubric/<name>.md` (the cartridge owns its own gate; shipped via the
  * `packs/builtin` entry in package.json `files[]`), read WHOLE by name. The pack is resolved from the active
  * `ctx.packId` (v1 `coding-flow` has `{scope,author}`; v2 `fullstack-flow` has `{scope,plan,author,code}`); the
- * bare reader defaults to `coding-flow` for back-compat with non-primitive callers. The guess/spec audits interpolate `{{rubric}}`
+ * bare reader takes the pack EXPLICITLY (no hardcoded default). The guess/spec audits interpolate `{{rubric}}`
  * from this (de-duping the former hardcoded prompt copy — docs/lexicon.md:40), and `rubric_pre_inject` (TR.B)
  * delivers the same content to the agent before authoring. Edit a fragment → both reflect it (the audit's
  * sha256(prompt) cache invalidates because the rubric content is interpolated INTO the prompt).
@@ -34,22 +34,21 @@ import type { FunctionRegistry } from './registry.js';
 /** Generous sanity ceiling, well above the few-KB prose rubric; over-cap → null (never a partial read). */
 const MAX_RUBRIC = 64_000;
 
-// v1 coding-flow has scope|author; v2 fullstack-flow adds plan|code (the guess-free standard at every stage).
-const ReadRubricArgs = z.object({ name: z.enum(['scope', 'plan', 'author', 'code']) }).strict();
-export type RubricName = 'scope' | 'plan' | 'author' | 'code';
+// GENERIC RUNTIME — `name` is any rubric name (the ACTIVE pack's own gate name), NOT a closed coding-flow list:
+// resolution flows through `ctx.packId` (below), so a non-coding pack's stages resolve to ITS own rubric files.
+// An unknown name simply has no rubric file → the reader returns null (never a hard arg rejection).
+const ReadRubricArgs = z.object({ name: z.string().min(1) }).strict();
 
 // dist/functions/read_rubric.js → ../.. = the package root; rubrics live in `packs/builtin/<pack>/rubric/`.
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
  * Bare reader — reused by `rubric_pre_inject` (TR.B) and wrapped by the primitive below. Resolves the rubric
- * for `pack` (default `coding-flow` for back-compat). Returns the whole fragment, or `null` on file-miss /
+ * for `pack` (the ACTIVE pack — the caller passes it; there is NO hardcoded default, so the reader keys off the
+ * active pack's OWN gate names, not a coding-flow list). Returns the whole fragment, or `null` on file-miss /
  * path-misresolve / over-cap. Never throws, never truncates.
  */
-export async function readRubricContent(
-  name: RubricName,
-  pack = 'coding-flow',
-): Promise<string | null> {
+export async function readRubricContent(name: string, pack: string): Promise<string | null> {
   try {
     const content = await readFile(
       join(PKG_ROOT, 'packs', 'builtin', pack, 'rubric', `${name}.md`),

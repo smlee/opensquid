@@ -37,8 +37,8 @@ export function registerPhaseBundleText(registry: FunctionRegistry): void {
       if (ctx.packProcedure === undefined) return ok({ text: '' });
       const st = await readFsmStateRaw(ctx.sessionId, 'coding-flow'); // RAW state; selector maps phase internally
       const rubrics = {
-        scope: await readRubricContent('scope'),
-        author: await readRubricContent('author'),
+        scope: await readRubricContent('scope', 'coding-flow'),
+        author: await readRubricContent('author', 'coding-flow'),
       };
       const { text } = selectPhaseBundle(st ?? 'idle', ctx.packProcedure, rubrics);
       return ok({ text });

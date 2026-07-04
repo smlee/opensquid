@@ -135,6 +135,23 @@ describe('resolveProjectScopeRoot', () => {
     await expect(resolveProjectScopeRoot(nested)).resolves.toBe(dotOpensquid);
   });
 
+  it('home-scope leak closed: does NOT resolve to the user/home scope root (~/.opensquid)', async () => {
+    // Project-only operation: a pack-less cwd under $HOME must resolve to NO project scope. Point the
+    // user scope at `<fakehome>/.opensquid` (so resolveUserScopeRoot() === that dir), create it, then
+    // resolve from a sub-dir whose ONLY .opensquid ancestor is that user-scope root. The leak fix must
+    // reject it (before the fix, the walk returned the home root and its packs enforced globally).
+    const fakeHome = join(root, 'fakehome');
+    const userScope = join(fakeHome, '.opensquid');
+    process.env.OPENSQUID_HOME = userScope; // resolveUserScopeRoot() === userScope
+    await mkdir(userScope, { recursive: true });
+    const sub = join(fakeHome, 'project-without-config');
+    await mkdir(sub, { recursive: true });
+
+    const result = await resolveProjectScopeRoot(sub);
+    // Deterministic regardless of what lies above `root`: the user-scope root must never be returned.
+    expect(result).not.toBe(userScope);
+  });
+
   it('returns null when no .opensquid exists in cwd or any ancestor', async () => {
     const empty = join(root, 'nowhere', 'a', 'b');
     await mkdir(empty, { recursive: true });

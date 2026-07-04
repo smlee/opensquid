@@ -26,7 +26,7 @@ describe('readProcedureContent', () => {
   it('returns null for a state with no procedure file (terminal/decision/unknown)', async () => {
     await expect(readProcedureContent('done', 'fullstack-flow')).resolves.toBeNull();
     await expect(readProcedureContent('accept', 'fullstack-flow')).resolves.toBeNull();
-    await expect(readProcedureContent('__nope__')).resolves.toBeNull();
+    await expect(readProcedureContent('__nope__', 'fullstack-flow')).resolves.toBeNull();
   });
 });
 
@@ -39,10 +39,21 @@ describe('read_procedure primitive', () => {
     if (res.ok) expect(res.value).toContain('CODE');
   });
 
-  it('rejects an unknown stage (.strict() enum)', async () => {
+  // GENERIC RUNTIME — the arg is NOT a closed coding enum: the ACTIVE pack's own stage name resolves against
+  // its own procedure dir. An arbitrary stage name is ACCEPTED (no arg rejection) and resolves to null when the
+  // pack ships no such file — so a non-coding pack can name a stage outside scope/plan/author/code/deploy.
+  it('accepts any stage name (keys off the active pack, not a coding enum) → null when the file is absent', async () => {
     const reg = new FunctionRegistry();
     registerReadProcedure(reg);
-    const res = await reg.call('read_procedure', { stage: 'ship' }, ctx());
+    const res = await reg.call('read_procedure', { stage: 'triage' }, ctx('fullstack-flow'));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value).toBeNull();
+  });
+
+  it('still rejects a non-string / empty stage (.strict() shape holds)', async () => {
+    const reg = new FunctionRegistry();
+    registerReadProcedure(reg);
+    const res = await reg.call('read_procedure', { stage: '' }, ctx());
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.kind).toBe('arg_invalid');
   });

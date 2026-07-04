@@ -19,15 +19,21 @@ rules:
         as: tool
       - call: read_fsm_state
         as: st
+      # The automation signal (env-only) — this HARD-BLOCK is INERT outside the driven loop, mirroring
+      # v2 fullstack-flow's pause-guard/stop-guard (packs/builtin/fullstack-flow/skills/pause-guard).
+      # In an interactive session (OPENSQUID_AUTOMATION unset) a real clarifying question is legitimate;
+      # the block must only engage under automation, never wall an interactive human turn.
+      - call: is_automation_mode
+        as: automation
       # GF.6 (F8): HARD-BLOCK the question — it's a real-time pause ACTION, so exit-2 deny
       # actually prevents it (the agent must answer from the principles, not stall).
       # CFD.3/PG.4: inject the phase bundle (procedure + rubric) on this hard-blocked pause,
       # GATED by the same condition so the I/O only runs when the block fires.
       - call: phase_bundle_text
-        if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
+        if: 'automation.value == true && (tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
         as: bundle
       - call: verdict
-        if: '(tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
+        if: 'automation.value == true && (tool == "AskUserQuestion") && st != "idle" && st != "scoping" && st != "researching" && st != "researched"'
         args:
           level: block
           message: >-
@@ -87,4 +93,7 @@ prose: |
   Two POST-SCOPE pause-gates (scope is FREE; both fire only past the scope region): an
   AskUserQuestion past SCOPE (GF.6: HARD-BLOCK — the real-time pause action), and pause/permission
   LANGUAGE in the settled prior turn (priorAssistantText, WARN — a retrospective detector, now
-  post-scope only). The automated phases take no pauses; pauses/questions live in SCOPE.
+  post-scope only). The AskUserQuestion HARD-BLOCK is AUTOMATION-GATED (`is_automation_mode`, env-only,
+  mirrors v2 fullstack-flow's pause-guard): interactively it is a true no-op so a legitimate clarifying
+  question to the user is never walled; it engages only inside the driven loop. The automated phases
+  take no pauses; pauses/questions live in SCOPE.

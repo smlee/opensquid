@@ -107,7 +107,7 @@ import { registerCheckChatConnectionFunction } from '../functions/check_chat_con
 import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
-import { discoverActivePacks, partitionActivePacks, readActiveExclusive } from '../packs/discovery.js';
+import { discoverActivePacks, partitionActivePacks } from '../packs/discovery.js';
 import { loadProjectContextPack } from '../packs/project_context.js';
 import type { LoadedPackV2 } from '../packs/loader_v2.js';
 import { type DetectionContext } from './detection.js';
@@ -116,7 +116,11 @@ import { loadPack } from '../packs/loader.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
 
-import { resolveBuiltinScopeRoot, resolveProjectScopeRoot, resolveUserScopeRoot } from './paths.js';
+import {
+  resolveBuiltinScopeRoot,
+  resolveProjectScopeRoot,
+  resolveUserScopeRoot,
+} from './paths.js';
 
 import type { RagBackend } from '../rag/types.js';
 import type { Pack } from './types.js';
@@ -329,7 +333,8 @@ export async function buildValidationRegistry(): Promise<FunctionRegistry> {
 //
 //   1. Test seam: `OPENSQUID_TEST_PACK`     (inline JSON pack object)
 //   2. Test seam: `OPENSQUID_TEST_PACK_DIR` (path to a pack folder)
-//   3. Real loader: user-scope + project-scope `active.json` (G.1)
+//   3. Real loader: the PROJECT-scope `active.json` ONLY (project-only operation —
+//      the user/home scope enforces nothing; global = mechanism, project = policy)
 //
 // The two test seams keep their fail-OPEN contract verbatim — fixtures are
 // opensquid-authored, so a malformed fixture stays a test bug and shouldn't
@@ -343,8 +348,8 @@ export async function buildValidationRegistry(): Promise<FunctionRegistry> {
 // `setActivePacks` is the test override that completely replaces the
 // in-process list; env+disk+real compose by concatenation. The real-loader
 // output is run through `sortPacksByScope` to land 5-tier scope ordering
-// across user-scope + project-scope packs; the test seams are NOT sorted
-// because tests want to assert exact insertion order.
+// across the project-scope packs; the test seams are NOT sorted because tests
+// want to assert exact insertion order.
 // ---------------------------------------------------------------------------
 
 function loadFromEnv(): Pack[] {
@@ -380,11 +385,13 @@ const diskPacksPromise: Promise<Pack[]> = (async () => {
   }
 })();
 
-// G.1 — real on-disk loader. Composes both installation scopes:
-//   - user scope: `~/.opensquid/` (via `resolveUserScopeRoot()`)
+// G.1 — real on-disk loader. Project-only operation: reads the PROJECT scope ONLY:
 //   - project scope: walked up from `process.cwd()` (via
 //     `resolveProjectScopeRoot(...)`); `null` when no `.opensquid/` exists
-//     in or above cwd, in which case `discoverActivePacks` returns `[]`.
+//     in or above cwd — OR the only `.opensquid/` found is the user/home root
+//     (rejected by the home-scope-leak fix) — in which case
+//     `discoverActivePacks` returns `[]` (zero packs, zero discipline).
+//   The user/home scope is NOT loaded here — global enforces nothing.
 //
 // Fail-LOUD: any thrown error from `discoverActivePacks` (malformed
 // active.json, missing pack folder, broken manifest.yaml) is rethrown
@@ -408,15 +415,19 @@ const realPacksPromise: Promise<Pack[]> = (async () => {
     // scope-architect, focused-react-19, ...) ENOENT-crashes the hook.
     const builtinRoot = resolveBuiltinScopeRoot();
     const projectRoot = await resolveProjectScopeRoot(cwd);
-    // Project-scope isolation (ActiveJson.exclusive): an exclusive project runs ITS packs ONLY — skip the
-    // user-scope union, so a project can run an isolated pack set without editing the home config (other
-    // projects, whose active.json has no `exclusive`, keep the default union).
-    const exclusive = await readActiveExclusive(projectRoot);
-    const user = exclusive ? [] : await discoverActivePacks(resolveUserScopeRoot(), ctx, builtinRoot);
-    const project = await discoverActivePacks(projectRoot, ctx, builtinRoot);
-    // PT.1 — dedupe by name (user-wins) BEFORE sort: a pack declared active in
-    // both scopes must load exactly once, not double-register + self-collide.
-    return sortPacksByScope(dedupePacksByName([...user, ...project]));
+    // Project-only operation: the live pack SET for a cwd is the PROJECT scope's listed packs ONLY —
+    // the user/home scope (`~/.opensquid`) enforces NOTHING (global = mechanism, project = policy),
+    // so there is NO home∪project union. A cwd with no project scope (projectRoot === null, incl. a
+    // pack-less cwd under $HOME after the home-scope-leak fix in resolveProjectScopeRoot) →
+    // discoverActivePacks returns [] → zero packs.
+    //
+    // NAME resolution is a separate axis from the SET: a name the project LISTED resolves through
+    // project → user → builtin (userScope + builtinRoot threaded to loadActiveEntry). User scope is a
+    // SOURCE for opt-in names that live only there (e.g. `sangmin-personal-rules`), NOT an
+    // auto-enforcer — an unlisted user pack is never loaded, so this does NOT reintroduce the union.
+    const project = await discoverActivePacks(projectRoot, ctx, builtinRoot, resolveUserScopeRoot());
+    // Dedupe by name (a name listed twice in one active.json loads once) then scope-sort.
+    return sortPacksByScope(dedupePacksByName(project));
   } catch (e) {
     // Surface the path-bearing error to stderr so the user can act on it,
     // then rethrow. The hook binary's top-level `main().catch(...)` is
@@ -505,12 +516,37 @@ export async function loadActiveV2Cartridges(_sessionId: string): Promise<Loaded
   const ctx = await buildDetectionContext(cwd);
   const builtinRoot = resolveBuiltinScopeRoot();
   const projectRoot = await resolveProjectScopeRoot(cwd);
-  // Project-scope isolation (ActiveJson.exclusive): skip the user-scope union for an exclusive project, so the
-  // v2-cartridge set matches the v1 path's isolation (both dispatch sites honor the flag).
-  const exclusive = await readActiveExclusive(projectRoot);
-  const userV2 = exclusive ? [] : (await partitionActivePacks(resolveUserScopeRoot(), ctx, builtinRoot)).v2;
-  const project = await partitionActivePacks(projectRoot, ctx, builtinRoot);
-  return [...userV2, ...project.v2];
+  // Project-only operation: the active v2 cartridge SET is the PROJECT scope's listed packs ONLY — no
+  // home∪project union (global enforces nothing), matching the v1 `realPacksPromise` path. NAME
+  // resolution for a LISTED name still falls through project → user → builtin (userScope + builtin
+  // threaded to loadActiveEntry): user scope is a supply SOURCE for an opt-in name, never an
+  // auto-enforcer of an unlisted pack.
+  const project = await partitionActivePacks(projectRoot, ctx, builtinRoot, resolveUserScopeRoot());
+  return project.v2;
+}
+
+/**
+ * project-only-operation Step 1a — does an ACTIVATED PROJECT pack DECLARE orchestrator-only discipline?
+ *
+ * The orchestrator guard's MECHANISM stays in opensquid (the pure `checkOrchestratorGuard` in
+ * `runtime/guard/orchestrator_guard.ts`); its ACTIVATION is a POLICY a project pack declares via
+ * `discipline: { orchestrator_only: true }` (pack_v2.ts). The pre-tool-use orchestrator-guard gate consults THIS
+ * instead of the coarse `hasActiveProjectPacks`: a content/SEO project (packs without the declaration) never
+ * misfires; only a project running a pack that declares the discipline (e.g. fullstack-flow) gets the guard.
+ *
+ * Resolution mirrors {@link loadActiveV2Cartridges} but is keyed on the EVENT `cwd` (the project the tool call
+ * runs in — the same `cwd` the pre-tool-use guard block already computes): project scope ONLY (no home∪project
+ * union — global enforces nothing), with user + builtin as NAME-resolution SOURCES for a listed pack. Returns
+ * false when the cwd has no project scope. The caller wraps this in try/catch, so a resolution error simply
+ * leaves the guard un-fired (fail-open — never blocks a legitimate call because of a config fault).
+ */
+export async function projectDeclaresOrchestratorOnly(cwd: string): Promise<boolean> {
+  const projectRoot = await resolveProjectScopeRoot(cwd);
+  if (projectRoot === null) return false;
+  const ctx = await buildDetectionContext(cwd);
+  const builtinRoot = resolveBuiltinScopeRoot();
+  const { v2 } = await partitionActivePacks(projectRoot, ctx, builtinRoot, resolveUserScopeRoot());
+  return v2.some((loaded) => loaded.pack.discipline?.orchestrator_only === true);
 }
 
 /**
@@ -543,17 +579,13 @@ export function v2PackToPack(loaded: LoadedPackV2): Pack {
  */
 export async function loadActivePacksForDispatch(sessionId: string): Promise<Pack[]> {
   const cwd = process.cwd();
-  // Project-scope isolation (ActiveJson.exclusive): an exclusive project runs ITS active.json packs ONLY —
-  // skip BOTH the user-scope union (handled in loadActivePacks/loadActiveV2Cartridges) AND the synthetic
-  // project-context pack, so the live set is purely the declared packs (e.g. v2 fullstack-flow alone).
-  const exclusive = await readActiveExclusive(await resolveProjectScopeRoot(cwd));
   const [v1, v2, projectContext] = await Promise.all([
     loadActivePacks(sessionId),
     loadActiveV2Cartridges(sessionId),
     // T-project-context: the project's own `.opensquid/context.md` (settings → block-guards +
     // prose → inject_context), auto-loaded as a synthetic project-scoped pack. ADDITIVE — null
-    // (no file / no project scope / exclusive project) leaves the dispatch set unchanged.
-    exclusive ? Promise.resolve(null) : loadProjectContextPack(cwd),
+    // (no file / no project scope) leaves the dispatch set unchanged.
+    loadProjectContextPack(cwd),
   ]);
   return [...v1, ...v2.map(v2PackToPack), ...(projectContext !== null ? [projectContext] : [])];
 }

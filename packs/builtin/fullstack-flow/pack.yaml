@@ -35,6 +35,15 @@ name: fullstack-flow
 version: 0.1.0
 scope: workflow
 
+# PACK-TAXONOMY (pack-taxonomy.md:105) — fullstack-flow is THE coding discipline, activated ON-DEMAND by the
+# classified request (produce × coding), not pinned always-on.
+activation: on-demand
+# DISCIPLINE-DECLARATION (project-only-operation, opensquid-project-only-operation.md:86-93) — fullstack-flow is a
+# coding flow whose main loop PLANS and dispatches executors; it imposes orchestrator-only discipline. opensquid
+# owns the guard MECHANISM (runtime/guard/orchestrator_guard.ts); this DECLARES the POLICY that turns it on, so a
+# project running fullstack-flow gets the orchestrator guard while a content/SEO project (no such declaration) does not.
+discipline: { orchestrator_only: true }
+
 # No detected_by gate — opt-in via active.json IS the pin (mirrors coding-flow; the user_pinned
 # DetectionContext signal is never populated, so a detected_by clause would silently DISABLE the pack).
 detected_by: []
@@ -139,6 +148,12 @@ fsm:
       # `summary`: `scope` is the FSM initial state, never entered via a transition, so an entry-edge summary
       # here could never fire.
       report: SCOPE
+      # EVIDENCE-DECLARATION (generic runtime) — the ctx keys the SCOPE report's `Evidence:` line proves. These
+      # are the keys buildGuardCtx sets for a scope advance; `open_question` is GOOD when FALSE (object form).
+      # Moves the former hardcoded core `stageEvidence` switch into pack data.
+      reads:
+        - scope.anchors_ok
+        - { key: scope.open_question, label: 'no open question', expect: false }
       # LANE MODEL — the SCOPE stage may write ONLY the pre-research artifact. `scope.is_advance` is derived
       # from this lane (data-driven, replacing the old PRE_RESEARCH_REGEX); an out-of-lane write blocks under
       # automation (no coding while still scoping). The glob is filename-scoped (`*pre-research*`) so a stray
@@ -154,6 +169,12 @@ fsm:
       # CADENCE — after-stage report on LEAVE (scope_write → plan) + before-stage summary on ENTRY (scope → scope_write).
       report: SCOPE_WRITE
       summary: true
+      # EVIDENCE-DECLARATION — same facets as SCOPE (scope_evidence.ts computes them for any pre-research write).
+      reads:
+        - scope.anchors_ok
+        - { key: scope.open_question, label: 'no open question', expect: false }
+      # STAGE-WORK — the "Will:"/"Next →" text (was NEXT_STAGE_WORK['scope_write'] in core, now pack data).
+      does: 'write the pre-research artifact for the scoped task (anchors resolved, guess-free)'
       # Same artifact lane as SCOPE — this automated stage's one job is to land the pre-research artifact.
       writes: ['docs/research/*pre-research*']
     # ── PLAN (new top-level region vs v1) ──────────────────────────────────
@@ -166,6 +187,12 @@ fsm:
       # CADENCE — after-stage report on LEAVE (plan → author) + before-stage summary on ENTRY.
       report: PLAN
       summary: true
+      # EVIDENCE-DECLARATION — the work-graph facets the PLAN report proves (was core stageEvidence['plan']).
+      reads:
+        - plan.acyclic
+        - plan.complete
+      # STAGE-WORK — was NEXT_STAGE_WORK['plan'] in core, now pack data.
+      does: 'decompose the scope into a dependency-ordered, acyclic plan'
       # LANE MODEL — PLAN decomposes into the work-graph (via MCP `workgraph_*` tools, which are not
       # file-writes and so are never lane-checked) and may write only docs (plan notes/reports). A source-file
       # write during PLAN is out of lane → blocked (planning does not implement).
@@ -181,6 +208,12 @@ fsm:
       # the VERIFY bug-fix loop re-enters author).
       report: AUTHOR
       summary: true
+      # EVIDENCE-DECLARATION — the coverage facets the AUTHOR report proves (was core stageEvidence['author']).
+      reads:
+        - author.manifest_complete
+        - author.real_code
+      # STAGE-WORK — was NEXT_STAGE_WORK['author'] in core, now pack data.
+      does: 'author the spec + real code covering every scoped element'
       # LANE MODEL — AUTHOR writes the task spec + requirement manifest (docs), not the implementation. A
       # source-file write during AUTHOR is out of lane → blocked (the code belongs to the CODE stage).
       writes: ['docs/**']
@@ -201,6 +234,13 @@ fsm:
       # v2_supply suppresses the CODE report (not the summary) under OPENSQUID_AUTOMATION=1 (unchanged double-emit guard).
       report: CODE
       summary: true
+      # EVIDENCE-DECLARATION — the CODE gate facets the report proves (was core stageEvidence['code']).
+      reads:
+        - code.phases_complete
+        - code.readiness_ran
+        - code.deprecated_clean
+      # STAGE-WORK — was NEXT_STAGE_WORK['code'] in core, now pack data.
+      does: 'run the 7-phase coding cycle: pre_research → learn → code → test → audit → post_research → fix'
       # LANE MODEL — CODE is the implementation stage: it writes source, tests, and configs. Its lane is
       # intentionally UNRESTRICTED (`**` matches every path) — declared explicitly (not omitted) so the pack
       # documents that CODE's freedom is a decision, not an oversight. Enforcement here is the completeness
@@ -216,6 +256,12 @@ fsm:
       # CADENCE — after-stage report on LEAVE (deploy → verify) + before-stage summary on ENTRY (code → deploy).
       report: DEPLOY
       summary: true
+      # EVIDENCE-DECLARATION — the facets the DEPLOY report proves (was core stageEvidence['deploy']).
+      reads:
+        - deploy.capability_ok
+        - deploy.reversible
+      # STAGE-WORK — was NEXT_STAGE_WORK['deploy'] in core, now pack data.
+      does: 'verify deploy capability, then the human-accept gate'
       # LANE MODEL — DEPLOY runs verification + release steps that may touch varied paths; its lane is
       # UNRESTRICTED (`**`), declared explicitly for the same documentation reason as CODE.
       writes: ['**']
