@@ -647,3 +647,73 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
     }
   });
 });
+
+// GS-durability — the live append path allocates the Lamport clock atomically from the DB inside a
+// BEGIN IMMEDIATE transaction, so concurrent writers (esp. separate processes sharing one workgraph.db)
+// can never mint the same (lamport, actorId) → no duplicate content-hashed wg_ops.id. These tests
+// reproduce the old crash shape and assert it no longer happens.
+describe('GS-durability — atomic Lamport under concurrency', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'wg-conc-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('concurrent appends on one store get unique, gapless lamports (no PK crash)', async () => {
+    const wg = await open({ dbUrl: `file:${join(dir, 'wg.db')}` });
+    const N = 25;
+    const issues = await Promise.all(
+      Array.from({ length: N }, (_, i) => wg.createIssue({ title: `t${i}` })),
+    );
+    expect(new Set(issues.map((i) => i.id)).size).toBe(N); // all ids distinct
+    const allOps = (await Promise.all(issues.map((i) => wg.listEvents(i.id)))).flat();
+    const lamports = allOps.map((o) => o.lamport).sort((a, b) => a - b);
+    expect(lamports).toEqual(Array.from({ length: N }, (_, i) => i + 1)); // 1..N, gapless, no dup
+  });
+
+  it('two instances on ONE file share the DB clock — no collision even on identical payloads', async () => {
+    const dbUrl = `file:${join(dir, 'wg.db')}`;
+    const a = await open({ dbUrl, sourceDir: join(dir, 'ops') });
+    const b = await open({ dbUrl, sourceDir: join(dir, 'ops') }); // both init'd — old in-memory hwm both = 0
+    // The exact old-crash shape, deterministic: two instances (default actorId 'legacy') creating
+    // IDENTICAL-payload issues, alternating. Old code → both seed hwm from MAX at init, both mint the
+    // same lamport → same newIssueId + same op-id → SQLITE_CONSTRAINT_PRIMARYKEY on wg_ops.id. New code
+    // → each append reads MAX from the SHARED file, so b continues a's clock → distinct lamports → ids.
+    const created = [];
+    for (let i = 0; i < 8; i++) {
+      created.push(await (i % 2 === 0 ? a : b).createIssue({ title: 'same', body: 'same' }));
+    }
+    expect(new Set(created.map((x) => x.id)).size).toBe(8); // distinct despite identical payloads
+    const c = await open({ dbUrl });
+    expect(await c.listIssues()).toHaveLength(8);
+    const lamports = (await Promise.all(created.map((x) => c.listEvents(x.id))))
+      .flat()
+      .map((o) => o.lamport)
+      .sort((p, q) => p - q);
+    expect(lamports).toEqual([1, 2, 3, 4, 5, 6, 7, 8]); // one shared, gapless clock across both writers
+  });
+
+  it(
+    'two instances writing SIMULTANEOUSLY neither crash nor hang',
+    { timeout: 30000 },
+    async () => {
+      const dbUrl = `file:${join(dir, 'wg.db')}`;
+      const a = await open({ dbUrl, sourceDir: join(dir, 'ops') });
+      const b = await open({ dbUrl, sourceDir: join(dir, 'ops') });
+      // Real simultaneous cross-connection contention (the ralph-parent + lap-subprocess shape). The file
+      // write lock serializes the two BEGIN IMMEDIATE writers; busy_timeout + the append retry absorb the
+      // wait. Assert: every op lands, all ids distinct — no PK crash, no deadlock.
+      const M = 12;
+      const issues = await Promise.all(
+        Array.from({ length: M }, (_, i) =>
+          (i % 2 === 0 ? a : b).createIssue({ title: 'x', body: 'y' }),
+        ),
+      );
+      expect(new Set(issues.map((i) => i.id)).size).toBe(M);
+      const c = await open({ dbUrl });
+      expect(await c.listIssues()).toHaveLength(M);
+    },
+  );
+});

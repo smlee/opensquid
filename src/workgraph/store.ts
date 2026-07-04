@@ -139,20 +139,50 @@ async function backfillTuple(c: Client): Promise<void> {
   await c.execute(`UPDATE wg_ops SET actor_id = 'legacy' WHERE actor_id IS NULL`);
 }
 
+// GS-durability — the live append path allocates the Lamport clock from the DB (`MAX+1`) instead of an
+// in-memory `++hwm`, so N processes sharing one workgraph.db read the same shared clock. An in-process
+// mutex serializes a process's own appends (gapless, no self-collision); across processes the PK on the
+// content-hashed `wg_ops.id` arbitrates a same-lamport race and the loser retries onto a fresh lamport.
+// A contended writer first waits on `busy_timeout`; these bounded retries then absorb the residual
+// SQLITE_BUSY / PK race.
+const MAX_APPEND_RETRIES = 8;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const isBusy = (e: unknown): boolean =>
+  errText(e).includes('SQLITE_BUSY') || errText(e).includes('database is locked');
+const isDupOpId = (e: unknown): boolean =>
+  errText(e).includes('SQLITE_CONSTRAINT_PRIMARYKEY') ||
+  errText(e).includes('UNIQUE constraint failed: wg_ops.id');
+// Exponential backoff w/ jitter, capped small — `busy_timeout` already absorbs most contention.
+const backoffMs = (attempt: number): number =>
+  Math.min(400, 25 * 2 ** attempt) + Math.random() * 25;
+
 export function workGraphStore(opts: {
   dbUrl: string;
   sourceDir?: string;
   // WGD.1 — this replica's actor id (the per-HOME UUID; the live openers pass `resolveActorId()`).
-  // Closure-captured like `hwm`; default 'legacy' so the existing tests need no actor wiring.
+  // Default 'legacy' so the existing tests need no actor wiring.
   actorId?: string;
 }): WorkGraphStore {
   let client: Client | null = null;
-  let hwm = 0; // Lamport high-water mark
   const actorId = opts.actorId ?? 'legacy';
-  const nextLamport = (): number => ++hwm;
   const db = (): Client => {
     if (!client) throw new Error('workgraph: not initialized');
     return client;
+  };
+
+  // In-process write mutex: libsql permits only ONE open transaction per connection, so this instance's
+  // appendOp calls must run one at a time (a promise chain IS the mutex — each waits for the prior to
+  // settle). The BEGIN IMMEDIATE inside appendOp then serializes writers ACROSS processes. Together:
+  // one writer per connection (this) + one writer per file (BEGIN IMMEDIATE) = no interleaved allocation.
+  let writeChain: Promise<unknown> = Promise.resolve();
+  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = writeChain.then(fn, fn);
+    writeChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   };
 
   // project-scoped: reads filter by it. (id is globally unique, so the filter is also an isolation guard.)
@@ -165,47 +195,93 @@ export function workGraphStore(opts: {
     return row ? rowToIssue(row) : null;
   };
 
-  // Append one op: file-first (git truth) when sourceDir set, then wg_ops, then fold the projection. The
-  // single `hwm` stays GLOBAL (one clock) → distinct lamports → unique op-ids; `project` is stamped on the op.
+  // Append one op. The `serialize` mutex keeps THIS process's appends one-at-a-time, so within a process
+  // the DB-derived lamport (`MAX+1`) is gapless and never self-collides. ACROSS processes, two writers can
+  // still read the same MAX; the PK on the content-hashed `wg_ops.id` is the arbiter — the loser retries,
+  // re-reads MAX (now +1), and lands a distinct lamport → distinct id. `busy_timeout` + the retry absorb
+  // SQLITE_BUSY. No explicit transaction: libsql serializes statements per connection, and the two-phase
+  // (insert-then-project) shape matches the original store; the projection is rebuildable + idempotent.
+  // `issueIdArg` may be a deriver — `createIssue`'s id is itself a function of the lamport. `ts` is excluded
+  // from the op-id (identity is content-only); it lives in the stored payload + column.
   async function appendOp(
     project: string,
-    issueId: string,
-    lamport: number,
+    issueIdArg: string | ((lamport: number) => string),
     type: WgOp['type'],
     payload: Record<string, unknown>,
-  ): Promise<void> {
-    const ts = new Date().toISOString();
-    const op: WgOp = {
-      // WGD.1 — id hashes the CONTENT payload (not `{...payload, ts}`): `ts` is excluded from identity,
-      // so the same op on the same replica reproduces its id. `ts` lives in the stored payload + column.
-      id: makeOpId(type, payload, lamport, actorId),
-      issueId,
-      lamport,
-      type,
-      payload: { ...payload, ts },
-      project,
-      actorId,
-    };
-    if (opts.sourceDir !== undefined) {
-      await atomicWriteFile(
-        join(opts.sourceDir, `${safeRecordId(op.id)}.json`),
-        JSON.stringify(op, null, 2),
-      );
-    }
-    await db().execute({
-      sql: 'INSERT INTO wg_ops (id, issue_id, lamport, type, payload, ts, project, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      args: [
-        op.id,
-        op.issueId,
-        op.lamport,
-        op.type,
-        JSON.stringify(op.payload),
-        ts,
-        op.project,
-        op.actorId ?? 'legacy',
-      ],
+  ): Promise<{ lamport: number; issueId: string }> {
+    return serialize(async () => {
+      const ts = new Date().toISOString();
+      // Phase 1 — allocate a lamport from the DB and INSERT the op, retrying on the cross-process PK race
+      // (two writers minting the same lamport → same id) and on SQLITE_BUSY.
+      let op: WgOp | null = null;
+      let lastErr: unknown;
+      for (let attempt = 0; attempt <= MAX_APPEND_RETRIES; attempt++) {
+        try {
+          const rs = await db().execute('SELECT COALESCE(MAX(lamport), 0) + 1 AS next FROM wg_ops');
+          const lamport = num(rs.rows[0]?.next);
+          const issueId = typeof issueIdArg === 'function' ? issueIdArg(lamport) : issueIdArg;
+          const candidate: WgOp = {
+            id: makeOpId(type, payload, lamport, actorId),
+            issueId,
+            lamport,
+            type,
+            payload: { ...payload, ts },
+            project,
+            actorId,
+          };
+          await db().execute({
+            sql: 'INSERT INTO wg_ops (id, issue_id, lamport, type, payload, ts, project, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            args: [
+              candidate.id,
+              candidate.issueId,
+              candidate.lamport,
+              candidate.type,
+              JSON.stringify(candidate.payload),
+              ts,
+              candidate.project,
+              candidate.actorId ?? 'legacy',
+            ],
+          });
+          op = candidate;
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (attempt < MAX_APPEND_RETRIES && (isBusy(e) || isDupOpId(e))) {
+            await sleep(backoffMs(attempt));
+            continue;
+          }
+          throw e;
+        }
+      }
+      if (op === null) {
+        throw lastErr instanceof Error
+          ? lastErr
+          : new Error('workgraph: appendOp exhausted retries');
+      }
+      // The op-file (git source) is written AFTER the row is durable so a retry never orphans a file that a
+      // rebuild would replay as a spurious op.
+      if (opts.sourceDir !== undefined) {
+        await atomicWriteFile(
+          join(opts.sourceDir, `${safeRecordId(op.id)}.json`),
+          JSON.stringify(op, null, 2),
+        );
+      }
+      // Phase 2 — fold the (rebuildable, idempotent) projection, BUSY-retrying. Safe to retry: applyOp is
+      // INSERT-OR-IGNORE / LWW / upsert / CAS, so re-running the same op is a no-op.
+      for (let attempt = 0; attempt <= MAX_APPEND_RETRIES; attempt++) {
+        try {
+          await applyOp(db(), op);
+          break;
+        } catch (e) {
+          if (attempt < MAX_APPEND_RETRIES && isBusy(e)) {
+            await sleep(backoffMs(attempt));
+            continue;
+          }
+          throw e;
+        }
+      }
+      return { lamport: op.lamport, issueId: op.issueId };
     });
-    await applyOp(db(), op);
   }
 
   return {
@@ -216,17 +292,21 @@ export function workGraphStore(opts: {
       await applyConcurrencyPragmas(client);
       await createSchema(client);
       await backfillTuple(client); // WGD.1 — fill the (lamport, actor-id) tuple on pre-existing rows
-      const rs = await client.execute('SELECT COALESCE(MAX(lamport), 0) AS hwm FROM wg_ops');
-      hwm = num(rs.rows[0]?.hwm);
+      // No in-memory Lamport seed: `appendOp` allocates each lamport atomically from the DB (MAX+1)
+      // inside its transaction, so the clock is correct across every process sharing this file.
     },
 
     getIssue,
 
     async createIssue(project, { title, body = '' }) {
-      const lamport = nextLamport();
-      const id = newIssueId({ title, body }, lamport, actorId);
-      await appendOp(project, id, lamport, 'issue_created', { title, body });
-      const issue = await getIssue(project, id);
+      // The issue id is a function of the atomically-allocated lamport, so it is derived INSIDE appendOp.
+      const { issueId } = await appendOp(
+        project,
+        (lamport) => newIssueId({ title, body }, lamport, actorId),
+        'issue_created',
+        { title, body },
+      );
+      const issue = await getIssue(project, issueId);
       if (issue === null) throw new Error('workgraph: createIssue failed to project');
       return issue;
     },
@@ -266,8 +346,7 @@ export function workGraphStore(opts: {
       if (patch.title !== undefined) payload.title = patch.title;
       if (patch.body !== undefined) payload.body = patch.body;
       if (patch.status !== undefined) payload.status = patch.status;
-      const lamport = nextLamport();
-      await appendOp(project, id, lamport, 'issue_set', payload);
+      await appendOp(project, id, 'issue_set', payload);
       const next = await getIssue(project, id);
       if (next === null) throw new Error('workgraph: updateIssue lost the issue');
       return next;
@@ -279,8 +358,7 @@ export function workGraphStore(opts: {
       if ((await getIssue(project, fromId)) === null || (await getIssue(project, toId)) === null) {
         throw new Error('workgraph: edge endpoint missing');
       }
-      const lamport = nextLamport();
-      await appendOp(project, fromId, lamport, 'dep_added', { from: fromId, to: toId, type });
+      await appendOp(project, fromId, 'dep_added', { from: fromId, to: toId, type });
     },
 
     async listReady(project) {
@@ -303,20 +381,17 @@ export function workGraphStore(opts: {
 
     async wedgeMark(project, id, reason: string) {
       if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      const lamport = nextLamport();
-      await appendOp(project, id, lamport, 'wedge_marked', { reason });
+      await appendOp(project, id, 'wedge_marked', { reason });
     },
 
     async clearWedge(project, id) {
       if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      const lamport = nextLamport();
-      await appendOp(project, id, lamport, 'wedge_cleared', {});
+      await appendOp(project, id, 'wedge_cleared', {});
     },
 
     async releaseClaim(project, id) {
       if ((await getIssue(project, id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      const lamport = nextLamport();
-      await appendOp(project, id, lamport, 'claim_released', {});
+      await appendOp(project, id, 'claim_released', {});
     },
 
     async claimIssue(project, id, audience: ClaimAudience, ttlSec) {
@@ -329,8 +404,7 @@ export function workGraphStore(opts: {
           .update(`${id}\n${String(Date.now())}\n${String(Math.random())}`)
           .digest('hex')
           .slice(0, 16);
-      const lamport = nextLamport();
-      await appendOp(project, id, lamport, 'claim_acquired', { claimToken, audience, expiresAt });
+      await appendOp(project, id, 'claim_acquired', { claimToken, audience, expiresAt });
       // applyOp ran the conditional CAS; we won iff OUR token is the one that landed.
       const cur = await getIssue(project, id);
       return { won: cur?.claimToken === claimToken, expiresAt };
