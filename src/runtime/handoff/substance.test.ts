@@ -7,9 +7,11 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { sessionStateFile } from '../paths.js';
+import { CheckpointStore } from '../durable/checkpoint_store.js';
 
 import { hasResumableState } from './substance.js';
 
@@ -74,5 +76,24 @@ describe('hasResumableState', () => {
       'utf8',
     );
     expect(await hasResumableState(SID)).toBe(true);
+  });
+
+  it('v2 pack-agnostic: a bound checkpoint beyond scope → true with NO v1 session keys (key-drift fix)', async () => {
+    // The old-bug shape: v2 writes fullstack-flow-* keys (none written here), and NONE of the v1 coding-flow-*
+    // keys exist. The durable checkpoint (keyed by wg id, pack-neutral) is the resume signal handoff must see.
+    const client = createClient({ url: `file:${join(home, 'opensquid.db')}` });
+    const store = new CheckpointStore(client);
+    await store.init();
+    await store.createTaskCheckpoint('wg-substance-v2', 'plan', Date.now()); // stage beyond `scope`
+    client.close();
+
+    const prevItem = process.env.OPENSQUID_ITEM_ID;
+    process.env.OPENSQUID_ITEM_ID = 'wg-substance-v2'; // resolveCheckpointKey returns this directly (lap path)
+    try {
+      expect(await hasResumableState(SID)).toBe(true);
+    } finally {
+      if (prevItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
+      else process.env.OPENSQUID_ITEM_ID = prevItem;
+    }
   });
 });

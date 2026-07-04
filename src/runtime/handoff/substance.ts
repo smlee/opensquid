@@ -20,6 +20,7 @@ import { readFile } from 'node:fs/promises';
 
 import { sessionStateFile } from '../paths.js';
 import { readActiveTask } from '../session_state.js';
+import { readCheckpointBySession } from '../ralph/loop_stage.js';
 
 async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, 'utf8'));
@@ -27,6 +28,16 @@ async function readJson(path: string): Promise<unknown> {
 
 export async function hasResumableState(sessionId: string): Promise<boolean> {
   if ((await readActiveTask(sessionId)) !== null) return true;
+  // PACK-AGNOSTIC resume signal: a bound task checkpoint past `scope` OR carrying a recorded scope artifact.
+  // Reads the durable checkpoint (keyed by wg id) so a v2 (fullstack-flow) session is recognized — the
+  // pack-named session keys below are v1 (coding-flow) only and are invisible for v2 (the key-drift bug).
+  const cp = await readCheckpointBySession(sessionId).catch(() => null);
+  if (
+    cp !== null &&
+    (cp.scopeArtifacts.length > 0 || (cp.stage !== 'scope' && cp.stage !== 'scoping'))
+  ) {
+    return true;
+  }
   try {
     const fsm = (await readJson(sessionStateFile(sessionId, 'fsm-coding-flow'))) as {
       state?: unknown;

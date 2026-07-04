@@ -31,6 +31,7 @@ import { createClient } from '@libsql/client';
 import { OPENSQUID_HOME } from '../paths.js';
 import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import { CheckpointStore } from '../durable/checkpoint_store.js';
+import { resolveCheckpointKey } from '../loop/checkpoint_key.js';
 
 /** The interactive/human-only stage. A checkpoint parked here is BY DEFINITION out of automation — the scope
  *  gate never drives it; it awaits interactive human scope, which advances the checkpoint past `scope` and
@@ -68,6 +69,21 @@ export async function readLoopStage(wgId: string): Promise<string | null> {
   return withTaskCheckpointStore(
     async (store) => (await store.getTaskCheckpoint(wgId))?.stage ?? null,
   );
+}
+
+/**
+ * Read the PACK-AGNOSTIC task checkpoint for a SESSION — resolves the session → its canonical wg issue id
+ * (`resolveCheckpointKey`), then reads the durable stage + scope-artifact paths. Returns null when the
+ * session has no bound checkpoint (no active/bound task, no lap item). This is the pack-neutral resume
+ * source handoff should read instead of guessing pack-named session keys (`fsm-<pack>` / `<pack>-*-path`),
+ * which drift when the active pack changes (coding-flow → fullstack-flow).
+ */
+export async function readCheckpointBySession(
+  sessionId: string,
+): Promise<{ stage: string; scopeArtifacts: string[] } | null> {
+  const wgId = await resolveCheckpointKey(sessionId);
+  if (wgId === null) return null;
+  return withTaskCheckpointStore((store) => store.getTaskCheckpoint(wgId));
 }
 
 /**
