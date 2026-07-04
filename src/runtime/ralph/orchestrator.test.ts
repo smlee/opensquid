@@ -172,12 +172,25 @@ describe('runRalphLoop', () => {
     expect((await wg.getIssue('a'))?.wedgeReason).toBeUndefined(); // NOT wedged → re-surfaces once the claim expires
   });
 
-  it('undroppable escalation: a failed delivery throws (no silent drop)', async () => {
-    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+  it('undroppable escalation: a RESIDUAL delivery failure throws (no silent drop — Inv 6)', async () => {
+    // A per-item wedge (SCOPE_FORK) with a failing transport MUST crash the loop — the human can never
+    // silently lose a wedged item. (Resource pauses are the exception; see the next test.)
+    const runLap = lap({ kind: 'HUMAN_REQUIRED', reason: 'SCOPE_FORK', costUsd: 0 });
     const failEsc = vi.fn(() => P({ escalated: false, reason: 'no channel' }));
-    await expect(runRalphLoop(cfg(), deps(mockStore([]), runLap, failEsc))).rejects.toThrow(
+    await expect(runRalphLoop(cfg(), deps(mockStore(['a']), runLap, failEsc))).rejects.toThrow(
       /UNDELIVERABLE/,
     );
+  });
+
+  it('resource-pause escalation is FAIL-OPEN on delivery: BOARD_EMPTY + a failing transport does NOT throw — loop stops cleanly', async () => {
+    // The original bug: the escalation channel was undeliverable, so BOARD_EMPTY threw EscalationUndeliverable
+    // and the loop exited 1. A transient clean stop must survive an undeliverable notice (daemon down / no
+    // chat binding) — it still ATTEMPTS to escalate (not a silent stop), then stops cleanly.
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const failEsc = vi.fn(() => P({ escalated: false, reason: 'chat-daemon unreachable' }));
+    const r = await runRalphLoop(cfg(), deps(mockStore([]), runLap, failEsc));
+    expect(r.stopped).toBe('BOARD_EMPTY');
+    expect(failEsc).toHaveBeenCalledTimes(1); // it DID attempt delivery — fail-open, not fail-silent
   });
 });
 

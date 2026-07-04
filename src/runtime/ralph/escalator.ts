@@ -19,17 +19,29 @@ import type { LapEscalator } from './escalate_lap.js';
 export type ChatSend = (params: {
   channel: string;
   text: string;
+  /** Telegram forum topic id (string), when the resolved channel targets a topic. */
+  threadId?: string;
 }) => Promise<{ ok: boolean; reason?: string }>;
 
 /**
- * Build a `LapEscalator` that delivers the lap's typed `text` to `channel` via the injected chat `send`.
+ * Build a `LapEscalator` that delivers the lap's typed `text` to `channel` (+ optional forum `threadId`) via
+ * the injected chat `send`. The CLI resolves the loop's cwd → a LITERAL `telegram:<chat_id>` channel + topic
+ * `threadId` (the daemon's gateway only accepts that wire form; the `project:telegram` shorthand is rejected).
  * Never throws (the contract reports delivery via `escalated`); a transport error is reported, not swallowed
- * — `escalateLap` turns a `false` into the undroppable throw.
+ * — `escalateLap` turns a `false` into the undroppable throw (for residual escalations).
  */
-export function chatEscalator(deps: { send: ChatSend; channel: string }): LapEscalator {
+export function chatEscalator(deps: {
+  send: ChatSend;
+  channel: string;
+  threadId?: string;
+}): LapEscalator {
   return async (msg) => {
     try {
-      const res = await deps.send({ channel: deps.channel, text: msg.text });
+      const res = await deps.send({
+        channel: deps.channel,
+        text: msg.text,
+        ...(deps.threadId !== undefined ? { threadId: deps.threadId } : {}),
+      });
       return res.ok
         ? { escalated: true }
         : { escalated: false, reason: res.reason ?? 'send failed' };

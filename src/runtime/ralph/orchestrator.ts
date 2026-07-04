@@ -18,7 +18,7 @@ import type { Issue, WorkGraphFacade, ClaimAudience } from '../../workgraph/type
 import type { HumanRequiredReason } from './lap_outcome.js';
 import type { LapResult, SuperviseOpts } from './supervisor.js';
 import { superviseLap } from './supervisor.js';
-import { escalateLap, type LapEscalator } from './escalate_lap.js';
+import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
 
 export interface RalphConfig {
@@ -159,11 +159,25 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       await wg.wedgeMark(item.id, reason); // a marked item SKIPS on re-attempt (residual only — GR.3)
       parked.push({ id: item.id, reason });
     }
-    // GR.3 — undroppable. Omit `item` entirely when absent (exactOptionalPropertyTypes: no explicit undefined).
-    await escalateLap(
-      reason,
-      item === undefined ? { escalate: deps.escalate } : { item: item.id, escalate: deps.escalate },
-    );
+    // GR.3 — undroppable for a RESIDUAL per-item escalation (IRREVERSIBLE_BOUNDARY / SCOPE_FORK /
+    // UNRECOVERABLE_WEDGE): a delivery failure THROWS so a wedged item never silently strands the human (Inv 6).
+    // A RESOURCE PAUSE (BOARD_EMPTY / BUDGET / RATE_BUDGET) is a TRANSIENT clean stop, not a wedge — its notice
+    // failing to deliver (daemon down, or no chat binding for this cwd) must NOT crash the loop with exit 1.
+    // Fail-open on DELIVERY there: log it and let the loop return its stop cleanly.
+    try {
+      await escalateLap(
+        reason,
+        item === undefined
+          ? { escalate: deps.escalate }
+          : { item: item.id, escalate: deps.escalate },
+      );
+    } catch (e) {
+      if (e instanceof EscalationUndeliverableError && isResourcePause(reason)) {
+        process.stderr.write(`⚠️ ${e.message} — non-fatal (resource pause); loop stops cleanly\n`);
+        return;
+      }
+      throw e;
+    }
   };
 
   for (;;) {

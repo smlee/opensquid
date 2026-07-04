@@ -20,8 +20,11 @@ import {
   GENERAL_UMBRELLA,
   channelsConfigPath,
   loadChannelsConfig,
+  resolveConfiguredChannel,
   resolveInboundUmbrella,
   resolveOutbound,
+  resolvePlatformChannel,
+  resolveTelegramChannel,
   resolveUmbrellaForCwd,
 } from './routing.js';
 
@@ -169,6 +172,55 @@ describe('resolveOutbound', () => {
 
   it('returns null for an unknown umbrella', () => {
     expect(resolveOutbound(CFG, 'nope')).toBeNull();
+  });
+});
+
+describe('resolveConfiguredChannel / resolvePlatformChannel', () => {
+  // Telegram parity: the real channels.json carries no `platform` key, so the
+  // configured resolver must default to `telegram:<chat_id>` (+ topic) exactly
+  // as the old hardcoded resolveTelegramChannel did.
+  it('defaults to telegram:<chat_id>+topic when no platform pointer is set (parity)', () => {
+    expect(resolveConfiguredChannel(CFG, 'loop')).toEqual({
+      channel: 'telegram:-1003923174632',
+      threadId: '15',
+    });
+  });
+
+  it('resolves general to telegram:<chat_id> with no thread (parity)', () => {
+    expect(resolveConfiguredChannel(CFG, GENERAL_UMBRELLA)).toEqual({
+      channel: 'telegram:-1003923174632',
+    });
+  });
+
+  it('returns null for an unknown umbrella (no binding)', () => {
+    expect(resolveConfiguredChannel(CFG, 'nope')).toBeNull();
+  });
+
+  // Platform-agnostic proof: a config declaring a DIFFERENT configured platform
+  // resolves to `<that-platform>:<id>` — the wire prefix follows the pointer,
+  // not a telegram literal, even though that platform's sender isn't wired.
+  it('follows the configured platform pointer for the wire prefix (not telegram)', () => {
+    const cfg = ChannelsConfig.parse({
+      v: 1,
+      platform: 'discord',
+      umbrellas: [{ id: 'loop', members: ['/x'], telegram: { chat_id: '-1003923174632', topic_id: 15 } }],
+    });
+    expect(resolveConfiguredChannel(cfg, 'loop')).toEqual({
+      channel: 'discord:-1003923174632',
+      threadId: '15',
+    });
+  });
+
+  // The explicit-platform formatter is a literal-free primitive both wrappers share.
+  it('resolvePlatformChannel builds <platform>:<native_id> from its argument', () => {
+    expect(resolvePlatformChannel(CFG, 'loop', 'slack')).toEqual({
+      channel: 'slack:-1003923174632',
+      threadId: '15',
+    });
+    expect(resolveTelegramChannel(CFG, 'loop')).toEqual({
+      channel: 'telegram:-1003923174632',
+      threadId: '15',
+    });
   });
 });
 

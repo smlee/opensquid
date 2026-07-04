@@ -12,15 +12,20 @@
  * ../../runtime/ralph/*, ../../workgraph/*, ../wizard/ralph_writer.js.
  */
 import { readFile } from 'node:fs/promises';
-import { connect } from 'node:net';
 import { join } from 'node:path';
 import type { Command } from 'commander';
 import {
   OPENSQUID_HOME,
-  chatDaemonSockPath,
   resolveProjectMarker,
   resolveProjectUuidFromEnv,
 } from '../../runtime/paths.js';
+import { sendChat } from '../../chat_daemon/client.js';
+import {
+  loadChannelsConfig,
+  resolveConfiguredChannel,
+  resolveUmbrellaForCwd,
+} from '../../channels/routing.js';
+import type { LapEscalator } from '../../runtime/ralph/escalate_lap.js';
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
 import { bindProject, workGraphStore } from '../../workgraph/store.js';
@@ -148,49 +153,50 @@ export function makeSpawnLap(
   };
 }
 
-/** The real chat transport: a one-shot UDS JSON-RPC `send` to the chat-daemon (the live Telegram path
- * `chat_send` uses). `ok:false` on any unreachable/error so the escalator stays undroppable. */
-export const daemonChatSend: ChatSend = (params) =>
-  new Promise((resolve) => {
-    const sock = connect(chatDaemonSockPath());
-    let buf = '';
-    const done = (r: { ok: boolean; reason?: string }): void => {
-      try {
-        sock.end();
-      } catch {
-        /* already closed */
-      }
-      resolve(r);
-    };
-    const timer = setTimeout(
-      () => done({ ok: false, reason: 'chat-daemon RPC timeout (5s)' }),
-      5000,
-    );
-    sock.on('error', (e) => {
-      clearTimeout(timer);
-      done({ ok: false, reason: `chat-daemon unreachable: ${e.message}` });
+/** The real chat transport: the SHARED one-shot daemon `send` client (`chat_daemon/client.ts` — the SAME
+ * path `chat_send` + the runtime report→chat surface use, incl. its win32 named-pipe branch + `threadId`
+ * forwarding). `ok:false` on any unreachable/error so the escalator stays honest (the caller decides
+ * fatal-vs-fail-open). Forwards `threadId` so an escalation lands in the resolved forum TOPIC, not the group root. */
+export const daemonChatSend: ChatSend = async (params) => {
+  try {
+    await sendChat({
+      channel: params.channel,
+      text: params.text,
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     });
-    sock.on('data', (d: Buffer) => {
-      buf += d.toString('utf8');
-      const nl = buf.indexOf('\n');
-      if (nl === -1) return;
-      clearTimeout(timer);
-      try {
-        const res = JSON.parse(buf.slice(0, nl)) as { error?: { message?: string } };
-        done(res.error ? { ok: false, reason: res.error.message ?? 'send error' } : { ok: true });
-      } catch (e) {
-        done({ ok: false, reason: e instanceof Error ? e.message : 'bad RPC response' });
-      }
-    });
-    sock.write(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: `ralph-${String(Date.now())}`,
-        method: 'send',
-        params: { channel: params.channel, text: params.text },
-      }) + '\n',
-    );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+};
+
+/**
+ * Resolve THIS loop's project cwd → its escalation `LapEscalator`, reusing the shared platform-agnostic
+ * resolver (`resolveConfiguredChannel`, the SAME cwd→umbrella→`<platform>:<native_id>`+topic resolution the
+ * runtime report→chat surface uses — `v2_supply.surfaceReportToChat`; the `<platform>` follows the
+ * configured pointer in channels.json, not a literal). The old `project:telegram` shorthand was
+ * REJECTED by the daemon gateway (`parseChannel`: platform `project` is not a wire platform) → every
+ * escalation failed with "unknown platform 'project'" and crashed the loop. When the cwd has NO chat binding
+ * (no `channels.json` / no umbrella owns the cwd) we cannot build a channel: return an HONEST no-delivery
+ * escalator (`escalated:false`). A resource-pause notice then fails open (non-fatal) in `parkAndEscalate`,
+ * while a residual wedge still throws loudly (Inv 6). Fail-open on load: a broken config must not crash the loop.
+ */
+export async function resolveLoopEscalator(cwd: string): Promise<LapEscalator> {
+  const cfg = await loadChannelsConfig().catch(() => null);
+  const umbrella = cfg === null ? null : resolveUmbrellaForCwd(cfg, cwd);
+  const resolved =
+    cfg !== null && umbrella !== null && umbrella !== ''
+      ? resolveConfiguredChannel(cfg, umbrella)
+      : null;
+  if (resolved === null) {
+    return async () => ({ escalated: false, reason: `no chat binding for cwd ${cwd}` });
+  }
+  return chatEscalator({
+    send: daemonChatSend,
+    channel: resolved.channel,
+    ...(resolved.threadId !== undefined ? { threadId: resolved.threadId } : {}),
   });
+}
 
 /** PSL.3 — the fullstack-flow stages the per-stage loop drives as its own laps (the human boundary is past these).
  *  GS1: `scope` is removed (interactive / human-paced; the agent confirms with the user and emits RALPH-EXIT with
@@ -268,7 +274,7 @@ export function registerRalph(program: Command): Command {
         wg,
         claimAudience,
         runLap: makeSpawnLap(cfg, file),
-        escalate: chatEscalator({ send: daemonChatSend, channel: 'project:telegram' }),
+        escalate: await resolveLoopEscalator(root),
         ...(stageLoop === undefined ? {} : { stageLoop }),
         // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
         // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).

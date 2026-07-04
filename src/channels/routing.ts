@@ -56,6 +56,17 @@ export type UmbrellaTarget = string;
 // is a config bug we want surfaced, not silently ignored.
 // ---------------------------------------------------------------------------
 
+/**
+ * The chat platforms the wire form (`<platform>:<native_id>`) and
+ * `gateway.parseChannel` understand. Mirrors the `chat_connections` platform
+ * union in `src/channels/config.ts` and the wire keys the CAT.1 design lists
+ * (`telegram:<chat>`, `discord:<id>`, `slack:<id>` — see
+ * `docs/research/T-chat-as-terminal-CAT1-pre-research-2026-06-02.md:25`).
+ * Kept local so this pure module stays free of the config-I/O module.
+ */
+export const ChatPlatform = z.enum(['telegram', 'discord', 'slack']);
+export type ChatPlatform = z.infer<typeof ChatPlatform>;
+
 const TelegramTarget = z
   .object({
     /** Supergroup/chat id (negative string for supergroups). */
@@ -117,6 +128,17 @@ export const ChannelsConfig = z
     umbrellas: z.array(UmbrellaRow),
     general: GeneralRow.optional(),
     responder: ResponderMode.optional(),
+    /**
+     * Which configured chat app the OUTBOUND resolver targets (the wire
+     * `<platform>:<native_id>` prefix). This is the CONFIG POINTER the CAT.1
+     * design threads through resolution as a first-class parameter
+     * (`resolveOutbound(umbrellaId, platform)` — CAT.1 pre-research line 75);
+     * adding another chat app is then a config edit, not a code change.
+     * Absent ⇒ `telegram` — the sole outbound binding the schema stores today,
+     * so the default IS "the configured binding's platform" (real
+     * `channels.json` carries no `platform` key → telegram parity is exact).
+     */
+    platform: ChatPlatform.optional(),
   })
   .strict();
 export type ChannelsConfig = z.infer<typeof ChannelsConfig>;
@@ -241,21 +263,51 @@ export function resolveOutbound(
 }
 
 /**
- * Format a resolved umbrella/general target's outbound Telegram binding into the DAEMON WIRE FORM:
- * `telegram:<chat_id>` (+ a string `threadId` for the forum topic), or null when the target has no
- * telegram binding. The daemon's `gateway.parseChannel` REQUIRES this `<platform>:<native_id>` shape —
- * the bare `chat_id` (no colon) and the `project:<platform>` shorthand are both rejected as malformed.
- * This is the ONE place that formatting lives; shared by the MCP chat-bridge's `resolveProjectChannel`
- * and the runtime report→chat delivery (`v2_supply.surfaceReportToChat`). Pure — no I/O.
+ * Format a resolved umbrella/general target's outbound binding into the DAEMON WIRE FORM
+ * `<platform>:<native_id>` (+ a string `threadId` for the forum topic), or null when the target has no
+ * outbound binding. The daemon's `gateway.parseChannel` REQUIRES this `<platform>:<native_id>` shape —
+ * the bare native id (no colon) and the `project:<platform>` shorthand are both rejected as malformed.
+ * The `<platform>` prefix comes from the `platform` ARGUMENT (the CAT.1 design's first-class resolution
+ * parameter — `resolveOutbound(umbrellaId, platform)`, pre-research line 75), NOT a literal, so the same
+ * formatter serves any configured chat app. The native id + thread come from the target's binding (only
+ * a telegram binding is stored today; per-platform native bindings are the follow-up when those senders
+ * land). This is the ONE place the wire formatting lives. Pure — no I/O.
+ */
+export function resolvePlatformChannel(
+  cfg: ChannelsConfig,
+  target: UmbrellaTarget,
+  platform: ChatPlatform,
+): { channel: string; threadId?: string } | null {
+  const tg = resolveOutbound(cfg, target);
+  if (tg === null) return null;
+  const channel = `${platform}:${tg.chat_id}`;
+  return tg.topic_id !== undefined ? { channel, threadId: String(tg.topic_id) } : { channel };
+}
+
+/**
+ * PLATFORM-AGNOSTIC outbound resolver — reads the CONFIGURED platform POINTER (`cfg.platform`, default
+ * `telegram`) and delegates to `resolvePlatformChannel`. This is what the runtime call sites use
+ * (`v2_supply.surfaceReportToChat`, `ralph.resolveLoopEscalator`): they must NOT hardcode a platform —
+ * the wire `<platform>:` prefix follows whichever chat app `channels.json` declares. Switching platforms
+ * is a config edit (`"platform": "discord"`), not a code change. Pure — no I/O.
+ */
+export function resolveConfiguredChannel(
+  cfg: ChannelsConfig,
+  target: UmbrellaTarget,
+): { channel: string; threadId?: string } | null {
+  return resolvePlatformChannel(cfg, target, cfg.platform ?? 'telegram');
+}
+
+/**
+ * TELEGRAM-PINNED convenience over `resolvePlatformChannel`. Retained for the MCP chat-bridge's
+ * `project:telegram` shorthand (`resolveProjectChannel`), which is explicitly telegram-scoped (it returns
+ * null for every other platform arg). Prefer `resolveConfiguredChannel` for platform-agnostic call sites.
  */
 export function resolveTelegramChannel(
   cfg: ChannelsConfig,
   target: UmbrellaTarget,
 ): { channel: string; threadId?: string } | null {
-  const tg = resolveOutbound(cfg, target);
-  if (tg === null) return null;
-  const channel = `telegram:${tg.chat_id}`;
-  return tg.topic_id !== undefined ? { channel, threadId: String(tg.topic_id) } : { channel };
+  return resolvePlatformChannel(cfg, target, 'telegram');
 }
 
 /**

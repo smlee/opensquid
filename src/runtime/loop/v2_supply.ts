@@ -48,7 +48,7 @@ import type { EvidenceRef } from '../../packs/schemas/pack_v2.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import {
   loadChannelsConfig,
-  resolveTelegramChannel,
+  resolveConfiguredChannel,
   resolveUmbrellaForCwd,
 } from '../../channels/routing.js';
 
@@ -88,11 +88,12 @@ export async function surfaceReportToChat(cwd: string, body: string): Promise<vo
     if (cfg === null) return;
     const umbrellaId = resolveUmbrellaForCwd(cfg, cwd);
     if (umbrellaId === null || umbrellaId === '') return;
-    // Resolve cwd → the daemon's LITERAL wire channel (`telegram:<chat_id>` + string threadId) BEFORE
+    // Resolve cwd → the daemon's LITERAL wire channel (`<platform>:<native_id>` + string threadId) BEFORE
     // sending. The old `project:telegram` shorthand is REJECTED by the daemon's gateway.parseChannel
     // (platform `project` is not a wire platform), so every push silently failed (swallowed by the catch).
-    // Reuse the shared resolver (routing.ts) — the same formatting the MCP chat-bridge's resolveProjectChannel uses.
-    const resolved = resolveTelegramChannel(cfg, umbrellaId);
+    // Platform-agnostic: the `<platform>` prefix comes from the configured pointer in channels.json
+    // (`cfg.platform`, default telegram) — NOT hardcoded here, so another chat app is a config edit.
+    const resolved = resolveConfiguredChannel(cfg, umbrellaId);
     if (resolved === null) return;
     await sendChat({
       channel: resolved.channel,
