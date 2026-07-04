@@ -21,7 +21,7 @@ import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
-import { withTaskCheckpointStore } from '../ralph/loop_stage.js';
+import { upsertTaskStage, withTaskCheckpointStore } from '../ralph/loop_stage.js';
 import { resolveCheckpointKey } from './checkpoint_key.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
@@ -74,10 +74,10 @@ function stageEvidence(
 ): { label: string; ok: boolean }[] {
   return reads.map((r) => {
     const key = typeof r === 'string' ? r : r.key;
-    const expect = typeof r === 'string' ? true : r.expect ?? true;
+    const expect = typeof r === 'string' ? true : (r.expect ?? true);
     const dot = key.indexOf('.');
     const shortLabel = dot >= 0 ? key.slice(dot + 1) : key; // key minus its `<state>.` prefix
-    const label = typeof r === 'string' ? shortLabel : r.label ?? shortLabel;
+    const label = typeof r === 'string' ? shortLabel : (r.label ?? shortLabel);
     return { label, ok: ctx.get(key) === expect };
   });
 }
@@ -620,10 +620,13 @@ export async function runV2Cartridges(
       ) {
         try {
           const key = await checkpointKey();
-          const cp = key === null ? null : await withTaskCheckpointStore((s) => s.getTaskCheckpoint(key));
+          const cp =
+            key === null ? null : await withTaskCheckpointStore((s) => s.getTaskCheckpoint(key));
           if (cp !== null) seededState = 'scope_write';
         } catch (err) {
-          process.stderr.write(`[v2-supply] scope_write seed check failed (ignored): ${String(err)}\n`);
+          process.stderr.write(
+            `[v2-supply] scope_write seed check failed (ignored): ${String(err)}\n`,
+          );
         }
       }
       actor.state.current = seededState;
@@ -696,14 +699,12 @@ export async function runV2Cartridges(
             try {
               const key = await checkpointKey();
               if (key !== null) {
-                await withTaskCheckpointStore(async (store) => {
-                  const nowMs = Date.parse(now);
-                  const existing = await store.getTaskCheckpoint(key);
-                  if (existing === null) await store.createTaskCheckpoint(key, e.state, nowMs);
-                  else await store.updateTaskStage(key, e.state, nowMs);
-                  const artifact = await readPreResearchPath(sessionId);
-                  if (artifact !== null) await store.setTaskArtifacts(key, [artifact], nowMs);
-                });
+                await upsertTaskStage(
+                  key,
+                  e.state,
+                  Date.parse(now),
+                  await readPreResearchPath(sessionId),
+                );
               }
             } catch (err) {
               process.stderr.write(
@@ -920,7 +921,7 @@ export async function runV2Cartridges(
             // (b) it's an executor subagent (agentId present — Hole 1, the lane model).
             // Non-enforceOnly (PostToolUse) is UNCHANGED — block always applies there.
             const evTool = 'tool' in event && typeof event.tool === 'string' ? event.tool : '';
-            const evArgs = ('args' in event ? event.args : {}) as Record<string, unknown>;
+            const evArgs = ('args' in event ? event.args : {});
             if (
               !enforceOnly ||
               (isMutatingCall(evTool, evArgs) && options?.agentId === undefined)
@@ -956,7 +957,7 @@ export async function runV2Cartridges(
     process.env.OPENSQUID_AUTOMATION !== '1' &&
     'tool' in event &&
     typeof event.tool === 'string' &&
-    /log_phase/.test(event.tool)
+    event.tool.includes('log_phase')
   ) {
     try {
       // isComplete + the phase ledger key on the harness `active.id` (log_phase: appendPhase(…, active.id)),

@@ -47,7 +47,9 @@ function checkpointDbUrl(): string {
  * `fn`, and ALWAYS close the client. The posture is AWAITED (not fire-and-forget) so `busy_timeout` is in
  * force before the first read/write. Shared by this module and the v2-supply single-writer trigger.
  */
-export async function withTaskCheckpointStore<T>(fn: (store: CheckpointStore) => Promise<T>): Promise<T> {
+export async function withTaskCheckpointStore<T>(
+  fn: (store: CheckpointStore) => Promise<T>,
+): Promise<T> {
   const client = createClient({ url: checkpointDbUrl() });
   await applyConcurrencyPragmas(client);
   try {
@@ -63,7 +65,29 @@ export async function withTaskCheckpointStore<T>(fn: (store: CheckpointStore) =>
 
 /** The item's recorded FSM stage (resume-correct), or null when it has no checkpoint yet (a fresh item). */
 export async function readLoopStage(wgId: string): Promise<string | null> {
-  return withTaskCheckpointStore(async (store) => (await store.getTaskCheckpoint(wgId))?.stage ?? null);
+  return withTaskCheckpointStore(
+    async (store) => (await store.getTaskCheckpoint(wgId))?.stage ?? null,
+  );
+}
+
+/**
+ * The SINGLE task-checkpoint WRITE, as one owned method (was inlined in v2_supply's stage fn). Create the
+ * checkpoint if absent, else update its stage; and when a scope artifact is stamped, record it as the on-disk
+ * scope proof (set AFTER create so the row exists). Keyed by the canonical wg issue id. Callers pass the
+ * artifact (or null) so this module owns the write orchestration, not the FSM supply layer.
+ */
+export async function upsertTaskStage(
+  wgId: string,
+  stage: string,
+  nowMs: number,
+  artifact: string | null = null,
+): Promise<void> {
+  await withTaskCheckpointStore(async (store) => {
+    const existing = await store.getTaskCheckpoint(wgId);
+    if (existing === null) await store.createTaskCheckpoint(wgId, stage, nowMs);
+    else await store.updateTaskStage(wgId, stage, nowMs);
+    if (artifact !== null) await store.setTaskArtifacts(wgId, [artifact], nowMs);
+  });
 }
 
 /** No-op (see module header): a closed item leaves `listReady`; a lingering checkpoint row is harmless. */
