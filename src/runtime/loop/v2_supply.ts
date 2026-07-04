@@ -21,7 +21,7 @@ import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
-import { upsertTaskStage, withTaskCheckpointStore } from '../ralph/loop_stage.js';
+import { taskCheckpointExists, upsertTaskStage } from '../ralph/loop_stage.js';
 import { resolveCheckpointKey } from './checkpoint_key.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
@@ -620,9 +620,7 @@ export async function runV2Cartridges(
       ) {
         try {
           const key = await checkpointKey();
-          const cp =
-            key === null ? null : await withTaskCheckpointStore((s) => s.getTaskCheckpoint(key));
-          if (cp !== null) seededState = 'scope_write';
+          if (key !== null && (await taskCheckpointExists(key))) seededState = 'scope_write';
         } catch (err) {
           process.stderr.write(
             `[v2-supply] scope_write seed check failed (ignored): ${String(err)}\n`,
@@ -921,7 +919,7 @@ export async function runV2Cartridges(
             // (b) it's an executor subagent (agentId present — Hole 1, the lane model).
             // Non-enforceOnly (PostToolUse) is UNCHANGED — block always applies there.
             const evTool = 'tool' in event && typeof event.tool === 'string' ? event.tool : '';
-            const evArgs = ('args' in event ? event.args : {});
+            const evArgs = 'args' in event ? event.args : {};
             if (
               !enforceOnly ||
               (isMutatingCall(evTool, evArgs) && options?.agentId === undefined)

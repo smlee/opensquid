@@ -71,6 +71,12 @@ export async function readLoopStage(wgId: string): Promise<string | null> {
   );
 }
 
+/** True iff the item already has a durable checkpoint (it is NOT fresh). The FSM seed uses this to restart an
+ *  automated lap past the pack initial (resume) rather than re-running from the top. */
+export async function taskCheckpointExists(wgId: string): Promise<boolean> {
+  return withTaskCheckpointStore(async (store) => (await store.getTaskCheckpoint(wgId)) !== null);
+}
+
 /**
  * Read the PACK-AGNOSTIC task checkpoint for a SESSION — resolves the session → its canonical wg issue id
  * (`resolveCheckpointKey`), then reads the durable stage + scope-artifact paths. Returns null when the
