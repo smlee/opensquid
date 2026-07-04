@@ -27,18 +27,17 @@ const ITEM: Issue = {
 };
 
 describe('buildRalphConfig', () => {
-  it('hydrates scalars + closures; --once and --max-budget-usd override', () => {
-    const cfg = buildRalphConfig(FILE, { once: true, maxBudgetUsd: 25 });
+  it('hydrates scalars + closures; --max-budget-usd override', () => {
+    const cfg = buildRalphConfig(FILE, { maxBudgetUsd: 25 });
     expect(cfg.authMode).toBe('subscription');
     expect(cfg.maxBudgetUsd).toBe(25); // override wins
-    expect(cfg.once).toBe(true);
     expect(cfg.supervise.maxRetries).toBe(2);
     expect(cfg.supervise.backoffMs(0)).toBe(2000); // base * 2^0
     expect(cfg.supervise.backoffMs(3)).toBe(16000); // base * 2^3 — exponential
   });
 
   it('falls back to the config budget when no override', () => {
-    expect(buildRalphConfig(FILE, { once: false }).maxBudgetUsd).toBe(10);
+    expect(buildRalphConfig(FILE, {}).maxBudgetUsd).toBe(10);
   });
 });
 
@@ -53,7 +52,7 @@ describe('makeSpawnLap', () => {
     const ralphPath = join(ralphDir, 'RALPH.md');
     await writeFile(ralphPath, RALPH_BODY);
     localFile = { ...FILE, harness: { ...FILE.harness, ralphMdPath: ralphPath } };
-    cfg = buildRalphConfig(localFile, { once: true });
+    cfg = buildRalphConfig(localFile, {});
   });
   afterAll(async () => {
     await rm(ralphDir, { recursive: true, force: true });

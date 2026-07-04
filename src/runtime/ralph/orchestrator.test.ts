@@ -69,7 +69,6 @@ const cfg = (over: Partial<RalphConfig> = {}): RalphConfig => ({
   authMode: 'subscription',
   maxBudgetUsd: 100,
   claimTtlSec: 1800,
-  once: false,
   supervise: {
     maxRetries: 0,
     backoffMs: () => 0,
@@ -97,10 +96,10 @@ describe('runRalphLoop', () => {
     expect(esc).toHaveBeenCalledTimes(1); // BOARD_EMPTY DOES escalate (not a silent stop)
   });
 
-  it('one ready item, lap SHIPPED → item closed, loop ends (--once)', async () => {
+  it('one ready item, lap SHIPPED → item closed, loop closes it → drains to BOARD_EMPTY', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0.04 });
-    const r = await runRalphLoop(cfg({ once: true }), deps(mockStore(['a']), runLap));
-    expect(r.stopped).toBe('once');
+    const r = await runRalphLoop(cfg(), deps(mockStore(['a']), runLap));
+    expect(r.stopped).toBe('BOARD_EMPTY');
     expect(r.closed).toEqual(['a']);
     expect(r.parked).toEqual([]);
     expect(r.spent).toBeCloseTo(0.04);
@@ -109,7 +108,7 @@ describe('runRalphLoop', () => {
   it('T2.9: calls onShipped(taskId) after a SHIPPED lap (the loop-driver live caller)', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
     const onShipped = vi.fn(() => P(undefined));
-    await runRalphLoop(cfg({ once: true }), {
+    await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       onShipped,
     });
@@ -119,7 +118,7 @@ describe('runRalphLoop', () => {
   it('T2.9: a throwing onShipped does NOT break the drain — the item still closes (fail-open)', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
     const onShipped = vi.fn(() => Promise.reject(new Error('report boom')));
-    const r = await runRalphLoop(cfg({ once: true }), {
+    const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       onShipped,
     });
@@ -146,7 +145,7 @@ describe('runRalphLoop', () => {
   it('API budget exceeded → BUDGET escalate + STOP', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 5 });
     const r = await runRalphLoop(
-      cfg({ authMode: 'api', maxBudgetUsd: 1, once: false }),
+      cfg({ authMode: 'api', maxBudgetUsd: 1 }),
       deps(mockStore(['a', 'b']), runLap),
     );
     expect(r.stopped).toBe('BUDGET');
@@ -265,10 +264,12 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.01 });
       const next = advance[sp.replace('DO ', '')];
       return P<LapResult>(
-        next === undefined ? { kind: 'SHIPPED', costUsd: 0.01 } : { kind: 'SHIPPED', stage: next, costUsd: 0.01 },
+        next === undefined
+          ? { kind: 'SHIPPED', costUsd: 0.01 }
+          : { kind: 'SHIPPED', stage: next, costUsd: 0.01 },
       );
     });
-    const r = await runRalphLoop(cfg({ once: true }), {
+    const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
@@ -288,10 +289,12 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
       const next = advance[sp.replace('DO ', '')];
       return P<LapResult>(
-        next === undefined ? { kind: 'SHIPPED', costUsd: 0 } : { kind: 'SHIPPED', stage: next, costUsd: 0 },
+        next === undefined
+          ? { kind: 'SHIPPED', costUsd: 0 }
+          : { kind: 'SHIPPED', stage: next, costUsd: 0 },
       );
     });
-    await runRalphLoop(cfg({ once: true }), {
+    await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
@@ -305,7 +308,7 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       calls.push(sp);
       return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
     });
-    await runRalphLoop(cfg({ once: true }), {
+    await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
@@ -315,7 +318,7 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
   it('a lap that never advances the stage is retried (bounded) then escalated UNRECOVERABLE_WEDGE', async () => {
     // Seeds at `scope_write` (the pack initial); the lap keeps reporting the SAME stage → never advances.
     const runLap = vi.fn(() => P<LapResult>({ kind: 'SHIPPED', stage: 'scope_write', costUsd: 0 }));
-    const r = await runRalphLoop(cfg({ once: true }), {
+    const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(),
     });
@@ -327,7 +330,7 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     const runLap = vi.fn(() =>
       P<LapResult>({ kind: 'HUMAN_REQUIRED', reason: 'SCOPE_FORK', costUsd: 0 }),
     );
-    const r = await runRalphLoop(cfg({ once: true }), {
+    const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(),
     });
@@ -340,7 +343,9 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     // only ready item, the picker finds nothing automation-eligible and the loop STOPS (drained) — it must not
     // re-pick the same held item forever (the old-design spin).
     const gate = (_item: Issue): Promise<'drive' | 'hold'> => P('hold');
-    const runLap = vi.fn((_item: Issue, _sp?: string) => P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }));
+    const runLap = vi.fn((_item: Issue, _sp?: string) =>
+      P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }),
+    );
     const wg = mockStore(['a']);
     const r = await runRalphLoop(cfg(), {
       ...deps(wg, runLap),
@@ -388,7 +393,13 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     const wg = mockStore(['a', 'b']);
     const r = await runRalphLoop(cfg(), {
       ...deps(wg, runLap),
-      stageLoop: stageLoopStub(new Map([['a', 'deploy'], ['b', 'deploy']]), gate),
+      stageLoop: stageLoopStub(
+        new Map([
+          ['a', 'deploy'],
+          ['b', 'deploy'],
+        ]),
+        gate,
+      ),
     });
     expect(driven).toEqual(['b', 'a']); // `a` held on pass 1 (drove `b`), re-admitted + driven on pass 2
     expect(r.closed).toEqual(['b', 'a']);
@@ -401,7 +412,7 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       calls.push(sp);
       return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
     });
-    await runRalphLoop(cfg({ once: true }), deps(mockStore(['a']), runLap));
+    await runRalphLoop(cfg(), deps(mockStore(['a']), runLap));
     expect(calls).toEqual([undefined]); // single lap, no per-stage prompt
   });
 });

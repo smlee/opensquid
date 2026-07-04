@@ -28,16 +28,16 @@ export interface RalphConfig {
   maxBudgetUsd: number;
   /** TTL for the per-item claim (GR.1). */
   claimTtlSec: number;
-  /** Stop after one item (the `--once` flag). */
-  once: boolean;
   /** GR.3 supervisor opts (retry cap, backoff, heartbeat). */
   supervise: SuperviseOpts;
 }
 
 /** Why the loop stopped. NB: the per-item residual reasons (IRREVERSIBLE_BOUNDARY / SCOPE_FORK /
- * UNRECOVERABLE_WEDGE) never STOP the loop — they park the item and the loop takes the next. Only the
- * RESOURCE pauses + an explicit `--once` end the run. */
-export type RalphStop = 'BOARD_EMPTY' | 'BUDGET' | 'RATE_BUDGET' | 'once';
+ * UNRECOVERABLE_WEDGE) never STOP the loop — they park the item and the loop takes the next. The loop
+ * RUNS TO EXHAUSTION: only an empty board or a RESOURCE pause (budget) ends the run — never a per-item stop.
+ * (There is deliberately no single-item mode: that would reintroduce the per-item pause the loop exists to
+ * eliminate — the run-to-exhaustion architecture.) */
+export type RalphStop = 'BOARD_EMPTY' | 'BUDGET' | 'RATE_BUDGET';
 
 export interface RalphResult {
   stopped: RalphStop;
@@ -190,7 +190,8 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     // re-admits it on a later pass. Without a stageLoop (v1 coding-flow) every item is eligible (no gate).
     let item: Issue | undefined;
     for (const cand of ready) {
-      if (deps.stageLoop !== undefined && (await deps.stageLoop.scopeGate(cand)) === 'hold') continue;
+      if (deps.stageLoop !== undefined && (await deps.stageLoop.scopeGate(cand)) === 'hold')
+        continue;
       item = cand; // oldest-first eligible (listReady ORDER BY created_lamport ASC; no priority column)
       break;
     }
@@ -232,7 +233,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       await parkAndEscalate('BUDGET'); // Inv 11 API bound (verified total_cost_usd) → resource pause → STOP
       return { stopped: 'BUDGET', spent, closed, parked };
     }
-    if (cfg.once) return { stopped: 'once', spent, closed, parked };
+    // No single-item stop: the loop takes the next ready item and runs to exhaustion (BOARD_EMPTY).
   }
 }
 

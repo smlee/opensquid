@@ -5,7 +5,7 @@
  * daemon (opensquid stays an MCP server / tool provider; the agent loop runs inside the spawned harness).
  *
  * Commands:
- *   opensquid loop [--once] [--max-budget-usd <n>]      — run the loop (read ready → claim → lap → repeat)
+ *   opensquid loop [--max-budget-usd <n>]               — run the loop to exhaustion (ready → claim → lap → repeat)
  *   opensquid loop resolve <itemId> --misclassified     — the human-override residual-shrink path (GR.4)
  *
  * Imports from: commander, node:net, ../../runtime/paths.js, ../../runtime/spawn_lifecycle.js,
@@ -79,13 +79,12 @@ async function openRalphWorkGraph() {
 /** Hydrate the persisted scalar config into the orchestrator's runtime `RalphConfig` (closures rebuilt). */
 export function buildRalphConfig(
   file: RalphConfigFile,
-  opts: { once: boolean; maxBudgetUsd?: number },
+  opts: { maxBudgetUsd?: number },
 ): RalphConfig {
   return {
     authMode: file.authMode,
     maxBudgetUsd: opts.maxBudgetUsd ?? file.maxBudgetUsd,
     claimTtlSec: file.claimTtlSec,
-    once: opts.once,
     supervise: {
       maxRetries: file.maxRetries,
       backoffMs: (attempt: number) => file.backoffBaseMs * 2 ** attempt, // exponential from the base
@@ -226,9 +225,8 @@ export function registerRalph(program: Command): Command {
     );
 
   loop
-    .option('--once', 'process a single ready item then stop', false)
     .option('--max-budget-usd <n>', 'API-mode dollar budget for this run (overrides config)')
-    .action(async (opts: { once?: boolean; maxBudgetUsd?: string }) => {
+    .action(async (opts: { maxBudgetUsd?: string }) => {
       const file = await readRalphConfig();
       if (file === null) {
         process.stderr.write(
@@ -243,7 +241,6 @@ export function registerRalph(program: Command): Command {
       // session and must NOT drive a turn-end BLOCK; only a genuine lap process carries this env.)
       process.env.OPENSQUID_AUTOMATION = '1';
       const cfg = buildRalphConfig(file, {
-        once: opts.once === true,
         ...(opts.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: Number(opts.maxBudgetUsd) }),
       });
       const wg = await openRalphWorkGraph();
