@@ -1,13 +1,13 @@
 /**
  * T2.9 — `onPhasesComplete` loop-driver tests (zero LLM, deterministic).
  *
- * Covers: (1) the CODE stage report file is emitted under a TEMP root (never the real repo docs/reports/);
+ * Covers: (1) the CODE stage report file is SAVED under a TEMP project's .opensquid/reports/ (V2-ENF.2/4 —
  * (2) the returned next run-group matches `batchDecide` — independent issues → singletons, sibling batch →
  * one group. Uses a stub `LoopWorkGraph` (no real store / no DB) + a temp dir, with an injected `iso`.
  */
 import { describe, expect, it } from 'vitest';
 
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,12 +24,15 @@ function stubWg(readyIds: string[], edges: Edge[]): LoopWorkGraph {
 }
 
 describe('onPhasesComplete (T2.9 loop driver)', () => {
-  it('emits the CODE stage report file under the given root (the AF.3 per-task report)', async () => {
+  it('emits the CODE stage report file under the project reports dir (the AF.3 per-task report)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'loop-driver-'));
+    await mkdir(join(root, '.opensquid'), { recursive: true }); // project marker → saveProjectReport resolves
     await onPhasesComplete('sid-1', root, 'T-code', stubWg([], []), ISO);
-    const path = join(root, 'docs/reports', 'code-T-code-2026-06-22.md');
+    // V2-ENF.2/4 — SAVED under `<project>/.opensquid/reports/`, never the legacy `docs/reports/`.
+    const path = join(root, '.opensquid', 'reports', 'code-T-code-2026-06-22.md');
     const body = await readFile(path, 'utf8');
-    expect(body).toContain('🦑 Phase report — CODE complete · T-code · 2026-06-22');
+    expect(body).toContain('After-stage report — CODE complete · T-code · 2026-06-22');
+    expect(body).not.toContain('🦑'); // reports never use the drift/gate glyph (design §4)
     // the long, stand-out CODE report: the 7-phase step chart
     expect(body).toContain('Phases:');
     expect(body).toContain('[x] pre_research');

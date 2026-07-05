@@ -44,6 +44,9 @@ import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
 import { CODE_PHASES, emitStageReport, renderStageSummary } from './stage_report.js';
+import { renderFollowReminder } from './follow_reminder.js';
+import { renderFailureReport } from './failure_report.js';
+import { saveProjectReport } from './reports_dir.js';
 import type { EvidenceRef } from '../../packs/schemas/pack_v2.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import {
@@ -109,6 +112,8 @@ import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.j
 import { frontendEvidenceForEvent, type FrontendEvidenceDeps } from './frontend_evidence.js';
 import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evidence.js';
 import { planEvidence, openWg } from './plan_evidence.js';
+import { resolveChecklist, type ChecklistSubIssue } from './report_checklist.js';
+import { reportResolved } from './report_resolution.js';
 import { autoDecompose } from './auto_decompose.js';
 import { buildCoveredBy } from './plan_audit.js';
 import { extractScope } from './scope_extract.js';
@@ -337,6 +342,42 @@ export async function buildGuardCtx(
     searched_existing: consult.before,
     external_needed: externalNeeded,
   });
+
+  // V2-ENF.2/1+3 — the block-on-unresolved REPORT-RESOLUTION facet (the mandatory-reporting heart). THE
+  // WORKGRAPH IS THE CHECKLIST (design §4.2): the active task's before-checklist IS its parent-child sub-issues;
+  // the after-report is resolved when they are (closed = done, wedged-with-reason = deferred, silently-open =
+  // unresolved). This facet reads the board and HOLDS the stage-exit gate on a silently-unresolved item — but
+  // ONLY under automation (`reportResolved`: interactive is never blocked; the gate never denies a tool, it only
+  // advances). DUAL-SHAPE like the other facets (nested `report` + flat `report.resolved`). FAIL-OPEN to `true`
+  // (never a false block): any workgraph read error / no active task / no committed sub-issues → resolved.
+  let reportResolvedFacet = true;
+  try {
+    const rTaskId = await readActiveTaskId(sessionId);
+    if (rTaskId !== null) {
+      const wg = await openWg(sessionId);
+      const [issues, edges] = await Promise.all([wg.listIssues(), wg.listEdges()]);
+      const childIds = new Set(
+        edges.filter((e) => e.type === 'parent-child' && e.from === rTaskId).map((e) => e.to),
+      );
+      const byId = new Map(issues.map((i) => [i.id, i]));
+      const subIssues: ChecklistSubIssue[] = [...childIds]
+        .map((id) => byId.get(id))
+        .filter((i): i is NonNullable<typeof i> => i !== undefined)
+        .map((i) => ({
+          id: i.id,
+          title: i.title,
+          status: i.status,
+          ...(i.wedgeReason === undefined ? {} : { wedgeReason: i.wedgeReason }),
+        }));
+      reportResolvedFacet = reportResolved(resolveChecklist(subIssues).allResolved);
+    }
+  } catch (err) {
+    process.stderr.write(
+      `[v2-supply] report-resolution evidence failed (ignored): ${String(err)}\n`,
+    );
+  }
+  m.set('report.resolved', reportResolvedFacet);
+  m.set('report', { resolved: reportResolvedFacet });
 
   // T2.7 — CODE gate evidence. THREE facets: `phases_complete` (the shipped 7-phase ledger `isComplete` for the
   // active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧ `deprecated_clean` (the
@@ -742,7 +783,7 @@ export async function runV2Cartridges(
             }
           }
           // T2.12 / CADENCE-IN-PACK — the LIVE per-stage report trigger. On each transition LEAVING a stage, emit
-          // that stage's after-report (dated docs/reports/ file + memory mirror + in-session injection +
+          // that stage's after-report (dated <project>/.opensquid/reports/ file + memory mirror + in-session injection +
           // best-effort chat) — but ONLY when the pack declares `report:` for the LEAVING state (`meta[p.from].report`).
           // The cadence (which stages report) is PACK DATA now, not the deleted core `STAGE` map. FAIL-OPEN: a report
           // failure must NEVER break the hook. T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1)
@@ -832,14 +873,24 @@ export async function runV2Cartridges(
               const root = await readSessionCwd(sessionId);
               if (root !== null) {
                 // STAGE-WORK (generic): the entered state's pack-declared `does:` text (pack data, NOT a core map).
+                const enteringWork = loaded.compiled.meta[p.to]?.does;
                 const { body } = renderStageSummary(
                   enteringLabel,
-                  loaded.compiled.meta[p.to]?.does,
+                  enteringWork,
                   taskId ?? 'no-active-task',
                   now,
                 );
                 injections.push(body);
                 await surfaceReportToChat(root, body);
+                // V2-ENF.2/7 — the FOLLOW-INSTRUCTIONS anti-drift nudge (reporting-model §5.4c): at the stage
+                // boundary, re-assert "stay on the <stage> procedure" so the lap drives the injected procedure,
+                // not freehand. SURFACED-only (ephemeral injection, never a saved file; never `🦑`). Gated on a
+                // present `does:` so the nudge never renders the literal "undefined" (the pack declares the work).
+                if (enteringWork !== undefined && enteringWork.trim().length > 0) {
+                  injections.push(
+                    renderFollowReminder({ stage: enteringLabel, procedure: enteringWork }),
+                  );
+                }
               }
             } catch (err) {
               process.stderr.write(
@@ -930,6 +981,40 @@ export async function runV2Cartridges(
             ) {
               exitCode = 2; // block | halt → ENFORCE; the deny IS the observation (gate/kernel.ts:37-43)
               if (effect.message !== undefined) messages.push(effect.message);
+              // V2-ENF.2/6 (§5.4b) — a gate that HOLDS is a FAILURE, and a silent hold is undiagnosable (the
+              // wedge-with-no-cause pain the design cites). So render a `held_gate` FAILURE REPORT stating the
+              // REASON (the held gate + the evidence that failed it + the resolving action), SAVE it under
+              // <project>/.opensquid/reports/, and SURFACE it — the in-session injection + the live
+              // subprocess→session channel (stderr) + best-effort chat. This is BOTH the saved record AND the
+              // content that feeds the escalation interrupt (§5.5). FAIL-OPEN: a report failure must NEVER
+              // change the block decision (the deny already stands via exitCode/messages above). The saved file
+              // dedups by `failure-<taskId>-<date>.md`, so a parked gate overwrites one file per task per day.
+              try {
+                const root = await readSessionCwd(sessionId);
+                if (root !== null) {
+                  const { path, body } = renderFailureReport(
+                    {
+                      taskId: taskId ?? 'no-active-task',
+                      kind: 'held_gate',
+                      reason: effect.message ?? p.message,
+                      criterion: `pack:${name} gate '${actor.state.current}' (${p.failureType})`,
+                      evidence: p.message,
+                      resolvingAction: `satisfy the ${actor.state.current} gate's requirement, then re-run`,
+                    },
+                    now,
+                  );
+                  await saveProjectReport(root, path, body);
+                  process.stderr.write(
+                    `[lap ${name}] ✗ gate held at ${actor.state.current} — failure report emitted\n`,
+                  );
+                  injections.push(body);
+                  await surfaceReportToChat(root, body);
+                }
+              } catch (err) {
+                process.stderr.write(
+                  `[v2-supply] failure report emit failed (ignored): ${String(err)}\n`,
+                );
+              }
             }
           } else if (effect.message !== undefined && !enforceOnly) {
             // warn nudge (exitCode 0): in observational mode (PostToolUse) surface as additionalContext.

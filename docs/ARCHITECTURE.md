@@ -308,4 +308,50 @@ requirements:
   - id: R-DELETE-SKILL-PREFILTER
     intent: 'the skill prefilter MODULE is gone'
     assert: { kind: absent, symbol: skill_prefilter }
+  # V2-ENF.2 (wg-0baaae4bcf2e) — mandatory reporting enforcement: one covering requirement per scoped element
+  # of loop/docs/design/opensquid-reporting-model.md §7 (+ §5.4b/§5.4c). Each names the primary export + its
+  # live-path proof-test (the authority; the static `from` hint is advisory — these surface through the loop's
+  # post_tool_call path). Data-shape exports (types/interfaces/schema consts) are baselined in the allowlist.
+  - id: R-REPORT-CHECKLIST
+    intent: 'the workgraph IS the checklist — resolve before-commitment sub-issues (closed=done, open=unresolved, wedged=deferred) (reporting-model §7.1/§4.2)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#7.1'
+    wg: wg-0baaae4bcf2e
+    assert: { kind: reachable, symbol: resolveChecklist, from: [post-tool-use] }
+    proof: 'src/runtime/loop/report_checklist.test.ts'
+  - id: R-REPORT-TEMPLATE
+    intent: 'the 9 report types materialize as core md-templates, pack-overridable with a core-default fallback (reporting-model §7.2)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#7.2'
+    wg: wg-0baaae4bcf2e
+    assert: { kind: reachable, symbol: readReportTemplate, from: [post-tool-use] }
+    proof: 'src/runtime/loop/report_template.test.ts'
+  - id: R-REPORT-RESOLUTION
+    intent: 'block-on-unresolved at the stage-exit gate, AUTOMATION-GATED — holds under OPENSQUID_AUTOMATION, never blocks interactive (reporting-model §7.3)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#7.3'
+    wg: wg-0baaae4bcf2e
+    assert: { kind: reachable, symbol: reportResolved, from: [post-tool-use] }
+    proof: 'src/runtime/loop/report_resolution.test.ts'
+  - id: R-REPORTS-DIR
+    intent: 'SAVED reports land under <project>/.opensquid/reports/, NEVER the global home (reporting-model §7.4/§3)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#7.4'
+    wg: wg-0baaae4bcf2e
+    assert: { kind: reachable, symbol: saveProjectReport, from: [post-tool-use] }
+    proof: 'src/runtime/loop/reports_dir.test.ts'
+  - id: R-HANDOFF-DEDUP
+    intent: 'the handoff dedups artifacts by path (fullstack-flow key-drift + double-send fix) (reporting-model §7.5)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#7.5'
+    wg: wg-0baaae4bcf2e
+    assert: { kind: reachable, symbol: dedupeArtifactsByPath, from: [post-tool-use] }
+    proof: 'src/runtime/handoff/collect.test.ts'
+  - id: R-FAILURE-REPORT
+    intent: 'on any failure (wedge|held_gate|crash) render a report stating the reason + resolving action, saved + surfaced (reporting-model §5.4b)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#5.4b'
+    wg: wg-0baaae4bcf2e
+    assert: { kind: reachable, symbol: renderFailureReport, from: [post-tool-use] }
+    proof: 'src/runtime/loop/failure_report.test.ts'
+  - id: R-FOLLOW-REMINDER
+    intent: 'the anti-drift follow-the-injected-procedure/rubric reminder (reporting-model §5.4c)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#5.4c'
+    wg: wg-0baaae4bcf2e
+    assert: { kind: reachable, symbol: renderFollowReminder, from: [post-tool-use] }
+    proof: 'src/runtime/loop/follow_reminder.test.ts'
 ```

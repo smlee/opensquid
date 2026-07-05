@@ -23,6 +23,9 @@ function ctx(audit: Record<string, unknown>): Map<string, unknown> {
     ['plan', { acyclic: true, complete: true }],
     ['author', { manifest_complete: true, real_code: true }],
     ['code', { phases_complete: true, readiness_ran: true, deprecated_clean: true }],
+    // V2-ENF.2/3 — the report-resolution facet buildGuardCtx always binds (dual-shape). Default RESOLVED so the
+    // guess-free gate cases isolate the verdict clause; the block-on-unresolved case overrides it below.
+    ['report', { resolved: true }],
     ['audit', audit],
   ]);
 }
@@ -36,7 +39,7 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
   it('every stage gate BLOCKS when its facets pass but the verdict is ABSENT (fail-closed)', async () => {
     const { pack } = await loadPackV2(PACK_DIR);
     for (const s of stages) {
-      const expr = (pack.guards[`${s}_ready`] ?? '');
+      const expr = pack.guards[`${s}_ready`] ?? '';
       expect(expr, `${s}_ready exists`).toBeTruthy();
       expect(evalCondition(expr, ctx({})), `${s}_ready blocks without verdict`).toBe(false);
     }
@@ -46,7 +49,9 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
     const { pack } = await loadPackV2(PACK_DIR);
     for (const s of stages) {
       const all = { scope: GUESS_FREE, plan: GUESS_FREE, author: GUESS_FREE, code: GUESS_FREE };
-      expect(evalCondition((pack.guards[`${s}_ready`] ?? ''), ctx(all)), `${s}_ready passes`).toBe(true);
+      expect(evalCondition(pack.guards[`${s}_ready`] ?? '', ctx(all)), `${s}_ready passes`).toBe(
+        true,
+      );
     }
   });
 
@@ -54,7 +59,10 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
     const { pack } = await loadPackV2(PACK_DIR);
     for (const s of stages) {
       const m = ctx({ [s]: UNRESOLVED });
-      expect(evalCondition((pack.guards[`${s}_ready`] ?? ''), m), `${s}_ready blocks on UNRESOLVED`).toBe(false);
+      expect(
+        evalCondition(pack.guards[`${s}_ready`] ?? '', m),
+        `${s}_ready blocks on UNRESOLVED`,
+      ).toBe(false);
     }
   });
 
@@ -72,11 +80,35 @@ describe('GFR.2 — guess-free gate enforcement (real pack.yaml guards)', () => 
     for (const { gate, cur, prior } of rollups) {
       // current stage's verdict GUESS_FREE, but the prior stage drifted (UNRESOLVED) → the rolling clause blocks.
       const drifted = ctx({ [cur]: GUESS_FREE, [prior]: UNRESOLVED });
-      expect(evalCondition(pack.guards[gate] ?? '', drifted), `${gate} blocks on ${prior} drift`).toBe(false);
+      expect(
+        evalCondition(pack.guards[gate] ?? '', drifted),
+        `${gate} blocks on ${prior} drift`,
+      ).toBe(false);
       // sanity: with BOTH current + prior GUESS_FREE the same gate passes (proves it was the prior clause blocking).
       const clean = ctx({ [cur]: GUESS_FREE, [prior]: GUESS_FREE });
-      expect(evalCondition(pack.guards[gate] ?? '', clean), `${gate} passes when ${prior} holds`).toBe(true);
+      expect(
+        evalCondition(pack.guards[gate] ?? '', clean),
+        `${gate} passes when ${prior} holds`,
+      ).toBe(true);
     }
+  });
+
+  // V2-ENF.2/3 — the block-on-unresolved REPORT-RESOLUTION facet is ANDed into the REAL code_ready guard: a
+  // silently-unresolved committed checklist item (report.resolved:false, as buildGuardCtx computes under
+  // automation) HOLDS the CODE stage-exit even when every other facet + verdict passes. This is "mandatory
+  // reporting" biting at the gate — the after-report must resolve the before-commitment on the board.
+  it('V2-ENF.2/3: report.resolved:false BLOCKS code_ready (all other facets + verdicts pass)', async () => {
+    const { pack } = await loadPackV2(PACK_DIR);
+    const m = ctx({ scope: GUESS_FREE, plan: GUESS_FREE, author: GUESS_FREE, code: GUESS_FREE });
+    m.set('report', { resolved: false }); // an unresolved committed sub-issue (automation-enforcing)
+    expect(evalCondition(pack.guards.code_ready ?? '', m), 'unresolved report holds CODE').toBe(
+      false,
+    );
+    // sanity: flip it back to resolved and the same ctx PASSES (proves report.resolved was the blocking clause).
+    m.set('report', { resolved: true });
+    expect(evalCondition(pack.guards.code_ready ?? '', m), 'resolved report advances CODE').toBe(
+      true,
+    );
   });
 
   it('SCOPE short-circuit still holds: a non-advance event passes regardless of verdict', async () => {

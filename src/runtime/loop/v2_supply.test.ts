@@ -1,5 +1,5 @@
 /** FAC-CUT.5b.2 — runV2Cartridges: in-process v2 host supply (inert / gate-fires+persist / non-trigger / fail-open). */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { execFile } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -111,7 +111,11 @@ const codingGatePack = () =>
 const bashCall = (): Event => ({ kind: 'tool_call', tool: 'Bash', args: {} }) as unknown as Event;
 /** A Bash tool_call with a file-writing redirect — always mutating (isMutatingCall → true). */
 const mutatingBashCall = (): Event =>
-  ({ kind: 'tool_call', tool: 'Bash', args: { command: 'echo x > /tmp/out.txt' } }) as unknown as Event;
+  ({
+    kind: 'tool_call',
+    tool: 'Bash',
+    args: { command: 'echo x > /tmp/out.txt' },
+  }) as unknown as Event;
 
 const NOW = '2026-06-22T00:00:00.000Z';
 
@@ -131,6 +135,27 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
     expect(d.messages).toContain('resolve it');
     expect(d.injections).toEqual([]);
     expect(await readFsmStateRaw('sess-block', 'observed-gate')).toBeNull(); // block = no advance, no write
+  });
+
+  it('V2-ENF.2/6 (§5.4b) — a gate that HOLDS emits a SAVED + SURFACED held_gate failure report', async () => {
+    const sid = 'sess-block-failrep';
+    const root = await newProjectRoot(sid); // records a project-scoped cwd so the report can be SAVED
+    await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-hold' });
+    mockLoad.mockResolvedValue([gatePack('block')]);
+    const d = await runV2Cartridges(sid, bashCall(), NOW); // Bash fails guard `tool=="Write"` → the gate HOLDS
+    expect(d.exitCode).toBe(2); // the block decision still stands (the failure report never changes it)
+    expect(d.messages).toContain('resolve it');
+    // SURFACED: the failure report body is injected in-session, plain header, NEVER the reserved `🦑`.
+    const inj = d.injections.join('\n');
+    expect(inj).toContain('Failure report — held_gate · T-hold');
+    expect(inj).toContain('Reason:');
+    expect(inj).toContain('Failing criterion:');
+    expect(inj).toContain('Resolving action:');
+    expect(inj).not.toContain('🦑');
+    // SAVED: a dated failure file under <project>/.opensquid/reports/ (NEVER the global home).
+    const saved = join(root, '.opensquid', 'reports', 'failure-T-hold-2026-06-22.md');
+    expect(await exists(saved)).toBe(true);
+    expect(await readFile(saved, 'utf8')).toContain('Failure report — held_gate · T-hold');
   });
 
   it('gate FAIL + warn → exitCode 0 + injection (nudge); advance persisted', async () => {
@@ -173,8 +198,12 @@ describe('runV2Cartridges (FAC-CUT.5b.2)', () => {
 // at-or-below the pack's served domain (hierarchical containment); a task outside that domain selects NOTHING
 // (no gate, no enforcement). Domain-only (intent-agnostic). A serves-LESS FSM pack is the always-on spine.
 describe('runV2Cartridges — LAYER-1 #37 serves-gated FSM selection', () => {
-  const facets = (domain?: string): Facets =>
-    ({ intent: 'produce', project: true, confidence: 'high', ...(domain ? { domain } : {}) }) as Facets;
+  const facets = (domain?: string): Facets => ({
+    intent: 'produce',
+    project: true,
+    confidence: 'high',
+    ...(domain ? { domain } : {}),
+  });
 
   it('a CODING task selects the serves-bearing pack → its gate evaluates + BLOCKS', async () => {
     mockLoad.mockResolvedValue([codingGatePack()]);
@@ -250,7 +279,11 @@ describe('runV2Cartridges — enforceOnly mode (PART A)', () => {
 
   it('enforceOnly + guard PASS → exitCode 0, no deny, no state advance', async () => {
     // A Write event satisfies the guard (tool == "Write" → pass).
-    const writeEvent = { kind: 'tool_call', tool: 'Write', args: { file_path: '/tmp/x.ts' } } as unknown as Event;
+    const writeEvent = {
+      kind: 'tool_call',
+      tool: 'Write',
+      args: { file_path: '/tmp/x.ts' },
+    } as unknown as Event;
     mockLoad.mockResolvedValue([gatePack('block')]);
     const sid = 'sess-enforce-pass';
     const d = await runV2Cartridges(sid, writeEvent, NOW, { enforceOnly: true });
@@ -277,7 +310,11 @@ describe('runV2Cartridges — enforceOnly mode (PART A)', () => {
     // bypass). This proves NOOP_BUS doesn't throw AND the exemption fires correctly.
     mockLoad.mockResolvedValue([gatePack('block')]);
     const sid = 'sess-kernel-path';
-    const gitStatus = { kind: 'tool_call', tool: 'Bash', args: { command: 'git status' } } as unknown as Event;
+    const gitStatus = {
+      kind: 'tool_call',
+      tool: 'Bash',
+      args: { command: 'git status' },
+    } as unknown as Event;
     const d = await runV2Cartridges(sid, gitStatus, NOW, { enforceOnly: true });
     // Read-only → isMutatingCall false → NOT blocked (read-only bypass).
     expect(d.exitCode).toBe(0);
@@ -323,7 +360,10 @@ describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + H
       tool: 'Edit',
       args: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' },
     } as unknown as Event;
-    const d = await runV2Cartridges(sid, editCall, NOW, { enforceOnly: true, agentId: 'executor-1' });
+    const d = await runV2Cartridges(sid, editCall, NOW, {
+      enforceOnly: true,
+      agentId: 'executor-1',
+    });
     expect(d.exitCode).toBe(0); // executor exempt (agentId present) → not blocked
     expect(d.messages).toEqual([]);
   });
@@ -378,7 +418,10 @@ describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + H
       tool: 'Bash',
       args: { command: "sed -i 's/a/b/' f.ts" },
     } as unknown as Event;
-    const d = await runV2Cartridges(sid, sedCall, NOW, { enforceOnly: true, agentId: 'executor-2' });
+    const d = await runV2Cartridges(sid, sedCall, NOW, {
+      enforceOnly: true,
+      agentId: 'executor-2',
+    });
     expect(d.exitCode).toBe(0); // executor exempt → not blocked
     expect(d.messages).toEqual([]);
   });
@@ -1237,8 +1280,9 @@ describe('buildGuardCtx — T2.3 verdict dual-shape', () => {
 });
 
 // ── T2.12 — the LIVE per-stage report trigger (leaving any of the 5 stages emits its report) ──────────────
-// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, emits a dated docs/reports/
-// file + memory mirror + in-session injection + best-effort chat. CODE fires here too (loop_driver was never
+// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, emits a dated
+// <project>/.opensquid/reports/ file (V2-ENF.2/4, never the legacy docs/reports/) + memory mirror +
+// in-session injection + best-effort chat. CODE fires here too (loop_driver was never
 // wired). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
 
 /** A one-state gate pack whose state is named `<stage>` and PASSES (advances to terminal) on a tool_call.
@@ -1272,9 +1316,9 @@ const stageGatePack = (stage: string): LoadedPackV2 =>
 const writeCall = (): Event =>
   ({ kind: 'tool_call', tool: 'Write', args: { file_path: '/tmp/x.ts' } }) as unknown as Event;
 
-/** A temp project root recorded as the session cwd (where docs/reports/ is written). The `.opensquid` marker
- *  makes it project-SCOPED so per-test goal maps (goalMapPath → resolveProjectScopeRoot) don't collide on the
- *  shared user-scope fallback. */
+/** A temp project root recorded as the session cwd. Its `.opensquid` marker makes it project-SCOPED, so SAVED
+ *  reports land under `<root>/.opensquid/reports/` (V2-ENF.2/4) AND per-test goal maps (goalMapPath →
+ *  resolveProjectScopeRoot) don't collide on the shared user-scope fallback. */
 async function newProjectRoot(sessionId: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 't212-root-'));
   await mkdir(join(root, '.opensquid'), { recursive: true });
@@ -1292,6 +1336,20 @@ async function exists(p: string): Promise<boolean> {
 }
 
 describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
+  // The interactive-CODE cases assert v2_supply IS the CODE emitter — true only OUTSIDE an autonomous lap
+  // (under OPENSQUID_AUTOMATION=1 loop_driver owns the CODE report, so v2_supply skips it, T2.9). vitest inherits
+  // the ambient env, and a ralph lap runs with OPENSQUID_AUTOMATION=1 — so pin the interactive default here (each
+  // test that needs automation, e.g. T2.9, sets it explicitly) and restore the ambient value after. Makes the
+  // block deterministic regardless of who runs it (CI, an interactive dev, or a self-verifying lap).
+  let priorAutomation: string | undefined;
+  beforeEach(() => {
+    priorAutomation = process.env.OPENSQUID_AUTOMATION;
+    delete process.env.OPENSQUID_AUTOMATION;
+  });
+  afterEach(() => {
+    if (priorAutomation === undefined) delete process.env.OPENSQUID_AUTOMATION;
+    else process.env.OPENSQUID_AUTOMATION = priorAutomation;
+  });
   for (const [stateName, stageUpper] of [
     ['scope', 'SCOPE'],
     ['plan', 'PLAN'],
@@ -1313,11 +1371,11 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       const d = await runV2Cartridges(sid, writeCall(), NOW);
       expect(d.exitCode).toBe(0);
 
-      // 1) the dated file under the SESSION CWD docs/reports/ (NOT the real repo).
-      const reportPath = join(root, 'docs', 'reports', `${stateName}-T-rep-2026-06-22.md`);
+      // 1) the dated file under the SESSION CWD's .opensquid/reports/ (NOT the real repo).
+      const reportPath = join(root, '.opensquid', 'reports', `${stateName}-T-rep-2026-06-22.md`);
       expect(await exists(reportPath)).toBe(true);
       const body = await readFile(reportPath, 'utf8');
-      expect(body).toContain(`🦑 Phase report — ${stageUpper} complete · T-rep ·`);
+      expect(body).toContain(`After-stage report — ${stageUpper} complete · T-rep ·`);
       expect(body).toContain('Summary:');
       expect(body).toContain('Evidence:'); // the gate predicates that backed the phase
       expect(body).toContain('Next →');
@@ -1327,7 +1385,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       const files = await readdir(lessonsDir);
       expect(files.length).toBe(1);
       const mirror = await readFile(join(lessonsDir, files[0]!), 'utf8');
-      expect(mirror).toContain(`🦑 Phase report — ${stageUpper} complete · T-rep ·`);
+      expect(mirror).toContain(`After-stage report — ${stageUpper} complete · T-rep ·`);
     });
   }
 
@@ -1339,8 +1397,11 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(join(root, 'docs', 'reports', 'code-T-rep-2026-06-22.md'), 'utf8');
-    expect(body).toContain('🦑 Phase report — CODE complete · T-rep ·');
+    const body = await readFile(
+      join(root, '.opensquid', 'reports', 'code-T-rep-2026-06-22.md'),
+      'utf8',
+    );
+    expect(body).toContain('After-stage report — CODE complete · T-rep ·');
     expect(body).toContain('Phases:'); // the long, stand-out 7-step chart
     expect(body).toContain('[x] pre_research');
     expect(body).toContain('[x] fix');
@@ -1362,13 +1423,13 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     const d = await runV2Cartridges(sid, logDone, NOW);
     const body = d.injections.join('\n');
     // label is the TRACK id (T-fb), proving isComplete keyed on active.id ('1') while the report uses the track id
-    expect(body).toContain('🦑 Phase report — CODE complete · T-fb');
+    expect(body).toContain('After-stage report — CODE complete · T-fb');
     expect(body).toContain('Evidence:'); // full-fidelity: the CODE gate proof line (not a reduced report)
     expect(body).toContain('[x] fix'); // the 7-phase chart
 
     // cross-event dedup: a SECOND completing log_phase → NO second report (durable claim marker)
     const d2 = await runV2Cartridges(sid, logDone, NOW);
-    expect(d2.injections.join('\n')).not.toContain('🦑 Phase report');
+    expect(d2.injections.join('\n')).not.toContain('After-stage report');
   });
 
   it('#12 — no completion report when the task is INCOMPLETE', async () => {
@@ -1383,7 +1444,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       args: { phase: 'pre_research' },
     } as unknown as Event;
     const d = await runV2Cartridges(sid, logEv, NOW);
-    expect(d.injections.join('\n')).not.toContain('🦑 Phase report');
+    expect(d.injections.join('\n')).not.toContain('After-stage report');
   });
 
   it('T2.9 double-emit guard: in an autonomous lap (OPENSQUID_AUTOMATION=1) v2_supply SKIPS the CODE report (loop_driver owns it)', async () => {
@@ -1397,7 +1458,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       await runV2Cartridges(sid, writeCall(), NOW);
       // the CODE report is NOT written here (the orchestrator's onPhasesComplete emits it autonomously)
       await expect(
-        readFile(join(root, 'docs', 'reports', 'code-T-auto-2026-06-22.md'), 'utf8'),
+        readFile(join(root, '.opensquid', 'reports', 'code-T-auto-2026-06-22.md'), 'utf8'),
       ).rejects.toThrow();
     } finally {
       if (prev === undefined) delete process.env.OPENSQUID_AUTOMATION;
@@ -1414,7 +1475,10 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
+    const body = await readFile(
+      join(root, '.opensquid', 'reports', 'scope-T-rep-2026-06-22.md'),
+      'utf8',
+    );
     expect(body).toContain('Goal: on the captured goal'); // absent goal → aligned:true (not a drift signal)
   });
 
@@ -1433,7 +1497,10 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(join(root, 'docs', 'reports', 'scope-T-rep-2026-06-22.md'), 'utf8');
+    const body = await readFile(
+      join(root, '.opensquid', 'reports', 'scope-T-rep-2026-06-22.md'),
+      'utf8',
+    );
     expect(body).toContain('OFF the captured goal — destination drift');
   });
 
@@ -1445,7 +1512,10 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(join(root, 'docs', 'reports', 'plan-T-rep-2026-06-22.md'), 'utf8');
+    const body = await readFile(
+      join(root, '.opensquid', 'reports', 'plan-T-rep-2026-06-22.md'),
+      'utf8',
+    );
     expect(body).not.toContain('## Goal alignment');
   });
 
@@ -1453,7 +1523,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
   // NOT on every event. A two-gate fixture: leaving `plan` ENTERS `author` (which declares `summary: true`).
   it('the before-stage SUMMARY fires ONCE on stage ENTRY (entry-edge), not per event', async () => {
     const sid = 'sess-cadence-summary';
-    const root = await newProjectRoot(sid);
+    await newProjectRoot(sid); // records the session cwd (side-effect); the returned root is unused here
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-sum' });
     const pack = load({
       name: 'fsf-summary',
@@ -1493,16 +1563,21 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     // event 1: a Write advances plan → author. Entering author fires its before-summary exactly once.
     const d1 = await runV2Cartridges(sid, writeCall(), NOW);
-    expect(d1.injections.join('\n')).toContain('🦑 Starting AUTHOR · T-sum');
+    expect(d1.injections.join('\n')).toContain('Starting AUTHOR · T-sum');
     expect(d1.injections.join('\n')).toContain('Will: author the spec'); // from the pack's author `does:`
+    // V2-ENF.2/7 — the follow-instructions anti-drift nudge rides the same stage-ENTRY boundary (§5.4c),
+    // re-asserting the injected procedure. SURFACED-only, no `🦑`, and never the literal "undefined".
+    expect(d1.injections.join('\n')).toContain('Stay on the AUTHOR procedure');
+    expect(d1.injections.join('\n')).toContain('Procedure: author the spec');
+    expect(d1.injections.join('\n')).not.toContain('Procedure: undefined');
     // exactly one entry-edge summary this event (not duplicated).
-    const starts1 = d1.injections.join('\n').match(/🦑 Starting AUTHOR/g) ?? [];
+    const starts1 = d1.injections.join('\n').match(/Starting AUTHOR/g) ?? [];
     expect(starts1.length).toBe(1);
 
     // event 2: a Bash FAILS the `author` gate (guard `tool=="Write"`) → NO transition → the actor STAYS in
     // author. Proof the summary is per-ENTRY, not per-event: no second "Starting AUTHOR" fires while parked.
     const d2 = await runV2Cartridges(sid, bashCall(), NOW);
-    expect(d2.injections.join('\n')).not.toContain('🦑 Starting AUTHOR');
+    expect(d2.injections.join('\n')).not.toContain('Starting AUTHOR');
   });
 
   // CADENCE-IN-PACK — the cadence is PACK DATA: a gate state that declares NO `report:` emits nothing on leave
@@ -1536,9 +1611,9 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
 
     const d = await runV2Cartridges(sid, writeCall(), NOW); // FSM DOES advance (silent → done)
     expect(d.exitCode).toBe(0);
-    expect(d.injections.join('\n')).not.toContain('🦑 Phase report'); // no after-report
-    expect(d.injections.join('\n')).not.toContain('🦑 Starting'); // no before-summary
-    expect(await exists(join(root, 'docs', 'reports'))).toBe(false); // no dated report file at all
+    expect(d.injections.join('\n')).not.toContain('After-stage report'); // no after-report
+    expect(d.injections.join('\n')).not.toContain('Starting'); // no before-summary
+    expect(await exists(join(root, '.opensquid', 'reports'))).toBe(false); // no dated report file at all
   });
 });
 

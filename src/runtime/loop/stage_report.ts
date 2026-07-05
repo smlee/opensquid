@@ -1,12 +1,15 @@
 /**
  * T2.12 — per-stage reports (SCOPE / PLAN / AUTHOR / CODE / DEPLOY).
  *
- * Each FSM stage emits a MANDATORY report: a dated, human-readable file under the active project's
- * `docs/reports/`, a memory mirror, AND (T2.12-surface) an in-session injection + best-effort chat push —
- * so the phase status is SHOWN, not just filed. The renderer is PURE — `iso` is injected, never `Date.now()`.
+ * Each FSM stage emits a MANDATORY after-report: a dated, human-readable file SAVED under the active project's
+ * `<project>/.opensquid/reports/` (V2-ENF.2/4 — never the legacy `docs/reports/`, never the global home; the
+ * directory + atomic write are owned by `reports_dir.saveProjectReport`), a memory mirror, AND (T2.12-surface)
+ * an in-session injection + best-effort chat push — so the phase status is SHOWN, not just filed. The renderer
+ * is PURE — `iso` is injected, never `Date.now()`.
  *
- * STANDARDIZED FORMAT (one shape for every phase, so reports are recognizable):
- *   🦑 Phase report — <STAGE> complete · <taskId> · <date>
+ * STANDARDIZED FORMAT (one shape for every phase, so reports are recognizable). NB the `🦑` glyph is RESERVED
+ * for drift/gate/blocked notices (reporting-model §4) — a report body NEVER carries it:
+ *   After-stage report — <STAGE> complete · <taskId> · <date>
  *   Summary: …
  *   Phases:  (CODE only) a checklist chart of the 7-phase coding cycle — the long, stand-out report
  *   Next → <stage>: <what that phase will work on>
@@ -15,11 +18,9 @@
  * Live triggers: `v2_supply.ts` (SCOPE/PLAN/AUTHOR/DEPLOY on the leaving transition) + `loop_driver` (CODE on
  * `phases_complete`). Both also surface the returned body in-session + chat.
  *
- * Imports from: node:path, ../../storage/atomic_file.
+ * Imports from: ./reports_dir (which owns the project-scoped dir resolution + atomic write).
  */
-import { join } from 'node:path';
-
-import { atomicWriteFile } from '../../storage/atomic_file.js';
+import { saveProjectReport } from './reports_dir.js';
 
 // GENERIC RUNTIME — a stage LABEL is any string (the gate's declared `report:` field in pack.yaml), NOT a
 // closed core enum. So a non-coding pack can name a stage outside SCOPE/PLAN/AUTHOR/CODE (e.g. REVIEW, TRIAGE)
@@ -63,7 +64,7 @@ export interface StageReport {
 /** Render the standardized report body + its dated file path. Pure (no `Date.now()`). */
 export function renderStageReport(r: StageReport, iso: string): { path: string; body: string } {
   const date = iso.slice(0, 10);
-  const lines: string[] = [`🦑 Phase report — ${r.stage} complete · ${r.taskId} · ${date}`, ''];
+  const lines: string[] = [`After-stage report — ${r.stage} complete · ${r.taskId} · ${date}`, ''];
   lines.push(`Summary: ${r.summary}`, '');
 
   // Evidence line — the deterministic gate predicates that backed this phase (how you know it passed).
@@ -92,10 +93,9 @@ export function renderStageReport(r: StageReport, iso: string): { path: string; 
   }
 
   const body = lines.join('\n') + '\n';
-  return {
-    path: join('docs/reports', `${r.stage.toLowerCase()}-${r.taskId}-${date}.md`),
-    body,
-  };
+  // Root-relative FILENAME only (no directory) — the SAVED-report directory is resolved by `emitStageReport`
+  // (V2-ENF.2/4: `<project>/.opensquid/reports/`, never `docs/reports/`, never the global home).
+  return { path: `${r.stage.toLowerCase()}-${r.taskId}-${date}.md`, body };
 }
 
 /**
@@ -113,7 +113,7 @@ export function renderStageSummary(
 ): { body: string } {
   const date = iso.slice(0, 10);
   const lines = [
-    `🦑 Starting ${stage} · ${taskId} · ${date}`,
+    `Starting ${stage} · ${taskId} · ${date}`,
     '',
     `Will: ${work ?? 'begin this stage'}`,
   ];
@@ -121,16 +121,18 @@ export function renderStageSummary(
 }
 
 /**
- * Atomically write the rendered report and return BOTH the (root-relative) path and the body — the caller
- * surfaces the body in-session (injection) + chat + memory, which this signature's lack of a sessionId
- * keeps in the caller (v2_supply / loop_driver).
+ * Save the rendered after-stage report to `<project>/.opensquid/reports/` (V2-ENF.2/4) and return BOTH the
+ * saved path and the body — the caller surfaces the body in-session (injection) + chat + memory, which this
+ * signature's lack of a sessionId keeps in the caller (v2_supply / loop_driver). `root` is the session cwd;
+ * `saveProjectReport` walks up to the project scope root. When no project scope resolves (a marker-less cwd),
+ * the report is surfaced-only and `path` falls back to the bare filename (never a global-home write).
  */
 export async function emitStageReport(
   root: string,
   r: StageReport,
   iso: string,
 ): Promise<{ path: string; body: string }> {
-  const { path, body } = renderStageReport(r, iso);
-  await atomicWriteFile(join(root, path), body);
-  return { path, body };
+  const { path: filename, body } = renderStageReport(r, iso);
+  const saved = await saveProjectReport(root, filename, body);
+  return { path: saved ?? filename, body };
 }

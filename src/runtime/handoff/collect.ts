@@ -197,6 +197,21 @@ async function gitRepo(dir: string): Promise<HandoffGitRepo | null> {
   }
 }
 
+/**
+ * V2-ENF.2/5 — dedupe handoff artifacts by their on-disk `path`, keeping the FIRST occurrence (so the v2
+ * `fullstack-flow-*` read, listed first, wins over a v1 read of the same file). Order-preserving.
+ */
+export function dedupeArtifactsByPath(artifacts: HandoffArtifact[]): HandoffArtifact[] {
+  const seen = new Set<string>();
+  const out: HandoffArtifact[] = [];
+  for (const a of artifacts) {
+    if (seen.has(a.path)) continue;
+    seen.add(a.path);
+    out.push(a);
+  }
+  return out;
+}
+
 export async function collectHandoffState(sessionId: string, cwd: string): Promise<HandoffState> {
   const root = (await resolveProjectMarker(cwd))?.root ?? cwd;
 
@@ -220,12 +235,19 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
   // fields so a v2 (fullstack-flow) session — invisible to the v1 pack-named keys below — still resumes. FAIL-OPEN.
   const checkpoint = await readCheckpointBySession(sessionId).catch(() => null);
 
-  const artifacts = (
-    await Promise.all([
-      artifactOf(sessionId, 'coding-flow-pre-research-path', 'pre_research'),
-      artifactOf(sessionId, 'coding-flow-spec-path', 'spec'),
-    ])
-  ).filter((a): a is HandoffArtifact => a !== null);
+  // V2-ENF.2/5 — KEY-DRIFT FIX: the v2 writer (v2_supply.ts:171) stamps `fullstack-flow-pre-research-path`,
+  // but this collector historically read only the v1 `coding-flow-pre-research-path` key, so a v2 handoff
+  // DROPPED the pre-research artifact on resume. Read BOTH keys (v1 + v2), then DEDUP by path so a project
+  // that stamped both (a mixed v1→v2 session) does not double-send the same artifact.
+  const artifacts = dedupeArtifactsByPath(
+    (
+      await Promise.all([
+        artifactOf(sessionId, 'fullstack-flow-pre-research-path', 'pre_research'),
+        artifactOf(sessionId, 'coding-flow-pre-research-path', 'pre_research'),
+        artifactOf(sessionId, 'coding-flow-spec-path', 'spec'),
+      ])
+    ).filter((a): a is HandoffArtifact => a !== null),
+  );
   // Enrich with the checkpoint's recorded scope artifacts (v2's on-disk proof), deduped by path — additive, so
   // a v1 artifact already found is untouched and a v2 session's artifact is no longer dropped.
   if (checkpoint !== null) {

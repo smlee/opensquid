@@ -1,12 +1,14 @@
 /**
  * T2.12 — stage_report renderer + emitter (zero LLM, deterministic, iso injected).
  *
- * Covers the STANDARDIZED format: the 🦑 header, Summary, the CODE phase-chart, the "Next → <stage>: <work>"
- * line, and the SCOPE-only Goal line. emitStageReport returns {path, body} + writes the dated file.
+ * Covers the STANDARDIZED format: the plain (no-🦑, reserved for drift/gate notices) header, Summary, the CODE
+ * phase-chart, the "Next → <stage>: <work>" line, and the SCOPE-only Goal line. The renderer returns a
+ * root-relative FILENAME (no directory); emitStageReport SAVES it under `<project>/.opensquid/reports/`
+ * (V2-ENF.2/4 — never the legacy `docs/reports/`, never the global home) and returns {path, body}.
  */
 import { describe, expect, it } from 'vitest';
 
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,19 +31,25 @@ describe('renderStageSummary (before-stage summary — pure)', () => {
       'T-x',
       ISO,
     );
-    expect(body).toContain('🦑 Starting AUTHOR · T-x · 2026-06-22');
+    expect(body).toContain('Starting AUTHOR · T-x · 2026-06-22');
+    expect(body).not.toContain('🦑'); // reports never use the drift/gate glyph (design §4)
     expect(body).toContain('Will: author the spec + real code covering every scoped element');
   });
 
   it('renders a non-coding stage label + its work (the label/work are pack data, not a closed enum)', () => {
-    const { body } = renderStageSummary('TRIAGE', 'sort the inbound reports by severity', 'T-x', ISO);
-    expect(body).toContain('🦑 Starting TRIAGE · T-x · 2026-06-22');
+    const { body } = renderStageSummary(
+      'TRIAGE',
+      'sort the inbound reports by severity',
+      'T-x',
+      ISO,
+    );
+    expect(body).toContain('Starting TRIAGE · T-x · 2026-06-22');
     expect(body).toContain('Will: sort the inbound reports by severity');
   });
 
   it('falls back to a generic "begin this stage" when no work text is supplied', () => {
     const { body } = renderStageSummary('CODE', undefined, 'T-x', ISO);
-    expect(body).toContain('🦑 Starting CODE · T-x · 2026-06-22');
+    expect(body).toContain('Starting CODE · T-x · 2026-06-22');
     expect(body).toContain('Will: begin this stage');
   });
 });
@@ -56,8 +64,9 @@ describe('renderStageReport (pure, standardized format)', () => {
       nextWork: 'author the spec + real code covering every scoped element', // pack data (the next state's `does:`)
     };
     const { path, body } = renderStageReport(r, ISO);
-    expect(path).toBe(join('docs/reports', 'plan-T-x-2026-06-22.md'));
-    expect(body).toContain('🦑 Phase report — PLAN complete · T-x · 2026-06-22');
+    expect(path).toBe('plan-T-x-2026-06-22.md'); // root-relative FILENAME only (dir resolved by emitStageReport)
+    expect(body).toContain('After-stage report — PLAN complete · T-x · 2026-06-22');
+    expect(body).not.toContain('🦑'); // no drift/gate glyph in a report body (design §4)
     expect(body).toContain('Summary: plan complete');
     // "Next" names the next stage AND what it will work on (the "tell me what you'll be working on" line)
     expect(body).toContain(
@@ -74,8 +83,8 @@ describe('renderStageReport (pure, standardized format)', () => {
       { stage: 'TRIAGE', taskId: 'T-t', summary: 'triaged', nextDirective: 'remediate' },
       ISO,
     );
-    expect(path).toBe(join('docs/reports', 'triage-T-t-2026-06-22.md'));
-    expect(body).toContain('🦑 Phase report — TRIAGE complete · T-t · 2026-06-22');
+    expect(path).toBe('triage-T-t-2026-06-22.md');
+    expect(body).toContain('After-stage report — TRIAGE complete · T-t · 2026-06-22');
     expect(body).toContain('Next → remediate');
     expect(body).not.toContain('Next → remediate:'); // no work suffix when nextWork is absent
   });
@@ -168,13 +177,15 @@ describe('renderStageReport (pure, standardized format)', () => {
       { stage: 'AUTHOR', taskId: 'T-a', summary: 's', nextDirective: 'code' },
       ISO,
     );
-    expect(path).toBe(join('docs/reports', 'author-T-a-2026-06-22.md'));
+    expect(path).toBe('author-T-a-2026-06-22.md');
   });
 });
 
-describe('emitStageReport (writes a dated file under a temp root)', () => {
-  it('atomic-writes the body to join(root, path) and returns {path, body}', async () => {
+describe('emitStageReport (SAVES under <project>/.opensquid/reports/)', () => {
+  it('saves the body atomically under the project reports dir + returns the ABSOLUTE saved path + body', async () => {
     const root = await mkdtemp(join(tmpdir(), 'stage-report-'));
+    const scope = join(root, '.opensquid'); // the project marker `saveProjectReport` walks up to
+    await mkdir(scope, { recursive: true });
     const r: StageReport = {
       stage: 'DEPLOY',
       taskId: 'T-deploy',
@@ -182,8 +193,23 @@ describe('emitStageReport (writes a dated file under a temp root)', () => {
       nextDirective: 'accepted',
     };
     const { path, body } = await emitStageReport(root, r, ISO);
-    expect(path).toBe(join('docs/reports', 'deploy-T-deploy-2026-06-22.md'));
-    expect(await readFile(join(root, path), 'utf8')).toBe(body);
+    // V2-ENF.2/4 — SAVED under the project `.opensquid/reports/`, never `docs/reports/`, never the global home.
+    expect(path).toBe(join(scope, 'reports', 'deploy-T-deploy-2026-06-22.md'));
+    expect(await readFile(path, 'utf8')).toBe(body);
+    expect(body).toBe(renderStageReport(r, ISO).body);
+  });
+
+  it('degrades to surfaced-only (bare filename, no write) when no project scope resolves', async () => {
+    const bare = await mkdtemp(join(tmpdir(), 'stage-report-bare-')); // no `.opensquid` marker
+    const r: StageReport = {
+      stage: 'DEPLOY',
+      taskId: 'T-deploy',
+      summary: 'deploy complete',
+      nextDirective: 'accepted',
+    };
+    const { path, body } = await emitStageReport(bare, r, ISO);
+    // no project scope → saveProjectReport returns null → path falls back to the bare filename, nothing written.
+    expect(path).toBe('deploy-T-deploy-2026-06-22.md');
     expect(body).toBe(renderStageReport(r, ISO).body);
   });
 });

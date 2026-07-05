@@ -6,16 +6,16 @@
  *   - per active v2 pack: the per-task FSM state + EVERY gate's pass/fail evaluated through the REAL
  *     RegistryGuardEvaluator over buildGuardCtx (the exact predicates the hooks enforce), with each guard's
  *     expression so the failing facet is visible;
- *   - the stage reports emitted to docs/reports/.
+ *   - the stage reports SAVED under `<project>/.opensquid/reports/` (V2-ENF.2/4, not the legacy docs/reports/).
  *
  * The gate evaluation uses a NEUTRAL `post_tool_call` event (no tool), so it reports the STANDING gate state —
  * "if a transition were attempted right now, which gates hold" — not an action-specific verdict. Read-only: it
  * NEVER advances the FSM or writes state. Reused by the `opensquid status` CLI + (optionally) an MCP tool.
  */
 import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import { loadActiveV2Cartridges } from '../bootstrap.js';
+import { projectReportsDirFor } from './reports_dir.js';
 import { readFsmState } from '../fsm_state.js';
 import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_state.js';
 import type { Event } from '../types.js';
@@ -86,12 +86,14 @@ export async function disciplineStatus(sessionId: string): Promise<DisciplineSta
   let reports: string[] = [];
   const root = await readSessionCwd(sessionId);
   if (root !== null) {
-    try {
-      reports = (await readdir(join(root, 'docs', 'reports')))
-        .filter((f) => f.endsWith('.md'))
-        .sort();
-    } catch {
-      // no reports dir yet — leave empty
+    // V2-ENF.2/4 — SAVED reports live under `<project>/.opensquid/reports/`, not the legacy `docs/reports/`.
+    const reportsDir = await projectReportsDirFor(root);
+    if (reportsDir !== null) {
+      try {
+        reports = (await readdir(reportsDir)).filter((f) => f.endsWith('.md')).sort();
+      } catch {
+        // no reports dir yet — leave empty
+      }
     }
   }
 
@@ -126,7 +128,7 @@ export function formatDisciplineStatus(s: DisciplineStatus): string {
   }
   lines.push(
     s.reports.length > 0
-      ? `• Reports emitted (docs/reports/): ${s.reports.join(', ')}`
+      ? `• Reports emitted (.opensquid/reports/): ${s.reports.join(', ')}`
       : '• Reports emitted: none yet.',
   );
   return lines.join('\n');

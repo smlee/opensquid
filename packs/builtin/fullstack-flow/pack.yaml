@@ -110,7 +110,15 @@ guards:
   # `code` phase is logged). Both REQUIRED only when the change touches an external fact; a docs-only /
   # no-new-dependency change is exempt (both clauses pass with no consult). Gate the ACT (a recorded consult),
   # never the QUALITY (was it the primary source) — quality stays advisory (the content-audit, GFR.1/GFR.2).
-  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
+  # V2-ENF.2/3 — + the block-on-unresolved REPORT-RESOLUTION facet: THE WORKGRAPH IS THE CHECKLIST (design §4.2)
+  # — the active task's before-commitment is its parent-child sub-issues, and the after-report is resolved only
+  # when they are (closed = done, wedged-with-reason = deferred, silently-open = unresolved). `report.resolved`
+  # (bound dual-shape by buildGuardCtx) HOLDS this stage-exit gate on a silently-unresolved committed item — but
+  # AUTOMATION-ONLY (report_resolution.ts: interactive is never blocked) and it never denies a tool, only holds
+  # ADVANCE. FAIL-OPEN to true (no active task / no committed sub-issues / a workgraph read error → resolved), so
+  # a leaf task with no decomposition passes exactly as before. This is where "mandatory reporting" bites: a
+  # parent task cannot leave CODE while its committed checklist has a silently-open item (design §6, §7.3).
+  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && report.resolved && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
   # T2.8 — the DEPLOY gate: a deterministic, zero-LLM predicate. `deploy.capability_ok` = the shipped
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.
@@ -175,7 +183,11 @@ fsm:
       guard: scope_write_ready
       trigger: [post_tool_call]
       on_pass_emits: scope_written
-      on_fail: { action: block, message: 'SCOPE_WRITE: write the scope artifact — anchors_ok ∧ !open_question ∧ GUESS_FREE' }
+      on_fail:
+        {
+          action: block,
+          message: 'SCOPE_WRITE: write the scope artifact — anchors_ok ∧ !open_question ∧ GUESS_FREE',
+        }
       # CADENCE — after-stage report on LEAVE (scope_write → plan) + before-stage summary on ENTRY (scope → scope_write).
       report: SCOPE_WRITE
       summary: true

@@ -130,6 +130,7 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(codeExpr).toContain('code.phases_complete');
     expect(codeExpr).toContain('code.readiness_ran');
     expect(codeExpr).toContain('code.deprecated_clean');
+    expect(codeExpr).toContain('report.resolved'); // V2-ENF.2/3 — block-on-unresolved report-resolution facet
     expect(codeExpr).toContain('contains(audit.code, "VERDICT: GUESS_FREE")'); // GFR.2
     expect(codeExpr).toContain('contains(audit.author, "VERDICT: GUESS_FREE")'); // GFR.3 rolling
   });
@@ -138,9 +139,11 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const child = childActor(loaded);
     expect(child.state.current).toBe('coding');
-    // the three facets + the CODE verdict (GFR.2) + the prior AUTHOR verdict (GFR.3 rolling).
+    // the three facets + the CODE verdict (GFR.2) + the prior AUTHOR verdict (GFR.3 rolling) + the resolved
+    // report-checklist facet (V2-ENF.2/3 — the block-on-unresolved clause; resolved here so it doesn't hold).
     const ready = {
       code: { phases_complete: true, readiness_ran: true, deprecated_clean: true },
+      report: { resolved: true },
       audit: { author: GF, code: GF },
     };
     await child.receive(env('post_tool_call', ready));
@@ -293,7 +296,9 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
 
   it('DBL.2: an EXHAUSTED bug-fix loop routes to the human (accept→plan), NOT another author loop', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    expect(loaded.compiled.guardExprs?.get('deploy_bugfix_exhausted')).toBe('deploy.bugfix_exhausted');
+    expect(loaded.compiled.guardExprs?.get('deploy_bugfix_exhausted')).toBe(
+      'deploy.bugfix_exhausted',
+    );
     const a = seedAt(loaded, 'deploy');
     // bugs (clean:false) BUT the round cap is hit → verify emits bugfix_exhausted → accept → (unaccepted) → plan.
     await a.receive(

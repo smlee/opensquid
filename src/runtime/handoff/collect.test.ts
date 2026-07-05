@@ -10,7 +10,8 @@ import { join } from 'node:path';
 import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { collectHandoffState, handoverDocPath } from './collect.js';
+import { collectHandoffState, dedupeArtifactsByPath, handoverDocPath } from './collect.js';
+import type { HandoffArtifact } from './collect.js';
 import { sessionLogFile, sessionStateFile } from '../paths.js';
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 
@@ -137,6 +138,39 @@ describe('collectHandoffState — populated home (real shapes)', () => {
     }
   });
 
+  it('V2-ENF.2/5 key-drift: reads the v2 `fullstack-flow-pre-research-path` session key (not just the v1 key)', async () => {
+    // The v2 writer (v2_supply.ts) stamps `fullstack-flow-pre-research-path`; the collector historically read
+    // ONLY the v1 `coding-flow-pre-research-path`, so a pure-v2 session (NO v1 key, NO checkpoint) dropped the
+    // artifact on resume. This proves the v2 session-state key is now surfaced.
+    await mkdir(join(home, 'sessions', SID, 'state'), { recursive: true });
+    const preResearch = join(cwd, 'v2-key.md');
+    await writeFile(preResearch, '# v2 pre-research', 'utf8');
+    await writeFile(
+      sessionStateFile(SID, 'fullstack-flow-pre-research-path'),
+      JSON.stringify(preResearch),
+      'utf8',
+    );
+    const state = await collectHandoffState(SID, cwd);
+    const art = state.artifacts.find((a) => a.kind === 'pre_research');
+    expect(art?.path).toBe(preResearch);
+    expect(art?.sha8).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('V2-ENF.2/5 double-send: v1 + v2 keys pointing at the SAME path yield ONE artifact (dedup)', async () => {
+    // A mixed v1→v2 session may have stamped both keys at the same file. Without the dedup the handoff would
+    // double-send the identical artifact; dedupeArtifactsByPath collapses it to one.
+    await mkdir(join(home, 'sessions', SID, 'state'), { recursive: true });
+    const shared = join(cwd, 'shared-pre.md');
+    await writeFile(shared, '# shared pre-research', 'utf8');
+    for (const key of ['fullstack-flow-pre-research-path', 'coding-flow-pre-research-path']) {
+      await writeFile(sessionStateFile(SID, key), JSON.stringify(shared), 'utf8');
+    }
+    const state = await collectHandoffState(SID, cwd);
+    const preResearch = state.artifacts.filter((a) => a.kind === 'pre_research');
+    expect(preResearch).toHaveLength(1);
+    expect(preResearch[0]?.path).toBe(shared);
+  });
+
   it('a cleared (empty-string) artifact-path key yields NO artifact, not a broken one (wg-4c48ef1b9969)', async () => {
     // simulate the scope_start re-arm having cleared the key to '' (or null)
     const keyPath = sessionStateFile(SID, 'coding-flow-pre-research-path');
@@ -158,5 +192,29 @@ describe('helpers', () => {
     expect(handoverDocPath('/u', 'abcdefgh-rest')).toBe(
       '/u/docs/handover-session-abcdefgh-auto.md',
     );
+  });
+
+  it('dedupeArtifactsByPath keeps the FIRST occurrence per path, order-preserving (V2-ENF.2/5)', () => {
+    const a = (path: string, sha8: string | null): HandoffArtifact => ({
+      kind: 'pre_research',
+      path,
+      sha8,
+    });
+    const out = dedupeArtifactsByPath([
+      a('/x/pre.md', 'aaaaaaaa'), // v2 read — listed first, so it wins
+      a('/x/pre.md', 'bbbbbbbb'), // v1 read of the SAME file — dropped
+      a('/y/spec.md', 'cccccccc'), // a distinct path — kept
+    ]);
+    expect(out.map((o) => o.path)).toEqual(['/x/pre.md', '/y/spec.md']);
+    expect(out[0]?.sha8).toBe('aaaaaaaa'); // first-wins, not last
+  });
+
+  it('dedupeArtifactsByPath is a no-op on an already-unique / empty list', () => {
+    expect(dedupeArtifactsByPath([])).toEqual([]);
+    const uniq: HandoffArtifact[] = [
+      { kind: 'pre_research', path: '/a', sha8: null },
+      { kind: 'spec', path: '/b', sha8: null },
+    ];
+    expect(dedupeArtifactsByPath(uniq)).toEqual(uniq);
   });
 });
