@@ -11,7 +11,7 @@
  * Imports from: commander, node:net, ../../runtime/paths.js, ../../runtime/spawn_lifecycle.js,
  * ../../runtime/ralph/*, ../../workgraph/*, ../wizard/ralph_writer.js.
  */
-import { readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Command } from 'commander';
 import {
@@ -120,6 +120,18 @@ export function makeSpawnLap(
       // The lap's OWN stage_inject hook supplies the stage's checkpoint/procedure/rubric/work-context (its own
       // session) — the directive only constrains scope + asks for the resulting-stage report.
       (stagePrompt === undefined ? '' : `\n---\n${stagePrompt}\n`);
+    // Per-lap log — capture the subprocess's stderr/stdout + outcome so a WEDGED or CRASHED lap is diagnosable
+    // afterward (best-effort: logging never breaks a lap). One file per lap under ~/.opensquid/lap-logs/.
+    const logDir = join(OPENSQUID_HOME(), 'lap-logs');
+    const logPath = join(
+      logDir,
+      `${item.id}__${new Date().toISOString().replace(/[:.]/g, '-')}.log`,
+    );
+    const appendLog = (body: string): void => {
+      void mkdir(logDir, { recursive: true })
+        .then(() => appendFile(logPath, body, 'utf8'))
+        .catch(() => undefined); // logging is best-effort — swallow any fs error
+    };
     let stdout: string;
     try {
       stdout = await runCli({
@@ -142,12 +154,25 @@ export function makeSpawnLap(
         // OPENSQUID_AUTOMATION reaches the hooks). This is the ONLY channel that tells the lap process its item id.
         env: { OPENSQUID_ITEM_ID: item.id },
         timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),
+        // LIVE channel — each lap stderr line surfaces immediately in the loop's own output (the subprocess→
+        // session message channel; no chat, no daemon, no log-scraping). Watch `opensquid loop` and you see
+        // the lap talking in real time.
+        onStderrLine: (line: string) =>
+          process.stdout.write(`    │ ${item.id.slice(3, 11)} ${line}\n`),
+        // Log BOTH streams at close (any exit code) — stderr is where a wedged lap's hook/gate errors land.
+        onStreams: ({ stdout: out, stderr, code }) =>
+          appendLog(
+            `# lap ${item.id} · exit=${code} · ${new Date().toISOString()}\n` +
+              `=== STDERR ===\n${stderr.trim() || '(empty)'}\n\n=== STDOUT (tail) ===\n${out.slice(-6000)}\n`,
+          ),
       });
     } catch (e) {
+      appendLog(`\n=== LAP ERROR ===\n${e instanceof Error ? e.message : String(e)}\n`);
       if ((e as { __timeout?: boolean }).__timeout === true) return { kind: 'TIMEOUT', costUsd: 0 };
       throw e; // genuine spawn/IO failure → superviseLap maps it to CRASH
     }
     const { outcome, costUsd } = parseLapOutcome(stdout);
+    appendLog(`\n=== PARSED OUTCOME === ${JSON.stringify(outcome)} · cost=$${costUsd}\n`);
     return { ...outcome, costUsd };
   };
 }
@@ -272,6 +297,10 @@ export function registerRalph(program: Command): Command {
         claimAudience,
         runLap: makeSpawnLap(cfg, file),
         escalate: await resolveLoopEscalator(root),
+        // Live play-by-play: one timestamped line per step (claim / stage lap / advance / ship / park / drain)
+        // so a detached `opensquid loop > loop.log` is watchable via `tail -f loop.log`.
+        narrate: (msg: string) =>
+          process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
         ...(stageLoop === undefined ? {} : { stageLoop }),
         // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
         // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).

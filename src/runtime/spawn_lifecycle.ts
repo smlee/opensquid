@@ -64,6 +64,18 @@ export interface OneShotOpts {
   graceMs?: number;
   /** Extra env vars merged OVER the inherited process env for the child (e.g. OPENSQUID_ITEM_ID for a ralph lap). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Best-effort observer of BOTH captured streams at process close / spawn-error (ANY exit code) — so the
+   * caller can LOG the subprocess's stdout/stderr/exit regardless of outcome (a wedged/crashed lap is then
+   * diagnosable). Called at most once; never affects the returned result.
+   */
+  onStreams?: (s: { stdout: string; stderr: string; code: number | null }) => void;
+  /**
+   * LIVE per-line observer of the child's stderr, called as each complete line arrives (not buffered until
+   * close) — the basic subprocess→parent message channel. The child writes a progress line to stderr; the
+   * parent sees it immediately and can surface it. No chat, no daemon, no log-scraping.
+   */
+  onStderrLine?: (line: string) => void;
 }
 
 type LifecyclePhase =
@@ -101,6 +113,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
     let state: LifecyclePhase = { phase: 'running' };
     let stdout = '';
     let stderr = '';
+    let stderrLineBuf = ''; // carries a partial (un-newlined) tail between data chunks for onStderrLine
     let graceTimer: NodeJS.Timeout | undefined;
 
     const groupKill = (): void => {
@@ -144,17 +157,28 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       stdout += d.toString('utf8');
     });
     proc.stderr.on('data', (d: Buffer) => {
-      stderr += d.toString('utf8');
+      const chunk = d.toString('utf8');
+      stderr += chunk;
+      if (opts.onStderrLine !== undefined) {
+        stderrLineBuf += chunk;
+        for (let nl = stderrLineBuf.indexOf('\n'); nl >= 0; nl = stderrLineBuf.indexOf('\n')) {
+          const line = stderrLineBuf.slice(0, nl);
+          stderrLineBuf = stderrLineBuf.slice(nl + 1);
+          if (line.length > 0) opts.onStderrLine(line); // deliver each COMPLETE line live to the parent
+        }
+      }
     });
 
     proc.on('error', (e) => {
       if (state.phase !== 'running') return;
       state = { phase: 'spawn_failed' };
       clearTimeout(timer);
+      opts.onStreams?.({ stdout, stderr, code: null });
       reject(new Error(`${prefix}spawn failed: ${e.message}`));
     });
 
     proc.on('close', (code) => {
+      opts.onStreams?.({ stdout, stderr, code }); // best-effort stream capture for logging (any exit code)
       if (state.phase === 'running') {
         state = { phase: 'closed' };
         clearTimeout(timer);

@@ -59,6 +59,8 @@ export interface RalphDeps {
   runLap: (item: Issue, stagePrompt?: string) => Promise<LapResult>;
   /** The undroppable escalation transport (GR.3) — the CLI wires `escalateSeverity`. */
   escalate: LapEscalator;
+  /** Optional per-step progress narration for a live play-by-play (the CLI wires stdout; omit → silent, as in tests). */
+  narrate?: (msg: string) => void;
   /**
    * T2.9 loop-driver hook — called after a lap SHIPS a task (phases_complete). The CLI wires this to
    * `onPhasesComplete` (emit the CODE stage report + compute the next run-group via batchDecide). Optional +
@@ -123,6 +125,7 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
   for (;;) {
     const isAuto = sl.isAutomated(stage);
     const sp = isAuto ? await sl.stagePrompt(item, stage) : undefined;
+    deps.narrate?.(`  ▷ ${item.id} · ${stage} lap…`);
     const res = await superviseLap(() => deps.runLap(item, sp), cfg.supervise);
     cost += res.costUsd;
     if (res.kind !== 'SHIPPED') return { ...res, costUsd: cost }; // escalation/wedge → the uniform handler parks it
@@ -136,6 +139,7 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
         return { kind: 'HUMAN_REQUIRED', reason: 'UNRECOVERABLE_WEDGE', costUsd: cost };
       continue; // retry the same stage with a fresh lap (bounded)
     }
+    deps.narrate?.(`  ✓ ${item.id} · ${stage} → ${next}`);
     sameStage = 0;
     stage = next; // in-run priming only; the DURABLE projection is written THROUGH by the FSM (v2_supply),
     // the single writer — a loop restart resumes from that FSM-written stage via `readStage`.
@@ -198,12 +202,16 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     if (item === undefined) {
       // Nothing automation-eligible (an empty board, OR every ready item is unscoped/held) → automation is
       // drained. Escalate + STOP (not a silent stop); the held items await interactive human scope.
+      deps.narrate?.(
+        `■ board drained — BOARD_EMPTY (closed ${closed.length}, parked ${parked.length})`,
+      );
       await parkAndEscalate('BOARD_EMPTY');
       return { stopped: 'BOARD_EMPTY', spent, closed, parked };
     }
     const { won } = await wg.claimIssue(item.id, deps.claimAudience(), cfg.claimTtlSec); // GR.1 atomic CAS
     if (!won) continue; // another runner/harness won it — it now carries a live claim, excluded next pass
 
+    deps.narrate?.(`▶ claim ${item.id} — ${item.title.slice(0, 60)}`);
     const outcome = await runItemLaps(item, deps, cfg); // GR.3 → LapResult (PSL.3: per-stage when stageLoop present)
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
@@ -211,6 +219,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       await wg.updateIssue(item.id, { status: 'closed' });
       await deps.stageLoop?.clearStage(item.id); // PSL.3 — the item left the loop; drop its durable stage
       closed.push(item.id);
+      deps.narrate?.(`✓ SHIPPED ${item.id} (closed ${closed.length})`);
       // T2.9: the loop-driver lives here — on phases_complete (a SHIPPED lap) emit the CODE report + compute the
       // next run-group. Fail-open: a report/grouping error must never break the drain.
       try {
@@ -224,6 +233,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       // them to HUMAN_REQUIRED{UNRECOVERABLE_WEDGE}) map to UNRECOVERABLE_WEDGE.
       const reason: HumanRequiredReason =
         outcome.kind === 'HUMAN_REQUIRED' ? outcome.reason : 'UNRECOVERABLE_WEDGE';
+      deps.narrate?.(`⚠ parked ${item.id}: ${reason}`);
       await parkAndEscalate(reason, item);
       if (isResourcePause(reason)) return { stopped: reason, spent, closed, parked }; // e.g. lap-emitted RATE_BUDGET
       // else (IRREVERSIBLE_BOUNDARY / SCOPE_FORK / UNRECOVERABLE_WEDGE): parked, take the next item

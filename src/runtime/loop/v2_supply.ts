@@ -713,6 +713,9 @@ export async function runV2Cartridges(
         } else if (!enforceOnly && e.kind === 'emit' && e.messageKind === 'transition') {
           // INV2 in-process observability — the cited v1 durable equivalent of the bus transition.
           const p = e.payload as { from: string; to: string };
+          // LIVE progress on the subprocess→session channel: a lap's stage advance surfaces to the parent
+          // (the loop) the instant it happens (spawn_lifecycle onStderrLine → the loop's live feed).
+          process.stderr.write(`[lap ${name}] ${p.from} → ${p.to}\n`);
           await appendTransition({
             session: sessionId,
             pack: name,
@@ -789,6 +792,7 @@ export async function runV2Cartridges(
                     : {}),
                 };
                 const { body } = await emitStageReport(root, r, now); // dated file + the body
+                process.stderr.write(`[lap ${name}] ✓ ${p.from} done — report emitted\n`); // LIVE channel
                 // T2.12-surface: SHOW the phase report — in-session (the injections set the hooks emit as
                 // additionalContext) + a best-effort chat push (fail-open). Was file+memory only → invisible.
                 injections.push(body);
