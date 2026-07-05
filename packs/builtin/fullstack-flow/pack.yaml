@@ -42,6 +42,14 @@ activation: on-demand
 # coding flow whose main loop PLANS and dispatches executors; it imposes orchestrator-only discipline. opensquid
 # owns the guard MECHANISM (runtime/guard/orchestrator_guard.ts); this DECLARES the POLICY that turns it on, so a
 # project running fullstack-flow gets the orchestrator guard while a content/SEO project (no such declaration) does not.
+#
+# WHAT THE GUARD ENFORCES (user spec 2026-07-05) — ALWAYS-ON in this project's cwd + subdirectories, in BOTH
+# interactive and automation sessions (NOT stage- or automation-gated): the main orchestrator loop may write
+# DOCUMENTS only (Markdown / anything under `docs/`); a CODING-FILE write (src/packs/tests/config) is HARD-BLOCKED
+# at PreToolUse — the freehand-proof boundary. The "unless": a STANDING human grant, the project-local
+# `.opensquid/allow-code-write` flag (create once to permit, remove to revoke). Executor subagents (agent_id) are
+# exempt — they implement what the orchestrator planned. This is PROJECT-SCOPED, never global (pre-tool-use.ts
+# gates on `projectDeclaresOrchestratorOnly(cwd)`, which rejects the home/global scope).
 discipline: { orchestrator_only: true }
 
 # No detected_by gate — opt-in via active.json IS the pin (mirrors coding-flow; the user_pinned
@@ -137,27 +145,29 @@ guards:
 fsm:
   initial: scope
   states:
-    # ── SCOPE (T2.4 — the foundational ENFORCING gate) ──────────────────────
+    # ── SCOPE (interactive — a NO-OP RESTING STATE) ─────────────────────────
+    # SCOPE is the ONE interactive stage (procedure/scope.md): the human + agent research and talk. The automated
+    # FSM does NOTHING here. It has NO `trigger`, so the observed actor DWELLS on every hook event
+    # (v2_observed_actor.ts:68 returns [] when the event is not in a gate's trigger) — a `recall`/`Read`/`Grep`,
+    # even the pre-research artifact write, NEVER advances it. Per the user (2026-07-05): "scope does nothing until
+    # it is scope_write", and "automation starts when the user says scope is done." The ONLY thing that leaves
+    # SCOPE is the human's explicit confirmation, which ends the interactive turn and starts the automated lap that
+    # boots directly at `scope_write` (v2_supply.ts:616-623). So `scoped → scope_write` is a STRUCTURAL transition,
+    # not one a tool event fires: nothing an agent does in the session leaves SCOPE — only the user's say-so does.
+    #
+    # The prior `trigger: [post_tool_call]` was the bug: it made SCOPE evaluate on every tool call and auto-advance
+    # on the first one (`!scope.is_advance` passing), so the interactive stage never actually ran. Removed.
     scope:
       kind: gate
       guard: scope_ready
-      trigger: [post_tool_call]
       on_pass_emits: scoped
+      # guard / on_fail are INERT in the interactive observed path (no trigger ⇒ never evaluated); retained only so
+      # the `scope → scope_write` transition stays structurally defined for the compiler / validateFsm.
       on_fail: { action: block, message: 'SCOPE: anchors∧!open_question' }
-      # CADENCE (behavior-as-data) — SCOPE emits its after-stage report on LEAVE (scope → scope_write). No
-      # `summary`: `scope` is the FSM initial state, never entered via a transition, so an entry-edge summary
-      # here could never fire.
       report: SCOPE
-      # EVIDENCE-DECLARATION (generic runtime) — the ctx keys the SCOPE report's `Evidence:` line proves. These
-      # are the keys buildGuardCtx sets for a scope advance; `open_question` is GOOD when FALSE (object form).
-      # Moves the former hardcoded core `stageEvidence` switch into pack data.
       reads:
         - scope.anchors_ok
         - { key: scope.open_question, label: 'no open question', expect: false }
-      # LANE MODEL — the SCOPE stage may write ONLY the pre-research artifact. `scope.is_advance` is derived
-      # from this lane (data-driven, replacing the old PRE_RESEARCH_REGEX); an out-of-lane write blocks under
-      # automation (no coding while still scoping). The glob is filename-scoped (`*pre-research*`) so a stray
-      # non-artifact write into docs/research is out of lane too.
       writes: ['docs/research/*pre-research*']
     # ── SCOPE_WRITE (GS1 — automated: write the pre-research artifact + trigger decompose) ────────────────────
     scope_write:

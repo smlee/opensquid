@@ -46,6 +46,9 @@ import { loadSafetyPolicy } from '../guard/safety_policy.js';
 import { isYoloMode } from '../guard/yolo.js';
 import { checkOrchestratorGuard } from '../guard/orchestrator_guard.js';
 import { appendProjectDriftEvent } from '../drift_catalog.js';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { resolveProjectScopeRoot } from '../paths.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -250,26 +253,39 @@ async function main(): Promise<void> {
   // NOTE the safety FLOOR above is UNCHANGED — it stays universal substrate and fires unconditionally regardless
   // of packs (machine-protection, not discipline). Only this DISCIPLINE guard became pack-declared.
   //
-  // AUTOMATION gate (mirrors the v2-enforce cartridge gate at "Hole 2" below): enforcement is the stand-in for a
-  // MISSING supervisor — the intended target is the DRIVEN orchestrator loop, NOT every human. In an INTERACTIVE
-  // session the human IS the supervisor, so the discipline guard must NOT fire (it would block the human's own
-  // SCOPE-stage writes, e.g. a `docs/research/*pre-research*` artifact). `OPENSQUID_AUTOMATION=1` is the per-lap
-  // "am I the driven loop" signal the orchestrator sets on its subprocess (ralph.ts). ENV-ONLY: the per-session
-  // flag file is deliberately NOT consulted (a stale flag would bleed into an interactive session sharing the id).
-  // The safety FLOOR above stays universal (machine-protection) — only this discipline guard is automation-gated.
+  // ALWAYS-ON, PROJECT-SCOPED (user spec 2026-07-05): the doc-only rule holds AT ALL TIMES in this project's cwd
+  // + subdirectories — NOT stage-gated, NOT automation-gated. The prior `OPENSQUID_AUTOMATION=1` condition is
+  // REMOVED: it left the INTERACTIVE orchestrator (the actual freehand risk — the agent at the keyboard, not the
+  // human) completely unguarded, and it over-broadly blocked ALL writes. Now the guard fires whenever THIS
+  // project declares `orchestrator_only`, and it blocks only CODING-FILE writes (documents always pass), so a
+  // human's / orchestrator's `docs/**` or `*.md` write is never blocked.
   //
-  // Executor exemption: a Task/Agent subagent's PreToolUse payload carries `agent_id` (per the CC hook
-  // docs) — `checkOrchestratorGuard` passes those calls through untouched. `exitIfSubagent` (above,
-  // ~line 82) has already terminated OPENSQUID_SUBAGENT=1 laps/reviewers, so this guard only sees the
-  // main loop and CC-native Task/Agent children. Orchestration commands (git, pnpm, grep, cd, Read,
-  // Agent, mcp__*) are NOT mutating → always allowed. FAIL-OPEN: any error here never blocks the call.
+  // CRUCIAL — ONLY THIS PROJECT (user: "this is not global"): `projectDeclaresOrchestratorOnly(cwd)` resolves the
+  // project from `cwd` upward, REJECTS the user/home scope root (the home-scope-leak fix), and checks the
+  // declaration in THAT project's pack set. A cwd outside this project tree, or a project without the
+  // declaration, gets NO guard. The permission flag is project-local too (`<projectRoot>/.opensquid/...`).
+  //
+  // THE "unless" — a STANDING human grant: the project-local `.opensquid/allow-code-write` flag file. Present →
+  // coding-file writes are permitted (set once, holds until removed — no per-write nagging); absent → coding
+  // files are hard-blocked while documents still pass.
+  //
+  // Executor exemption: a Task/Agent subagent's PreToolUse payload carries `agent_id` (per the CC hook docs) —
+  // `checkOrchestratorGuard` passes those through untouched. `exitIfSubagent` (above) already terminated
+  // OPENSQUID_SUBAGENT=1 laps/reviewers, so this guard only sees the main loop and CC-native Task/Agent children.
+  // Reads + orchestration commands (git, pnpm, grep, cd, Read, Agent, mcp__*) are not coding-file mutations →
+  // always allowed. FAIL-OPEN: any error here never blocks the call.
   if (parsed.data.kind === 'tool_call') {
     try {
-      if (process.env.OPENSQUID_AUTOMATION === '1' && (await projectDeclaresOrchestratorOnly(cwd))) {
+      if (await projectDeclaresOrchestratorOnly(cwd)) {
+        // resolveProjectScopeRoot returns the `.opensquid` scope dir itself, so the flag lives directly inside it.
+        const scopeRoot = await resolveProjectScopeRoot(cwd);
+        const codeWritePermitted =
+          scopeRoot !== null && existsSync(join(scopeRoot, 'allow-code-write'));
         const verdict = checkOrchestratorGuard(
           parsed.data.tool,
           parsed.data.args,
           agentId !== undefined ? { agent_id: agentId } : undefined,
+          { codeWritePermitted },
         );
         if (verdict.deny) {
           process.stdout.write(JSON.stringify(buildPreToolUseDeny(verdict.message ?? '', '')));
@@ -343,10 +359,13 @@ async function main(): Promise<void> {
         ...(agentId !== undefined ? { agentId } : {}),
       })
     : { exitCode: 0, messages: [], injections: [], boundSkills: [] };
-  const exitCode: 0 | 2 = v1.exitCode === 2 || skillHost.exitCode === 2 || v2Gate.exitCode === 2 ? 2 : 0;
+  const exitCode: 0 | 2 =
+    v1.exitCode === 2 || skillHost.exitCode === 2 || v2Gate.exitCode === 2 ? 2 : 0;
   // v2Gate.messages are the block/halt instructions; only include them in the deny when v2Gate triggered.
   const gateMessages = v2Gate.exitCode === 2 ? v2Gate.messages : [];
-  const stderr = [v1.stderr, skillHost.stderr, ...gateMessages].filter((s) => s.length > 0).join('\n');
+  const stderr = [v1.stderr, skillHost.stderr, ...gateMessages]
+    .filter((s) => s.length > 0)
+    .join('\n');
   const contextInjections = [
     ...v1.contextInjections,
     ...skillHost.contextInjections,

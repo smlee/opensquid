@@ -81,25 +81,28 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(validateFsm(fsm!)).toEqual([]); // every emit routed, targets declared, decision totality
   });
 
-  it('advances SCOPE → SCOPE_WRITE → PLAN → AUTHOR → CODE; CODE is the T2.7 sub_flow await-point (observed mode)', async () => {
-    // GS1: scope now advances to scope_write (not directly to plan). scope_write advances to plan.
+  it('SCOPE dwells (no-op); the automated chain SCOPE_WRITE → PLAN → AUTHOR → CODE advances from scope_write', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
     expect(a.state.current).toBe('scope'); // initial
 
-    // SCOPE is the T2.4 ENFORCING gate (post_tool_call-triggered, blocking). A READY advance passes → SCOPE_WRITE.
-    await a.receive(env('post_tool_call', scopeReady)); // SCOPE gate fires → SCOPE_WRITE
-    expect(a.state.current).toBe('scope_write');
+    // SCOPE is the interactive NO-OP resting state (no trigger): even a READY-looking advance shape does NOTHING.
+    // The FSM dwells at scope until the human confirms — nothing an agent does in-session leaves SCOPE.
+    const dwell = await a.receive(env('post_tool_call', scopeReady));
+    expect(dwell).toEqual([]); // no advance, no block
+    expect(a.state.current).toBe('scope');
 
-    // SCOPE_WRITE is the GS1 automated gate (write the pre-research artifact). A READY advance passes → PLAN.
+    // Automation begins at scope_write (the lap boots there on the user's confirmation, v2_supply.ts:616-623).
+    // Seed there and drive the automated chain.
+    a.state.current = 'scope_write';
     await a.receive(env('post_tool_call', scopeReady)); // SCOPE_WRITE gate fires → PLAN
     expect(a.state.current).toBe('plan');
 
-    // PLAN is now the T2.5 ENFORCING gate (acyclic ∧ complete). A READY plan passes → AUTHOR.
+    // PLAN is the T2.5 ENFORCING gate (acyclic ∧ complete). A READY plan passes → AUTHOR.
     await a.receive(env('post_tool_call', planReady)); // PLAN → AUTHOR
     expect(a.state.current).toBe('author');
 
-    // AUTHOR is now the T2.6 ENFORCING gate (manifest_complete ∧ real_code). A READY author passes → CODE.
+    // AUTHOR is the T2.6 ENFORCING gate (manifest_complete ∧ real_code). A READY author passes → CODE.
     await a.receive(env('post_tool_call', authorReady)); // AUTHOR → CODE
     expect(a.state.current).toBe('code');
 
@@ -180,36 +183,29 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
   it('a gate at an await-point ignores a non-trigger observation (no spurious advance)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
-    // SCOPE now waits for post_tool_call (T2.4); a prompt_submit must NOT advance it.
+    // SCOPE has no trigger (interactive no-op resting state); a prompt_submit is a no-op like every other event.
     const effects = await a.receive(env('prompt_submit'));
     expect(effects).toEqual([]);
     expect(a.state.current).toBe('scope');
   });
 
-  it('T2.4: a NOT-READY SCOPE advance BLOCKS (stays at scope, emits the block action)', async () => {
+  it('T2.4: SCOPE never blocks and never advances on a tool call — it DWELLS (interactive no-op)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
-    // is_advance true but anchors_ok false → the predicate fails → on_fail block.
+    // Even a "ready advance" shape (the exact input that USED to advance scope→scope_write) is now a no-op:
+    // SCOPE has no trigger, so the FSM does nothing — no advance AND no block. It waits for the human.
     const notReady = {
       scope: { is_advance: true, anchors_ok: false, depth: 0, open_question: false },
     };
     const effects = await a.receive(env('post_tool_call', notReady));
-    expect(a.state.current).toBe('scope'); // blocked → stayed
-    const blocked = effects.some(
-      (e) =>
-        e.kind === 'emit' &&
-        e.messageKind === 'gate_action' &&
-        (e.payload as { action?: string }).action === 'block',
-    );
-    expect(blocked).toBe(true);
+    expect(a.state.current).toBe('scope'); // dwelled
+    expect(effects).toEqual([]); // no advance, no block — SCOPE is inert to tool calls
   });
 
   it('T2.5: an incomplete/cyclic PLAN BLOCKS (stays at plan, emits the block action)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const a = new V2ObservedActor('pack:fullstack-flow', loaded);
-    // GS1: scope → scope_write → plan (two advances needed before reaching plan).
-    await a.receive(env('post_tool_call', scopeReady)); // → scope_write
-    await a.receive(env('post_tool_call', scopeReady)); // → plan
+    // PLAN is an AUTOMATION stage — seed there directly (SCOPE dwells now; the lap boots past it to scope_write).
+    const a = seedAt(loaded, 'plan');
     expect(a.state.current).toBe('plan');
     // plan.complete false (an uncovered element) → predicate fails → on_fail block.
     const notReady = { plan: { acyclic: true, complete: false } };
@@ -226,11 +222,8 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
 
   it('T2.6: an AUTHOR with orphans or a failing proof BLOCKS (stays at author, emits the block action)', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const a = new V2ObservedActor('pack:fullstack-flow', loaded);
-    // GS1: scope → scope_write → plan → author (three advances needed before reaching author).
-    await a.receive(env('post_tool_call', scopeReady)); // → scope_write
-    await a.receive(env('post_tool_call', scopeReady)); // → plan
-    await a.receive(env('post_tool_call', planReady)); // → author
+    // AUTHOR is an AUTOMATION stage — seed there directly (SCOPE dwells; the lap drives the automated chain).
+    const a = seedAt(loaded, 'author');
     expect(a.state.current).toBe('author');
     // real_code false (a failing/absent proof-test) → predicate fails → on_fail block.
     const notReady = { author: { manifest_complete: true, real_code: false } };
@@ -245,13 +238,14 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(blocked).toBe(true);
   });
 
-  it('T2.4: a non-advance post_tool_call short-circuits PASS (advances; never blocks mid-scoping)', async () => {
+  it('T2.4: a plain (non-advance) post_tool_call during SCOPE is a NO-OP — it dwells, never reaches scope_write', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const a = new V2ObservedActor('pack:fullstack-flow', loaded);
-    // is_advance false → `!scope.is_advance` short-circuits true → gate passes without inspecting anchors.
-    // GS1: scope → scope_write (not scope → plan), so non-advance still lands at scope_write.
-    await a.receive(env('post_tool_call', { scope: { is_advance: false } }));
-    expect(a.state.current).toBe('scope_write');
+    // This is the exact bug that used to auto-eject SCOPE: a non-advance tool call passing `!scope.is_advance`
+    // and advancing to scope_write. With the trigger removed, SCOPE dwells — the tool call does nothing.
+    const effects = await a.receive(env('post_tool_call', { scope: { is_advance: false } }));
+    expect(effects).toEqual([]);
+    expect(a.state.current).toBe('scope'); // dwelled — SCOPE only leaves on the user's confirmation
   });
 
   // ── T2.8 — the DEPLOY capability gate + the durable acceptance decision (never auto-ship) ──────────────────

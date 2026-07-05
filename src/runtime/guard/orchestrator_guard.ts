@@ -1,8 +1,19 @@
 /**
- * GS1 — Orchestrator guard: deny CODE-EDITING in the main (orchestrator) loop.
+ * GS1 — Orchestrator guard: the interactive main loop may write DOCUMENTS ONLY; coding files are hard-blocked.
  *
- * The main loop is a PLANNER that dispatches work to executor subagents — it MUST NOT
- * directly mutate files or run mutating shell commands.
+ * The main loop is a PLANNER that dispatches implementation to executor subagents — it MUST NOT freehand coding
+ * files (src/packs/tests/config). SPEC (user, 2026-07-05): "you can only write docs in this project" — a
+ * document write (Markdown / anything under `docs/`) always passes; ANY other mutating call (a non-document file
+ * write, or a file-writing Bash) is a CODING-FILE mutation and is DENIED unless one of:
+ *   - the caller is an executor subagent (`agent_id` present), OR
+ *   - a STANDING human permission grant is present (the project-local `.opensquid/allow-code-write` flag — set
+ *     once, holds until removed; the caller resolves it and passes `codeWritePermitted`).
+ *
+ * PROJECT-SCOPED, NOT GLOBAL (user: "this is not global"): the caller (pre-tool-use.ts) fires this guard ONLY
+ * when the project at `cwd` declares `discipline: { orchestrator_only: true }` (fullstack-flow does). A project
+ * without that declaration never gets the guard. It fires in BOTH interactive and automation sessions — the
+ * interactive orchestrator is exactly the freehand risk the previous automation-only gate left open.
+ *
  * This guard enforces that boundary at PreToolUse.
  *
  * DENY-LIST, default-allow:
@@ -88,6 +99,35 @@ export function isMutatingCall(tool: string, args: Record<string, unknown>): boo
   return false; // Read, Grep, Agent, Task, mcp__* tools, git, pnpm, node, … — fail-open
 }
 
+/**
+ * A DOCUMENT the orchestrator may always write (the doc-only lane, user spec): a Markdown file (`.md`/`.mdx`) or
+ * ANY path under a `docs/` directory. Case-insensitive; matches both absolute (`/repo/docs/x.md`) and
+ * repo-relative (`docs/x.md`) paths. Everything else is a coding file.
+ */
+export function isDocumentPath(path: string): boolean {
+  const p = path.toLowerCase();
+  if (p.endsWith('.md') || p.endsWith('.mdx')) return true;
+  if (p.startsWith('docs/') || p.includes('/docs/')) return true;
+  return false;
+}
+
+/**
+ * A CODING-FILE mutation = a mutating call that is NOT a document write. A file-editor
+ * (Write/Edit/NotebookEdit) whose single target path is a DOCUMENT is allowed (→ false); any other mutating call
+ * — a non-document file write, or a file-writing Bash (`sed -i`, `>`, `tee`, `cp`/`mv`, whose target we cannot
+ * trust as a document) — is a coding-file mutation (→ true). Reads never mutate (→ false).
+ */
+export function isCodeFileMutation(tool: string, args: Record<string, unknown>): boolean {
+  if (!isMutatingCall(tool, args)) return false; // reads / non-mutating → never a coding-file write
+  if (ALWAYS_MUTATING_TOOLS.has(tool)) {
+    const a = args as { file_path?: unknown; notebook_path?: unknown };
+    const fp = typeof a.file_path === 'string' ? a.file_path : a.notebook_path;
+    if (typeof fp === 'string' && isDocumentPath(fp)) return false; // a document write — always allowed
+    return true; // a non-document file write → coding file
+  }
+  return true; // a file-writing Bash mutation → treated as a coding-file mutation (no trusted doc target)
+}
+
 /** Optional hook-input fields threaded from the PreToolUse stdin payload. */
 export interface HookInput {
   /** Present only when the hook runs inside a Task/Agent subagent (per Claude Code docs). */
@@ -100,24 +140,37 @@ export interface OrchestratorGuardResult {
 }
 
 const DENY_MESSAGE =
-  '🦑 [orchestrator guard] Orchestrator does not implement — dispatch an executor subagent.';
+  '🦑 [orchestrator guard] In this project you may write DOCUMENTS only (docs/, *.md). Writing a coding file ' +
+  'requires explicit permission — create `.opensquid/allow-code-write` in this project to grant a standing ' +
+  'window (it holds until you remove it), or dispatch an executor subagent to implement.';
+
+/** Caller-resolved inputs the pure guard can't read itself (filesystem lives in pre-tool-use.ts). */
+export interface OrchestratorGuardOptions {
+  /** A STANDING human grant is present (the project-local `.opensquid/allow-code-write` flag) → allow a
+   *  coding-file write this call. The caller resolves the flag; the guard stays pure. */
+  codeWritePermitted?: boolean;
+}
 
 /**
- * GS1 orchestrator-only check: deny mutating tool calls in the main loop.
+ * GS1 orchestrator-only check: in a project that declares `orchestrator_only`, the main loop may write DOCUMENTS
+ * but a CODING-FILE write is denied unless explicitly permitted.
  *
  * Returns `{ deny: false }` when:
  *   - `hookInput.agent_id` is present (a Task/Agent executor — always exempt), OR
- *   - the call is not mutating (pass-through for all orchestration commands).
+ *   - the call is not a coding-file mutation (reads + document writes always pass), OR
+ *   - `opts.codeWritePermitted` is true (a standing human grant is in effect).
  *
- * Returns `{ deny: true, message }` when the main loop (no agent_id) attempts a mutating call.
+ * Returns `{ deny: true, message }` when the main loop (no agent_id) attempts a coding-file write with no grant.
  */
 export function checkOrchestratorGuard(
   tool: string,
   args: Record<string, unknown>,
   hookInput?: HookInput,
+  opts?: OrchestratorGuardOptions,
 ): OrchestratorGuardResult {
   // Executor exemption: agent_id present → Task/Agent subagent, not the main loop.
   if (hookInput?.agent_id !== undefined) return { deny: false };
-  if (!isMutatingCall(tool, args)) return { deny: false };
+  if (!isCodeFileMutation(tool, args)) return { deny: false }; // reads + DOCUMENT writes always pass
+  if (opts?.codeWritePermitted === true) return { deny: false }; // standing human permission granted
   return { deny: true, message: DENY_MESSAGE };
 }

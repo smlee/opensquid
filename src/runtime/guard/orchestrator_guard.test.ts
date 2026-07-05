@@ -8,7 +8,12 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { checkOrchestratorGuard, isMutatingCall } from './orchestrator_guard.js';
+import {
+  checkOrchestratorGuard,
+  isCodeFileMutation,
+  isDocumentPath,
+  isMutatingCall,
+} from './orchestrator_guard.js';
 
 describe('isMutatingCall — deny-list, default-allow', () => {
   // --- always-mutating tools ---
@@ -141,6 +146,75 @@ describe('checkOrchestratorGuard — main loop denies, executor exempt', () => {
       'Bash',
       { command: 'sed -i s/a/b/ file.ts' },
       { agent_id: 'executor-xyz' },
+    );
+    expect(r.deny).toBe(false);
+  });
+});
+
+describe('isDocumentPath — the doc-only lane', () => {
+  it('Markdown files are documents', () => {
+    expect(isDocumentPath('docs/plan.md')).toBe(true);
+    expect(isDocumentPath('/repo/README.md')).toBe(true);
+    expect(isDocumentPath('notes.MDX')).toBe(true); // case-insensitive
+  });
+  it('anything under a docs/ directory is a document', () => {
+    expect(isDocumentPath('docs/research/foo-pre-research.md')).toBe(true);
+    expect(isDocumentPath('/repo/docs/diagram.svg')).toBe(true); // location, not extension
+  });
+  it('coding files are NOT documents', () => {
+    expect(isDocumentPath('src/runtime/x.ts')).toBe(false);
+    expect(isDocumentPath('/repo/packs/builtin/fullstack-flow/pack.yaml')).toBe(false);
+    expect(isDocumentPath('package.json')).toBe(false);
+    expect(isDocumentPath('/tmp/x')).toBe(false);
+  });
+});
+
+describe('isCodeFileMutation — document writes are not coding-file mutations', () => {
+  it('a document Write/Edit is NOT a coding-file mutation', () => {
+    expect(isCodeFileMutation('Write', { file_path: 'docs/plan.md', content: 'x' })).toBe(false);
+    expect(isCodeFileMutation('Edit', { file_path: '/repo/README.md' })).toBe(false);
+  });
+  it('a non-document Write/Edit IS a coding-file mutation', () => {
+    expect(isCodeFileMutation('Write', { file_path: 'src/x.ts', content: 'x' })).toBe(true);
+    expect(isCodeFileMutation('Edit', { file_path: 'packs/x/pack.yaml' })).toBe(true);
+  });
+  it('a file-writing Bash is a coding-file mutation; a read is not', () => {
+    expect(isCodeFileMutation('Bash', { command: 'echo x > f' })).toBe(true);
+    expect(isCodeFileMutation('Bash', { command: 'git status' })).toBe(false);
+    expect(isCodeFileMutation('Read', { file_path: 'src/x.ts' })).toBe(false);
+  });
+});
+
+describe('checkOrchestratorGuard — documents pass, coding files gated by permission', () => {
+  it('main + Write to a DOCUMENT → ALLOW (the doc-only lane)', () => {
+    expect(checkOrchestratorGuard('Write', { file_path: 'docs/plan.md', content: 'x' }).deny).toBe(
+      false,
+    );
+    expect(checkOrchestratorGuard('Edit', { file_path: '/repo/README.md' }).deny).toBe(false);
+  });
+  it('main + Write to a CODING FILE → DENY (freehand-blocked)', () => {
+    const r = checkOrchestratorGuard('Write', { file_path: 'src/x.ts', content: 'x' });
+    expect(r.deny).toBe(true);
+    expect(r.message).toContain('DOCUMENTS only');
+    expect(r.message).toContain('allow-code-write');
+  });
+  it('main + coding file WITH a standing permission grant → ALLOW', () => {
+    const r = checkOrchestratorGuard('Write', { file_path: 'src/x.ts', content: 'x' }, undefined, {
+      codeWritePermitted: true,
+    });
+    expect(r.deny).toBe(false);
+  });
+  it('main + coding file with permission NOT granted → DENY', () => {
+    const r = checkOrchestratorGuard('Write', { file_path: 'src/x.ts', content: 'x' }, undefined, {
+      codeWritePermitted: false,
+    });
+    expect(r.deny).toBe(true);
+  });
+  it('executor (agent_id) + coding file → ALLOW even without a grant (executors implement)', () => {
+    const r = checkOrchestratorGuard(
+      'Write',
+      { file_path: 'src/x.ts', content: 'x' },
+      { agent_id: 'executor-abc' },
     );
     expect(r.deny).toBe(false);
   });

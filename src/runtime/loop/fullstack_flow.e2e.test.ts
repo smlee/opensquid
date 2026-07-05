@@ -64,7 +64,7 @@ const postWrite = (filePath: string): Event =>
 beforeEach(() => mockLoad.mockReset());
 
 describe('fullstack-flow E2E — real pack, live path', () => {
-  it('SCOPE → PLAN: a resolving pre-research advance passes the real SCOPE gate and advances the FSM', async () => {
+  it('SCOPE is a no-op resting state: a pre-research write DWELLS — the interactive FSM does not advance', async () => {
     const real = await loadPackV2(FSF);
     mockLoad.mockResolvedValue([real]);
 
@@ -74,7 +74,8 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     await recordSessionCwd(sid, root);
     // SCOPE runs BEFORE a task is active (taskId=null → session-level FSM key 'fullstack-flow', per T2.2).
 
-    // SCOPE evidence: captured ask + depth≥3 + a pre-research artifact whose element traces to the ask.
+    // Even a fully-resolving pre-research artifact write (the input that USED to advance the FSM) must NOT move
+    // SCOPE: it is interactive and leaves only on the user's explicit confirmation (procedure/scope.md).
     await appendAsk(sid, 'add login screen');
     for (let i = 0; i < 3; i++) await appendTool(sid, 'Read');
     const sub = join(root, 'docs', 'research');
@@ -82,17 +83,16 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     const artifact = join(sub, 'T-e2e-pre-research-2026.md');
     await writeFile(artifact, '1. Login [ask: "add login screen"]\n', 'utf8');
     await atomicWriteFile(sessionStateFile(sid, PRE_RESEARCH_PATH_KEY), JSON.stringify(artifact));
-    await seedVerdict(sid, 'scope'); // GFR.2: the SCOPE gate now requires the guess-free verdict
+    await seedVerdict(sid, 'scope');
 
     const d = await runV2Cartridges(sid, postWrite(artifact), NOW);
 
-    // The real SCOPE gate evaluated real evidence and PASSED (no block).
+    // SCOPE never blocks (no on_fail fires without a trigger) and never advances (dwells): the interactive stage
+    // does nothing on a tool call. No transition is persisted, so the per-pack FSM state stays unset / at scope.
     expect(d.exitCode).toBe(0);
     expect(d.messages).toEqual([]);
-    // The FSM advanced past scope (the live spine works on the REAL pack, not a stub).
     const state = await readFsmStateRaw(sid, 'fullstack-flow');
-    expect(state).not.toBe('scope');
-    expect(state).not.toBeNull();
+    expect(state === null || state === 'scope').toBe(true); // dwelled — no transition out of SCOPE
   });
 
   it('PLAN gate: a covered + acyclic work-graph passes the real PLAN gate', async () => {
