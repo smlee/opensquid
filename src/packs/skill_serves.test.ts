@@ -14,26 +14,39 @@ const facets = (over: Partial<Facets> = {}): Facets => ({
 
 describe('skillServesMatches (fractal lens gating — hierarchical containment)', () => {
   it('a frontend lens (coding.frontend) fires on a coding.frontend turn', () => {
-    expect(skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'coding.frontend' }))).toBe(true);
+    expect(
+      skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'coding.frontend' })),
+    ).toBe(true);
   });
 
   it('a frontend lens does NOT fire on a coding.backend turn', () => {
-    expect(skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'coding.backend' }))).toBe(false);
+    expect(
+      skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'coding.backend' })),
+    ).toBe(false);
   });
 
   it('a frontend lens does NOT fire on a SHALLOW coding (full-stack) turn — graceful depth, no false depth', () => {
-    expect(skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'coding' }))).toBe(false);
+    expect(skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'coding' }))).toBe(
+      false,
+    );
   });
 
   it('a cross-cutting lens (coding) fires on ANY coding.* turn — shallow, frontend, or backend', () => {
     expect(skillServesMatches({ domain: 'coding' }, facets({ domain: 'coding' }))).toBe(true);
-    expect(skillServesMatches({ domain: 'coding' }, facets({ domain: 'coding.frontend' }))).toBe(true);
-    expect(skillServesMatches({ domain: 'coding' }, facets({ domain: 'coding.backend' }))).toBe(true);
+    expect(skillServesMatches({ domain: 'coding' }, facets({ domain: 'coding.frontend' }))).toBe(
+      true,
+    );
+    expect(skillServesMatches({ domain: 'coding' }, facets({ domain: 'coding.backend' }))).toBe(
+      true,
+    );
   });
 
   it('intent-agnostic: a domain lens fires regardless of the turn intent', () => {
     expect(
-      skillServesMatches({ domain: 'coding.frontend' }, facets({ intent: 'inform', domain: 'coding.frontend' })),
+      skillServesMatches(
+        { domain: 'coding.frontend' },
+        facets({ intent: 'inform', domain: 'coding.frontend' }),
+      ),
     ).toBe(true);
   });
 
@@ -49,7 +62,9 @@ describe('skillServesMatches (fractal lens gating — hierarchical containment)'
     expect(skillServesMatches({ domain: 'coding.frontend' }, facets())).toBe(true); // facets() omits domain
     expect(skillServesMatches({ domain: 'coding' }, facets())).toBe(true);
     // but a PRESENT, differing domain still gates (fail-open is per-absent-axis, not a blanket pass):
-    expect(skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'content.seo' }))).toBe(false);
+    expect(
+      skillServesMatches({ domain: 'coding.frontend' }, facets({ domain: 'content.seo' })),
+    ).toBe(false);
   });
 });
 

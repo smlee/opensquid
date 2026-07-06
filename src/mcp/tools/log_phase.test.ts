@@ -19,8 +19,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // E4: partial-mock bootstrap so `loadActiveV2Cartridges` is controllable. Default → [] (no active v2 pack →
 // fail-open), so the pre-existing tests are unaffected; E4 tests opt in by setting a fullstack-flow cartridge.
 vi.mock('../../runtime/bootstrap.js', async (orig) => ({
-  ...(await orig<typeof import('../../runtime/bootstrap.js')>()),
-  loadActiveV2Cartridges: vi.fn(async () => []),
+  ...(await orig()),
+  loadActiveV2Cartridges: vi.fn(() => Promise.resolve([])),
 }));
 
 import { loadActiveV2Cartridges } from '../../runtime/bootstrap.js';
@@ -32,9 +32,10 @@ import { writeActiveTask } from '../../runtime/session_state.js';
 import { handleLogPhase } from './log_phase.js';
 
 // E4 — a minimal fake v2 cartridge (only the fields log_phase reads: a compiled FSM + the pack name).
-const FSF_CARTRIDGE = { pack: { name: 'fullstack-flow' }, compiled: { fsm: {} } } as unknown as Awaited<
-  ReturnType<typeof loadActiveV2Cartridges>
->[number];
+const FSF_CARTRIDGE = {
+  pack: { name: 'fullstack-flow' },
+  compiled: { fsm: {} },
+} as unknown as Awaited<ReturnType<typeof loadActiveV2Cartridges>>[number];
 
 let tempHome: string;
 let priorEnv: Record<string, string | undefined> = {};

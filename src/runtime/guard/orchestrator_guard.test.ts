@@ -196,7 +196,7 @@ describe('checkOrchestratorGuard — documents pass, coding files gated by permi
     const r = checkOrchestratorGuard('Write', { file_path: 'src/x.ts', content: 'x' });
     expect(r.deny).toBe(true);
     expect(r.message).toContain('DOCUMENTS only');
-    expect(r.message).toContain('allow-code-write');
+    expect(r.message).toContain('/code-write');
   });
   it('main + coding file WITH a standing permission grant → ALLOW', () => {
     const r = checkOrchestratorGuard('Write', { file_path: 'src/x.ts', content: 'x' }, undefined, {

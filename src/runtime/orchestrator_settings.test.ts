@@ -12,6 +12,7 @@ import {
   setProjectDomain,
   pinRoute,
   forgetRoute,
+  setAllowCodeWrite,
   type Settings,
   type Route,
 } from './orchestrator_settings.js';
@@ -35,14 +36,16 @@ const settings = (routes: Route[], domain?: Settings['domain']): Settings => ({
   version: 1,
   ...(domain ? { domain } : {}),
   routes,
+  allow_code_write: false,
   policy: { onTie: 'ask', onLowConfidence: 'ground', onlineSearch: false },
 });
 
 describe('readSettings (ORCH.4)', () => {
-  it('absent file → DEFAULTS (domain undefined, policy defaults)', async () => {
+  it('absent file → DEFAULTS (domain undefined, policy defaults, code-write locked)', async () => {
     const s = await readSettings(proj);
     expect(s.domain).toBeUndefined();
     expect(s.routes).toEqual([]);
+    expect(s.allow_code_write).toBe(false);
     expect(s.policy).toEqual({ onTie: 'ask', onLowConfidence: 'ground', onlineSearch: false });
   });
 
@@ -175,5 +178,22 @@ describe('control writers (ORCH.9)', () => {
     await forgetRoute(p, 'gone');
     const s = await readSettings(p);
     expect(s.routes.map((r) => r.pack)).toEqual(['keep']);
+  });
+
+  it('setAllowCodeWrite flips the grant and round-trips; preserves other settings', async () => {
+    await setProjectDomain(p, 'coding');
+    await recordRoute(p, { intent: 'produce' }, 'pack-a', now);
+    expect((await readSettings(p)).allow_code_write).toBe(false); // default: locked
+
+    await setAllowCodeWrite(p, true);
+    let s = await readSettings(p);
+    expect(s.allow_code_write).toBe(true);
+    expect(s.domain).toBe('coding'); // RMW preserved the other settings
+    expect(s.routes.map((r) => r.pack)).toEqual(['pack-a']);
+
+    await setAllowCodeWrite(p, false);
+    s = await readSettings(p);
+    expect(s.allow_code_write).toBe(false);
+    expect(s.routes.map((r) => r.pack)).toEqual(['pack-a']);
   });
 });

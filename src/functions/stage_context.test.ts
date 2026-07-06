@@ -34,11 +34,11 @@ describe('renderCheckpoint', () => {
 });
 
 const deps = (over: Partial<WorkContextDeps> = {}): WorkContextDeps => ({
-  goal: async () => 'ship v2',
-  scopePath: async () => 'docs/research/x-pre-research-2026-06-29.md',
-  plan: async () => 'ISSUES:\n- I1: do it',
-  task: async () => ({ id: '1', subject: 'do the thing', taskId: 'GFR.1' }),
-  acceptance: async () => 'waiting',
+  goal: () => Promise.resolve('ship v2'),
+  scopePath: () => Promise.resolve('docs/research/x-pre-research-2026-06-29.md'),
+  plan: () => Promise.resolve('ISSUES:\n- I1: do it'),
+  task: () => Promise.resolve({ id: '1', subject: 'do the thing', taskId: 'GFR.1' }),
+  acceptance: () => Promise.resolve('waiting'),
   ...over,
 });
 
@@ -61,7 +61,9 @@ describe('stageWorkContext — the per-stage input pointer', () => {
     expect(await stageWorkContext('deploy', 's', deps())).toContain('waiting');
   });
   it('an absent input → empty slot (drops out of the bundle)', async () => {
-    expect(await stageWorkContext('scope', 's', deps({ goal: async () => null }))).toBe('');
+    expect(await stageWorkContext('scope', 's', deps({ goal: () => Promise.resolve(null) }))).toBe(
+      '',
+    );
   });
   it('a terminal/decision/unknown stage → empty', async () => {
     expect(await stageWorkContext('done', 's', deps())).toBe('');

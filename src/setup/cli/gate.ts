@@ -33,15 +33,21 @@ import { promisify } from 'node:util';
 import type { Command } from 'commander';
 
 import { stagedDiff } from '../../functions/staged_diff.js';
+import {
+  readCommitGateEvidence,
+  type CommitGateEvidence,
+} from '../../runtime/commit_gate_evidence.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { sha256Hex } from '../../runtime/durable/run_id.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../../runtime/paths.js';
 import { PROTECTED_PREFIXES, isDocsOnly } from '../../runtime/protected_paths.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
+import { readSuite } from '../../runtime/loop/verification.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../../runtime/workflow_phases.js';
 
 import { appendAttestation, readAttestedShas } from './attestations.js';
+import { registerReaudit } from './reaudit.js';
 
 const execFileP = promisify(execFile);
 /** E0 (docs/design/v2-enforcement-implementation.md §0): the discipline packs whose presence
@@ -134,14 +140,15 @@ function block(msg: string): number {
 /** Does the LIVE session prove a completed flow / docs-only change right now?
  *  Shared by the commit boundary (block decision) and the attest boundary (record
  *  decision) so the two can never diverge. Null = not allowed. */
-/** GFR.2-hard: the fullstack-flow CODE producer's EXTERNAL verdict text (`fullstack-flow-code-audit-cache`),
+/** GFR.2-hard: the CODE producer's EXTERNAL verdict text, cached under the PACK-DECLARED `auditCacheKey`
+ *  (scope-4 §4a — core carries no pack-specific cache-key literal; the key comes from the active pack's evidence),
  *  or null when absent/unreadable. The text carries the findings (the UNRESOLVED bullets) the block surfaces so
  *  the agent redoes EXACTLY those (force a guided redo, not a bare refusal). */
-async function readCodeAuditVerdict(sid: string): Promise<string | null> {
+async function readCodeAuditVerdict(sid: string, auditCacheKey: string): Promise<string | null> {
   try {
-    const parsed = JSON.parse(
-      await readFile(sessionStateFile(sid, 'fullstack-flow-code-audit-cache'), 'utf8'),
-    ) as { verdict?: unknown };
+    const parsed = JSON.parse(await readFile(sessionStateFile(sid, auditCacheKey), 'utf8')) as {
+      verdict?: unknown;
+    };
     return typeof parsed.verdict === 'string' ? parsed.verdict : null;
   } catch {
     return null;
@@ -150,16 +157,19 @@ async function readCodeAuditVerdict(sid: string): Promise<string | null> {
 
 /** GUESS_FREE iff the verdict exists AND says so. FAIL-CLOSED: absent/UNRESOLVED → false (cannot commit). */
 function isGuessFree(verdict: string | null): boolean {
-  return verdict !== null && verdict.includes('VERDICT: GUESS_FREE');
+  return verdict?.includes('VERDICT: GUESS_FREE') ?? false;
 }
 
 /** GFR.2-hard staleness anchor: the sha256 of the diff the CODE audit certified (cached_audit `subjectHash`),
  *  or null when absent/unreadable (an audit run before the subject was recorded, or no cache). */
-async function readCodeAuditSubjectHash(sid: string): Promise<string | null> {
+async function readCodeAuditSubjectHash(
+  sid: string,
+  auditCacheKey: string,
+): Promise<string | null> {
   try {
-    const parsed = JSON.parse(
-      await readFile(sessionStateFile(sid, 'fullstack-flow-code-audit-cache'), 'utf8'),
-    ) as { subjectHash?: unknown };
+    const parsed = JSON.parse(await readFile(sessionStateFile(sid, auditCacheKey), 'utf8')) as {
+      subjectHash?: unknown;
+    };
     return typeof parsed.subjectHash === 'string' ? parsed.subjectHash : null;
   } catch {
     return null;
@@ -170,8 +180,8 @@ async function readCodeAuditSubjectHash(sid: string): Promise<string | null> {
  *  committed NOW. Re-derive `git diff HEAD` and require its sha256 to equal the audit's recorded `subjectHash`.
  *  FAIL-CLOSED: no recorded subject (a pre-anchor audit), no current diff (over-cap/empty/git error), or a
  *  mismatch (the code changed since the audit) → false → block (re-log the `audit` phase on the current diff). */
-async function codeAuditCertifiesCurrentDiff(sid: string): Promise<boolean> {
-  const recorded = await readCodeAuditSubjectHash(sid);
+async function codeAuditCertifiesCurrentDiff(sid: string, auditCacheKey: string): Promise<boolean> {
+  const recorded = await readCodeAuditSubjectHash(sid, auditCacheKey);
   if (recorded === null) return false;
   const diff = await stagedDiff(sid);
   if (diff === null) return false;
@@ -182,6 +192,7 @@ export async function commitAllowedNow(
   sid: string | null,
   files: string[],
   env: NodeJS.ProcessEnv = process.env,
+  ev: CommitGateEvidence | null = null,
   pack: DisciplinePack = 'coding-flow',
 ): Promise<{ allowed: true; reason: 'docs_only' | 'flow_complete' | 'human' } | null> {
   // GDC.1: the gate's subject is the AGENT — a human terminal (no host marker
@@ -189,21 +200,32 @@ export async function commitAllowedNow(
   if (!isAgentInvocation(env)) return { allowed: true, reason: 'human' };
   if (isDocsOnly(files)) return { allowed: true, reason: 'docs_only' };
   if (sid === null) return null;
-  const active = await readActiveTask(sid);
+  // scope-4 (§4): a headless ralph lap disables the AP.1 mirror, so active-task.json is absent — resolve the
+  // driven item from OPENSQUID_ITEM_ID (threaded via `env`, injectable) so the gate's readActiveTask resolves.
+  const active = await readActiveTask(sid, env.OPENSQUID_ITEM_ID);
   if (active === null) return null;
   const phases = await readPhaseState(sid);
-  // E0: v2 `fullstack-flow` gates on the 7-phase LEDGER for the active task — the
-  // agent-controllable completion signal (matching v1's `phases_complete` intent).
-  // Gating on the FSM reaching `deploy` would over-block while the stage gates only
-  // ADVISE at PostToolUse (that tightening is E1/E4). v1 keeps the session-FSM check.
-  if (pack === 'fullstack-flow') {
-    // GFR.2-hard: a code commit requires the 7-phase ledger AND the CODE producer's EXTERNAL guess-free verdict
-    // AND that the verdict certifies the CURRENT diff (staleness window) — so guess-free BINDS at the git
-    // boundary (PostToolUse is too late to block; the FSM gates only advise). FAIL-CLOSED: an unaudited,
-    // non-GUESS_FREE, or since-changed code change cannot be committed.
-    return isComplete(phases, active.id) &&
-      isGuessFree(await readCodeAuditVerdict(sid)) &&
-      (await codeAuditCertifiesCurrentDiff(sid))
+  // scope-4 (§4a): the PACK-DECLARED evidence path. A pack that declares `commit_gate` evidence (v2
+  // `fullstack-flow`) gates on the CODE guess-free verdict (staleness-anchored) cached under its OWN
+  // `auditCacheKey` + the 7-phase ledger — core carries no pack-specific cache-key literal. A pack that declares no
+  // evidence (v1 `coding-flow`, `ev === null`) keeps the session-FSM check.
+  // E0: the ledger is the agent-controllable completion signal (matching v1's `phases_complete` intent);
+  // gating on the FSM reaching `deploy` would over-block while the stage gates only ADVISE at PostToolUse.
+  if (ev !== null) {
+    // GFR.2-hard: a code commit requires the 7-phase ledger (when the pack requires it) AND the CODE producer's
+    // EXTERNAL guess-free verdict AND that the verdict certifies the CURRENT diff (staleness window) — so
+    // guess-free BINDS at the git boundary (PostToolUse is too late to block; the FSM gates only advise).
+    // FAIL-CLOSED: an unaudited, non-GUESS_FREE, or since-changed code change cannot be committed.
+    // scope-5 (§5.4) belt-and-suspenders: when the pack declares `requireSuiteGreen`, the gate ALSO independently
+    // requires the DEPLOY verification-suite record (scope-1's `readSuite`, keyed by the active task) to be green —
+    // so even a commit that bypassed the DEPLOY driver cannot land on a red suite. FAIL-CLOSED: an unrecorded suite
+    // (null) is NOT green. The suite RECORD is the single source of truth (one writer, two readers: the DEPLOY
+    // driver via deploy_evidence + this gate); core names no suite command literal (design §4a).
+    const suiteOk = !ev.requireSuiteGreen || (await readSuite(sid, active.id)) === true;
+    return (!ev.requirePhaseLedger || isComplete(phases, active.id)) &&
+      isGuessFree(await readCodeAuditVerdict(sid, ev.auditCacheKey)) &&
+      (await codeAuditCertifiesCurrentDiff(sid, ev.auditCacheKey)) &&
+      suiteOk
       ? { allowed: true, reason: 'flow_complete' }
       : null;
   }
@@ -282,7 +304,10 @@ export async function runGate(
   // blocked by the old early sid-null check, the most natural human case);
   // the no-session block below is agent-only by construction.
   const sid = await resolveMcpSessionId();
-  const verdict = await commitAllowedNow(sid, files, env, pack);
+  // scope-4 (§4a): resolve the pack-DECLARED commit-gate evidence (null for v1 `coding-flow`, which keeps the
+  // session-FSM path). Core reads whatever the active pack declares — no pack-specific cache-key literal here.
+  const ev = await readCommitGateEvidence(pack);
+  const verdict = await commitAllowedNow(sid, files, env, ev, pack);
   if (verdict !== null) return 0;
   if (sid === null) {
     return block(
@@ -291,23 +316,39 @@ export async function runGate(
         `explicit authorization.`,
     );
   }
-  const active = await readActiveTask(sid);
+  const active = await readActiveTask(sid, env.OPENSQUID_ITEM_ID); // scope-4: headless-lap item fallback
   const fsm = await readFsmStateRaw(sid, pack);
   // GFR.2-hard: if the 7-phase flow IS complete, the block is the CODE guess-free audit, not the flow —
   // give the precise reason rather than the misleading "finish the flow".
-  if (pack === 'fullstack-flow' && active !== null && isComplete(await readPhaseState(sid), active.id)) {
-    const verdict = await readCodeAuditVerdict(sid);
+  if (ev !== null && active !== null && isComplete(await readPhaseState(sid), active.id)) {
+    const verdict = await readCodeAuditVerdict(sid, ev.auditCacheKey);
     // STALENESS branch: the verdict IS GUESS_FREE but it certified a DIFFERENT diff (the code changed since the
     // audit). The fix is mechanical — re-run the audit on the current diff — not a content redo, so say so.
-    if (isGuessFree(verdict) && !(await codeAuditCertifiesCurrentDiff(sid))) {
+    if (isGuessFree(verdict) && !(await codeAuditCertifiesCurrentDiff(sid, ev.auditCacheKey))) {
       return block(
         `this ${boundary} is GUESS_FREE but the audit certified a DIFFERENT diff — the code changed since the ` +
           `CODE audit ran (staleness window). Re-log the \`audit\` phase to re-run the audit on the CURRENT ` +
           `diff, then retry. (Or pass --no-verify only with explicit authorization.)`,
       );
     }
+    // scope-5 (§5.4) SUITE backstop: the CODE audit IS satisfied (GUESS_FREE + certifies the current diff), but the
+    // pack-declared suite requirement is not met — the repo-wide verification suite is not recorded green. Surface
+    // THAT precise, mechanical reason (run the suite) rather than the audit-redo one. Core names no suite command.
+    if (
+      isGuessFree(verdict) &&
+      ev.requireSuiteGreen &&
+      (await readSuite(sid, active.id)) !== true
+    ) {
+      return block(
+        `this ${boundary} has a GUESS_FREE, current-diff CODE audit but the project verification suite is not ` +
+          `recorded green — the commit gate independently requires suite-green (belt-and-suspenders, design §5.4), ` +
+          `so a commit that bypassed the DEPLOY driver still cannot land on a red suite. Run the project ` +
+          `verification suite, fix any red, then retry. (\`--no-verify\` is a human-only override, never your unblock.)`,
+      );
+    }
     const findings =
-      verdict ?? '(no verdict yet — log/re-log the `audit` phase to run the CODE audit, then retry)';
+      verdict ??
+      '(no verdict yet — log/re-log the `audit` phase to run the CODE audit, then retry)';
     // Force a GUIDED redo: surface the exact findings so the agent fixes those, re-logs audit → re-audit →
     // loop until GUESS_FREE (the self-continue pattern), rather than a bare refusal.
     return block(
@@ -354,7 +395,8 @@ export async function runAttest(
     const files = await commitFiles(cwd, sha);
     if (files.length === 0) return 0; // empty/merge/undetermined → nothing to attest
     const sid = await resolveMcpSessionId();
-    const verdict = await commitAllowedNow(sid, files, env, pack);
+    const ev = await readCommitGateEvidence(pack);
+    const verdict = await commitAllowedNow(sid, files, env, ev, pack);
     if (verdict !== null) {
       await appendAttestation(scopeRoot, {
         sha,
@@ -403,6 +445,9 @@ export function registerGate(program: Command): void {
     .action(async () => {
       process.exit(await runAttest(process.cwd()));
     });
+  // scope-4 (§2.4): the LAP-RUNNABLE CODE audit-on-diff — regenerate the exact artifact the commit gate checks,
+  // so an honest headless lap (hooks disabled) clears the gate without gate-gaming.
+  registerReaudit(gate);
   gate
     .command('install')
     .description('install the opensquid pre-commit + pre-push hooks into the current git repo')

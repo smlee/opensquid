@@ -47,8 +47,9 @@ import { isYoloMode } from '../guard/yolo.js';
 import { checkOrchestratorGuard } from '../guard/orchestrator_guard.js';
 import { appendProjectDriftEvent } from '../drift_catalog.js';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { resolveProjectScopeRoot } from '../paths.js';
+import { readSettings } from '../orchestrator_settings.js';
 
 interface PreToolUsePayload {
   tool?: string;
@@ -265,9 +266,11 @@ async function main(): Promise<void> {
   // declaration in THAT project's pack set. A cwd outside this project tree, or a project without the
   // declaration, gets NO guard. The permission flag is project-local too (`<projectRoot>/.opensquid/...`).
   //
-  // THE "unless" — a STANDING human grant: the project-local `.opensquid/allow-code-write` flag file. Present →
-  // coding-file writes are permitted (set once, holds until removed — no per-write nagging); absent → coding
-  // files are hard-blocked while documents still pass.
+  // THE "unless" — a STANDING human grant: the `allow_code_write` boolean in this project's orchestrator.json
+  // (single owner: orchestrator_settings; flipped only by the `/code-write` CLI via a server-side write). True →
+  // coding-file writes are permitted (holds until toggled off); false/absent → coding files are hard-blocked
+  // while documents still pass. BACK-COMPAT (one release): the retired `.opensquid/allow-code-write` flag file
+  // still grants when present, so an in-the-wild flag keeps working until it is migrated away.
   //
   // Executor exemption: a Task/Agent subagent's PreToolUse payload carries `agent_id` (per the CC hook docs) —
   // `checkOrchestratorGuard` passes those through untouched. `exitIfSubagent` (above) already terminated
@@ -277,10 +280,14 @@ async function main(): Promise<void> {
   if (parsed.data.kind === 'tool_call') {
     try {
       if (await projectDeclaresOrchestratorOnly(cwd)) {
-        // resolveProjectScopeRoot returns the `.opensquid` scope dir itself, so the flag lives directly inside it.
+        // resolveProjectScopeRoot returns the `.opensquid` scope dir itself; readSettings takes the project dir
+        // (its parent). Grant when the config value is true OR (back-compat) the retired flag file still exists.
         const scopeRoot = await resolveProjectScopeRoot(cwd);
-        const codeWritePermitted =
+        const allowByConfig =
+          scopeRoot !== null && (await readSettings(dirname(scopeRoot))).allow_code_write === true;
+        const allowByLegacyFlag =
           scopeRoot !== null && existsSync(join(scopeRoot, 'allow-code-write'));
+        const codeWritePermitted = allowByConfig || allowByLegacyFlag;
         const verdict = checkOrchestratorGuard(
           parsed.data.tool,
           parsed.data.args,

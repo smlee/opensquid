@@ -365,7 +365,10 @@ describe('CheckpointStore — task_checkpoints (GS1)', () => {
     await store.createTaskCheckpoint('wg-3', 'author', 1000);
     await store.setTaskArtifacts('wg-3', ['p1', 'p2'], 1000);
     await store.updateTaskStage('wg-3', 'code', 3000);
-    expect(await store.getTaskCheckpoint('wg-3')).toEqual({ stage: 'code', scopeArtifacts: ['p1', 'p2'] });
+    expect(await store.getTaskCheckpoint('wg-3')).toEqual({
+      stage: 'code',
+      scopeArtifacts: ['p1', 'p2'],
+    });
   });
 
   it('trigger shape: create-if-absent then update-on-second-transition (the v2_supply write path)', async () => {

@@ -221,7 +221,10 @@ describe('hook subprocess integration', () => {
     // tempHome and find no flag → must exit 0 regardless. The ENV-ONLY semantics are proven by the
     // fact that this test passes while the env var is absent, even if the old code would have checked
     // the flag file. The deeper unit-level proof is in the code: isAutomationFlagSet import removed.
-    const stdin = JSON.stringify({ tool: 'Edit', args: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' } });
+    const stdin = JSON.stringify({
+      tool: 'Edit',
+      args: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' },
+    });
     const r = await runHook('pre-tool-use.ts', stdin, {
       // No OPENSQUID_AUTOMATION — env gate is off. OPENSQUID_HOME is already tempHome (no flag file).
     });

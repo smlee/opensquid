@@ -2,10 +2,7 @@
  *  outbound reconcile instruction wiring. Deps are injected so no I/O / OPENSQUID_HOME is touched. */
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  runHarnessGraphSync,
-  type HarnessGraphSyncDeps,
-} from './harness_graph_sync.js';
+import { runHarnessGraphSync, type HarnessGraphSyncDeps } from './harness_graph_sync.js';
 import type { HarnessTaskLike, WgSyncFacade } from '../../workgraph/harness_sync.js';
 
 /** A work-graph facade whose issues are all pre-`closed` (so an open harness task → stale-open nudge). */
@@ -17,7 +14,10 @@ function closedWg(): WgSyncFacade {
   };
 }
 
-function deps(over: Partial<HarnessGraphSyncDeps> = {}, tasks: HarnessTaskLike[] = []): HarnessGraphSyncDeps {
+function deps(
+  over: Partial<HarnessGraphSyncDeps> = {},
+  tasks: HarnessTaskLike[] = [],
+): HarnessGraphSyncDeps {
   const mapMem = new Map<string, string>();
   return {
     readTasks: () => Promise.resolve(tasks),
@@ -39,10 +39,17 @@ describe('runHarnessGraphSync — gating (blast-radius)', () => {
   it('does NOT fire on a non-task tool (returns null, never reads/opens anything)', async () => {
     const readTasks = vi.fn();
     const openWg = vi.fn();
-    const r = await runHarnessGraphSync('s1', 'Bash', { command: 'ls' }, undefined, undefined, deps({
-      readTasks: readTasks as unknown as HarnessGraphSyncDeps['readTasks'],
-      openWg: openWg as unknown as HarnessGraphSyncDeps['openWg'],
-    }));
+    const r = await runHarnessGraphSync(
+      's1',
+      'Bash',
+      { command: 'ls' },
+      undefined,
+      undefined,
+      deps({
+        readTasks: readTasks as unknown as HarnessGraphSyncDeps['readTasks'],
+        openWg: openWg as unknown as HarnessGraphSyncDeps['openWg'],
+      }),
+    );
     expect(r).toBeNull();
     expect(readTasks).not.toHaveBeenCalled();
     expect(openWg).not.toHaveBeenCalled();
@@ -50,18 +57,32 @@ describe('runHarnessGraphSync — gating (blast-radius)', () => {
 
   it.each(['TaskCreate', 'TaskUpdate'])('DOES fire on %s (reads the task list)', async (tool) => {
     const readTasks = vi.fn().mockResolvedValue([]);
-    await runHarnessGraphSync('s1', tool, {}, undefined, undefined, deps({
-      readTasks: readTasks as unknown as HarnessGraphSyncDeps['readTasks'],
-    }));
+    await runHarnessGraphSync(
+      's1',
+      tool,
+      {},
+      undefined,
+      undefined,
+      deps({
+        readTasks: readTasks as unknown as HarnessGraphSyncDeps['readTasks'],
+      }),
+    );
     expect(readTasks).toHaveBeenCalledOnce();
   });
 });
 
 describe('runHarnessGraphSync — fail-open', () => {
   it('a throwing readTasks resolves to null (never throws into the hook)', async () => {
-    const r = await runHarnessGraphSync('s1', 'TaskUpdate', { taskId: 'h1', status: 'completed' }, 't.jsonl', undefined, deps({
-      readTasks: () => Promise.reject(new Error('boom')),
-    }));
+    const r = await runHarnessGraphSync(
+      's1',
+      'TaskUpdate',
+      { taskId: 'h1', status: 'completed' },
+      't.jsonl',
+      undefined,
+      deps({
+        readTasks: () => Promise.reject(new Error('boom')),
+      }),
+    );
     expect(r).toBeNull();
   });
 

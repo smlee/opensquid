@@ -26,10 +26,10 @@
  *   - The host `config.json` is read/written here directly, keyed on
  *     `OPENSQUID_HOME()` (runtime/paths), instead of the legacy
  *     `codex/store.js` data-root + `../config.js` engine helpers. The
- *     new tree split engine-binary discovery into a SEPARATE
- *     `engine-config.json` (src/engine/config.ts), so `config.json` is
- *     now the chat stack's own file — but we still round-trip unknown
- *     top-level keys so we never clobber a field another writer owns.
+ *     loop-engine subsystem has since been retired (opensquid is
+ *     engine-free), so `config.json` is now the chat stack's own file —
+ *     but we still round-trip unknown top-level keys so we never clobber
+ *     a field another writer owns.
  *   - The token resolver imports from the relocated `./env-token.js`.
  */
 

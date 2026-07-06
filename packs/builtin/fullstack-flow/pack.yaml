@@ -47,7 +47,7 @@ activation: on-demand
 # interactive and automation sessions (NOT stage- or automation-gated): the main orchestrator loop may write
 # DOCUMENTS only (Markdown / anything under `docs/`); a CODING-FILE write (src/packs/tests/config) is HARD-BLOCKED
 # at PreToolUse — the freehand-proof boundary. The "unless": a STANDING human grant, the project-local
-# `.opensquid/allow-code-write` flag (create once to permit, remove to revoke). Executor subagents (agent_id) are
+# `allow_code_write` value in `.opensquid/orchestrator.json` (flip via `/code-write`). Executor subagents (agent_id) are
 # exempt — they implement what the orchestrator planned. This is PROJECT-SCOPED, never global (pre-tool-use.ts
 # gates on `projectDeclaresOrchestratorOnly(cwd)`, which rejects the home/global scope).
 discipline: { orchestrator_only: true }
@@ -58,6 +58,19 @@ detected_by: []
 
 # ORCH.1 serves contract — the orchestrator routes build work (produce × coding) to this pack.
 serves: { intent: produce, domain: coding }
+
+# COMMIT-GATE EVIDENCE (T-deploy-commit-gate scope-4, design §4a) — the POLICY of WHICH evidence the generic
+# core commit-gate (src/setup/cli/gate.ts) reads to authorize a code commit, declared HERE in the pack (core
+# carries no `fullstack-flow-*` key literal). The core reader (runtime/commit_gate_evidence.ts) resolves this
+# block; the gate reads `audit_cache_key` for the CODE guess-free verdict (staleness-anchored) + requires the
+# 7-phase ledger. `require_suite_green` is the scope-5 backstop (the commit gate ALSO independently hard-requires
+# the DEPLOY verification-suite record green — belt-and-suspenders, design §5.4): even a commit that bypassed the
+# DEPLOY driver cannot land on a red suite. Two enforcement points (the DEPLOY driver + this gate), one requirement
+# reading the SAME per-task suite record (scope-1's `readSuite`).
+commit_gate:
+  audit_cache_key: fullstack-flow-code-audit-cache
+  require_phase_ledger: true
+  require_suite_green: true
 
 # Guard registry (ref → if:-expression, evaluated by RegistryGuardEvaluator over buildGuardCtx).
 guards:
@@ -123,13 +136,32 @@ guards:
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.
   deploy_ready: 'deploy.capability_ok'
-  # DBL.1 — the VERIFY decision's predicate: the recorded verification (the configured verifyCommand) passed.
-  # FAIL-CLOSED once a verification IS configured (no record → not clean → bug-fix loop); defaults CLEAN when
-  # none is configured (skip, mirroring capability_ok) so an unconfigured project ships as today (deploy→accept).
+  # DBL.1 + scope-1 (T-deploy-commit-gate §2.1) — the VERIFY predicate: `deploy.clean` = the project VERIFICATION
+  # SUITE ran green AND (the configured verifyCommand passed OR none is configured). The SUITE is DEPLOY's
+  # MANDATORY FLOOR (the whole pre-push bar — the project declares the command in `.opensquid/active.json`
+  # `verifySuite`; opensquid's is `bash scripts/pre-push.sh` = lint+typecheck+build+test+format:check); the
+  # verifyCommand (e2e/smoke) is ADDITIVE on top. The SKIP hole is CLOSED: once a suite is DECLARED it FAILS
+  # CLOSED (no record / red → not clean → the DEPLOY-local fix-loop, scope-2), never a silent pass. A LEGACY
+  # project that declares NEITHER a suite NOR a verifyCommand still ships as today. The suite COMMAND stays
+  # PROJECT config (a cargo/pytest project declares its own) — core carries no suite literal (design §4a).
   deploy_clean: 'deploy.clean'
   # DBL.2 — the bug-fix loop has hit its round cap (deploy.bugfix_rounds ≥ MAX) without reaching clean → escalate
   # to the human ACCEPT touchpoint instead of looping to AUTHOR again. Bounds a genuinely-unfixable bug.
   deploy_bugfix_exhausted: 'deploy.bugfix_exhausted'
+  # scope-2 (T-deploy-commit-gate §5.1) — the DEPLOY-local fix loop's ESCAPE HATCH to AUTHOR. `deploy.needs_redesign`
+  # = the durable per-task "this red genuinely needs re-authoring" flag (verification.ts, set by `opensquid
+  # redesign <taskId>`). The `verify` decision routes red → DEPLOY-LOCAL fix by DEFAULT; it kicks to AUTHOR ONLY
+  # when this flag is set — so a mechanical failure (lint/format/type/test/build) never routes through AUTHOR (the
+  # NARROWING). FAIL-CLOSED to false (unset → DEPLOY-local), which is exactly the default the design wants.
+  deploy_needs_redesign: 'deploy.needs_redesign'
+  # scope-2 §5.3 — the DEPLOY_FIX gate's EXIT condition. The in-place fix loop dwells in `deploy_fix` while it is
+  # under the cap AND still mechanically red (block → keep fixing). It must LEAVE (back through the `verify`
+  # decision, which does the real routing) the moment ANY loop-terminal condition holds: clean (→ ACCEPT), the
+  # round cap hit (→ human), or a redesign flag (→ AUTHOR). Guarding `deploy_fix` on `deploy.clean` ALONE was the
+  # bug — the cap/redesign escapes were unreachable from inside `deploy_fix` (only the `verify` decision read them,
+  # and `verify` was re-reachable ONLY via a clean pass), so an unfixable red looped forever. This disjunction
+  # makes the gate PASS (→ `fix_verified` → `verify`) on any escape, so `verify` re-routes to accept/human/author.
+  deploy_fix_exit: 'deploy.clean || deploy.bugfix_exhausted || deploy.needs_redesign'
   # T2.8 — the DURABLE human-acceptance signal (`deploy.accepted` = the active task's acceptance item is
   # `accepted`, acceptance.ts — survives a closed session, re-surfaces at start-up). UNACCEPTED/absent → the
   # accept decision's `else` branch fires → DEPLOY loops back to PLAN (NEVER auto-declare "shipped").
@@ -287,21 +319,52 @@ fsm:
       # LANE MODEL — DEPLOY runs verification + release steps that may touch varied paths; its lane is
       # UNRESTRICTED (`**`), declared explicitly for the same documentation reason as CODE.
       writes: ['**']
-    # ── VERIFY (DBL.1 — the bug-fix fork: deploy delegates bugs back to AUTHOR) ─────────────────────────────
-    # After DEPLOY's capability gate, a DECISION over `deploy_clean` (the recorded verification result): clean →
-    # ACCEPT (the human touchpoint); bugs → AUTHOR (re-spec the fix as task(s) → code → deploy → re-verify),
-    # looping until deployable. DISTINCT from accept→rejected→plan (a SCOPE rejection); this is the BUG loop.
-    # `deploy_clean` defaults CLEAN when no verification is configured (skip, mirroring capability_ok) — until
-    # DBL.1b wires the deterministic verify-record, this preserves today's deploy→accept exactly.
+    # ── VERIFY (DBL.1 + scope-2 — the bug-fix fork: DEPLOY-LOCAL by default, AUTHOR only for redesign) ──────
+    # After DEPLOY's capability gate, a DECISION over the recorded verification result. scope-2 (§5.1) NARROWS the
+    # routing: red is fixed IN DEPLOY by default (the common case: lint/format/type/test/build), NOT routed back
+    # through AUTHOR. The branch order is load-bearing (first match wins):
+    #   1. clean         → ACCEPT (a now-clean item ships regardless of past rounds — checked first).
+    #   2. exhausted     → the human ACCEPT touchpoint (DBL.2: the round cap stops an unfixable loop — checked
+    #                      BEFORE the fix branches so the cap actually terminates the loop).
+    #   3. needs_redesign→ AUTHOR (the NARROWED escape hatch: only an explicit `opensquid redesign` signal
+    #                      genuinely needing re-authoring leaves DEPLOY — never a mechanical failure).
+    #   4. else (red, under cap, mechanical) → DEPLOY-LOCAL fix (`bugs_local` → the `deploy_fix` state): read the
+    #                      real failure → fix guess-free → re-run the suite → re-verify, in place. This is the
+    #                      "proper fixing phase." DISTINCT from accept→rejected→plan (a SCOPE rejection).
     verify:
       kind: decision
       branches:
         - { guard: deploy_clean, emits: verified } # verification passed → ACCEPT
-        # DBL.2 — BOUND the loop: too many bug-fix rounds without reaching clean → escalate to the human (ACCEPT
-        # touchpoint), never an infinite deploy→author grind. Checked AFTER clean (a now-clean item ships
-        # regardless of past rounds) and BEFORE bugs_found (so the cap actually stops the loop).
-        - { guard: deploy_bugfix_exhausted, emits: bugfix_exhausted } # cap hit → human review
-        - { else: true, emits: bugs_found } # bugs, under cap → AUTHOR (the bug-fix loop; never ship broken)
+        - { guard: deploy_bugfix_exhausted, emits: bugfix_exhausted } # DBL.2 — cap hit → human review
+        - { guard: deploy_needs_redesign, emits: bugs_need_redesign } # §5.1 — genuine design rework → AUTHOR
+        - { else: true, emits: bugs_local } # bugs, under cap, mechanical → DEPLOY-LOCAL fix (never leaves DEPLOY)
+    # ── DEPLOY_FIX (scope-2 §5.1 — the DEPLOY-LOCAL guess-free fix loop) ────────────────────────────────────
+    # The "proper fixing phase": on a mechanical red the loop stays HERE (not AUTHOR) and fixes in place — read the
+    # real failure output → fix the cited errors guess-free → re-run the project suite (its real exit code is
+    # recorded, verification.ts) → the gate re-checks the EXIT condition `deploy_fix_exit`. It PASSES (→ `fix_verified`
+    # → back to VERIFY, which does the real routing) on ANY loop-terminal condition — clean (→ ACCEPT), the round cap
+    # hit (→ human), or a redesign flag (→ AUTHOR); it BLOCKS (stay in deploy_fix, keep fixing) ONLY while still under
+    # the cap AND mechanically red. Every red suite re-run bumps the round count (v2_supply), so a genuinely-unfixable
+    # mechanical failure hits the cap → `deploy.bugfix_exhausted` flips → the gate passes → VERIFY escalates it to the
+    # human, even though it never left DEPLOY (§5.3 — the DEPLOY-local loop is bounded, never infinite). Guarding on
+    # `deploy.clean` ALONE was the bug: the cap/redesign escapes are read ONLY by the `verify` decision, and `verify`
+    # is re-reachable ONLY via `fix_verified`, so a red loop could never reach them (it blocked here forever).
+    deploy_fix:
+      kind: gate
+      guard: deploy_fix_exit
+      trigger: [post_tool_call]
+      on_pass_emits: fix_verified
+      on_fail:
+        {
+          action: block,
+          message: 'DEPLOY-FIX: read the real failure output, fix the cited errors guess-free, re-run the project suite — do NOT ship on red, do NOT patch blind.',
+        }
+      # EVIDENCE-DECLARATION — the DEPLOY-local fix loop reads the SAME facets the verify decision routes on: clean
+      # (fixed), the round cap (escalate to human), and the redesign flag (escape to AUTHOR).
+      reads:
+        - deploy.clean
+        - deploy.bugfix_exhausted
+        - deploy.needs_redesign
     # ── acceptance (the second/last human touchpoint) ──────────────────────
     accept:
       kind: decision
@@ -326,7 +389,9 @@ fsm:
     - { from: code, on: coded, to: deploy }
     - { from: deploy, on: deployed, to: verify } # DBL.1 — through VERIFY (was: straight to accept)
     - { from: verify, on: verified, to: accept } # clean → the human-accept touchpoint
-    - { from: verify, on: bugs_found, to: author } # bugs → re-author the fix (the bug-fix loop)
+    - { from: verify, on: bugs_local, to: deploy_fix } # scope-2 — mechanical red → DEPLOY-LOCAL fix (not AUTHOR)
+    - { from: verify, on: bugs_need_redesign, to: author } # scope-2 §5.1 — genuine redesign → re-author (narrowed)
+    - { from: deploy_fix, on: fix_verified, to: verify } # DEPLOY-local fix reached clean → re-verify → ACCEPT
     - { from: verify, on: bugfix_exhausted, to: accept } # DBL.2 — cap hit → human review (bounded, never infinite)
     - { from: accept, on: accepted, to: done }
     - { from: accept, on: auto_accepted, to: done } # REVERSIBLE-DEPLOY: distinct event, same target as accepted

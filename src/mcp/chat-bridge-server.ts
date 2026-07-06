@@ -596,7 +596,9 @@ function logAgentBridgeResult(
       `[opensquid] agent-bridge[${label}] ${res.status === 'spawned' ? 'started' : 'found peer'} (pid ${String(res.pid)})\n`,
     );
   } else if (res.status === 'error') {
-    process.stderr.write(`[opensquid] agent-bridge[${label}] autospawn error: ${String(res.error)}\n`);
+    process.stderr.write(
+      `[opensquid] agent-bridge[${label}] autospawn error: ${String(res.error)}\n`,
+    );
   }
   // already_running / no_config → silent
 }

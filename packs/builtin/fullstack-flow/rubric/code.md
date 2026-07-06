@@ -8,6 +8,7 @@ CODE rubric — net-new), grounded in the design's CODE·before / CODE·after re
 CODE has two halves; BOTH must hold for `VERDICT: GUESS_FREE`.
 
 ## A. BEFORE coding (pre_research / learn) — verify + expand + align
+
 1. **VERIFY THE TASK** — every claim in the task spec is re-confirmed against current reality (`file:line` /
    the live API), not taken on faith. A task claim contradicted by the code is surfaced, not coded around.
 2. **EXPAND** — the task is expanded to the concrete implementation detail (affected files, existing defs to
@@ -18,6 +19,7 @@ CODE has two halves; BOTH must hold for `VERDICT: GUESS_FREE`.
    (Existing-solution discovery is NOT here — that was decided at AUTHOR/tasking.)
 
 ## B. AFTER coding (audit) — another layer (user: "another run for audit")
+
 5. **ALIGNMENT** — the written code matches the goal/scope (re-checked against the captured ask + scoped element).
 6. **PROPER USE OF DOCUMENTATION** — the APIs/libraries are used per their official docs (no deprecated calls,
    no misused signatures) — verified against the primary source, not assumed.
@@ -31,6 +33,7 @@ CODE has two halves; BOTH must hold for `VERDICT: GUESS_FREE`.
    Exempt only a genuinely external-dependency-free change (diff-derived, not agent-asserted).
 
 ## C. Rolling re-audit
+
 10. **RE-AUDIT AUTHOR** — the TASK spec this code implements still holds `GUESS_FREE` at CODE time
     (re-evaluated). A task that drifted since its gate fails here, catching it at this boundary.
 

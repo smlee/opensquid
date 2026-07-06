@@ -8,24 +8,27 @@ import { describe, expect, it } from 'vitest';
 import { serializePlan, type PlanSerializeDeps } from './serialize_plan.js';
 
 const deps = (over: Partial<PlanSerializeDeps> = {}): PlanSerializeDeps => ({
-  scopePath: async () => 'scope.md',
-  extract: async () => ({
-    authoredElements: [{ id: 'E2' }, { id: 'E1' }],
-    scopeElements: [
-      { designId: 'E1', askSpan: 'a', text: 'first element' },
-      { designId: 'E2', askSpan: 'b', text: 'second element' },
-    ],
-    deps: [{ element: 'E2', dependsOn: 'E1', reason: 'E2 consumes the X that E1 produces' }],
-  }),
-  wg: async () => ({
-    // I1/I2 are stamped IN-SCOPE (sourceElementId ∈ {E1,E2}); I9 is a foreign/backlog node (off-universe
-    // stamp) that the PROPER issue-scoping must EXCLUDE — it must not leak into the rendered audit artifact.
-    listIssues: async () => [
-      { id: 'I2', title: 'two', body: 'work. sourceElementId:E2' },
-      { id: 'I1', title: 'one', body: 'work. sourceElementId:E1' },
-      { id: 'I9', title: 'foreign backlog', body: 'sourceElementId:OTHER' },
-    ],
-  }),
+  scopePath: () => Promise.resolve('scope.md'),
+  extract: () =>
+    Promise.resolve({
+      authoredElements: [{ id: 'E2' }, { id: 'E1' }],
+      scopeElements: [
+        { designId: 'E1', askSpan: 'a', text: 'first element' },
+        { designId: 'E2', askSpan: 'b', text: 'second element' },
+      ],
+      deps: [{ element: 'E2', dependsOn: 'E1', reason: 'E2 consumes the X that E1 produces' }],
+    }),
+  wg: () =>
+    Promise.resolve({
+      // I1/I2 are stamped IN-SCOPE (sourceElementId ∈ {E1,E2}); I9 is a foreign/backlog node (off-universe
+      // stamp) that the PROPER issue-scoping must EXCLUDE — it must not leak into the rendered audit artifact.
+      listIssues: () =>
+        Promise.resolve([
+          { id: 'I2', title: 'two', body: 'work. sourceElementId:E2' },
+          { id: 'I1', title: 'one', body: 'work. sourceElementId:E1' },
+          { id: 'I9', title: 'foreign backlog', body: 'sourceElementId:OTHER' },
+        ]),
+    }),
   ...over,
 });
 
@@ -49,14 +52,15 @@ describe('serializePlan', () => {
     const text = await serializePlan(
       's',
       deps({
-        extract: async () => ({
-          authoredElements: [{ id: 'E1' }, { id: 'E2' }],
-          scopeElements: [
-            { designId: 'E1', askSpan: 'a', text: 'first' },
-            { designId: 'E2', askSpan: 'b', text: 'second' },
-          ],
-          deps: [{ element: 'E2', dependsOn: 'E1', reason: '' }], // un-derived
-        }),
+        extract: () =>
+          Promise.resolve({
+            authoredElements: [{ id: 'E1' }, { id: 'E2' }],
+            scopeElements: [
+              { designId: 'E1', askSpan: 'a', text: 'first' },
+              { designId: 'E2', askSpan: 'b', text: 'second' },
+            ],
+            deps: [{ element: 'E2', dependsOn: 'E1', reason: '' }], // un-derived
+          }),
       }),
     );
     expect(text).toContain('NO REASON CITED');
@@ -66,11 +70,12 @@ describe('serializePlan', () => {
     const text = await serializePlan(
       's',
       deps({
-        extract: async () => ({
-          authoredElements: [{ id: 'E1' }],
-          scopeElements: [{ designId: 'E1', askSpan: '', text: 'orphan element' }],
-          deps: [],
-        }),
+        extract: () =>
+          Promise.resolve({
+            authoredElements: [{ id: 'E1' }],
+            scopeElements: [{ designId: 'E1', askSpan: '', text: 'orphan element' }],
+            deps: [],
+          }),
       }),
     );
     expect(text).toContain('NO ask-anchor');
@@ -86,8 +91,12 @@ describe('serializePlan', () => {
   });
 
   it('returns null (fail-loud → gate blocks) when no captured scope', async () => {
-    await expect(serializePlan('s', deps({ scopePath: async () => null }))).resolves.toBeNull();
-    await expect(serializePlan('s', deps({ extract: async () => null }))).resolves.toBeNull();
+    await expect(
+      serializePlan('s', deps({ scopePath: () => Promise.resolve(null) })),
+    ).resolves.toBeNull();
+    await expect(
+      serializePlan('s', deps({ extract: () => Promise.resolve(null) })),
+    ).resolves.toBeNull();
   });
 
   it('is stable: an identical graph renders identically (cache-hash safe)', async () => {

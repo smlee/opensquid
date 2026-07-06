@@ -93,7 +93,7 @@ describe('loop_stage — scopeGate (GS1 scope proof, checkpoint-backed)', () => 
 describe('loop_stage — readLoopStage / clearLoopStage (own opensquid.db opener + WAL posture)', () => {
   let home: string;
   let prior: string | undefined;
-  beforeEach(async () => {
+  beforeEach(() => {
     prior = process.env.OPENSQUID_HOME;
     home = mkdtempSync(join(tmpdir(), 'osq-loopstage-'));
     process.env.OPENSQUID_HOME = home;

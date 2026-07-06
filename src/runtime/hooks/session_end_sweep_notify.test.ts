@@ -36,7 +36,10 @@ const FAKE_RESULT: DaemonSendResult = {
 const reachablePing = (): Promise<boolean> => Promise.resolve(true);
 const absentPing = (): Promise<boolean> => Promise.resolve(false);
 
-function fakeSend(): { calls: DaemonSendParams[]; fn: (p: DaemonSendParams) => Promise<DaemonSendResult> } {
+function fakeSend(): {
+  calls: DaemonSendParams[];
+  fn: (p: DaemonSendParams) => Promise<DaemonSendResult>;
+} {
   const calls: DaemonSendParams[] = [];
   return {
     calls,

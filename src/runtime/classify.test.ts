@@ -79,11 +79,15 @@ describe('classify (ORCH.2) — facet rules', () => {
 describe('classify — the dotted domain PATH (graceful-depth sub-domain, fractal lens gating)', () => {
   it('a clear FRONTEND coding prompt → domain:coding.frontend', () => {
     expect(classify('add a CSS button to the page', coding).domain).toBe('coding.frontend');
-    expect(classify('fix the responsive layout on the modal', coding).domain).toBe('coding.frontend');
+    expect(classify('fix the responsive layout on the modal', coding).domain).toBe(
+      'coding.frontend',
+    );
   });
   it('a clear BACKEND coding prompt → domain:coding.backend', () => {
     expect(classify('add an API endpoint with a db query', coding).domain).toBe('coding.backend');
-    expect(classify('write the auth route + schema migration', coding).domain).toBe('coding.backend');
+    expect(classify('write the auth route + schema migration', coding).domain).toBe(
+      'coding.backend',
+    );
   });
   it('AMBIGUOUS (both sides) → stays SHALLOW coding (vague → broad nodes only, no false depth)', () => {
     expect(classify('wire the React form to the API endpoint', coding).domain).toBe('coding');

@@ -69,12 +69,12 @@ describe('isYoloMode — config resolution', () => {
 });
 
 describe('setYolo — preserves other config keys', () => {
-  it('global write keeps engine_bin / chat_connections intact', async () => {
+  it('global write keeps foreign top-level keys (e.g. chat_connections) intact', async () => {
     await writeFile(
       join(home, 'config.json'),
       JSON.stringify({
         version: 1,
-        engine_bin: '/x',
+        foreign_key: '/x',
         chat_connections: { telegram: { bot_token: 't' } },
       }),
       'utf8',
@@ -86,7 +86,10 @@ describe('setYolo — preserves other config keys', () => {
     const raw = JSON.parse(
       await (await import('node:fs/promises')).readFile(join(home, 'config.json'), 'utf8'),
     ) as Record<string, unknown>;
-    expect(raw.engine_bin).toBe('/x');
+    expect(raw.foreign_key).toBe('/x');
+    expect(
+      (raw.chat_connections as { telegram?: { bot_token?: string } }).telegram?.bot_token,
+    ).toBe('t');
     expect(raw.yolo).toBe(true);
   });
 

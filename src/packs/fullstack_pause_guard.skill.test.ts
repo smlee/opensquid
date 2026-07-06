@@ -23,7 +23,7 @@ import { z } from 'zod';
 
 import { registerEventFunctions } from '../functions/event.js';
 import { registerFsmFunctions } from '../functions/fsm.js';
-import { FunctionRegistry } from '../functions/registry.js';
+import { FunctionRegistry, type FunctionDef } from '../functions/registry.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import type { Event } from '../runtime/event.js';
@@ -59,12 +59,12 @@ function buildRegistry(automation = true): FunctionRegistry {
     durable: false,
     memoizable: false,
     costEstimateMs: 0,
-    execute: async () => ({
-      ok: true,
-      value: { value: automation, source: automation ? 'env' : 'none' },
-    }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any);
+    execute: () =>
+      Promise.resolve({
+        ok: true,
+        value: { value: automation, source: automation ? 'env' : 'none' },
+      }),
+  } as unknown as FunctionDef<unknown, unknown>);
   return reg;
 }
 
@@ -86,7 +86,12 @@ async function ruleSteps(): Promise<ProcessStep[]> {
   return rule.process;
 }
 
-function run(steps: ProcessStep[], event: Event, packFsm: Fsm, automation = true): Promise<RuleResult> {
+function run(
+  steps: ProcessStep[],
+  event: Event,
+  packFsm: Fsm,
+  automation = true,
+): Promise<RuleResult> {
   return evaluateProcess(
     steps,
     {

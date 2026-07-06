@@ -110,7 +110,7 @@ describe('agent-bridge autospawn', () => {
       { kind: 'general' },
       {
         isConfigured: () => Promise.resolve(true),
-        statusFn: statusFn as never,
+        statusFn: statusFn,
         spawnFn: spawnFn as never,
         entrypoint: '/x/dist/cli.js',
       },
@@ -197,7 +197,7 @@ describe('agent-bridge autospawn', () => {
       { kind: 'general' },
       {
         isConfigured: () => Promise.resolve(true),
-        statusFn: statusFn as never,
+        statusFn: statusFn,
         spawnFn: spawnFn as never,
         entrypoint: '/x/dist/cli.js',
       },
@@ -276,7 +276,7 @@ describe('agent-bridge autospawn', () => {
     const ensureFn = vi.fn(() => Promise.resolve({ status: 'spawned' as const, pid: 1 }));
     const out = await ensureHeadlessRespondersForBoot({
       umbrellaForCwd: null,
-      ensureFn: ensureFn as never,
+      ensureFn: ensureFn,
     });
     expect(out).toEqual({ general: { status: 'spawned', pid: 1 }, umbrella: null });
     expect(ensureFn).toHaveBeenCalledTimes(1);
@@ -287,7 +287,7 @@ describe('agent-bridge autospawn', () => {
     const ensureFn = vi.fn(() => Promise.resolve({ status: 'no_config' as const }));
     const out = await ensureHeadlessRespondersForBoot({
       umbrellaForCwd: GENERAL_UMBRELLA,
-      ensureFn: ensureFn as never,
+      ensureFn: ensureFn,
     });
     expect(out.umbrella).toBeNull();
     expect(ensureFn).toHaveBeenCalledTimes(1);
@@ -306,7 +306,7 @@ describe('agent-bridge autospawn', () => {
     const out = await ensureHeadlessRespondersForBoot({
       umbrellaForCwd: 'loop',
       cwd: '/work/loop',
-      ensureFn: ensureFn as never,
+      ensureFn: ensureFn,
     });
     expect(out).toEqual({
       general: { status: 'spawned', pid: 10 },

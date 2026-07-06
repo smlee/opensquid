@@ -68,7 +68,8 @@ function provenanceBody(t: HarnessTaskLike): string {
   const parts = [`${HARNESS_TASK_STAMP}${t.id}`];
   if (t.metadata?.taskId !== undefined && t.metadata.taskId !== '')
     parts.push(`task-spec:${t.metadata.taskId}`);
-  if (t.metadata?.spec !== undefined && t.metadata.spec !== '') parts.push(`spec:${t.metadata.spec}`);
+  if (t.metadata?.spec !== undefined && t.metadata.spec !== '')
+    parts.push(`spec:${t.metadata.spec}`);
   return parts.join('\n');
 }
 

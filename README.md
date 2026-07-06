@@ -76,28 +76,28 @@ Coding agents usually fail in predictable ways:
 
 OpenSquid treats those as continuity problems. Memory, task state, workflow phase logs, pack rules, and chat routing should live outside the agent turn. The agent can use them through MCP tools, but it does not own the source of truth. Device capability state belongs on the same path as OpenSquid grows beyond one machine.
 
-| Without OpenSquid                                | With OpenSquid                                                          |
-| ------------------------------------------------ | ----------------------------------------------------------------------- |
-| The agent says it remembers.                     | Memory is stored under `~/.opensquid/` and recalled through MCP.        |
-| The agent picks the next task from chat context. | `workgraph_ready` returns unblocked work.                               |
-| The agent claims tests or research happened.     | `log_phase` writes a phase ledger that gates can read.                  |
-| The agent promotes its own lesson.               | `store_lesson` captures a candidate; promotion stays gated.             |
-| Rules live in one long prompt.                   | Packs make rules, skills, state machines, and gates inspectable. |
-| Work is trapped on one machine.                  | Synced state can let another device resume the same agent workspace.    |
+| Without OpenSquid                                | With OpenSquid                                                       |
+| ------------------------------------------------ | -------------------------------------------------------------------- |
+| The agent says it remembers.                     | Memory is stored under `~/.opensquid/` and recalled through MCP.     |
+| The agent picks the next task from chat context. | `workgraph_ready` returns unblocked work.                            |
+| The agent claims tests or research happened.     | `log_phase` writes a phase ledger that gates can read.               |
+| The agent promotes its own lesson.               | `store_lesson` captures a candidate; promotion stays gated.          |
+| Rules live in one long prompt.                   | Packs make rules, skills, state machines, and gates inspectable.     |
+| Work is trapped on one machine.                  | Synced state can let another device resume the same agent workspace. |
 
 ## The Operating Model
 
 OpenSquid is built from six pieces that work together.
 
-| Layer          | What it gives the agent                                                                                                        |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Memory         | `recall`, `memorize`, and `forget` over a durable local store, with user-authored memories protected from quiet eviction.      |
-| Workgraph      | Issues, blockers, dependency edges, ready queues, and append-only event history for task state.                                |
-| Workflow gates | A gated state machine per discipline pack. For coding (`fullstack-flow`): **SCOPE → PLAN → AUTHOR → CODE → DEPLOY**, each an enforcing gate (see "The Gated Flow" below).            |
-| Packs          | Portable rules, skills, state machines, models, and chat-agent bindings.                                                       |
-| MCP + hooks    | Agent-facing tools through MCP, plus optional hooks (Claude Code and codex) that catch drift even when no tool is called.      |
-| Handoffs       | Deterministic session handoffs: `opensquid handoff`, a session-end backup, and lazy generation that survives a killed session. |
-| Sync + devices | A path for multi-device memory/workgraph continuity and future routing to device-specific capabilities.                        |
+| Layer          | What it gives the agent                                                                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Memory         | `recall`, `memorize`, and `forget` over a durable local store, with user-authored memories protected from quiet eviction.                                                 |
+| Workgraph      | Issues, blockers, dependency edges, ready queues, and append-only event history for task state.                                                                           |
+| Workflow gates | A gated state machine per discipline pack. For coding (`fullstack-flow`): **SCOPE → PLAN → AUTHOR → CODE → DEPLOY**, each an enforcing gate (see "The Gated Flow" below). |
+| Packs          | Portable rules, skills, state machines, models, and chat-agent bindings.                                                                                                  |
+| MCP + hooks    | Agent-facing tools through MCP, plus optional hooks (Claude Code and codex) that catch drift even when no tool is called.                                                 |
+| Handoffs       | Deterministic session handoffs: `opensquid handoff`, a session-end backup, and lazy generation that survives a killed session.                                            |
+| Sync + devices | A path for multi-device memory/workgraph continuity and future routing to device-specific capabilities.                                                                   |
 
 The shape is deliberately agent-native. Instead of asking a model to remember a process in its prompt forever, OpenSquid exposes the process as tools and state:
 
@@ -113,13 +113,13 @@ recall context -> inspect packs -> claim ready work -> log phases -> publish res
 
 A discipline pack drives the agent through an explicit, gated state machine — not a process it has to remember in prose. For coding, the `fullstack-flow` pack runs five stages, each an **enforcing gate**: the agent cannot advance until the stage's gate passes, and a commit is blocked until the whole flow is complete.
 
-| Stage      | The gate passes when…                                                                                                                     |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Stage      | The gate passes when…                                                                                                                                      |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **SCOPE**  | the pre-research artifact anchors every scoped element to the captured ask, the research depth threshold is met, and a content-audit returns `GUESS_FREE`. |
-| **PLAN**   | the work-graph decomposition of the scope is acyclic and covers every scope element, and its content-audit returns `GUESS_FREE`.          |
-| **AUTHOR** | the task spec covers every gated export with a passing proof-test (coverage + real-code), and its content-audit returns `GUESS_FREE`.     |
-| **CODE**   | all seven phases are logged, the readiness checks ran clean, and the diff content-audit returns `GUESS_FREE`.                             |
-| **DEPLOY** | the deploy capability gate allows it, the recorded verification passed, and a human accepts the result.                                   |
+| **PLAN**   | the work-graph decomposition of the scope is acyclic and covers every scope element, and its content-audit returns `GUESS_FREE`.                           |
+| **AUTHOR** | the task spec covers every gated export with a passing proof-test (coverage + real-code), and its content-audit returns `GUESS_FREE`.                      |
+| **CODE**   | all seven phases are logged, the readiness checks ran clean, and the diff content-audit returns `GUESS_FREE`.                                              |
+| **DEPLOY** | the deploy capability gate allows it, the recorded verification passed, and a human accepts the result.                                                    |
 
 Two principles run through it:
 
@@ -198,15 +198,15 @@ There is intentionally no agent-callable `promote` MCP tool. The agent may propo
 
 ### Inspection And Workflow
 
-| Tool                | Purpose                                                    |
-| ------------------- | ---------------------------------------------------------- |
-| `log_phase`         | Record completed workflow phases for the active task.      |
-| `list_packs`        | List loaded packs.                                         |
-| `list_skills`       | List skills, optionally scoped to a pack.                  |
+| Tool                | Purpose                                                      |
+| ------------------- | ------------------------------------------------------------ |
+| `log_phase`         | Record completed workflow phases for the active task.        |
+| `list_packs`        | List loaded packs.                                           |
+| `list_skills`       | List skills, optionally scoped to a pack.                    |
 | `inspect_skill`     | Show one skill's rules, load conditions, and verdict levels. |
-| `read_state`        | Read session state.                                        |
-| `read_violations`   | Read the session violation log.                            |
-| `list_drift_events` | List drift events across packs and session state.          |
+| `read_state`        | Read session state.                                          |
+| `read_violations`   | Read the session violation log.                              |
+| `list_drift_events` | List drift events across packs and session state.            |
 
 The chat bridge MCP server adds:
 

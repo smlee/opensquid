@@ -18,11 +18,11 @@ A pre-research / scope artifact passes (`VERDICT: GUESS_FREE`) ONLY if ALL SIX h
    - **NOT a valid question (drift — HARD-BLOCKED in EVERY phase, scope included):**
      (a) a question whose answer is findable by research (ask the research, not the user);
      (b) a CONFIRMATION / permission / DIRECTION-SEEKING question — "should I continue / proceed", "how should
-         I proceed", "how do you want to proceed", "want me to", "ready to", "shall I", or ANYTHING SUGGESTIVE
-         (any phrasing that fishes for the user to direct / choose / confirm instead of the agent deciding);
+     I proceed", "how do you want to proceed", "want me to", "ready to", "shall I", or ANYTHING SUGGESTIVE
+     (any phrasing that fishes for the user to direct / choose / confirm instead of the agent deciding);
      (c) an OPTION / CHOICE question ("do you want A or B?") where principles + research settle the pick — the
-         agent DECIDES it (the router's `DECIDE`: Simplicity / Best-Solution choose), it does NOT offload the
-         pick to the user.
+     agent DECIDES it (the router's `DECIDE`: Simplicity / Best-Solution choose), it does NOT offload the
+     pick to the user.
      A choice escalates ONLY when it is a genuine ARCHITECTURE-CHANGING fork that research + principles
      genuinely CANNOT settle. Otherwise: proceed, never pause.
    - **THESE BANNED QUESTIONS ARE DRIFT QUALIFIERS (user, 2026-06-28):** reaching for one is itself EVIDENCE

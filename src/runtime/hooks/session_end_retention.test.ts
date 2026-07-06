@@ -43,7 +43,10 @@ describe('sweepRetiredIfAllowed (#16 gate wiring)', () => {
   it('gate=true → sweepRetired called with the 30-day cutoff; swept ids returned', async () => {
     const { calls, backend } = fakeBackend(['a', 'b']);
 
-    const swept = await sweepRetiredIfAllowed(backend, CWD, { pruneAllowed: allow, now: () => NOW });
+    const swept = await sweepRetiredIfAllowed(backend, CWD, {
+      pruneAllowed: allow,
+      now: () => NOW,
+    });
 
     expect(swept).toEqual(['a', 'b']);
     expect(calls).toHaveLength(1);

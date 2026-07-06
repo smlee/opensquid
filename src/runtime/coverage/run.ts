@@ -38,5 +38,9 @@ export function runCoverageReport(repoRoot: string): CoverageReport {
     readFileSync(join(repoRoot, MANIFEST_FILE), 'utf8'),
   );
   const index = buildCodeIndex(repoRoot, GATED_PREFIXES);
-  return checkCoverage(reqs, { gatedPrefixes: GATED_PREFIXES, index, allowlist: readAllowlist(repoRoot) });
+  return checkCoverage(reqs, {
+    gatedPrefixes: GATED_PREFIXES,
+    index,
+    allowlist: readAllowlist(repoRoot),
+  });
 }

@@ -96,8 +96,12 @@ export interface RalphDeps {
   };
 }
 
-/** PSL.3 — a stage that reports the SAME stage this many times in a row (no advance) is genuinely stuck. */
-const MAX_STAGE_RETRIES = 3;
+/** PSL.3 — a stage that reports the SAME stage this many times in a row (no advance) is genuinely stuck.
+ *  Raised 3→10 (2026-07-06): a real multi-lap CODE stage needed ~6 laps to complete (the deploy-commit-gate
+ *  task), so 3 wedged legitimate progress. 10 gives generous headroom while staying bounded (a genuinely stuck
+ *  stage still wedges — no unbounded spin/OOM). NOTE: a fixed cap can still park a very large task; the durable
+ *  fix is progress-aware (reset the counter on real progress). Errors are a separate, per-lap bound (`maxRetries`). */
+const MAX_STAGE_RETRIES = 10;
 
 /** Resource pauses END the run; everything else is per-item decision-residual that parks + continues. */
 const RESOURCE_PAUSES: readonly HumanRequiredReason[] = ['BUDGET', 'RATE_BUDGET', 'BOARD_EMPTY'];

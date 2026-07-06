@@ -6,8 +6,8 @@
  * document write (Markdown / anything under `docs/`) always passes; ANY other mutating call (a non-document file
  * write, or a file-writing Bash) is a CODING-FILE mutation and is DENIED unless one of:
  *   - the caller is an executor subagent (`agent_id` present), OR
- *   - a STANDING human permission grant is present (the project-local `.opensquid/allow-code-write` flag — set
- *     once, holds until removed; the caller resolves it and passes `codeWritePermitted`).
+ *   - a STANDING human permission grant is present (the project-local `allow_code_write` config value in
+ *     orchestrator.json, flipped by `/code-write`; the caller resolves it and passes `codeWritePermitted`).
  *
  * PROJECT-SCOPED, NOT GLOBAL (user: "this is not global"): the caller (pre-tool-use.ts) fires this guard ONLY
  * when the project at `cwd` declares `discipline: { orchestrator_only: true }` (fullstack-flow does). A project
@@ -141,13 +141,13 @@ export interface OrchestratorGuardResult {
 
 const DENY_MESSAGE =
   '🦑 [orchestrator guard] In this project you may write DOCUMENTS only (docs/, *.md). Writing a coding file ' +
-  'requires explicit permission — create `.opensquid/allow-code-write` in this project to grant a standing ' +
-  'window (it holds until you remove it), or dispatch an executor subagent to implement.';
+  'requires explicit permission — run `/code-write` to flip `allow_code_write` in this project’s orchestrator.json ' +
+  '(it holds until you toggle it off), or dispatch an executor subagent to implement.';
 
 /** Caller-resolved inputs the pure guard can't read itself (filesystem lives in pre-tool-use.ts). */
 export interface OrchestratorGuardOptions {
-  /** A STANDING human grant is present (the project-local `.opensquid/allow-code-write` flag) → allow a
-   *  coding-file write this call. The caller resolves the flag; the guard stays pure. */
+  /** A STANDING human grant is present (the project-local `allow_code_write` value in orchestrator.json) → allow
+   *  a coding-file write this call. The caller resolves the value; the guard stays pure. */
   codeWritePermitted?: boolean;
 }
 

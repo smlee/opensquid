@@ -27,11 +27,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { resolveActorId } from '../actor_id.js';
-import {
-  OPENSQUID_HOME,
-  resolveProjectMarker,
-  resolveProjectUuidFromEnv,
-} from '../paths.js';
+import { OPENSQUID_HOME, resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
 
 import { workGraphStore } from '../../workgraph/store.js';
 

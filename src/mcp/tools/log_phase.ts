@@ -66,7 +66,11 @@ export async function handleLogPhase(args: LogPhaseArgs): Promise<LogPhaseOutput
         'OPENSQUID_SESSION_ID env, and .current-session absent.',
     );
   }
-  const active = await readActiveTask(sessionId);
+  // scope-4 (§4): a headless ralph lap runs hooks-off (OPENSQUID_SUBAGENT), so the AP.1 mirror never writes
+  // active-task.json — resolve the driven item from OPENSQUID_ITEM_ID so a lap can log its 7 CODE phases (the
+  // ledger the commit gate requires). id === taskId === the wg id, so these phases key identically to the gate's
+  // isComplete(phases, active.id) check. Interactively OPENSQUID_ITEM_ID is unset → pure active-task.json read.
+  const active = await readActiveTask(sessionId, process.env.OPENSQUID_ITEM_ID);
   if (active === null) {
     throw new Error(
       'log_phase: no active task (active-task.json absent). Create a task and set it in_progress first (rule #1).',

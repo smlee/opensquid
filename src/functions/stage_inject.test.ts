@@ -14,7 +14,7 @@ import { registerStageInject } from './stage_inject.js';
 
 const PACK = 'fullstack-flow';
 const ISO = '2026-06-29T00:00:00.000Z';
-const ev = (kind: string): Event => ({ kind } as unknown as Event);
+const ev = (kind: string): Event => ({ kind }) as unknown as Event;
 const ctx = (sessionId: string, event: Event): EvalCtx => ({
   event,
   bindings: new Map<string, unknown>(),
@@ -26,8 +26,10 @@ function reg(): FunctionRegistry {
   registerStageInject(r);
   return r;
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const content = (v: any): string => (v && v.kind === 'inject_context' ? (v.content as string) : '');
+const content = (v: unknown): string => {
+  const rec = v as { kind?: unknown; content?: unknown } | null | undefined;
+  return rec?.kind === 'inject_context' && typeof rec.content === 'string' ? rec.content : '';
+};
 
 describe('stage_inject', () => {
   it('injects the current stage procedure + rubric before action (scope)', async () => {

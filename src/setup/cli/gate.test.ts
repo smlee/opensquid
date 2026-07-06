@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,11 +10,12 @@ import { loadPack } from '../../packs/loader.js';
 import { advanceFsmState } from '../../runtime/fsm_state.js';
 import { sha256Hex } from '../../runtime/durable/run_id.js';
 import { sessionStateFile } from '../../runtime/paths.js';
+import { recordSuite } from '../../runtime/loop/verification.js';
 import { recordSessionCwd, writeActiveTask } from '../../runtime/session_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
 
 import { readAttestedShas } from './attestations.js';
-import { isGatedRepo, runAttest, runGate } from './gate.js';
+import { commitAllowedNow, isGatedRepo, runAttest, runGate } from './gate.js';
 
 // GDC.1 — every gate call injects the env explicitly (ambient env must never
 // decide: CI runners carry no agent marker, the authoring session carries
@@ -31,7 +32,8 @@ const NOW = '2026-06-04T00:00:00.000Z';
 async function writeCodeAudit(verdict: string, subjectHash?: string): Promise<void> {
   const p = sessionStateFile(SID, 'fullstack-flow-code-audit-cache');
   await mkdir(dirname(p), { recursive: true });
-  const entry = subjectHash === undefined ? { hash: 'x', verdict } : { hash: 'x', verdict, subjectHash };
+  const entry =
+    subjectHash === undefined ? { hash: 'x', verdict } : { hash: 'x', verdict, subjectHash };
   await writeFile(p, JSON.stringify(entry), 'utf8');
 }
 
@@ -384,7 +386,7 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
-  it('v2 + agent code commit + 7 phases + CODE audit GUESS_FREE (certifying the CURRENT diff) → ALLOW (0)', async () => {
+  it('v2 + agent code commit + 7 phases + CODE audit GUESS_FREE (certifying the CURRENT diff) + suite green → ALLOW (0)', async () => {
     await makeGatedV2();
     await armStalenessRepo();
     await stage('src/x.ts');
@@ -392,6 +394,9 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
     // GFR.2-hard: the external verdict AND its subjectHash certifies exactly the diff being committed.
     await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', await currentDiffHash());
+    // scope-5 (§5.4): fullstack-flow now declares `require_suite_green: true`, so the gate ALSO needs the
+    // suite record green (the belt-and-suspenders backstop) — record it for the active task.
+    await recordSuite(SID, 't1', true);
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
   });
 
@@ -465,6 +470,74 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     await makeGatedV2();
     await stage('README.md');
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  // scope-4 (T-deploy-commit-gate §4a): the CODE-audit cache KEY is PACK-DECLARED evidence, never a core literal.
+  // Drift-pin: if a future edit re-hardcodes `fullstack-flow-<something>` into core gate.ts, this fails — the key
+  // must come from the pack's `commit_gate` block (runtime/commit_gate_evidence.ts), enforced by acceptance.
+  it('DRIFT-PIN: core gate.ts carries NO `fullstack-flow-` key literal (evidence is pack-declared, §4a)', async () => {
+    const src = await readFile(resolve('src/setup/cli/gate.ts'), 'utf8');
+    expect(src).not.toContain('fullstack-flow-');
+  });
+});
+
+// scope-5 (T-deploy-commit-gate §2.5 + §5.4) — SUITE-IN-BOTH: the commit gate INDEPENDENTLY hard-requires the
+// project verification-suite record green (pack-declared `require_suite_green: true`), so a commit that bypassed
+// the DEPLOY driver still cannot land on a red suite. Two enforcement points (the DEPLOY driver + this gate), one
+// requirement over the SAME per-task suite record (scope-1's readSuite).
+describe('scope-5 — the commit gate independently requires suite-green (belt-and-suspenders, §5.4)', () => {
+  /** The full v2 pass-the-gate setup EXCEPT the suite record — the caller decides what to record. */
+  async function driveV2AuditGreen(): Promise<void> {
+    await makeGatedV2();
+    await armStalenessRepo();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', await currentDiffHash());
+  }
+
+  it('audit GUESS_FREE + current-diff, but suite recorded RED → BLOCK (2), with the suite-specific reason', async () => {
+    await driveV2AuditGreen();
+    await recordSuite(SID, 't1', false); // the backstop bites even though the CODE audit is satisfied
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((s: unknown) => {
+      writes.push(String(s));
+      return true;
+    });
+    const code = await runGate('commit', repo, AGENT_ENV);
+    spy.mockRestore();
+    expect(code).toBe(2);
+    // the suite-specific message, NOT the audit-redo or staleness one (the audit here IS satisfied).
+    expect(writes.join('')).toContain('verification suite is not');
+  });
+
+  it('audit GUESS_FREE + current-diff, but NO suite record → BLOCK (2, fail-closed — unrecorded is not green)', async () => {
+    await driveV2AuditGreen();
+    // no recordSuite → readSuite is null → not green → block
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('audit GUESS_FREE + current-diff + suite recorded GREEN → ALLOW (0) (both enforcement points satisfied)', async () => {
+    await driveV2AuditGreen();
+    await recordSuite(SID, 't1', true);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('requireSuiteGreen=false → the suite record is NOT consulted (backward-compatible); commit ALLOWED with no suite record', async () => {
+    await driveV2AuditGreen();
+    // NO recordSuite. A pack that declares require_suite_green:false must keep its pre-scope-5 behavior.
+    const verdict = await commitAllowedNow(
+      SID,
+      ['src/x.ts'],
+      AGENT_ENV,
+      {
+        auditCacheKey: 'fullstack-flow-code-audit-cache',
+        requirePhaseLedger: true,
+        requireSuiteGreen: false,
+      },
+      'fullstack-flow',
+    );
+    expect(verdict).toEqual({ allowed: true, reason: 'flow_complete' });
   });
 });
 

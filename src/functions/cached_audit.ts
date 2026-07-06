@@ -177,7 +177,9 @@ export function registerCachedAuditFunction(registry: FunctionRegistry): void {
           await writeCache(
             ctx.sessionId,
             cache_key,
-            subjectHash === undefined ? { hash, verdict: out } : { hash, verdict: out, subjectHash },
+            subjectHash === undefined
+              ? { hash, verdict: out }
+              : { hash, verdict: out, subjectHash },
           );
         }
         await stamp(hasVerdict ? 'verdict' : 'no_verdict', Date.now() - t0);

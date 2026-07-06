@@ -77,7 +77,11 @@ export async function serializePlan(
   // applies, so the content-audit and the gate see the identical node set). Edges are NOT rendered (the audit
   // judges the authored scope-element deps below; work-graph edge acyclicity is the gate's job) — so pass `[]`
   // and use only `.issues`.
-  const scoped = scopeToDecomposition(await facade.listIssues(), [], ext.authoredElements.map((e) => e.id));
+  const scoped = scopeToDecomposition(
+    await facade.listIssues(),
+    [],
+    ext.authoredElements.map((e) => e.id),
+  );
   const issues = [...scoped.issues].sort((a, b) => a.id.localeCompare(b.id));
   // SUBSTANCE (not bare ids): render each scope element's AUTHORED TEXT + ask-anchor so the content-audit can
   // judge on-topic + coverage; flag any element missing its ask-anchor (an un-traceable element = a guess).

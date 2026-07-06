@@ -11,10 +11,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // Mock the daemon client (no real socket) + the on-disk channels config (no real ~/.opensquid/channels.json).
 // The routing mock keeps the REAL resolvers (resolveTelegramChannel/resolveUmbrellaForCwd) — only the disk read
 // (loadChannelsConfig) is stubbed — so the test exercises the actual resolution surfaceReportToChat depends on.
-vi.mock('../../chat_daemon/client.js', () => ({ sendChat: vi.fn(() => Promise.resolve({ ok: true })) }));
+vi.mock('../../chat_daemon/client.js', () => ({
+  sendChat: vi.fn(() => Promise.resolve({ ok: true })),
+}));
 vi.mock('../../channels/routing.js', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../channels/routing.js')>('../../channels/routing.js');
+  const actual = await vi.importActual('../../channels/routing.js');
   return { ...actual, loadChannelsConfig: vi.fn() };
 });
 
@@ -28,7 +29,11 @@ const mockLoad = vi.mocked(loadChannelsConfig);
 const CFG = ChannelsConfig.parse({
   v: 1,
   umbrellas: [
-    { id: 'loop', members: ['/Users/x/projects/opensquid'], telegram: { chat_id: '-100777', topic_id: 15 } },
+    {
+      id: 'loop',
+      members: ['/Users/x/projects/opensquid'],
+      telegram: { chat_id: '-100777', topic_id: 15 },
+    },
   ],
 });
 

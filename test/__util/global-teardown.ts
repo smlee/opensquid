@@ -36,6 +36,33 @@ export default function setup(): () => Promise<void> {
   process.env.LOOP_HOME = runtimeHome;
   process.stderr.write(`[vitest globalSetup] OPENSQUID_HOME=${runtimeHome}\n`);
 
+  // T-green-v2-enforcement-baseline — LAP-AMBIENT ENV-LEAK DEFENSE. The WHOLE suite may run INSIDE a ralph
+  // lap (DEPLOY runs `pnpm test` as a subprocess; a spawned subagent inherits the lap env), which injects a
+  // fixed set of ambient OPENSQUID_* signals. Each is legitimate in production but, as ambient TEST env, it
+  // silently rewrites the "not-in-a-lap" world every unit/integration test assumes:
+  //   - OPENSQUID_ITEM_ID     — the headless active-task fallback; makes every "no active task" assertion
+  //                             (log_phase.test.ts) resolve to the driven item.
+  //   - OPENSQUID_PROJECT_UUID — resolveProjectUuid prefers it over the cwd `.opensquid` marker, so pointer
+  //                             reads (handoff_session_start) + the work-graph namespace (v2_supply decompose)
+  //                             resolve to the lap's project instead of the test's fixture.
+  //   - OPENSQUID_AUTOMATION   — is_automation_mode returns true (stop/pause guards, per-stage reporting).
+  //   - OPENSQUID_SUBAGENT / OPENSQUID_SUPERVISED — flip the subagent/supervised code paths (hook dispatch).
+  // Clear them all for the run so the suite is hermetic in ANY env (a clean interactive push AND a ralph lap
+  // that runs the DEPLOY-floor `pnpm test`). A test that exercises one of these paths sets the var EXPLICITLY
+  // in its own setup — never relies on ambient env. Restored (per-var) at teardown.
+  const LAP_AMBIENT_ENV = [
+    'OPENSQUID_ITEM_ID',
+    'OPENSQUID_PROJECT_UUID',
+    'OPENSQUID_AUTOMATION',
+    'OPENSQUID_SUBAGENT',
+    'OPENSQUID_SUPERVISED',
+  ] as const;
+  const priorLapEnv = new Map<string, string | undefined>();
+  for (const key of LAP_AMBIENT_ENV) {
+    priorLapEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
   return async function teardown(): Promise<void> {
     // Restore env BEFORE rm in case rm fails — env restoration is more
     // important than tempdir cleanup (vitest's OS-level cleanup is fallback).
@@ -43,6 +70,9 @@ export default function setup(): () => Promise<void> {
     else process.env.OPENSQUID_HOME = priorOpensquidHome;
     if (priorLoopHome === undefined) delete process.env.LOOP_HOME;
     else process.env.LOOP_HOME = priorLoopHome;
+    for (const [key, prior] of priorLapEnv) {
+      if (prior !== undefined) process.env[key] = prior;
+    }
     await rm(runtimeHome, { recursive: true, force: true }).catch(() => undefined);
   };
 }

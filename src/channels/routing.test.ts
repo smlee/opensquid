@@ -203,7 +203,9 @@ describe('resolveConfiguredChannel / resolvePlatformChannel', () => {
     const cfg = ChannelsConfig.parse({
       v: 1,
       platform: 'discord',
-      umbrellas: [{ id: 'loop', members: ['/x'], telegram: { chat_id: '-1003923174632', topic_id: 15 } }],
+      umbrellas: [
+        { id: 'loop', members: ['/x'], telegram: { chat_id: '-1003923174632', topic_id: 15 } },
+      ],
     });
     expect(resolveConfiguredChannel(cfg, 'loop')).toEqual({
       channel: 'discord:-1003923174632',

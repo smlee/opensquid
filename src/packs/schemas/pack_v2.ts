@@ -14,6 +14,7 @@
  */
 import { z } from 'zod';
 
+import { CommitGateBlock } from '../../runtime/commit_gate_evidence.js';
 import { Transition } from '../../runtime/fsm.js';
 import { isNode, TAXONOMY } from '../taxonomy.js';
 
@@ -217,9 +218,9 @@ export type DomainDict = z.infer<typeof DomainDict>;
 // an off-dictionary node FAILS LOUD (you cannot declare a made-up category — the guess-free discipline). The
 // flat roots ARE the `DomainDict` values above (same `TAXONOMY.domain` keys), so every root-only `domain: coding`
 // parses identically as both a root and a node; deeper nodes (`coding.frontend`) address sub-domains.
-const DomainNode = z
-  .string()
-  .refine((s) => isNode('domain', s), { message: 'off-dictionary domain node (see src/packs/taxonomy.ts)' });
+const DomainNode = z.string().refine((s) => isNode('domain', s), {
+  message: 'off-dictionary domain node (see src/packs/taxonomy.ts)',
+});
 
 // NOT `.strict()`: `.catchall(z.string())` admits free qualifiers (`lang`, `framework`) as string→string while
 // the LOAD-BEARING keys (`intent`, `domain`) stay validated (cannot typo-drift silently).
@@ -273,6 +274,11 @@ export const PackV2 = z
     flows: z.record(z.string(), FsmV2).optional(),
     guards: z.record(z.string(), z.string()).default({}), // FAC-CUT.2: guard ref → an `if:`-expression (boolean predicate); the gate's block/halt action is on the state's on_fail
     messages: z.record(z.string(), z.string()).default({}), // self-continue store: failure_type → instruction
+    // COMMIT-GATE EVIDENCE (T-deploy-commit-gate scope-4, design §4a) — a discipline pack DECLARES which
+    // session-state keys the generic CORE commit-gate reads to authorize a code commit, so core carries no
+    // `fullstack-flow-*` key literal. Optional/additive: a pack that omits it (v1 `coding-flow`) keeps the
+    // session-FSM gate path. The reader (runtime/commit_gate_evidence.ts) resolves this block module-relative.
+    commit_gate: CommitGateBlock.optional(),
     foundation: z.unknown().optional(), // pure expertise (manifest/lessons) — neither fsm nor gates
   })
   .strict()

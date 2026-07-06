@@ -139,10 +139,7 @@ export interface SpawnInvocation {
 }
 
 /** Default spawn: detached `node <entrypoint> <args...>` with the merged env. */
-function defaultSpawn(
-  entrypoint: string,
-  inv: SpawnInvocation,
-): { pid?: number } {
+function defaultSpawn(entrypoint: string, inv: SpawnInvocation): { pid?: number } {
   const child = spawn(process.execPath, [entrypoint, ...inv.args], {
     detached: true,
     stdio: 'ignore',
@@ -237,7 +234,8 @@ export async function ensureAgentBridgeRunning(
     }
 
     const cur = await statusFn(scope);
-    if (cur.running) return { status: 'already_running', ...(cur.pid !== undefined ? { pid: cur.pid } : {}) };
+    if (cur.running)
+      return { status: 'already_running', ...(cur.pid !== undefined ? { pid: cur.pid } : {}) };
 
     const invocation = buildInvocation(target, { resolvePackRootFn, env }, projectUuid);
     if (invocation === null) return { status: 'no_config' };
@@ -331,7 +329,10 @@ export async function ensureHeadlessRespondersForBoot(opts: {
   const general = await ensureFn({ kind: 'general' }, opts.deps);
   let umbrella: AgentBridgeAutoSpawnResult | null = null;
   if (opts.umbrellaForCwd !== null && opts.umbrellaForCwd !== GENERAL_UMBRELLA) {
-    umbrella = await ensureFn({ kind: 'umbrella', umbrellaId: opts.umbrellaForCwd, cwd }, opts.deps);
+    umbrella = await ensureFn(
+      { kind: 'umbrella', umbrellaId: opts.umbrellaForCwd, cwd },
+      opts.deps,
+    );
   }
   return { general, umbrella };
 }

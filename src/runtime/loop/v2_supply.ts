@@ -25,10 +25,13 @@ import { taskCheckpointExists, upsertTaskStage } from '../ralph/loop_stage.js';
 import { resolveCheckpointKey } from './checkpoint_key.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
-import { readActiveVerifyCommand } from '../../packs/discovery.js';
+import { readActiveVerifyCommand, readActiveVerifySuite } from '../../packs/discovery.js';
 import {
   bumpBugfixRounds,
   readBugfixRounds,
+  readNeedsRedesign,
+  recordNeedsRedesign,
+  recordSuite,
   recordVerification,
   resetBugfixRounds,
 } from './verification.js';
@@ -421,23 +424,31 @@ export async function buildGuardCtx(
   // DBL.2 — bug-fix loop bound: exhausted once the recorded round count hits the cap (the VERIFY decision then
   // escalates to ACCEPT instead of looping to AUTHOR). Cheap (a small state-file read), FAIL-OPEN to NOT-exhausted.
   let bugfixExhausted = false;
+  // scope-2 (§5.1) — the DEPLOY-local fix loop's ESCAPE HATCH facet: is this red flagged as genuine design
+  // rework (→ AUTHOR) rather than a mechanical fix (→ DEPLOY-local)? Durable per-task, set by `opensquid
+  // redesign <taskId>`. FAIL-CLOSED to false (unset/read-error → NOT redesign → DEPLOY-local, the narrowing).
+  let needsRedesign = false;
   try {
     const dTaskId = await readActiveTaskId(sessionId);
     bugfixExhausted =
       dTaskId !== null && (await readBugfixRounds(sessionId, dTaskId)) >= MAX_BUGFIX_ROUNDS;
+    needsRedesign = dTaskId !== null && (await readNeedsRedesign(sessionId, dTaskId));
   } catch {
     bugfixExhausted = false; // fail-open: a read error keeps the loop going (the lap budget still backstops)
+    needsRedesign = false; // fail-closed: a read error routes to DEPLOY-local, never a spurious AUTHOR kick
   }
   m.set('deploy.capability_ok', dep.capabilityOk);
   m.set('deploy.accepted', dep.accepted);
   m.set('deploy.clean', dep.deployClean); // DBL.1 — the VERIFY decision's facet (skip→clean when no verifyCommand)
   m.set('deploy.bugfix_exhausted', bugfixExhausted); // DBL.2
+  m.set('deploy.needs_redesign', needsRedesign); // scope-2 §5.1 — the AUTHOR escape hatch (default false = local)
   m.set('deploy.reversible', dep.reversible); // REVERSIBLE-DEPLOY: true → auto-advance accept; false → human gate
   m.set('deploy', {
     capability_ok: dep.capabilityOk,
     accepted: dep.accepted,
     clean: dep.deployClean,
     bugfix_exhausted: bugfixExhausted,
+    needs_redesign: needsRedesign,
     reversible: dep.reversible,
   });
 
@@ -565,26 +576,38 @@ export async function runV2Cartridges(
       );
     }
   }
-  // DBL.1b — record the DETERMINISTIC deploy verification: when the agent runs EXACTLY the project's configured
-  // `verifyCommand` (the deploy procedure dictates the exact command, so the match is reliable), capture its REAL
-  // exit code → `deployClean` (verification.ts). Never a self-report. FAIL-OPEN on any read error.
+  // DBL.1b + scope-1/scope-2 — record the DETERMINISTIC deploy verification records: when the agent runs EXACTLY
+  // the project's configured `verifyCommand` (DBL.1b, additive smoke/e2e) OR its declared `verifySuite` (scope-1,
+  // the MANDATORY FLOOR = the whole pre-push suite), capture the REAL exit code (never a self-report). The deploy
+  // procedure dictates the exact commands, so the verbatim match is reliable. scope-2 (§5.3): a RED suite re-run
+  // BUMPS the bug-fix round count — so the DEPLOY-local fix loop is bounded (it hits the cap → bugfix_exhausted →
+  // human) even though it never leaves DEPLOY. FAIL-OPEN on any read/record error (observe-never-breaks).
   if (event.kind === 'post_tool_call' && 'tool' in event && event.tool === 'Bash') {
     try {
       const cwd = 'cwd' in event ? (event as { cwd?: unknown }).cwd : undefined;
       const command = 'args' in event ? (event.args as { command?: unknown }).command : undefined;
       if (typeof cwd === 'string' && cwd !== '' && typeof command === 'string') {
-        const verifyCmd = await readActiveVerifyCommand(await resolveProjectScopeRoot(cwd));
+        const scopeRoot = await resolveProjectScopeRoot(cwd);
+        const verifyCmd = await readActiveVerifyCommand(scopeRoot);
+        const suiteCmd = await readActiveVerifySuite(scopeRoot);
         const taskId = await readActiveTaskId(sessionId);
-        if (verifyCmd !== null && command.trim() === verifyCmd.trim() && taskId !== null) {
-          await recordVerification(
-            sessionId,
-            taskId,
-            (event as { exit_code?: number }).exit_code === 0,
-          );
+        const cmd = command.trim();
+        const passed = (event as { exit_code?: number }).exit_code === 0;
+        if (taskId !== null) {
+          if (verifyCmd !== null && cmd === verifyCmd.trim()) {
+            await recordVerification(sessionId, taskId, passed);
+          }
+          if (suiteCmd !== null && cmd === suiteCmd.trim()) {
+            await recordSuite(sessionId, taskId, passed);
+            // scope-2 §5.3 — DEPLOY-local round accounting: a red suite re-run is one fix round. Counting the
+            // suite re-run (not only a verify→author transition) bounds the in-place loop, so an unfixable
+            // mechanical failure escalates at the cap instead of looping forever inside `deploy_fix`.
+            if (!passed) await bumpBugfixRounds(sessionId, taskId);
+          }
         }
       }
     } catch (err) {
-      process.stderr.write(`[v2-supply] verify record failed (ignored): ${String(err)}\n`);
+      process.stderr.write(`[v2-supply] verify/suite record failed (ignored): ${String(err)}\n`);
     }
   }
   let exitCode: 0 | 2 = 0;
@@ -766,15 +789,18 @@ export async function runV2Cartridges(
             at: now,
             via: -1,
           });
-          // DBL.2 — bug-fix loop round accounting on the VERIFY decision's transitions: bugs_found (verify→author)
-          // is one round (bump → the cap eventually flips deploy.bugfix_exhausted); a verify→accept (clean OR
-          // exhausted) resets so a future re-open starts fresh. FAIL-OPEN (never break the hook).
-          if (p.from === 'verify') {
+          // DBL.2 + scope-2 — bug-fix loop round RESET on the VERIFY decision's clean exit. The round COUNT is now
+          // driven UNIFORMLY by the red-suite re-run reaction above (one red run = one round), covering BOTH the
+          // DEPLOY-local `deploy_fix` loop and a redesign→author re-entry — so no per-transition bump is needed
+          // here (that would double-count a red cycle that also recorded a red suite). A verify→accept (clean OR
+          // exhausted) RESETS the round count AND clears the redesign flag, so a re-authored, now-green item does
+          // not re-escalate on a future re-open. FAIL-OPEN (never break the hook).
+          if (p.from === 'verify' && p.to === 'accept') {
             try {
               const bfTask = await readActiveTaskId(sessionId);
               if (bfTask !== null) {
-                if (p.to === 'author') await bumpBugfixRounds(sessionId, bfTask);
-                else if (p.to === 'accept') await resetBugfixRounds(sessionId, bfTask);
+                await resetBugfixRounds(sessionId, bfTask);
+                await recordNeedsRedesign(sessionId, bfTask, false); // clear the escape-hatch flag on clean
               }
             } catch (err) {
               process.stderr.write(

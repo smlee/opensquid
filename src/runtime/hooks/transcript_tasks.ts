@@ -272,7 +272,12 @@ export async function readAllTasksFromTranscript(
       taskId !== undefined || spec !== undefined
         ? { ...(taskId !== undefined ? { taskId } : {}), ...(spec !== undefined ? { spec } : {}) }
         : undefined;
-    tasks.push({ id, subject: t.subject, status: t.status, ...(metadata !== undefined ? { metadata } : {}) });
+    tasks.push({
+      id,
+      subject: t.subject,
+      status: t.status,
+      ...(metadata !== undefined ? { metadata } : {}),
+    });
   }
   return tasks;
 }

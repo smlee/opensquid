@@ -355,8 +355,32 @@ export async function writeActiveTask(sessionId: string, task: ActiveTask): Prom
   await atomicWriteFile(path, JSON.stringify(task, null, 2));
 }
 
-/** Read the active-task signal, or `null` if absent/unreadable/malformed (no throw). */
-export async function readActiveTask(sessionId: string): Promise<ActiveTask | null> {
+/**
+ * scope-4 (deploy-commit-gate §4) — the headless-lap active-task fallback. A ralph lap runs with
+ * `OPENSQUID_SUBAGENT=1`, which short-circuits EVERY hook bin (`exitIfSubagent`), so the AP.1 PreToolUse
+ * mirror never runs and `active-task.json` is never written — the reporting-wedge failure ("active-task.json
+ * missing under the headless lap"). The lap DOES publish the driven work-graph id as `OPENSQUID_ITEM_ID`; when
+ * the on-disk signal is absent AND that id is supplied, active-task RESOLUTION (a core mechanism, design §4a)
+ * synthesizes the signal from it — `id` AND `taskId` BOTH the wg id, so every keying path agrees (the commit
+ * gate's `active.id`, `readActiveTaskId`, the loop-stage checkpoint key). This runs INDEPENDENT of hook policy
+ * because the two real consumers — the `opensquid gate` CLI and the `log_phase` MCP tool — call it directly.
+ *
+ * INJECTED, never ambient: `lapItemId` is an explicit argument (production passes `process.env.OPENSQUID_ITEM_ID`
+ * at the two call sites). It defaults to `undefined` so a bare `readActiveTask(sid)` keeps the pure file-read
+ * semantics — the whole test suite (which may itself run inside a lap) is unaffected unless a test opts in.
+ */
+function lapItemActiveTask(lapItemId: string | undefined): ActiveTask | null {
+  const id = typeof lapItemId === 'string' ? lapItemId.trim() : '';
+  if (id === '') return null;
+  return { id, subject: id, started_at: new Date().toISOString(), taskId: id };
+}
+
+/** Read the active-task signal, or `null` if absent/unreadable/malformed (no throw). When the on-disk signal
+ *  is absent and `lapItemId` is supplied (a headless ralph lap), resolve the driven item as the active task. */
+export async function readActiveTask(
+  sessionId: string,
+  lapItemId?: string,
+): Promise<ActiveTask | null> {
   try {
     const parsed = JSON.parse(await readFile(activeTaskFile(sessionId), 'utf8')) as unknown;
     if (
@@ -375,9 +399,9 @@ export async function readActiveTask(sessionId: string): Promise<ActiveTask | nu
         ...(typeof o.spec === 'string' ? { spec: o.spec } : {}),
       };
     }
-    return null;
+    return lapItemActiveTask(lapItemId);
   } catch {
-    return null;
+    return lapItemActiveTask(lapItemId);
   }
 }
 

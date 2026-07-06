@@ -161,14 +161,14 @@ describe('saveChatConfig round-trip + unknown-key preservation', () => {
     expect((await loadChatConfig()).telegram?.bot_token).toBe(TG_TOKEN);
   });
 
-  it('preserves unrelated top-level keys (e.g. engine_bin)', async () => {
-    await writeHostConfig({ version: 1, engine_bin: '/usr/local/bin/loop-engine' });
+  it('preserves unrelated top-level keys (e.g. a foreign field)', async () => {
+    await writeHostConfig({ version: 1, foreign_key: '/some/foreign/value' });
     await saveChatConfig({ telegram: { bot_token: TG_TOKEN } });
     const raw = JSON.parse(await readFile(join(tempHome, 'config.json'), 'utf8')) as Record<
       string,
       unknown
     >;
-    expect(raw.engine_bin).toBe('/usr/local/bin/loop-engine');
+    expect(raw.foreign_key).toBe('/some/foreign/value');
     expect((raw.chat_connections as ChatConnectionsConfig).telegram?.bot_token).toBe(TG_TOKEN);
   });
 });

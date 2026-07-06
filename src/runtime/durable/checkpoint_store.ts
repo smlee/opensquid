@@ -275,12 +275,16 @@ export class CheckpointStore {
     if (!row) return null;
     let scopeArtifacts: string[] = [];
     try {
-      const parsed = JSON.parse(String(row.scope_artifacts_json)) as unknown;
-      if (Array.isArray(parsed)) scopeArtifacts = parsed.filter((x): x is string => typeof x === 'string');
+      const rawJson =
+        typeof row.scope_artifacts_json === 'string' ? row.scope_artifacts_json : '[]';
+      const parsed = JSON.parse(rawJson) as unknown;
+      if (Array.isArray(parsed))
+        scopeArtifacts = parsed.filter((x): x is string => typeof x === 'string');
     } catch {
       /* malformed json → treat as no recorded artifacts (the gate then holds until proof reappears) */
     }
-    return { stage: String(row.stage), scopeArtifacts };
+    const stage = typeof row.stage === 'string' ? row.stage : '';
+    return { stage, scopeArtifacts };
   }
 
   /**

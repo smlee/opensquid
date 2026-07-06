@@ -116,14 +116,26 @@ describe('PackV2 schema — activation class + discipline declaration (project-o
 
   it('parses each activation class value', () => {
     for (const activation of ['always-on', 'on-demand', 'project-scoped'] as const) {
-      const p = PackV2.parse({ name: 'p', version: '1.0.0', scope: 'workflow', activation, fsm: baseFsm });
+      const p = PackV2.parse({
+        name: 'p',
+        version: '1.0.0',
+        scope: 'workflow',
+        activation,
+        fsm: baseFsm,
+      });
       expect(p.activation).toBe(activation);
     }
   });
 
   it('rejects an off-enum activation value (fail-loud)', () => {
     expect(() =>
-      PackV2.parse({ name: 'p', version: '1.0.0', scope: 'workflow', activation: 'always', fsm: baseFsm }),
+      PackV2.parse({
+        name: 'p',
+        version: '1.0.0',
+        scope: 'workflow',
+        activation: 'always',
+        fsm: baseFsm,
+      }),
     ).toThrow();
   });
 

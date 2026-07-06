@@ -32,7 +32,13 @@ import { migrateUmbrellaNs } from './setup/migrate/migrate-umbrella-ns.js';
 import { migrateWedgeLessons } from './rag/wedge/migrate.js';
 import { wedgeLessonsDbUrl, wedgeLessonsDir } from './rag/wedge/paths.js';
 import { OpenSquidDaemon } from './runtime/daemon.js';
-import { setProjectDomain, pinRoute, forgetRoute } from './runtime/orchestrator_settings.js';
+import {
+  setProjectDomain,
+  pinRoute,
+  forgetRoute,
+  setAllowCodeWrite,
+  readSettings,
+} from './runtime/orchestrator_settings.js';
 import { MacroIntent, DomainDict } from './packs/schemas/pack_v2.js';
 import { daemonPidPath, OPENSQUID_HOME } from './runtime/paths.js';
 import { parseShow, runDaemonReport } from './setup/cli/daemon_report.js';
@@ -156,6 +162,38 @@ function runCli(): void {
     .action(async (pack: string) => {
       await forgetRoute(process.cwd(), pack);
       process.stdout.write(`orchestrator: forgot routes for ${pack}\n`);
+    });
+  // The doc-only guard's standing code-write grant, as a CONFIG VALUE (allow_code_write) — flipped ONLY here,
+  // via a server-side write (an agent Edit of orchestrator.json is guard-blocked). `/code-write` calls `toggle`.
+  orch
+    .command('code-write [state]')
+    .description(
+      'grant/revoke the doc-only orchestrator code-write permission: on | off | toggle | status',
+    )
+    .action(async (state: string | undefined) => {
+      const s = (state ?? 'status').toLowerCase();
+      const cwd = process.cwd();
+      if (s === 'status') {
+        const on = (await readSettings(cwd)).allow_code_write;
+        process.stdout.write(
+          on
+            ? '🔓 code-write GRANTED — coding-file writes permitted (allow_code_write: true)\n'
+            : '🔒 code-write REVOKED — coding-file writes blocked; docs still pass (allow_code_write: false)\n',
+        );
+        return;
+      }
+      if (s !== 'on' && s !== 'off' && s !== 'toggle') {
+        throw new Error(
+          `opensquid orchestrator code-write: state must be on|off|toggle|status, got "${state ?? ''}"`,
+        );
+      }
+      const next = s === 'toggle' ? !(await readSettings(cwd)).allow_code_write : s === 'on';
+      await setAllowCodeWrite(cwd, next);
+      process.stdout.write(
+        next
+          ? '🔓 GRANTED — coding-file writes permitted until you toggle again (allow_code_write: true)\n'
+          : '🔒 REVOKED — coding-file writes are blocked again, docs still pass (allow_code_write: false)\n',
+      );
     });
 
   const daemon = program.command('daemon').description('Background daemon lifecycle');

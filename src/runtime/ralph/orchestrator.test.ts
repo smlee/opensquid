@@ -322,7 +322,7 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(),
     });
-    expect(runLap).toHaveBeenCalledTimes(3); // MAX_STAGE_RETRIES
+    expect(runLap).toHaveBeenCalledTimes(10); // MAX_STAGE_RETRIES
     expect(r.parked).toEqual([{ id: 'a', reason: 'UNRECOVERABLE_WEDGE' }]);
   });
 

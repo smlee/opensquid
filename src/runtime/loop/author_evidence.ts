@@ -42,7 +42,10 @@ export function authorInputsForRepo(repoRoot: string): AuthorInputs {
     readFileSync(join(repoRoot, MANIFEST_FILE), 'utf8'),
   );
   const index = buildCodeIndex(repoRoot, GATED_PREFIXES);
-  return { reqs, opts: { gatedPrefixes: GATED_PREFIXES, index, allowlist: readAllowlist(repoRoot) } };
+  return {
+    reqs,
+    opts: { gatedPrefixes: GATED_PREFIXES, index, allowlist: readAllowlist(repoRoot) },
+  };
 }
 
 /**

@@ -197,6 +197,16 @@ export interface ActiveJson {
    */
   verifyCommand?: string;
   /**
+   * scope-1 (T-deploy-commit-gate §2.1, §4a) — the per-project VERIFICATION SUITE command: the whole pre-push
+   * bar the human's `git push` runs (opensquid's `bash scripts/pre-push.sh` = lint+typecheck+build+test+
+   * format:check). This is DEPLOY's MANDATORY FLOOR (`deployClean = suiteGreen && (verifyCommand green OR
+   * unconfigured)`), whereas `verifyCommand` is the ADDITIVE e2e/smoke layer on top. The COMMAND itself is
+   * PROJECT config (a cargo/pytest project declares its own) — core reads it generically here and carries NO
+   * `pre-push.sh` literal (design §4a). ABSENT ⇒ no suite declared ⇒ the floor is skipped (a legacy project
+   * ships as today); the fullstack-flow floor only bites once a suite is declared.
+   */
+  verifySuite?: string;
+  /**
    * REVERSIBLE-DEPLOY — when `true`, the project's deploy is reversible (e.g. a feature-flag roll-out, a
    * preview-channel push, a staged infra change with an instant rollback path). A reversible deploy auto-advances
    * the `accept` decision to `accepted` without a human `opensquid accept <taskId>` (the acceptance audit item
@@ -373,6 +383,23 @@ export async function readActiveVerifyCommand(scopeRoot: string | null): Promise
   try {
     const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
     const v = (JSON.parse(raw) as ActiveJson).verifyCommand;
+    return typeof v === 'string' && v.trim().length > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * scope-1 (T-deploy-commit-gate §2.1) — read the per-project VERIFICATION-SUITE command from a scope's
+ * `active.json` (see {@link ActiveJson.verifySuite}), or `null` when absent/unconfigured/unreadable (→ the
+ * DEPLOY floor is skipped; a legacy project ships as today). Lenient: absent scope / ENOENT / any fault → `null`.
+ * Mirrors {@link readActiveVerifyCommand} so core reads the suite command generically (no `pre-push.sh` literal).
+ */
+export async function readActiveVerifySuite(scopeRoot: string | null): Promise<string | null> {
+  if (scopeRoot === null) return null;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const v = (JSON.parse(raw) as ActiveJson).verifySuite;
     return typeof v === 'string' && v.trim().length > 0 ? v : null;
   } catch {
     return null;

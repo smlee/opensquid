@@ -51,10 +51,10 @@ export const IsAutomationMode: FunctionDef<
   durable: false,
   memoizable: false,
   costEstimateMs: 1,
-  execute: async () => {
-    if (process.env.OPENSQUID_AUTOMATION === '1') {
-      return ok({ value: true, source: 'env' });
-    }
-    return ok({ value: false, source: 'none' });
-  },
+  execute: () =>
+    Promise.resolve(
+      process.env.OPENSQUID_AUTOMATION === '1'
+        ? ok({ value: true, source: 'env' })
+        : ok({ value: false, source: 'none' }),
+    ),
 };

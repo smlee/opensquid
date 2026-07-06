@@ -32,6 +32,11 @@ const Settings = z.object({
   // the project's declared domain — read into the classifier ctx (ORCH.5); never coined by the model.
   domain: DomainDict.optional(),
   routes: z.array(Route).default([]),
+  // The STANDING code-write grant for the doc-only orchestrator guard (GS1). A CONFIG VALUE (single owner:
+  // this file) — NOT the retired `.opensquid/allow-code-write` flag file. Flipped ONLY by the `/code-write`
+  // command via a SERVER-SIDE CLI write (`setAllowCodeWrite`); an agent Edit of orchestrator.json is
+  // guard-blocked (DANGEROUS substrate-edit), so the toggle must stay a CLI operation. Default OFF (locked).
+  allow_code_write: z.boolean().default(false),
   policy: z
     .object({
       onTie: z.enum(['ask', 'first']).default('ask'),
@@ -133,5 +138,16 @@ export async function pinRoute(
 export async function forgetRoute(projectDir: string, pack: string): Promise<void> {
   const s = await readSettings(projectDir);
   s.routes = s.routes.filter((r) => r.pack !== pack);
+  await writeSettings(projectDir, s);
+}
+
+/**
+ * Set the project's standing code-write grant (the doc-only orchestrator guard's "unless"). SERVER-SIDE ONLY —
+ * run by the `/code-write` CLI, never an agent Edit (an agent write of orchestrator.json is guard-blocked).
+ * Preserves every other setting (read-modify-write via the atomic tmp+rename `writeSettings`).
+ */
+export async function setAllowCodeWrite(projectDir: string, on: boolean): Promise<void> {
+  const s = await readSettings(projectDir);
+  s.allow_code_write = on;
   await writeSettings(projectDir, s);
 }

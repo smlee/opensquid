@@ -36,7 +36,7 @@ async function readLastStage(sessionId: string, packId: string): Promise<string 
       await readFile(sessionStateFile(sessionId, stageKey(packId)), 'utf8'),
     ) as unknown;
     if (typeof parsed === 'object' && parsed !== null && 'stage' in parsed) {
-      const s: unknown = (parsed as { stage: unknown }).stage;
+      const s: unknown = parsed.stage;
       if (typeof s === 'string') return s;
     }
   } catch {

@@ -1473,7 +1473,7 @@ describe('LAYER-3 #37: null-classifiedFacets domain-fallback gate', () => {
       triggers: [{ kind: 'tool_call' }],
       // Cast required: `serves` is typed as SkillServes in the runtime Skill; a plain object matches
       // the shape at runtime (the dispatcher only reads `serves` as-is into skillServesMatches).
-      serves: { domain: servesDomain } as unknown as NonNullable<Skill['serves']>,
+      serves: { domain: servesDomain },
       rules: [verdictRule],
     };
     return {
@@ -1497,15 +1497,24 @@ describe('LAYER-3 #37: null-classifiedFacets domain-fallback gate', () => {
    * Cast needed because `cwd` is not in the public ToolCallEvent type but IS
    * read at runtime via the `'cwd' in event` guard (same pattern as line ~510 in dispatch.ts).
    */
-  const eventInProject = (projectDir: string): ToolCallEvent =>
-    ({ kind: 'tool_call' as const, tool: 'Bash', args: {}, cwd: projectDir }) as unknown as ToolCallEvent;
+  const eventInProject = (projectDir: string): ToolCallEvent => ({
+    kind: 'tool_call' as const,
+    tool: 'Bash',
+    args: {},
+    cwd: projectDir,
+  });
 
   it('#37.1: null facets + domain=coding + coding.frontend lens → does NOT fire (domain mismatch)', async () => {
     await writeOrchestratorDomain(tempProjectDir, 'coding');
     // classifiedFacets is null (no writeClassifiedFacets call → file absent → readClassifiedFacets returns null)
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'should-not-fire' });
     const pack = makeServingPack('fe-lens', 'coding.frontend');
-    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-1');
+    const result = await dispatchEvent(
+      eventInProject(tempProjectDir),
+      [pack],
+      registry,
+      'sess-l3-1',
+    );
     expect(result.exitCode).toBe(0); // coding.frontend lens blocked by domain fallback (coding ≠ coding.frontend)
     expect(result.stderr).toBe('');
   });
@@ -1514,7 +1523,12 @@ describe('LAYER-3 #37: null-classifiedFacets domain-fallback gate', () => {
     await writeOrchestratorDomain(tempProjectDir, 'coding');
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'coding lens fired' });
     const pack = makeServingPack('be-lens', 'coding');
-    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-2');
+    const result = await dispatchEvent(
+      eventInProject(tempProjectDir),
+      [pack],
+      registry,
+      'sess-l3-2',
+    );
     expect(result.exitCode).toBe(2); // coding lens fires: contains('coding', 'coding') = true
     expect(result.stderr).toBe('coding lens fired');
   });
@@ -1524,7 +1538,12 @@ describe('LAYER-3 #37: null-classifiedFacets domain-fallback gate', () => {
     // → fallbackDomain null → fail-open (existing behavior preserved)
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'fail-open fired' });
     const pack = makeServingPack('fe-lens-failsafe', 'coding.frontend');
-    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-3');
+    const result = await dispatchEvent(
+      eventInProject(tempProjectDir),
+      [pack],
+      registry,
+      'sess-l3-3',
+    );
     expect(result.exitCode).toBe(2); // fail-open: no domain → skill fires
     expect(result.stderr).toBe('fail-open fired');
   });
@@ -1537,10 +1556,15 @@ describe('LAYER-3 #37: null-classifiedFacets domain-fallback gate', () => {
       domain: 'coding.frontend',
       project: true,
       confidence: 'high',
-    } as Parameters<typeof writeClassifiedFacets>[1]);
+    });
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'classified path fired' });
     const pack = makeServingPack('fe-lens-classified', 'coding.frontend');
-    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-4');
+    const result = await dispatchEvent(
+      eventInProject(tempProjectDir),
+      [pack],
+      registry,
+      'sess-l3-4',
+    );
     // Classified facets say coding.frontend → coding.frontend lens matches → fires
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toBe('classified path fired');
@@ -1551,7 +1575,12 @@ describe('LAYER-3 #37: null-classifiedFacets domain-fallback gate', () => {
     // Use makePack which creates a Skill with NO serves field → always-on spine, never gated
     const registry = buildRegistryWithVerdict({ level: 'block', message: 'spine fired' });
     const pack = makePack('spine', [verdictRule]);
-    const result = await dispatchEvent(eventInProject(tempProjectDir), [pack], registry, 'sess-l3-5');
+    const result = await dispatchEvent(
+      eventInProject(tempProjectDir),
+      [pack],
+      registry,
+      'sess-l3-5',
+    );
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toBe('spine fired');
   });

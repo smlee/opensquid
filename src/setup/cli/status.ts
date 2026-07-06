@@ -13,6 +13,7 @@ import type { Command } from 'commander';
 
 import { disciplineStatus, formatDisciplineStatus } from '../../runtime/loop/discipline_status.js';
 import { markAccepted } from '../../runtime/loop/acceptance.js';
+import { recordNeedsRedesign } from '../../runtime/loop/verification.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 
 /** Most-recently-modified session id under $OPENSQUID_HOME/sessions, or null when there are none. */
@@ -51,6 +52,32 @@ export function registerStatusCli(program: Command): Command {
       }
       await markAccepted(sessionId, taskId, new Date().toISOString());
       process.stdout.write(`🦑 accepted ${taskId} — the DEPLOY gate can now reach done.\n`);
+    });
+
+  // `opensquid redesign <taskId>` (T-deploy-commit-gate scope-2, §5.1) — the DEPLOY-local fix loop's ESCAPE
+  // HATCH. By default a red suite is fixed IN DEPLOY (deploy_fix); this flags the active task so the `verify`
+  // decision routes red → AUTHOR instead — for a failure that genuinely needs re-authoring (a design-level fix),
+  // NOT a mechanical lint/type/test fix. The flag clears automatically on a clean verify. Use sparingly.
+  program
+    .command('redesign <taskId>')
+    .description(
+      'Escalate a DEPLOY bug to AUTHOR — the fix needs design rework, not an in-place fix (scope-2)',
+    )
+    .option('--session <id>', 'session id (default: the most recent session)')
+    .option('--clear', 'clear the flag instead of setting it (route back to DEPLOY-local fixing)')
+    .action(async (taskId: string, opts: { session?: string; clear?: boolean }) => {
+      const sessionId = opts.session ?? (await latestSessionId());
+      if (sessionId === undefined || sessionId === null) {
+        process.stdout.write('🦑 no opensquid sessions found.\n');
+        return;
+      }
+      const needed = opts.clear !== true;
+      await recordNeedsRedesign(sessionId, taskId, needed);
+      process.stdout.write(
+        needed
+          ? `🦑 ${taskId} flagged for redesign — the DEPLOY verify decision now routes to AUTHOR.\n`
+          : `🦑 ${taskId} redesign flag cleared — DEPLOY red is fixed in place again.\n`,
+      );
     });
 
   return program

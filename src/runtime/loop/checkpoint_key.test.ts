@@ -1,16 +1,16 @@
 /**
  * GS1 — resolveCheckpointKey: the canonical wg-issue-id resolver (lap vs interactive + null-skip).
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { resolveCheckpointKey, type CheckpointKeyDeps } from './checkpoint_key.js';
 
 function deps(over: Partial<CheckpointKeyDeps> = {}): CheckpointKeyDeps {
   return {
     itemId: () => undefined,
-    readActiveTask: async () => null,
-    resolveProject: async () => 'proj-1',
-    mapGet: async () => null,
+    readActiveTask: () => Promise.resolve(null),
+    resolveProject: () => Promise.resolve('proj-1'),
+    mapGet: () => Promise.resolve(null),
     ...over,
   };
 }
@@ -22,9 +22,9 @@ describe('resolveCheckpointKey', () => {
       'sess',
       deps({
         itemId: () => 'wg-42',
-        mapGet: async () => {
+        mapGet: () => {
           mapCalls++;
-          return 'should-not-be-used';
+          return Promise.resolve('should-not-be-used');
         },
       }),
     );
@@ -37,12 +37,12 @@ describe('resolveCheckpointKey', () => {
     const key = await resolveCheckpointKey(
       'sess',
       deps({
-        readActiveTask: async () => ({ id: 'harness-7' }),
-        resolveProject: async () => 'proj-X',
-        mapGet: async (project, harnessId) => {
+        readActiveTask: () => Promise.resolve({ id: 'harness-7' }),
+        resolveProject: () => Promise.resolve('proj-X'),
+        mapGet: (project, harnessId) => {
           seen.project = project;
           seen.harnessId = harnessId;
-          return 'wg-mapped-99';
+          return Promise.resolve('wg-mapped-99');
         },
       }),
     );
@@ -51,14 +51,20 @@ describe('resolveCheckpointKey', () => {
   });
 
   it('NULL-SKIP: no active task → null (skip the checkpoint write)', async () => {
-    const key = await resolveCheckpointKey('sess', deps({ readActiveTask: async () => null }));
+    const key = await resolveCheckpointKey(
+      'sess',
+      deps({ readActiveTask: () => Promise.resolve(null) }),
+    );
     expect(key).toBeNull();
   });
 
   it('NULL-SKIP: active task with NO wg binding yet (unmapped) → null (a later event creates it)', async () => {
     const key = await resolveCheckpointKey(
       'sess',
-      deps({ readActiveTask: async () => ({ id: 'harness-unbound' }), mapGet: async () => null }),
+      deps({
+        readActiveTask: () => Promise.resolve({ id: 'harness-unbound' }),
+        mapGet: () => Promise.resolve(null),
+      }),
     );
     expect(key).toBeNull();
   });
@@ -66,7 +72,7 @@ describe('resolveCheckpointKey', () => {
   it('LAP takes precedence over an active task (a lap never consults the map)', async () => {
     const key = await resolveCheckpointKey(
       'sess',
-      deps({ itemId: () => 'wg-lap', readActiveTask: async () => ({ id: 'harness-1' }) }),
+      deps({ itemId: () => 'wg-lap', readActiveTask: () => Promise.resolve({ id: 'harness-1' }) }),
     );
     expect(key).toBe('wg-lap');
   });

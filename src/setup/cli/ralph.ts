@@ -213,7 +213,7 @@ export async function resolveLoopEscalator(cwd: string): Promise<LapEscalator> {
       ? resolveConfiguredChannel(cfg, umbrella)
       : null;
   if (resolved === null) {
-    return async () => ({ escalated: false, reason: `no chat binding for cwd ${cwd}` });
+    return () => Promise.resolve({ escalated: false, reason: `no chat binding for cwd ${cwd}` });
   }
   return chatEscalator({
     send: daemonChatSend,
@@ -282,8 +282,8 @@ export function registerRalph(program: Command): Command {
               // holds back any item that reaches PAST scope without a real, on-disk scope artifact.
               initialStage: 'scope_write',
               isAutomated: (s: string): boolean => AUTOMATED_STAGES.has(s),
-              stagePrompt: async (_item: Issue, stage: string): Promise<string> =>
-                perStageDirective(stage),
+              stagePrompt: (_item: Issue, stage: string): Promise<string> =>
+                Promise.resolve(perStageDirective(stage)),
               readStage: readLoopStage,
               // No writeStage — the FSM transition (v2_supply write-through) is the SINGLE writer of the
               // durable task checkpoint; the orchestrator only READS it (+ scopeGate's corrective reset).

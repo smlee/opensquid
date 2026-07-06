@@ -189,7 +189,13 @@ describe('fullstack-flow E2E — real pack, live path', () => {
       'utf8',
     );
     const bash = (command: string, exit_code: number): Event =>
-      ({ kind: 'post_tool_call', tool: 'Bash', args: { command }, exit_code, cwd: root }) as unknown as Event;
+      ({
+        kind: 'post_tool_call',
+        tool: 'Bash',
+        args: { command },
+        exit_code,
+        cwd: root,
+      }) as unknown as Event;
 
     await runV2Cartridges(sid, bash('pnpm verify', 0), NOW); // the agent ran it + it PASSED
     expect(await readVerification(sid, taskId)).toBe(true);

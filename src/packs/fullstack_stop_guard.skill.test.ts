@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { registerFsmFunctions } from '../functions/fsm.js';
-import { FunctionRegistry } from '../functions/registry.js';
+import { FunctionRegistry, type FunctionDef } from '../functions/registry.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
 import type { Event } from '../runtime/event.js';
 import { evaluateProcess } from '../runtime/evaluator.js';
@@ -22,7 +22,10 @@ import { Skill } from './schemas/skill.js';
 import { parseYamlFile } from './yaml.js';
 
 const HERE = fileURLToPath(import.meta.url);
-const SKILL_PATH = resolve(HERE, '../../../packs/builtin/fullstack-flow/skills/stop-guard/skill.yaml');
+const SKILL_PATH = resolve(
+  HERE,
+  '../../../packs/builtin/fullstack-flow/skills/stop-guard/skill.yaml',
+);
 
 const STATES = ['scope', 'plan', 'author', 'code', 'deploy', 'accept', 'done'];
 const fsmAt = (initial: string): Fsm => ({ initial, states: STATES, transitions: [] });
@@ -40,22 +43,24 @@ function registry(count: number, automation: boolean): FunctionRegistry {
     durable: false,
     memoizable: false,
     costEstimateMs: 1,
-    execute: async () => ({ ok: true, value: { count } }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any);
+    execute: () => Promise.resolve({ ok: true, value: { count } }),
+  } as unknown as FunctionDef<unknown, unknown>);
   reg.register({
     name: 'is_automation_mode',
     argSchema: z.object({}),
     durable: false,
     memoizable: false,
     costEstimateMs: 1,
-    execute: async () => ({ ok: true, value: { value: automation, source: automation ? 'flag' : 'none' } }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any);
+    execute: () =>
+      Promise.resolve({
+        ok: true,
+        value: { value: automation, source: automation ? 'flag' : 'none' },
+      }),
+  } as unknown as FunctionDef<unknown, unknown>);
   return reg;
 }
 
-const stopEvent = (): Event => ({ kind: 'stop', assistantText: '' } as unknown as Event);
+const stopEvent = (): Event => ({ kind: 'stop', assistantText: '' }) as unknown as Event;
 
 async function loadSkill(): Promise<Skill> {
   const { data } = await parseYamlFile(SKILL_PATH, Skill);
@@ -69,10 +74,21 @@ async function ruleSteps(): Promise<ProcessStep[]> {
   return rule.process;
 }
 
-function run(steps: ProcessStep[], count: number, packFsm: Fsm, automation = true): Promise<RuleResult> {
+function run(
+  steps: ProcessStep[],
+  count: number,
+  packFsm: Fsm,
+  automation = true,
+): Promise<RuleResult> {
   return evaluateProcess(
     steps,
-    { event: stopEvent(), bindings: new Map(), sessionId: `stop-guard-${String(n++)}`, packId: 'fullstack-flow', packFsm },
+    {
+      event: stopEvent(),
+      bindings: new Map(),
+      sessionId: `stop-guard-${String(n++)}`,
+      packId: 'fullstack-flow',
+      packFsm,
+    },
     registry(count, automation),
   );
 }

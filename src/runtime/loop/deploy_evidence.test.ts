@@ -11,6 +11,7 @@ const deps = (over: Partial<DeployEvidenceDeps>): DeployEvidenceDeps => ({
   capabilityCheck: () => Promise.resolve(null),
   acceptance: () => Promise.resolve([]),
   verificationResult: () => Promise.resolve(null), // DBL.1 — no verification configured → skip → deployClean:true
+  suiteResult: () => Promise.resolve(null), // scope-1 — no suite declared → floor off (legacy project ships as today)
   reversible: () => Promise.resolve(false), // REVERSIBLE-DEPLOY — fail-closed default (irreversible)
   ...over,
 });
@@ -42,17 +43,26 @@ describe('deployEvidenceForSession (T2.8)', () => {
 
   // DBL.1 — the VERIFY facet (deployClean): skip→clean when unconfigured; the recorded result otherwise.
   it('no verification configured (verificationResult → null) → deployClean:true (SKIP, ships as today)', async () => {
-    const ev = await deployEvidenceForSession('s', deps({ verificationResult: () => Promise.resolve(null) }));
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ verificationResult: () => Promise.resolve(null) }),
+    );
     expect(ev.deployClean).toBe(true);
   });
 
   it('verification PASSED (true) → deployClean:true (→ accept)', async () => {
-    const ev = await deployEvidenceForSession('s', deps({ verificationResult: () => Promise.resolve(true) }));
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ verificationResult: () => Promise.resolve(true) }),
+    );
     expect(ev.deployClean).toBe(true);
   });
 
   it('verification FAILED (false) → deployClean:false (→ the AUTHOR bug-fix loop)', async () => {
-    const ev = await deployEvidenceForSession('s', deps({ verificationResult: () => Promise.resolve(false) }));
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ verificationResult: () => Promise.resolve(false) }),
+    );
     expect(ev.deployClean).toBe(false);
   });
 
@@ -60,6 +70,68 @@ describe('deployEvidenceForSession (T2.8)', () => {
     const ev = await deployEvidenceForSession(
       's',
       deps({ verificationResult: () => Promise.reject(new Error('boom')) }),
+    );
+    expect(ev.deployClean).toBe(false);
+  });
+
+  // scope-1 (T-deploy-commit-gate §2.1) — the SUITE is the mandatory floor; verifyCommand is additive.
+  // deployClean = (suite ?? true) && (verify ?? true). The SKIP hole is CLOSED once a suite is declared.
+  it('scope-1: suite PASS, no verifyCommand → deployClean:true (floor green, additive absent)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({
+        suiteResult: () => Promise.resolve(true),
+        verificationResult: () => Promise.resolve(null),
+      }),
+    );
+    expect(ev.deployClean).toBe(true);
+  });
+
+  it('scope-1: suite FAIL, no verifyCommand → deployClean:false (the SKIP hole is CLOSED — was true)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({
+        suiteResult: () => Promise.resolve(false),
+        verificationResult: () => Promise.resolve(null),
+      }),
+    );
+    expect(ev.deployClean).toBe(false);
+  });
+
+  it('scope-1: suite DECLARED but no record (suiteResult → false) → deployClean:false (fail-closed: run the suite)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ suiteResult: () => Promise.resolve(false) }),
+    );
+    expect(ev.deployClean).toBe(false);
+  });
+
+  it('scope-1: suite green + verifyCommand FAIL → deployClean:false (the additive check bites)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({
+        suiteResult: () => Promise.resolve(true),
+        verificationResult: () => Promise.resolve(false),
+      }),
+    );
+    expect(ev.deployClean).toBe(false);
+  });
+
+  it('scope-1: no suite declared (legacy) + no verifyCommand → deployClean:true (unchanged for a non-suite project)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({
+        suiteResult: () => Promise.resolve(null),
+        verificationResult: () => Promise.resolve(null),
+      }),
+    );
+    expect(ev.deployClean).toBe(true);
+  });
+
+  it('scope-1: FAIL-CLOSED — a throwing suite reader → deployClean:false (never ship an unverifiable build)', async () => {
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ suiteResult: () => Promise.reject(new Error('boom')) }),
     );
     expect(ev.deployClean).toBe(false);
   });
@@ -126,12 +198,18 @@ describe('deployEvidenceForSession (T2.8)', () => {
 
   // REVERSIBLE-DEPLOY — auto-advance the accept decision; fail-closed on unknown/absent.
   it('reversible: false → reversible:false (irreversible; human gate holds)', async () => {
-    const ev = await deployEvidenceForSession('s', deps({ reversible: () => Promise.resolve(false) }));
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ reversible: () => Promise.resolve(false) }),
+    );
     expect(ev.reversible).toBe(false);
   });
 
   it('reversible: true → reversible:true (auto-ship; no human gate needed)', async () => {
-    const ev = await deployEvidenceForSession('s', deps({ reversible: () => Promise.resolve(true) }));
+    const ev = await deployEvidenceForSession(
+      's',
+      deps({ reversible: () => Promise.resolve(true) }),
+    );
     expect(ev.reversible).toBe(true);
   });
 

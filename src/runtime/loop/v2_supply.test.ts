@@ -1123,6 +1123,7 @@ const deployDeps = (
   capabilityCheck: () => Promise.resolve(capabilityCheck),
   acceptance: () => Promise.resolve(acceptance),
   verificationResult: () => Promise.resolve(null), // DBL.1 — no verification configured → skip → deployClean:true
+  suiteResult: () => Promise.resolve(null), // scope-1 — no suite declared → floor off (legacy project)
   reversible: () => Promise.resolve(false), // REVERSIBLE-DEPLOY — fail-closed default (irreversible)
 });
 

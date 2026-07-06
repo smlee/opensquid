@@ -14,8 +14,8 @@
  * Resolution precedence (per cwd): env → project → global → legacy marker → OFF. "Key present" semantics are
  * load-bearing: `undefined` (key absent) means INHERIT, while `false` is an explicit opt-out.
  *
- * Both config writes preserve every other top-level key (read-modify-write) so `engine_bin` / `chat_connections`
- * are never clobbered. The legacy `<home>/.opensquid/yolo` marker is still READ (deprecated back-compat) and is
+ * Both config writes preserve every other top-level key (read-modify-write) so a foreign field like
+ * `chat_connections` is never clobbered. The legacy `<home>/.opensquid/yolo` marker is still READ (deprecated back-compat) and is
  * removed the next time global YOLO is written.
  *
  * FAIL-SAFE: any read error ⇒ that source contributes nothing; an all-miss resolves OFF (full enforcement).

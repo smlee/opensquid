@@ -31,7 +31,8 @@ describe('applyConcurrencyPragmas', () => {
     const client = createClient({ url: `file:${join(dir, 'a.db')}` });
     await applyConcurrencyPragmas(client);
     const rs = await client.execute('PRAGMA journal_mode');
-    expect(String(rs.rows[0]?.journal_mode).toLowerCase()).toBe('wal');
+    const mode = rs.rows[0]?.journal_mode;
+    expect((typeof mode === 'string' ? mode : '').toLowerCase()).toBe('wal');
     client.close();
   });
 

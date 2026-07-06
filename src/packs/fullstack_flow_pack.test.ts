@@ -281,17 +281,85 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(a.state.current).toBe('done');
   });
 
-  it('DBL.1: VERIFY routes a BUGGY deploy (deploy.clean:false) back to AUTHOR (the bug-fix loop)', async () => {
+  it('scope-2: a MECHANICAL red (deploy.clean:false, needs_redesign:false) routes to DEPLOY-LOCAL fix, NOT AUTHOR', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const verify = loaded.compiled.meta.verify;
     expect(verify?.kind).toBe('decision');
     expect(loaded.compiled.guardExprs?.get('deploy_clean')).toBe('deploy.clean');
-    const a = seedAt(loaded, 'deploy');
-    // capability_ok passes the gate; VERIFY(deploy.clean false) → bugs_found → AUTHOR (not accept/plan).
-    await a.receive(
-      env('post_tool_call', { deploy: { capability_ok: true, clean: false, accepted: false } }),
+    expect(loaded.compiled.guardExprs?.get('deploy_needs_redesign')).toBe('deploy.needs_redesign');
+    // deploy_fix is a gate whose EXIT condition re-checks every loop-terminal facet (clean/exhausted/redesign),
+    // so the cap/redesign escapes are reachable from INSIDE the fix loop (scope-2 §5.3 — not deploy.clean alone).
+    expect(loaded.compiled.meta.deploy_fix?.kind).toBe('gate');
+    expect(loaded.compiled.meta.deploy_fix?.guard).toBe('deploy_fix_exit');
+    expect(loaded.compiled.guardExprs?.get('deploy_fix_exit')).toBe(
+      'deploy.clean || deploy.bugfix_exhausted || deploy.needs_redesign',
     );
-    expect(a.state.current).toBe('author'); // bug-fix loop: re-author the fix (NOT plan, NOT done)
+    expect(loaded.compiled.meta.deploy_fix?.onFail?.action).toBe('block');
+    const a = seedAt(loaded, 'deploy');
+    // capability_ok passes the gate; VERIFY(clean:false, needs_redesign default false) → bugs_local → DEPLOY_FIX.
+    await a.receive(
+      env('post_tool_call', {
+        deploy: { capability_ok: true, clean: false, needs_redesign: false, accepted: false },
+      }),
+    );
+    expect(a.state.current).toBe('deploy_fix'); // §5.1 NARROWING: mechanical red fixed IN DEPLOY, not via AUTHOR
+  });
+
+  it('scope-2: a REDESIGN-flagged red (deploy.needs_redesign:true) routes to AUTHOR (the narrowed escape hatch)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'deploy');
+    // capability_ok passes the gate; VERIFY(clean:false, needs_redesign:true) → bugs_need_redesign → AUTHOR.
+    await a.receive(
+      env('post_tool_call', {
+        deploy: { capability_ok: true, clean: false, needs_redesign: true, accepted: false },
+      }),
+    );
+    expect(a.state.current).toBe('author'); // §5.1: ONLY a genuine design-rework signal leaves DEPLOY to re-author
+  });
+
+  it('scope-2: the DEPLOY-local fix loop reaches clean → re-VERIFY → ACCEPT (deploy_fix → verify → accept → done)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'deploy_fix');
+    // The agent fixed + re-ran the suite green: deploy_fix(clean:true) → fix_verified → verify → verified →
+    // accept → (accepted:true) → done. The in-place fix loop completes without ever routing through AUTHOR.
+    await a.receive(env('post_tool_call', { deploy: { clean: true, accepted: true } }));
+    expect(a.state.current).toBe('done');
+  });
+
+  it('scope-2: deploy_fix BLOCKS on a still-red suite (stays in deploy_fix — no ship on red)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'deploy_fix');
+    const effects = await a.receive(env('post_tool_call', { deploy: { clean: false } }));
+    expect(a.state.current).toBe('deploy_fix'); // still red → held in the fix loop
+    expect(blockedIn(effects)).toBe(true);
+  });
+
+  it('scope-2 §5.3: an EXHAUSTED red INSIDE deploy_fix escalates to the human (deploy_fix → verify → accept → plan)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'deploy_fix');
+    // Still mechanically red, but a genuinely-unfixable failure has bumped the round count to the cap. The gate
+    // must NOT block forever: deploy_fix_exit passes on bugfix_exhausted → fix_verified → verify → bugfix_exhausted
+    // → accept → (unaccepted) → plan. This is the regression the deploy.clean-only guard let loop forever.
+    await a.receive(
+      env('post_tool_call', {
+        deploy: { clean: false, bugfix_exhausted: true, accepted: false },
+      }),
+    );
+    expect(a.state.current).toBe('plan'); // bounded escalation from inside the fix loop — never an infinite red loop
+  });
+
+  it('scope-2 §5.1: a redesign flag set INSIDE deploy_fix escapes to AUTHOR (deploy_fix → verify → author)', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const a = seedAt(loaded, 'deploy_fix');
+    // `opensquid redesign <taskId>` was run mid-fix-loop: still red, but the red genuinely needs re-authoring. The
+    // gate passes on needs_redesign → fix_verified → verify → bugs_need_redesign → author (the §5.1 escape hatch,
+    // now reachable from inside the fix loop, not only from the first verify pass).
+    await a.receive(
+      env('post_tool_call', {
+        deploy: { clean: false, needs_redesign: true, accepted: false },
+      }),
+    );
+    expect(a.state.current).toBe('author');
   });
 
   it('DBL.2: an EXHAUSTED bug-fix loop routes to the human (accept→plan), NOT another author loop', async () => {

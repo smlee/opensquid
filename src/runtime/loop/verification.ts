@@ -40,7 +40,33 @@ export async function recordVerification(
 /** The recorded verification result, or `null` when none/unreadable (the caller decides skip-vs-fail-closed). */
 export async function readVerification(sid: string, taskId: string): Promise<boolean | null> {
   try {
-    const p = JSON.parse(await readFile(sessionStateFile(sid, verificationKey(taskId)), 'utf8')) as {
+    const p = JSON.parse(
+      await readFile(sessionStateFile(sid, verificationKey(taskId)), 'utf8'),
+    ) as {
+      passed?: unknown;
+    };
+    return typeof p.passed === 'boolean' ? p.passed : null;
+  } catch {
+    return null; // never-run / unreadable / malformed
+  }
+}
+
+// scope-1 (T-deploy-commit-gate §2.1) — the DETERMINISTIC project-SUITE record, mirroring the verifyCommand
+// record above. DEPLOY's mandatory floor is the whole pre-push suite (lint+typecheck+build+test+format:check);
+// like verifyCommand it is EXPENSIVE, so the AGENT runs it in the deploy procedure and a PostToolUse reaction
+// (v2_supply) records its REAL exit code HERE — `deployClean` READS this record and NEVER runs the suite in the
+// hot `buildGuardCtx` path. The verifyCommand is now ADDITIVE on top of this floor (deploy_evidence).
+const suiteKey = (taskId: string): string => `fullstack-flow-suite-${taskId}`;
+
+/** Record the deterministic result of the agent's project-suite run (its real exit code) for the task. */
+export async function recordSuite(sid: string, taskId: string, passed: boolean): Promise<void> {
+  await atomicWriteFile(sessionStateFile(sid, suiteKey(taskId)), JSON.stringify({ passed }));
+}
+
+/** The recorded suite result, or `null` when none/unreadable (the caller decides skip-vs-fail-closed). */
+export async function readSuite(sid: string, taskId: string): Promise<boolean | null> {
+  try {
+    const p = JSON.parse(await readFile(sessionStateFile(sid, suiteKey(taskId)), 'utf8')) as {
       passed?: unknown;
     };
     return typeof p.passed === 'boolean' ? p.passed : null;
@@ -57,7 +83,9 @@ const bugfixRoundsKey = (taskId: string): string => `fullstack-flow-bugfix-round
 /** The recorded bug-fix round count for the task (0 when none/unreadable). */
 export async function readBugfixRounds(sid: string, taskId: string): Promise<number> {
   try {
-    const p = JSON.parse(await readFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), 'utf8')) as {
+    const p = JSON.parse(
+      await readFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), 'utf8'),
+    ) as {
       rounds?: unknown;
     };
     return typeof p.rounds === 'number' && Number.isFinite(p.rounds) ? p.rounds : 0;
@@ -66,18 +94,62 @@ export async function readBugfixRounds(sid: string, taskId: string): Promise<num
   }
 }
 
-/** Increment the bug-fix round count (called on each bugs_found deploy→author transition); returns the new count. */
+/** Increment the bug-fix round count (scope-2: bumped on each RED suite re-run — the uniform DEPLOY-local /
+ *  redesign round driver); returns the new count. Bounds the fix loop → the cap flips deploy.bugfix_exhausted. */
 export async function bumpBugfixRounds(sid: string, taskId: string): Promise<number> {
   const next = (await readBugfixRounds(sid, taskId)) + 1;
-  await atomicWriteFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), JSON.stringify({ rounds: next }));
+  await atomicWriteFile(
+    sessionStateFile(sid, bugfixRoundsKey(taskId)),
+    JSON.stringify({ rounds: next }),
+  );
   return next;
 }
 
 /** Reset the bug-fix round count (on a clean verification or when the item leaves the flow). Best-effort. */
 export async function resetBugfixRounds(sid: string, taskId: string): Promise<void> {
   try {
-    await atomicWriteFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), JSON.stringify({ rounds: 0 }));
+    await atomicWriteFile(
+      sessionStateFile(sid, bugfixRoundsKey(taskId)),
+      JSON.stringify({ rounds: 0 }),
+    );
   } catch {
     /* best-effort: a stale count at worst escalates one round early — never a correctness hole */
   }
+}
+
+// scope-2 (T-deploy-commit-gate §5.1) — the DEPLOY-local fix loop's ESCAPE HATCH: the durable per-task
+// "this red genuinely needs re-authoring" signal. The `verify` decision routes red → DEPLOY-LOCAL fix by
+// DEFAULT (the common case: lint/format/type/test/build — fixed in place); it kicks back to AUTHOR ONLY when
+// this flag is set, so a mechanical failure never routes through AUTHOR. It is AGENT-INTENT (set by the
+// operator/lap via `opensquid redesign <taskId>` when the deploy procedure judges the fix needs design rework),
+// NOT a reaction — mirroring `accept` (a durable human/agent signal), distinct from the deterministic
+// suite/verify reaction records above. FAIL-CLOSED to false (unset/unreadable → not-redesign → DEPLOY-local),
+// which IS the narrowing the design wants: default local, escalate only on an explicit signal. Reset on a clean
+// verify (verify→accept) so a re-authored, now-green item does not re-escalate.
+const needsRedesignKey = (taskId: string): string => `fullstack-flow-needs-redesign-${taskId}`;
+
+/** The recorded "needs design rework" flag for the task (false when unset/unreadable → DEPLOY-local). */
+export async function readNeedsRedesign(sid: string, taskId: string): Promise<boolean> {
+  try {
+    const p = JSON.parse(
+      await readFile(sessionStateFile(sid, needsRedesignKey(taskId)), 'utf8'),
+    ) as {
+      needed?: unknown;
+    };
+    return p.needed === true;
+  } catch {
+    return false; // unset / unreadable → not redesign → DEPLOY-local (the safe narrowing)
+  }
+}
+
+/** Set/clear the "needs design rework" flag for the task (the escape hatch to AUTHOR). Best-effort on clear. */
+export async function recordNeedsRedesign(
+  sid: string,
+  taskId: string,
+  needed: boolean,
+): Promise<void> {
+  await atomicWriteFile(
+    sessionStateFile(sid, needsRedesignKey(taskId)),
+    JSON.stringify({ needed }),
+  );
 }

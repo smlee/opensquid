@@ -252,6 +252,32 @@ describe('active-task signal (AP.2)', () => {
     expect(await readActiveTask('sid-bad')).toBeNull();
   });
 
+  // scope-4 (deploy-commit-gate §4) — the headless-lap item fallback (injected, never ambient env).
+  it('resolves the lap item when no on-disk signal AND lapItemId is supplied (id === taskId)', async () => {
+    const t = await readActiveTask('sid-lap-none', 'wg-a32d43367f52');
+    expect(t?.id).toBe('wg-a32d43367f52');
+    expect(t?.taskId).toBe('wg-a32d43367f52'); // every keying path (gate.active.id, readActiveTaskId) agrees
+    expect(t?.subject).toBe('wg-a32d43367f52');
+    expect(typeof t?.started_at).toBe('string');
+  });
+
+  it('falls back to the lap item even on malformed JSON', async () => {
+    const path = activeTaskFile('sid-lap-bad');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, '{ not json', 'utf8');
+    expect((await readActiveTask('sid-lap-bad', 'wg-x'))?.id).toBe('wg-x');
+  });
+
+  it('a REAL on-disk signal WINS over the lap item fallback', async () => {
+    await writeActiveTask('sid-lap-file', full);
+    expect(await readActiveTask('sid-lap-file', 'wg-ignored')).toEqual(full);
+  });
+
+  it('blank/whitespace lapItemId is treated as absent → null (no fallback)', async () => {
+    expect(await readActiveTask('sid-lap-blank', '   ')).toBeNull();
+    expect(await readActiveTask('sid-lap-undef', undefined)).toBeNull();
+  });
+
   it('returns null when a required field is missing', async () => {
     const path = activeTaskFile('sid-partial');
     await mkdir(dirname(path), { recursive: true });

@@ -17,21 +17,28 @@
  *
  * Spec: docs/tasks/T-v2-track2-discipline.md T2.8.
  */
-import { readActiveDeployReversible, readActiveVerifyCommand } from '../../packs/discovery.js';
+import {
+  readActiveDeployReversible,
+  readActiveVerifyCommand,
+  readActiveVerifySuite,
+} from '../../packs/discovery.js';
 import { resolveProjectScopeRoot } from '../paths.js';
 import { readActiveTask, readSessionCwd } from '../session_state.js';
 
 import { readAcceptance } from './acceptance.js';
-import { readVerification } from './verification.js';
+import { readSuite, readVerification } from './verification.js';
 
 export interface DeployEvidence {
   capabilityOk: boolean;
   accepted: boolean;
   /**
-   * DBL.1 — the VERIFY decision's facet: the configured verification (verifyCommand) passed. The `verify`
-   * decision routes clean→ACCEPT / bugs→AUTHOR. SKIP semantics (mirroring `capabilityOk`): when NO verification
-   * is configured the result reader returns `null` → `deployClean:true` (an unconfigured project ships as today).
-   * FAIL-CLOSED once configured (no record / throw → false → the bug-fix loop; never ship an unverified build).
+   * scope-1 (T-deploy-commit-gate §2.1) — the VERIFY facet, now `suiteGreen && (verifyCommand green OR
+   * unconfigured)`. The full project SUITE (lint+typecheck+build+test+format:check) is DEPLOY's MANDATORY FLOOR;
+   * `verifyCommand` (e2e/smoke) is ADDITIVE on top. The SKIP hole is CLOSED: an unconfigured `verifyCommand` no
+   * longer yields `deployClean:true` on a red suite — once a project DECLARES a verification suite the floor
+   * FAILS CLOSED (no suite record / a red suite → not clean → the DEPLOY-local fix-loop). A LEGACY project that
+   * declares NEITHER a suite NOR a verifyCommand still ships as today (both readers null → clean). The `verify`
+   * decision routes clean→ACCEPT / red→DEPLOY-local fix (scope-2).
    */
   deployClean: boolean;
   /**
@@ -60,6 +67,14 @@ export interface DeployEvidenceDeps {
    * verifyCommand. DBL.1b binds the deterministic record (the agent's verify-run exit code); today: `null`.
    */
   verificationResult(sessionId: string): Promise<boolean | null>;
+  /**
+   * scope-1 (T-deploy-commit-gate §2.1) — the recorded project-SUITE result for the session. `null` ⇒ NO
+   * verification suite DECLARED for the project (`verifySuite` absent) → the floor is SKIPPED (legacy project).
+   * A boolean ⇒ the recorded pass/fail of the declared suite's real exit code. FAIL-CLOSED once declared: a
+   * configured-but-unrecorded suite ⇒ `false` (run the suite first), never a silent pass. Cheap (file reads
+   * only — the AGENT runs the suite in the deploy procedure; this NEVER runs it in the hot ctx path).
+   */
+  suiteResult(sessionId: string): Promise<boolean | null>;
   /**
    * REVERSIBLE-DEPLOY — whether this project's deploy is declared reversible in `.opensquid/active.json`.
    * FAIL-CLOSED default: absent / unreadable / false ⇒ `false` ⇒ human gate holds.
@@ -93,6 +108,20 @@ export const defaultDeployEvidenceDeps: DeployEvidenceDeps = {
     const taskId = t === null ? null : (t.taskId ?? t.id);
     if (taskId === null) return false; // configured but no active task → fail-closed
     return (await readVerification(sessionId, taskId)) ?? false; // recorded pass/fail; no record → fail-closed
+  },
+  // scope-1 — resolve the project's DECLARED verification SUITE (verifySuite); UNDECLARED → null (SKIP → the
+  // floor is off, a legacy project ships as today). DECLARED → the recorded suite result (the agent's suite
+  // exit code, verification.ts); no active task or no record yet → false (FAIL-CLOSED: run the suite first, the
+  // SKIP hole is closed). Cheap (file reads only — never runs the suite here; the deploy procedure does).
+  async suiteResult(sessionId) {
+    const cwd = await readSessionCwd(sessionId);
+    if (cwd === null) return null;
+    const suite = await readActiveVerifySuite(await resolveProjectScopeRoot(cwd));
+    if (suite === null) return null; // no suite declared → skip → floor off (legacy project)
+    const t = await readActiveTask(sessionId);
+    const taskId = t === null ? null : (t.taskId ?? t.id);
+    if (taskId === null) return false; // declared but no active task → fail-closed
+    return (await readSuite(sessionId, taskId)) ?? false; // recorded pass/fail; no record → fail-closed
   },
   // REVERSIBLE-DEPLOY — read `reversible` from the project's active.json. FAIL-CLOSED: absent/false/unreadable
   // → false → irreversible → human gate holds.
@@ -131,10 +160,15 @@ export async function deployEvidenceForSession(
   }
   let deployClean = true;
   try {
-    const v = await deps.verificationResult(sessionId);
-    deployClean = v ?? true; // null = no verification configured → SKIP → clean (ships as today)
+    // scope-1 — the SUITE is the mandatory floor; `verifyCommand` is ADDITIVE on top:
+    //   deployClean = (suite ?? true) && (verify ?? true)
+    // A null suite = no suite DECLARED → skipped (legacy project); a null verify = no verifyCommand → additive
+    // absent → treated true. The SKIP hole is closed: once a suite is declared, a red/unrecorded suite → false.
+    const suite = await deps.suiteResult(sessionId);
+    const verify = await deps.verificationResult(sessionId);
+    deployClean = (suite ?? true) && (verify ?? true);
   } catch {
-    deployClean = false; // fail-closed: a throwing verification reader routes to the bug-fix loop
+    deployClean = false; // fail-closed: a throwing suite/verification reader routes to the bug-fix loop
   }
   let reversible = false;
   try {

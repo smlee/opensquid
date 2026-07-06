@@ -12,13 +12,21 @@ import { evaluateLane, extractWritePath, laneBlockMessage, matchesLane } from '.
 
 describe('matchesLane', () => {
   it('matches a repo-relative glob against a relative AND an absolute path (** anchor)', () => {
-    expect(matchesLane('docs/research/T-x-pre-research-2026.md', ['docs/research/*pre-research*'])).toBe(true);
-    expect(matchesLane('/tmp/repo/docs/research/T-x-pre-research-2026.md', ['docs/research/*pre-research*'])).toBe(true);
+    expect(
+      matchesLane('docs/research/T-x-pre-research-2026.md', ['docs/research/*pre-research*']),
+    ).toBe(true);
+    expect(
+      matchesLane('/tmp/repo/docs/research/T-x-pre-research-2026.md', [
+        'docs/research/*pre-research*',
+      ]),
+    ).toBe(true);
     expect(matchesLane('/repo/src/a/b.ts', ['src/**'])).toBe(true);
   });
 
   it('does NOT match a filename-scoped lane on a non-artifact file in the same dir', () => {
-    expect(matchesLane('docs/research/some-notes.md', ['docs/research/*pre-research*'])).toBe(false);
+    expect(matchesLane('docs/research/some-notes.md', ['docs/research/*pre-research*'])).toBe(
+      false,
+    );
   });
 
   it('does NOT match a path outside the lane', () => {
@@ -72,7 +80,11 @@ describe('evaluateLane — the five cases', () => {
 
   it('an IN-lane file-write → checked, NOT out of lane', () => {
     const v = evaluateLane(lane, 'Write', { file_path: 'docs/research/T-x-pre-research-2026.md' });
-    expect(v).toEqual({ checked: true, path: 'docs/research/T-x-pre-research-2026.md', outOfLane: false });
+    expect(v).toEqual({
+      checked: true,
+      path: 'docs/research/T-x-pre-research-2026.md',
+      outOfLane: false,
+    });
   });
 
   it('an OUT-of-lane file-write → checked + outOfLane (the blockable case)', () => {

@@ -11,15 +11,15 @@ the load-bearing dead-code / gate-removal claims were independently re-verified 
 
 ## Verdict table
 
-| # | Target | Verdict |
-|---|--------|---------|
-| 1 | blast-radius re-deadlock (`discovery.ts` + `harness_graph_sync.ts`) | **DRIFT** |
-| 2 | #16 prune cycle-gating (`session_end_prune_gate.ts` / `session-end.ts`) | **CLEAN** |
-| 3 | accessibility lens `serves:` (`accessibility/skill.yaml`) | **DRIFT** |
-| 4 | stale `depth≥3` evidence line (`v2_supply.ts`) | **CLEAN** (label removal) — audit premise corrected |
-| 5 | `THE_3X_100`→`THE_4X_100` rename (`stage_context.ts`) | **CLEAN** |
-| 6 | #26 workgraph↔harness sync (`harness_map/sync/graph_sync.ts`) | **DRIFT** |
-| 7 | orchestrator-guard opt-in (`bootstrap.ts` + `pre-tool-use.ts`) | **CLEAN** |
+| #   | Target                                                                  | Verdict                                             |
+| --- | ----------------------------------------------------------------------- | --------------------------------------------------- |
+| 1   | blast-radius re-deadlock (`discovery.ts` + `harness_graph_sync.ts`)     | **DRIFT**                                           |
+| 2   | #16 prune cycle-gating (`session_end_prune_gate.ts` / `session-end.ts`) | **CLEAN**                                           |
+| 3   | accessibility lens `serves:` (`accessibility/skill.yaml`)               | **DRIFT**                                           |
+| 4   | stale `depth≥3` evidence line (`v2_supply.ts`)                          | **CLEAN** (label removal) — audit premise corrected |
+| 5   | `THE_3X_100`→`THE_4X_100` rename (`stage_context.ts`)                   | **CLEAN**                                           |
+| 6   | #26 workgraph↔harness sync (`harness_map/sync/graph_sync.ts`)           | **DRIFT**                                           |
+| 7   | orchestrator-guard opt-in (`bootstrap.ts` + `pre-tool-use.ts`)          | **CLEAN**                                           |
 
 Plus a **meta-finding (M1)** surfaced by the audit: the AUTHOR gate's repo-global `manifest_complete` facet is
 currently RED (77 uncovered gated exports), several of which ARE the audit-target symbols — see §M1.
@@ -34,7 +34,7 @@ The ask conflated two concerns; audited separately. Concern (b) is CLEAN; concer
 
 - `hasActiveProjectPacks` (`src/packs/discovery.ts:355`, empty-`packs[]`→`false` at `:360`) has **zero
   production callers**: `grep -rn hasActiveProjectPacks src --include=*.ts` (excl. its own def + tests) returns
-  only a comment at `src/runtime/bootstrap.ts:534` stating it was *replaced* by the finer predicate.
+  only a comment at `src/runtime/bootstrap.ts:534` stating it was _replaced_ by the finer predicate.
 - The orchestrator guard actually resolves via **`projectDeclaresOrchestratorOnly`**
   (`src/runtime/bootstrap.ts:543`), called at `src/runtime/hooks/pre-tool-use.ts:268` behind the
   `OPENSQUID_AUTOMATION==='1'` gate. The deadlock IS prevented — by `bootstrap.ts:545`
@@ -55,11 +55,12 @@ The ask conflated two concerns; audited separately. Concern (b) is CLEAN; concer
 `isTaskTick` (`:40`) admits only TaskCreate/TaskUpdate. All 5 criteria hold: matches #26
 (`~/projects/loop/docs/reports/v2-scope-clarifications-2026-07-01.md:185`), one guard clause, double fail-open
 (`:138-140` + `pre-tool-use.ts:179`), tested (`harness_graph_sync.test.ts:39` non-task never reads;
-`:51` both Task* ticks fire).
+`:51` both Task\* ticks fire).
 
 ## Target 2 — #16 prune cycle-gating — **CLEAN**
 
 All 5 criteria hold with evidence:
+
 - **Design-match**: predicate is exactly "cycle complete AND committed" — `session_end_prune_gate.ts:91`
   (`openWorkCount(cwd) !== 0 → false`, cycle not complete) then `:92` (`gitClean(cwd)`), matching the corrected
   #16 (`v2-scope-clarifications-2026-07-01.md:140`, "activates only when the cwd project's work-graph cycle is
@@ -103,6 +104,7 @@ to the cross-cutting `coding` domain.
 ## Target 4 — stale `depth≥3` evidence line — **CLEAN** (label removal); audit premise corrected
 
 The label-removal refactor is CLEAN:
+
 - Module header `src/runtime/loop/v2_supply.ts:59-68` documents the deleted per-stage switch, replaced by the
   generic pack-declared `stageEvidence()` renderer (`:71`).
 - The only surviving `depth 4≥3` literal is a pure-renderer test fixture (`stage_report.test.ts:107,113`) —
@@ -114,8 +116,8 @@ The label-removal refactor is CLEAN:
 **Material premise correction (reported faithfully, not rubber-stamped):** the pre-research's audit obligation
 — "verify the `depth ≥ 3` bar is STILL ENFORCED by the SCOPE gate" — is **false for the live pack**. The live
 `scope_ready` gate carries **no depth term** (`packs/builtin/fullstack-flow/pack.yaml:66`), and `:65` states
-explicitly: *"GS1: `depth >= 3` removed — research depth is human-paced guidance (procedure), not a
-machine-enforced gate."* The `scope.depth >= 3` assertion at `v2_supply.test.ts:489` is a **synthetic** test
+explicitly: _"GS1: `depth >= 3` removed — research depth is human-paced guidance (procedure), not a
+machine-enforced gate."_ The `scope.depth >= 3` assertion at `v2_supply.test.ts:489` is a **synthetic** test
 pack, not the live gate; `scope_dwell.ts:8-9` keeps depth only as a soft dwell-nudge. Minor loose end:
 `v2_supply.ts:263` still sets `scope.depth` into ctx but no live gate/evidence expression consumes it — a dead
 ctx write left by the GS1 gate removal (a simplicity nit, not a functional defect).
@@ -143,8 +145,8 @@ The core mechanism is exemplary; one dead exported API with a false doc-claim dr
 - **RALPH.md note CONFIRMED**: `RALPH_MD` (`src/runtime/ralph/ralph_template.ts:18`) carries no #26 text; the
   real "outbound" is the `additionalContext` write-back nudge (`pre-tool-use.ts:353-354`), NOT a RALPH.md edit.
 - **DRIFT finding**: `isHarnessOwnedBody` (`harness_sync.ts:62`) has **zero consumers** (`grep` returns only its
-  def + a self-referential doc comment at `:56`). Its header claims *"The ralph loop uses this to drive the
-  SYNCED task-list mirror items first"* — **that consumer does not exist**; the provenance stamp is written
+  def + a self-referential doc comment at `:56`). Its header claims _"The ralph loop uses this to drive the
+  SYNCED task-list mirror items first"_ — **that consumer does not exist**; the provenance stamp is written
   (`:67`) but never read back. Failing criteria: **#2 simplicity** (exported dead code / speculative
   generality), **#3 no-invention** (an exported read-side API documenting an unbuilt ralph consumer = scope the
   design did not deliver), **#5 tested** (the read path + "drive-synced-first" behavior are untested +
@@ -163,6 +165,7 @@ Ask-naming note: `discovery.ts readOrchestratorOnly` does not exist; the real re
 `projectDeclaresOrchestratorOnly` (`src/runtime/bootstrap.ts:543`) — imprecision in the ask, not code drift.
 
 All 5 criteria hold:
+
 - **Design-match**: guard is a project-selected pack discipline — activation reads
   `loaded.pack.discipline?.orchestrator_only === true` (`bootstrap.ts:549`), declared by
   `packs/builtin/fullstack-flow/pack.yaml:45`; fires only under `OPENSQUID_AUTOMATION==='1'`

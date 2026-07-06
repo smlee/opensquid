@@ -116,11 +116,7 @@ import { loadPack } from '../packs/loader.js';
 import { createBackend } from '../rag/backend_factory.js';
 import { resolveBackendConfig } from '../rag/config.js';
 
-import {
-  resolveBuiltinScopeRoot,
-  resolveProjectScopeRoot,
-  resolveUserScopeRoot,
-} from './paths.js';
+import { resolveBuiltinScopeRoot, resolveProjectScopeRoot, resolveUserScopeRoot } from './paths.js';
 
 import type { RagBackend } from '../rag/types.js';
 import type { Pack } from './types.js';
@@ -425,7 +421,12 @@ const realPacksPromise: Promise<Pack[]> = (async () => {
     // project → user → builtin (userScope + builtinRoot threaded to loadActiveEntry). User scope is a
     // SOURCE for opt-in names that live only there (e.g. `sangmin-personal-rules`), NOT an
     // auto-enforcer — an unlisted user pack is never loaded, so this does NOT reintroduce the union.
-    const project = await discoverActivePacks(projectRoot, ctx, builtinRoot, resolveUserScopeRoot());
+    const project = await discoverActivePacks(
+      projectRoot,
+      ctx,
+      builtinRoot,
+      resolveUserScopeRoot(),
+    );
     // Dedupe by name (a name listed twice in one active.json loads once) then scope-sort.
     return sortPacksByScope(dedupePacksByName(project));
   } catch (e) {

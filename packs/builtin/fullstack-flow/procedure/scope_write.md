@@ -5,6 +5,7 @@ SCOPE_WRITE is automated: write the formal pre-research artifact that captures t
 The user already confirmed the scope — do not re-confirm or re-research; just write the artifact.
 
 ## Do
+
 - Write the pre-research artifact to `docs/research/<track>-pre-research-<date>.md`.
 - Every claim must be cited (`file:line` / memory / the user's words) — no bare assertions.
 - Flag any residual uncertainty as `- [ ] OPEN QUESTION: …` then resolve it before exiting.
@@ -13,6 +14,7 @@ The user already confirmed the scope — do not re-confirm or re-research; just 
 - Exit: `RALPH-EXIT: {"kind":"SHIPPED","stage":"plan"}`
 
 ## Gate to advance (scope_write → plan): `scope_write_ready`
+
 Passes when the pre-research write is: `anchors_ok` (every scoped element traces to the captured ask)
 ∧ `!open_question` (no unchecked `- [ ] OPEN QUESTION` remains in the artifact)
 ∧ `contains(audit.scope, "VERDICT: GUESS_FREE")` (the content-audit judged the artifact guess-free).

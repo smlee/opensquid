@@ -14,7 +14,9 @@
  */
 
 /** A node tree per axis: each key is a node; its value is the sub-tree (`{}` = a leaf). Dotted paths address it. */
-export type NodeTree = { [node: string]: NodeTree };
+export interface NodeTree {
+  [node: string]: NodeTree;
+}
 
 /**
  * The canonical dictionary (seeded from docs/design/pack-taxonomy.md §"Canonical dictionary"). Each axis is its

@@ -74,9 +74,10 @@ describe('extractScope (T2.4)', () => {
 
   it('captures the DERIVED reason from `[needs: M — <reason>]`', async () => {
     const p = await writeArtifact(
-      ['1. Root [ask: "root"]', '2. Leaf [ask: "leaf"] [needs: 1 — Leaf consumes Root output]'].join(
-        '\n',
-      ),
+      [
+        '1. Root [ask: "root"]',
+        '2. Leaf [ask: "leaf"] [needs: 1 — Leaf consumes Root output]',
+      ].join('\n'),
     );
     const ext = await extractScope(p);
     expect(ext?.deps).toEqual([

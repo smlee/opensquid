@@ -63,7 +63,7 @@ describe('resolveAndPublishLoopProject → lap agreement', () => {
     expect(lapProject).not.toBe('legacy-global');
   });
 
-  it('WITHOUT the published env the lap degrades to the empty legacy-global board (the bug)', async () => {
+  it('WITHOUT the published env the lap degrades to the empty legacy-global board (the bug)', () => {
     // Simulate pre-fix: the loop did not publish the env.
     delete process.env.OPENSQUID_PROJECT_UUID;
     const lapProject = resolveWgNamespace(null, resolveProjectUuidFromEnv());

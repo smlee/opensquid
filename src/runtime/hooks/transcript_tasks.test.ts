@@ -263,7 +263,12 @@ describe('readAllTasksFromTranscript (#26 — the full harness projection the wo
       update('16', 'in_progress'),
     ]);
     expect(await readAllTasksFromTranscript(p)).toEqual([
-      { id: '16', subject: 'Task A', status: 'in_progress', metadata: { taskId: 'A', spec: '/abs/a.md' } },
+      {
+        id: '16',
+        subject: 'Task A',
+        status: 'in_progress',
+        metadata: { taskId: 'A', spec: '/abs/a.md' },
+      },
     ]);
   });
 
