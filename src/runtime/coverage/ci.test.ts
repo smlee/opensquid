@@ -33,6 +33,11 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     expect(byId['R-HANDOFF-DEDUP']).toBe('met'); // handoff key-drift + double-send dedup
     expect(byId['R-FAILURE-REPORT']).toBe('met'); // failure_report.ts (§5.4b — report WHY on any fail)
     expect(byId['R-FOLLOW-REMINDER']).toBe('met'); // follow_reminder.ts (§5.4c — anti-drift nudge)
-    expect(a.results.length).toBe(13); // 4 original seeds + 7 V2-ENF.2 + 2 T-project-local-state (PLS.1)
+    // wg-fecabb8ff29f (auto-trigger loop on scope-exit) — 3 new behavioral exports, each MET via its passing
+    // proof-test (loop_autospawn.test.ts); the data-shape siblings are allowlisted (no orphan drift).
+    expect(byId['R-LOOP-AUTOSPAWN']).toBe('met'); // ensureLoopRunning (idempotent/single-flight/fail-open)
+    expect(byId['R-LOOP-STATUS']).toBe('met'); // loopStatus (project-local pidfile liveness)
+    expect(byId['R-LOOP-START']).toBe('met'); // startLoop (detached background spawn)
+    expect(a.results.length).toBe(16); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn (ATL.4)
   }, 30_000);
 });

@@ -369,4 +369,25 @@ requirements:
     wg: wg-6a079c496944
     assert: { kind: reachable, symbol: resolveLocalStoreDir, from: [pre-tool-use] }
     proof: 'src/runtime/paths.test.ts'
+  # wg-fecabb8ff29f (auto-trigger loop on scope-exit) — the loop auto-starts on the human scope→scope_write
+  # advance. One reachable requirement per new BEHAVIORAL export; the proof-test is the authority (the static
+  # `from` hint is advisory — these surface through the scope-exit checkpoint-writer path, not a hook builder,
+  # so a negative static pre-filter does not veto a passing proof). Data-shape exports (loopPidPath/loopLockPath
+  # path builders + LoopStatus/LoopAutoSpawnResult/EnsureLoopRunningDeps types + the resolveLoopEntrypoint seam)
+  # are baselined in the allowlist, per the chatDaemon*Path / resolveCliEntrypoint / *Deps precedent.
+  - id: R-LOOP-AUTOSPAWN
+    intent: 'the loop auto-starts on scope-exit — idempotent, single-flight, fail-open (ask BUILD §2/§3/§4)'
+    wg: wg-fecabb8ff29f
+    assert: { kind: reachable, symbol: ensureLoopRunning, from: [post-tool-use] }
+    proof: 'src/runtime/ralph/loop_autospawn.test.ts'
+  - id: R-LOOP-STATUS
+    intent: 'project-local loop liveness (pidfile + kill -0) — the idempotency probe (ask BUILD §2)'
+    wg: wg-fecabb8ff29f
+    assert: { kind: reachable, symbol: loopStatus, from: [post-tool-use] }
+    proof: 'src/runtime/ralph/loop_autospawn.test.ts'
+  - id: R-LOOP-START
+    intent: 'detached background spawn of `dist/cli.js loop`, waiting for the worker pidfile (ask BUILD §2)'
+    wg: wg-fecabb8ff29f
+    assert: { kind: reachable, symbol: startLoop, from: [post-tool-use] }
+    proof: 'src/runtime/ralph/loop_autospawn.test.ts'
 ```

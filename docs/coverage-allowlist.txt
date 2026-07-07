@@ -2111,3 +2111,15 @@ renderItem
 renderStatusLine
 setLoopPhase
 withLoopDb
+# --- baseline maintenance (wg-fecabb8ff29f, CODE, 2026-07-07): the DATA-shape / seam exports of the loop
+# autospawn (T-auto-trigger-loop-on-scope-exit). The BEHAVIORAL exports (ensureLoopRunning/loopStatus/startLoop)
+# carry reachable requirements in ARCHITECTURE.md §10; these are pure `join`-string path builders, the injected
+# LoopStatus/LoopAutoSpawnResult/EnsureLoopRunningDeps type shapes, and the resolveLoopEntrypoint test seam —
+# the same class the chat-daemon precedent allowlists (chatDaemon*Path / resolveCliEntrypoint / EnsureChatDaemonDeps
+# / AutoSpawnResult / DaemonStatus). Data-shape, not a live path — no covering requirement. ---
+EnsureLoopRunningDeps
+LoopAutoSpawnResult
+LoopStatus
+loopLockPath
+loopPidPath
+resolveLoopEntrypoint

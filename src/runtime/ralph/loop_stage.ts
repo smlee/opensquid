@@ -35,6 +35,12 @@ import { resolveLocalStoreDir } from '../paths.js';
 import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 import { resolveCheckpointKey } from '../loop/checkpoint_key.js';
+import { ensureLoopRunning } from './loop_autospawn.js';
+
+/** The AUTOMATED stage an item advances INTO on the human scope-exit (SCOPE→scope_write). Reaching this stage
+ *  makes the item automation-eligible (`scopeGate` → 'drive'), so the scope-3 trigger auto-starts a loop to
+ *  drive it — the ONE stage literal the policy adds to this writer (consistent with `SCOPE_STAGE`). */
+const SCOPE_WRITE_STAGE = 'scope_write';
 
 /** The interactive/human-only stage. A checkpoint parked here is BY DEFINITION out of automation — the scope
  *  gate never drives it; it awaits interactive human scope, which advances the checkpoint past `scope` and
@@ -116,6 +122,22 @@ export async function upsertTaskStage(
     else await store.updateTaskStage(wgId, stage, nowMs);
     if (artifact !== null) await store.setTaskArtifacts(wgId, [artifact], nowMs);
   });
+  // POLICY (ATL.3): the human-granted scope-exit reaches scope_write HERE — the SOLE writer both scope-exit
+  // paths funnel through (the automated `v2_supply` lap AND the interactive `/scope-done` handoff, which
+  // imports this fn directly and bypasses v2_supply). Auto-start a loop to drive the now-eligible item, AFTER
+  // the durable write above (so the item is at scope_write on disk before the loop it starts claims it).
+  // FAIL-OPEN: `ensureLoopRunning` never throws (loop_autospawn.ts) AND this try/catch is belt-and-suspenders
+  // so a synchronous import/resolve fault also cannot break the scope-exit / the checkpoint just written — the
+  // ask's hard invariant ("a trigger failure never blocks scope-exit").
+  if (stage === SCOPE_WRITE_STAGE) {
+    try {
+      await ensureLoopRunning(process.cwd());
+    } catch (err) {
+      process.stderr.write(
+        `[loop-autospawn] scope_write trigger failed (ignored): ${String(err)}\n`,
+      );
+    }
+  }
 }
 
 /** No-op (see module header): a closed item leaves `listReady`; a lingering checkpoint row is harmless. */

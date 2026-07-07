@@ -7,13 +7,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createClient } from '@libsql/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 import { recordStageMetric, readMetrics } from '../loop/loop_metrics.js';
-import { scopeGate, readLoopStage, clearLoopStage, withTaskCheckpointStore } from './loop_stage.js';
+import {
+  scopeGate,
+  readLoopStage,
+  clearLoopStage,
+  withTaskCheckpointStore,
+  upsertTaskStage,
+} from './loop_stage.js';
+import { ensureLoopRunning } from './loop_autospawn.js';
 
 import type { Client } from '@libsql/client';
+
+// ATL.3/ATL.4 — mock the loop-autospawn trigger so the scope-3 wire-test never spawns a real loop; the spy
+// lets us assert fire-once on scope_write / no-fire otherwise / fail-open. The other describes never call it.
+vi.mock('./loop_autospawn.js', () => ({
+  ensureLoopRunning: vi.fn().mockResolvedValue({ status: 'spawned', pid: 1 }),
+}));
+const ensureLoopRunningMock = vi.mocked(ensureLoopRunning);
 
 const yes = (): Promise<boolean> => Promise.resolve(true);
 const no = (): Promise<boolean> => Promise.resolve(false);
@@ -155,5 +169,50 @@ describe('loop_stage — project-LOCAL opensquid.db opener (PLS.3 table split; W
     // One db file, in the LOCAL store — nothing leaked to the global home.
     expect(existsSync(join(projectRoot, '.opensquid', 'opensquid.db'))).toBe(true);
     expect(existsSync(join(globalHome, 'opensquid.db'))).toBe(false);
+  });
+});
+
+describe('loop_stage — scope-3 loop-autospawn trigger (ATL.3: fire on scope_write, fail-open)', () => {
+  // upsertTaskStage writes the durable checkpoint through the LOCAL opener, then fires ensureLoopRunning ONLY on
+  // scope_write. Same OPENSQUID_PROJECT_ROOT seam as above so the write lands in a temp store, never the repo db.
+  let projectRoot: string;
+  let priorRoot: string | undefined;
+  let priorHome: string | undefined;
+  beforeEach(() => {
+    priorRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    priorHome = process.env.OPENSQUID_HOME;
+    projectRoot = mkdtempSync(join(tmpdir(), 'osq-atl3-'));
+    mkdirSync(join(projectRoot, '.opensquid'), { recursive: true });
+    process.env.OPENSQUID_PROJECT_ROOT = projectRoot;
+    process.env.OPENSQUID_HOME = mkdtempSync(join(tmpdir(), 'osq-atl3-home-'));
+    ensureLoopRunningMock.mockClear();
+    ensureLoopRunningMock.mockResolvedValue({ status: 'spawned', pid: 1 });
+  });
+  afterEach(() => {
+    if (priorRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+    else process.env.OPENSQUID_PROJECT_ROOT = priorRoot;
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    rmSync(projectRoot, { recursive: true, force: true });
+  });
+
+  it('fires the loop trigger exactly once on a scope_write advance', async () => {
+    await upsertTaskStage('wg-t', 'scope_write', 1);
+    expect(ensureLoopRunningMock).toHaveBeenCalledTimes(1);
+    // it targets the current project (process.cwd()) — the same project the checkpoint was written to.
+    expect(ensureLoopRunningMock).toHaveBeenCalledWith(process.cwd());
+    expect(await readLoopStage('wg-t')).toBe('scope_write'); // the durable write still landed
+  });
+
+  it('does NOT fire on a non-scope_write stage (the guard)', async () => {
+    await upsertTaskStage('wg-t2', 'plan', 1);
+    expect(ensureLoopRunningMock).not.toHaveBeenCalled();
+    expect(await readLoopStage('wg-t2')).toBe('plan');
+  });
+
+  it('a trigger throw NEVER breaks the checkpoint write (fail-open — the ask invariant)', async () => {
+    ensureLoopRunningMock.mockRejectedValueOnce(new Error('boom'));
+    await expect(upsertTaskStage('wg-t3', 'scope_write', 1)).resolves.toBeUndefined();
+    expect(await readLoopStage('wg-t3')).toBe('scope_write'); // the write survived the trigger fault
   });
 });

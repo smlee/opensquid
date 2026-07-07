@@ -394,6 +394,22 @@ export const chatDaemonPidPath = (): string => join(OPENSQUID_HOME(), 'chat-daem
 export const chatDaemonLogPath = (): string => join(OPENSQUID_HOME(), 'chat-daemon.log');
 
 // ---------------------------------------------------------------------------
+// Loop liveness paths (T-auto-trigger-loop-on-scope-exit, ATL.2) — PROJECT-LOCAL.
+//   - `loop.pid`         worker pid, written on boot + removed on every exit path (ralph.ts loop action).
+//   - `loop.spawn.lock`  single-flight spawn-lock so concurrent scope-exits don't race two loops.
+//
+// DELIBERATE DIVERGENCE from the `chatDaemon*Path` precedent (above): a loop drives ONE project's
+// PROJECT-LOCAL board (commit `a023159` — "project-local state"), so its liveness + single-flight lock must
+// live under the PROJECT store (`<root>/.opensquid/`, `root` = a `resolveLocalStoreDir` result), NOT the
+// machine-global `OPENSQUID_HOME`. A machine-global home would make two projects' loops collide (project B's
+// loop would look "already running" to project A). `root` is passed in (the resolved store dir) so these stay
+// pure `join`-string builders with no env dependency — the chat-daemon `*Path` baseline convention.
+// ---------------------------------------------------------------------------
+
+export const loopPidPath = (root: string): string => join(root, 'loop.pid');
+export const loopLockPath = (root: string): string => join(root, 'loop.spawn.lock');
+
+// ---------------------------------------------------------------------------
 // Per-project chat inbox. The chat-daemon appends one inbound message per line
 // to `<home>/projects/<uuid>/inbox/<platform>.jsonl` (the on-disk contract the
 // agent_bridge + `chat watch` both consume). Honors OPENSQUID_HOME so tests

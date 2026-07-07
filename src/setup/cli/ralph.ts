@@ -11,10 +11,11 @@
  * Imports from: commander, node:net, ../../runtime/paths.js, ../../runtime/spawn_lifecycle.js,
  * ../../runtime/ralph/*, ../../workgraph/*, ../wizard/ralph_writer.js.
  */
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { Command } from 'commander';
-import { OPENSQUID_HOME, resolveLocalStoreDir } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, loopPidPath, resolveLocalStoreDir } from '../../runtime/paths.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import {
   loadChannelsConfig,
@@ -259,6 +260,29 @@ export function registerRalph(program: Command): Command {
       const wg = await openRalphWorkGraph();
       const sid = process.env.CLAUDE_SESSION_ID ?? '<cli>';
       const root = process.cwd();
+      // ATL.2 — the loop's PROJECT-LOCAL liveness surface: write our own pid FIRST (so ensureLoopRunning's
+      // waitForPidfile sees it fast on the next scope-exit), remove it on EVERY exit path. Placed AFTER the
+      // config guard (a worker that exits early on missing config must not leave a stale pidfile). The pidfile
+      // lives under the project store (resolveLocalStoreDir(root)) — per-project, not OPENSQUID_HOME.
+      const storeDir = await resolveLocalStoreDir(root);
+      const loopPidFile = loopPidPath(storeDir);
+      await mkdir(dirname(loopPidFile), { recursive: true });
+      await writeFile(loopPidFile, `${process.pid}\n`);
+      const removeLoopPid = (): void => {
+        try {
+          rmSync(loopPidFile, { force: true });
+        } catch {
+          /* race-tolerant — a concurrent reclaim may have unlinked it already */
+        }
+      };
+      process.once('SIGINT', () => {
+        removeLoopPid();
+        process.exit(130);
+      });
+      process.once('SIGTERM', () => {
+        removeLoopPid();
+        process.exit(143);
+      });
       // PSL.3 — drive a fullstack-flow item per-stage (one fresh-context lap per automated stage); any other
       // pack (v1 coding-flow) keeps the open-ended per-item lap. Detected from the project's active discipline.
       const pack = await activeDisciplinePack(root);
@@ -280,36 +304,42 @@ export function registerRalph(program: Command): Command {
               scopeGate: (item: Issue): Promise<'drive' | 'hold'> => scopeGate(item.id),
             }
           : undefined;
-      const result = await runRalphLoop(cfg, {
-        wg,
-        claimAudience,
-        runLap: makeSpawnLap(cfg, file),
-        escalate: await resolveLoopEscalator(root),
-        // Live play-by-play: one timestamped line per step (claim / stage lap / advance / ship / park / drain)
-        // so a detached `opensquid loop > loop.log` is watchable via `tail -f loop.log`.
-        narrate: (msg: string) =>
-          process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
-        ...(stageLoop === undefined ? {} : { stageLoop }),
-        // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
-        // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
-        onShipped: async (taskId) => {
-          const { next } = await onPhasesComplete(
-            sid,
-            root,
-            taskId,
-            {
-              listReadyIds: async () => (await wg.listReady()).map((i) => i.id),
-              listEdges: () => wg.listEdges(),
-            },
-            new Date().toISOString(),
-          );
-          process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
-        },
-        // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
-        // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.
-        recordMetric: recordStageMetric,
-      });
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      try {
+        const result = await runRalphLoop(cfg, {
+          wg,
+          claimAudience,
+          runLap: makeSpawnLap(cfg, file),
+          escalate: await resolveLoopEscalator(root),
+          // Live play-by-play: one timestamped line per step (claim / stage lap / advance / ship / park / drain)
+          // so a detached `opensquid loop > loop.log` is watchable via `tail -f loop.log`.
+          narrate: (msg: string) =>
+            process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
+          ...(stageLoop === undefined ? {} : { stageLoop }),
+          // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
+          // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
+          onShipped: async (taskId) => {
+            const { next } = await onPhasesComplete(
+              sid,
+              root,
+              taskId,
+              {
+                listReadyIds: async () => (await wg.listReady()).map((i) => i.id),
+                listEdges: () => wg.listEdges(),
+              },
+              new Date().toISOString(),
+            );
+            process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
+          },
+          // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
+          // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.
+          recordMetric: recordStageMetric,
+        });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } finally {
+        // BOARD_EMPTY exhaustion, budget stop, or a throw — the pidfile always goes, so the NEXT scope-exit
+        // re-triggers a fresh loop (the ask's "the next scope-exit re-triggers"), never a false already-running.
+        removeLoopPid();
+      }
     });
 
   loop
