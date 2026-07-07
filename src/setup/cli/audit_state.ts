@@ -21,6 +21,10 @@
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 
 export function defaultAuditDbPath(): string {
+  // SPLIT BOUNDARY (T-project-local-state PLS.3, pre-research §5): this reads the daemon's `audit_log` table, NOT
+  // the checkpoints — so it follows the daemon (GLOBAL), not the project-local checkpoint readers
+  // (`checkpoints.ts`/`trace.ts`). Do NOT repoint onto `resolveLocalStoreDir`: a local reader over the
+  // globally-written audit_log is the split-brain the design forbids. Only the checkpoint + loop TABLES moved.
   return `file:${OPENSQUID_HOME()}/opensquid.db`;
 }
 

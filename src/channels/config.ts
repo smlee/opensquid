@@ -176,30 +176,40 @@ async function overlayEnvTokensWithSources(
   const out: ChatConnectionsConfig = { ...base };
   const sources: ChatTokenSources = {};
 
-  // Telegram
-  const tg = await resolveToken('OPENSQUID_TELEGRAM_BOT_TOKEN', base.telegram?.bot_token);
-  if (tg.value) {
-    out.telegram = { ...(base.telegram ?? {}), bot_token: tg.value };
-    sources.telegram = tg.source;
-    if (tg.env_file_path) sources.env_file_path = tg.env_file_path;
+  // CONFIG IS AUTHORITATIVE: a platform is active ONLY if config DECLARES it (its key is present under
+  // `chat_connections`). An env-var / `.env` token is a CREDENTIAL for a platform config already stated — it can
+  // NEVER, on its own, activate a platform config did not declare. So an empty `chat_connections: {}` means "no
+  // chat", even when a stray token (e.g. a lingering `~/.opensquid/.env` entry) exists. We therefore only resolve
+  // a token for a platform PRESENT in `base` — an undeclared platform is never probed, so it cannot be resurrected.
+
+  // Telegram — only when declared
+  if (base.telegram) {
+    const tg = await resolveToken('OPENSQUID_TELEGRAM_BOT_TOKEN', base.telegram.bot_token);
+    if (tg.value) {
+      out.telegram = { ...base.telegram, bot_token: tg.value };
+      sources.telegram = tg.source;
+      if (tg.env_file_path) sources.env_file_path = tg.env_file_path;
+    }
   }
 
-  // Discord
-  const dc = await resolveToken('OPENSQUID_DISCORD_BOT_TOKEN', base.discord?.bot_token);
-  if (dc.value) {
-    out.discord = { ...(base.discord ?? {}), bot_token: dc.value };
-    sources.discord = dc.source;
-    if (dc.env_file_path && !sources.env_file_path) sources.env_file_path = dc.env_file_path;
+  // Discord — only when declared
+  if (base.discord) {
+    const dc = await resolveToken('OPENSQUID_DISCORD_BOT_TOKEN', base.discord.bot_token);
+    if (dc.value) {
+      out.discord = { ...base.discord, bot_token: dc.value };
+      sources.discord = dc.source;
+      if (dc.env_file_path && !sources.env_file_path) sources.env_file_path = dc.env_file_path;
+    }
   }
 
-  // Slack: needs both bot_token + app_token
-  const sb = await resolveToken('OPENSQUID_SLACK_BOT_TOKEN', base.slack?.bot_token);
-  const sa = await resolveToken('OPENSQUID_SLACK_APP_TOKEN', base.slack?.app_token);
-  if (sb.value || sa.value || base.slack) {
+  // Slack — only when declared (needs both bot_token + app_token)
+  if (base.slack) {
+    const sb = await resolveToken('OPENSQUID_SLACK_BOT_TOKEN', base.slack.bot_token);
+    const sa = await resolveToken('OPENSQUID_SLACK_APP_TOKEN', base.slack.app_token);
     out.slack = {
-      ...(base.slack ?? { bot_token: '', app_token: '' }),
-      bot_token: sb.value ?? base.slack?.bot_token ?? '',
-      app_token: sa.value ?? base.slack?.app_token ?? '',
+      ...base.slack,
+      bot_token: sb.value ?? base.slack.bot_token ?? '',
+      app_token: sa.value ?? base.slack.app_token ?? '',
     };
     sources.slack_bot = sb.source;
     sources.slack_app = sa.source;

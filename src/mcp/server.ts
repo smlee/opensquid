@@ -56,12 +56,13 @@ import { readGoalMap } from '../runtime/goal_map/goal_map.js';
 import { resolveMcpSessionId } from '../runtime/hooks/session_id.js';
 import {
   OPENSQUID_HOME,
+  resolveLocalStoreDir,
   resolveProjectMarker,
   resolveProjectUuidFromEnv,
 } from '../runtime/paths.js';
 import { readSessionCwd } from '../runtime/session_state.js';
 import { resolveActorId } from '../runtime/actor_id.js';
-import { bindProject, workGraphStore } from '../workgraph/store.js';
+import { workGraphStore } from '../workgraph/store.js';
 
 import type { RagBackend } from '../rag/types.js';
 
@@ -72,6 +73,11 @@ import { handleListDriftEvents } from './tools/list-drift-events.js';
 import { handleListPacks } from './tools/list-packs.js';
 import { handleListSkills } from './tools/list-skills.js';
 import { handleLogPhase, LogPhaseSchema, type LogPhaseArgs } from './tools/log_phase.js';
+import {
+  handleSetLoopPhase,
+  SetLoopPhaseSchema,
+  type SetLoopPhaseArgs,
+} from './tools/set_loop_phase.js';
 import { handleMemorize, MemorizeSchema, type MemorizeArgs } from './tools/memorize.js';
 import { handleSetGoal, SetGoalSchema, type SetGoalArgs } from './tools/set_goal.js';
 import { handleReadState } from './tools/read-state.js';
@@ -144,55 +150,39 @@ async function ragBackend(): Promise<RagBackend> {
 }
 
 /**
- * Lazy work-graph store singleton (T-WORKGRAPH-MCP). Promise-memoized so concurrent first-calls
- * await a single `init()` (one schema creation). Dedicated `~/.opensquid/workgraph.db` + per-op
- * git source under `store/issues`. T-WORKGRAPH-PROJECT-SCOPE: this is the ONE shared base store (one
- * client, one global Lamport clock) — handlers reach it through a per-project facade (`getWorkGraph`).
+ * Resolve the caller's PROJECT-LOCAL `.opensquid` store dir (T-project-local-state PLS.2): the session's
+ * cwd → nearest `.opensquid/` walking up (like `git` finds `.git`), falling back to the server's own cwd
+ * when there is no session cwd. There is no project UUID and no global partition — the store IS the project.
  */
-let workGraphPromise: Promise<WorkGraphStore> | null = null;
-function getWorkGraphBase(): Promise<WorkGraphStore> {
-  workGraphPromise ??= (async () => {
-    const store = workGraphStore({
-      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
-      actorId: await resolveActorId(), // WGD.1 — stamp the per-HOME replica id on ops
-    });
-    await store.init();
-    return store;
-  })();
-  return workGraphPromise;
-}
-
-/**
- * Resolve the workgraph project namespace SERVER-SIDE (T-WORKGRAPH-PROJECT-SCOPE) — same
- * session→cwd→marker chain as `resolveKanbanProject`, but DEGRADES a null at any step to
- * `'legacy-global'` (the `set_goal.ts:35` precedent, NOT the kanban throw): the read-heavy workgraph
- * must not break a marker-less session. The bucket equals the schema/replay DEFAULT, so a degraded
- * session sees exactly the legacy/un-scoped backlog.
- */
-async function resolveWgProject(): Promise<string> {
+async function resolveWgStoreDir(): Promise<string> {
   const session = await resolveMcpSessionId();
-  if (session === null) return 'legacy-global';
-  const cwd = await readSessionCwd(session);
-  const markerUuid = cwd === null ? null : ((await resolveProjectMarker(cwd))?.uuid ?? null);
-  return markerUuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';
+  const cwd = (session === null ? null : await readSessionCwd(session)) ?? process.cwd();
+  return resolveLocalStoreDir(cwd);
 }
 
 /**
- * The handler-facing work-graph accessor: resolves the caller's project and returns a per-project
- * {@link WorkGraphFacade} over the ONE shared base store. Facades are memoized per project (each is a
- * thin binding of `project` onto the shared store/client/clock). Handler call-sites are unchanged.
+ * The handler-facing work-graph accessor: resolves the caller's project-LOCAL store and returns it. Stores
+ * are promise-memoized per store dir (one `init()` per project db, amortized). A {@link WorkGraphStore} IS a
+ * {@link WorkGraphFacade}, so handler call-sites (project-less ops) are unchanged. Different sessions in
+ * different projects resolve different local stores; the same cwd always resolves the same one (no flip).
  */
-const wgFacades = new Map<string, WorkGraphFacade>();
+const wgStores = new Map<string, Promise<WorkGraphStore>>();
 async function getWorkGraph(): Promise<WorkGraphFacade> {
-  const base = await getWorkGraphBase();
-  const project = await resolveWgProject();
-  let facade = wgFacades.get(project);
-  if (facade === undefined) {
-    facade = bindProject(base, project);
-    wgFacades.set(project, facade);
+  const dir = await resolveWgStoreDir();
+  let store = wgStores.get(dir);
+  if (store === undefined) {
+    store = (async () => {
+      const s = workGraphStore({
+        dbUrl: `file:${join(dir, 'workgraph.db')}`,
+        sourceDir: join(dir, 'store', 'issues'),
+        actorId: await resolveActorId(), // WGD.1 — stamp the per-replica id on ops
+      });
+      await s.init();
+      return s;
+    })();
+    wgStores.set(dir, store);
   }
-  return facade;
+  return store;
 }
 
 /**
@@ -295,6 +285,10 @@ const ToolHandlers = {
   log_phase: {
     schema: LogPhaseSchema,
     handle: (args: LogPhaseArgs) => handleLogPhase(args).then((r) => JSON.stringify(r)),
+  },
+  set_loop_phase: {
+    schema: SetLoopPhaseSchema,
+    handle: (args: SetLoopPhaseArgs) => handleSetLoopPhase(args).then((r) => JSON.stringify(r)),
   },
   set_goal: {
     schema: SetGoalSchema,
@@ -401,6 +395,7 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   memorize: LOCAL_WRITE,
   store_lesson: LOCAL_WRITE,
   log_phase: LOCAL_WRITE,
+  set_loop_phase: LOCAL_WRITE,
   set_goal: LOCAL_WRITE,
   workgraph_create_issue: LOCAL_WRITE,
   workgraph_update_issue: LOCAL_WRITE,
@@ -438,6 +433,10 @@ const descriptions: Record<ToolName, string> = {
   log_phase:
     'Log a completed workflow phase (pre_research|learn|code|test|audit|post_research|fix) ' +
     'for the active task. Writes the engine ledger + the gate state; the commit gate unblocks once all 7 are logged.',
+  set_loop_phase:
+    'Emit the current phase WITHIN the active stage to the wg-keyed live-status feed (opensquid loop-status). ' +
+    'Generic: pass an opaque phase label (+ optional index/total). The pack calls this at each phase boundary; ' +
+    'distinct from log_phase (which drives the commit-gate ledger).',
   set_goal:
     'Declare/update the project GOAL (the single source of truth) that the per-slice worksheets ' +
     'anchor to — the anti-drift goal-map. Claims the goal-map for this session.',

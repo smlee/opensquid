@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { resolveActorId } from '../actor_id.js';
-import { OPENSQUID_HOME, resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
+import { resolveLocalStoreDir } from '../paths.js';
 
 import { workGraphStore } from '../../workgraph/store.js';
 
@@ -41,30 +41,20 @@ export interface PruneGateDeps {
   gitClean(cwd: string): Promise<boolean>;
 }
 
-/**
- * Resolve the work-graph project namespace for `cwd` — the same chain as the server's `resolveWgProject`
- * (marker uuid → env uuid → 'legacy-global'), but keyed off an explicit cwd (the hook has it directly).
- */
-async function resolveCwdWgProject(cwd: string): Promise<string> {
-  const markerUuid = (await resolveProjectMarker(cwd))?.uuid ?? null;
-  return markerUuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';
-}
-
 /** Default readers: the shipped work-graph store + a standard `git status --porcelain` clean check. */
 export const defaultPruneGateDeps: PruneGateDeps = {
   async openWorkCount(cwd) {
-    const project = await resolveCwdWgProject(cwd);
-    // The ONE shared base store (same db/source/actor wiring as the MCP server's getWorkGraphBase).
-    // No close(): the constructed libSQL client is reclaimed by the hook's process.exit (mirrors the
-    // retention backend in session-end.ts).
+    // T-project-local-state PLS.2: count THIS project's LOCAL work-graph (`<root>/.opensquid/workgraph.db`,
+    // resolved from cwd). No close(): the libSQL client is reclaimed by the hook's process.exit.
+    const dir = await resolveLocalStoreDir(cwd);
     const store = workGraphStore({
-      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+      dbUrl: `file:${join(dir, 'workgraph.db')}`,
+      sourceDir: join(dir, 'store', 'issues'),
       actorId: await resolveActorId(),
     });
     await store.init();
-    const open = await store.listIssues(project, { status: 'open' });
-    const inProgress = await store.listIssues(project, { status: 'in_progress' });
+    const open = await store.listIssues({ status: 'open' });
+    const inProgress = await store.listIssues({ status: 'in_progress' });
     return open.length + inProgress.length;
   },
   async gitClean(cwd) {

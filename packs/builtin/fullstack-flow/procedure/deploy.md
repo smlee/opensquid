@@ -65,6 +65,16 @@ git push                                        # the pre-push gate re-runs the 
   would sweep unrelated drive-by changes into the task commit).
 - A RED suite yields NO commit — the fix-loop (§2) owns it first. Commit is reached only from green.
 
+## Emit your phase to the live status feed
+
+At each step of the DEPLOY loop, emit the phase via the `set_loop_phase` MCP tool so the harness status line /
+Monitor shows where this item is (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
+
+- `set_loop_phase(phase: "verify", index: 1, total: 4)` while running the full suite (§1),
+- `set_loop_phase(phase: "fix", index: 2, total: 4)` while in the DEPLOY-LOCAL fix-loop (§2),
+- `set_loop_phase(phase: "commit", index: 3, total: 4)` while committing + pushing (§3),
+- `set_loop_phase(phase: "accept", index: 4, total: 4)` once surfaced for the human ACCEPT touchpoint (§4).
+
 ## 4. ACCEPT — the human touchpoint
 
 Once green + committed + pushed, the `verify` decision routes to ACCEPT. You CANNOT accept your own work —

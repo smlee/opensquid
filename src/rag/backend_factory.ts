@@ -183,6 +183,9 @@ export function libsqlQwen3WithLexicalFallback(opts: QwenWithFallbackOpts): RagB
  * always-on ingest hook (`runtime/hooks/stop_ingest.ts`) — one source of truth for the db path + Ollama URL.
  */
 export function defaultRagBackend(home: string): RagBackend {
+  // SPLIT BOUNDARY (T-project-local-state PLS.3, design §4 OUT): RAG/recall = memories STAY GLOBAL at
+  // `<home>/opensquid.db`. Only the checkpoint + loop TABLES moved project-local — this is a TABLE split, not
+  // a file move. Do NOT "consolidate" this onto `resolveLocalStoreDir`: that would relocate memories per-project.
   const dbUrl = `file:${join(home, 'opensquid.db')}`;
   const ollamaUrl = process.env.OPENSQUID_OLLAMA_URL ?? 'http://127.0.0.1:11434';
   return libsqlQwen3WithLexicalFallback({ dbUrl, ollamaUrl });

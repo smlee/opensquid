@@ -17,6 +17,7 @@ import type { Embedder } from '../../rag/embedders/types.js';
 import {
   buildExportList,
   isExcluded,
+  rebuildProjections,
   redactConfig,
   runExport,
   runImport,
@@ -27,6 +28,13 @@ import {
 let tmp: string;
 let srcHome: string;
 let dstHome: string;
+// PLS.5 — the workgraph is project-LOCAL now, so portability rebuilds the LOCAL board
+// (`<projRoot>/.opensquid/workgraph.db`). Every rebuild in this suite is pinned to a throwaway
+// project root via the `OPENSQUID_PROJECT_ROOT` test seam (paths.ts:resolveLocalStoreDir) so the
+// rebuild NEVER walks up into — and clobbers — the real repo's `.opensquid/workgraph.db`.
+let projRoot: string;
+let localStore: string;
+let savedProjRoot: string | undefined;
 const lines: string[] = [];
 const print = (l: string): void => void lines.push(l);
 
@@ -67,10 +75,18 @@ beforeEach(async () => {
   await mkdir(srcHome, { recursive: true });
   await mkdir(dstHome, { recursive: true });
   await seedTruthHome(srcHome);
+  // Pin the LOCAL workgraph store to a fresh, empty temp project root (start-fresh: no seed).
+  projRoot = join(tmp, 'proj');
+  localStore = join(projRoot, '.opensquid');
+  await mkdir(join(localStore, 'store', 'issues'), { recursive: true });
+  savedProjRoot = process.env.OPENSQUID_PROJECT_ROOT;
+  process.env.OPENSQUID_PROJECT_ROOT = projRoot;
   lines.length = 0;
 });
 
 afterEach(async () => {
+  if (savedProjRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+  else process.env.OPENSQUID_PROJECT_ROOT = savedProjRoot;
   await rm(tmp, { recursive: true, force: true });
 });
 
@@ -211,5 +227,39 @@ describe('rebuild failure', () => {
     const out = await runImport({ bundle, homeDir: dstHome, embedder: throwingEmbedder, print });
     expect(out.failed.some((f) => f.includes('re-run:'))).toBe(true);
     expect(existsSync(join(dstHome, 'memories', 'mem-1.md'))).toBe(true);
+  });
+});
+
+describe('PLS.5 — rebuild targets the project-LOCAL board (start-fresh, no global)', () => {
+  it('rebuilds the LOCAL <root>/.opensquid/workgraph.db, not the global homeDir board', async () => {
+    // A never-before-seen local store (empty store/issues, seeded in beforeEach).
+    const out = await rebuildProjections(dstHome, fakeEmbedder);
+    const wg = out.rebuilt.find((r) => r.startsWith('workgraph'));
+    // The rebuild opened the LOCAL board...
+    expect(existsSync(join(localStore, 'workgraph.db'))).toBe(true);
+    // ...and did NOT touch the global home board (deliberately abandoned under start-fresh).
+    expect(existsSync(join(dstHome, 'workgraph.db'))).toBe(false);
+    // Fresh first-run = an EMPTY board: 0 ops replayed, no legacy-global rows leak in.
+    expect(wg).toBe('workgraph (0 ops)');
+  });
+
+  it('a fresh local store yields an empty board even when the global home has op files', async () => {
+    // Put a legacy op file in the GLOBAL home store — it must NOT leak into the fresh local board.
+    await mkdir(join(dstHome, 'store', 'issues'), { recursive: true });
+    await writeFile(
+      join(dstHome, 'store', 'issues', 'op-legacy.json'),
+      JSON.stringify({
+        id: 'op-legacy',
+        issueId: 'wg-legacy',
+        lamport: 1,
+        type: 'create',
+        payload: { ts: '2020-01-01T00:00:00Z', title: 'legacy' },
+      }),
+      'utf8',
+    );
+    const out = await rebuildProjections(dstHome, fakeEmbedder);
+    // The LOCAL board (empty store/issues) rebuilt to 0 ops — the global op file is ignored.
+    expect(out.rebuilt.find((r) => r.startsWith('workgraph'))).toBe('workgraph (0 ops)');
+    expect(existsSync(join(localStore, 'workgraph.db'))).toBe(true);
   });
 });

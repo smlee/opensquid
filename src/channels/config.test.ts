@@ -95,6 +95,33 @@ describe('loadChatConfig', () => {
   });
 });
 
+describe('config is authoritative — an env token never activates an UNDECLARED platform', () => {
+  it('pure overlay: {} in → {} out even when a telegram token resolves from env', async () => {
+    process.env.OPENSQUID_TELEGRAM_BOT_TOKEN = TG_TOKEN;
+    expect(await overlayEnvTokens({})).toEqual({});
+  });
+
+  it('pure overlay: a DECLARED platform (even an empty block) gets the env credential overlaid', async () => {
+    process.env.OPENSQUID_TELEGRAM_BOT_TOKEN = TG_TOKEN;
+    const out = await overlayEnvTokens({ telegram: { bot_token: '' } });
+    expect(out.telegram?.bot_token).toBe(TG_TOKEN);
+  });
+
+  it('loadChatConfig: empty chat_connections + telegram token in env → NOT resurrected', async () => {
+    await writeHostConfig({ version: 1, chat_connections: {} });
+    process.env.OPENSQUID_TELEGRAM_BOT_TOKEN = TG_TOKEN;
+    const cfg = await loadChatConfig();
+    expect(cfg.telegram).toBeUndefined();
+    expect(cfg).toEqual({});
+  });
+
+  it('loadChatConfig: absent chat_connections block + telegram token in env → still no chat', async () => {
+    await writeHostConfig({ version: 1 });
+    process.env.OPENSQUID_TELEGRAM_BOT_TOKEN = TG_TOKEN;
+    expect(await loadChatConfig()).toEqual({});
+  });
+});
+
 describe('env-token overlay priority', () => {
   it('process.env wins over config.json (source: env)', async () => {
     await writeHostConfig({
@@ -141,11 +168,24 @@ describe('overlayEnvTokens (no disk read)', () => {
     expect(out.telegram?.bot_token).toBe(TG_TOKEN);
   });
 
-  it('synthesizes a slack block from env app+bot tokens', async () => {
+  it('does NOT synthesize slack from env tokens when slack is UNDECLARED (config authoritative)', async () => {
+    // Old contract synthesized a slack block from env tokens alone; the new contract requires config to
+    // DECLARE the platform first — an env token can't activate an undeclared one.
     process.env.OPENSQUID_SLACK_BOT_TOKEN = 'xoxb-abc';
     process.env.OPENSQUID_SLACK_APP_TOKEN = 'xapp-def';
     try {
-      const out = await overlayEnvTokens({});
+      expect(await overlayEnvTokens({})).toEqual({});
+    } finally {
+      delete process.env.OPENSQUID_SLACK_BOT_TOKEN;
+      delete process.env.OPENSQUID_SLACK_APP_TOKEN;
+    }
+  });
+
+  it('overlays env slack tokens onto a DECLARED slack block', async () => {
+    process.env.OPENSQUID_SLACK_BOT_TOKEN = 'xoxb-abc';
+    process.env.OPENSQUID_SLACK_APP_TOKEN = 'xapp-def';
+    try {
+      const out = await overlayEnvTokens({ slack: { bot_token: '', app_token: '' } });
       expect(out.slack?.bot_token).toBe('xoxb-abc');
       expect(out.slack?.app_token).toBe('xapp-def');
     } finally {

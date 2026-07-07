@@ -14,10 +14,12 @@
  *   - `scopeGate(wgId)`       → THE scope proof gate: never drive an item PAST scope without a real, on-disk
  *                               scope artifact.
  *
- * Every read/write opens a short-lived CheckpointStore client to `~/.opensquid/opensquid.db` with the shared
- * WAL + busy_timeout posture (`applyConcurrencyPragmas`) so it never trips `SQLITE_BUSY` against the daemon /
- * a concurrent lap. `withTaskCheckpointStore` is exported for the FSM write-through (v2_supply) to reuse the
- * SAME opener + posture.
+ * Every read/write opens a short-lived CheckpointStore client to the PROJECT-LOCAL `<root>/.opensquid/opensquid.db`
+ * (resolved by walking up from cwd for the nearest `.opensquid/`, git-`.git` style; T-project-local-state PLS.3)
+ * with the shared WAL + busy_timeout posture (`applyConcurrencyPragmas`) so it never trips `SQLITE_BUSY` against
+ * the daemon / a concurrent lap. `withTaskCheckpointStore` is exported for the FSM write-through (v2_supply) to
+ * reuse the SAME opener + posture. This is a TABLE split: the checkpoint + loop tables are project-local; the
+ * daemon `audit_log` + RAG/recall stay GLOBAL (design §4 OUT).
  *
  * Imports from: node:fs/promises, @libsql/client, ../paths.js, ../../storage/sqlite_concurrency.js,
  *   ../durable/checkpoint_store.js.
@@ -25,10 +27,11 @@
  *   (withTaskCheckpointStore — the single-writer trigger + the FSM scope_write seed).
  */
 import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { createClient } from '@libsql/client';
 
-import { OPENSQUID_HOME } from '../paths.js';
+import { resolveLocalStoreDir } from '../paths.js';
 import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 import { resolveCheckpointKey } from '../loop/checkpoint_key.js';
@@ -38,9 +41,12 @@ import { resolveCheckpointKey } from '../loop/checkpoint_key.js';
  *  records the on-disk artifact (v2_supply's universal write-through), re-admitting it to automation. */
 const SCOPE_STAGE = 'scope';
 
-/** The canonical opensquid.db url the task checkpoint lives in (honors the OPENSQUID_HOME test override). */
-function checkpointDbUrl(): string {
-  return `file:${OPENSQUID_HOME()}/opensquid.db`;
+/** The PROJECT-LOCAL opensquid.db url the task checkpoint lives in: `<root>/.opensquid/opensquid.db`, resolved
+ *  by walking up from cwd for the nearest `.opensquid/` (honors the `OPENSQUID_PROJECT_ROOT` test override).
+ *  THROWS when run outside a project store — an IN opener never falls back to the global home (that fallback is
+ *  the partition PLS removes). The daemon `audit_log` + RAG stay GLOBAL; this is a TABLE split, not a file move. */
+async function checkpointDbUrl(): Promise<string> {
+  return `file:${join(await resolveLocalStoreDir(process.cwd()), 'opensquid.db')}`;
 }
 
 /**
@@ -51,7 +57,7 @@ function checkpointDbUrl(): string {
 export async function withTaskCheckpointStore<T>(
   fn: (store: CheckpointStore) => Promise<T>,
 ): Promise<T> {
-  const client = createClient({ url: checkpointDbUrl() });
+  const client = createClient({ url: await checkpointDbUrl() });
   await applyConcurrencyPragmas(client);
   try {
     return await fn(new CheckpointStore(client));

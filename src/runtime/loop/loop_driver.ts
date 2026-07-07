@@ -9,12 +9,12 @@
  *
  * The work-graph is injected as a minimal interface (`LoopWorkGraph`), NOT the concrete store, so the driver
  * is decoupled + trivially testable. The concrete `WorkGraphStore` (src/workgraph/store.ts) exposes
- * `listReady(project)` → `Issue[]` and `listEdges(project)` → `{from,to,type}[]`; a caller adapts it to this
- * interface (project-bound + `Issue[]` → `id[]`):
+ * `listReady()` → `Issue[]` and `listEdges()` → `{from,to,type}[]` on the project-LOCAL store; a caller
+ * adapts it to this interface (`Issue[]` → `id[]`):
  *
  *   const wg: LoopWorkGraph = {
- *     listReadyIds: async () => (await store.listReady(project)).map((i) => i.id),
- *     listEdges:    () => store.listEdges(project),
+ *     listReadyIds: async () => (await store.listReady()).map((i) => i.id),
+ *     listEdges:    () => store.listEdges(),
  *   };
  *
  * No live caller yet: T2.9 ships the skill + this driver module + tests. The FSM `phases_complete` →

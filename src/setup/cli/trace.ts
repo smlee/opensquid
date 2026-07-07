@@ -18,13 +18,15 @@
  * Imported by: src/cli.ts (register subcommand).
  */
 
+import { join } from 'node:path';
+
 import { createClient } from '@libsql/client';
 
 import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import pc from 'picocolors';
 
 import { TraceReader } from '../../runtime/observability/index.js';
-import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { resolveLocalStoreDir } from '../../runtime/paths.js';
 
 import type { Client } from '@libsql/client';
 import type { Command } from 'commander';
@@ -155,8 +157,15 @@ export interface TraceCliDeps {
   abort?: AbortController;
 }
 
-function defaultDbPath(): string {
-  return `file:${OPENSQUID_HOME()}/opensquid.db`;
+/**
+ * Resolve the effective trace-store path: an explicit `--db` wins; otherwise the PROJECT-LOCAL
+ * `<root>/.opensquid/opensquid.db` (T-project-local-state PLS.3 — the trace CLI reader reads `task_checkpoints`,
+ * so it follows the checkpoints project-local). Resolved LAZILY at action time (not at registration) so a
+ * no-project cwd only errors when a verb is actually invoked without `--db`. RAG + the daemon `audit_log`
+ * (a different store) stay GLOBAL — this is a TABLE split, not a file move.
+ */
+async function resolveDbPath(db: string | undefined): Promise<string> {
+  return db ?? `file:${join(await resolveLocalStoreDir(process.cwd()), 'opensquid.db')}`;
 }
 
 function defaultOpen(dbPath: string): Client {
@@ -182,10 +191,10 @@ export function registerTraceCommand(program: Command, deps: TraceCliDeps = {}):
     .command('show', { isDefault: true })
     .description('Render a primitive-call timeline for one run.')
     .argument('<runId>', 'Run id (as recorded in the checkpoints table)')
-    .option('--db <path>', 'Path to the libsql DB', defaultDbPath())
+    .option('--db <path>', 'Path to the libsql DB (default: project-local .opensquid/opensquid.db)')
     .option('--no-color', 'Disable ANSI color output')
-    .action(async (runId: string, opts: { db: string; color: boolean }) => {
-      const client = open(opts.db);
+    .action(async (runId: string, opts: { db?: string; color: boolean }) => {
+      const client = open(await resolveDbPath(opts.db));
       try {
         const reader = new TraceReader(client);
         const timeline = await reader.getTimeline(runId);
@@ -203,20 +212,20 @@ export function registerTraceCommand(program: Command, deps: TraceCliDeps = {}):
   trace
     .command('tail')
     .description('Stream new primitive-call events as they complete.')
-    .option('--db <path>', 'Path to the libsql DB', defaultDbPath())
+    .option('--db <path>', 'Path to the libsql DB (default: project-local .opensquid/opensquid.db)')
     .option('--follow', 'Keep tailing until SIGINT', false)
     .option('--pack <packId>', 'Filter to one pack')
     .option('--interval <ms>', 'Polling interval (default 1000ms, floor 100ms)', '1000')
     .option('--no-color', 'Disable ANSI color output')
     .action(
       async (opts: {
-        db: string;
+        db?: string;
         follow: boolean;
         pack?: string;
         interval: string;
         color: boolean;
       }) => {
-        const client = open(opts.db);
+        const client = open(await resolveDbPath(opts.db));
         const controller = deps.abort ?? new AbortController();
         const onSigint = (): void => {
           controller.abort();
@@ -256,15 +265,15 @@ export function registerTraceCommand(program: Command, deps: TraceCliDeps = {}):
     .description('Export a run as json | md | otel to stdout.')
     .argument('<runId>', 'Run id (as recorded in the checkpoints table)')
     .requiredOption('--format <fmt>', 'Output format: json | md | otel')
-    .option('--db <path>', 'Path to the libsql DB', defaultDbPath())
-    .action(async (runId: string, opts: { format: string; db: string }) => {
+    .option('--db <path>', 'Path to the libsql DB (default: project-local .opensquid/opensquid.db)')
+    .action(async (runId: string, opts: { format: string; db?: string }) => {
       const fmt = opts.format;
       if (fmt !== 'json' && fmt !== 'md' && fmt !== 'otel') {
         err(`opensquid trace export: unknown --format "${fmt}" (expected json|md|otel)\n`);
         process.exitCode = 1;
         return;
       }
-      const client = open(opts.db);
+      const client = open(await resolveDbPath(opts.db));
       try {
         const reader = new TraceReader(client);
         if (fmt === 'md') {

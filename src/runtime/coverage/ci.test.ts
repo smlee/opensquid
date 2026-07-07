@@ -33,6 +33,6 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     expect(byId['R-HANDOFF-DEDUP']).toBe('met'); // handoff key-drift + double-send dedup
     expect(byId['R-FAILURE-REPORT']).toBe('met'); // failure_report.ts (§5.4b — report WHY on any fail)
     expect(byId['R-FOLLOW-REMINDER']).toBe('met'); // follow_reminder.ts (§5.4c — anti-drift nudge)
-    expect(a.results.length).toBe(11); // 4 original seeds + 7 V2-ENF.2 covering requirements
+    expect(a.results.length).toBe(13); // 4 original seeds + 7 V2-ENF.2 + 2 T-project-local-state (PLS.1)
   }, 30_000);
 });

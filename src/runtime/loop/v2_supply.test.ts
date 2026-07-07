@@ -11,11 +11,11 @@ import { compilePackV2 } from '../../packs/compile_v2.js';
 import { PackV2 } from '../../packs/schemas/pack_v2.js';
 import type { LoadedPackV2 } from '../../packs/loader_v2.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
-import { bindProject, workGraphStore } from '../../workgraph/store.js';
+import { workGraphStore } from '../../workgraph/store.js';
 import { appendAsk, readCapturedAsk } from '../coverage/captured_ask.js';
 import { writeGoalMap } from '../goal_map/goal_map.js';
 import { readFsmStateRaw, readFsmState, fsmStateKey } from '../fsm_state.js';
-import { OPENSQUID_HOME, sessionStateFile } from '../paths.js';
+import { resolveLocalStoreDir, sessionStateFile } from '../paths.js';
 import {
   appendTool,
   clearActiveTask,
@@ -637,7 +637,12 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
   it('GS1: the FSM write-through creates the task checkpoint keyed by the wg issue id (stage + scope proof)', async () => {
     const prevItem = process.env.OPENSQUID_ITEM_ID;
     const prevHome = process.env.OPENSQUID_HOME;
-    process.env.OPENSQUID_HOME = await mkdtemp(join(tmpdir(), 'osq-cp-mirror-'));
+    const prevRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    const home = await mkdtemp(join(tmpdir(), 'osq-cp-mirror-'));
+    process.env.OPENSQUID_HOME = home;
+    // The task checkpoint store is project-LOCAL (PLS.3) — point the IN-opener seam at the same tmp root.
+    process.env.OPENSQUID_PROJECT_ROOT = home;
+    await mkdir(join(home, '.opensquid'), { recursive: true });
     process.env.OPENSQUID_ITEM_ID = 'wg-mirror-1'; // the wg issue id the ralph loop publishes at spawn
     try {
       const sid = 'sess-mirror';
@@ -656,13 +661,20 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
       else process.env.OPENSQUID_ITEM_ID = prevItem;
       if (prevHome === undefined) delete process.env.OPENSQUID_HOME;
       else process.env.OPENSQUID_HOME = prevHome;
+      if (prevRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = prevRoot;
     }
   });
 
   it('GS1: NO OPENSQUID_ITEM_ID and no active task → null-skip (no checkpoint fabricated)', async () => {
     const prevItem = process.env.OPENSQUID_ITEM_ID;
     const prevHome = process.env.OPENSQUID_HOME;
-    process.env.OPENSQUID_HOME = await mkdtemp(join(tmpdir(), 'osq-cp-none-'));
+    const prevRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    const home = await mkdtemp(join(tmpdir(), 'osq-cp-none-'));
+    process.env.OPENSQUID_HOME = home;
+    // The task checkpoint store is project-LOCAL (PLS.3) — point the IN-opener seam at the same tmp root.
+    process.env.OPENSQUID_PROJECT_ROOT = home;
+    await mkdir(join(home, '.opensquid'), { recursive: true });
     delete process.env.OPENSQUID_ITEM_ID;
     try {
       const sid = 'sess-no-item';
@@ -681,6 +693,8 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
       else process.env.OPENSQUID_ITEM_ID = prevItem;
       if (prevHome === undefined) delete process.env.OPENSQUID_HOME;
       else process.env.OPENSQUID_HOME = prevHome;
+      if (prevRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = prevRoot;
     }
   });
 
@@ -696,23 +710,34 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
   // work-graph from the captured artifact, so plan_ready can later pass. Before this wiring autoDecompose had no
   // live caller and the work-graph stayed empty → plan never completed.
   async function readWgIssues(): Promise<{ id: string; body: string }[]> {
+    // PLS.2: the work-graph is PROJECT-LOCAL (`<root>/.opensquid/workgraph.db`); read the same store production's
+    // `openWg` resolves via `resolveLocalStoreDir` (seam = OPENSQUID_PROJECT_ROOT, set by `withFreshHome`).
+    const dir = await resolveLocalStoreDir(process.cwd());
     const store = workGraphStore({
-      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+      dbUrl: `file:${join(dir, 'workgraph.db')}`,
+      sourceDir: join(dir, 'store', 'issues'),
     });
     await store.init();
-    return bindProject(store, 'legacy-global').listIssues();
+    return store.listIssues();
   }
 
-  // Isolate OPENSQUID_HOME per test (the file otherwise shares one HOME → the work-graph leaks across tests).
+  // Isolate the PROJECT-LOCAL store per test (PLS.2): a fresh temp root pointed at by OPENSQUID_PROJECT_ROOT so
+  // production's `resolveLocalStoreDir` and this test's helpers agree on `<root>/.opensquid/workgraph.db` without
+  // walking up into (and polluting) the real repo's `.opensquid/`. OPENSQUID_HOME is isolated too (session state).
   async function withFreshHome<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = process.env.OPENSQUID_HOME;
-    process.env.OPENSQUID_HOME = await mkdtemp(join(tmpdir(), 'osq-decomp-'));
+    const prevHome = process.env.OPENSQUID_HOME;
+    const prevRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    const dir = await mkdtemp(join(tmpdir(), 'osq-decomp-'));
+    process.env.OPENSQUID_HOME = dir;
+    process.env.OPENSQUID_PROJECT_ROOT = dir;
+    await mkdir(join(dir, '.opensquid'), { recursive: true });
     try {
       return await fn();
     } finally {
-      if (prev === undefined) delete process.env.OPENSQUID_HOME;
-      else process.env.OPENSQUID_HOME = prev;
+      if (prevHome === undefined) delete process.env.OPENSQUID_HOME;
+      else process.env.OPENSQUID_HOME = prevHome;
+      if (prevRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = prevRoot;
     }
   }
   const countScope1 = async (): Promise<number> =>
@@ -756,17 +781,19 @@ async function stampPreResearch(sessionId: string, p: string): Promise<void> {
   await atomicWriteFile(sessionStateFile(sessionId, PRE_RESEARCH_PATH_KEY), JSON.stringify(p));
 }
 
-/** Populate the HOME work-graph (legacy-global — the project a marker-less session resolves to). */
+/** Populate the PROJECT-LOCAL work-graph (PLS.2: `<root>/.opensquid/workgraph.db`, resolved the same way
+ *  production's `openWg` does; the caller sets OPENSQUID_PROJECT_ROOT so this points at a temp root). */
 async function populateWg(
   issues: { title: string; body: string }[],
   edges: [number, number][] = [],
 ): Promise<void> {
+  const dir = await resolveLocalStoreDir(process.cwd());
   const store = workGraphStore({
-    dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-    sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+    dbUrl: `file:${join(dir, 'workgraph.db')}`,
+    sourceDir: join(dir, 'store', 'issues'),
   });
   await store.init();
-  const wg = bindProject(store, 'legacy-global');
+  const wg = store;
   const ids: string[] = [];
   for (const i of issues) ids.push((await wg.createIssue(i)).id);
   for (const [f, t] of edges) {
@@ -806,16 +833,26 @@ describe('buildGuardCtx — T2.5 PLAN binding', () => {
       'utf8',
     );
     await stampPreResearch(sid, p);
-    await populateWg(
-      [
-        { title: 'scope-1', body: 'sourceElementId:scope-1' },
-        { title: 'scope-2', body: 'sourceElementId:scope-2' },
-      ],
-      [[0, 1]],
-    );
-    const ctx = await buildGuardCtx(ev, sid, 'plan');
-    expect(ctx.get('plan.acyclic')).toBe(true);
-    expect(ctx.get('plan.complete')).toBe(true);
+    // PLS.2: point the PROJECT-LOCAL store seam at this temp root so `populateWg` and `buildGuardCtx`'s `openWg`
+    // resolve the SAME `<dir>/.opensquid/workgraph.db` (production reads project-local, not the global HOME).
+    const prevRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    process.env.OPENSQUID_PROJECT_ROOT = dir;
+    await mkdir(join(dir, '.opensquid'), { recursive: true });
+    try {
+      await populateWg(
+        [
+          { title: 'scope-1', body: 'sourceElementId:scope-1' },
+          { title: 'scope-2', body: 'sourceElementId:scope-2' },
+        ],
+        [[0, 1]],
+      );
+      const ctx = await buildGuardCtx(ev, sid, 'plan');
+      expect(ctx.get('plan.acyclic')).toBe(true);
+      expect(ctx.get('plan.complete')).toBe(true);
+    } finally {
+      if (prevRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = prevRoot;
+    }
   });
 });
 

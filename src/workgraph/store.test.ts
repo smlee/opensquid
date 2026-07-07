@@ -11,16 +11,13 @@ import { join } from 'node:path';
 import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { bindProject, rebuildWorkGraph, workGraphStore } from './store.js';
+import { rebuildWorkGraph, workGraphStore } from './store.js';
 
-// T-WORKGRAPH-PROJECT-SCOPE: the store methods now take `project`; these legacy behavior tests run under one
-// fixed project via a bound facade, so the bodies (which call facade-shaped methods) are unchanged. The
-// project-scoping behavior (isolation / migration / replay default) has its own describe block below.
-const P = 'test-project';
+// PLS.2: the store is now PROJECT-LOCAL — ops take no leading `project` arg and the store IS the facade.
 const open = async (opts: { dbUrl: string; sourceDir?: string }) => {
   const base = workGraphStore(opts);
   await base.init();
-  return bindProject(base, P);
+  return base;
 };
 
 const fresh = async () => open({ dbUrl: ':memory:' });
@@ -304,36 +301,21 @@ describe('workGraphStore claim + audience (GR.1)', () => {
   });
 });
 
-describe('workGraphStore project-scope (T-WORKGRAPH-PROJECT-SCOPE)', () => {
-  // These exercise the project DIMENSION directly on the base store (its methods take `project`).
+describe('workGraphStore migration + replay defaults (PLS.2)', () => {
   const baseOpen = async (opts: { dbUrl: string; sourceDir?: string }) => {
     const b = workGraphStore(opts);
     await b.init();
     return b;
   };
 
-  it('isolates issues by project (create in A → invisible from B)', async () => {
+  it('op-ids stay globally unique across issues (one shared Lamport clock)', async () => {
     const base = await baseOpen({ dbUrl: ':memory:' });
-    const a = await base.createIssue('proj-a', { title: 'in A' });
-    await base.createIssue('proj-b', { title: 'in B' });
-    // listIssues + listReady are project-scoped
-    expect((await base.listIssues('proj-a')).map((i) => i.title)).toEqual(['in A']);
-    expect((await base.listReady('proj-b')).map((i) => i.title)).toEqual(['in B']);
-    // getIssue is project-scoped: A's id is invisible under B (the filter is also an isolation guard)
-    expect(await base.getIssue('proj-a', a.id)).not.toBeNull();
-    expect(await base.getIssue('proj-b', a.id)).toBeNull();
-  });
-
-  it('op-ids stay globally unique across projects (one shared Lamport clock)', async () => {
-    const base = await baseOpen({ dbUrl: ':memory:' });
-    const a = await base.createIssue('proj-a', { title: 'a' });
-    const b = await base.createIssue('proj-b', { title: 'b' });
-    const eventsA = await base.listEvents('proj-a', a.id);
-    const eventsB = await base.listEvents('proj-b', b.id);
+    const a = await base.createIssue({ title: 'a' });
+    const b = await base.createIssue({ title: 'b' });
+    const eventsA = await base.listEvents(a.id);
+    const eventsB = await base.listEvents(b.id);
     const ids = [...eventsA, ...eventsB].map((o) => o.id);
-    expect(new Set(ids).size).toBe(ids.length); // no collision despite two projects (single clock)
-    expect(eventsA[0]?.project).toBe('proj-a'); // each op carries its project
-    expect(eventsB[0]?.project).toBe('proj-b');
+    expect(new Set(ids).size).toBe(ids.length); // no collision (single clock)
   });
 
   it('ADD COLUMN migration backfills pre-existing rows to legacy-global', async () => {
@@ -354,7 +336,7 @@ describe('workGraphStore project-scope (T-WORKGRAPH-PROJECT-SCOPE)', () => {
       raw.close();
       // init → createSchema runs the idempotent ALTER TABLE ADD COLUMN ... DEFAULT 'legacy-global'.
       const base = await baseOpen({ dbUrl });
-      expect((await base.getIssue('legacy-global', 'wg-legacy'))?.title).toBe('old');
+      expect((await base.getIssue('wg-legacy'))?.title).toBe('old');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -375,7 +357,7 @@ describe('workGraphStore project-scope (T-WORKGRAPH-PROJECT-SCOPE)', () => {
       const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
       expect(await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir })).toBe(1);
       const base = await baseOpen({ dbUrl: rebuiltUrl });
-      expect((await base.getIssue('legacy-global', 'wg-old'))?.title).toBe('legacy');
+      expect((await base.getIssue('wg-old'))?.title).toBe('legacy');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -388,14 +370,13 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
     await b.init();
     return b;
   };
-  const Q = 'det-project';
 
   it('ORDER reproducibility: two fresh stores, same create seq → identical order (NOT wall-clock)', async () => {
     const seq = ['gamma', 'alpha', 'beta'];
     const run = async () => {
       const b = await baseOpen({ dbUrl: ':memory:', actorId: 'dev-x' });
-      for (const title of seq) await b.createIssue(Q, { title });
-      return (await b.listIssues(Q)).map((i) => i.id);
+      for (const title of seq) await b.createIssue({ title });
+      return (await b.listIssues()).map((i) => i.id);
     };
     const first = await run();
     const second = await run();
@@ -413,11 +394,11 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
           sourceDir: dir,
           actorId: 'dev-x',
         });
-        const a = await b.createIssue(Q, { title: 'a', body: 'A' });
-        await b.updateIssue(Q, a.id, { status: 'in_progress' });
-        const c = await b.createIssue(Q, { title: 'c' });
-        await b.addEdge(Q, a.id, c.id, 'blocks');
-        const ops = [...(await b.listEvents(Q, a.id)), ...(await b.listEvents(Q, c.id))];
+        const a = await b.createIssue({ title: 'a', body: 'A' });
+        await b.updateIssue(a.id, { status: 'in_progress' });
+        const c = await b.createIssue({ title: 'c' });
+        await b.addEdge(a.id, c.id, 'blocks');
+        const ops = [...(await b.listEvents(a.id)), ...(await b.listEvents(c.id))];
         return { issueIds: [a.id, c.id], opIds: ops.map((o) => o.id) };
       };
       const r1 = await run(dir1);
@@ -441,9 +422,9 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
         sourceDir: dir,
         actorId: 'dev-x',
       });
-      const a = await b.createIssue(Q, { title: 'claim me' });
-      await b.claimIssue(Q, a.id, { source: 'claudecode' }, 1800);
-      const claimOp = (await b.listEvents(Q, a.id)).find((o) => o.type === 'claim_acquired');
+      const a = await b.createIssue({ title: 'claim me' });
+      await b.claimIssue(a.id, { source: 'claudecode' }, 1800);
+      const claimOp = (await b.listEvents(a.id)).find((o) => o.type === 'claim_acquired');
       return { dir, claimId: claimOp?.id, issueId: a.id };
     };
     const d1 = await mkdtemp(join(tmpdir(), 'wg-lease-1-'));
@@ -457,9 +438,7 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
       const rebuiltUrl = `file:${join(d1, 'rebuilt.db')}`;
       await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: d1 });
       const rb = await baseOpen({ dbUrl: rebuiltUrl });
-      const replayed = (await rb.listEvents(Q, s1.issueId)).find(
-        (o) => o.type === 'claim_acquired',
-      );
+      const replayed = (await rb.listEvents(s1.issueId)).find((o) => o.type === 'claim_acquired');
       expect(replayed?.id).toBe(s1.claimId);
     } finally {
       await rm(d1, { recursive: true, force: true });
@@ -473,8 +452,8 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
     try {
       const mk = (actorId: string) => async () => {
         const b = await baseOpen({ dbUrl: ':memory:', actorId });
-        const i = await b.createIssue(Q, { title: 'same-title', body: 'same' });
-        const op = (await b.listEvents(Q, i.id))[0];
+        const i = await b.createIssue({ title: 'same-title', body: 'same' });
+        const op = (await b.listEvents(i.id))[0];
         return { issueId: i.id, opId: op?.id, lamport: op?.lamport, actorId: op?.actorId };
       };
       const a = await mk('actor-aaa')();
@@ -491,7 +470,6 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
         lamport: 1,
         type: 'issue_created',
         payload: { title: 'same-title', body: 'same', ts: '2026-01-01T00:00:00.000Z' },
-        project: Q,
         actorId,
       });
       await writeFile(
@@ -506,7 +484,7 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
       expect(await rebuildWorkGraph({ dbUrl: merged, sourceDir: dir })).toBe(2);
       const mb = await baseOpen({ dbUrl: merged });
       // both distinct issues survive (no INSERT OR IGNORE dedupe) and order by actor_id at the colliding lamport
-      const listed = (await mb.listIssues(Q)).map((i) => i.id);
+      const listed = (await mb.listIssues()).map((i) => i.id);
       expect(listed).toEqual([a.issueId, z.issueId]); // actor-aaa < actor-zzz
       expect(listed).toHaveLength(2);
     } finally {
@@ -521,8 +499,8 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
       try {
         vi.setSystemTime(new Date(iso));
         const b = await baseOpen({ dbUrl: ':memory:', actorId: 'dev-x' });
-        const i = await b.createIssue(Q, { title: 'fixed', body: 'fixed' });
-        const op = (await b.listEvents(Q, i.id))[0];
+        const i = await b.createIssue({ title: 'fixed', body: 'fixed' });
+        const op = (await b.listEvents(i.id))[0];
         return { id: op?.id, ts: (op?.payload as { ts?: string }).ts };
       } finally {
         vi.useRealTimers();
@@ -605,14 +583,14 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
         sourceDir: dir,
         actorId: 'dev-x',
       });
-      await b.createIssue(Q, { title: 'one' });
-      await b.createIssue(Q, { title: 'two' });
-      const liveOrder = (await b.listIssues(Q)).map((i) => i.id);
+      await b.createIssue({ title: 'one' });
+      await b.createIssue({ title: 'two' });
+      const liveOrder = (await b.listIssues()).map((i) => i.id);
 
       const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
       await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
       const rb = await baseOpen({ dbUrl: rebuiltUrl });
-      expect((await rb.listIssues(Q)).map((i) => i.id)).toEqual(liveOrder);
+      expect((await rb.listIssues()).map((i) => i.id)).toEqual(liveOrder);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -620,8 +598,8 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
 
   it('listEvents read-back carries actorId (X for a stamped op, legacy for a NULL row)', async () => {
     const b = await baseOpen({ dbUrl: ':memory:', actorId: 'dev-X' });
-    const i = await b.createIssue(Q, { title: 'e' });
-    const op = (await b.listEvents(Q, i.id))[0];
+    const i = await b.createIssue({ title: 'e' });
+    const op = (await b.listEvents(i.id))[0];
     expect(op?.actorId).toBe('dev-X');
 
     // a legacy NULL row → 'legacy' on read-back (replay default)
@@ -633,14 +611,13 @@ describe('workGraphStore determinism — (lamport, actor-id) tuple (WGD.1)', () 
         lamport: 1,
         type: 'issue_created',
         payload: { title: 'leg', body: '', ts: '2026-01-01T00:00:00.000Z' },
-        project: Q,
         // no actorId field
       };
       await writeFile(join(dir, `${legacyOp.id}.json`), JSON.stringify(legacyOp));
       const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
       await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
       const rb = await baseOpen({ dbUrl: rebuiltUrl });
-      const ev = (await rb.listEvents(Q, 'wg-leg'))[0];
+      const ev = (await rb.listEvents('wg-leg'))[0];
       expect(ev?.actorId).toBe('legacy');
     } finally {
       await rm(dir, { recursive: true, force: true });

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { runRalphLoop, resolveParked, type RalphConfig, type RalphDeps } from './orchestrator.js';
 import type { Issue, WorkGraphFacade } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
+import type { LoopMetricRow } from '../loop/loop_metrics.js';
 
 const P = <T>(v: T): Promise<T> => Promise.resolve(v);
 
@@ -75,6 +76,8 @@ const cfg = (over: Partial<RalphConfig> = {}): RalphConfig => ({
     heartbeat: () => undefined,
     sleep: () => P(undefined),
   },
+  harness: 'claude',
+  runId: 'run-test',
   ...over,
 });
 
@@ -278,6 +281,88 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     expect(r.closed).toEqual(['a']);
     expect(r.spent).toBeCloseTo(0.05);
     expect(store.has('a')).toBe(false); // clearStage on close
+  });
+
+  it('LSF.5 — records ONE per-stage metrics row per stage with the folded cost/tokens/harness/runId', async () => {
+    const advance: Record<string, string> = {
+      scope_write: 'plan',
+      plan: 'author',
+      author: 'code',
+      code: 'deploy',
+    };
+    const runLap = vi.fn((_item: Issue, sp?: string) => {
+      if (sp === undefined)
+        return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.02, inputTokens: 5, outputTokens: 2 });
+      const next = advance[sp.replace('DO ', '')];
+      return P<LapResult>(
+        next === undefined
+          ? { kind: 'SHIPPED', costUsd: 0.02, inputTokens: 5, outputTokens: 2 }
+          : { kind: 'SHIPPED', stage: next, costUsd: 0.02, inputTokens: 5, outputTokens: 2 },
+      );
+    });
+    const rows: LoopMetricRow[] = [];
+    await runRalphLoop(cfg({ harness: 'codex', runId: 'run-xyz', authMode: 'api' }), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(new Map<string, string>()),
+      recordMetric: (row) => {
+        rows.push(row);
+        return P(undefined);
+      },
+    });
+    // one row per stage the drive passed through: scope_write, plan, author, code, then the deploy boundary.
+    expect(rows.map((r) => r.stage)).toEqual(['scope_write', 'plan', 'author', 'code', 'deploy']);
+    for (const r of rows) {
+      expect(r).toMatchObject({
+        runId: 'run-xyz',
+        itemId: 'a',
+        harness: 'codex',
+        authMode: 'api',
+        costUsd: 0.02,
+        inputTokens: 5,
+        outputTokens: 2,
+      });
+      expect(r.endedAtMs).toBeGreaterThanOrEqual(r.startedAtMs);
+      expect(r.durationMs).toBe(r.endedAtMs - r.startedAtMs);
+    }
+  });
+
+  it('LSF.5 — a stuck stage is metriced ONCE (SUM of its retry laps) before the wedge', async () => {
+    const runLap = vi.fn(() =>
+      P<LapResult>({
+        kind: 'SHIPPED',
+        stage: 'scope_write',
+        costUsd: 0.01,
+        inputTokens: 3,
+        outputTokens: 1,
+      }),
+    );
+    const rows: LoopMetricRow[] = [];
+    await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(),
+      recordMetric: (row) => {
+        rows.push(row);
+        return P(undefined);
+      },
+    });
+    expect(rows).toHaveLength(1); // one row for the stuck stage
+    expect(rows[0]).toMatchObject({ stage: 'scope_write', inputTokens: 30, outputTokens: 10 });
+    expect(rows[0]?.costUsd).toBeCloseTo(0.1, 5); // SUM of the 10 retry laps (0.01 each)
+  });
+
+  it('LSF.5 — a recordMetric throw is swallowed (fail-open; the drive still ships)', async () => {
+    const runLap = vi.fn((_item: Issue, sp?: string) =>
+      P<LapResult>(
+        sp === undefined ? { kind: 'SHIPPED', costUsd: 0 } : { kind: 'SHIPPED', costUsd: 0 },
+      ),
+    );
+    const store = new Map<string, string>([['a', 'deploy']]);
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop: stageLoopStub(store),
+      recordMetric: () => Promise.reject(new Error('db down')),
+    });
+    expect(r.closed).toEqual(['a']); // the metrics fault never broke the drive
   });
 
   it('resumes from the DURABLE stage, not the pack initial', async () => {

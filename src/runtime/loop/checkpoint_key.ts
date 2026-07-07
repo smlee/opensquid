@@ -36,7 +36,7 @@ export interface CheckpointKeyDeps {
   itemId: () => string | undefined;
   /** The active harness task (its `.id` is the harness_map key), or null when no task is active. */
   readActiveTask: (sessionId: string) => Promise<{ id: string } | null>;
-  /** The wg project namespace for this session (same chain the loop + MCP use). */
+  /** The project uuid namespace keying the OUT global `harness_map.db` (NOT the project-local workgraph). */
   resolveProject: (sessionId: string) => Promise<string>;
   /** Forward map: harness task id → bound wg issue id (null when unbound). */
   mapGet: (project: string, harnessId: string) => Promise<string | null>;

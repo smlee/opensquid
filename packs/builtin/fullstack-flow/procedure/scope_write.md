@@ -13,6 +13,14 @@ The user already confirmed the scope — do not re-confirm or re-research; just 
 - After writing, run the content-audit skill (`cached_audit`) to obtain the GUESS_FREE verdict.
 - Exit: `RALPH-EXIT: {"kind":"SHIPPED","stage":"plan"}`
 
+## Emit your phase to the live status feed
+
+Emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor shows where this item is
+(pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
+
+- `set_loop_phase(phase: "write", index: 1, total: 2)` while writing the artifact,
+- `set_loop_phase(phase: "audit", index: 2, total: 2)` while running the content-audit for the GUESS_FREE verdict.
+
 ## Gate to advance (scope_write → plan): `scope_write_ready`
 
 Passes when the pre-research write is: `anchors_ok` (every scoped element traces to the captured ask)

@@ -68,6 +68,8 @@ describe('parseLapOutcome', () => {
     expect(parseLapOutcome(envelope('did the work, tests pass'))).toEqual({
       outcome: { kind: 'SHIPPED' },
       costUsd: 0.04,
+      inputTokens: 0,
+      outputTokens: 0,
     });
   });
 
@@ -78,21 +80,64 @@ describe('parseLapOutcome', () => {
   });
 
   it('an unparseable envelope → CRASH (never SHIPPED)', () => {
-    expect(parseLapOutcome('not json at all')).toEqual({ outcome: { kind: 'CRASH' }, costUsd: 0 });
+    expect(parseLapOutcome('not json at all')).toEqual({
+      outcome: { kind: 'CRASH' },
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
   });
 
   it('is_error:true → CRASH, still reporting cost', () => {
     expect(parseLapOutcome(envelope('boom', { is_error: true, total_cost_usd: 0.02 }))).toEqual({
       outcome: { kind: 'CRASH' },
       costUsd: 0.02,
+      inputTokens: 0,
+      outputTokens: 0,
     });
   });
 
   it('a non-object JSON envelope → CRASH', () => {
-    expect(parseLapOutcome('42')).toEqual({ outcome: { kind: 'CRASH' }, costUsd: 0 });
+    expect(parseLapOutcome('42')).toEqual({
+      outcome: { kind: 'CRASH' },
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
   });
 
   it('missing total_cost_usd defaults cost to 0', () => {
     expect(parseLapOutcome(JSON.stringify({ result: 'ok', is_error: false })).costUsd).toBe(0);
+  });
+
+  // LSF.5 (§3a) — the token fold: usage.input_tokens/output_tokens surface for the loop_metrics history.
+  it('folds usage.input_tokens/output_tokens from the envelope', () => {
+    const r = parseLapOutcome(
+      envelope('done', { usage: { input_tokens: 1200, output_tokens: 340 } }),
+    );
+    expect(r).toEqual({
+      outcome: { kind: 'SHIPPED' },
+      costUsd: 0.04,
+      inputTokens: 1200,
+      outputTokens: 340,
+    });
+  });
+
+  it('tokens default to 0 when usage is absent or malformed', () => {
+    expect(parseLapOutcome(envelope('done', { usage: null }))).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(parseLapOutcome(envelope('done', { usage: { input_tokens: 'x' } }))).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+  });
+
+  it('reports tokens even on a CRASH (is_error:true) so the resource burn is captured', () => {
+    const r = parseLapOutcome(
+      envelope('boom', { is_error: true, usage: { input_tokens: 50, output_tokens: 10 } }),
+    );
+    expect(r).toMatchObject({ outcome: { kind: 'CRASH' }, inputTokens: 50, outputTokens: 10 });
   });
 });

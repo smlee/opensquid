@@ -90,21 +90,40 @@ export function extractTypedExit(resultText: string): LapOutcome | null {
   }
 }
 
-/** Parse the headless JSON envelope into a total `LapOutcome` + the lap's cost. Never throws. */
-export function parseLapOutcome(stdout: string): { outcome: LapOutcome; costUsd: number } {
+/** The lap's cost + token usage, folded from the envelope for the LSF.5 loop_metrics history (§3a). */
+export interface LapUsage {
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** Read `usage.input_tokens`/`usage.output_tokens` from the headless envelope (0 when absent). */
+function readUsage(env: Record<string, unknown>): { inputTokens: number; outputTokens: number } {
+  const u = env.usage;
+  if (u === null || typeof u !== 'object') return { inputTokens: 0, outputTokens: 0 };
+  const rec = u as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
+  return { inputTokens: num(rec.input_tokens), outputTokens: num(rec.output_tokens) };
+}
+
+/** Parse the headless JSON envelope into a total `LapOutcome` + the lap's cost + token usage. Never throws. */
+export function parseLapOutcome(stdout: string): { outcome: LapOutcome } & LapUsage {
   let env: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(stdout);
     if (parsed === null || typeof parsed !== 'object')
-      return { outcome: { kind: 'CRASH' }, costUsd: 0 };
+      return { outcome: { kind: 'CRASH' }, costUsd: 0, inputTokens: 0, outputTokens: 0 };
     env = parsed as Record<string, unknown>;
   } catch {
-    return { outcome: { kind: 'CRASH' }, costUsd: 0 }; // unparseable envelope = CRASH, never SHIPPED
+    // unparseable envelope = CRASH, never SHIPPED
+    return { outcome: { kind: 'CRASH' }, costUsd: 0, inputTokens: 0, outputTokens: 0 };
   }
   const costUsd = typeof env.total_cost_usd === 'number' ? env.total_cost_usd : 0;
-  if (env.is_error === true) return { outcome: { kind: 'CRASH' }, costUsd };
+  const { inputTokens, outputTokens } = readUsage(env);
+  if (env.is_error === true)
+    return { outcome: { kind: 'CRASH' }, costUsd, inputTokens, outputTokens };
   const tagged = extractTypedExit(typeof env.result === 'string' ? env.result : '');
-  return { outcome: tagged ?? { kind: 'SHIPPED' }, costUsd }; // clean exit, no tag = SHIPPED
+  return { outcome: tagged ?? { kind: 'SHIPPED' }, costUsd, inputTokens, outputTokens }; // clean exit, no tag = SHIPPED
 }
 
 /** Return the first balanced `{…}` JSON object substring starting at `s[0]`, or null. */

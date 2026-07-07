@@ -179,6 +179,11 @@ export class OpenSquidDaemon {
         this.auditClient = this.opts.auditClient;
         this.auditClientOwned = false;
       } else {
+        // SPLIT BOUNDARY (T-project-local-state PLS.3, pre-research §5): the always-on cross-project daemon's
+        // `audit_log` table STAYS GLOBAL. The daemon is one process serving every project (no per-request project
+        // store), so a project-local audit_log — or a local reader over a globally-written table — is the
+        // split-brain the design forbids. Do NOT repoint this onto `resolveLocalStoreDir`. Only the checkpoint +
+        // loop TABLES moved project-local (a TABLE split, not a file move).
         this.auditClient = createClient({ url: `file:${join(OPENSQUID_HOME(), 'opensquid.db')}` });
         // Concurrency posture (WAL + busy_timeout) so the always-on daemon never trips SQLITE_BUSY against a
         // concurrent lap / CLI writing opensquid.db. Awaited: in force before the first audit-log write.

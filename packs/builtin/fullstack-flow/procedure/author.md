@@ -20,6 +20,14 @@ You are in the AUTHOR (tasking) stage. Turn the plan into self-contained task sp
   works IN ITS LIVE PATH (wired into its real caller) — a built-but-dormant component needs a tracked wiring
   task, else it is INCOMPLETE. Simplest correct design; no MVP/reduced subset of the scoped design.
 
+## Emit your phase to the live status feed
+
+Emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor shows where this item is
+(pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
+
+- `set_loop_phase(phase: "research", index: 1, total: 2)` during the existing-solution search / PLAN re-audit,
+- `set_loop_phase(phase: "author", index: 2, total: 2)` while authoring the task spec(s) + coverage.
+
 ## Gate to advance (author → code): `author_ready`
 
 Passes when `author.manifest_complete` (no gated export lacks a covering requirement) ∧ `author.real_code`

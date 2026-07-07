@@ -22,10 +22,9 @@ import { promisify } from 'node:util';
 import { workGraphStore } from '../../workgraph/store.js';
 import { readPhaseLedger } from '../phase_ledger.js';
 import {
-  OPENSQUID_HOME,
+  resolveLocalStoreDir,
   resolveProjectMarker,
   resolveProjectScopeRoot,
-  resolveProjectUuidFromEnv,
   sessionLogFile,
   sessionStateFile,
 } from '../paths.js';
@@ -269,19 +268,17 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
 
   // KANBAN.5: ONE store read yields the story inputs — ALL issues (incl. closed → the `done` lane) carrying
   // status+wedgeReason, plus the ready set. Replaces the old non-closed-only {id,title} `openIssues`.
-  // T-WORKGRAPH-PROJECT-SCOPE: the workgraph is per-project — resolve this cwd's namespace (degrade a
-  // marker-less cwd to 'legacy-global', mirroring the server's resolveWgProject) so the story reflects THIS
-  // project's backlog, not the global union.
-  const wgProject =
-    (await resolveProjectMarker(cwd))?.uuid ?? resolveProjectUuidFromEnv() ?? 'legacy-global';
+  // T-project-local-state PLS.2: the workgraph is PROJECT-LOCAL — open this cwd's `<root>/.opensquid/workgraph.db`
+  // (nearest `.opensquid/` walking up) so the story reflects THIS project's backlog; the store IS the project's.
   const story = await bounded(async () => {
+    const dir = await resolveLocalStoreDir(cwd);
     const store = workGraphStore({
-      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+      dbUrl: `file:${join(dir, 'workgraph.db')}`,
+      sourceDir: join(dir, 'store', 'issues'),
     });
     await store.init();
-    const issues = await store.listIssues(wgProject);
-    const ready = await store.listReady(wgProject);
+    const issues = await store.listIssues();
+    const ready = await store.listReady();
     return {
       storyIssues: issues.map((i) => ({
         id: i.id,

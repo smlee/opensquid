@@ -39,7 +39,7 @@ import { parse as parseYaml } from 'yaml';
 import { fastembedEmbedder } from '../../rag/embedders/fastembed.js';
 import { migrateMemories } from '../../rag/migrate_memories.js';
 import { migrateWedgeLessons } from '../../rag/wedge/migrate.js';
-import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveLocalStoreDir } from '../../runtime/paths.js';
 import { rebuildWorkGraph } from '../../workgraph/store.js';
 
 // ---------------------------------------------------------------------------
@@ -314,9 +314,15 @@ export async function rebuildProjections(
     return `lessons (${String(r.migrated)})`;
   });
   await attempt('workgraph', 'opensquid rebuild', async () => {
+    // T-project-local-state PLS.5 — the workgraph is project-LOCAL now, so portability
+    // rebuilds the LOCAL board (`<root>/.opensquid/workgraph.db` from `<root>/.opensquid/store/issues`),
+    // NOT the global `homeDir` board. Start-fresh (design §6.1) deliberately ABANDONS the old global
+    // `~/.opensquid/workgraph.db` — there is intentionally NO migration/import/replay of it; a fresh
+    // local store's own `init()`/rebuild bootstraps an empty board (0 ops, no legacy-global leak).
+    const localStore = await resolveLocalStoreDir(process.cwd());
     const n = await rebuildWorkGraph({
-      dbUrl: `file:${join(homeDir, 'workgraph.db')}`,
-      sourceDir: join(homeDir, 'store', 'issues'),
+      dbUrl: `file:${join(localStore, 'workgraph.db')}`,
+      sourceDir: join(localStore, 'store', 'issues'),
     });
     return `workgraph (${String(n)} ops)`;
   });

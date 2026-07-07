@@ -81,7 +81,13 @@ describe('hasResumableState', () => {
   it('v2 pack-agnostic: a bound checkpoint beyond scope → true with NO v1 session keys (key-drift fix)', async () => {
     // The old-bug shape: v2 writes fullstack-flow-* keys (none written here), and NONE of the v1 coding-flow-*
     // keys exist. The durable checkpoint (keyed by wg id, pack-neutral) is the resume signal handoff must see.
-    const client = createClient({ url: `file:${join(home, 'opensquid.db')}` });
+    // PLS.3: the durable checkpoint is PROJECT-LOCAL (`<root>/.opensquid/opensquid.db`). Point the store seam
+    // (OPENSQUID_PROJECT_ROOT) at `home` so this write and `hasResumableState`'s `readCheckpointBySession`
+    // resolve the SAME db, instead of the retired global `home/opensquid.db`.
+    const prevRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    process.env.OPENSQUID_PROJECT_ROOT = home;
+    await mkdir(join(home, '.opensquid'), { recursive: true });
+    const client = createClient({ url: `file:${join(home, '.opensquid', 'opensquid.db')}` });
     const store = new CheckpointStore(client);
     await store.init();
     await store.createTaskCheckpoint('wg-substance-v2', 'plan', Date.now()); // stage beyond `scope`
@@ -94,6 +100,8 @@ describe('hasResumableState', () => {
     } finally {
       if (prevItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
       else process.env.OPENSQUID_ITEM_ID = prevItem;
+      if (prevRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = prevRoot;
     }
   });
 });

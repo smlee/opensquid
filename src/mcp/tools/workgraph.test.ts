@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { bindProject, workGraphStore } from '../../workgraph/store.js';
+import { workGraphStore } from '../../workgraph/store.js';
 
 import {
   handleWgAddEdge,
@@ -21,7 +21,7 @@ import {
 const fresh = async () => {
   const base = workGraphStore({ dbUrl: ':memory:' });
   await base.init();
-  return bindProject(base, 'test-project');
+  return base;
 };
 
 describe('workgraph MCP handlers', () => {
