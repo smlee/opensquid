@@ -947,11 +947,13 @@ const codeEv = {
   exit_code: 0,
 } as unknown as Event;
 
-/** Injectable pure CODE deps — a fixed task + the three facets a test wants the producer to read. */
+/** Injectable pure CODE deps — a fixed task + the four facets a test wants the producer to read. The 4th
+ *  (`suiteGreen`, SGG.2) DEFAULTS to true so the pre-existing three-arg callers keep asserting a green suite. */
 const codeDeps = (
   phasesComplete: boolean,
   ran: boolean,
   deprecatedClean: boolean,
+  suiteGreen: boolean | null = true,
 ): CodeEvidenceDeps => ({
   activeTaskId: () => Promise.resolve('T2.7'),
   // a PhaseState whose `isComplete` is `phasesComplete`: all-7 when complete, one phase when not.
@@ -965,15 +967,22 @@ const codeDeps = (
         : { task_id: 'T2.7', phases: ['pre_research'] },
     ),
   readiness: () => Promise.resolve({ ran, deprecatedClean }),
+  suite: () => Promise.resolve(suiteGreen), // SGG.2 — injected suite record (null = no record → fail-closed)
 });
 
-// The real `code_ready` guard expression, evaluated over the nested `code` object buildGuardCtx binds.
+// The real `code_ready` guard expression (its deterministic `code.*` clauses), evaluated over the nested `code`
+// object buildGuardCtx binds. Includes `code.suite_green` (SGG.3 — the appended suite-green term).
 const CODE_GUARD = new RegistryGuardEvaluator(
-  new Map([['code_ready', 'code.phases_complete && code.readiness_ran && code.deprecated_clean']]),
+  new Map([
+    [
+      'code_ready',
+      'code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green',
+    ],
+  ]),
 );
 
 describe('buildGuardCtx — T2.7 CODE binding', () => {
-  it('binds code.phases_complete/readiness_ran/deprecated_clean dual-shape (flat + nested)', async () => {
+  it('binds code.phases_complete/readiness_ran/deprecated_clean/suite_green dual-shape (flat + nested)', async () => {
     const ctx = await buildGuardCtx(
       codeEv,
       'sess-code-shape',
@@ -984,14 +993,17 @@ describe('buildGuardCtx — T2.7 CODE binding', () => {
     expect(ctx.has('code.phases_complete')).toBe(true);
     expect(ctx.has('code.readiness_ran')).toBe(true);
     expect(ctx.has('code.deprecated_clean')).toBe(true);
+    expect(ctx.has('code.suite_green')).toBe(true); // SGG.2 — flat Map key present
     const nested = ctx.get('code') as {
       phases_complete: boolean;
       readiness_ran: boolean;
       deprecated_clean: boolean;
+      suite_green: boolean;
     };
     expect(typeof nested.phases_complete).toBe('boolean');
     expect(typeof nested.readiness_ran).toBe('boolean');
     expect(typeof nested.deprecated_clean).toBe('boolean');
+    expect(typeof nested.suite_green).toBe('boolean'); // SGG.2 — nested prop present
   });
 
   it('complete phases + clean readiness → all true → code_ready PASSES (gate advances)', async () => {
@@ -1043,6 +1055,45 @@ describe('buildGuardCtx — T2.7 CODE binding', () => {
     );
     expect(ctx.get('code.readiness_ran')).toBe(false);
     expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('SGG.2/3: a RED suite → suite_green:false (all else green) → code_ready BLOCKS (kills the false-green slice)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-suite-red',
+      'code',
+      undefined,
+      codeDeps(true, true, true, false),
+    );
+    expect(ctx.get('code.phases_complete')).toBe(true);
+    expect(ctx.get('code.readiness_ran')).toBe(true);
+    expect(ctx.get('code.deprecated_clean')).toBe(true);
+    expect(ctx.get('code.suite_green')).toBe(false); // …but a red/slice suite BLOCKS
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('SGG.2/3: NO suite record (null) → suite_green:false → code_ready BLOCKS (fail-closed)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-suite-absent',
+      'code',
+      undefined,
+      codeDeps(true, true, true, null),
+    );
+    expect(ctx.get('code.suite_green')).toBe(false);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('SGG.2/3: a GREEN full suite (all else green) → suite_green:true → code_ready PASSES (gate advances)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-suite-green',
+      'code',
+      undefined,
+      codeDeps(true, true, true, true),
+    );
+    expect(ctx.get('code.suite_green')).toBe(true);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(true);
   });
 
   it('FAIL-CLOSED: no active task (default deps, no signal) → all false → BLOCKS', async () => {

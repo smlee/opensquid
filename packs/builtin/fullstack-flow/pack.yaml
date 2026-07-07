@@ -131,7 +131,13 @@ guards:
   # ADVANCE. FAIL-OPEN to true (no active task / no committed sub-issues / a workgraph read error → resolved), so
   # a leaf task with no decomposition passes exactly as before. This is where "mandatory reporting" bites: a
   # parent task cannot leave CODE while its committed checklist has a silently-open item (design §6, §7.3).
-  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && report.resolved && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
+  # SGG.2/3 (T-code-suite-green-gate) — + the SUITE-GREEN facet: `code.suite_green` = the recorded FULL declared
+  # verifySuite (`.opensquid/active.json` verifySuite — for opensquid `bash scripts/pre-push.sh`) came back green,
+  # repo-wide. This kills the FALSE-GREEN SLICE: CODE's `test` phase must run the whole pre-push bar DEPLOY runs
+  # (procedure/code.md), not a self-selected subset — a slice that passes while the full suite is red no longer
+  # advances CODE. FAIL-CLOSED (no record / red → false), mirroring DEPLOY's `deploy.clean` suite floor
+  # (deploy_evidence.ts). Grouped with the deterministic `code.*` facets, before `report.resolved`.
+  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green && report.resolved && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
   # T2.8 — the DEPLOY gate: a deterministic, zero-LLM predicate. `deploy.capability_ok` = the shipped
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.

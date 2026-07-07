@@ -21,7 +21,7 @@ import { appendTool, recordSessionCwd, writeActiveTask } from '../session_state.
 import { readFsmStateRaw, readFsmStateFile, persistActorState } from '../fsm_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../workflow_phases.js';
 import { recordReadiness } from './readiness.js';
-import { readVerification } from './verification.js';
+import { readVerification, recordSuite } from './verification.js';
 import { appendAcceptance, markAccepted } from './acceptance.js';
 import type { Event } from '../event.js';
 
@@ -153,11 +153,12 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     expect((await readFsmStateFile(sid, 'fullstack-flow', taskId))?.state).toBe('code');
   });
 
-  it('CODE gate PASSES live with all 7 phases logged + clean readiness → advances to deploy', async () => {
+  it('CODE gate PASSES live with all 7 phases logged + clean readiness + green suite → advances to deploy', async () => {
     mockLoad.mockResolvedValue([await loadPackV2(FSF)]);
     const { sid, taskId } = await freshTaskSession('code');
     for (const p of REQUIRED_PHASES) await appendPhase(sid, taskId, p); // all 7 logged for the task
     await recordReadiness(sid, taskId, { affected: [], existingDefs: [], deprecated: [] }); // ran + deprecated_clean
+    await recordSuite(sid, taskId, true); // SGG.2 — the FULL declared verifySuite recorded green (not a slice)
     await seedVerdict(sid, 'code'); // GFR.2: the CODE verdict
     await seedVerdict(sid, 'author'); // GFR.3: the rolling re-assert of the prior AUTHOR verdict
 

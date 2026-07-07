@@ -358,18 +358,24 @@ export async function buildGuardCtx(
   m.set('report.resolved', reportResolvedFacet);
   m.set('report', { resolved: reportResolvedFacet });
 
-  // T2.7 — CODE gate evidence. THREE facets: `phases_complete` (the shipped 7-phase ledger `isComplete` for the
-  // active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧ `deprecated_clean` (the
-  // recorded readiness found NO deprecated call — the BLOCKING result, gates on the RESULT not merely "ran").
-  // DUAL-SHAPE like T2.4/T2.5/T2.6: a nested `code` object (the path the guard
-  // `code.phases_complete && code.readiness_ran && code.deprecated_clean` resolves) PLUS flat `code.*` Map keys
-  // (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `codeDeps` is injectable
-  // (tests pass pure readers); the default binds the shipped runtime readers. FAIL-CLOSED on no active task /
-  // any throw → {false,false,false}: an unprovable CODE blocks (never auto-"ready").
+  // T2.7 + SGG.2 — CODE gate evidence. FOUR deterministic facets: `phases_complete` (the shipped 7-phase ledger
+  // `isComplete` for the active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧
+  // `deprecated_clean` (the recorded readiness found NO deprecated call — the BLOCKING result, gates on the
+  // RESULT not merely "ran") ∧ `suite_green` (SGG.2 — the recorded FULL declared verifySuite came back green, not
+  // a self-selected slice). DUAL-SHAPE like T2.4/T2.5/T2.6: a nested `code` object (the path the guard
+  // `code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green` resolves) PLUS flat
+  // `code.*` Map keys (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `codeDeps`
+  // is injectable (tests pass pure readers); the default binds the shipped runtime readers. FAIL-CLOSED on no
+  // active task / any throw → {false,false,false,false}: an unprovable CODE blocks (never auto-"ready").
   const co = await codeEvidenceForSession(sessionId, codeDeps);
   m.set('code.phases_complete', co.phasesComplete);
   m.set('code.readiness_ran', co.readinessRan);
   m.set('code.deprecated_clean', co.deprecatedClean);
+  // SGG.2 — the FOURTH deterministic CODE facet: `suite_green` = the recorded FULL declared verifySuite came
+  // back green (the `test` phase ran the whole pre-push bar, not a self-selected slice). FAIL-CLOSED (no record
+  // / red → false), mirroring DEPLOY's `deploy.clean` suite read. This kills the false-green slice: a CODE lap
+  // that ran only a subset leaves no green suite record → `code.suite_green:false` → `code_ready` blocks.
+  m.set('code.suite_green', co.suiteGreen);
   // E2c/E2a — the external half of the CODE gate, CONDITIONAL on `external_needed` (same diff-derived predicate
   // as AUTHOR). `consulted_before` (E2c: read the task's APIs in the official docs BEFORE coding — the `before`
   // bucket) ∧ `audited` (E2a: the CODE·after AUDIT is a SECOND research run reaching EXTERNAL — the `after`
@@ -382,6 +388,7 @@ export async function buildGuardCtx(
     phases_complete: co.phasesComplete,
     readiness_ran: co.readinessRan,
     deprecated_clean: co.deprecatedClean,
+    suite_green: co.suiteGreen, // SGG.2 — nested prop (the path the guard `code.suite_green` resolves)
     consulted_before: consult.before,
     audited: consult.after,
     external_needed: externalNeeded,
@@ -1079,6 +1086,7 @@ export async function runV2Cartridges(
               { label: 'phases_complete', ok: code.phasesComplete },
               { label: 'readiness_ran', ok: code.readinessRan },
               { label: 'deprecated_clean', ok: code.deprecatedClean },
+              { label: 'suite_green', ok: code.suiteGreen }, // SGG.2 — the FULL verifySuite ran green (not a slice)
             ],
             phases: CODE_PHASES.map((name) => ({ name, done: true })),
           },
