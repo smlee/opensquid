@@ -2123,3 +2123,14 @@ LoopStatus
 loopLockPath
 loopPidPath
 resolveLoopEntrypoint
+
+# --- baseline maintenance (T-opensquid-release-flow, CODE, 2026-07-07): the DATA-shape / seam type exports of
+# the release flow (REL.1/REL.2/REL.4). The BEHAVIORAL exports (mergeToMain/…/versionAlreadyPublished,
+# parseConventionalCommit/…/nextVersion, runCommitMsgGate, runRelease/registerRelease) carry reachable
+# requirements in ARCHITECTURE.md §10; these are pure type/interface shapes (the parsed-commit + bump-level
+# types, the injectable npm-view + release-deps seams) — data-shape, not a live path, no covering requirement.
+# Same class the loop-autospawn / chat-daemon *Deps precedent allowlists. ---
+ParsedCommit
+BumpLevel
+NpmView
+ReleaseDeps

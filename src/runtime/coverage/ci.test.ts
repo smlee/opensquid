@@ -38,6 +38,26 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     expect(byId['R-LOOP-AUTOSPAWN']).toBe('met'); // ensureLoopRunning (idempotent/single-flight/fail-open)
     expect(byId['R-LOOP-STATUS']).toBe('met'); // loopStatus (project-local pidfile liveness)
     expect(byId['R-LOOP-START']).toBe('met'); // startLoop (detached background spawn)
-    expect(a.results.length).toBe(16); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn (ATL.4)
+    // T-opensquid-release-flow (REL.1..REL.4) — 14 new behavioral exports, each MET via its element proof-test;
+    // the data-shape siblings (ParsedCommit/BumpLevel/NpmView/ReleaseDeps) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-RELEASE-MERGE',
+      'R-RELEASE-TAG',
+      'R-RELEASE-READ-VERSION',
+      'R-RELEASE-WRITE-VERSION',
+      'R-RELEASE-LAST-TAG',
+      'R-RELEASE-SUBJECTS',
+      'R-RELEASE-PUBLISHED',
+      'R-RELEASE-PARSE',
+      'R-RELEASE-VALIDATE-MSG',
+      'R-RELEASE-BUMP-LEVEL',
+      'R-RELEASE-NEXT-VERSION',
+      'R-RELEASE-COMMIT-MSG-GATE',
+      'R-RELEASE-RUN',
+      'R-RELEASE-REGISTER',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    expect(a.results.length).toBe(30); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release
   }, 30_000);
 });

@@ -65,6 +65,10 @@
   ],
   "author": "Sangmin Lee <sangmlee23@gmail.com>",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/smlee/opensquid.git"

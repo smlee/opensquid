@@ -41,6 +41,12 @@ import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
 import { sha256Hex } from '../../runtime/durable/run_id.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../../runtime/paths.js';
 import { PROTECTED_PREFIXES, isDocsOnly } from '../../runtime/protected_paths.js';
+import {
+  commitSubjectsSince,
+  // REL.3: the shared conventional-commit predicate — single-sourced from REL.2, imported both here (the
+  // commit-msg gate + the pre-push range backstop) and by REL.4's bump path. No duplicate parser.
+} from '../../runtime/release/release_core.js';
+import { validateConventionalMessage } from '../../runtime/release/release_semver.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
 import { readSuite } from '../../runtime/loop/verification.js';
 import { readActiveTask } from '../../runtime/session_state.js';
@@ -276,6 +282,12 @@ export async function runGate(
 ): Promise<number> {
   const pack = await activeDisciplinePack(cwd);
   if (pack === null) return 0; // no discipline pack pinned → never block
+  // REL.3 pre-push backstop: range-validate the pushed commits' conventional-commit format (defense-in-depth
+  // behind the commit-msg hook). Runs even for a docs-only push — the format check is orthogonal to the flow gate.
+  if (boundary === 'push') {
+    const backstop = await runPushMessageBackstop(cwd, env);
+    if (backstop !== 0) return backstop;
+  }
   const files = await changedFiles(boundary, cwd);
   if (files.length === 0) return 0; // nothing to gate (amend / empty / undetermined)
   if (isDocsOnly(files)) return 0; // flow artifacts only → allow
@@ -411,6 +423,55 @@ export async function runAttest(
   }
 }
 
+/** REL.3 (T-opensquid-release-flow) — the conventional-commit format gate. Fail-CLOSED but SCOPED exactly like
+ *  `commitAllowedNow`: a NON-gated repo or a HUMAN invocation ALWAYS passes (0) — a human's natural commit is never
+ *  format-blocked (the GDC.1 subject-is-the-agent invariant). A non-parsing message in a gated AGENT commit blocks
+ *  (2), because auto-versioning (REL.2's `bumpLevel`) needs the message to parse. git's comment lines (`#`) and the
+ *  `--verbose`/`commit.status` scissors diff are stripped — only the subject is validated. */
+export async function runCommitMsgGate(
+  msgfile: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  if (!(await isGatedRepo(cwd))) return 0;
+  if (!isAgentInvocation(env)) return 0; // humans commit naturally (GDC.1)
+  const raw = await readFile(msgfile, 'utf8').catch(() => '');
+  const message = raw
+    .split('\n')
+    .filter((l) => !l.startsWith('#'))
+    .join('\n')
+    .trim();
+  if (message === '') return 0; // empty message → git aborts the commit itself; nothing to gate
+  if (validateConventionalMessage(message)) return 0;
+  return block(
+    `commit message is not a conventional commit (type(scope): subject). Auto-versioning needs it. ` +
+      `Got: ${message.split('\n')[0]}`,
+  );
+}
+
+/** REL.3 pre-push backstop (defense-in-depth behind the commit-msg hook): range-validate the pushed commits'
+ *  subjects (`@{u}..HEAD`), blocking a push that carries a non-conventional commit. SCOPED to gated agent pushes;
+ *  tolerant of a missing upstream (a brand-new branch → can't range → don't block). Merge commits (`Merge …`) are
+ *  skipped — they never run commit-msg and are not release-classified by `bumpLevel`. NOT retro-validation: the
+ *  range is the delta being pushed, not the branch's whole history. Returns 0 (allow) or 2 (block). */
+async function runPushMessageBackstop(cwd: string, env: NodeJS.ProcessEnv): Promise<number> {
+  if (!isAgentInvocation(env)) return 0; // humans push naturally (GDC.1)
+  let subjects: string[];
+  try {
+    subjects = await commitSubjectsSince('@{u}', cwd); // throws when there is no upstream → tolerated below
+  } catch {
+    return 0; // no resolvable range (new branch / detached) → nothing to backstop
+  }
+  const offending = subjects.find(
+    (s) => !s.startsWith('Merge ') && !validateConventionalMessage(s),
+  );
+  if (offending === undefined) return 0;
+  return block(
+    `pre-push backstop: a pushed commit's message is not a conventional commit (auto-versioning needs it). ` +
+      `Got: ${offending}`,
+  );
+}
+
 /** Resolve the git work-tree root for `cwd`, or null if not in a repo. */
 export async function gitRoot(cwd: string): Promise<string | null> {
   try {
@@ -444,6 +505,16 @@ export function registerGate(program: Command): void {
     )
     .action(async () => {
       process.exit(await runAttest(process.cwd()));
+    });
+  // REL.3 — commit-msg: block a commit whose message is not a conventional commit (auto-versioning input).
+  gate
+    .command('commit-msg')
+    .description(
+      'commit-msg: block a commit whose message is not a conventional commit (auto-versioning input)',
+    )
+    .argument('<msgfile>', 'path to the git COMMIT_EDITMSG file (git passes it as $1)')
+    .action(async (msgfile: string) => {
+      process.exit(await runCommitMsgGate(msgfile, process.cwd()));
     });
   // scope-4 (§2.4): the LAP-RUNNABLE CODE audit-on-diff — regenerate the exact artifact the commit gate checks,
   // so an honest headless lap (hooks disabled) clears the gate without gate-gaming.

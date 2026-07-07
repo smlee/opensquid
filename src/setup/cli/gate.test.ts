@@ -15,7 +15,7 @@ import { recordSessionCwd, writeActiveTask } from '../../runtime/session_state.j
 import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
 
 import { readAttestedShas } from './attestations.js';
-import { commitAllowedNow, isGatedRepo, runAttest, runGate } from './gate.js';
+import { commitAllowedNow, isGatedRepo, runAttest, runCommitMsgGate, runGate } from './gate.js';
 
 // GDC.1 — every gate call injects the env explicitly (ambient env must never
 // decide: CI runners carry no agent marker, the authoring session carries
@@ -230,14 +230,16 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
     await git(['push', '-q', '-u', 'origin', 'HEAD'], repo);
   }
 
+  // REL.3: messages are conventional — post-REL.3 every agent commit parses (the commit-msg hook enforces it),
+  // so the range backstop is a clean pass here and these tests isolate the ATTESTATION behavior they target.
   it('HANDOVER SCENARIO: range fully attested + authoring session GONE → ALLOW', async () => {
     await makeGated();
     await stage('docs/base.md');
-    await commit('base');
+    await commit('chore: base');
     await wireUpstream();
     await stage('src/x.ts');
     await driveComplete();
-    await commit('code in session A');
+    await commit('feat: code in session A');
     await runAttest(repo, AGENT_ENV);
     await killSession(); // session A is gone — only the attestation survives
     expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
@@ -246,11 +248,11 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
   it('same scenario WITHOUT the attestation → BLOCK (fail-closed unchanged)', async () => {
     await makeGated();
     await stage('docs/base.md');
-    await commit('base');
+    await commit('chore: base');
     await wireUpstream();
     await stage('src/x.ts');
     await driveComplete();
-    await commit('code in session A'); // NOT attested
+    await commit('feat: code in session A'); // NOT attested
     await killSession();
     expect(await runGate('push', repo, AGENT_ENV)).toBe(2);
   });
@@ -258,14 +260,14 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
   it('mixed range: one attested code commit + one docs-only commit → ALLOW', async () => {
     await makeGated();
     await stage('docs/base.md');
-    await commit('base');
+    await commit('chore: base');
     await wireUpstream();
     await stage('src/x.ts');
     await driveComplete();
-    await commit('code');
+    await commit('feat: code');
     await runAttest(repo, AGENT_ENV);
     await stage('docs/more.md');
-    await commit('docs ride along');
+    await commit('docs: ride along');
     await killSession();
     expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
   });
@@ -273,14 +275,14 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
   it('one UNATTESTED code commit in the range poisons the push → BLOCK', async () => {
     await makeGated();
     await stage('docs/base.md');
-    await commit('base');
+    await commit('chore: base');
     await wireUpstream();
     await stage('src/x.ts');
     await driveComplete();
-    await commit('attested');
+    await commit('feat: attested');
     await runAttest(repo, AGENT_ENV);
     await stage('src/y.ts');
-    await commit('rogue — never attested');
+    await commit('feat: rogue never attested');
     await killSession();
     expect(await runGate('push', repo, AGENT_ENV)).toBe(2);
   });
@@ -288,11 +290,11 @@ describe('PGB.2 — runGate "push" with attestation range check', () => {
   it('live completed session still allows an unattested push (fallback unchanged)', async () => {
     await makeGated();
     await stage('docs/base.md');
-    await commit('base');
+    await commit('chore: base');
     await wireUpstream();
     await stage('src/x.ts');
     await driveComplete();
-    await commit('code'); // not attested, but the session is alive + complete
+    await commit('feat: code'); // not attested, but the session is alive + complete
     expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
   });
 });
@@ -571,5 +573,91 @@ describe('project-only operation — the user/home scope (~/.opensquid) no longe
     await stage('src/x.ts');
     expect(await isGatedRepo(repo)).toBe(true);
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+});
+
+// REL.3 (T-opensquid-release-flow) — the commit-msg format gate + the pre-push range backstop.
+describe('REL.3 — runCommitMsgGate (conventional-commit format)', () => {
+  async function writeMsg(text: string): Promise<string> {
+    const p = join(repo, '.git', 'COMMIT_EDITMSG');
+    await writeFile(p, text, 'utf8');
+    return p;
+  }
+
+  it('gated agent + conventional message → ALLOW (0)', async () => {
+    await makeGated();
+    const msg = await writeMsg('feat(release): add opensquid release\n');
+    expect(await runCommitMsgGate(msg, repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('gated agent + non-conventional message → BLOCK (2)', async () => {
+    await makeGated();
+    const msg = await writeMsg('wip nonsense\n');
+    expect(await runCommitMsgGate(msg, repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('NON-gated repo → ALLOW (0) regardless of format', async () => {
+    const msg = await writeMsg('wip nonsense\n');
+    expect(await runCommitMsgGate(msg, repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('HUMAN invocation → ALLOW (0) even in a gated repo (GDC.1)', async () => {
+    await makeGated();
+    const msg = await writeMsg('wip nonsense\n');
+    expect(await runCommitMsgGate(msg, repo, HUMAN_ENV)).toBe(0);
+  });
+
+  it('strips git comment/scissors lines before validating the subject', async () => {
+    await makeGated();
+    const msg = await writeMsg(
+      'fix: real subject\n# Please enter the commit message…\n# ------------------------ >8 ------------------------\ndiff --git a/x b/x\n',
+    );
+    expect(await runCommitMsgGate(msg, repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('empty (comment-only) message → ALLOW (git aborts the commit itself)', async () => {
+    await makeGated();
+    const msg = await writeMsg('# only a comment\n');
+    expect(await runCommitMsgGate(msg, repo, AGENT_ENV)).toBe(0);
+  });
+});
+
+describe('REL.3 — pre-push conventional-commit backstop (defense-in-depth)', () => {
+  /** Give `repo` an upstream with the given committed subjects ahead of it, so `@{u}..HEAD` is a real range. */
+  async function pushSetup(aheadSubjects: string[]): Promise<void> {
+    await makeGated();
+    await git(['commit', '--allow-empty', '-q', '-m', 'chore: base'], repo);
+    const bare = await mkdtemp(join(tmpdir(), 'opensquid-gate-remote-'));
+    await execFileP('git', ['init', '-q', '--bare'], { cwd: bare });
+    await git(['remote', 'add', 'origin', bare], repo);
+    await git(['push', '-q', '-u', 'origin', 'HEAD'], repo); // upstream now = base
+    for (const s of aheadSubjects) await git(['commit', '--allow-empty', '-q', '-m', s], repo);
+  }
+
+  it('all-conventional range → ALLOW (0)', async () => {
+    await pushSetup(['feat: a', 'fix: b']);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('a non-conventional commit in the range → BLOCK (2)', async () => {
+    await pushSetup(['feat: a', 'wip broken']);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('a human push is never format-blocked (GDC.1)', async () => {
+    await pushSetup(['wip broken']);
+    expect(await runGate('push', repo, HUMAN_ENV)).toBe(0);
+  });
+
+  it('no upstream (new branch) → tolerated, no backstop block', async () => {
+    await makeGated();
+    await git(['commit', '--allow-empty', '-q', '-m', 'wip no upstream'], repo);
+    // @{u} does not resolve → the backstop can't range → does not block on that account.
+    // (The flow gate may still block for other reasons; assert the backstop specifically is a no-op via a
+    // docs-only change so the flow gate passes and only the backstop could bite.)
+    await stage('docs/x.md');
+    await git(['add', 'docs/x.md'], repo);
+    await git(['commit', '-q', '-m', 'wip no upstream 2'], repo);
+    expect(await runGate('push', repo, AGENT_ENV)).toBe(0);
   });
 });

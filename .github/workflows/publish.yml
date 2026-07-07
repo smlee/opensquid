@@ -1,0 +1,47 @@
+# .github/workflows/publish.yml — REL.6 (T-opensquid-release-flow): tag-triggered npm publish, guarded by the
+# version-difference check (REL.1's versionAlreadyPublished, run from the built dist/). Tag-only trigger — publish
+# is never on branch/PR push; the irreversible publish fires ONLY after a clean-env green build AND only when the
+# version is new (an already-published version is a clean no-op, exit 0, NOT a failure). NPM_TOKEN is a GitHub
+# secret (REL.7's human-provisioned prerequisite), never in the repo.
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org' # honors REL.7's publishConfig.registry; enables NODE_AUTH_TOKEN
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build # produces dist/, incl. dist/runtime/release/release_core.js for the guard
+      - name: Version-difference guard (REL.1 versionAlreadyPublished)
+        id: guard
+        run: |
+          node -e "
+            const { name, version } = require('./package.json');
+            import('./dist/runtime/release/release_core.js').then(async (m) => {
+              const published = await m.versionAlreadyPublished(name, version);
+              const fs = require('fs');
+              if (published) { console.log('v' + version + ' already published — skip'); }
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'publish=' + (published ? 'false' : 'true') + '\n');
+            }).catch((e) => { console.error(e); process.exit(1); });
+          "
+      - name: Publish to npm
+        if: steps.guard.outputs.publish == 'true'
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

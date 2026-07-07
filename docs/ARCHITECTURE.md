@@ -390,4 +390,80 @@ requirements:
     wg: wg-fecabb8ff29f
     assert: { kind: reachable, symbol: startLoop, from: [post-tool-use] }
     proof: 'src/runtime/ralph/loop_autospawn.test.ts'
+
+  # T-opensquid-release-flow (REL.1..REL.4) — the release flow's new BEHAVIORAL exports: one reachable
+  # requirement per export, its element test the proof (the authority). The `from` hints are advisory — these
+  # surface through the `opensquid release` CLI / the commit-msg git hook / the CI publish guard, not a hook
+  # builder, so a negative static pre-filter never vetoes a passing proof. The DATA-shape exports (ParsedCommit /
+  # BumpLevel / NpmView / ReleaseDeps) are baselined in the allowlist, per the *Deps / *Path precedent.
+  - id: R-RELEASE-MERGE
+    intent: 'REL.1 mergeToMain: FF else merge-commit feat/* → main (mechanics only, no policy)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: mergeToMain, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-TAG
+    intent: 'REL.1 tagAndPushTag: git tag v<version> on HEAD + push the tag'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: tagAndPushTag, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-READ-VERSION
+    intent: 'REL.1 readPackageVersion: read package.json version'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: readPackageVersion, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-WRITE-VERSION
+    intent: 'REL.1 writePackageVersion: targeted field replace (no re-serialize; preserves formatting)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: writePackageVersion, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-LAST-TAG
+    intent: 'REL.1 lastReleaseTag: newest v* tag or null (git describe)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: lastReleaseTag, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-SUBJECTS
+    intent: 'REL.1 commitSubjectsSince: commit subjects in <ref>..HEAD (the bump input)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: commitSubjectsSince, from: [release, commit-msg] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-PUBLISHED
+    intent: 'REL.1 versionAlreadyPublished: the version-difference guard (npm view exact-version probe, fail-safe)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: versionAlreadyPublished, from: [publish-ci] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-PARSE
+    intent: 'REL.2 parseConventionalCommit: parse type(scope)!: subject + BREAKING footer → ParsedCommit | null'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: parseConventionalCommit, from: [release, commit-msg] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-VALIDATE-MSG
+    intent: 'REL.2/REL.3 validateConventionalMessage: the shared commit-msg gate predicate (single parser)'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: validateConventionalMessage, from: [commit-msg] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-BUMP-LEVEL
+    intent: 'REL.2 bumpLevel: fold parsed commits → highest bump (breaking>feat>fix>null)'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: bumpLevel, from: [release] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-NEXT-VERSION
+    intent: 'REL.2 nextVersion: apply a BumpLevel to a semver (null → unchanged, the no-bump signal)'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: nextVersion, from: [release] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-COMMIT-MSG-GATE
+    intent: 'REL.3 runCommitMsgGate: block a non-conventional agent commit (scoped fail-closed, gated ∧ agent)'
+    wg: wg-d043e1002f6d
+    assert: { kind: reachable, symbol: runCommitMsgGate, from: [commit-msg] }
+    proof: 'src/setup/cli/gate.test.ts'
+  - id: R-RELEASE-RUN
+    intent: 'REL.4 runRelease: the sequence (precondition → merge → bump → tag), refuse-red, skip-when-null'
+    wg: wg-7bf3ae9f592b
+    assert: { kind: reachable, symbol: runRelease, from: [release] }
+    proof: 'src/setup/cli/release.test.ts'
+  - id: R-RELEASE-REGISTER
+    intent: 'REL.4 registerRelease: the `opensquid release` top-level command wired into cli.ts'
+    wg: wg-7bf3ae9f592b
+    assert: { kind: reachable, symbol: registerRelease, from: [release] }
+    proof: 'src/setup/cli/release.test.ts'
 ```
