@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 
 import { createClient, type Client } from '@libsql/client';
 
+import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import { ftsEscape } from '../backends/libsql_store.js';
 
 import {
@@ -202,6 +203,10 @@ export function wedgeLessonStore(opts: {
   return {
     async init() {
       client = createClient({ url: opts.dbUrl });
+      // Parallel buildRegistry() (vitest workers / concurrent suite) opens the same
+      // wg_lessons.db — without WAL + busy_timeout a second CREATE TABLE throws SQLITE_BUSY
+      // and surfaces as flaky "live registry" failures.
+      await applyConcurrencyPragmas(client);
       await client.execute(`CREATE TABLE IF NOT EXISTS wg_lessons (
         id TEXT PRIMARY KEY, description TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL,
         authored_by TEXT NOT NULL, pack_id TEXT, external_id TEXT,

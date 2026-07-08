@@ -105,6 +105,25 @@ describe('runHooksWizard — dry-run', () => {
 });
 
 describe('runHooksWizard — write mode', () => {
+  // Stub agents/context harness probes — real hasBinaryOnPath + installAgentsContext can exceed
+  // vitest's 5s default under a full parallel suite (PATH walks), unrelated to the writer under test.
+  const writeDeps = (cwd: string, home: string, seenPaths: string[]) => ({
+    writer: (p: string) => {
+      seenPaths.push(p);
+      return Promise.resolve({
+        added: 4,
+        replaced: 0,
+        preserved: 0,
+        backupPath: `${p}.bak`,
+      });
+    },
+    cwd: () => cwd,
+    home: () => home,
+    hasBinary: () => Promise.resolve(false),
+    stdout: recordStdout,
+    stderr: recordStderr,
+  });
+
   it('calls the writer once for the user target (--user-only flag)', async () => {
     const fakeHome = join(root, 'home');
     const fakeCwd = join(root, 'isolated');
@@ -112,17 +131,8 @@ describe('runHooksWizard — write mode', () => {
 
     const seenPaths: string[] = [];
     await runHooksWizard(
-      { userOnly: true },
-      {
-        writer: (p) => {
-          seenPaths.push(p);
-          return Promise.resolve({ added: 4, replaced: 0, preserved: 0, backupPath: `${p}.bak` });
-        },
-        cwd: () => fakeCwd,
-        home: () => fakeHome,
-        stdout: recordStdout,
-        stderr: recordStderr,
-      },
+      { userOnly: true, agents: false, context: false },
+      writeDeps(fakeCwd, fakeHome, seenPaths),
     );
 
     expect(seenPaths).toEqual([join(fakeHome, '.claude', 'settings.json')]);
@@ -138,19 +148,7 @@ describe('runHooksWizard — write mode', () => {
     await mkdir(nested, { recursive: true });
 
     const seenPaths: string[] = [];
-    await runHooksWizard(
-      {},
-      {
-        writer: (p) => {
-          seenPaths.push(p);
-          return Promise.resolve({ added: 4, replaced: 0, preserved: 0, backupPath: `${p}.bak` });
-        },
-        cwd: () => nested,
-        home: () => fakeHome,
-        stdout: recordStdout,
-        stderr: recordStderr,
-      },
-    );
+    await runHooksWizard({ agents: false, context: false }, writeDeps(nested, fakeHome, seenPaths));
 
     expect(seenPaths).toEqual([
       join(fakeHome, '.claude', 'settings.json'),

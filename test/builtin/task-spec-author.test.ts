@@ -35,6 +35,7 @@ describe('builtin task-spec-author profession pack', () => {
   it('passes validatePackFunctions (no rules → no primitive refs to resolve)', async () => {
     const pack = await loadPack(resolve('packs/builtin/task-spec-author'));
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),

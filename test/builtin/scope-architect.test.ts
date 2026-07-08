@@ -56,6 +56,7 @@ describe('builtin scope-architect pack', () => {
   it('every process step references a registered primitive', async () => {
     const pack = await loadPack(resolve('packs/builtin/scope-architect'));
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),

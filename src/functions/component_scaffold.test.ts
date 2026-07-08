@@ -47,10 +47,23 @@ describe('component_scaffold', () => {
   });
 });
 
+async function liveRegistry() {
+  const { buildRegistry } = await import('../runtime/bootstrap.js');
+  return buildRegistry({
+    lessonStore: null,
+    backend: {
+      init: () => Promise.resolve(),
+      embed: () => Promise.resolve(null),
+      recall: () => Promise.resolve([]),
+      storeLesson: () => Promise.resolve(),
+      deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+    },
+  });
+}
+
 describe('component_scaffold primitive (live registry)', () => {
   it('is registered + returns the requested scaffold', async () => {
-    const { buildRegistry } = await import('../runtime/bootstrap.js');
-    const r = await buildRegistry();
+    const r = await liveRegistry();
     const res = await r.call('component_scaffold', { kind: 'dialog' }, CTX);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -58,8 +71,7 @@ describe('component_scaffold primitive (live registry)', () => {
   });
 
   it('rejects an unknown kind at the Zod boundary', async () => {
-    const { buildRegistry } = await import('../runtime/bootstrap.js');
-    const r = await buildRegistry();
+    const r = await liveRegistry();
     const res = await r.call('component_scaffold', { kind: 'carousel' }, CTX);
     expect(res.ok).toBe(false);
   });

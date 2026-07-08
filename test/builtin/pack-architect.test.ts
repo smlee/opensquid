@@ -104,6 +104,7 @@ describe('builtin pack-architect pack (T-MULTIMODE MM.4)', () => {
   it('every process step references a registered primitive', async () => {
     const pack = await loadPack(resolve('packs/builtin/pack-architect'));
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),

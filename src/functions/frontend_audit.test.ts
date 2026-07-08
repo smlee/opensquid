@@ -97,10 +97,24 @@ describe('auditFiles — aggregate', () => {
   });
 });
 
+/** Live registry without wedge/RAG I/O — avoids shared wg_lessons.db SQLITE_BUSY under parallel vitest. */
+async function liveRegistry() {
+  const { buildRegistry } = await import('../runtime/bootstrap.js');
+  return buildRegistry({
+    lessonStore: null,
+    backend: {
+      init: () => Promise.resolve(),
+      embed: () => Promise.resolve(null),
+      recall: () => Promise.resolve([]),
+      storeLesson: () => Promise.resolve(),
+      deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+    },
+  });
+}
+
 describe('frontend_audit primitive (live registry)', () => {
   it('is registered, dispatches through Zod, and enriches a finding with its primary source url', async () => {
-    const { buildRegistry } = await import('../runtime/bootstrap.js');
-    const r = await buildRegistry();
+    const r = await liveRegistry();
     const res = await r.call(
       'frontend_audit',
       { files: [{ path: 'Card.tsx', content: '<img src="x">' }] },
@@ -119,8 +133,7 @@ describe('frontend_audit primitive (live registry)', () => {
   });
 
   it('rejects a malformed args shape at the Zod boundary', async () => {
-    const { buildRegistry } = await import('../runtime/bootstrap.js');
-    const r = await buildRegistry();
+    const r = await liveRegistry();
     const res = await r.call('frontend_audit', { files: [{ path: 'a.tsx' }] }, CTX); // missing content
     expect(res.ok).toBe(false);
   });

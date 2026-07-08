@@ -70,6 +70,7 @@ describe('builtin default-discipline pack', () => {
     // independent of which backend services the calls — validatePackFunctions
     // only checks primitive names are registered.
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),
@@ -101,6 +102,7 @@ describe('builtin default-discipline pack', () => {
     expect(pack.driftResponse?.per_rule['claim-without-evidence']).toBe('warn');
 
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),
@@ -126,6 +128,7 @@ describe('builtin default-discipline pack', () => {
     const pack = await loadPack(resolve('packs/builtin/default-discipline'));
     expect(pack.driftResponse?.per_rule['claim-evidence-block']).toBe('block_tool');
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),
@@ -240,6 +243,7 @@ describe('builtin default-discipline pack', () => {
     });
 
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),
@@ -282,6 +286,7 @@ describe('builtin default-discipline pack', () => {
     });
 
     const registry = await buildRegistry({
+      lessonStore: null,
       backend: {
         init: () => Promise.resolve(),
         embed: () => Promise.resolve(null),

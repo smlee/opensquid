@@ -117,10 +117,24 @@ describe('filterRules (pure)', () => {
     ]));
 });
 
+/** Live registry without wedge/RAG I/O — avoids shared wg_lessons.db SQLITE_BUSY under parallel vitest. */
+async function liveRegistry() {
+  const { buildRegistry } = await import('../runtime/bootstrap.js');
+  return buildRegistry({
+    lessonStore: null,
+    backend: {
+      init: () => Promise.resolve(),
+      embed: () => Promise.resolve(null),
+      recall: () => Promise.resolve([]),
+      storeLesson: () => Promise.resolve(),
+      deleteLesson: () => Promise.resolve({ deleted: false, forced: false }),
+    },
+  });
+}
+
 describe('knowledge_lookup primitive (live registry)', () => {
   it('is registered + dispatches through Zod validation (returns ok)', async () => {
-    const { buildRegistry } = await import('../runtime/bootstrap.js');
-    const r = await buildRegistry();
+    const r = await liveRegistry();
     // A missing dataset is fail-loud→null (ok(null)); FD2 adds the real dataset + asserts its shape.
     const res = await r.call(
       'knowledge_lookup',
@@ -131,8 +145,7 @@ describe('knowledge_lookup primitive (live registry)', () => {
   });
 
   it('rejects a path-unsafe dataset name at the Zod boundary', async () => {
-    const { buildRegistry } = await import('../runtime/bootstrap.js');
-    const r = await buildRegistry();
+    const r = await liveRegistry();
     const res = await r.call('knowledge_lookup', { pack: 'x', dataset: '../escape' }, CTX);
     expect(res.ok).toBe(false); // regex-constrained arg → validation error
   });
