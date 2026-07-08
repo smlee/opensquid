@@ -236,18 +236,8 @@ export interface ActiveJson {
    * project that omits it still resolves. ABSENT/malformed ⇒ `readActiveVersioning` → null ⇒ core falls back to
    * the PACK default. SUPERSEDES the naive `bumpLevel`/`nextVersion` (release_semver.ts:39-54) in the automated
    * flow — that intent-from-commit semver is no longer consulted once the locked-prefix path is active.
-   *
-   * Prefer folding under `version-control.versioning` (see version_control.ts); top-level kept for back-compat.
    */
   versioning?: VersioningConfig;
-  /**
-   * Git-flow topology: environments { production?, staging?, local? }. Presence of staging is the stage toggle.
-   * Read via readVersionControl (src/runtime/release/version_control.ts); not parsed here.
-   */
-  'version-control'?: {
-    environments?: { production?: string; staging?: string; local?: string };
-    versioning?: VersioningConfig;
-  };
 }
 
 /**

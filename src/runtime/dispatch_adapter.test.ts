@@ -42,22 +42,41 @@ const toolCall = (tool: string): Event =>
 
 let origHome: string | undefined;
 let home: string;
-/** Point OPENSQUID_HOME at a fresh temp with the given active.json (the real loadActiveV2Cartridges + the
- *  FSM-state + registry all read OPENSQUID_HOME live). loadActivePacks's realPacksPromise is module-cached
- *  at import (the globalSetup home) so it is unaffected — the v2 side is what varies. */
+let projectDir: string | undefined;
+let prevCwd: string | undefined;
+/**
+ * Project-only pack resolution: loadActiveV2Cartridges reads the PROJECT `.opensquid/active.json`
+ * (walked from cwd), not OPENSQUID_HOME. Point both a temp home (FSM/registry) and a temp project
+ * with the listed packs, then chdir into the project so partitionActivePacks sees them.
+ */
 async function setHome(activePacks: string[]): Promise<void> {
   home = await mkdtemp(join(tmpdir(), 'osq-s1-'));
   await mkdir(home, { recursive: true });
-  await writeFile(join(home, 'active.json'), JSON.stringify({ packs: activePacks }), 'utf8');
+  await writeFile(join(home, 'active.json'), JSON.stringify({ packs: [] }), 'utf8');
   process.env.OPENSQUID_HOME = home;
+
+  projectDir = await mkdtemp(join(tmpdir(), 'osq-s1-proj-'));
+  const scope = join(projectDir, '.opensquid');
+  await mkdir(scope, { recursive: true });
+  await writeFile(join(scope, 'active.json'), JSON.stringify({ packs: activePacks }), 'utf8');
+  prevCwd = process.cwd();
+  process.chdir(projectDir);
 }
 beforeEach(() => {
   origHome = process.env.OPENSQUID_HOME;
 });
 afterEach(async () => {
+  if (prevCwd !== undefined) {
+    process.chdir(prevCwd);
+    prevCwd = undefined;
+  }
   if (origHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = origHome;
   if (home) await rm(home, { recursive: true, force: true });
+  if (projectDir) {
+    await rm(projectDir, { recursive: true, force: true });
+    projectDir = undefined;
+  }
 });
 
 describe('v2PackToPack (S1 adapter)', () => {
@@ -76,22 +95,27 @@ describe('v2PackToPack (S1 adapter)', () => {
 
 describe('loadActivePacksForDispatch (S1)', () => {
   it('is ADDITIVE — equals loadActivePacks (modulo the cwd project-context pack) when no v2 cartridge is active', async () => {
-    // Hermeticity: loadActivePacksForDispatch resolves a v2 cartridge set from BOTH OPENSQUID_HOME and the
-    // PROJECT scope walked up from process.cwd(). Running inside the opensquid repo (whose own active.json may
-    // list a v2 pack like fullstack-flow) would leak that in — so run from a NEUTRAL cwd with no `.opensquid`
-    // ancestor to genuinely assert "no v2 cartridge active".
-    const prevCwd = process.cwd();
+    // Hermeticity: loadActiveV2Cartridges is PROJECT-only (cwd walk). Running inside the opensquid repo
+    // (whose own active.json may list fullstack-flow) would leak that in — so run from a NEUTRAL cwd with
+    // no `.opensquid` ancestor. Do NOT call setHome (it chdirs into a project with .opensquid).
+    const saved = process.cwd();
     const neutral = await mkdtemp(join(tmpdir(), 'osq-s1-neutral-'));
+    const emptyHome = await mkdtemp(join(tmpdir(), 'osq-s1-empty-home-'));
+    await writeFile(join(emptyHome, 'active.json'), JSON.stringify({ packs: [] }), 'utf8');
+    const savedHome = process.env.OPENSQUID_HOME;
+    process.env.OPENSQUID_HOME = emptyHome;
     process.chdir(neutral);
     try {
-      await setHome([]);
       const dispatch = (await loadActivePacksForDispatch('sess-add')).filter(
         (p) => p.name !== 'project-context',
       );
       expect(dispatch).toEqual(await loadActivePacks('sess-add'));
     } finally {
-      process.chdir(prevCwd);
+      process.chdir(saved);
+      if (savedHome === undefined) delete process.env.OPENSQUID_HOME;
+      else process.env.OPENSQUID_HOME = savedHome;
       await rm(neutral, { recursive: true, force: true });
+      await rm(emptyHome, { recursive: true, force: true });
     }
   });
 
