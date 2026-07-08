@@ -52,7 +52,9 @@ export type ChecklistItemState = 'done' | 'deferred' | 'unresolved';
 export interface ChecklistSubIssue {
   id: string;
   title: string;
-  status: 'open' | 'in_progress' | 'closed';
+  // WGL.1 — 'archived' is a terminal state (a soft-archived/superseded child): it counts as DONE (resolved),
+  // never silently-unresolved.
+  status: 'open' | 'in_progress' | 'closed' | 'archived';
   /** Present only when the item was explicitly deferred with a recorded blocker. */
   wedgeReason?: string;
 }
@@ -79,8 +81,8 @@ function hasWedgeReason(
 }
 
 function classify(sub: ChecklistSubIssue): ChecklistItem {
-  if (sub.status === 'closed') {
-    return { id: sub.id, title: sub.title, state: 'done' };
+  if (sub.status === 'closed' || sub.status === 'archived') {
+    return { id: sub.id, title: sub.title, state: 'done' }; // WGL.1 — archived is terminal (resolved)
   }
   // status is 'open' or 'in_progress' here.
   if (hasWedgeReason(sub)) {

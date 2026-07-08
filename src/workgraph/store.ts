@@ -39,7 +39,10 @@ const newIssueId = (
 
 const str = (r: Row, k: string): string => (typeof r[k] === 'string' ? r[k] : '');
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0));
-const toStatus = (s: string): IssueStatus => (s === 'in_progress' || s === 'closed' ? s : 'open');
+// WGL.1 — 'archived' MUST be preserved (a soft, reversible terminal state); any other unknown value still
+// coerces to 'open'. Miss this and an archived row would read back as 'open' and re-enter listReady.
+const toStatus = (s: string): IssueStatus =>
+  s === 'in_progress' || s === 'closed' || s === 'archived' ? s : 'open';
 const optStr = (r: Row, k: string): string | undefined => {
   const v = r[k];
   return typeof v === 'string' && v !== '' ? v : undefined;
@@ -58,6 +61,7 @@ const rowToIssue = (r: Row): Issue => {
   const claimAudience = parseAudience(r);
   const claimExpiresAt = optStr(r, 'claim_expires_at');
   const wedgeReason = optStr(r, 'wedge_reason');
+  const archiveReason = optStr(r, 'archive_reason'); // WGL.1
   return {
     id: str(r, 'id'),
     title: str(r, 'title'),
@@ -69,6 +73,7 @@ const rowToIssue = (r: Row): Issue => {
     ...(claimAudience === undefined ? {} : { claimAudience }),
     ...(claimExpiresAt === undefined ? {} : { claimExpiresAt }),
     ...(wedgeReason === undefined ? {} : { wedgeReason }),
+    ...(archiveReason === undefined ? {} : { archiveReason }),
   };
 };
 
@@ -87,6 +92,7 @@ async function createSchema(client: Client): Promise<void> {
     status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     lww INTEGER NOT NULL DEFAULT 0,
     claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT, wedge_reason TEXT,
+    archive_reason TEXT,
     project TEXT NOT NULL DEFAULT 'legacy-global',
     created_lamport INTEGER NOT NULL DEFAULT 0, actor_id TEXT);`);
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_edges (
@@ -98,6 +104,7 @@ async function createSchema(client: Client): Promise<void> {
     `ALTER TABLE wg_issues ADD COLUMN claim_audience TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN claim_expires_at TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN wedge_reason TEXT`,
+    `ALTER TABLE wg_issues ADD COLUMN archive_reason TEXT`, // WGL.1 (idempotent; already-migrated throws → caught)
     `ALTER TABLE wg_ops ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
     `ALTER TABLE wg_issues ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
     `ALTER TABLE wg_edges ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
@@ -360,13 +367,16 @@ export function workGraphStore(opts: {
       // unclaimed (query-time expiry — no reaper). ISO-8601 UTC sorts lexically == chronologically. The
       // store is project-LOCAL, so no project filter — every row IS this project's.
       const now = new Date().toISOString();
+      // WGL.1 — the `status = 'open'` predicate already hides archived ROWS; the one non-obvious ready-filter
+      // edit is the blocks sub-query below (`NOT IN ('closed','archived')`) so archiving a SUPERSEDED BLOCKER
+      // unblocks its consumer (an archived blocker must no longer hold its dependent).
       const rs = await db().execute({
         sql: `SELECT * FROM wg_issues WHERE status = 'open'
           AND (claim_token IS NULL OR claim_expires_at <= ?)
           AND wedge_reason IS NULL
           AND id NOT IN (
             SELECT e.to_id FROM wg_edges e JOIN wg_issues x ON x.id = e.from_id
-            WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_lamport, actor_id`,
+            WHERE e.type = 'blocks' AND x.status NOT IN ('closed','archived')) ORDER BY created_lamport, actor_id`,
         args: [now],
       });
       return rs.rows.map(rowToIssue);
@@ -380,6 +390,18 @@ export function workGraphStore(opts: {
     async clearWedge(id) {
       if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
       await appendOp(id, 'wedge_cleared', {});
+    },
+
+    // WGL.1 — soft-archive to the reversible `archived` terminal state (a new op, LWW, surviving replay). The
+    // row is KEPT (history-preserving); listReady excludes it. `unarchiveIssue` restores it to `open`.
+    async archiveIssue(id, reason?: string) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(id, 'issue_archived', reason === undefined ? {} : { reason });
+    },
+
+    async unarchiveIssue(id) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(id, 'issue_unarchived', {});
     },
 
     async releaseClaim(id) {

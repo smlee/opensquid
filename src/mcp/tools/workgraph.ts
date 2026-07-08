@@ -14,7 +14,7 @@ import { claimAudience } from '../../workgraph/audience.js';
 
 import type { WorkGraphFacade } from '../../workgraph/types.js';
 
-const Status = z.enum(['open', 'in_progress', 'closed']);
+const Status = z.enum(['open', 'in_progress', 'closed', 'archived']); // WGL.1 — + 'archived'
 const EdgeT = z.enum(['blocks', 'parent-child', 'discovered-from', 'related']);
 
 export const WgCreateSchema = z.object({ title: z.string().min(1), body: z.string().optional() });
@@ -63,6 +63,27 @@ export const handleWgAddEdge = async (
 ): Promise<string> => {
   await s.addEdge(a.from, a.to, a.type);
   return JSON.stringify({ ok: true });
+};
+
+// WGL.7 — the archive op's MCP surface: soft-archive (with an optional reason) + its reverse. Thin handlers
+// (validate → facade call → JSON), exactly like handleWgAddEdge; the archive semantics live in the store (WGL.1).
+export const WgArchiveSchema = z.object({ id: z.string().min(1), reason: z.string().optional() });
+export const WgUnarchiveSchema = z.object({ id: z.string().min(1) });
+
+export const handleWgArchive = async (
+  a: z.infer<typeof WgArchiveSchema>,
+  s: WorkGraphFacade,
+): Promise<string> => {
+  await s.archiveIssue(a.id, a.reason);
+  return JSON.stringify({ ok: true, id: a.id, status: 'archived' });
+};
+
+export const handleWgUnarchive = async (
+  a: z.infer<typeof WgUnarchiveSchema>,
+  s: WorkGraphFacade,
+): Promise<string> => {
+  await s.unarchiveIssue(a.id);
+  return JSON.stringify({ ok: true, id: a.id, status: 'open' });
 };
 
 export const handleWgReady = async (

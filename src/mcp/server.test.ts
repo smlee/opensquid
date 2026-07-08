@@ -198,7 +198,7 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 27 tools (+ kanban overlay + story, KANBAN.2/.5) with JSON Schema', async () => {
+  it('tools/list returns the 29 tools (+ kanban overlay + story, KANBAN.2/.5) with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
@@ -225,12 +225,14 @@ describe('opensquid-mcp subprocess', () => {
       'set_loop_phase',
       'store_lesson',
       'workgraph_add_edge',
+      'workgraph_archive',
       'workgraph_claim',
       'workgraph_create_issue',
       'workgraph_events',
       'workgraph_get',
       'workgraph_list',
       'workgraph_ready',
+      'workgraph_unarchive',
       'workgraph_update_issue',
     ]);
     for (const t of result.tools) {

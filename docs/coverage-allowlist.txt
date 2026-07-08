@@ -2134,3 +2134,14 @@ ParsedCommit
 BumpLevel
 NpmView
 ReleaseDeps
+
+# --- baseline maintenance (T-workgraph-lifecycle, wg-141e0ffd9955, CODE, 2026-07-07): the DATA-shape / schema
+# exports of the workgraph item-lifecycle (WGL.2/4/7). The BEHAVIORAL exports (deriveGenerationId,
+# reconcileDecomposition, reapOrphans/isOrphan/reapOrphansIfAllowed, rollUpParents, handleWgArchive/
+# handleWgUnarchive) carry reachable requirements in ARCHITECTURE.md §10; these are the injected DecomposeOwner /
+# ReapGateDeps seam type shapes + the WgArchive/WgUnarchive zod schema consts — data-shape, not a live path, no
+# covering requirement. Same class the release-flow / loop-autospawn *Deps + *Schema precedent allowlists. ---
+DecomposeOwner
+ReapGateDeps
+WgArchiveSchema
+WgUnarchiveSchema

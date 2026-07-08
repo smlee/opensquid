@@ -19,6 +19,8 @@ import type { HumanRequiredReason } from './lap_outcome.js';
 import type { LapResult, SuperviseOpts } from './supervisor.js';
 import type { LoopMetricRow } from '../loop/loop_metrics.js';
 import { superviseLap } from './supervisor.js';
+import { reapOrphans } from '../loop/reaper.js'; // WGL.4/WGL.6 — the shared per-pass reaper
+import { rollUpParents } from '../loop/parent_rollup.js'; // WGL.5 — parent auto-close on all-children-terminal
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
 
@@ -263,7 +265,20 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     }
     if (item === undefined) {
       // Nothing automation-eligible (an empty board, OR every ready item is unscoped/held) → automation is
-      // drained. Escalate + STOP (not a silent stop); the held items await interactive human scope.
+      // drained. WGL.6 (§6.6) — before declaring BOARD_EMPTY, REAP orphaned stubs so junk never masquerades as
+      // an empty board. This is the SINGLE per-pass reaper call site (also WGL.4's loop-pass trigger). If the
+      // reap archived anything, re-drain (the board changed); only a reap that archives NOTHING NEW is a genuine
+      // empty/all-held board → escalate. Converges (the reaper is idempotent, so pass 2 archives nothing).
+      let reaped: string[] = [];
+      try {
+        reaped = await reapOrphans(wg);
+      } catch {
+        /* fail-open: a reap error must never break the drain — fall through to BOARD_EMPTY */
+      }
+      if (reaped.length > 0) {
+        deps.narrate?.(`■ reaped ${reaped.length} orphan(s) before BOARD_EMPTY — re-draining`);
+        continue; // re-evaluate: the orphans are gone; the held/real items are re-considered
+      }
       deps.narrate?.(
         `■ board drained — BOARD_EMPTY (closed ${closed.length}, parked ${parked.length})`,
       );
@@ -282,6 +297,18 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       await deps.stageLoop?.clearStage(item.id); // PSL.3 — the item left the loop; drop its durable stage
       closed.push(item.id);
       deps.narrate?.(`✓ SHIPPED ${item.id} (closed ${closed.length})`);
+      // WGL.5 — parent roll-up: after the child's close is durable, close every ancestor parent whose children
+      // are ALL non-drivable (closed/archived/wedged). A wedged child stays independently escalated (never
+      // buried). Fail-open: a roll-up error must never break the drain (mirrors the onShipped hook).
+      try {
+        const rolled = await rollUpParents(wg, item.id);
+        for (const p of rolled) {
+          closed.push(p);
+          deps.narrate?.(`✓ rolled up parent ${p} (all children terminal)`);
+        }
+      } catch {
+        /* fail-open: never break the drain over the parent roll-up */
+      }
       // T2.9: the loop-driver lives here — on phases_complete (a SHIPPED lap) emit the CODE report + compute the
       // next run-group. Fail-open: a report/grouping error must never break the drain.
       try {

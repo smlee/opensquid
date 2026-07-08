@@ -35,6 +35,11 @@ import { reconcileMemoryOnSessionEnd } from './memory_reconcile.js';
 import { sessionEndIndication } from './session_end_indication.js';
 import { notifyRetentionSweep } from './session_end_sweep_notify.js';
 import { sweepRetiredIfAllowed } from './session_end_retention.js';
+import { reapOrphansIfAllowed } from './session_end_reap.js';
+import { resolveLocalStoreDir } from '../paths.js';
+import { resolveActorId } from '../actor_id.js';
+import { workGraphStore } from '../../workgraph/store.js';
+import { join } from 'node:path';
 
 interface SessionEndPayload {
   sessionId?: string;
@@ -193,6 +198,28 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     process.stderr.write(`opensquid: retention sweep skipped — ${String(e)}\n`);
+  }
+
+  // WGL.4 (wg-141e0ffd9955) — the SESSION-END reaper trigger (the other half of §6.4's "both, not one"; the
+  // loop-pass trigger is in the orchestrator drain). Soft-archive orphaned decomposition stubs so the board
+  // stays clean even for a project the loop is not actively draining. Fail-OPEN: a reap error never blocks
+  // teardown. Archive is reversible + non-destructive, so it runs unconditionally (no #16-style prune gate).
+  try {
+    const cwd = process.cwd();
+    const dir = await resolveLocalStoreDir(cwd);
+    const wg = workGraphStore({
+      dbUrl: `file:${join(dir, 'workgraph.db')}`,
+      sourceDir: join(dir, 'store', 'issues'),
+      actorId: await resolveActorId(),
+    });
+    await wg.init();
+    const reaped = await reapOrphansIfAllowed(wg, cwd);
+    if (reaped.length > 0)
+      process.stderr.write(
+        `opensquid: workgraph reaper — ${String(reaped.length)} orphan(s) archived\n`,
+      );
+  } catch (e) {
+    process.stderr.write(`opensquid: workgraph reap skipped — ${String(e)}\n`);
   }
 
   // GVM.1 (wg-7f4df49787cb) — snapshot the per-file memory+op store to git AFTER compression, so the

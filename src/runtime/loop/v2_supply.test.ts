@@ -751,6 +751,16 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
       mockLoad.mockResolvedValue([scopeWriteGatePack()]);
       await appendAsk(sid, 'add login screen'); // still needed: scope.anchors_ok checks against captured ask
       expect(await countScope1()).toBe(0); // clean baseline
+      // WGL.2/WGL.3 — decomposition now stamps OWNERSHIP (a parent-child edge from the decompose-root task),
+      // so it requires an active task id whose issue exists (addEdge validates endpoints). Seed both.
+      const wdir = await resolveLocalStoreDir(process.cwd());
+      const wstore = workGraphStore({
+        dbUrl: `file:${join(wdir, 'workgraph.db')}`,
+        sourceDir: join(wdir, 'store', 'issues'),
+      });
+      await wstore.init();
+      const parent = await wstore.createIssue({ title: 'root task', body: '' });
+      await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: parent.id });
       const p = await writePreResearch('1. Login [ask: "add login screen"]');
       await runV2Cartridges(sid, advanceWrite(p), NOW);
       // the artifact's element (scope-1) was stamped into a work-graph issue → plan.complete can now hold

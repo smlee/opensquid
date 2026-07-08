@@ -466,4 +466,56 @@ requirements:
     wg: wg-7bf3ae9f592b
     assert: { kind: reachable, symbol: registerRelease, from: [release] }
     proof: 'src/setup/cli/release.test.ts'
+  # WGL (wg-141e0ffd9955) — workgraph item-lifecycle + ownership + GC: one covering requirement per BEHAVIORAL
+  # export of the eight scoped elements (docs/tasks/T-workgraph-lifecycle.md). Each names the primary export +
+  # its proof-test (the authority; the static `from` hint is advisory). Data-shape exports (the DecomposeOwner
+  # / ReapGateDeps type shapes + the WgArchive/WgUnarchive zod consts) are baselined in the allowlist.
+  - id: R-WGL-OWNERSHIP-GENID
+    intent: 'WGL.2 deriveGenerationId: a PURE content hash of the artifact element universe — idempotent re-fire, change-sensitive (lets WGL.3 detect a superseded generation by mismatch)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: deriveGenerationId, from: [post-tool-use] }
+    proof: 'src/runtime/loop/auto_decompose.test.ts'
+  - id: R-WGL-RECONCILE
+    intent: 'WGL.3 reconcileDecomposition: re-decompose reconcile by run-id mismatch (idempotent / supersede-by-archive / first) — replaces the any-covered short-circuit'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: reconcileDecomposition, from: [post-tool-use] }
+    proof: 'src/runtime/loop/decompose_reconcile.test.ts'
+  - id: R-WGL-REAP-ORPHANS
+    intent: 'WGL.4 reapOrphans: archive OPEN, ownerless sourceElementId stubs (the orphan drain) — soft + idempotent'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: reapOrphans, from: [orchestrator, session-end] }
+    proof: 'src/runtime/loop/reaper.test.ts'
+  - id: R-WGL-IS-ORPHAN
+    intent: 'WGL.4 isOrphan: the narrow orphan predicate (open + sourceElementId body + no incoming parent-child edge) — a real human task is never reaped'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: isOrphan, from: [orchestrator, session-end] }
+    proof: 'src/runtime/loop/reaper.test.ts'
+  - id: R-WGL-REAP-SESSION-END
+    intent: 'WGL.4 reapOrphansIfAllowed: the session-end reaper seam (injectable, fail-open owned by the caller, no destructive gate — archive is reversible)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: reapOrphansIfAllowed, from: [session-end] }
+    proof: 'src/runtime/hooks/session_end_reap.test.ts'
+  - id: R-WGL-PARENT-ROLLUP
+    intent: 'WGL.5 rollUpParents: auto-close a parent once every child is non-drivable (closed/archived/wedged); recurses upward; never buries a wedge'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: rollUpParents, from: [orchestrator] }
+    proof: 'src/runtime/loop/parent_rollup.test.ts'
+  - id: R-WGL-MCP-ARCHIVE
+    intent: 'WGL.7 handleWgArchive: the MCP soft-archive tool (thin validate → facade.archiveIssue → JSON)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: handleWgArchive, from: [server] }
+    proof: 'src/mcp/tools/workgraph.test.ts'
+  - id: R-WGL-MCP-UNARCHIVE
+    intent: 'WGL.7 handleWgUnarchive: the MCP restore tool (reverses workgraph_archive → open)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: handleWgUnarchive, from: [server] }
+    proof: 'src/mcp/tools/workgraph.test.ts'
 ```

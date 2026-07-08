@@ -10,7 +10,10 @@ const P = <T>(v: T): Promise<T> => Promise.resolve(v);
 // listReady returns open, non-wedged, non-live-claimed items oldest-first; claim/close/wedge mutate
 // state so the loop terminates naturally (the real store's invariants, in miniature).
 function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphFacade {
-  const rows = new Map<string, { status: 'open' | 'closed'; wedged: boolean; claimed: boolean }>();
+  const rows = new Map<
+    string,
+    { status: 'open' | 'closed' | 'archived'; wedged: boolean; claimed: boolean }
+  >();
   ids.forEach((id) => rows.set(id, { status: 'open', wedged: false, claimed: false }));
   const issue = (id: string): Issue => ({
     id,
@@ -60,6 +63,14 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphFacad
     getIssue: (id: string) => P(rows.has(id) ? issue(id) : null),
     listIssues: () => P(ids.map(issue)),
     addEdge: () => P(undefined),
+    archiveIssue: (id: string) => {
+      rows.get(id)!.status = 'archived';
+      return P(undefined);
+    },
+    unarchiveIssue: (id: string) => {
+      rows.get(id)!.status = 'open';
+      return P(undefined);
+    },
     listEvents: () => P([]),
     listEdges: () => P([]),
   };
@@ -499,5 +510,88 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     });
     await runRalphLoop(cfg(), deps(mockStore(['a']), runLap));
     expect(calls).toEqual([undefined]); // single lap, no per-stage prompt
+  });
+});
+
+// WGL.6 (wg-141e0ffd9955) — reap-then-BOARD_EMPTY: before declaring an empty board, reap orphaned stubs so junk
+// never masquerades as an empty board; a genuinely-held (non-orphan) board escalates immediately.
+describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
+  const at = '2026-01-01T00:00:00.000Z';
+  const mk = (over: Partial<Issue>): Issue => ({
+    id: 'x',
+    title: 'x',
+    body: '',
+    status: 'open',
+    createdAt: at,
+    updatedAt: at,
+    ...over,
+  });
+
+  it('an all-orphan board is REAPED then escalates BOARD_EMPTY (junk never lingers); converges in one pass', async () => {
+    const issues: Issue[] = [mk({ id: 'wg-orphan', body: 'sourceElementId:scope-1' })];
+    const archived: string[] = [];
+    const wg: WorkGraphFacade = {
+      listReady: () => P([]), // nothing automation-eligible (the orphan is held by scopeGate in reality)
+      listIssues: () => P(issues.map((i) => ({ ...i }))),
+      listEdges: () => P([]), // no parent-child edge → the orphan is ownerless
+      archiveIssue: (id: string) => {
+        const it = issues.find((x) => x.id === id)!;
+        it.status = 'archived'; // second reap sees it non-open → idempotent, converges
+        archived.push(id);
+        return P(undefined);
+      },
+      unarchiveIssue: () => P(undefined),
+      claimIssue: () => P({ won: false, expiresAt: '' }),
+      updateIssue: (id: string) => P(mk({ id })),
+      wedgeMark: () => P(undefined),
+      clearWedge: () => P(undefined),
+      releaseClaim: () => P(undefined),
+      createIssue: () => P(issues[0]!),
+      getIssue: (id: string) => P(issues.find((x) => x.id === id) ?? null),
+      addEdge: () => P(undefined),
+      listEvents: () => P([]),
+    };
+    const narrate = vi.fn();
+    const esc = vi.fn(() => P({ escalated: true }));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(wg, lap({ kind: 'SHIPPED', costUsd: 0 }), esc),
+      narrate,
+    });
+    expect(r.stopped).toBe('BOARD_EMPTY');
+    expect(archived).toEqual(['wg-orphan']); // reaped exactly once (idempotent → no infinite continue)
+    expect(esc).toHaveBeenCalledTimes(1); // escalates only AFTER the reap
+    expect(narrate).toHaveBeenCalledWith(expect.stringContaining('reaped 1 orphan'));
+  });
+
+  it('a legitimately-held board with NO orphans escalates BOARD_EMPTY immediately (reap is a no-op)', async () => {
+    const held = mk({ id: 'wg-held', body: 'a genuine human ask' }); // no sourceElementId → never reaped
+    const archived: string[] = [];
+    const wg: WorkGraphFacade = {
+      listReady: () => P([]),
+      listIssues: () => P([{ ...held }]),
+      listEdges: () => P([]),
+      archiveIssue: (id: string) => {
+        archived.push(id);
+        return P(undefined);
+      },
+      unarchiveIssue: () => P(undefined),
+      claimIssue: () => P({ won: false, expiresAt: '' }),
+      updateIssue: () => P(held),
+      wedgeMark: () => P(undefined),
+      clearWedge: () => P(undefined),
+      releaseClaim: () => P(undefined),
+      createIssue: () => P(held),
+      getIssue: (id: string) => P(id === held.id ? held : null),
+      addEdge: () => P(undefined),
+      listEvents: () => P([]),
+    };
+    const esc = vi.fn(() => P({ escalated: true }));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(wg, lap({ kind: 'SHIPPED', costUsd: 0 }), esc),
+      narrate: vi.fn(),
+    });
+    expect(r.stopped).toBe('BOARD_EMPTY');
+    expect(archived).toEqual([]); // the held task is NOT junk — never reaped
+    expect(esc).toHaveBeenCalledTimes(1);
   });
 });

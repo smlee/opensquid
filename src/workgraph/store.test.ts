@@ -694,3 +694,76 @@ describe('GS-durability — atomic Lamport under concurrency', () => {
     },
   );
 });
+
+// WGL.1 (wg-141e0ffd9955) — soft-archive terminal state: a new reversible op, LWW, surviving replay; the row
+// is KEPT (history), filtered off listReady, and an archived BLOCKER no longer blocks its consumer.
+describe('workGraphStore soft-archive (WGL.1)', () => {
+  it('archiveIssue → archived (row kept, in the op-log); listReady excludes it; unarchive restores open', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'stub', body: 'x' });
+    await wg.archiveIssue(a.id, 'reaped');
+    const arch = await wg.getIssue(a.id);
+    expect(arch?.status).toBe('archived');
+    expect(arch?.archiveReason).toBe('reaped');
+    expect(await wg.listIssues()).toHaveLength(1); // row KEPT, not deleted
+    expect((await wg.listEvents(a.id)).map((o) => o.type)).toEqual([
+      'issue_created',
+      'issue_archived',
+    ]);
+    expect((await wg.listReady()).map((i) => i.id)).not.toContain(a.id);
+
+    await wg.unarchiveIssue(a.id);
+    const un = await wg.getIssue(a.id);
+    expect(un?.status).toBe('open');
+    expect(un?.archiveReason).toBeUndefined(); // cleared
+    expect((await wg.listReady()).map((i) => i.id)).toContain(a.id);
+  });
+
+  it('an archived BLOCKER no longer blocks its consumer (listReady NOT IN (closed,archived))', async () => {
+    const wg = await fresh();
+    const blocker = await wg.createIssue({ title: 'A' });
+    const consumer = await wg.createIssue({ title: 'B' });
+    await wg.addEdge(blocker.id, consumer.id, 'blocks');
+    expect((await wg.listReady()).map((i) => i.id)).toEqual([blocker.id]); // B blocked
+    await wg.archiveIssue(blocker.id, 'superseded');
+    expect((await wg.listReady()).map((i) => i.id)).toEqual([consumer.id]); // B unblocked by the archive
+  });
+
+  it('archiveIssue/unarchiveIssue reject a missing id', async () => {
+    const wg = await fresh();
+    await expect(wg.archiveIssue('wg-nope')).rejects.toThrow(/no issue/);
+    await expect(wg.unarchiveIssue('wg-nope')).rejects.toThrow(/no issue/);
+  });
+
+  it('archive SURVIVES rebuild replay (event-sourcing integrity — a new op the replay re-folds)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wgl-arch-'));
+    try {
+      const wg = await open({ dbUrl: `file:${join(dir, 'wg.db')}`, sourceDir: dir });
+      const a = await wg.createIssue({ title: 'x' });
+      await wg.archiveIssue(a.id, 'reaped');
+      const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const wg2 = await open({ dbUrl: rebuiltUrl });
+      expect((await wg2.getIssue(a.id))?.status).toBe('archived'); // reconstructed from the op-files
+      expect((await wg2.getIssue(a.id))?.archiveReason).toBe('reaped');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('LWW: the highest-lamport archive/unarchive wins on replay (unarchive after archive → open)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wgl-lww-'));
+    try {
+      const wg = await open({ dbUrl: `file:${join(dir, 'wg.db')}`, sourceDir: dir });
+      const a = await wg.createIssue({ title: 'x' });
+      await wg.archiveIssue(a.id, 'r'); // lamport N
+      await wg.unarchiveIssue(a.id); // lamport N+1 (later → wins)
+      const rebuiltUrl = `file:${join(dir, 'r.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const wg2 = await open({ dbUrl: rebuiltUrl });
+      expect((await wg2.getIssue(a.id))?.status).toBe('open'); // the later op wins under LWW
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

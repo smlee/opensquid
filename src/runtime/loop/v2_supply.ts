@@ -93,8 +93,7 @@ import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evid
 import { planEvidence, openWg } from './plan_evidence.js';
 import { resolveChecklist, type ChecklistSubIssue } from './report_checklist.js';
 import { reportResolved } from './report_resolution.js';
-import { autoDecompose } from './auto_decompose.js';
-import { buildCoveredBy } from './plan_audit.js';
+import { reconcileDecomposition } from './decompose_reconcile.js';
 import { extractScope } from './scope_extract.js';
 import { gatherReadiness, recordReadiness, readinessResult } from './readiness.js';
 import { externalNeededForSession } from './external_dependency_evidence.js';
@@ -930,12 +929,16 @@ export async function runV2Cartridges(
             try {
               const artifact = await readPreResearchPath(sessionId);
               const ext = artifact === null ? null : await extractScope(artifact);
-              if (artifact !== null && ext !== null && ext.authoredElements.length > 0) {
+              if (
+                artifact !== null &&
+                ext !== null &&
+                ext.authoredElements.length > 0 &&
+                taskId !== null
+              ) {
+                // WGL.3 — RUN-ID reconcile (replaces the any-covered short-circuit): idempotent on the same
+                // generation, supersede-by-archive on a re-authored generation, else first decomposition.
                 const wg = await openWg(sessionId);
-                const ids = ext.authoredElements.map((el) => el.id);
-                const covered = buildCoveredBy(ids, await wg.listIssues());
-                const already = Object.values(covered).some((c) => c.length > 0);
-                if (!already) await autoDecompose(artifact, wg); // first decomposition of this scope
+                await reconcileDecomposition(wg, taskId, artifact, ext);
               }
             } catch (err) {
               process.stderr.write(`[v2-supply] auto-decompose failed (ignored): ${String(err)}\n`);
