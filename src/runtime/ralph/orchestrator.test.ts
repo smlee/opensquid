@@ -1,8 +1,29 @@
-import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runRalphLoop, resolveParked, type RalphConfig, type RalphDeps } from './orchestrator.js';
 import type { Issue, WorkGraphFacade } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
 import type { LoopMetricRow } from '../loop/loop_metrics.js';
+import { tailEventsSince } from '../loop/loop_events.js';
+
+// LMP.2 — the SHIPPED/wedge paths push monitor events (fail-open). Isolate every emit to a temp project-local
+// store (OPENSQUID_PROJECT_ROOT) so the loop's emits never touch the real dev store, and so the item_shipped /
+// item_wedged assertions below read an isolated log.
+const savedRoot = process.env.OPENSQUID_PROJECT_ROOT;
+let projectRoot: string;
+beforeEach(() => {
+  projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-'));
+  mkdirSync(join(projectRoot, '.opensquid'), { recursive: true });
+  process.env.OPENSQUID_PROJECT_ROOT = projectRoot;
+});
+afterEach(() => {
+  if (savedRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+  else process.env.OPENSQUID_PROJECT_ROOT = savedRoot;
+  rmSync(projectRoot, { recursive: true, force: true });
+});
 
 const P = <T>(v: T): Promise<T> => Promise.resolve(v);
 
@@ -204,6 +225,32 @@ describe('runRalphLoop', () => {
     const r = await runRalphLoop(cfg(), deps(mockStore([]), runLap, failEsc));
     expect(r.stopped).toBe('BOARD_EMPTY');
     expect(failEsc).toHaveBeenCalledTimes(1); // it DID attempt delivery — fail-open, not fail-silent
+  });
+});
+
+describe('runRalphLoop — LMP.2 monitor emits (push feed)', () => {
+  it('a SHIPPED lap pushes an item_shipped event (the pushed close event — staleness fix)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    await runRalphLoop(cfg(), deps(mockStore(['wg-a']), runLap));
+    const events = await tailEventsSince(0);
+    const shipped = events.filter((e) => e.kind === 'item_shipped');
+    expect(shipped.map((e) => e.wgId)).toContain('wg-a');
+  });
+
+  it('a wedged lap pushes an item_wedged event (guarded on a present item)', async () => {
+    const runLap = lap({ kind: 'WEDGE', costUsd: 0 });
+    await runRalphLoop(cfg(), deps(mockStore(['wg-w']), runLap));
+    const events = await tailEventsSince(0);
+    const wedged = events.filter((e) => e.kind === 'item_wedged');
+    expect(wedged.map((e) => e.wgId)).toEqual(['wg-w']);
+  });
+
+  it('BOARD_EMPTY (item-less park) pushes NO item-keyed event', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    await runRalphLoop(cfg(), deps(mockStore([]), runLap)); // empty board → BOARD_EMPTY only
+    const events = await tailEventsSince(0);
+    // no item_wedged/closed/shipped from an item-less BOARD_EMPTY park (there is nothing to key).
+    expect(events).toEqual([]);
   });
 });
 

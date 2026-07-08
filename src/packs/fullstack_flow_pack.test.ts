@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 
 import { validateFsm } from '../runtime/fsm.js';
 import { loadPackV2, type LoadedPackV2 } from './loader_v2.js';
+import { lintPhaseEmits } from './phase_emit_lint.js';
 import { V2ObservedActor } from '../runtime/loop/v2_observed_actor.js';
 import type { Effect } from '../runtime/actor/port.js';
 import type { Envelope, MessageKind } from '../runtime/bus/types.js';
@@ -145,6 +146,28 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     // …and forbid the false-green slice + tie to the gate (so a future edit that re-vaguens it fails here).
     expect(codeMd).toContain('code.suite_green');
     expect(codeMd.toLowerCase()).toContain('slice');
+  });
+
+  it('LMP.3: every built-in procedure stage emits an enter+leave phase pair (no silent stage — the live path)', () => {
+    const stages = ['scope', 'scope_write', 'plan', 'author', 'code', 'deploy'];
+    const procs = stages.map((s) => ({
+      stage: s,
+      text: readFileSync(join(BUILTIN_DIR, 'procedure', `${s}.md`), 'utf8'),
+    }));
+    const results = lintPhaseEmits(procs);
+    // No stage is silent — CODE (the longest, historically 0 emits) included; a failure NAMES the silent stage.
+    const bad = results.filter((r) => !r.ok);
+    expect(bad, `silent stages: ${JSON.stringify(bad)}`).toEqual([]);
+    // and a synthetic silent procedure (log_phase only, no set_loop_phase) is caught, missing NAMED.
+    const neg = lintPhaseEmits([{ stage: 'x', text: 'log_phase(pre_research) only' }]);
+    expect(neg[0]?.ok).toBe(false);
+    expect(neg[0]?.missing).toContain('no set_loop_phase emit');
+    // an enter emit with no `lifecycle:"done"` leave is also caught.
+    const noLeave = lintPhaseEmits([
+      { stage: 'y', text: 'set_loop_phase(phase: "code", lifecycle: "running")' },
+    ]);
+    expect(noLeave[0]?.ok).toBe(false);
+    expect(noLeave[0]?.missing).toContain('no leave (lifecycle:"done") emit');
   });
 
   it('T2.7: the inner CODE gate PASSES on phases_complete ∧ readiness_ran ∧ deprecated_clean ∧ suite_green', async () => {

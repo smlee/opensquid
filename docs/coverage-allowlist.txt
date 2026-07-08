@@ -2084,11 +2084,9 @@ runReaudit
 # Surfaced, not hidden: the global AUTHOR manifest_complete facet requires the baseline be current; greening a
 # sibling's drift is on-topic maintenance (NOT this task's own code — T-project-local-state adds no gated export
 # at AUTHOR). The loop-status task recreates + records these properly when it lands (design §6.1). ---
-DEFAULT_SURFACE
 LapUsage
 LoopAggregateRow
 LoopMetricRow
-LoopPhaseRow
 LoopState
 LoopStateItem
 MetricsFilter
@@ -2096,20 +2094,15 @@ SetLoopPhaseArgs
 SetLoopPhaseOutput
 SetLoopPhaseSchema
 TaskCheckpointRow
-TerminalSeenStore
 aggregatePerLoop
 collectLoopState
-filterLiveView
 handleSetLoopPhase
-libsqlTerminalSeenStore
-listLoopPhases
 loopDbUrl
 readMetrics
 recordStageMetric
 registerLoopStatus
 renderItem
 renderStatusLine
-setLoopPhase
 withLoopDb
 # --- baseline maintenance (wg-fecabb8ff29f, CODE, 2026-07-07): the DATA-shape / seam exports of the loop
 # autospawn (T-auto-trigger-loop-on-scope-exit). The BEHAVIORAL exports (ensureLoopRunning/loopStatus/startLoop)
@@ -2145,3 +2138,17 @@ DecomposeOwner
 ReapGateDeps
 WgArchiveSchema
 WgUnarchiveSchema
+
+# --- baseline maintenance (T-loop-monitoring-pushstream, wg-61db3ededf19, CODE, 2026-07-07): the DATA-shape
+# exports of the PUSH / LIVE-STREAM monitor feed (LMP.1/LMP.3/LMP.4). The BEHAVIORAL exports (appendMonitorEvent/
+# tailEventsSince, emitMonitorEvent, foldEvents/foldLatestState/subscribeMonitor, liveItems, formatRelativeAge,
+# lintPhaseEmits) carry reachable requirements in ARCHITECTURE.md §10; these are the MonitorEvent/NewMonitorEvent
+# event type + the MonitorEventKind/PhaseLifecycle enums + the LoopFoldState / ProcedureLintResult shapes — pure
+# data-shape, not a live path, no covering requirement. Same class the release-flow / WGL *Deps + *Schema
+# precedent allowlists. ---
+MonitorEvent
+NewMonitorEvent
+MonitorEventKind
+PhaseLifecycle
+LoopFoldState
+ProcedureLintResult

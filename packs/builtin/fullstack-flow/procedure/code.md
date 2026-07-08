@@ -27,6 +27,20 @@ complete them — this is the agent-controllable completion signal the gate read
   FALSE GREEN (the exact regression this closes — a 116-test slice hid 4 real reds). `code_ready` now gates on
   the recorded full-suite result (`code.suite_green`), so a slice run cannot advance CODE.
 
+## Emit your phase to the live status feed
+
+As you run each of the 7 phases, ALSO emit it to the live status feed via the `set_loop_phase` MCP tool — enter
+with `lifecycle: "running"` (⟳), leave with `lifecycle: "done"` (✓) — IN ADDITION to `log_phase`. The two stores
+serve DIFFERENT consumers and are never conflated: `log_phase` is the session-keyed commit-gate ledger;
+`set_loop_phase` is the wg-keyed push feed the harness status line / Monitor reads. Without this, CODE — the
+longest stage — is SILENT on the feed (it shows only `wg-… · code`). `wg_id` defaults to this lap's item — do
+not pass it:
+
+- `set_loop_phase(phase: "pre_research", index: 1, total: 7, lifecycle: "running")` on enter,
+  then `set_loop_phase(phase: "pre_research", index: 1, total: 7, lifecycle: "done")` on leave,
+- and the same enter+leave pair for each remaining phase:
+  learn (2/7) · code (3/7) · test (4/7) · audit (5/7) · post_research (6/7) · fix (7/7).
+
 ## Research AFTER coding (audit) — another layer
 
 - FAN OUT adversarial audit subagents with the appropriate skills, one per lens, each trying to REFUTE that

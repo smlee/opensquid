@@ -36,6 +36,7 @@ import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 import { resolveCheckpointKey } from '../loop/checkpoint_key.js';
 import { ensureLoopRunning } from './loop_autospawn.js';
+import { emitMonitorEvent } from '../loop/monitor_emit.js';
 
 /** The AUTOMATED stage an item advances INTO on the human scope-exit (SCOPE→scope_write). Reaching this stage
  *  makes the item automation-eligible (`scopeGate` → 'drive'), so the scope-3 trigger auto-starts a loop to
@@ -122,6 +123,9 @@ export async function upsertTaskStage(
     else await store.updateTaskStage(wgId, stage, nowMs);
     if (artifact !== null) await store.setTaskArtifacts(wgId, [artifact], nowMs);
   });
+  // LMP.2 — PUSH the stage advance to the live monitor stream, AFTER the durable checkpoint write. Fail-open:
+  // `emitMonitorEvent` swallows a store fault so a monitor-feed hiccup never breaks the load-bearing advance.
+  await emitMonitorEvent({ wgId, kind: 'stage_advance', stage, atMs: nowMs });
   // POLICY (ATL.3): the human-granted scope-exit reaches scope_write HERE — the SOLE writer both scope-exit
   // paths funnel through (the automated `v2_supply` lap AND the interactive `/scope-done` handoff, which
   // imports this fn directly and bypasses v2_supply). Auto-start a loop to drive the now-eligible item, AFTER

@@ -518,4 +518,65 @@ requirements:
     wg: wg-141e0ffd9955
     assert: { kind: reachable, symbol: handleWgUnarchive, from: [server] }
     proof: 'src/mcp/tools/workgraph.test.ts'
+  # T-loop-monitoring-pushstream (wg-61db3ededf19, LMP.1..7) — the loop monitor becomes a PUSH / LIVE-STREAM
+  # feed: one durable append-only `loop_events` log, consumers fold/tail, the pull machinery removed. One
+  # reachable requirement per new BEHAVIORAL export; the proof-test is the authority (the static `from` hint is
+  # advisory — these surface through the mutation choke-points / the loop-status CLI / the pack test, not a hook
+  # builder, so a negative static pre-filter never vetoes a passing proof). The DATA-shape exports (MonitorEvent /
+  # NewMonitorEvent / MonitorEventKind / PhaseLifecycle / LoopFoldState / ProcedureLintResult) are baselined in
+  # the allowlist, per the *Deps / *Schema precedent.
+  - id: R-MONITOR-APPEND
+    intent: 'LMP.1 appendMonitorEvent: append one MonitorEvent to the durable append-only loop_events log (store-assigned monotonic seq)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.1'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: appendMonitorEvent, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_events.test.ts'
+  - id: R-MONITOR-TAIL
+    intent: 'LMP.1 tailEventsSince: the raw cursor read — every event after a seq, in order (exactly-once resume)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.1'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: tailEventsSince, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_events.test.ts'
+  - id: R-MONITOR-EMIT
+    intent: 'LMP.2 emitMonitorEvent: the fail-open emit at the mutation choke-points (a store fault never breaks the mutation)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.1'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: emitMonitorEvent, from: [post-tool-use] }
+    proof: 'src/runtime/loop/monitor_emit.test.ts'
+  - id: R-MONITOR-FOLD
+    intent: 'LMP.4 foldEvents: the pure, chunk-invariant reducer folding the ordered log into per-item latest state'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.2'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: foldEvents, from: [status-line] }
+    proof: 'src/runtime/loop/loop_fold.test.ts'
+  - id: R-MONITOR-FOLD-LATEST
+    intent: 'LMP.4 foldLatestState: the full-truth materialization (terminal items included) — the collectLoopState contract'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.2'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: foldLatestState, from: [status-line] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
+  - id: R-MONITOR-SUBSCRIBE
+    intent: 'LMP.4 subscribeMonitor: the live cursor tail — exactly-once per new event (the --watch/Monitor primitive)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.3'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: subscribeMonitor, from: [status-line] }
+    proof: 'src/runtime/loop/loop_fold.test.ts'
+  - id: R-MONITOR-LIVE-ITEMS
+    intent: 'LMP.5 liveItems: the pushed close event terminal flag IS the drop (staleness fix — no seen-table, no pull-join)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.2'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: liveItems, from: [status-line] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
+  - id: R-MONITOR-AGE
+    intent: 'LMP.5 formatRelativeAge: the always-rendered relative-freshness token (push cadence = freshness)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.5'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: formatRelativeAge, from: [status-line] }
+    proof: 'src/cli/loop_status.test.ts'
+  - id: R-MONITOR-PHASE-LINT
+    intent: 'LMP.3 lintPhaseEmits: the no-silent-stage pack-lint — every procedure stage emits an enter+leave pair'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.6'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: lintPhaseEmits, from: [pack-validation] }
+    proof: 'src/packs/phase_emit_lint.test.ts'
 ```

@@ -1,7 +1,7 @@
 /**
  * LSF.1/LSF.2/LSF.5 — the shared opener for the loop-status feature's durable stores.
  *
- * The wg-keyed phase store (`loop_phases`, LSF.2) and the metrics history (`loop_metrics`, LSF.5) live in the
+ * The push-stream monitor log (`loop_events`, LMP.1) and the metrics history (`loop_metrics`, LSF.5) live in the
  * SAME libsql store the task checkpoints use — the PROJECT-LOCAL `<root>/.opensquid/opensquid.db` (`loopDbUrl`),
  * co-located with `task_checkpoints` (T-project-local-state PLS.3; subprocess-harness-push.md §1 UPDATE).
  * Co-locating them means the whole loop-status data layer relocates in one move, never split across two stores.
@@ -14,7 +14,7 @@
  * lap / the daemon / a concurrent CLI read never trips `SQLITE_BUSY`. Mirrors `withTaskCheckpointStore`.
  *
  * Imports from: node:path, @libsql/client, ../paths.js, ../../storage/sqlite_concurrency.js.
- * Imported by: ./loop_phase_store.ts, ./loop_metrics.ts.
+ * Imported by: ./loop_events.ts, ./loop_metrics.ts.
  */
 import { join } from 'node:path';
 

@@ -19,6 +19,7 @@ import {
   upsertTaskStage,
 } from './loop_stage.js';
 import { ensureLoopRunning } from './loop_autospawn.js';
+import { tailEventsSince } from '../loop/loop_events.js';
 
 import type { Client } from '@libsql/client';
 
@@ -208,6 +209,15 @@ describe('loop_stage — scope-3 loop-autospawn trigger (ATL.3: fire on scope_wr
     await upsertTaskStage('wg-t2', 'plan', 1);
     expect(ensureLoopRunningMock).not.toHaveBeenCalled();
     expect(await readLoopStage('wg-t2')).toBe('plan');
+  });
+
+  it('LMP.2: pushes exactly one stage_advance monitor event AFTER the durable write', async () => {
+    await upsertTaskStage('wg-adv', 'code', 42);
+    const events = await tailEventsSince(0);
+    const advances = events.filter((e) => e.kind === 'stage_advance' && e.wgId === 'wg-adv');
+    expect(advances).toHaveLength(1);
+    expect(advances[0]).toMatchObject({ stage: 'code', atMs: 42 });
+    expect(await readLoopStage('wg-adv')).toBe('code'); // the checkpoint advanced too
   });
 
   it('a trigger throw NEVER breaks the checkpoint write (fail-open — the ask invariant)', async () => {

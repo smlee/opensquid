@@ -21,6 +21,7 @@ import type { LoopMetricRow } from '../loop/loop_metrics.js';
 import { superviseLap } from './supervisor.js';
 import { reapOrphans } from '../loop/reaper.js'; // WGL.4/WGL.6 — the shared per-pass reaper
 import { rollUpParents } from '../loop/parent_rollup.js'; // WGL.5 — parent auto-close on all-children-terminal
+import { emitMonitorEvent } from '../loop/monitor_emit.js'; // LMP.2 — push item_shipped/closed/wedged to the feed
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
 
@@ -225,6 +226,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   const parkAndEscalate = async (reason: HumanRequiredReason, item?: Issue): Promise<void> => {
     if (item !== undefined && !isResourcePause(reason)) {
       await wg.wedgeMark(item.id, reason); // a marked item SKIPS on re-attempt (residual only — GR.3)
+      await emitMonitorEvent({ wgId: item.id, kind: 'item_wedged', atMs: Date.now() }); // LMP.2 — GUARDED on a present item (the item-less BOARD_EMPTY park emits none)
       parked.push({ id: item.id, reason });
     }
     // GR.3 — undroppable for a RESIDUAL per-item escalation (IRREVERSIBLE_BOUNDARY / SCOPE_FORK /
@@ -294,6 +296,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
 
     if (outcome.kind === 'SHIPPED') {
       await wg.updateIssue(item.id, { status: 'closed' });
+      await emitMonitorEvent({ wgId: item.id, kind: 'item_shipped', atMs: Date.now() }); // LMP.2 — the pushed close event; the live view drops it (staleness fix)
       await deps.stageLoop?.clearStage(item.id); // PSL.3 — the item left the loop; drop its durable stage
       closed.push(item.id);
       deps.narrate?.(`✓ SHIPPED ${item.id} (closed ${closed.length})`);
@@ -304,6 +307,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
         const rolled = await rollUpParents(wg, item.id);
         for (const p of rolled) {
           closed.push(p);
+          await emitMonitorEvent({ wgId: p, kind: 'item_closed', atMs: Date.now() }); // LMP.2 — a rolled-up parent drops from the feed too
           deps.narrate?.(`✓ rolled up parent ${p} (all children terminal)`);
         }
       } catch {

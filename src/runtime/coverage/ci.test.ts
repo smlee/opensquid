@@ -58,6 +58,22 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(38); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL
+    // T-loop-monitoring-pushstream (wg-61db3ededf19, LMP.1..5) — 9 new behavioral exports of the PUSH/STREAM
+    // monitor feed, each MET via its element proof-test; the data-shape siblings (MonitorEvent/NewMonitorEvent/
+    // MonitorEventKind/PhaseLifecycle/LoopFoldState/ProcedureLintResult) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-MONITOR-APPEND',
+      'R-MONITOR-TAIL',
+      'R-MONITOR-EMIT',
+      'R-MONITOR-FOLD',
+      'R-MONITOR-FOLD-LATEST',
+      'R-MONITOR-SUBSCRIBE',
+      'R-MONITOR-LIVE-ITEMS',
+      'R-MONITOR-AGE',
+      'R-MONITOR-PHASE-LINT',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    expect(a.results.length).toBe(47); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring
   }, 30_000);
 });

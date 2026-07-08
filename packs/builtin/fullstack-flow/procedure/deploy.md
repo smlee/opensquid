@@ -70,10 +70,16 @@ git push                                        # the pre-push gate re-runs the 
 At each step of the DEPLOY loop, emit the phase via the `set_loop_phase` MCP tool so the harness status line /
 Monitor shows where this item is (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
 
-- `set_loop_phase(phase: "verify", index: 1, total: 4)` while running the full suite (§1),
-- `set_loop_phase(phase: "fix", index: 2, total: 4)` while in the DEPLOY-LOCAL fix-loop (§2),
-- `set_loop_phase(phase: "commit", index: 3, total: 4)` while committing + pushing (§3),
-- `set_loop_phase(phase: "accept", index: 4, total: 4)` once surfaced for the human ACCEPT touchpoint (§4).
+Emit each phase with `lifecycle: "running"` on ENTER (⟳) and `lifecycle: "done"` on LEAVE (✓):
+
+- `set_loop_phase(phase: "verify", index: 1, total: 4, lifecycle: "running")` while running the full suite (§1),
+  then `set_loop_phase(phase: "verify", index: 1, total: 4, lifecycle: "done")` when it is green,
+- `set_loop_phase(phase: "fix", index: 2, total: 4, lifecycle: "running")` while in the DEPLOY-LOCAL fix-loop
+  (§2) (leave with `lifecycle: "done"`),
+- `set_loop_phase(phase: "commit", index: 3, total: 4, lifecycle: "running")` while committing + pushing (§3)
+  (leave with `lifecycle: "done"`),
+- `set_loop_phase(phase: "accept", index: 4, total: 4, lifecycle: "running")` once surfaced for the human ACCEPT
+  touchpoint (§4) (leave with `lifecycle: "done"`).
 
 ## 4. ACCEPT — the human touchpoint
 

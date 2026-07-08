@@ -1,43 +1,71 @@
 /**
- * LSF.3 — `opensquid loop-status`: the THIN renderer over the `collectLoopState` read-model (LSF.1) + the
- * `loop_metrics` history (LSF.5). Renders whatever stage/phase STRINGS exist — NO built-in stage vocabulary
- * (pack-agnostic). It NEVER writes the loop stores (a read surface only); the sole write it performs is the
- * live-view linger marker (`filterLiveView`), which is state OF the view, not of the loop.
+ * LSF.3 / LMP.5 — `opensquid loop-status`: the THIN renderer over the `collectLoopState` fold (LSF.1/LMP.5) +
+ * the `loop_metrics` history (LSF.5). Renders whatever stage/phase STRINGS exist — NO built-in stage vocabulary
+ * (pack-agnostic). It NEVER writes the loop stores (a read surface only).
+ *
+ * LMP.5/LMP.6 — the live view is a FOLD/TAIL over the push stream: the status line + default read the cheap
+ * materialized latest-state (`collectLoopState` → `liveItems`), and `--watch` TAILS new events via
+ * `subscribeMonitor` (one line per change) instead of a 2s poll+snapshot-diff. `renderItem` ALWAYS renders a
+ * relative-age token (`formatRelativeAge`) + the running/done marker (⟳/✓) so a glance answers item · stage ·
+ * phase (idx/total) · running-or-done · how-long-since-it-moved. The old pull surfaces (`filterLiveView` +
+ * `loop_terminal_seen` linger, the poll loop) are GONE.
  *
  * Modes (subprocess-harness-push.md §2.3):
  *   --json         the raw LoopState contract (full truth; the exact shape the future UI reads).
  *   --status-line  exactly ONE line, --width-truncatable, NEVER throws, active few + "+N more", stable
  *                  non-empty idle line ("silence is a bug, not success").
- *   --watch        Monitor stream: one line per change, a terminal line on drain.
+ *   --watch        Monitor stream: one line per pushed event, a terminal line on drain.
  *   --metrics      SQL-filterable read over loop_metrics: --since <ISO|ms> [--task <id>] [--harness <name>].
  *
- * Imports from: commander, ../runtime/loop/loop_state.js, ../runtime/loop/loop_metrics.js.
+ * Imports from: commander, ../runtime/loop/loop_state.js, ../runtime/loop/loop_events.js,
+ *   ../runtime/loop/loop_metrics.js.
  * Imported by: src/cli.ts (registerLoopStatus).
  */
 import type { Command } from 'commander';
 
 import {
   collectLoopState,
-  filterLiveView,
-  DEFAULT_SURFACE,
+  liveItems,
   type LoopState,
   type LoopStateItem,
 } from '../runtime/loop/loop_state.js';
+import {
+  subscribeMonitor,
+  tailEventsSince,
+  foldEvents,
+  type MonitorEvent,
+} from '../runtime/loop/loop_events.js';
 import { readMetrics, aggregatePerLoop, type MetricsFilter } from '../runtime/loop/loop_metrics.js';
 
 /** The stable, NON-EMPTY idle line — an empty board is a state, not silence. */
 const IDLE_LINE = '🦑 loop idle — no items in flight';
 
-/** Render ONE item: `wgId · stage[ · phase (idx/total)]`. */
-export function renderItem(item: LoopStateItem): string {
+/** The explicit drain announcement — silence is not success. */
+const DRAIN_LINE = '■ loop drained — no items in flight';
+
+/** A pure relative-age token from an elapsed-ms delta: `just now` / `Nm ago` / `Nh ago` (never throws on NaN). */
+export function formatRelativeAge(deltaMs: number): string {
+  if (!Number.isFinite(deltaMs) || deltaMs < 60_000) return 'just now';
+  const m = Math.floor(deltaMs / 60_000);
+  return m < 60 ? `${String(m)}m ago` : `${String(Math.floor(m / 60))}h ago`;
+}
+
+/**
+ * Render ONE item: `wgId · stage[ · phase (idx/total) ⟳|✓] · <age>`. `now` is injectable (default `Date.now()`)
+ * so the renderer is deterministic in tests, and it is TOTAL (never throws — the never-throws status-line
+ * contract): a missing `lastActivityMs` falls back to `updatedAt`, and `formatRelativeAge` tolerates NaN.
+ */
+export function renderItem(item: LoopStateItem, now: number = Date.now()): string {
   const parts = [item.wgId, item.stage];
   if (item.phase !== undefined) {
     const counter =
       item.phaseIndex !== undefined && item.phaseTotal !== undefined
         ? ` (${String(item.phaseIndex)}/${String(item.phaseTotal)})`
         : '';
-    parts.push(`${item.phase}${counter}`);
+    const mark = item.lifecycle === 'done' ? ' ✓' : item.lifecycle === 'running' ? ' ⟳' : '';
+    parts.push(`${item.phase}${counter}${mark}`);
   }
+  parts.push(formatRelativeAge(now - (item.lastActivityMs ?? item.updatedAt))); // ALWAYS rendered (decision 5)
   return parts.join(' · ');
 }
 
@@ -46,9 +74,9 @@ export function renderItem(item: LoopStateItem): string {
  * (leaving room for the overflow suffix), oldest-stalest last. Falls back to the idle line for an empty board.
  * PURE — the caller wraps it so a render bug can never throw on the status line.
  */
-export function renderStatusLine(items: LoopState, width = 120): string {
+export function renderStatusLine(items: LoopState, width = 120, now: number = Date.now()): string {
   if (items.length === 0) return IDLE_LINE;
-  const rendered = items.map(renderItem);
+  const rendered = items.map((i) => renderItem(i, now));
   const prefix = '🦑 ';
   const out: string[] = [];
   let used = prefix.length;
@@ -74,10 +102,9 @@ function joinLine(chunks: string[]): string {
   return chunks.join('  ');
 }
 
-// Each live surface names itself so its linger marker is independent — the always-on status line and the
-// Monitor --watch stream run concurrently (§3.1) and must NOT consume each other's one-shot terminal finish.
-async function liveView(surface: string): Promise<LoopState> {
-  return filterLiveView(await collectLoopState(), undefined, true, surface);
+/** The current live board — the fold over the push stream, terminal items dropped. */
+async function liveView(): Promise<LoopState> {
+  return liveItems(await collectLoopState());
 }
 
 function parseSince(since: string | undefined): number | undefined {
@@ -87,8 +114,6 @@ function parseSince(since: string | undefined): number | undefined {
   const asDate = Date.parse(since); // ISO
   return Number.isNaN(asDate) ? undefined : asDate;
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 interface LoopStatusOpts {
   json?: boolean;
@@ -108,13 +133,16 @@ export function registerLoopStatus(program: Command): void {
     .description('Live loop-state feed (status line / Monitor) + the loop_metrics history.')
     .option('--json', 'emit the raw LoopState (or metrics) JSON — the shape the UI reads')
     .option('--status-line', 'ONE width-bounded line for the harness status line (never throws)')
-    .option('--watch', 'stream one line per change for the Monitor tool (terminal line on drain)')
+    .option(
+      '--watch',
+      'stream one line per pushed change for the Monitor tool (terminal line on drain)',
+    )
     .option('--width <n>', 'bound the --status-line render width (default 120)')
     .option('--metrics', 'read the loop_metrics history instead of the live state')
     .option('--since <iso|ms>', 'metrics: only rows at/after this time')
     .option('--task <id>', 'metrics: only this item id')
     .option('--harness <name>', 'metrics: only this harness')
-    .option('--interval <ms>', '--watch poll interval (default 2000)')
+    .option('--interval <ms>', '--watch tail interval (default 1000)')
     .action(async (opts: LoopStatusOpts) => {
       if (opts.metrics === true) {
         await runMetrics(opts);
@@ -125,8 +153,7 @@ export function registerLoopStatus(program: Command): void {
         try {
           const width = opts.width !== undefined ? Number(opts.width) : 120;
           process.stdout.write(
-            renderStatusLine(await liveView('status-line'), Number.isFinite(width) ? width : 120) +
-              '\n',
+            renderStatusLine(await liveView(), Number.isFinite(width) ? width : 120) + '\n',
           );
         } catch {
           process.stdout.write(IDLE_LINE + '\n');
@@ -142,41 +169,75 @@ export function registerLoopStatus(program: Command): void {
       if (opts.json === true) {
         process.stdout.write(JSON.stringify(state, null, 2) + '\n');
       } else {
-        const view = await liveView(DEFAULT_SURFACE);
+        const view = liveItems(state);
         process.stdout.write(
-          view.length === 0 ? IDLE_LINE + '\n' : view.map(renderItem).join('\n') + '\n',
+          view.length === 0 ? IDLE_LINE + '\n' : view.map((i) => renderItem(i)).join('\n') + '\n',
         );
       }
     });
 }
 
-/** --watch: poll, emit one line per CHANGE, emit a terminal drain line when the board empties, then return. */
-async function runWatch(opts: LoopStatusOpts): Promise<void> {
-  const interval = opts.interval !== undefined ? Number(opts.interval) : 2000;
-  let last = '';
-  for (;;) {
-    let view: LoopState;
-    try {
-      view = await liveView('watch');
-    } catch (e) {
-      process.stdout.write(
-        `⚠️ loop-status watch read error: ${e instanceof Error ? e.message : String(e)}\n`,
-      );
-      await sleep(Number.isFinite(interval) ? interval : 2000);
-      continue;
+/** Render one pushed event as a single stream line (kind → the changed facet), age-stamped from its `atMs`. */
+function renderEvent(e: MonitorEvent, now: number = Date.now()): string {
+  const age = formatRelativeAge(now - e.atMs);
+  switch (e.kind) {
+    case 'stage_advance':
+      return `${e.wgId} · ${e.stage ?? ''} · ${age}`;
+    case 'phase_enter':
+    case 'phase_leave': {
+      const counter =
+        e.index !== undefined && e.total !== undefined
+          ? ` (${String(e.index)}/${String(e.total)})`
+          : '';
+      const mark = e.lifecycle === 'done' ? ' ✓' : ' ⟳';
+      return `${e.wgId} · ${e.phase ?? ''}${counter}${mark} · ${age}`;
     }
-    const snapshot = view.map(renderItem).join('\n');
-    if (snapshot !== last) {
-      for (const item of view) process.stdout.write(renderItem(item) + '\n');
-      last = snapshot;
-    }
-    if (view.length === 0) {
-      // Silence is not success — announce the drain explicitly, then stop the stream.
-      process.stdout.write('■ loop drained — no items in flight\n');
-      return;
-    }
-    await sleep(Number.isFinite(interval) ? interval : 2000);
+    case 'item_shipped':
+      return `${e.wgId} · ✓ shipped · ${age}`;
+    case 'item_closed':
+      return `${e.wgId} · ✓ closed · ${age}`;
+    case 'item_wedged':
+      return `${e.wgId} · ⚠ wedged · ${age}`;
   }
+}
+
+/**
+ * --watch: TAIL the push stream (`subscribeMonitor`), emit one line per pushed event, and announce the drain
+ * when every item has closed (silence is not success). A watcher joining mid-flight first sees the current live
+ * board; the tail then streams each change. The live set is maintained from the events themselves (a close/ship
+ * removes the item; a wedge keeps it shown) so the drain is exact — no pull.
+ */
+async function runWatch(opts: LoopStatusOpts): Promise<void> {
+  const interval = opts.interval !== undefined ? Number(opts.interval) : 1000;
+  const intervalMs = Number.isFinite(interval) ? interval : 1000;
+
+  // Seed from the whole log: render the current live board once, track the live set, and start the tail cursor
+  // past the last seen event (so the stream only shows NEW changes).
+  const seed = await tailEventsSince(0);
+  const live = new Set<string>();
+  for (const f of foldEvents(seed)) if (!f.terminal) live.add(f.wgId);
+  const state = liveItems(await collectLoopState());
+  for (const item of state) process.stdout.write(renderItem(item) + '\n');
+  if (live.size === 0) {
+    process.stdout.write(DRAIN_LINE + '\n');
+    return;
+  }
+  const cursor = seed.length > 0 ? Math.max(...seed.map((e) => e.seq)) : 0;
+
+  let drained = false;
+  await subscribeMonitor(
+    cursor,
+    (e) => {
+      process.stdout.write(renderEvent(e) + '\n');
+      if (e.kind === 'item_shipped' || e.kind === 'item_closed') live.delete(e.wgId);
+      else live.add(e.wgId); // a stage/phase advance (or a re-open) makes the item live again
+      if (live.size === 0 && !drained) {
+        process.stdout.write(DRAIN_LINE + '\n');
+        drained = true;
+      }
+    },
+    { intervalMs, shouldStop: () => drained },
+  );
 }
 
 /** --metrics: the SQL-filterable read (per-stage rows + a per-loop aggregate footer). */
