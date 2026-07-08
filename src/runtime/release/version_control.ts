@@ -33,8 +33,14 @@ export interface ResolvedEnvironments {
   local: string;
 }
 
-export type ResolveError = { ok: false; reason: string };
-export type ResolveOk = { ok: true; environments: ResolvedEnvironments };
+export interface ResolveError {
+  ok: false;
+  reason: string;
+}
+export interface ResolveOk {
+  ok: true;
+  environments: ResolvedEnvironments;
+}
 export type ResolveResult = ResolveOk | ResolveError;
 
 /**

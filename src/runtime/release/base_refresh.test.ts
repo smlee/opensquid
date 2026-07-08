@@ -26,10 +26,12 @@ function makeIo(opts: {
     checkout: (ref) => (log.push(`checkout:${ref}`), Promise.resolve()),
     revParse: (ref) =>
       Promise.resolve(ref.includes('/') || ref.startsWith('origin') ? opts.remote : opts.local),
-    isAncestor: async (maybe, rev) => {
-      if (maybe === opts.remote && rev === opts.local) return opts.remoteAncestorOfLocal;
-      if (maybe === opts.local && rev === opts.remote) return opts.localAncestorOfRemote;
-      return maybe === rev;
+    isAncestor: (maybe, rev) => {
+      if (maybe === opts.remote && rev === opts.local)
+        return Promise.resolve(opts.remoteAncestorOfLocal);
+      if (maybe === opts.local && rev === opts.remote)
+        return Promise.resolve(opts.localAncestorOfRemote);
+      return Promise.resolve(maybe === rev);
     },
     merge: (ref) => {
       log.push(`merge:${ref}`);
