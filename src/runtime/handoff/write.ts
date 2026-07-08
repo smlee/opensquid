@@ -31,7 +31,7 @@ import {
 } from '../../channels/routing.js';
 import { workGraphStore } from '../../workgraph/store.js';
 import { resolveActorId } from '../actor_id.js';
-import { OPENSQUID_HOME, resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
+import { OPENSQUID_HOME, resolveLocalStoreDir } from '../paths.js';
 
 import { handoverDocPath, type HandoffState } from './collect.js';
 import {
@@ -219,23 +219,21 @@ export async function writeHandoffSurfaces(
 
   // (c) work-graph upsert — stable title key; update-or-create.
   try {
+    // T-project-local-state PLS.2: upsert into THIS project's LOCAL store (`<root>/.opensquid/workgraph.db`,
+    // resolved from the session's cwd) — the store IS the project's, no namespace binding.
+    const dir = await resolveLocalStoreDir(state.cwd);
     const store = workGraphStore({
-      dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-      sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
-      actorId: await resolveActorId(), // WGD.1 — stamp the per-HOME replica id on ops
+      dbUrl: `file:${join(dir, 'workgraph.db')}`,
+      sourceDir: join(dir, 'store', 'issues'),
+      actorId: await resolveActorId(), // WGD.1 — stamp the per-replica id on ops
     });
     await store.init();
-    // T-WORKGRAPH-PROJECT-SCOPE: upsert into THIS project's namespace (degrade marker-less → 'legacy-global').
-    const wgProject =
-      (await resolveProjectMarker(state.cwd))?.uuid ??
-      resolveProjectUuidFromEnv() ??
-      'legacy-global';
     const title = `handoff-${state.sessionId.slice(0, 8)}`;
-    const existing = (await store.listIssues(wgProject)).find((i) => i.title === title);
+    const existing = (await store.listIssues()).find((i) => i.title === title);
     if (existing !== undefined) {
-      await store.updateIssue(wgProject, existing.id, { body: renderWgDigest(state) });
+      await store.updateIssue(existing.id, { body: renderWgDigest(state) });
     } else {
-      await store.createIssue(wgProject, { title, body: renderWgDigest(state) });
+      await store.createIssue({ title, body: renderWgDigest(state) });
     }
     outcomes.push({ surface: 'workgraph', ok: true, detail: title });
   } catch (e) {

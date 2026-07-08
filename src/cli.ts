@@ -23,6 +23,7 @@ import { Command } from 'commander';
 import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
+import { registerLoopStatus } from './cli/loop_status.js';
 import { registerYoloCli, consumeYoloFlags, applyYoloFlagDecision } from './cli/yolo.js';
 import { registerChatWatch } from './runtime/chat/watch_cli.js';
 import { resolveBackendConfig } from './rag/config.js';
@@ -426,6 +427,11 @@ function runCli(): void {
   // living-pack mechanic. v1 ships local-directory install + lessons-only/raw
   // export modes. Tarball/URL install + with-evidence export are v1.5.
   registerPackCli(program);
+
+  // LSF.3 — `opensquid loop-status [--json|--status-line|--watch|--metrics]`. The thin renderer over the
+  // collectLoopState read-model (live where-is-every-item feed) + the loop_metrics history. Feeds the harness
+  // status line (--status-line) + the Monitor tool (--watch); no new push channel, no in-session polling.
+  registerLoopStatus(program);
 
   // YOLO mode — `opensquid yolo on|off|status`: downgrade the Safety floor's DANGEROUS tier to warn
   // (hardline stays enforced). The toggle the user runs to let dangerous-but-reversible actions proceed.

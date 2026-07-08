@@ -16,6 +16,15 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
 - Resolve every open question here (ask the user only if it is unanswerable after research OR an
   architecture-changing fork). CHECK the box / remove the item before you leave SCOPE.
 
+## Emit your phase to the live status feed
+
+As you move through SCOPE, emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor
+shows where this item is (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
+
+- `set_loop_phase(phase: "research", index: 1, total: 3)` while researching,
+- `set_loop_phase(phase: "write-artifact", index: 2, total: 3)` while writing the pre-research artifact,
+- `set_loop_phase(phase: "confirm", index: 3, total: 3)` when you present the scope for the user's confirmation.
+
 ## Gate during SCOPE (scope → scope_write): `scope_ready`
 
 Passes only when the pre-research write is: `anchors_ok` (every scoped element traces to the captured ask)

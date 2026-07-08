@@ -2,7 +2,7 @@
  * GS1 — the ralph loop's scope gate over the durable task_checkpoints store (drive / hold + reset semantics).
  * Uses an injected in-memory CheckpointStore so the decision is exercised without touching opensquid.db.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CheckpointStore } from '../durable/checkpoint_store.js';
+import { recordStageMetric, readMetrics } from '../loop/loop_metrics.js';
 import { scopeGate, readLoopStage, clearLoopStage, withTaskCheckpointStore } from './loop_stage.js';
 
 import type { Client } from '@libsql/client';
@@ -90,21 +91,32 @@ describe('loop_stage — scopeGate (GS1 scope proof, checkpoint-backed)', () => 
   });
 });
 
-describe('loop_stage — readLoopStage / clearLoopStage (own opensquid.db opener + WAL posture)', () => {
-  let home: string;
-  let prior: string | undefined;
+describe('loop_stage — project-LOCAL opensquid.db opener (PLS.3 table split; WAL posture)', () => {
+  // The IN opener resolves `<root>/.opensquid/opensquid.db` via the OPENSQUID_PROJECT_ROOT test seam. The GLOBAL
+  // home is pointed at a SEPARATE tmpdir so the tests can prove the checkpoint/loop tables land LOCAL, never global.
+  let projectRoot: string;
+  let globalHome: string;
+  let priorRoot: string | undefined;
+  let priorHome: string | undefined;
   beforeEach(() => {
-    prior = process.env.OPENSQUID_HOME;
-    home = mkdtempSync(join(tmpdir(), 'osq-loopstage-'));
-    process.env.OPENSQUID_HOME = home;
+    priorRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    priorHome = process.env.OPENSQUID_HOME;
+    projectRoot = mkdtempSync(join(tmpdir(), 'osq-proj-'));
+    mkdirSync(join(projectRoot, '.opensquid'), { recursive: true });
+    globalHome = mkdtempSync(join(tmpdir(), 'osq-home-'));
+    process.env.OPENSQUID_PROJECT_ROOT = projectRoot;
+    process.env.OPENSQUID_HOME = globalHome;
   });
   afterEach(() => {
-    if (prior === undefined) delete process.env.OPENSQUID_HOME;
-    else process.env.OPENSQUID_HOME = prior;
-    rmSync(home, { recursive: true, force: true });
+    if (priorRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+    else process.env.OPENSQUID_PROJECT_ROOT = priorRoot;
+    if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
+    else process.env.OPENSQUID_HOME = priorHome;
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(globalHome, { recursive: true, force: true });
   });
 
-  it('readLoopStage round-trips the recorded stage through the module opener (fresh → null)', async () => {
+  it('readLoopStage round-trips the recorded stage through the LOCAL opener (fresh → null)', async () => {
     expect(await readLoopStage('wg-r')).toBeNull(); // fresh
     await withTaskCheckpointStore((s) => s.createTaskCheckpoint('wg-r', 'code', 1));
     expect(await readLoopStage('wg-r')).toBe('code');
@@ -112,5 +124,36 @@ describe('loop_stage — readLoopStage / clearLoopStage (own opensquid.db opener
 
   it('clearLoopStage is a no-op (resolves without throwing)', async () => {
     await expect(clearLoopStage('wg-anything')).resolves.toBeUndefined();
+  });
+
+  it('opens `<root>/.opensquid/opensquid.db` — NOT the global home (the split boundary)', async () => {
+    await withTaskCheckpointStore((s) => s.createTaskCheckpoint('wg-loc', 'author', 1));
+    expect(existsSync(join(projectRoot, '.opensquid', 'opensquid.db'))).toBe(true);
+    expect(existsSync(join(globalHome, 'opensquid.db'))).toBe(false); // checkpoints are LOCAL, not global
+  });
+
+  it('a checkpoint + a loop metric round-trip through the SAME local opensquid.db', async () => {
+    await withTaskCheckpointStore((s) => s.createTaskCheckpoint('wg-rt', 'code', 1_000));
+    await recordStageMetric({
+      runId: 'run-rt',
+      itemId: 'wg-rt',
+      stage: 'code',
+      harness: 'claude',
+      authMode: 'subscription',
+      startedAtMs: 1_000,
+      endedAtMs: 2_000,
+      durationMs: 1_000,
+      costUsd: 0.5,
+      inputTokens: 100,
+      outputTokens: 40,
+    });
+    // Both stores resolved the identical local file, so each sees the other's writer's rows.
+    expect(await readLoopStage('wg-rt')).toBe('code');
+    const metrics = await readMetrics({ itemId: 'wg-rt' });
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0]?.stage).toBe('code');
+    // One db file, in the LOCAL store — nothing leaked to the global home.
+    expect(existsSync(join(projectRoot, '.opensquid', 'opensquid.db'))).toBe(true);
+    expect(existsSync(join(globalHome, 'opensquid.db'))).toBe(false);
   });
 });

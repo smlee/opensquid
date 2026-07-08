@@ -131,6 +131,63 @@ export const resolveProjectScopeRoot = async (cwd: string): Promise<string | nul
 };
 
 // ---------------------------------------------------------------------------
+// Project-LOCAL store resolution (T-project-local-state PLS.1)
+//
+// OpenSquid's workgraph + ralph loop + checkpoints are PROJECT-LOCAL — they
+// live in each project's own `<root>/.opensquid/`, discovered by walking up
+// from cwd exactly how `git` finds `.git`. The code on this IN path is
+// project-AGNOSTIC: it resolves a ROOT (a path), never a UUID to partition a
+// shared global db. `resolveProjectMarker`/`ProjectMarker.uuid` below stay
+// intact for the OUT consumers (agent-bridge, kanban) — only the workgraph
+// stops binding on the uuid.
+// ---------------------------------------------------------------------------
+
+/**
+ * The nearest ancestor project ROOT (git-`rev-parse --show-toplevel`-style):
+ * the directory CONTAINING a `.opensquid/` directory, walking up from
+ * `startDir`, or `null` if none is found before the filesystem root.
+ *
+ * REUSES {@link resolveProjectScopeRoot} — which recognizes the bare
+ * `.opensquid/` DIRECTORY (NOT the `project.json` FILE), so a start-fresh
+ * local store (PLS.5, no marker file yet) resolves — and returns that dir's
+ * PARENT (the project root). Deliberately does NOT delegate to
+ * {@link resolveProjectMarker} (a `project.json` walk that returns `null` for
+ * a bare `.opensquid/` dir). Nested markers resolve to the INNERMOST (the
+ * scope-root walk stops at the first `.opensquid/` hit), so a repo inside a
+ * workspace binds to its own local store — the invariant that makes the
+ * cross-project namespace flip structurally impossible (design §6.3).
+ */
+export async function resolveProjectRoot(startDir: string): Promise<string | null> {
+  const scope = await resolveProjectScopeRoot(startDir);
+  return scope === null ? null : dirname(scope);
+}
+
+/**
+ * The IN-path locator every workgraph/loop/checkpoint opener shares: returns
+ * the project-local `<root>/.opensquid` directory for `cwd`.
+ *
+ * Honors an `OPENSQUID_PROJECT_ROOT` env override (mirroring the
+ * {@link OPENSQUID_HOME} test-seam) so a suite can point the IN openers at a
+ * temp project WITHOUT walking up into (and polluting) the real repo's
+ * `.opensquid/`. With no override it walks up from `cwd` for the nearest
+ * `.opensquid/` (git-`.git` style) and THROWS when none is found — an IN
+ * opener with no project store is a hard error, not a silent global fallback
+ * (the global fallback is exactly the partition this scope removes).
+ */
+export async function resolveLocalStoreDir(cwd: string): Promise<string> {
+  const override = process.env.OPENSQUID_PROJECT_ROOT?.trim();
+  if (override !== undefined && override.length > 0) return join(override, '.opensquid');
+  const root = await resolveProjectRoot(cwd);
+  if (root === null)
+    throw new Error(
+      'opensquid: no .opensquid/ project store found (run from inside a project — walked up from ' +
+        cwd +
+        ')',
+    );
+  return join(root, '.opensquid');
+}
+
+// ---------------------------------------------------------------------------
 // Project-UUID resolution (T-PUC)
 //
 // The `.opensquid/project.json` file (legacy schema `{ version: 1, id, uuid }`)

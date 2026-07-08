@@ -62,57 +62,22 @@ export interface WgOp {
 }
 
 /**
- * The project-scoped store. ONE instance (one client, one global Lamport clock) backs every project;
- * `project` is threaded as the first arg of each method so reads filter and writes stamp it. Handlers do
- * NOT call this directly — they call a per-project {@link WorkGraphFacade} (which binds `project`).
- * Spec: docs/tasks/T-workgraph-project-scope.md.
+ * The PROJECT-LOCAL work-graph store (T-project-local-state PLS.2). Each project's OpenSquid state lives
+ * in its own `<root>/.opensquid/workgraph.db` (discovered by walking up from cwd like `git` finds `.git`),
+ * so the store IS the project's — the ops take NO `project` key and reads filter on nothing. The
+ * de-partitioned store adds only `init()` to the caller-facing {@link WorkGraphFacade} op surface; every
+ * op signature is defined once, on the facade, so the partition cannot silently reappear on the IN path.
+ * (The `project` column survives physically with a constant `'legacy-global'` stamp for schema back-compat
+ * — see `workGraphStore` — but nothing FILTERS on it.) Spec: docs/tasks/T-project-local-state.md (PLS.2).
  */
-export interface WorkGraphStore {
+export interface WorkGraphStore extends WorkGraphFacade {
   init(): Promise<void>;
-  createIssue(project: string, input: { title: string; body?: string }): Promise<Issue>;
-  getIssue(project: string, id: string): Promise<Issue | null>;
-  listIssues(project: string, filter?: { status?: IssueStatus }): Promise<Issue[]>;
-  updateIssue(
-    project: string,
-    id: string,
-    patch: { status?: IssueStatus; title?: string; body?: string },
-  ): Promise<Issue>;
-  addEdge(project: string, fromId: string, toId: string, type: EdgeType): Promise<void>;
-  /** Open issues with no un-closed `blocks` blocker AND no live claim, oldest-first. */
-  listReady(project: string): Promise<Issue[]>;
-  /**
-   * Atomically claim an item for `ttlSec` (exactly-once CAS via a unique claim token). Returns
-   * `won:true` only for the single winner; concurrent/duplicate claims get `won:false`. An item
-   * whose prior claim has expired is claimable again (query-time staleness). (GR.1.)
-   */
-  claimIssue(
-    project: string,
-    id: string,
-    audience: ClaimAudience,
-    ttlSec: number,
-  ): Promise<{ won: boolean; expiresAt: string }>;
-  /**
-   * Mark an item as wedged (GR.3): a re-attempt SKIPS it (it's escalated, not retried) so the
-   * supervisor can't crash-loop the same wall. Excluded from `listReady` until the reason is cleared.
-   */
-  wedgeMark(project: string, id: string, reason: string): Promise<void>;
-  /** Clear a wedge-mark (GR.4 human-override resolution): `wedge_reason` → null → the item re-enters
-   * `listReady` for another lap. The residual-shrink path's un-wedge. */
-  clearWedge(project: string, id: string): Promise<void>;
-  releaseClaim(project: string, id: string): Promise<void>;
-  /** The append-only op-log for an issue, in (lamport, id) order. */
-  listEvents(project: string, issueId: string): Promise<WgOp[]>;
-  /**
-   * T2.5 — the folded edge projection for a project, as `{from,to,type}` triples (deterministic order by
-   * `edge_key`). Mirrors {@link listIssues}; the PLAN gate (`planAudit`) reads the dependency graph through it.
-   */
-  listEdges(project: string): Promise<{ from: string; to: string; type: EdgeType }[]>;
 }
 
 /**
- * A per-project view over the single {@link WorkGraphStore}: the SAME methods minus the leading `project`
- * arg (it's bound by `bindProject`). This is what `getWorkGraph()` returns, so the MCP handlers keep their
- * existing call signatures while operating on one project.
+ * The caller-facing work-graph op surface — the project-less API every MCP handler / loop consumer calls.
+ * Since T-project-local-state PLS.2 the store IS this surface (plus `init`); a {@link WorkGraphStore} is
+ * structurally a `WorkGraphFacade`, so openers return the store directly (no `bindProject` binding step).
  */
 export interface WorkGraphFacade {
   createIssue(input: { title: string; body?: string }): Promise<Issue>;

@@ -22,6 +22,8 @@ import {
   packLogFile,
   packStateDir,
   packStateFile,
+  resolveLocalStoreDir,
+  resolveProjectRoot,
   resolveProjectScopeRoot,
   resolveProjectUuid,
   resolveProjectUuidFromEnv,
@@ -168,6 +170,113 @@ describe('resolveProjectScopeRoot', () => {
     } else {
       expect(result).toBeNull();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-project-local-state PLS.1 — the IN-path project-ROOT resolver
+// ---------------------------------------------------------------------------
+
+describe('resolveProjectRoot (PLS.1 — git-toplevel-style project root)', () => {
+  let root: string;
+  let priorRootEnv: string | undefined;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'opensquid-projroot-'));
+    priorRootEnv = process.env.OPENSQUID_PROJECT_ROOT;
+    delete process.env.OPENSQUID_PROJECT_ROOT;
+  });
+
+  afterEach(async () => {
+    if (priorRootEnv === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+    else process.env.OPENSQUID_PROJECT_ROOT = priorRootEnv;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('returns the project ROOT (parent of .opensquid/) for a marker up the tree', async () => {
+    const proj = join(root, 'proj');
+    await mkdir(join(proj, '.opensquid'), { recursive: true });
+    const deep = join(proj, 'a', 'b');
+    await mkdir(deep, { recursive: true });
+
+    await expect(resolveProjectRoot(deep)).resolves.toBe(proj);
+  });
+
+  it('resolves NESTED markers to the INNERMOST root (the anti-flip invariant)', async () => {
+    // <root>/proj/.opensquid AND <root>/proj/sub/repo/.opensquid — a repo inside a workspace.
+    const proj = join(root, 'proj');
+    const repo = join(proj, 'sub', 'repo');
+    await mkdir(join(proj, '.opensquid'), { recursive: true });
+    await mkdir(join(repo, '.opensquid'), { recursive: true });
+
+    await expect(resolveProjectRoot(join(repo, 'x'))).resolves.toBe(repo); // innermost
+    await expect(resolveProjectRoot(join(proj, 'a', 'b'))).resolves.toBe(proj); // outer
+  });
+
+  it('resolves a BARE .opensquid/ dir with NO project.json (the PLS.5 start-fresh state)', async () => {
+    const proj = join(root, 'fresh');
+    await mkdir(join(proj, '.opensquid'), { recursive: true }); // no project.json written
+    await expect(resolveProjectRoot(proj)).resolves.toBe(proj);
+  });
+
+  it('returns null when no .opensquid ancestor exists', async () => {
+    const empty = join(root, 'nowhere', 'a');
+    await mkdir(empty, { recursive: true });
+    const result = await resolveProjectRoot(empty);
+    // The walk continues into the real filesystem; assert it is at least never a fixture path.
+    if (result !== null) expect(result.startsWith(root)).toBe(false);
+    else expect(result).toBeNull();
+  });
+
+  it('ProjectMarker STILL exposes uuid (not collateral-removed for the OUT consumers)', async () => {
+    const proj = join(root, 'marked');
+    await mkdir(join(proj, '.opensquid'), { recursive: true });
+    await writeFile(
+      join(proj, '.opensquid', 'project.json'),
+      JSON.stringify({ version: 1, id: 'demo', uuid: 'uuid-abc' }),
+    );
+    const marker = await resolveProjectMarker(proj);
+    expect(marker?.uuid).toBe('uuid-abc');
+    expect(marker?.root).toBe(proj);
+  });
+});
+
+describe('resolveLocalStoreDir (PLS.1 — the shared IN-opener locator + test seam)', () => {
+  let root: string;
+  let priorRootEnv: string | undefined;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'opensquid-localstore-'));
+    priorRootEnv = process.env.OPENSQUID_PROJECT_ROOT;
+    delete process.env.OPENSQUID_PROJECT_ROOT;
+  });
+
+  afterEach(async () => {
+    if (priorRootEnv === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+    else process.env.OPENSQUID_PROJECT_ROOT = priorRootEnv;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('honors the OPENSQUID_PROJECT_ROOT override (temp-dir injection, no cwd walk)', async () => {
+    process.env.OPENSQUID_PROJECT_ROOT = root;
+    await expect(resolveLocalStoreDir('/does/not/matter')).resolves.toBe(join(root, '.opensquid'));
+  });
+
+  it('walks up from cwd for the nearest .opensquid/ when no override is set', async () => {
+    const proj = join(root, 'proj');
+    await mkdir(join(proj, '.opensquid'), { recursive: true });
+    await expect(resolveLocalStoreDir(join(proj, 'a'))).resolves.toBe(join(proj, '.opensquid'));
+  });
+
+  it('THROWS (no silent global fallback) when no project store is found', async () => {
+    const empty = join(root, 'no', 'marker', 'here');
+    await mkdir(empty, { recursive: true });
+    process.env.OPENSQUID_PROJECT_ROOT = ''; // empty override → walk → (fixture has no marker)
+    // Point the walk at a dir with no ancestor marker under the fixture; if the dev machine has a
+    // real ancestor marker the walk resolves it, so only assert the throw when it genuinely finds none.
+    const result = await resolveProjectRoot(empty);
+    if (result === null)
+      await expect(resolveLocalStoreDir(empty)).rejects.toThrow(/no \.opensquid/);
   });
 });
 

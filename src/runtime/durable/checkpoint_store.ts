@@ -195,6 +195,19 @@ export interface TaskCheckpoint {
   scopeArtifacts: string[];
 }
 
+/**
+ * LSF.1 — one WHOLE-BOARD row: a task's id + stage + recorded scope-proof paths + timestamps. The `updatedAtMs`
+ * is what the loop-status read-model orders by (most-recently-advanced first) and the linger-then-drop live-view
+ * uses; `createdAtMs` is carried for completeness (age). This is the enumerating counterpart to
+ * {@link CheckpointStore.getTaskCheckpoint} — the store had only a single-item read, so "all in-flight items"
+ * (subprocess-harness-push.md §3.3) needed this whole-table read.
+ */
+export interface TaskCheckpointRow extends TaskCheckpoint {
+  taskId: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export class CheckpointStore {
   private initialized = false;
 
@@ -261,6 +274,41 @@ export class CheckpointStore {
     await this.db.execute({
       sql: `UPDATE task_checkpoints SET scope_artifacts_json = ?, updated_at_ms = ? WHERE task_id = ?`,
       args: [JSON.stringify(files), nowMs, taskId],
+    });
+  }
+
+  /**
+   * LSF.1 — the WHOLE-BOARD read: every task checkpoint in one query, ordered most-recently-advanced first
+   * (`updated_at_ms DESC`). Pack-agnostic MECHANISM — it reads the pack-neutral `stage` string verbatim and
+   * knows nothing about any pack's stage vocabulary. This is what makes "all in-flight items" possible for
+   * `collectLoopState` (one board read per refresh, no per-item fan-out). Malformed `scope_artifacts_json`
+   * degrades to `[]` per-row (same posture as {@link getTaskCheckpoint}).
+   */
+  async listTaskCheckpoints(): Promise<TaskCheckpointRow[]> {
+    await this.init();
+    const rs = await this.db.execute(
+      `SELECT task_id, stage, scope_artifacts_json, created_at_ms, updated_at_ms
+       FROM task_checkpoints
+       ORDER BY updated_at_ms DESC`,
+    );
+    return rs.rows.map((row) => {
+      let scopeArtifacts: string[] = [];
+      try {
+        const rawJson =
+          typeof row.scope_artifacts_json === 'string' ? row.scope_artifacts_json : '[]';
+        const parsed = JSON.parse(rawJson) as unknown;
+        if (Array.isArray(parsed))
+          scopeArtifacts = parsed.filter((x): x is string => typeof x === 'string');
+      } catch {
+        /* malformed json → no recorded artifacts for this row */
+      }
+      return {
+        taskId: typeof row.task_id === 'string' ? row.task_id : '',
+        stage: typeof row.stage === 'string' ? row.stage : '',
+        scopeArtifacts,
+        createdAtMs: Number(row.created_at_ms),
+        updatedAtMs: Number(row.updated_at_ms),
+      };
     });
   }
 

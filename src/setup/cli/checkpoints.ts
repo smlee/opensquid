@@ -29,9 +29,11 @@
  * Imported by: src/setup/cli/checkpoints.test.ts, src/cli.ts.
  */
 
+import { join } from 'node:path';
+
 import { createClient } from '@libsql/client';
 
-import { OPENSQUID_HOME } from '../../runtime/paths.js';
+import { resolveLocalStoreDir } from '../../runtime/paths.js';
 import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 
 import { actClean, actList, actResume, actShow, type ActionDeps } from './checkpoints_actions.js';
@@ -65,8 +67,15 @@ export interface CheckpointsCliDeps {
   resumerFor?: (store: CheckpointStore) => Resumer | null;
 }
 
-function defaultDbPath(): string {
-  return `file:${OPENSQUID_HOME()}/opensquid.db`;
+/**
+ * Resolve the effective checkpoint-store path: an explicit `--db` wins; otherwise the PROJECT-LOCAL
+ * `<root>/.opensquid/opensquid.db` (T-project-local-state PLS.3 — the checkpoint CLI reader follows the
+ * checkpoints project-local). Resolved LAZILY at action time (not at registration) so a no-project cwd only
+ * errors when the verb is actually invoked without `--db`, never at CLI construction. NB: the daemon
+ * `audit_log` reader (`audit_state.ts`) is a DIFFERENT boundary — it stays GLOBAL with the daemon.
+ */
+async function resolveDbPath(db: string | undefined): Promise<string> {
+  return db ?? `file:${join(await resolveLocalStoreDir(process.cwd()), 'opensquid.db')}`;
 }
 
 function defaultOpen(dbPath: string): Client {
@@ -92,32 +101,40 @@ function buildDeps(deps: CheckpointsCliDeps): ActionDeps {
 export function registerCheckpoints(parent: Command, deps: CheckpointsCliDeps = {}): Command {
   const ad = buildDeps(deps);
   const c = parent.command('checkpoints').description('Durable-execution checkpoint store');
-  const db = defaultDbPath();
+  const dbHelp = 'Path to the libsql DB (default: project-local .opensquid/opensquid.db)';
 
   c.command('list')
     .description('List interrupted runs (durable-execution checkpoint store)')
-    .option('--db <path>', 'Path to the libsql DB', db)
+    .option('--db <path>', dbHelp)
     .option('--interrupted', 'only show interrupted runs (default: true)')
     .option('--limit <n>', 'cap result count (default 20)')
-    .action((opts: { db: string; interrupted?: boolean; limit?: string }) => actList(ad, opts));
+    .action(async (opts: { db?: string; interrupted?: boolean; limit?: string }) =>
+      actList(ad, { ...opts, db: await resolveDbPath(opts.db) }),
+    );
 
   c.command('show <runId>')
     .description('Raw JSONL dump of one run (manifest + checkpoints + terminal)')
-    .option('--db <path>', 'Path to the libsql DB', db)
-    .action((runId: string, opts: { db: string }) => actShow(ad, runId, opts));
+    .option('--db <path>', dbHelp)
+    .action(async (runId: string, opts: { db?: string }) =>
+      actShow(ad, runId, { db: await resolveDbPath(opts.db) }),
+    );
 
   c.command('resume <runId>')
     .description('Manually resume an interrupted run (overrides DURABLE.4 resume window)')
-    .option('--db <path>', 'Path to the libsql DB', db)
+    .option('--db <path>', dbHelp)
     .option('--yes', 'skip confirmation', false)
-    .action((runId: string, opts: { db: string; yes: boolean }) => actResume(ad, runId, opts));
+    .action(async (runId: string, opts: { db?: string; yes: boolean }) =>
+      actResume(ad, runId, { ...opts, db: await resolveDbPath(opts.db) }),
+    );
 
   c.command('clean')
     .description('Prune old checkpoint rows (confirms unless --yes)')
-    .option('--db <path>', 'Path to the libsql DB', db)
+    .option('--db <path>', dbHelp)
     .option('--older-than <duration>', 'e.g. 7d, 30d', '30d')
     .option('--yes', 'skip confirmation', false)
-    .action((opts: { db: string; olderThan: string; yes: boolean }) => actClean(ad, opts));
+    .action(async (opts: { db?: string; olderThan: string; yes: boolean }) =>
+      actClean(ad, { ...opts, db: await resolveDbPath(opts.db) }),
+    );
 
   return c;
 }

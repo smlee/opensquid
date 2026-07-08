@@ -117,7 +117,13 @@ describe('collectHandoffState — populated home (real shapes)', () => {
     const artifactPath = join(cwd, 'v2-pre.md');
     await writeFile(artifactPath, '# v2 pre-research', 'utf8');
 
-    const client = createClient({ url: `file:${join(home, 'opensquid.db')}` });
+    // PLS.3: the durable checkpoint is PROJECT-LOCAL (`<root>/.opensquid/opensquid.db`). Point the store seam
+    // (OPENSQUID_PROJECT_ROOT) at `home` so this write and `collectHandoffState`'s `readCheckpointBySession`
+    // resolve the SAME db, instead of the retired global `home/opensquid.db`.
+    const prevRoot = process.env.OPENSQUID_PROJECT_ROOT;
+    process.env.OPENSQUID_PROJECT_ROOT = home;
+    await mkdir(join(home, '.opensquid'), { recursive: true });
+    const client = createClient({ url: `file:${join(home, '.opensquid', 'opensquid.db')}` });
     const store = new CheckpointStore(client);
     await store.init();
     await store.createTaskCheckpoint('wg-collect-v2', 'author', Date.now());
@@ -135,6 +141,8 @@ describe('collectHandoffState — populated home (real shapes)', () => {
     } finally {
       if (prevItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
       else process.env.OPENSQUID_ITEM_ID = prevItem;
+      if (prevRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = prevRoot;
     }
   });
 

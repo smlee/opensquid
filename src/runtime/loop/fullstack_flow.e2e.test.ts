@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { loadPackV2 } from '../../packs/loader_v2.js';
 import { OPENSQUID_HOME, sessionStateFile } from '../paths.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
-import { bindProject, workGraphStore } from '../../workgraph/store.js';
+import { workGraphStore } from '../../workgraph/store.js';
 import { appendAsk } from '../coverage/captured_ask.js';
 import { appendTool, recordSessionCwd, writeActiveTask } from '../session_state.js';
 import { readFsmStateRaw, readFsmStateFile, persistActorState } from '../fsm_state.js';
@@ -111,7 +111,7 @@ describe('fullstack-flow E2E — real pack, live path', () => {
       sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
     });
     await store.init();
-    const wg = bindProject(store, 'legacy-global');
+    const wg = store;
     await wg.createIssue({ title: 'Login', body: 'implement login' });
 
     const ev = { kind: 'post_tool_call', tool: 'Bash', args: {}, exit_code: 0 } as unknown as Event;

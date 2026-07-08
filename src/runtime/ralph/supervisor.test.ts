@@ -29,7 +29,7 @@ describe('superviseLap', () => {
       calls++;
       return Promise.resolve({ kind: 'SHIPPED', costUsd: 0.01 });
     }, opts(3));
-    expect(r).toEqual({ kind: 'SHIPPED', costUsd: 0.01 });
+    expect(r).toEqual({ kind: 'SHIPPED', costUsd: 0.01, inputTokens: 0, outputTokens: 0 });
     expect(calls).toBe(1);
   });
 
@@ -50,7 +50,13 @@ describe('superviseLap', () => {
 
   it('exhausts bounded retries → typed HUMAN_REQUIRED{UNRECOVERABLE_WEDGE} (never silent)', async () => {
     const r = await superviseLap(sequence({ kind: 'CRASH', costUsd: 0.01 }), opts(2));
-    expect(r).toEqual({ kind: 'HUMAN_REQUIRED', reason: 'UNRECOVERABLE_WEDGE', costUsd: 0.03 });
+    expect(r).toEqual({
+      kind: 'HUMAN_REQUIRED',
+      reason: 'UNRECOVERABLE_WEDGE',
+      costUsd: 0.03,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
   });
 
   it('a HUMAN_REQUIRED outcome is terminal — not retried', async () => {
@@ -80,6 +86,26 @@ describe('superviseLap', () => {
 
   it('TIMEOUT is retryable, exhausting to UNRECOVERABLE_WEDGE', async () => {
     const r = await superviseLap(sequence({ kind: 'TIMEOUT', costUsd: 0 }), opts(1));
-    expect(r).toEqual({ kind: 'HUMAN_REQUIRED', reason: 'UNRECOVERABLE_WEDGE', costUsd: 0 });
+    expect(r).toEqual({
+      kind: 'HUMAN_REQUIRED',
+      reason: 'UNRECOVERABLE_WEDGE',
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+  });
+
+  it('LSF.5 — accumulates input/output tokens across retries (a crashed attempt still burned tokens)', async () => {
+    const r = await superviseLap(
+      sequence(
+        { kind: 'CRASH', costUsd: 0.02, inputTokens: 100, outputTokens: 20 },
+        { kind: 'SHIPPED', costUsd: 0.05, inputTokens: 300, outputTokens: 80 },
+      ),
+      opts(3),
+    );
+    expect(r.kind).toBe('SHIPPED');
+    expect(r.inputTokens).toBe(400); // both attempts' input tokens summed
+    expect(r.outputTokens).toBe(100); // both attempts' output tokens summed
+    expect(r.costUsd).toBeCloseTo(0.07);
   });
 });

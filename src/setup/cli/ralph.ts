@@ -14,11 +14,7 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Command } from 'commander';
-import {
-  OPENSQUID_HOME,
-  resolveProjectMarker,
-  resolveProjectUuidFromEnv,
-} from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveLocalStoreDir } from '../../runtime/paths.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import {
   loadChannelsConfig,
@@ -28,11 +24,11 @@ import {
 import type { LapEscalator } from '../../runtime/ralph/escalate_lap.js';
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
-import { bindProject, workGraphStore } from '../../workgraph/store.js';
-import { resolveWgNamespace } from '../../workgraph/project_scope.js';
+import { workGraphStore } from '../../workgraph/store.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
+import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
 import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import { activeDisciplinePack } from './gate.js';
@@ -43,43 +39,29 @@ import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
 
 /**
- * T-WORKGRAPH-PROJECT-SCOPE (lap/loop agreement): resolve the loop's project from the cwd's
- * `.opensquid/project.json` marker (degrading marker-less → env-fallback → 'legacy-global' via the ONE
- * `resolveWgNamespace` coalesce the MCP server's `resolveWgProject` also runs) AND PUBLISH it into
- * `process.env.OPENSQUID_PROJECT_UUID`. `runOneShotCli` spawns each lap with `...process.env`, so a lap
- * whose OWN session→cwd marker is unresolvable inherits this env and resolves the SAME project as the loop —
- * instead of landing on the empty `legacy-global` board (BOARD_EMPTY). Returns the resolved uuid.
- */
-export async function resolveAndPublishLoopProject(): Promise<string> {
-  const cwd = process.cwd();
-  const project = resolveWgNamespace(
-    (await resolveProjectMarker(cwd))?.uuid ?? null,
-    resolveProjectUuidFromEnv(),
-  );
-  process.env.OPENSQUID_PROJECT_UUID = project;
-  return project;
-}
-
-/**
- * T-WORKGRAPH-PROJECT-SCOPE: the ralph loop drains THIS project's ready queue. Init the shared base store,
- * resolve+publish the cwd's namespace (so spawned laps inherit it), and return a per-project facade so
- * runRalphLoop/resolveParked operate on one project.
+ * T-project-local-state PLS.2: the ralph loop drains THIS project's ready queue from the PROJECT-LOCAL
+ * `<root>/.opensquid/workgraph.db`, discovered by walking up from cwd (like `git` finds `.git`). No project
+ * UUID is resolved or published — the loop, its spawned laps, and the MCP all resolve the SAME local store
+ * from their shared cwd, so they cannot diverge (the namespace flip is structurally impossible). Returns the
+ * store directly (a {@link WorkGraphStore} IS a {@link WorkGraphFacade}); no `bindProject` binding step.
  */
 async function openRalphWorkGraph() {
-  const base = workGraphStore({
-    dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-    sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
-    actorId: await resolveActorId(), // WGD.1 — stamp the per-HOME replica id on ops
+  const dir = await resolveLocalStoreDir(process.cwd());
+  const store = workGraphStore({
+    dbUrl: `file:${join(dir, 'workgraph.db')}`,
+    sourceDir: join(dir, 'store', 'issues'),
+    actorId: await resolveActorId(), // WGD.1 — stamp the per-replica id on ops
   });
-  await base.init();
-  const project = await resolveAndPublishLoopProject();
-  return bindProject(base, project);
+  await store.init();
+  return store;
 }
 
-/** Hydrate the persisted scalar config into the orchestrator's runtime `RalphConfig` (closures rebuilt). */
+/** Hydrate the persisted scalar config into the orchestrator's runtime `RalphConfig` (closures rebuilt).
+ *  LSF.5: `harness` = the configured CLI; `runId` identifies THIS loop invocation (injectable for deterministic
+ *  tests, else stamped from the wall clock — one id shared by every per-stage loop_metrics row of the run). */
 export function buildRalphConfig(
   file: RalphConfigFile,
-  opts: { maxBudgetUsd?: number },
+  opts: { maxBudgetUsd?: number; runId?: string },
 ): RalphConfig {
   return {
     authMode: file.authMode,
@@ -90,6 +72,8 @@ export function buildRalphConfig(
       backoffMs: (attempt: number) => file.backoffBaseMs * 2 ** attempt, // exponential from the base
       heartbeat: () => undefined, // a future lease-refresh; liveness tick is a no-op for the CLI run
     },
+    harness: file.harness.cli,
+    runId: opts.runId ?? `run-${new Date().toISOString()}`,
   };
 }
 
@@ -171,9 +155,13 @@ export function makeSpawnLap(
       if ((e as { __timeout?: boolean }).__timeout === true) return { kind: 'TIMEOUT', costUsd: 0 };
       throw e; // genuine spawn/IO failure → superviseLap maps it to CRASH
     }
-    const { outcome, costUsd } = parseLapOutcome(stdout);
-    appendLog(`\n=== PARSED OUTCOME === ${JSON.stringify(outcome)} · cost=$${costUsd}\n`);
-    return { ...outcome, costUsd };
+    const { outcome, costUsd, inputTokens, outputTokens } = parseLapOutcome(stdout);
+    appendLog(
+      `\n=== PARSED OUTCOME === ${JSON.stringify(outcome)} · cost=$${costUsd} · ` +
+        `${String(inputTokens)}in/${String(outputTokens)}out\n`,
+    );
+    // LSF.5 — carry the lap's token usage up so the orchestrator can fold it into the per-stage loop_metrics row.
+    return { ...outcome, costUsd, inputTokens, outputTokens };
   };
 }
 
@@ -317,6 +305,9 @@ export function registerRalph(program: Command): Command {
           );
           process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
         },
+        // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
+        // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.
+        recordMetric: recordStageMetric,
       });
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     });

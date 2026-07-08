@@ -18,6 +18,14 @@ You are in the PLAN stage. The scope is guess-free; turn it into an executable, 
 - Add the `blocks` / parent-child edges; keep the graph ACYCLIC (no dependency cycle).
 - Every task traces to the captured user ask (not merely to the pre-research).
 
+## Emit your phase to the live status feed
+
+Emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor shows where this item is
+(pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
+
+- `set_loop_phase(phase: "research", index: 1, total: 2)` while researching / re-auditing the SCOPE,
+- `set_loop_phase(phase: "decompose", index: 2, total: 2)` while creating the work-graph issues + edges.
+
 ## Gate to advance (plan → author): `plan_ready`
 
 Passes when `plan.acyclic` (no cycle in blocks + parent-child edges) ∧ `plan.complete` (every scoped element

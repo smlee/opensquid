@@ -354,4 +354,19 @@ requirements:
     wg: wg-0baaae4bcf2e
     assert: { kind: reachable, symbol: renderFollowReminder, from: [post-tool-use] }
     proof: 'src/runtime/loop/follow_reminder.test.ts'
+  # T-project-local-state (wg-6a079c496944) — workgraph/loop/checkpoints become PROJECT-LOCAL (like .git).
+  # New IN-path exports introduced by PLS.1 (the foundational root resolver + the shared opener locator). The
+  # proof-test is the authority (static `from` advisory — these are deep path utilities the openers consume).
+  - id: R-PROJECT-LOCAL-ROOT
+    intent: 'the workgraph/loop/checkpoint IN path resolves a project ROOT (nearest .opensquid/ walking up, git-.git style), never a UUID partition (design §6.3)'
+    spec: 'loop/docs/design/opensquid-project-local-state.md#6.3'
+    wg: wg-6a079c496944
+    assert: { kind: reachable, symbol: resolveProjectRoot, from: [pre-tool-use] }
+    proof: 'src/runtime/paths.test.ts'
+  - id: R-PROJECT-LOCAL-STORE-DIR
+    intent: 'every IN opener shares one <root>/.opensquid locator with an OPENSQUID_PROJECT_ROOT test seam; no silent global fallback (design §3/§6.5)'
+    spec: 'loop/docs/design/opensquid-project-local-state.md#6.5'
+    wg: wg-6a079c496944
+    assert: { kind: reachable, symbol: resolveLocalStoreDir, from: [pre-tool-use] }
+    proof: 'src/runtime/paths.test.ts'
 ```

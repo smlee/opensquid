@@ -17,6 +17,7 @@
 import type { Issue, WorkGraphFacade, ClaimAudience } from '../../workgraph/types.js';
 import type { HumanRequiredReason } from './lap_outcome.js';
 import type { LapResult, SuperviseOpts } from './supervisor.js';
+import type { LoopMetricRow } from '../loop/loop_metrics.js';
 import { superviseLap } from './supervisor.js';
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
@@ -30,6 +31,10 @@ export interface RalphConfig {
   claimTtlSec: number;
   /** GR.3 supervisor opts (retry cap, backoff, heartbeat). */
   supervise: SuperviseOpts;
+  /** LSF.5 — the harness that drove this run (`file.harness.cli`), stamped on every loop_metrics row (§3a). */
+  harness: string;
+  /** LSF.5 — a stable id for THIS `opensquid loop` invocation; the `run_id` every metrics row shares (§3a). */
+  runId: string;
 }
 
 /** Why the loop stopped. NB: the per-item residual reasons (IRREVERSIBLE_BOUNDARY / SCOPE_FORK /
@@ -67,6 +72,13 @@ export interface RalphDeps {
    * fail-open: a report/grouping error must never break the drain loop.
    */
   onShipped?: (taskId: string) => Promise<void>;
+  /**
+   * LSF.5 (subprocess-harness-push.md §3a) — the per-STAGE metrics writer, INJECTED so the loop stays unit-
+   * testable without a real libsql. Called once per completed/exited stage of a `stageLoop` drive with the
+   * folded cost/tokens/timing row. Fail-open by contract (the orchestrator swallows a write error) — a metrics
+   * fault must NEVER break the drive. Absent → no history recorded (tests / the v1 non-stage path).
+   */
+  recordMetric?: (row: LoopMetricRow) => Promise<void>;
   /**
    * T-v2-per-stage-loop PSL.3 — present ONLY for a stage-gated pack (fullstack-flow). When present, the
    * orchestrator drives each AUTOMATED stage as its OWN fresh-context lap (priming `stagePrompt` per stage,
@@ -126,27 +138,73 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
   let stage = (await sl.readStage(item.id)) ?? sl.initialStage;
   let cost = 0;
   let sameStage = 0;
+
+  // LSF.5 (§3a) — per-STAGE metrics accumulation. One row per stage: SUM the cost/tokens of the lap(s) that ran
+  // in it, timed from stage-entry to stage-exit. `flushStage` writes the completed/exited stage's row and is
+  // FAIL-OPEN (a metrics fault never breaks the drive). `stageAcc` resets on every real advance.
+  let stageStartMs = Date.now();
+  let stageCost = 0;
+  let stageIn = 0;
+  let stageOut = 0;
+  const flushStage = async (stageName: string): Promise<void> => {
+    if (deps.recordMetric === undefined) return;
+    const endedAtMs = Date.now();
+    try {
+      await deps.recordMetric({
+        runId: cfg.runId,
+        itemId: item.id,
+        stage: stageName, // OPAQUE pack label — core stamps whatever the stage string is (§3a boundary rule)
+        harness: cfg.harness,
+        authMode: cfg.authMode,
+        startedAtMs: stageStartMs,
+        endedAtMs,
+        durationMs: endedAtMs - stageStartMs,
+        costUsd: stageCost,
+        inputTokens: stageIn,
+        outputTokens: stageOut,
+      });
+    } catch {
+      /* fail-open: the metrics history must NEVER break the drive */
+    }
+  };
+
   for (;;) {
     const isAuto = sl.isAutomated(stage);
     const sp = isAuto ? await sl.stagePrompt(item, stage) : undefined;
     deps.narrate?.(`  ▷ ${item.id} · ${stage} lap…`);
     const res = await superviseLap(() => deps.runLap(item, sp), cfg.supervise);
     cost += res.costUsd;
-    if (res.kind !== 'SHIPPED') return { ...res, costUsd: cost }; // escalation/wedge → the uniform handler parks it
+    stageCost += res.costUsd;
+    stageIn += res.inputTokens ?? 0;
+    stageOut += res.outputTokens ?? 0;
+    if (res.kind !== 'SHIPPED') {
+      await flushStage(stage); // record the resources this stage burned before the escalation parks the item
+      return { ...res, costUsd: cost }; // escalation/wedge → the uniform handler parks it
+    }
     const next = res.stage;
     // A SHIPPED human-boundary lap with no resulting stage = item complete (deploy/accept done, or the scope lap
     // when the agent reports no stage to advance to). Return the lap result as the item's final outcome.
-    if (!isAuto && next === undefined) return { ...res, costUsd: cost };
+    if (!isAuto && next === undefined) {
+      await flushStage(stage);
+      return { ...res, costUsd: cost };
+    }
     // No advance (stage didn't change, or undefined for an automated lap) → bounded retry.
     if (next === undefined || next === stage) {
-      if (++sameStage >= MAX_STAGE_RETRIES)
+      if (++sameStage >= MAX_STAGE_RETRIES) {
+        await flushStage(stage); // the stuck stage still burned resources — record before wedging
         return { kind: 'HUMAN_REQUIRED', reason: 'UNRECOVERABLE_WEDGE', costUsd: cost };
-      continue; // retry the same stage with a fresh lap (bounded)
+      }
+      continue; // retry the same stage with a fresh lap (bounded) — accumulators carry across the retry
     }
+    await flushStage(stage); // the stage COMPLETED (advanced) → write its per-stage row, then reset for `next`
     deps.narrate?.(`  ✓ ${item.id} · ${stage} → ${next}`);
     sameStage = 0;
     stage = next; // in-run priming only; the DURABLE projection is written THROUGH by the FSM (v2_supply),
     // the single writer — a loop restart resumes from that FSM-written stage via `readStage`.
+    stageStartMs = Date.now();
+    stageCost = 0;
+    stageIn = 0;
+    stageOut = 0;
   }
 }
 

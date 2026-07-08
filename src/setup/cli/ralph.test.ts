@@ -65,7 +65,8 @@ describe('makeSpawnLap', () => {
       return Promise.resolve('{"result":"done","is_error":false,"total_cost_usd":0.07}');
     }) as unknown as typeof runOneShotCli;
     const out = await makeSpawnLap(cfg, localFile, runCli)(ITEM);
-    expect(out).toEqual({ kind: 'SHIPPED', costUsd: 0.07 });
+    // LSF.5 — the lap result now also carries the folded token usage (0/0 when the envelope omits `usage`).
+    expect(out).toEqual({ kind: 'SHIPPED', costUsd: 0.07, inputTokens: 0, outputTokens: 0 });
     expect(seen?.cli).toBe('claude');
     expect(seen?.args).toContain('-p');
     expect(seen?.args).toContain('--output-format');

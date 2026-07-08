@@ -51,12 +51,6 @@ import { renderFollowReminder } from './follow_reminder.js';
 import { renderFailureReport } from './failure_report.js';
 import { saveProjectReport } from './reports_dir.js';
 import type { EvidenceRef } from '../../packs/schemas/pack_v2.js';
-import { sendChat } from '../../chat_daemon/client.js';
-import {
-  loadChannelsConfig,
-  resolveConfiguredChannel,
-  resolveUmbrellaForCwd,
-} from '../../channels/routing.js';
 
 /**
  * T2.12-surface — best-effort push of a phase report to the project's chat. FAIL-OPEN in every branch: no
@@ -88,28 +82,10 @@ function stageEvidence(
   });
 }
 
-export async function surfaceReportToChat(cwd: string, body: string): Promise<void> {
-  try {
-    const cfg = await loadChannelsConfig().catch(() => null);
-    if (cfg === null) return;
-    const umbrellaId = resolveUmbrellaForCwd(cfg, cwd);
-    if (umbrellaId === null || umbrellaId === '') return;
-    // Resolve cwd → the daemon's LITERAL wire channel (`<platform>:<native_id>` + string threadId) BEFORE
-    // sending. The old `project:telegram` shorthand is REJECTED by the daemon's gateway.parseChannel
-    // (platform `project` is not a wire platform), so every push silently failed (swallowed by the catch).
-    // Platform-agnostic: the `<platform>` prefix comes from the configured pointer in channels.json
-    // (`cfg.platform`, default telegram) — NOT hardcoded here, so another chat app is a config edit.
-    const resolved = resolveConfiguredChannel(cfg, umbrellaId);
-    if (resolved === null) return;
-    await sendChat({
-      channel: resolved.channel,
-      text: body,
-      ...(resolved.threadId !== undefined ? { threadId: resolved.threadId } : {}),
-    });
-  } catch {
-    /* fail-open: chat is optional — never break the hook over it */
-  }
-}
+// LSF.4 (subprocess-harness-push.md §4) — the Telegram report-push (`surfaceReportToChat`) was REMOVED here.
+// Stage reports still SAVE to `.opensquid/reports/` (the durable record); their live VISIBILITY moved to the
+// harness status line / Monitor (`opensquid loop-status`), not chat. The wrong surface (fail-open telegram push,
+// silently swallowing failures) is gone — no report goes to telegram.
 import { authorEvidenceForSession, type AuthorInputs } from './author_evidence.js';
 import { codeEvidenceForSession, type CodeEvidenceDeps } from './code_evidence.js';
 import { frontendEvidenceForEvent, type FrontendEvidenceDeps } from './frontend_evidence.js';
@@ -860,11 +836,9 @@ export async function runV2Cartridges(
                 };
                 const { body } = await emitStageReport(root, r, now); // dated file + the body
                 process.stderr.write(`[lap ${name}] ✓ ${p.from} done — report emitted\n`); // LIVE channel
-                // T2.12-surface: SHOW the phase report — in-session (the injections set the hooks emit as
-                // additionalContext) + a best-effort chat push (fail-open). Was file+memory only → invisible.
+                // T2.12-surface: SHOW the phase report in-session (the injections the hooks emit as
+                // additionalContext). LSF.4: the telegram push was removed — visibility is the status line / Monitor.
                 injections.push(body);
-                await surfaceReportToChat(root, body);
-
                 // The caller mirrors `body` into memory (session-scoped wedge buffer — the real in-runtime
                 // memory write available here; no ToolContext/RagBackend at this layer). FAIL-OPEN.
                 await capturePendingLesson(sessionId, {
@@ -907,7 +881,7 @@ export async function runV2Cartridges(
                   now,
                 );
                 injections.push(body);
-                await surfaceReportToChat(root, body);
+                // LSF.4 — telegram push removed; the summary surfaces in-session, visibility via the status line.
                 // V2-ENF.2/7 — the FOLLOW-INSTRUCTIONS anti-drift nudge (reporting-model §5.4c): at the stage
                 // boundary, re-assert "stay on the <stage> procedure" so the lap drives the injected procedure,
                 // not freehand. SURFACED-only (ephemeral injection, never a saved file; never `🦑`). Gated on a
@@ -1034,7 +1008,7 @@ export async function runV2Cartridges(
                     `[lap ${name}] ✗ gate held at ${actor.state.current} — failure report emitted\n`,
                   );
                   injections.push(body);
-                  await surfaceReportToChat(root, body);
+                  // LSF.4 — telegram push removed; the failure report surfaces in-session + saves to disk.
                 }
               } catch (err) {
                 process.stderr.write(
@@ -1110,10 +1084,10 @@ export async function runV2Cartridges(
           },
           now,
         );
-        // All FOUR standardized sinks (stage_report.ts:4-6), matching the transition path: file (emitStageReport)
-        // + injection + chat + the memory mirror — so an in-band CODE completion reaches the wedge buffer too.
+        // The standardized sinks (stage_report.ts:4-6), matching the transition path: file (emitStageReport)
+        // + injection + the memory mirror — so an in-band CODE completion reaches the wedge buffer too. LSF.4
+        // removed the telegram sink (visibility is the harness status line / Monitor, not chat).
         injections.push(body);
-        await surfaceReportToChat(root, body);
         await capturePendingLesson(sessionId, {
           id: `stage-report-code-${trackId}-${now.replaceAll(':', '-')}`,
           type: 'workflow',

@@ -15,11 +15,10 @@
  */
 import { join } from 'node:path';
 
-import { OPENSQUID_HOME } from '../paths.js';
 import { readSessionCwd } from '../session_state.js';
-import { resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
+import { resolveLocalStoreDir, resolveProjectMarker, resolveProjectUuidFromEnv } from '../paths.js';
 import { resolveActorId } from '../actor_id.js';
-import { bindProject, workGraphStore } from '../../workgraph/store.js';
+import { workGraphStore } from '../../workgraph/store.js';
 
 import { buildCoveredBy, planAudit, scopeToDecomposition } from './plan_audit.js';
 import { extractScope } from './scope_extract.js';
@@ -38,8 +37,11 @@ export interface PlanWgReader {
 }
 
 /**
- * Resolve the work-graph project for a session the SAME way the MCP server does (session→cwd→marker, then
- * env), degrading a null at any step to `'legacy-global'` (the read-must-not-break default).
+ * Resolve the session's project UUID namespace (session→cwd→marker, then env), degrading a null at any step to
+ * `'legacy-global'` (the read-must-not-break default). Post-cutover (T-project-local-state PLS.2) this keys ONLY
+ * the OUT, still-global, still-uuid-partitioned `harness_map.db` (§4 OUT — the cross-harness task↔issue binding
+ * index); it NO LONGER selects the workgraph store, which went project-local (see {@link openWg}, resolved by
+ * `resolveLocalStoreDir` with no uuid). Do not re-conflate the two: the OUT map stays uuid-keyed by design.
  */
 export async function resolveWgProject(sessionId: string): Promise<string> {
   const cwd = await readSessionCwd(sessionId);
@@ -48,17 +50,21 @@ export async function resolveWgProject(sessionId: string): Promise<string> {
 }
 
 /**
- * Open a project-bound work-graph facade over the HOME store (mirrors MCP `getWorkGraphBase`). A fresh store
- * per call — the hook subprocess is short-lived. OPENSQUID_HOME is test-isolated (global-teardown).
+ * Open the session's PROJECT-LOCAL work-graph store (T-project-local-state PLS.2): `<root>/.opensquid/workgraph.db`
+ * resolved from the session's cwd (nearest `.opensquid/` walking up). A fresh store per call — the hook
+ * subprocess is short-lived. The store IS the project's (no `bindProject`); a {@link WorkGraphStore} is a
+ * {@link WorkGraphFacade}. Test-isolated via `OPENSQUID_PROJECT_ROOT`.
  */
 export async function openWg(sessionId: string): Promise<WorkGraphFacade> {
+  const cwd = (await readSessionCwd(sessionId)) ?? process.cwd();
+  const dir = await resolveLocalStoreDir(cwd);
   const store = workGraphStore({
-    dbUrl: `file:${join(OPENSQUID_HOME(), 'workgraph.db')}`,
-    sourceDir: join(OPENSQUID_HOME(), 'store', 'issues'),
+    dbUrl: `file:${join(dir, 'workgraph.db')}`,
+    sourceDir: join(dir, 'store', 'issues'),
     actorId: await resolveActorId(),
   });
   await store.init();
-  return bindProject(store, await resolveWgProject(sessionId));
+  return store;
 }
 
 /**
