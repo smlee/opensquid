@@ -71,7 +71,10 @@ export async function integrateItem(opts: IntegrateItemOpts): Promise<Integratio
 
   if (plan.hasStaging && plan.staging !== undefined) {
     if (opts.stageIo === undefined) {
-      return { ok: false, reason: 'integration-failed: stageIo required when staging is configured' };
+      return {
+        ok: false,
+        reason: 'integration-failed: stageIo required when staging is configured',
+      };
     }
     const source = opts.sourceRef ?? plan.local;
     const { integrated } = await mergeToStage({

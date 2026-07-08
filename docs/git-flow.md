@@ -27,11 +27,11 @@ In project `.opensquid/active.json`:
 }
 ```
 
-| Key | Required | Meaning |
-| --- | --- | --- |
-| `production` | **yes** | Trunk. Human MERGE is the only way here. CI tags + publishes on merge. |
-| `staging` | no | Protection layer. **Presence is the has-stage toggle.** |
-| `local` | no | Serial work / accumulation base. Defaults to `production` when unset. |
+| Key          | Required | Meaning                                                                |
+| ------------ | -------- | ---------------------------------------------------------------------- |
+| `production` | **yes**  | Trunk. Human MERGE is the only way here. CI tags + publishes on merge. |
+| `staging`    | no       | Protection layer. **Presence is the has-stage toggle.**                |
+| `local`      | no       | Serial work / accumulation base. Defaults to `production` when unset.  |
 
 Elicit at setup:
 
@@ -73,12 +73,12 @@ When `staging` is set, merge/suite/reset run in a dedicated worktree
 
 Against `environments.production` (or the configured base):
 
-| Situation | Action |
-| --- | --- |
-| origin ahead | fast-forward |
-| local ahead | keep local |
-| diverged | **merge** (preserve both) |
-| content conflict | surface to human |
+| Situation        | Action                    |
+| ---------------- | ------------------------- |
+| origin ahead     | fast-forward              |
+| local ahead      | keep local                |
+| diverged         | **merge** (preserve both) |
+| content conflict | surface to human          |
 
 Never `--ff-only` reject-as-fault. Never reset/rebase away commits.
 
@@ -96,14 +96,14 @@ Never `--ff-only` reject-as-fault. Never reset/rebase away commits.
 
 ## Modules (SRP + composition)
 
-| Module | Role |
-| --- | --- |
-| `version_control.ts` | Read/resolve environments |
-| `base_refresh.ts` | Whoever’s-ahead reconcile |
+| Module                 | Role                                |
+| ---------------------- | ----------------------------------- |
+| `version_control.ts`   | Read/resolve environments           |
+| `base_refresh.ts`      | Whoever’s-ahead reconcile           |
 | `stage_integration.ts` | Land onto staging in stage worktree |
-| `ensure_pr.ts` | Idempotent open PR |
-| `integration_gate.ts` | SHIPPED consistency gate |
-| `orchestrator.ts` | Close only after gate |
+| `ensure_pr.ts`         | Idempotent open PR                  |
+| `integration_gate.ts`  | SHIPPED consistency gate            |
+| `orchestrator.ts`      | Close only after gate               |
 
 ## Parallelism (deferred)
 

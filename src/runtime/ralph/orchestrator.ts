@@ -82,9 +82,7 @@ export interface RalphDeps {
    * ok:false → item is NOT closed; bounded re-drive then park INTEGRATION_FAILED. Absent → close as before
    * (tests / packs without version-control).
    */
-  integrate?: (
-    item: Issue,
-  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  integrate?: (item: Issue) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /**
    * #26 HWS.5(b) — the loop-pass harness↔workgraph reconcile: once per drained pass (beside the orphan
    * reaper), observe OUT-OF-SESSION wg changes off the op-log cursor (no Task tick) and emit the outbound

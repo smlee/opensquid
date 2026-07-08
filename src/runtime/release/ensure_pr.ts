@@ -75,9 +75,7 @@ export async function ensurePr(
   io: GhIo | EnsurePrIo,
 ): Promise<{ url: string; created: boolean }> {
   if (!(await io.ghAuthOk(cwd))) {
-    throw new GhAuthError(
-      `gh is not authenticated — cannot ensure PR ${a.head} → ${a.base}`,
-    );
+    throw new GhAuthError(`gh is not authenticated — cannot ensure PR ${a.head} → ${a.base}`);
   }
   const view = 'prView' in io && typeof io.prView === 'function' ? io.prView : null;
   if (view !== null) {

@@ -26,22 +26,14 @@ function io(over: Partial<EnsurePrIo> = {}): EnsurePrIo & { creates: number; vie
 describe('ensurePr', () => {
   it('creates when none open', async () => {
     const i = io();
-    const r = await ensurePr(
-      { base: 'main', head: 'stage', title: 't', body: 'b' },
-      '/repo',
-      i,
-    );
+    const r = await ensurePr({ base: 'main', head: 'stage', title: 't', body: 'b' }, '/repo', i);
     expect(r).toEqual({ url: 'https://example/pr/new', created: true });
     expect(i.creates).toBe(1);
   });
 
   it('reuses existing open PR (idempotent)', async () => {
     const i = io({ prView: () => Promise.resolve('https://example/pr/7') });
-    const r = await ensurePr(
-      { base: 'main', head: 'stage', title: 't', body: 'b' },
-      '/repo',
-      i,
-    );
+    const r = await ensurePr({ base: 'main', head: 'stage', title: 't', body: 'b' }, '/repo', i);
     expect(r).toEqual({ url: 'https://example/pr/7', created: false });
     expect(i.creates).toBe(0);
   });

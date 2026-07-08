@@ -42,9 +42,7 @@ export async function runRelease(cwd: string, deps: ReleaseDeps = {}): Promise<n
     );
   }
   const { plan } = vc;
-  const open =
-    deps.ensurePr ??
-    ((a, c) => ensurePr(a, c, deps.ghIo ?? realEnsurePrIo));
+  const open = deps.ensurePr ?? ((a, c) => ensurePr(a, c, deps.ghIo ?? realEnsurePrIo));
   try {
     const { url, created } = await open(
       {

@@ -179,9 +179,7 @@ describe('runRalphLoop', () => {
 
   it('consistency gate: integrate fails → NOT closed; re-drive then park INTEGRATION_FAILED', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
-    const integrate = vi.fn(() =>
-      P({ ok: false as const, reason: 'integration-failed: test' }),
-    );
+    const integrate = vi.fn(() => P({ ok: false as const, reason: 'integration-failed: test' }));
     const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       integrate,

@@ -67,10 +67,7 @@ export async function openStagePr(
       `gh is not authenticated — cannot open the ${branches.head}→${branches.base} PR`,
     );
   }
-  const url = await io.prCreate(
-    { base: branches.base, head: branches.head, title, body },
-    cwd,
-  );
+  const url = await io.prCreate({ base: branches.base, head: branches.head, title, body }, cwd);
   return { url };
 }
 

@@ -35,9 +35,8 @@ export async function autoPullMain(
   remote = 'origin',
   production = 'main',
 ): Promise<void> {
-  const { reconcileBase: reconcile, realBaseRefreshIo } = await import(
-    '../release/base_refresh.js'
-  );
+  const { reconcileBase: reconcile, realBaseRefreshIo } =
+    await import('../release/base_refresh.js');
   const result = await reconcile(cwd, production, remote, realBaseRefreshIo);
   if (result.kind === 'conflict') {
     throw new Error(
