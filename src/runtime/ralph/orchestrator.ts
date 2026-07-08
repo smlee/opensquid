@@ -71,11 +71,20 @@ export interface RalphDeps {
   /** Optional per-step progress narration for a live play-by-play (the CLI wires stdout; omit → silent, as in tests). */
   narrate?: (msg: string) => void;
   /**
-   * T2.9 loop-driver hook — called after a lap SHIPS a task (phases_complete). The CLI wires this to
+   * T2.9 loop-driver hook — called AFTER a successful close (integration landed). The CLI wires this to
    * `onPhasesComplete` (emit the CODE stage report + compute the next run-group via batchDecide). Optional +
    * fail-open: a report/grouping error must never break the drain loop.
    */
   onShipped?: (taskId: string) => Promise<void>;
+  /**
+   * Consistency gate (git-flow): run BEFORE close when a lap reports SHIPPED. Must return ok:true only when
+   * the configured integration actually landed (item commit on target + auto-PR ensured). Fail-visible:
+   * ok:false → item is NOT closed; bounded re-drive then park INTEGRATION_FAILED. Absent → close as before
+   * (tests / packs without version-control).
+   */
+  integrate?: (
+    item: Issue,
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /**
    * #26 HWS.5(b) — the loop-pass harness↔workgraph reconcile: once per drained pass (beside the orphan
    * reaper), observe OUT-OF-SESSION wg changes off the op-log cursor (no Task tick) and emit the outbound
@@ -234,11 +243,16 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
   }
 }
 
+/** Bounded re-drives of the same item after integration failure before parking INTEGRATION_FAILED. */
+const MAX_INTEGRATION_RETRIES = 2;
+
 export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<RalphResult> {
   const { wg } = deps;
   const closed: string[] = [];
   const parked: { id: string; reason: HumanRequiredReason }[] = [];
   let spent = 0;
+  /** Per-run integration failure counts (in-memory; durable park after bound). */
+  const integrationFails = new Map<string, number>();
 
   // THE single uniform stop-layer (Inv 5): every reason chat-escalates through ONE path — no per-trigger
   // code paths (rejects Alt D). Two SEPARATE, explicit decisions ride alongside it: (a) wedge-mark ONLY the
@@ -330,6 +344,26 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
     if (outcome.kind === 'SHIPPED') {
+      // Consistency gate: SHIPPED close IFF configured integration landed (when integrate is wired).
+      if (deps.integrate !== undefined) {
+        const gate = await deps.integrate(item);
+        if (!gate.ok) {
+          const n = (integrationFails.get(item.id) ?? 0) + 1;
+          integrationFails.set(item.id, n);
+          deps.narrate?.(
+            `✗ integration-failed ${item.id} (${n}/${MAX_INTEGRATION_RETRIES}): ${gate.reason}`,
+          );
+          if (n < MAX_INTEGRATION_RETRIES) {
+            // Bounded re-drive: release claim, leave open — next pass re-claims.
+            await wg.releaseClaim(item.id).catch(() => undefined);
+            continue;
+          }
+          // Exhausted re-drives → park fail-visible (never a silent close).
+          deps.narrate?.(`⚠ parked ${item.id}: INTEGRATION_FAILED`);
+          await parkAndEscalate('INTEGRATION_FAILED', item);
+          continue;
+        }
+      }
       await wg.updateIssue(item.id, { status: 'closed' });
       await emitMonitorEvent({ wgId: item.id, kind: 'item_shipped', atMs: Date.now() }); // LMP.2 — the pushed close event; the live view drops it (staleness fix)
       await deps.stageLoop?.clearStage(item.id); // PSL.3 — the item left the loop; drop its durable stage
@@ -348,8 +382,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       } catch {
         /* fail-open: never break the drain over the parent roll-up */
       }
-      // T2.9: the loop-driver lives here — on phases_complete (a SHIPPED lap) emit the CODE report + compute the
-      // next run-group. Fail-open: a report/grouping error must never break the drain.
+      // T2.9: report/next-group AFTER durable close. Fail-open: never break the drain over the hook.
       try {
         await deps.onShipped?.(item.id);
       } catch {
@@ -388,8 +421,11 @@ async function driveMaybePooled(
   if (pool === undefined) return runItemLaps(item, deps, cfg);
   let path: string | undefined;
   try {
-    path = await addItemWorktree(item.id, pool.mainRoot, pool.poolRoot, pool.io);
-    deps.narrate?.(`⑃ worktree ${path} (auto/${item.id})`);
+    path = await addItemWorktree(item.id, pool.mainRoot, pool.poolRoot, pool.io, {
+      title: item.title,
+    });
+    deps.narrate?.(`⑃ worktree ${path} (feat/… · ${item.id})`);
+    // NOTE: path is not yet threaded into runItemLaps (parallelism deferred — pool stays dormant).
     return await runItemLaps(item, deps, cfg);
   } finally {
     if (path !== undefined)

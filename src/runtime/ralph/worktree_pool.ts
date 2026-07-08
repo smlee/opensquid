@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 
-import { branchNameFor } from './auto_pull.js';
+import { featBranchFromTitle } from '../release/base_refresh.js';
 
 const execFileP = promisify(execFile);
 
@@ -40,16 +40,22 @@ export const realWorktreeIo: WorktreeIo = {
   },
 };
 
-/** Add the item's worktree on `auto/wg-<id>` (AGF.2's `branchNameFor`) cut from `main` (AGF.2's fresh base), at
- *  `<poolRoot>/<id>`. Returns the checkout path — the cwd the item's drive runs in. */
+/**
+ * Add the item's worktree (DORMANT — parallelism element 8). Branch is semantic `feat/<slug>` when a title
+ * is supplied; otherwise `feat/<id>` (never auto/wg-<id>). Cut from `base` (default production/main).
+ * Returns the checkout path — the cwd the item's drive runs in when wired.
+ */
 export async function addItemWorktree(
   id: string,
   mainRoot: string,
   poolRoot: string,
   io: WorktreeIo,
+  opts: { title?: string; base?: string; branch?: string } = {},
 ): Promise<string> {
   const path = join(poolRoot, id);
-  await io.worktreeAdd(branchNameFor(id), path, 'main', mainRoot);
+  const branch = opts.branch ?? featBranchFromTitle(opts.title ?? id);
+  const base = opts.base ?? 'main';
+  await io.worktreeAdd(branch, path, base, mainRoot);
   return path;
 }
 

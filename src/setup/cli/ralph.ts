@@ -42,6 +42,14 @@ import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
 import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
+import { readVersionControl } from '../../runtime/release/version_control.js';
+import { integrateItem } from '../../runtime/release/integration_gate.js';
+import { realStageIo } from '../../runtime/release/stage_integration.js';
+import { realEnsurePrIo } from '../../runtime/release/ensure_pr.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileP = promisify(execFile);
 
 /**
  * T-project-local-state PLS.2: the ralph loop drains THIS project's ready queue from the PROJECT-LOCAL
@@ -319,8 +327,47 @@ export function registerRalph(program: Command): Command {
           narrate: (msg: string) =>
             process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
           ...(stageLoop === undefined ? {} : { stageLoop }),
-          // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
-          // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
+          // Consistency gate: SHIPPED only when version-control integration lands (fail-visible).
+          // Absent version-control.environments → integrate is a no-op ok (local dev without git-flow).
+          integrate: async (item) => {
+            const vc = await readVersionControl(join(root, '.opensquid'));
+            if (vc === null) {
+              process.stdout.write(
+                `🦑 integrate skip ${item.id}: no version-control.environments (run setup wizard version-control)\n`,
+              );
+              return { ok: true };
+            }
+            const itemCommit = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: root })
+              .then((r) => r.stdout.trim())
+              .catch(() => '');
+            const result = await integrateItem({
+              plan: vc.plan,
+              itemCommit,
+              cwd: root,
+              ...(vc.plan.hasStaging ? { stageIo: realStageIo } : {}),
+              ghIo: realEnsurePrIo,
+              gateIo: {
+                isReachable: (commit, ref, cwd) =>
+                  execFileP('git', ['merge-base', '--is-ancestor', commit, ref], { cwd })
+                    .then(() => true)
+                    .catch(() => false),
+                revParse: (ref, cwd) =>
+                  execFileP('git', ['rev-parse', ref], { cwd }).then((r) => r.stdout.trim()),
+              },
+              prTitle: `Integrate: ${vc.plan.prHead} → ${vc.plan.prBase}`,
+              prBody: `Loop item ${item.id} (${item.title.slice(0, 80)}). Human MERGE is the sole gate.`,
+              sourceRef: vc.plan.local,
+            });
+            if (result.ok) {
+              process.stdout.write(
+                `🦑 integrated ${item.id} on ${result.target}; PR ${result.prUrl}\n`,
+              );
+              return { ok: true };
+            }
+            process.stdout.write(`🦑 ${result.reason}\n`);
+            return { ok: false, reason: result.reason };
+          },
+          // T2.9 loop-driver: AFTER durable close — emit CODE report + next run-group (fail-open).
           onShipped: async (taskId) => {
             const { next } = await onPhasesComplete(
               sid,

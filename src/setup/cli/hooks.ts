@@ -38,6 +38,7 @@ import {
   writeOpensquidHooks,
   type WriteResult,
 } from '../wizard/settings-writer.js';
+import { registerVersionControlWizard } from './version_control_wizard.js';
 import { installPacksSkill } from '../wizard/skill-installer.js';
 import { hasBinaryOnPath, installAgentsContext } from '../wizard/install_agents_context.js';
 import { detectPackageManager } from '../wizard/package_manager_detect.js';
@@ -254,6 +255,8 @@ export function registerSetupWizard(setup: Command, deps: HooksCliDeps = {}): Co
     .action(async (flags: HooksCliFlags) => {
       await runHooksWizard(flags, deps);
     });
+
+  registerVersionControlWizard(wizard);
 
   return wizard;
 }

@@ -1,75 +1,122 @@
-// src/runtime/release/stage_integration.ts — merge `auto/wg-<id>` → the persistent `stage` branch, re-run the
-// suite on the merge, `rc`-tag ONLY on green. A conflict or a red suite → NO integration (roll back); the item
-// re-drives from fresh `main`. SINGLE-WRITER on the one `stage` branch — items DROVE concurrently in worktrees
-// (AGF.3) but integrate SERIALLY into `stage`, so the `rc` counter never races. Mirrors release_core.ts:17-42.
-//
-// AGF.5 (T-opensquid-automated-gitflow, wg-72134554548f). Consumed by AGF.6 (opens the PR from `stage`) + the
-// orchestrator's onShipped wiring (the LIVE integration).
+/**
+ * Role: land a source branch onto the configured staging branch in staging's OWN context.
+ * Context: staging branch name from version-control.environments; mainRoot + StageIo.
+ * Constraints: NEVER checkout/merge/reset on the main working tree; create-if-absent staging;
+ *   invoked ONLY when staging is configured (caller-gated). Conflict/red → no integration.
+ * Output: { integrated: boolean }.
+ *
+ * Fix: destructive ops (checkout/merge/resetHard) run in a dedicated stage worktree under
+ * `<mainRoot>/.opensquid/git/stage-wt`, not `cwd = mainRoot`.
+ */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { join } from 'node:path';
 
 const execFileP = promisify(execFile);
 
-/** The persistent integration branch — long-lived, accumulating item merges between releases (design §6). */
+/** @deprecated Prefer the configured environments.staging name; kept for test fixtures. */
 export const STAGE_BRANCH = 'stage';
 
-/** Injectable git + suite effects — default binds real `execFileP('git', …)` + the full pre-push suite. */
+/** Injectable git + suite effects for stage integration. */
 export interface StageIo {
-  checkout: (ref: string, cwd: string) => Promise<void>;
-  mergeNoFf: (branch: string, cwd: string) => Promise<void>; // `git merge --no-ff <branch>` (throws on conflict)
-  abortMerge: (cwd: string) => Promise<void>; // `git merge --abort`
-  resetHard: (ref: string, cwd: string) => Promise<void>; // `git reset --hard <ref>`
-  runSuite: (cwd: string) => Promise<boolean>; // the full verifySuite; green === true (release.ts:52-56)
-  tagPush: (tag: string, cwd: string) => Promise<void>; // `git tag <tag>` + push (tagAndPushTag shape)
+  /** Ensure `branch` exists (create from startPoint if absent). Runs in mainRoot. */
+  ensureBranch: (branch: string, startPoint: string, mainRoot: string) => Promise<void>;
+  /** Ensure a worktree for `branch` at `path` (create or reuse). Runs in mainRoot. */
+  ensureWorktree: (path: string, branch: string, mainRoot: string) => Promise<void>;
+  /** `git merge --no-ff <branch>` in stageCwd (throws on conflict). */
+  mergeNoFf: (branch: string, stageCwd: string) => Promise<void>;
+  abortMerge: (stageCwd: string) => Promise<void>;
+  /** Roll back last commit in stageCwd only (never mainRoot). */
+  resetHard: (ref: string, stageCwd: string) => Promise<void>;
+  runSuite: (stageCwd: string) => Promise<boolean>;
+  tagPush: (tag: string, stageCwd: string) => Promise<void>;
+  /** Optional push of the staging branch after green integrate. */
+  pushBranch?: (branch: string, mainRoot: string) => Promise<void>;
 }
 
-/** The default real StageIo — the concrete git + suite mechanics behind the seam. */
 export const realStageIo: StageIo = {
-  checkout: async (ref, cwd) => {
-    await execFileP('git', ['checkout', ref], { cwd });
+  ensureBranch: async (branch, startPoint, mainRoot) => {
+    const exists = await execFileP('git', ['rev-parse', '--verify', branch], { cwd: mainRoot })
+      .then(() => true)
+      .catch(() => false);
+    if (!exists) {
+      await execFileP('git', ['branch', branch, startPoint], { cwd: mainRoot });
+    }
   },
-  mergeNoFf: async (branch, cwd) => {
-    await execFileP('git', ['merge', '--no-ff', '--no-edit', branch], { cwd });
+  ensureWorktree: async (path, branch, mainRoot) => {
+    // Reuse if already registered; otherwise add.
+    const listed = await execFileP('git', ['worktree', 'list', '--porcelain'], { cwd: mainRoot })
+      .then((r) => r.stdout)
+      .catch(() => '');
+    if (listed.includes(path)) return;
+    await execFileP('git', ['worktree', 'add', path, branch], { cwd: mainRoot });
   },
-  abortMerge: async (cwd) => {
-    await execFileP('git', ['merge', '--abort'], { cwd });
+  mergeNoFf: async (branch, stageCwd) => {
+    await execFileP('git', ['merge', '--no-ff', '--no-edit', branch], { cwd: stageCwd });
   },
-  resetHard: async (ref, cwd) => {
-    await execFileP('git', ['reset', '--hard', ref], { cwd });
+  abortMerge: async (stageCwd) => {
+    await execFileP('git', ['merge', '--abort'], { cwd: stageCwd }).catch(() => undefined);
   },
-  runSuite: async (cwd) =>
-    execFileP('bash', ['scripts/pre-push.sh'], { cwd })
+  resetHard: async (ref, stageCwd) => {
+    await execFileP('git', ['reset', '--hard', ref], { cwd: stageCwd });
+  },
+  runSuite: async (stageCwd) =>
+    execFileP('bash', ['scripts/pre-push.sh'], { cwd: stageCwd })
       .then(() => true)
       .catch(() => false),
-  tagPush: async (tag, cwd) => {
-    await execFileP('git', ['tag', tag], { cwd });
-    await execFileP('git', ['push', 'origin', tag], { cwd });
+  tagPush: async (tag, stageCwd) => {
+    await execFileP('git', ['tag', tag], { cwd: stageCwd });
+    await execFileP('git', ['push', 'origin', tag], { cwd: stageCwd });
+  },
+  pushBranch: async (branch, mainRoot) => {
+    await execFileP('git', ['push', '-u', 'origin', branch], { cwd: mainRoot });
   },
 };
 
-/** Merge `branch` into the persistent `stage` branch (`--no-ff`, a real integration commit), gate on the suite,
- *  and `rc`-tag on green. Returns whether it integrated. A conflict (→ `abortMerge`) or a red suite
- *  (→ `resetHard HEAD~1`, rolling the merge back so `stage` stays green for the NEXT item) → `{ integrated:false }`,
- *  no tag; the item re-drives from fresh `main` (the loop's existing re-drive). */
-export async function mergeToStage(
-  branch: string,
-  rcTag: string,
-  cwd: string,
-  io: StageIo,
-): Promise<{ integrated: boolean }> {
-  await io.checkout(STAGE_BRANCH, cwd);
+export interface MergeToStageOpts {
+  sourceBranch: string;
+  stagingBranch: string;
+  /** null → skip rc-tag (loop path may omit). */
+  rcTag: string | null;
+  mainRoot: string;
+  io: StageIo;
+  /** Override stage worktree path (default: `<mainRoot>/.opensquid/git/stage-wt`). */
+  stageWorktreePath?: string;
+  /** Branch start-point when creating staging (default: sourceBranch). */
+  startPoint?: string;
+}
+
+/**
+ * Role: merge source → staging inside the stage worktree; suite-gate; optional rc-tag.
+ * Context: MergeToStageOpts (config-gated by caller — only when staging set).
+ * Constraints: all checkout/merge/reset on stage worktree path, never mainRoot working tree.
+ * Output: { integrated }.
+ */
+export async function mergeToStage(opts: MergeToStageOpts): Promise<{ integrated: boolean }> {
+  const { sourceBranch, stagingBranch, rcTag, mainRoot, io } = opts;
+  const stageWt = opts.stageWorktreePath ?? join(mainRoot, '.opensquid', 'git', 'stage-wt');
+  const start = opts.startPoint ?? sourceBranch;
+
+  await io.ensureBranch(stagingBranch, start, mainRoot);
+  await io.ensureWorktree(stageWt, stagingBranch, mainRoot);
+
   const merged = await io
-    .mergeNoFf(branch, cwd)
+    .mergeNoFf(sourceBranch, stageWt)
     .then(() => true)
     .catch(() => false);
   if (!merged) {
-    await io.abortMerge(cwd).catch(() => undefined); // conflict → no integration; the item re-drives from fresh main
+    await io.abortMerge(stageWt);
     return { integrated: false };
   }
-  if (!(await io.runSuite(cwd))) {
-    await io.resetHard('HEAD~1', cwd); // red-on-merge → roll the merge back; stage stays green
+  if (!(await io.runSuite(stageWt))) {
+    await io.resetHard('HEAD~1', stageWt); // roll back ONLY on the stage worktree
     return { integrated: false };
   }
-  await io.tagPush(rcTag, cwd); // rc tag on the green integration (step 7 — no untagged state)
+  if (rcTag !== null && rcTag.length > 0) {
+    await io.tagPush(rcTag, stageWt);
+  }
+  if (io.pushBranch !== undefined) {
+    await io.pushBranch(stagingBranch, mainRoot).catch(() => undefined);
+  }
   return { integrated: true };
 }

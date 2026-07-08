@@ -1,25 +1,47 @@
-// src/runtime/ralph/auto_pull.ts — step-0 "never a stale base" mechanic + the `auto/wg-<id>` branch-name SSOT.
-// Generic git only; the pool (AGF.3) owns WHEN to pull + branch. Mirrors the execFileP('git', …, { cwd }) idiom
-// (release_core.ts:12,21-30).
-//
-// AGF.2 (T-opensquid-automated-gitflow, wg-f2f8e8609ee6). Consumed by AGF.3's worktree cut + AGF.4's branch push.
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+/**
+ * Role: thin re-export of base-refresh + semantic branch helpers for the loop.
+ * Context: version-control.environments.production as the reconcile base.
+ * Constraints: no mechanical auto/wg-<id>; no --ff-only reject-on-divergence.
+ * Output: reconcileBase / featBranchFromTitle.
+ *
+ * AGF.2 rewritten: whoever's-ahead reconcile lives in release/base_refresh.ts.
+ */
+export {
+  reconcileBase,
+  realBaseRefreshIo,
+  featBranchFromTitle,
+  type BaseRefreshIo,
+  type ReconcileResult,
+} from '../release/base_refresh.js';
 
-const execFileP = promisify(execFile);
+/**
+ * @deprecated Mechanical auto/wg-<id> naming is retired (semantic env branches + feat/<slug> under parallelism).
+ * Kept as a throw-away alias so any stray import fails loudly at runtime if still called.
+ */
+export function branchNameFor(_id: string): never {
+  throw new Error(
+    'branchNameFor(auto/wg-<id>) is retired — use environments.* branch names (serial) or featBranchFromTitle (parallelism)',
+  );
+}
 
-/** The `auto/wg-<id>` branch convention — the SINGLE source AGF.3's `git worktree add -b`, AGF.4's `git push`,
- *  and AGF.5's `mergeToStage(branch)` all reference. The id already carries the `wg-` prefix, so
- *  `branchNameFor('wg-abc123')` → `'auto/wg-abc123'` (never double-prefixed). */
-export const branchNameFor = (id: string): string => `auto/${id}`;
-
-/** Fetch + fast-forward the local `main` to `<remote>/main` so the branch base is never stale (step 0). FF-only:
- *  a clean automation checkout is never diverged from origin/main; a divergence is a real fault (the `--ff-only`
- *  merge REJECTS → the promise rejects and the caller surfaces it), never a silent merge commit on `main`. Leaves
- *  the working tree ON `main`; the pool (AGF.3) then cuts each worktree from that fresh base. Fetch is scoped to
- *  `main` (not `--all`) to stay fast — the `auto/wg-*` branches are pushed by AGF.4, not fetched here. */
-export async function autoPullMain(cwd: string, remote = 'origin'): Promise<void> {
-  await execFileP('git', ['fetch', remote, 'main'], { cwd });
-  await execFileP('git', ['checkout', 'main'], { cwd });
-  await execFileP('git', ['merge', '--ff-only', `${remote}/main`], { cwd });
+/**
+ * Role: refresh the configured production base before a loop pass.
+ * Context: cwd + production branch name from version-control.
+ * Constraints: preserve-whoever's-ahead; conflict surfaces as thrown Error.
+ * Output: void (throws on conflict).
+ */
+export async function autoPullMain(
+  cwd: string,
+  remote = 'origin',
+  production = 'main',
+): Promise<void> {
+  const { reconcileBase: reconcile, realBaseRefreshIo } = await import(
+    '../release/base_refresh.js'
+  );
+  const result = await reconcile(cwd, production, remote, realBaseRefreshIo);
+  if (result.kind === 'conflict') {
+    throw new Error(
+      `base-refresh conflict on ${production}: ${result.message} — human must resolve (hot-patch preserved; never auto-reset)`,
+    );
+  }
 }

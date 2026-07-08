@@ -163,6 +163,36 @@ describe('runRalphLoop', () => {
     expect(r.closed).toEqual(['a']); // closed despite the hook throwing
   });
 
+  it('consistency gate: integrate ok → close; onShipped runs after close', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const integrate = vi.fn(() => P({ ok: true as const }));
+    const onShipped = vi.fn(() => P(undefined));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), runLap),
+      integrate,
+      onShipped,
+    });
+    expect(r.closed).toEqual(['a']);
+    expect(integrate).toHaveBeenCalled();
+    expect(onShipped).toHaveBeenCalledWith('a');
+  });
+
+  it('consistency gate: integrate fails → NOT closed; re-drive then park INTEGRATION_FAILED', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const integrate = vi.fn(() =>
+      P({ ok: false as const, reason: 'integration-failed: test' }),
+    );
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), runLap),
+      integrate,
+    });
+    expect(r.closed).toEqual([]);
+    expect(r.parked).toEqual([{ id: 'a', reason: 'INTEGRATION_FAILED' }]);
+    // 2 re-drive attempts then park on the 2nd failure? MAX=2 means n=1 re-drive, n=2 park
+    // first fail n=1 < 2 → releaseClaim continue; second fail n=2 → park
+    expect(integrate.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('lap HUMAN_REQUIRED{SCOPE_FORK} → escalate + wedge-mark, loop proceeds then BOARD_EMPTY', async () => {
     const esc = vi.fn(() => P({ escalated: true }));
     const runLap = lap({ kind: 'HUMAN_REQUIRED', reason: 'SCOPE_FORK', costUsd: 0.01 });

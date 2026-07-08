@@ -17,14 +17,16 @@ function io(): WorktreeIo & { added: string[]; removed: string[] } {
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1));
 
-describe('AGF.3 addItemWorktree', () => {
-  it('cuts auto/wg-<id> from main at <poolRoot>/<id>', async () => {
+describe('AGF.3 addItemWorktree (dormant parallelism)', () => {
+  it('cuts feat/<slug> from base at <poolRoot>/<id> (never auto/wg-<id>)', async () => {
     const i = io();
     let call: unknown[] = [];
     const spy: WorktreeIo = { ...i, worktreeAdd: (...a) => ((call = a), Promise.resolve()) };
-    const path = await addItemWorktree('wg-x', '/main', '/pool', spy);
+    const path = await addItemWorktree('wg-x', '/main', '/pool', spy, {
+      title: 'My Task',
+    });
     expect(path).toBe('/pool/wg-x');
-    expect(call).toEqual(['auto/wg-x', '/pool/wg-x', 'main', '/main']);
+    expect(call).toEqual(['feat/my-task', '/pool/wg-x', 'main', '/main']);
   });
 });
 

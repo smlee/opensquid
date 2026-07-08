@@ -21,9 +21,9 @@ function io(over: Partial<GhIo> = {}): GhIo & { pr: unknown[][]; tags: string[] 
 }
 
 describe('AGF.6 openStagePr — the human MERGE is the sole gate', () => {
-  it('auth ok → gh pr create --base main --head stage, returns the url, NO merge call anywhere', async () => {
+  it('auth ok → gh pr create with configured base/head, returns the url, NO merge call anywhere', async () => {
     const i = io();
-    const r = await openStagePr('t', 'b', '/repo', i);
+    const r = await openStagePr('t', 'b', '/repo', i, { base: 'main', head: 'stage' });
     expect(r.url).toBe('https://example/pr/7');
     expect(i.pr).toHaveLength(1);
     expect((i.pr[0] as { base: string; head: string }[])[0]).toMatchObject({

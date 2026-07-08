@@ -674,8 +674,11 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: latestPrefixTag, from: [release] }
     proof: 'src/runtime/release/latest_prefix_tag.test.ts'
+  # Git-flow integration fix (config-driven environments + fail-visible consistency gate):
+  # see docs/git-flow.md — version-control.environments presence-toggle; SHIPPED iff integration landed;
+  # stage ops in stage worktree; base-refresh preserve-whoever's-ahead; auto/wg-<id> retired.
   - id: R-AGF-BRANCH-NAME
-    intent: 'AGF.2 branchNameFor: the auto/wg-<id> branch-name SSOT (never double-prefixed) shared by the worktree cut + push + stage merge'
+    intent: 'AGF.2 featBranchFromTitle: semantic feat/<slug> for parallelism (dormant); mechanical auto/wg-<id> retired'
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: branchNameFor, from: [orchestrator] }
     proof: 'src/runtime/ralph/auto_pull.test.ts'
