@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ZodError } from 'zod';
 
 import { validateFsm } from '../runtime/fsm.js';
@@ -76,6 +76,33 @@ fsm:
 `,
     );
     await expect(loadPackV2(dir)).rejects.toThrow(ZodError);
+  });
+
+  it('warns and LOADS on an unknown pack.yaml top-level key (was: crash, wg-a02313251dfb)', async () => {
+    const warned: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((c: string | Uint8Array): boolean => (warned.push(String(c)), true));
+    try {
+      // A genuinely-unknown top-level key (NOT `versioning:`, which is now recognized) on an otherwise-valid pack.
+      await writeFile(
+        join(dir, 'pack.yaml'),
+        `name: fwd
+version: 1.0.0
+scope: workflow
+future_flag: true
+foundation:
+  manifest: strict-ts
+  lessons: []
+`,
+      );
+      const loaded = await loadPackV2(dir); // NO throw
+      expect(loaded.pack.name).toBe('fwd');
+      expect(warned.join('')).toContain('pack.yaml'); // source named
+      expect(warned.join('')).toContain("'future_flag'"); // key NAMED
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('rejects a dangling transition target (validateFsm enforced via the compiler)', async () => {

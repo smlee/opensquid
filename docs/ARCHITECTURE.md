@@ -769,4 +769,10 @@ requirements:
     wg: wg-c954689147da
     assert: { kind: reachable, symbol: collectLoopStateIncremental, from: [post-tool-use] }
     proof: 'src/runtime/loop/loop_state.test.ts'
+  - id: R-CLR-1
+    intent: 'CLR.1 parseTolerantStrict: the ONE tolerant-strict pack-config seam behind BOTH loadPackV2 (PackV2.parse) and parseYamlString (v1 manifest/drift_response) — a ZodError whose issues are ALL unrecognized_keys → warn (name source + keys) + strip + re-parse the same .strict() schema; ANY other error re-thrown UNCHANGED (fail-loud). One bad config line no longer process.exits the loop; a genuinely-broken pack still stops it. Deterministic (all-issues-are-unrecognized_keys), typo-visibility preserved'
+    spec: 'docs/tasks/T-config-load-resilience.md'
+    wg: wg-a02313251dfb
+    assert: { kind: reachable, symbol: parseTolerantStrict, from: [pack-validation] }
+    proof: 'src/packs/tolerant_strict.test.ts'
 ```

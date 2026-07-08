@@ -31,7 +31,9 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
 import { parseDocument, type Document } from 'yaml';
-import type { z } from 'zod';
+import { ZodError, type z } from 'zod';
+
+import { parseTolerantStrict } from './tolerant_strict.js';
 
 // ---------------------------------------------------------------------------
 // Public return shape
@@ -88,12 +90,18 @@ export function parseYamlString<T>(
     throw new Error(`YAML parse errors in ${ctx}: ${msg}`);
   }
 
-  const parsed = schema.safeParse(doc.toJSON());
-  if (!parsed.success) {
-    throw new Error(`Schema validation failed for ${ctx}: ${parsed.error.message}`);
+  // Route the schema step through the tolerant-strict seam: an unknown/forward top-level key warns + strips
+  // (no longer takes down the loop); a genuine schema error re-throws a ZodError, re-wrapped in today's
+  // `Schema validation failed for <ctx>` message so the source label + genuine-error surface are preserved.
+  try {
+    const data = parseTolerantStrict(schema, doc.toJSON(), ctx);
+    return { data, document: doc };
+  } catch (e) {
+    if (e instanceof ZodError) {
+      throw new Error(`Schema validation failed for ${ctx}: ${e.message}`);
+    }
+    throw e;
   }
-
-  return { data: parsed.data, document: doc };
 }
 
 // ---------------------------------------------------------------------------

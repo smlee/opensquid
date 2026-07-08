@@ -20,6 +20,7 @@ import { parse as yamlParse } from 'yaml';
 import { compilePackV2, type CompiledPack } from './compile_v2.js';
 import { loadSkillsDir, type SkillOutput } from './loader.js';
 import { PackV2 } from './schemas/pack_v2.js';
+import { parseTolerantStrict } from './tolerant_strict.js';
 
 export interface LoadedPackV2 {
   pack: PackV2;
@@ -30,8 +31,10 @@ export interface LoadedPackV2 {
 }
 
 export async function loadPackV2(dir: string): Promise<LoadedPackV2> {
-  const raw: unknown = yamlParse(await readFile(join(dir, 'pack.yaml'), 'utf8'));
-  const pack = PackV2.parse(raw); // fail-loud on a malformed pack
+  const packPath = join(dir, 'pack.yaml');
+  const raw: unknown = yamlParse(await readFile(packPath, 'utf8'));
+  // Unknown/forward top-level key → warn + strip (no longer crashes the loop); any genuine error still fails loud.
+  const pack = parseTolerantStrict(PackV2, raw, packPath);
   // Reuse the v1 skills/ scanner: absent dir → [] (ENOENT contract); a malformed skill.yaml throws (fail-loud).
   const skills = await loadSkillsDir(join(dir, 'skills'));
   return {

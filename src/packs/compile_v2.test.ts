@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { stepFlat as step, validateFsm } from '../runtime/fsm.js';
 import { compilePackV2 } from './compile_v2.js';
 import { PackV2 } from './schemas/pack_v2.js';
+import { parseTolerantStrict } from './tolerant_strict.js';
 
 // A representative amazon-clone-shaped pack exercising all 5 state kinds, with EXPLICIT named-event
 // transitions (structure) separate from the per-state `emits` (behavior).
@@ -284,19 +285,40 @@ describe('compilePackV2 (T1) — coding-flow-shaped fixture: multi-out + wildcar
   });
 });
 
-// CONFORMANCE-RECONCILE — the fsm-less `gates` form is GONE: a top-level `gates:` key fails `.strict()`.
-// Gates belong IN the execution FSM as gate-STATES (see the gate-state tests above).
-describe('compilePackV2 — the fsm-less `gates` form is retired', () => {
-  it('a top-level `gates:` key is rejected (unknown key via .strict())', () => {
-    expect(() =>
-      PackV2.parse({
+// CONFORMANCE-RECONCILE — the fsm-less `gates` form is GONE: `gates:` is a retired/unknown top-level key.
+// Gates belong IN the execution FSM as gate-STATES (see the gate-state tests above). Per wg-a02313251dfb the
+// tolerant-strict seam now WARNS + strips a retired/unknown top-level key instead of taking down the loop —
+// the pack loads as its valid foundation form (gates dropped, key named in the warning).
+describe('compilePackV2 — the fsm-less `gates` form is retired (warn + strip, not crash)', () => {
+  it('warns and LOADS on a retired top-level `gates:` key (unknown → strip, wg-a02313251dfb)', () => {
+    const warned: string[] = [];
+    const pack = parseTolerantStrict(
+      PackV2,
+      {
         name: 'discipline',
         version: '1.0.0',
         scope: 'universal',
         gates: [
           { kind: 'track_check', trigger: ['tool_call'], process: [{ call: 'x', args: {} }] },
         ],
-      }),
+      },
+      '<test>',
+      (m) => warned.push(m),
+    );
+    expect(pack.name).toBe('discipline'); // foundation form (no fsm) is valid; gates stripped
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("'gates'"); // key NAMED, not silently dropped
+  });
+
+  it('STILL fails loud on a PackV2 missing a required field (fail-loud preserved)', () => {
+    // No `name` — a genuine (missing-required) error still throws.
+    expect(() =>
+      parseTolerantStrict(
+        PackV2,
+        { version: '1.0.0', scope: 'universal' },
+        '<test>',
+        () => undefined,
+      ),
     ).toThrow();
   });
 });
