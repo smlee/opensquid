@@ -325,7 +325,7 @@ describe('FileWatcher — lifecycle', () => {
     const beforeStop = Date.now();
     await h.watcher.stop();
     const stopElapsed = Date.now() - beforeStop;
-    expect(stopElapsed).toBeLessThan(FIVE_SECONDS_MS);
+    expect(stopElapsed).toBeLessThan(WAIT_TIMEOUT_MS);
 
     // Idempotent: second stop is a no-op.
     await h.watcher.stop();
