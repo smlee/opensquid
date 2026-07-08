@@ -35,6 +35,10 @@ import { FileWatcher, type FileWatcherAuditEntry } from './file_watcher.js';
 
 import type { Client } from '@libsql/client';
 
+// chokidar + debounce under a full parallel suite exceeds vitest's 5s default.
+// Apply to every `it` in this file so waitFor's 15s budget can actually run.
+const TEST_TIMEOUT_MS = 20_000;
+
 // ---------------------------------------------------------------------------
 // Helpers — kept colocated so each test reads top-to-bottom.
 // ---------------------------------------------------------------------------
@@ -129,7 +133,7 @@ async function makeHarness(opts: {
 // Tests.
 // ---------------------------------------------------------------------------
 
-describe('FileWatcher — basic add/change/unlink', () => {
+describe('FileWatcher — basic add/change/unlink', { timeout: TEST_TIMEOUT_MS }, () => {
   let h: Harness;
 
   afterEach(async () => {
@@ -157,7 +161,7 @@ describe('FileWatcher — basic add/change/unlink', () => {
   });
 });
 
-describe('FileWatcher — debounce', () => {
+describe('FileWatcher — debounce', { timeout: TEST_TIMEOUT_MS }, () => {
   let h: Harness;
   afterEach(async () => {
     await h.cleanup();
@@ -205,7 +209,7 @@ describe('FileWatcher — debounce', () => {
   }, 20_000);
 });
 
-describe('FileWatcher — rate limit integration', () => {
+describe('FileWatcher — rate limit integration', { timeout: TEST_TIMEOUT_MS }, () => {
   let h: Harness;
   afterEach(async () => {
     await h.cleanup();
@@ -244,7 +248,7 @@ describe('FileWatcher — rate limit integration', () => {
   });
 });
 
-describe('FileWatcher — ignored', () => {
+describe('FileWatcher — ignored', { timeout: TEST_TIMEOUT_MS }, () => {
   let h: Harness;
   afterEach(async () => {
     await h.cleanup();
@@ -315,7 +319,7 @@ describe('FileWatcher — ignored', () => {
   });
 });
 
-describe('FileWatcher — lifecycle', () => {
+describe('FileWatcher — lifecycle', { timeout: TEST_TIMEOUT_MS }, () => {
   it('stop() is idempotent and closes cleanly with no leaked listeners', async () => {
     const h = await makeHarness({});
     const file = join(h.dir, 'lc.ts');
@@ -344,7 +348,7 @@ describe('FileWatcher — lifecycle', () => {
   });
 });
 
-describe('FileWatcher — dispatch error path', () => {
+describe('FileWatcher — dispatch error path', { timeout: TEST_TIMEOUT_MS }, () => {
   let h: Harness;
   afterEach(async () => {
     await h.cleanup();
