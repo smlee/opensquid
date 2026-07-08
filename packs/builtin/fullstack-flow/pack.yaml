@@ -72,6 +72,18 @@ commit_gate:
   require_phase_ledger: true
   require_suite_green: true
 
+# AGF.1 (T-opensquid-automated-gitflow, wg-01d5a9233026) — the PACK-declared DEFAULT versioning strategy for the
+# automated git-flow. This is DATA (never a core literal): core reads it, it never assumes intent-from-commit-type
+# (feat→minor / BREAKING→major). A project inherits this default when its `.opensquid/active.json` omits `versioning`
+# or declares only a subset (e.g. just the `prefix`); the project object OVERRIDES the pack default field-by-field
+# (`resolveVersioning`, one-directional project-over-pack — no third store, SSOT). The `0.5` prefix is HUMAN-held:
+# the loop only ever bumps the patch (`0.5.N → 0.5.N+1`); moving off the prefix is a manual edit here or in the
+# project active.json, never an automated bump.
+versioning:
+  strategy: locked-prefix
+  prefix: '0.5'
+  bump: patch-per-release
+
 # Guard registry (ref → if:-expression, evaluated by RegistryGuardEvaluator over buildGuardCtx).
 guards:
   # T2.4 / GS1 — the SCOPE gate: a deterministic, zero-LLM predicate. The `!scope.is_advance` short-circuit passes

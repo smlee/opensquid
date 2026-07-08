@@ -2193,6 +2193,7 @@ realStageIo
 realGhIo
 STAGE_BRANCH
 GhAuthError
+IntegrationResult
 
 # --- baseline maintenance (T-statusline-compose, wg-c954689147da, CODE, 2026-07-08): the DATA-shape siblings of
 # the additive status-line pill (SLC.2). The BEHAVIORAL exports (renderStatuslineFragment, writeStatuslineSnapshot,

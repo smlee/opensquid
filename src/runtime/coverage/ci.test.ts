@@ -125,6 +125,6 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(73); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 13 automated-gitflow + 5 statusline-compose
+    expect(a.results.length).toBe(76); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose
   }, 30_000);
 });

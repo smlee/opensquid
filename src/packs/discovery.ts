@@ -488,6 +488,77 @@ export async function readActiveVersioning(
 }
 
 /**
+ * AGF.1 — read the RAW (possibly PARTIAL) project `versioning` object from a scope's `active.json`, unvalidated,
+ * for the pack-default MERGE ({@link resolveVersioning}). Unlike {@link readActiveVersioning} (which returns a
+ * fully-validated config or null), this preserves a project that declares only a subset (e.g. just `{prefix}`)
+ * so the merge can fill the rest from the pack default. Lenient: absent scope / ENOENT / any parse fault → null.
+ */
+async function readRawProjectVersioning(
+  scopeRoot: string | null,
+): Promise<Partial<VersioningConfig> | null> {
+  if (scopeRoot === null) return null;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const v = (JSON.parse(raw) as { versioning?: Partial<VersioningConfig> }).versioning;
+    return v ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AGF.1 — the PURE one-directional versioning merge: the PROJECT object OVERRIDES the PACK default field-by-field
+ * (SSOT — no third store), then the merged shape is validated. A project that declares only `{prefix:'0.5'}` still
+ * resolves `strategy`/`bump` from the pack default; a project that declares nothing inherits the pack default
+ * whole; both absent → null. Returns a validated `VersioningConfig` or null when the merged shape is not a
+ * well-formed locked-prefix config (no valid `strategy`/`prefix` from either source).
+ */
+export function mergeVersioning(
+  packDefault: Partial<VersioningConfig> | null,
+  project: Partial<VersioningConfig> | null,
+): VersioningConfig | null {
+  if (packDefault === null && project === null) return null;
+  const merged = { ...(packDefault ?? {}), ...(project ?? {}) }; // project overrides pack (one-directional)
+  if (
+    merged.strategy === 'locked-prefix' &&
+    typeof merged.prefix === 'string' &&
+    merged.prefix.trim().length > 0
+  ) {
+    return {
+      strategy: 'locked-prefix',
+      prefix: merged.prefix,
+      bump: merged.bump ?? 'patch-per-release',
+    };
+  }
+  return null;
+}
+
+/**
+ * AGF.1 — RESOLVE the effective versioning config for a scope: the RAW project object (possibly partial) merged
+ * OVER the active pack's declared default ({@link mergeVersioning}, project-over-pack). This is the reader the
+ * automated git-flow consumes (release.ts) so a project that declares only the `prefix` — or omits `versioning`
+ * entirely — still resolves the `strategy`/`bump` from the PACK (design §6: "versioning strategy defaulted in the
+ * pack + the prefix in the project active.json"). The pack default is the FIRST active v2 pack that declares a
+ * `versioning` block; a pack-load fault never breaks resolution (the project object may already suffice → null
+ * pack default). Returns the validated config or null when neither source yields a well-formed locked-prefix shape.
+ */
+export async function resolveVersioning(
+  scopeRoot: string | null,
+  builtinRoot: string | null = null,
+  userScopeRoot: string | null = null,
+): Promise<VersioningConfig | null> {
+  const project = await readRawProjectVersioning(scopeRoot);
+  let packDefault: Partial<VersioningConfig> | null = null;
+  try {
+    const { v2 } = await partitionActivePacks(scopeRoot, null, builtinRoot, userScopeRoot);
+    packDefault = v2.map((p) => p.pack.versioning).find((v) => v !== undefined) ?? null;
+  } catch {
+    packDefault = null; // a pack-load fault must never break versioning resolution
+  }
+  return mergeVersioning(packDefault, project);
+}
+
+/**
  * REVERSIBLE-DEPLOY — read the per-project `deploy.reversible` flag from a scope's `active.json` (see
  * {@link ActiveJson.reversible}). Returns `true` ONLY when the flag is explicitly `true`; all other cases
  * (absent, false, unreadable, malformed) return `false` (FAIL-CLOSED: unknown ⇒ irreversible ⇒ human gate).

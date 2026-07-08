@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import type { Command } from 'commander';
 
 import { latestPrefixTag } from '../../runtime/release/release_core.js';
-import { nextRcTag } from '../../runtime/release/locked_version.js';
+import { nextRcTag, nextLockedTag } from '../../runtime/release/locked_version.js';
 import {
   mergeToStage,
   STAGE_BRANCH,
@@ -20,7 +20,8 @@ import {
   type StageIo,
 } from '../../runtime/release/stage_integration.js';
 import { openStagePr, realGhIo, type GhIo } from '../../runtime/release/stage_pr.js';
-import { readActiveVersioning, type VersioningConfig } from '../../packs/discovery.js';
+import { resolveVersioning, type VersioningConfig } from '../../packs/discovery.js';
+import { resolveBuiltinScopeRoot, resolveUserScopeRoot } from '../../runtime/paths.js';
 import { join } from 'node:path';
 
 const execFileP = promisify(execFile);
@@ -69,9 +70,15 @@ async function isUpToDateWithMain(cwd: string): Promise<boolean> {
     .catch(() => false);
 }
 
-/** The declared locked-prefix versioning config from the project's `.opensquid/active.json`, or null when absent. */
+/** The EFFECTIVE locked-prefix versioning config: the project's `.opensquid/active.json` object merged OVER the
+ *  active pack's declared default (project-over-pack, AGF.1) — so a project that declares only the `prefix` (or
+ *  omits `versioning`) still resolves `strategy`/`bump` from the pack. Null only when neither source declares it. */
 async function readVersioning(cwd: string): Promise<VersioningConfig | null> {
-  return readActiveVersioning(join(cwd, '.opensquid'));
+  return resolveVersioning(
+    join(cwd, '.opensquid'),
+    resolveBuiltinScopeRoot(),
+    resolveUserScopeRoot(),
+  );
 }
 
 /** The existing `v<base>-rc.*` tags (for the rc counter — single-writer on the one `stage` branch). */
@@ -90,43 +97,46 @@ function fail(msg: string): number {
   return 1;
 }
 
-/** AGF.6 — the SUPERSEDED release sequence: green precondition → merge the item branch into the persistent `stage`
- *  integration branch (suite-gated + `rc`-tagged, AGF.5) → open the batched `stage → main` PR (AGF.6). There is
- *  ONE path to `main` (the human MERGE on the PR); NO direct merge to `main`, NO intent-from-commit semver. Returns
- *  the process exit code (0 success, non-zero refusal). */
-export async function runRelease(cwd: string, deps: ReleaseDeps = {}): Promise<number> {
-  const branch = await (deps.currentBranch ?? gitCurrentBranch)(cwd);
-  // 1. PRECONDITION — refuse a red or behind branch BEFORE any mutating git op (the safety floor).
-  if (!(await (deps.suiteGreen ?? runFullSuite)(cwd))) return fail('the branch suite is not green');
-  if (!(await (deps.upToDateWithMain ?? isUpToDateWithMain)(cwd)))
-    return fail('the branch is behind main');
-  // 2. VERSIONING — the locked-prefix config is REQUIRED (the automated flow versions by declared strategy, never
-  //    by guessing intent from commit types). Absent ⇒ refuse (no naive-semver fallback — that path is superseded).
+/** The integration outcome — either integrated (with the PR url + the release base version + the rc tag), or not
+ *  (with a machine-readable `skip`/`reason`). SSOT for both the `opensquid release` command (below) and the live
+ *  loop's SHIPPED fold (`onShipped` in ralph.ts) — one path to `stage`, one rc-counter, one PR-open. */
+export interface IntegrationResult {
+  integrated: boolean;
+  url?: string;
+  base?: string; // the bare release version (e.g. 0.5.548) the human MERGE will tag
+  rcTag?: string; // the single-writer rc tag applied to the stage integration
+  reason?: 'no-versioning' | 'not-integrated'; // why it did not integrate (skip vs merge-reject)
+}
+
+/**
+ * AGF.5+AGF.6 SSOT — integrate a pushed `auto/wg-<id>` branch into the persistent `stage` branch (suite-gated +
+ * single-writer `rc`-tagged, AGF.5) then open/refresh the batched `stage → main` PR (AGF.6). NO precondition here
+ * (the caller owns whether to gate on a green tree): `runRelease` runs the manual command's suite/up-to-date floor
+ * BEFORE this; the loop's `onShipped` calls this directly (the item already passed its own suite; the suite reruns
+ * ON THE MERGE inside `mergeToStage`). Versions ONLY by the declared locked-prefix config — never intent-from-commit;
+ * a project with no `versioning` config resolves `{ integrated:false, reason:'no-versioning' }` (skipped, not failed).
+ */
+export async function integrateBranchToStage(
+  branch: string,
+  cwd: string,
+  deps: ReleaseDeps = {},
+): Promise<IntegrationResult> {
+  // VERSIONING — the locked-prefix config (project-over-pack, AGF.1). Absent ⇒ this project is not on the automated
+  // git-flow ⇒ skip integration (not an error — a non-automated project ships without a stage/PR).
   const cfg = await (deps.versioning ?? readVersioning)(cwd);
-  if (cfg === null)
-    return fail(
-      'no `versioning` config declared in .opensquid/active.json (locked-prefix strategy required)',
-    );
-  // 3. rc TAG — the next single-writer rc tag for the `stage` integration (locked-prefix + rc counter).
+  if (cfg === null) return { integrated: false, reason: 'no-versioning' };
+  // rc TAG — the next single-writer rc tag for the `stage` integration (locked-prefix base + rc counter).
   const prefixTag = await (deps.prefixTag ?? latestPrefixTag)(cfg.prefix, cwd);
-  const base = (await import('../../runtime/release/locked_version.js')).nextLockedTag(
-    cfg,
-    prefixTag,
-  );
+  const base = nextLockedTag(cfg, prefixTag);
   const existingRc = await (deps.rcTagsFor ?? rcTagsForBase)(base, cwd);
   const rcTag = `v${nextRcTag(cfg, prefixTag, existingRc)}`;
-  // 4. INTEGRATE — merge the item branch → persistent `stage`, re-run the suite, rc-tag on green (AGF.5).
+  // INTEGRATE — merge the item branch → persistent `stage`, re-run the suite, rc-tag on green (AGF.5).
   const integrate =
     deps.stageIntegrate ??
     ((b: string, tag: string, c: string) => mergeToStage(b, tag, c, deps.stageIo ?? realStageIo));
   const { integrated } = await integrate(branch, rcTag, cwd);
-  if (!integrated) {
-    return fail(
-      `merge of ${branch} into ${STAGE_BRANCH} did not integrate (conflict or red suite on the merge) — ` +
-        `the branch re-drives from fresh main`,
-    );
-  }
-  // 5. PR — open/refresh the batched stage → main PR. The human MERGE is the SOLE gate (never auto-merged here).
+  if (!integrated) return { integrated: false, base, rcTag, reason: 'not-integrated' };
+  // PR — open/refresh the batched stage → main PR. The human MERGE is the SOLE gate (never auto-merged here).
   const open =
     deps.openPr ??
     ((title: string, body: string, c: string) =>
@@ -137,9 +147,34 @@ export async function runRelease(cwd: string, deps: ReleaseDeps = {}): Promise<n
       `Merging opens the release tag (${base}) + publish.`,
     cwd,
   );
+  return { integrated: true, url, base, rcTag };
+}
+
+/** AGF.6 — the SUPERSEDED release sequence: green precondition → merge the item branch into the persistent `stage`
+ *  integration branch (suite-gated + `rc`-tagged, AGF.5) → open the batched `stage → main` PR (AGF.6). There is
+ *  ONE path to `main` (the human MERGE on the PR); NO direct merge to `main`, NO intent-from-commit semver. Returns
+ *  the process exit code (0 success, non-zero refusal). */
+export async function runRelease(cwd: string, deps: ReleaseDeps = {}): Promise<number> {
+  const branch = await (deps.currentBranch ?? gitCurrentBranch)(cwd);
+  // 1. PRECONDITION — refuse a red or behind branch BEFORE any mutating git op (the safety floor).
+  if (!(await (deps.suiteGreen ?? runFullSuite)(cwd))) return fail('the branch suite is not green');
+  if (!(await (deps.upToDateWithMain ?? isUpToDateWithMain)(cwd)))
+    return fail('the branch is behind main');
+  // 2-5. VERSIONING + rc + INTEGRATE + PR — the SSOT integration core (shared with the loop's onShipped fold).
+  const r = await integrateBranchToStage(branch, cwd, deps);
+  if (r.reason === 'no-versioning')
+    return fail(
+      'no `versioning` config declared in .opensquid/active.json (locked-prefix strategy required)',
+    );
+  if (!r.integrated) {
+    return fail(
+      `merge of ${branch} into ${STAGE_BRANCH} did not integrate (conflict or red suite on the merge) — ` +
+        `the branch re-drives from fresh main`,
+    );
+  }
   process.stdout.write(
-    `Integrated ${branch} → ${STAGE_BRANCH} (${rcTag}); opened stage → main PR: ${url}. ` +
-      `Click MERGE to release ${base}.\n`,
+    `Integrated ${branch} → ${STAGE_BRANCH} (${r.rcTag}); opened stage → main PR: ${r.url}. ` +
+      `Click MERGE to release ${r.base}.\n`,
   );
   return 0;
 }

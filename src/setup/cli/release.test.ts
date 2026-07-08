@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { runRelease, type ReleaseDeps } from './release.js';
+import { runRelease, integrateBranchToStage, type ReleaseDeps } from './release.js';
 
 interface Calls {
   stageIntegrate: unknown[][];
@@ -79,6 +79,35 @@ describe('AGF.6 non-integrating merge (conflict / red on merge) → refuse, no P
     const d = deps({ stageIntegrate: () => Promise.resolve({ integrated: false }) });
     // the spy above is overridden; assert via exit code + no PR
     expect(await runRelease('/repo', d)).not.toBe(0);
+    expect(d.calls.openPr).toHaveLength(0);
+  });
+});
+
+describe('AGF.5+AGF.6 integrateBranchToStage — the SSOT the loop onShipped fold reuses (no precondition)', () => {
+  it('integrates the given branch (rc-tagged) then opens the batched PR — returns the url + base', async () => {
+    const d = deps();
+    const r = await integrateBranchToStage('auto/wg-abc', '/repo', d);
+    expect(r.integrated).toBe(true);
+    expect(r.rcTag).toBe('v0.5.548-rc.1');
+    expect(r.base).toBe('0.5.548');
+    expect(r.url).toBe('https://example/pr/1');
+    expect(d.calls.stageIntegrate[0]).toEqual(['auto/wg-abc', 'v0.5.548-rc.1', '/repo']);
+    expect(d.calls.openPr).toHaveLength(1);
+  });
+
+  it('a non-automated project (no versioning) SKIPS (reason no-versioning), no integrate/PR', async () => {
+    const d = deps({ versioning: () => Promise.resolve(null) });
+    const r = await integrateBranchToStage('auto/wg-abc', '/repo', d);
+    expect(r).toEqual({ integrated: false, reason: 'no-versioning' });
+    expect(d.calls.stageIntegrate).toHaveLength(0);
+    expect(d.calls.openPr).toHaveLength(0);
+  });
+
+  it('a non-integrating merge (conflict/red) returns not-integrated + opens NO PR', async () => {
+    const d = deps({ stageIntegrate: () => Promise.resolve({ integrated: false }) });
+    const r = await integrateBranchToStage('auto/wg-abc', '/repo', d);
+    expect(r.integrated).toBe(false);
+    expect(r.reason).toBe('not-integrated');
     expect(d.calls.openPr).toHaveLength(0);
   });
 });

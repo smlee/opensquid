@@ -654,6 +654,16 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: readActiveVersioning, from: [release] }
     proof: 'src/packs/read_active_versioning.test.ts'
+  - id: R-AGF-MERGE-VERSIONING
+    intent: 'AGF.1 mergeVersioning: the PURE one-directional project-over-pack versioning merge — a project that declares only the prefix resolves strategy+bump from the pack default; both absent → null'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: mergeVersioning, from: [release] }
+    proof: 'src/packs/read_active_versioning.test.ts'
+  - id: R-AGF-RESOLVE-VERSIONING
+    intent: 'AGF.1 resolveVersioning: the effective versioning = the raw project object merged OVER the active pack default (design §6 — strategy defaulted in the pack, prefix human-held in the project); the reader release.ts consumes'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: resolveVersioning, from: [release] }
+    proof: 'src/packs/read_active_versioning.test.ts'
   - id: R-AGF-PATCH-OF-TAG
     intent: 'AGF.1 patchOfTag: parse the patch int off a v<prefix>.<patch> tag (dots escaped, leading v optional), null off-prefix'
     wg: wg-732b2b68a168
@@ -714,6 +724,11 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: tagMainRelease, from: [release] }
     proof: 'src/runtime/release/stage_pr.test.ts'
+  - id: R-AGF-INTEGRATE-BRANCH
+    intent: 'AGF.5+AGF.6 integrateBranchToStage: the SSOT the `opensquid release` command AND the live loop onShipped fold both reuse — rc-tag → mergeToStage → openStagePr (no precondition); a no-versioning project skips, a non-integrating merge opens no PR'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: integrateBranchToStage, from: [release] }
+    proof: 'src/setup/cli/release.test.ts'
   # T-statusline-compose (SLC.1..SLC.4, wg-c954689147da) — the additive status-line pill's new BEHAVIORAL exports:
   # one reachable requirement per export, its element proof-test the AUTHORITY. The `from` hints are advisory —
   # these surface through the `emitMonitorEvent` state-change choke-point (post-tool-use phase writes / the
