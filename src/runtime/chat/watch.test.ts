@@ -41,14 +41,19 @@ function row(over: Partial<InboxRow> = {}): InboxRow {
 }
 const jline = (r: InboxRow): string => JSON.stringify(r) + '\n';
 
-async function until(pred: () => boolean, ms = 4000): Promise<void> {
+// Under a full parallel suite, chokidar + awaitWriteFinish (50ms stability + 25ms
+// poll) can lag well past 4s before the second half of a split write drains.
+const UNTIL_MS = 15_000;
+const SETTLE_MS = 400;
+
+async function until(pred: () => boolean, ms = UNTIL_MS): Promise<void> {
   const start = Date.now();
   while (!pred()) {
     if (Date.now() - start > ms) throw new Error('timeout waiting for condition');
     await new Promise((r) => setTimeout(r, 20));
   }
 }
-const settle = (ms = 300): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const settle = (ms = SETTLE_MS): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 let dir: string;
 let inbox: string;
@@ -90,7 +95,7 @@ function startWatch(over: Partial<Parameters<typeof watchInbox>[0]> = {}): {
   };
 }
 
-describe('watchInbox', () => {
+describe('watchInbox', { timeout: 20_000 }, () => {
   it('skips the backlog and emits only post-start appends', async () => {
     await writeFile(inbox, jline(row({ text: 'old-1' })) + jline(row({ text: 'old-2' })));
     const w = startWatch();
@@ -127,9 +132,11 @@ describe('watchInbox', () => {
     const full = jline(row({ text: 'abcd' }));
     const cut = Math.floor(full.length / 2);
     const w = startWatch();
-    await settle();
+    // Let chokidar attach to the empty file (polling + first awaitWriteFinish cycle).
+    await settle(600);
     await appendFile(inbox, full.slice(0, cut)); // no newline yet
-    await settle();
+    // Wait past awaitWriteFinish stability so the partial is drained into leftover.
+    await settle(600);
     expect(w.out).toEqual([]); // incomplete line not emitted
     await appendFile(inbox, full.slice(cut)); // completes the line + newline
     await until(() => w.out.length === 1);
