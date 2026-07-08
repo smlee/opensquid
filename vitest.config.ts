@@ -9,8 +9,9 @@ export default defineConfig({
     exclude: ['node_modules', 'dist'],
     // Cap parallelism: under full-core load, chokidar/file_watcher + spawn
     // SIGTERM timing tests flake (events never fire, kill paths exceed 1s).
-    // Half the cores keeps the suite honest without starving the FS watcher.
-    maxWorkers: '50%',
+    // Numeric (not '%') — tinypool rejects maxThreads < minThreads with percent forms.
+    maxWorkers: 4,
+    minWorkers: 1,
     // Safety net for stray `loop-engine` daemons spawned by live /
     // E2E tests. Each test file kills its own engine in `afterAll`,
     // but mid-flight crashes leak; this is the backstop. Filtered
