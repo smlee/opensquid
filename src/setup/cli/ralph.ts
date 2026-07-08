@@ -36,8 +36,6 @@ import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ral
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
 import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
-import { integrateBranchToStage } from './release.js';
-import { branchNameFor } from '../../runtime/ralph/auto_pull.js';
 import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
 import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
@@ -335,30 +333,14 @@ export function registerRalph(program: Command): Command {
               new Date().toISOString(),
             );
             process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
-            // AGF.5+AGF.6 — the automated git-flow's live wiring: a SHIPPED item pushed its `auto/wg-<id>` branch
-            // (deploy.md §3), so integrate it into the persistent `stage` branch (suite-gated + rc-tagged) then
-            // open/refresh the batched `stage → main` PR (the human MERGE is the SOLE gate). GATED on a resolved
-            // `versioning` config: a project NOT on the automated git-flow resolves `no-versioning` and skips
-            // (unaffected). FAIL-OPEN: a merge conflict / red-on-merge / missing gh auth must NEVER break the
-            // drain — the item already SHIPPED; a stage/PR fault is surfaced, not fatal (mirrors the fold hooks).
-            try {
-              const r = await integrateBranchToStage(branchNameFor(taskId), root);
-              if (r.reason === 'no-versioning') {
-                /* not an automated-git-flow project — no stage/PR step */
-              } else if (r.integrated) {
-                process.stdout.write(
-                  `🦑 integrated ${taskId} → stage (${r.rcTag}); PR ${r.url ?? '(refreshed)'} — MERGE to release ${r.base}\n`,
-                );
-              } else {
-                process.stdout.write(
-                  `🦑 ${taskId} did NOT integrate into stage (conflict or red-on-merge) — re-drives from fresh main\n`,
-                );
-              }
-            } catch (err) {
-              process.stderr.write(
-                `[loop] stage integration for ${taskId} failed (ignored): ${String(err)}\n`,
-              );
-            }
+            // INTERIM (fast-slice loop-fix, 2026-07-08): the fragile per-item stage-integration was REMOVED. It
+            // ran `mergeToStage`/`reset --hard` in the MAIN checkout against a never-created `stage` and swallowed
+            // its own failure (fail-open) — silently no-op'ing while items showed SHIPPED (phantom ships that lost
+            // work). Durable landing is now owned by the item's DEPLOY commit+push (deploy.md:47-55) straight to
+            // the loop branch; `onShipped` only computes the next run-group. The full config-driven git-flow
+            // (version-control.environments, consistency gate, semantic branches, whoever's-ahead reconcile,
+            // auto-PR) is re-driven THROUGH the loop as its own scoped items — see the private design doc
+            // ~/projects/loop/docs/research/opensquid-gitflow-integration-fix-pre-research-2026-07-08.md.
           },
           // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
           // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.
