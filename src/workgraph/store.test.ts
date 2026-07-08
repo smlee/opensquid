@@ -99,6 +99,45 @@ describe('workGraphStore (event-sourced)', () => {
   });
 });
 
+// HWS.2 — the store-global op-log cursor + the durable high-water-mark.
+describe('workGraphStore op-log cursor (HWS.2)', () => {
+  it('listOpsSince(0) returns every op in (lamport, id) order; listOpsSince(max) is empty (no re-emit)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'a' });
+    await wg.createIssue({ title: 'b' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    const all = await wg.listOpsSince(0);
+    expect(all.length).toBeGreaterThanOrEqual(3); // 2× issue_created + 1× issue_set
+    // strictly ascending lamport (the store-global monotonic clock) — the exactly-once resume ordering.
+    for (let i = 1; i < all.length; i++)
+      expect(all[i]!.lamport).toBeGreaterThanOrEqual(all[i - 1]!.lamport);
+    const max = Math.max(...all.map((o) => o.lamport));
+    expect(await wg.listOpsSince(max)).toEqual([]); // nothing after the last op
+  });
+
+  it('the cursor projection matches listEvents (same store-global lamport, no new counter)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'a' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    const viaCursor = (await wg.listOpsSince(0))
+      .filter((o) => o.issueId === a.id)
+      .map((o) => o.lamport);
+    const viaEvents = (await wg.listEvents(a.id)).map((o) => o.lamport);
+    expect(viaCursor).toEqual(viaEvents); // identical lamports — the cursor reuses wg_ops.lamport
+  });
+
+  it('readHighWater is 0 fresh; advanceHighWater is MONOTONIC (a lower value never rewinds it)', async () => {
+    const wg = await fresh();
+    expect(await wg.readHighWater()).toBe(0); // fresh store → see-everything-once
+    await wg.advanceHighWater(5);
+    expect(await wg.readHighWater()).toBe(5);
+    await wg.advanceHighWater(3); // stale/lower — must NOT rewind
+    expect(await wg.readHighWater()).toBe(5);
+    await wg.advanceHighWater(9);
+    expect(await wg.readHighWater()).toBe(9);
+  });
+});
+
 describe('workGraphStore per-file source + rebuild', () => {
   let dir: string;
   beforeEach(async () => {

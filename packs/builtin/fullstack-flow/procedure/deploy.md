@@ -51,9 +51,10 @@ guess-free audit is `VERDICT: GUESS_FREE` for the CURRENT diff — regenerate it
 the diff changed), **commit and push**:
 
 ```bash
-git add <the exact files this task changed>   # explicit paths ONLY — never `git add -A` / `-p` / `.`
-git commit -m "<type>(<scope>): <subject>"    # sole author — NO Co-Authored-By trailer (project rule)
-git push                                        # the pre-push gate re-runs the suite; green → pushes
+git add <the exact files this task changed>       # explicit paths ONLY — never `git add -A` / `-p` / `.`
+git commit -m "<type>(<scope>): <subject>"        # sole author — NO Co-Authored-By trailer (project rule)
+git tag "<wg-id>-$(git rev-parse --short HEAD)"    # AGF.4 — lightweight ITEM marker on the green commit ("no untagged state", step 7)
+git push origin <branch> --follow-tags            # push the auto/wg-<id> branch + the item tag; pre-push gate re-runs the suite
 ```
 
 - **NO `--no-verify`.** The suite is genuinely green, so there is nothing to bypass; `--no-verify` is a
@@ -63,6 +64,14 @@ git push                                        # the pre-push gate re-runs the 
   `sole-author`). Author identity is the project's configured author, nobody else.
 - **Explicit paths.** `git add <paths>` names exactly the files this task touched — never a blanket `-A` (that
   would sweep unrelated drive-by changes into the task commit).
+- **AGF.4 — auto-tag + branch push (the automated git-flow, `wg-732b2b68a168`).** Under the automated loop the
+  item drives in its own `auto/wg-<id>` worktree (AGF.3, cut from fresh `main` by AGF.2); its terminus is
+  commit + a lightweight ITEM marker tag (`<wg-id>-<shortsha>`, satisfying "no untagged state" for the item's
+  work) + a push of the `auto/wg-<id>` branch with that tag (`--follow-tags`). The item marker is a NON-version
+  tag — it carries NO `v<major>.<minor>.<patch>` bump. The VERSION-bearing tags are SINGLE-WRITER downstream: the
+  `rc` tag at the one `stage` integration (AGF.5) and the release tag at the one `main` merge (AGF.6), both via
+  the locked-prefix computer (`nextLockedTag`); the DEPLOY terminus NEVER computes an intent-from-commit bump
+  (that would race all N concurrent items to the same patch). Do NOT push a version tag from here.
 - A RED suite yields NO commit — the fix-loop (§2) owns it first. Commit is reached only from green.
 
 ## Emit your phase to the live status feed
@@ -81,14 +90,26 @@ Emit each phase with `lifecycle: "running"` on ENTER (⟳) and `lifecycle: "done
 - `set_loop_phase(phase: "accept", index: 4, total: 4, lifecycle: "running")` once surfaced for the human ACCEPT
   touchpoint (§4) (leave with `lifecycle: "done"`).
 
-## 4. ACCEPT — the human touchpoint
+## 4. ACCEPT — the human touchpoint (RELOCATED to the batched PR under the automated git-flow)
 
-Once green + committed + pushed, the `verify` decision routes to ACCEPT. You CANNOT accept your own work —
-acceptance is recorded ONLY by the human via `opensquid accept <taskId>` (the start-up handoff re-surfaces
-waiting items), unless the project declares the deploy `reversible: true` in `.opensquid/active.json`, in which
-case ACCEPT auto-advances (the acceptance audit item is still created — the auto-advance is visible in the log).
-FAIL-CLOSED: absent or `false` ⇒ irreversible ⇒ the human gate holds. Do NOT set `reversible: true` for deploys
-that cannot be cheaply undone.
+**AGF.4 — the per-item human ACCEPT is REMOVED in the automated git-flow (`wg-732b2b68a168`).** The single human
+gate is RELOCATED off the per-item touchpoint and onto the batched `stage → main` pull request (AGF.6): the ONLY
+human action is clicking MERGE on that PR. After the item's green commit + item-tag + branch push (§3), the loop
+proceeds automatically — the pushed `auto/wg-<id>` branch is auto-merged into the persistent `stage` integration
+branch with the suite re-run on the merge and an `rc` tag (AGF.5), and the batched `stage → main` PR is
+opened/refreshed (AGF.6). Nothing reaches `main` without the human MERGE; on merge, `main` is release-tagged
+(locked-prefix patch, `0.5.N → 0.5.N+1`) and CI publishes (version-difference-guarded). The item's DEPLOY terminus
+is therefore commit + item-tag + branch push — NOT a per-item human touchpoint.
+
+Mechanically the `accept` decision AUTO-ADVANCES for this flow (opensquid declares `reversible: true` in
+`.opensquid/active.json`, so the acceptance audit item is created and the decision advances without a per-item
+human gate — the auto-advance is visible in the log). This is the precedent AGF.4 relocates onto: the human gate
+is the PR, not the per-item accept.
+
+For a NON-automated project (no worktree/stage/PR flow) the classic rule still holds: you CANNOT accept your own
+work — acceptance is recorded ONLY by the human via `opensquid accept <taskId>` — UNLESS the project declares the
+deploy `reversible: true`, in which case ACCEPT auto-advances. FAIL-CLOSED: absent or `false` ⇒ irreversible ⇒ the
+human gate holds. Do NOT set `reversible: true` for deploys that cannot be cheaply undone.
 
 ## Gate map (deploy → verify → [deploy_fix ⇄ verify] → accept → done)
 

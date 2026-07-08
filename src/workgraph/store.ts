@@ -98,6 +98,12 @@ async function createSchema(client: Client): Promise<void> {
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_edges (
     edge_key TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL,
     project TEXT NOT NULL DEFAULT 'legacy-global');`);
+  // HWS.2 — a tiny durable per-store high-water-mark for the harness↔workgraph reconcile (the outbound
+  // cursor over `wg_ops.lamport`). Keyed by a `name` so a future consumer can carry its own watermark; the
+  // reconcile uses name='harness'. Idempotent CREATE, same template as wg_ops.
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS sync_cursor (name TEXT PRIMARY KEY, lamport INTEGER NOT NULL DEFAULT 0);`,
+  );
   // GR.1/GR.3 + project — additive columns for a pre-existing schema (idempotent; already-migrated throws).
   for (const ddl of [
     `ALTER TABLE wg_issues ADD COLUMN claim_token TEXT`,
@@ -441,6 +447,49 @@ export function workGraphStore(opts: {
           actorId: str(r, 'actor_id') || 'legacy',
         }),
       );
+    },
+
+    // HWS.2 — the STORE-GLOBAL sibling of `listEvents`: every op with `lamport > cursorLamport`, in
+    // (lamport, id) order (the id tie-break makes a same-lamport cross-process race deterministic, exactly
+    // as `listEvents`). `wg_ops.lamport` is already store-global monotonic (appendOp's MAX+1), so this is a
+    // WHERE-clause widen of the per-issue read — no new counter. The reconcile filters the types it cares
+    // about; the store stays a general cursor (single responsibility).
+    async listOpsSince(cursorLamport) {
+      const rs = await db().execute({
+        sql: 'SELECT id, issue_id, lamport, type, payload, project, actor_id FROM wg_ops WHERE lamport > ? ORDER BY lamport, id',
+        args: [cursorLamport],
+      });
+      return rs.rows.map(
+        (r): WgOp => ({
+          id: str(r, 'id'),
+          issueId: str(r, 'issue_id'),
+          lamport: num(r.lamport),
+          type: str(r, 'type') as WgOp['type'],
+          payload: JSON.parse(str(r, 'payload') || '{}') as Record<string, unknown>,
+          project: str(r, 'project'),
+          actorId: str(r, 'actor_id') || 'legacy',
+        }),
+      );
+    },
+
+    // HWS.2 — the durable high-water-mark for the harness reconcile. A fresh store returns 0 (see-everything
+    // once on first run).
+    async readHighWater() {
+      const rs = await db().execute({
+        sql: 'SELECT lamport FROM sync_cursor WHERE name = ?',
+        args: ['harness'],
+      });
+      return rs.rows[0] ? num(rs.rows[0].lamport) : 0;
+    },
+
+    // MONOTONIC upsert — a lower value NEVER rewinds the cursor, so two concurrent reconciles (a PreToolUse
+    // tick + a loop-pass) can both advance safely and neither re-emits the other's ops.
+    async advanceHighWater(lamport) {
+      await db().execute({
+        sql: `INSERT INTO sync_cursor (name, lamport) VALUES ('harness', ?)
+              ON CONFLICT(name) DO UPDATE SET lamport = MAX(sync_cursor.lamport, excluded.lamport)`,
+        args: [lamport],
+      });
     },
   };
 }

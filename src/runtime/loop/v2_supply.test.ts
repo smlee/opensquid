@@ -978,6 +978,10 @@ const codeDeps = (
     ),
   readiness: () => Promise.resolve({ ran, deprecatedClean }),
   suite: () => Promise.resolve(suiteGreen), // SGG.2 — injected suite record (null = no record → fail-closed)
+  // AQG.4 — NO arch-detector declared by default ⇒ archClean fails OPEN to true, so the pre-existing callers'
+  // `code_ready` evaluation is unaffected (opensquid itself declares none).
+  archDetectorDeclared: () => Promise.resolve(false),
+  arch: () => Promise.resolve(null),
 });
 
 // The real `code_ready` guard expression (its deterministic `code.*` clauses), evaluated over the nested `code`
@@ -1004,12 +1008,16 @@ describe('buildGuardCtx — T2.7 CODE binding', () => {
     expect(ctx.has('code.readiness_ran')).toBe(true);
     expect(ctx.has('code.deprecated_clean')).toBe(true);
     expect(ctx.has('code.suite_green')).toBe(true); // SGG.2 — flat Map key present
+    expect(ctx.has('code.arch_clean')).toBe(true); // AQG.4 — flat Map key present
+    expect(ctx.get('code.arch_clean')).toBe(true); // undeclared detector ⇒ fail-open true
     const nested = ctx.get('code') as {
       phases_complete: boolean;
       readiness_ran: boolean;
       deprecated_clean: boolean;
       suite_green: boolean;
+      arch_clean: boolean;
     };
+    expect(typeof nested.arch_clean).toBe('boolean'); // AQG.4 — nested prop present
     expect(typeof nested.phases_complete).toBe('boolean');
     expect(typeof nested.readiness_ran).toBe('boolean');
     expect(typeof nested.deprecated_clean).toBe('boolean');

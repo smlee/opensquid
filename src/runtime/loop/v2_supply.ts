@@ -25,11 +25,16 @@ import { taskCheckpointExists, upsertTaskStage } from '../ralph/loop_stage.js';
 import { resolveCheckpointKey } from './checkpoint_key.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
-import { readActiveVerifyCommand, readActiveVerifySuite } from '../../packs/discovery.js';
+import {
+  readActiveArchDetector,
+  readActiveVerifyCommand,
+  readActiveVerifySuite,
+} from '../../packs/discovery.js';
 import {
   bumpBugfixRounds,
   readBugfixRounds,
   readNeedsRedesign,
+  recordArch,
   recordNeedsRedesign,
   recordSuite,
   recordVerification,
@@ -375,6 +380,12 @@ export async function buildGuardCtx(
   // / red → false), mirroring DEPLOY's `deploy.clean` suite read. This kills the false-green slice: a CODE lap
   // that ran only a subset leaves no green suite record → `code.suite_green:false` → `code_ready` blocks.
   m.set('code.suite_green', co.suiteGreen);
+  // AQG.4 (T-arch-quality-gate) — the deterministic ARCHITECTURE facet: `arch_clean` = the project-declared
+  // arch-detector came back green. DELIBERATELY asymmetric to `suite_green`: fails OPEN (true) when NO detector
+  // is declared (a legacy project ships as today), fails CLOSED once one IS declared (unrun / red → false →
+  // `code_ready` blocks). Core runs a declared command and reads an exit code; the qualitative architecture
+  // criteria live in the rubric (AQG.1), never in core. Dual-shape like `suite_green` (flat key + nested prop).
+  m.set('code.arch_clean', co.archClean);
   // E2c/E2a — the external half of the CODE gate, CONDITIONAL on `external_needed` (same diff-derived predicate
   // as AUTHOR). `consulted_before` (E2c: read the task's APIs in the official docs BEFORE coding — the `before`
   // bucket) ∧ `audited` (E2a: the CODE·after AUDIT is a SECOND research run reaching EXTERNAL — the `after`
@@ -388,6 +399,7 @@ export async function buildGuardCtx(
     readiness_ran: co.readinessRan,
     deprecated_clean: co.deprecatedClean,
     suite_green: co.suiteGreen, // SGG.2 — nested prop (the path the guard `code.suite_green` resolves)
+    arch_clean: co.archClean, // AQG.4 — nested prop (the path the guard `code.arch_clean` resolves)
     consulted_before: consult.before,
     audited: consult.after,
     external_needed: externalNeeded,
@@ -572,6 +584,7 @@ export async function runV2Cartridges(
         const scopeRoot = await resolveProjectScopeRoot(cwd);
         const verifyCmd = await readActiveVerifyCommand(scopeRoot);
         const suiteCmd = await readActiveVerifySuite(scopeRoot);
+        const archCmd = await readActiveArchDetector(scopeRoot);
         const taskId = await readActiveTaskId(sessionId);
         const cmd = command.trim();
         const passed = (event as { exit_code?: number }).exit_code === 0;
@@ -585,6 +598,11 @@ export async function runV2Cartridges(
             // suite re-run (not only a verify→author transition) bounds the in-place loop, so an unfixable
             // mechanical failure escalates at the cap instead of looping forever inside `deploy_fix`.
             if (!passed) await bumpBugfixRounds(sessionId, taskId);
+          }
+          // AQG.4 (T-arch-quality-gate) — record the arch-detector exit code ONLY on a verbatim match of the
+          // declared command (a sibling of the suiteCmd branch); `code.arch_clean` reads this record.
+          if (archCmd !== null && cmd === archCmd.trim()) {
+            await recordArch(sessionId, taskId, passed);
           }
         }
       }

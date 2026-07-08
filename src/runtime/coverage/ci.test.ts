@@ -74,6 +74,44 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(47); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring
+    // T-harness-workgraph-sync (wg-b52161a5961f, HWS.1..6) — 4 new behavioral exports of the OUTBOUND half +
+    // reverse observation, each MET via its element proof-test; the data-shape siblings (OutboundDelta/
+    // ReconcileResult/HarnessWriter/WgReconcileFacade) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-HWS-RECONCILE',
+      'R-HWS-CC-WRITER',
+      'R-HWS-STALE-NUDGE',
+      'R-HWS-OPEN-MAP',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-arch-quality-gate (wg-82e5a35c8e97, AQG.4/AQG.5) — 4 new behavioral exports of the architecture gate,
+    // each MET via its element proof-test; the data-shape siblings (DesignDocGuardOptions / isDesignDoc + the
+    // ActiveJson.archDetector / CodeEvidence.archClean field additions) are allowlisted (no orphan drift).
+    for (const id of ['R-ARCH-DETECTOR', 'R-ARCH-RECORD', 'R-ARCH-READ', 'R-ARCH-DESIGN-REWRITE']) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-opensquid-automated-gitflow (wg-732b2b68a168, AGF.1..AGF.7) — 13 new behavioral exports of the fully-
+    // automated git-flow, each MET via its element proof-test; the data-shape / seam siblings (VersioningConfig /
+    // WorktreeIo / PoolConfig / StageIo / GhIo + the real*Io default bindings + STAGE_BRANCH + GhAuthError) are
+    // allowlisted (no orphan drift — the forward ratchet registered AT CODE).
+    for (const id of [
+      'R-AGF-READ-VERSIONING',
+      'R-AGF-PATCH-OF-TAG',
+      'R-AGF-NEXT-LOCKED-TAG',
+      'R-AGF-NEXT-RC-TAG',
+      'R-AGF-LATEST-PREFIX-TAG',
+      'R-AGF-BRANCH-NAME',
+      'R-AGF-AUTO-PULL',
+      'R-AGF-ADD-WORKTREE',
+      'R-AGF-REMOVE-WORKTREE',
+      'R-AGF-DRAIN-POOL',
+      'R-AGF-MERGE-STAGE',
+      'R-AGF-OPEN-PR',
+      'R-AGF-TAG-MAIN-RELEASE',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    expect(a.results.length).toBe(68); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 13 automated-gitflow
   }, 30_000);
 });

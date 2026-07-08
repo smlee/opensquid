@@ -579,4 +579,139 @@ requirements:
     wg: wg-61db3ededf19
     assert: { kind: reachable, symbol: lintPhaseEmits, from: [pack-validation] }
     proof: 'src/packs/phase_emit_lint.test.ts'
+  # T-harness-workgraph-sync (wg-b52161a5961f, HWS.1..6) — the OUTBOUND half + reverse observation + conflict
+  # of the harness task-list ↔ work-graph sync. One reachable requirement per new BEHAVIORAL export; the
+  # proof-test is the authority (the static `from` hint is advisory — these surface through the PreToolUse tick
+  # / the orchestrator loop-pass, not a hook builder). The DATA-shape exports (OutboundDelta / ReconcileResult /
+  # HarnessWriter / WgReconcileFacade) are baselined in the allowlist, per the *Deps / *Schema precedent. The
+  # cursor primitives (listOpsSince / readHighWater / advanceHighWater) + getByWgId are object-literal METHODS,
+  # not top-level exports, so they carry no orphan; their behavior is proven by the store/map unit tests.
+  - id: R-HWS-RECONCILE
+    intent: 'HWS.3 reconcileHarnessWorkgraph: the two-way reconcile — inbound (composed) + outbound status+existence delta-set, per-field authority (status←harness, structure omitted, LWW), echo-guarded + idempotent'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert:
+      { kind: reachable, symbol: reconcileHarnessWorkgraph, from: [pre-tool-use, orchestrator] }
+    proof: 'src/workgraph/harness_sync.test.ts'
+  - id: R-HWS-CC-WRITER
+    intent: 'HWS.4 ccNudgeWriter: the default CC advisory-nudge writer — renders create/status/close, byte-for-byte the shipped stale-closed nudge, writes nothing (agent-executed)'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert: { kind: reachable, symbol: ccNudgeWriter, from: [pre-tool-use, orchestrator] }
+    proof: 'src/runtime/hooks/harness_writer.test.ts'
+  - id: R-HWS-STALE-NUDGE
+    intent: 'HWS.4 buildStaleClosedNudge: the shipped stale-closed reconcile line, preserved verbatim so the generalized writer never regresses the live message'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert: { kind: reachable, symbol: buildStaleClosedNudge, from: [pre-tool-use] }
+    proof: 'src/runtime/hooks/harness_writer.test.ts'
+  - id: R-HWS-OPEN-MAP
+    intent: 'HWS.1 defaultOpenMap: the binding overlay opens PROJECT-LOCAL at <root>/.opensquid/harness_map.db (decision 5), resolved by the shared resolveLocalStoreDir — not OPENSQUID_HOME'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert: { kind: reachable, symbol: defaultOpenMap, from: [pre-tool-use] }
+    proof: 'src/runtime/hooks/harness_graph_sync.test.ts'
+  # T-arch-quality-gate (wg-82e5a35c8e97, AQG.4/AQG.5) — the deterministic ARCHITECTURE facet + the interactive
+  # design-doc REWRITE gate. One reachable requirement per new BEHAVIORAL export; the proof-test is the authority
+  # (the `from` hint is advisory — these surface through the PreToolUse tick / the post-tool-call verbatim record
+  # / the code-evidence deps). The DATA-shape / helper siblings (DesignDocGuardOptions interface, the isDesignDoc
+  # path predicate, and the ActiveJson.archDetector / CodeEvidence.archClean field additions) are baselined in the
+  # allowlist, per the *Deps / *Schema precedent. The archClean facet itself is a field on the already-covered
+  # codeEvidenceForSession — its behavior is proven by the code_evidence archClean matrix (no new export symbol).
+  - id: R-ARCH-DETECTOR
+    intent: 'AQG.4 readActiveArchDetector: the per-project arch-detector command read from active.json (sibling of readActiveVerifySuite); null ⇒ undeclared ⇒ code.arch_clean fails OPEN'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: readActiveArchDetector, from: [post-tool-use] }
+    proof: 'src/packs/discovery.test.ts'
+  - id: R-ARCH-RECORD
+    intent: 'AQG.4 recordArch: the verbatim-match arch-detector exit-code record (sibling of recordSuite) on a DISTINCT state key, written by the post-tool-call reaction in v2_supply'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: recordArch, from: [post-tool-use] }
+    proof: 'src/runtime/loop/verification.test.ts'
+  - id: R-ARCH-READ
+    intent: 'AQG.4 readArch: the recorded arch-detector pass/fail (sibling of readSuite); read by the code_evidence archClean facet in buildGuardCtx — declared+no-record ⇒ fail-CLOSED'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: readArch, from: [pre-tool-use] }
+    proof: 'src/runtime/loop/verification.test.ts'
+  - id: R-ARCH-DESIGN-REWRITE
+    intent: 'AQG.5 checkDesignDocRewrite: the orchestrator-guard teeth — a docs/design/*.md rewrite whose scope-audit verdict is present-and-not-GUESS_FREE is denied; fail-open on no-cache / read-error / agent_id / non-design'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: checkDesignDocRewrite, from: [pre-tool-use] }
+    proof: 'src/runtime/guard/orchestrator_guard.test.ts'
+  # T-opensquid-automated-gitflow (AGF.1..AGF.7, wg-732b2b68a168) — the fully-automated git-flow's new BEHAVIORAL
+  # exports: one reachable requirement per export, its element proof-test the AUTHORITY. The `from` hints are
+  # advisory — these surface through the `opensquid release` CLI (stage → PR flow), the orchestrator's worktree
+  # pool, and the CI release-tag workflow (dist), not a hook builder, so a negative static pre-filter never vetoes
+  # a passing proof. The DATA-shape / seam exports (VersioningConfig / WorktreeIo / PoolConfig / StageIo / GhIo
+  # interfaces + the real{Worktree,Stage,Gh}Io default bindings + STAGE_BRANCH + GhAuthError) are baselined in the
+  # allowlist, per the release-flow ParsedCommit/ReleaseDeps precedent (the forward ratchet, registered AT CODE).
+  - id: R-AGF-READ-VERSIONING
+    intent: 'AGF.1 readActiveVersioning: read the declared locked-prefix versioning config from active.json (sibling of readActiveVerifySuite); absent/malformed → null → core falls back to the pack default'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: readActiveVersioning, from: [release] }
+    proof: 'src/packs/read_active_versioning.test.ts'
+  - id: R-AGF-PATCH-OF-TAG
+    intent: 'AGF.1 patchOfTag: parse the patch int off a v<prefix>.<patch> tag (dots escaped, leading v optional), null off-prefix'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: patchOfTag, from: [release] }
+    proof: 'src/runtime/release/locked_version.test.ts'
+  - id: R-AGF-NEXT-LOCKED-TAG
+    intent: 'AGF.1 nextLockedTag: <prefix>.<patch+1> from the highest prefix tag, <prefix>.0 when none/off-prefix — NEVER intent-from-commit (no feat→minor/BREAKING→major)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: nextLockedTag, from: [release] }
+    proof: 'src/runtime/release/locked_version.test.ts'
+  - id: R-AGF-NEXT-RC-TAG
+    intent: 'AGF.1 nextRcTag: <nextLockedTag>-rc.<n> single-writer on the one stage branch (n = 1 + highest existing rc for the base)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: nextRcTag, from: [release] }
+    proof: 'src/runtime/release/locked_version.test.ts'
+  - id: R-AGF-LATEST-PREFIX-TAG
+    intent: 'AGF.1 latestPrefixTag: the PREFIX-SCOPED git-tag list (v<prefix>.* sorted) — ignores an off-prefix newest tag (v0.7.2), never reuses lastReleaseTag'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: latestPrefixTag, from: [release] }
+    proof: 'src/runtime/release/latest_prefix_tag.test.ts'
+  - id: R-AGF-BRANCH-NAME
+    intent: 'AGF.2 branchNameFor: the auto/wg-<id> branch-name SSOT (never double-prefixed) shared by the worktree cut + push + stage merge'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: branchNameFor, from: [orchestrator] }
+    proof: 'src/runtime/ralph/auto_pull.test.ts'
+  - id: R-AGF-AUTO-PULL
+    intent: 'AGF.2 autoPullMain: fetch + fast-forward-only pull of main (never a stale base); a diverged local main REJECTS (surfaced, no silent merge commit)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: autoPullMain, from: [orchestrator] }
+    proof: 'src/runtime/ralph/auto_pull.test.ts'
+  - id: R-AGF-ADD-WORKTREE
+    intent: 'AGF.3 addItemWorktree: cut auto/wg-<id> from fresh main into its own checkout at <poolRoot>/<id> (git worktree add)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: addItemWorktree, from: [orchestrator] }
+    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+  - id: R-AGF-REMOVE-WORKTREE
+    intent: 'AGF.3 removeItemWorktree: git worktree remove --force teardown of the item checkout (fail-open)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: removeItemWorktree, from: [orchestrator] }
+    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+  - id: R-AGF-DRAIN-POOL
+    intent: 'AGF.3 drainPool: drive ≤bound items concurrently, each in its own worktree, fold outcomes; a driven-item fault is isolated + its worktree torn down (never breaks the drain)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: drainPool, from: [orchestrator] }
+    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+  - id: R-AGF-MERGE-STAGE
+    intent: 'AGF.5 mergeToStage: --no-ff merge auto/wg-<id> → persistent stage, re-run the suite, rc-tag on green; a conflict (abort) or red suite (reset HEAD~1) → no integration, stage stays green'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: mergeToStage, from: [release] }
+    proof: 'src/runtime/release/stage_integration.test.ts'
+  - id: R-AGF-OPEN-PR
+    intent: 'AGF.6 openStagePr: gh pr create --base main --head stage for the batched PR; FAIL-CLOSED on no gh auth (GhAuthError, no PR); NEVER auto-merges (the human MERGE is the sole gate)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: openStagePr, from: [release] }
+    proof: 'src/runtime/release/stage_pr.test.ts'
+  - id: R-AGF-TAG-MAIN-RELEASE
+    intent: 'AGF.6 tagMainRelease: on merge to main, compute the prefix-scoped locked release tag (nextLockedTag) + push v<prefix>.N, triggering the KEPT publish.yml'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: tagMainRelease, from: [release] }
+    proof: 'src/runtime/release/stage_pr.test.ts'
 ```

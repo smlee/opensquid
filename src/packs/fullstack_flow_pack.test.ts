@@ -182,6 +182,7 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
         readiness_ran: true,
         deprecated_clean: true,
         suite_green: true,
+        arch_clean: true, // AQG.4 — undeclared detector fails OPEN; the gate now includes && code.arch_clean
       },
       report: { resolved: true },
       audit: { author: GF, code: GF },

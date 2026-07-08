@@ -5,7 +5,8 @@ content-audit prompt AND injected to the agent. Edit HERE only. Authored fresh f
 CODE rubric — net-new), grounded in the design's CODE·before / CODE·after research types
 (`docs/design/opensquid-v2-coding-flow-design.md` §4.2) + the user's two-point model (2026-06-28).
 
-CODE has two halves; BOTH must hold for `VERDICT: GUESS_FREE`.
+CODE has two halves (BEFORE + AFTER) plus the architecture criteria (§C, mirroring SCOPE on the diff); ALL must
+hold for `VERDICT: GUESS_FREE`.
 
 ## A. BEFORE coding (pre_research / learn) — verify + expand + align
 
@@ -32,7 +33,23 @@ CODE has two halves; BOTH must hold for `VERDICT: GUESS_FREE`.
    "what did I miss / is this the best / does this match the docs." 100% confidence is unreachable from local.
    Exempt only a genuinely external-dependency-free change (diff-derived, not agent-asserted).
 
-## C. Rolling re-audit
+## C. ARCHITECTURE (the diff introduces no architecture defect — mirrors SCOPE §7–10, enforced on the CHANGE)
+
+11. **MODULARITY** — the change stays behind its seam with a stated contract; it does not reach into another
+    module's internals or thread one responsibility across unrelated files. A diff that ripples a volatile
+    detail (I/O, a vendor, a schema) across modules is a modularity defect → fails (keep it behind the seam,
+    or state why one boundary genuinely owns both).
+12. **SCALABILITY** — the change adds no unbounded buffer, no per-item full scan on a growing set, no hot path
+    whose work grows with total history. A new O(N)-per-tick scan of an ever-growing set, or an unbounded
+    queue, is a scalability defect → fails (bound it, or cite why N is fixed).
+13. **SINGLE-SOURCE-OF-TRUTH** — the change adds no second store of a datum an existing store (the DB) already
+    owns; a new flat file / table duplicating DB-owned data is a redundancy defect → fails (use a projection /
+    derived read, not a second store). One writer per datum; every other reader derives.
+14. **PUSH-vs-PULL** — the change adds no poll/pull loop reconstructing state a producing boundary could have
+    PUSHED (an event / hook / write-through). A poll where the producer already knows the moment of change is a
+    push-vs-pull defect → fails (push from the known boundary, or cite why the producer cannot signal).
+
+## D. Rolling re-audit
 
 10. **RE-AUDIT AUTHOR** — the TASK spec this code implements still holds `GUESS_FREE` at CODE time
     (re-evaluated). A task that drifted since its gate fails here, catching it at this boundary.

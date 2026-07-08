@@ -24,8 +24,14 @@ function ctx(audit: Record<string, unknown>): Map<string, unknown> {
     ['author', { manifest_complete: true, real_code: true }],
     [
       'code',
-      { phases_complete: true, readiness_ran: true, deprecated_clean: true, suite_green: true },
-    ], // SGG.2
+      {
+        phases_complete: true,
+        readiness_ran: true,
+        deprecated_clean: true,
+        suite_green: true,
+        arch_clean: true,
+      },
+    ], // SGG.2 + AQG.4 (arch_clean fail-OPEN true — opensquid declares no arch-detector)
     // V2-ENF.2/3 — the report-resolution facet buildGuardCtx always binds (dual-shape). Default RESOLVED so the
     // guess-free gate cases isolate the verdict clause; the block-on-unresolved case overrides it below.
     ['report', { resolved: true }],

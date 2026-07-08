@@ -9,10 +9,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   bumpBugfixRounds,
+  readArch,
   readBugfixRounds,
   readNeedsRedesign,
   readSuite,
   readVerification,
+  recordArch,
   recordNeedsRedesign,
   recordSuite,
   recordVerification,
@@ -70,6 +72,29 @@ describe('suite record (scope-1: the DEPLOY floor)', () => {
     expect(await readSuite(SID, 't2')).toBeNull();
     await recordVerification(SID, 't1', false); // the verifyCommand record must not clobber the suite record
     expect(await readSuite(SID, 't1')).toBe(true);
+  });
+});
+
+// AQG.4 (T-arch-quality-gate) — the arch-detector record mirrors the suite record on a DISTINCT state key.
+describe('arch record (AQG.4: the architecture facet)', () => {
+  it('absent → null (never run; the caller decides fail-open-when-undeclared vs fail-closed)', async () => {
+    expect(await readArch(SID, 't1')).toBeNull();
+  });
+
+  it('record(true) → read true; record(false) → read false (latest-arch-wins)', async () => {
+    await recordArch(SID, 't1', true);
+    expect(await readArch(SID, 't1')).toBe(true);
+    await recordArch(SID, 't1', false); // a re-run after a regression overwrites
+    expect(await readArch(SID, 't1')).toBe(false);
+  });
+
+  it('is per-task + independent of the suite record (distinct keys — no facet conflation)', async () => {
+    await recordArch(SID, 't1', true);
+    expect(await readArch(SID, 't2')).toBeNull();
+    await recordSuite(SID, 't1', false); // the suite record must not clobber the arch record
+    expect(await readArch(SID, 't1')).toBe(true);
+    await recordArch(SID, 't1', true);
+    expect(await readSuite(SID, 't1')).toBe(false); // and the arch record must not clobber the suite record
   });
 });
 

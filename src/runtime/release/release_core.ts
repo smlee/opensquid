@@ -64,6 +64,27 @@ export async function lastReleaseTag(cwd: string): Promise<string | null> {
   return stdout.trim() || null;
 }
 
+/** AGF.1 (T-opensquid-automated-gitflow, wg-01d5a9233026) — the PREFIX-SCOPED tag-list mechanic. NOT
+ *  `lastReleaseTag`: that returns the newest `v*` tag REGARDLESS of prefix (the live repo's newest is `v0.7.2`,
+ *  off the human-held `0.5` prefix). The locked-prefix computer must scope to the DECLARED prefix — it lists
+ *  `v<prefix>.*` sorted descending and returns the highest, never chasing an off-prefix tag. Mechanics only:
+ *  parse/policy lives in locked_version.ts (`patchOfTag`/`nextLockedTag`). null when the prefix has no tag yet. */
+export async function latestPrefixTag(prefix: string, cwd: string): Promise<string | null> {
+  const { stdout } = await execFileP(
+    'git',
+    ['tag', '--list', `v${prefix}.*`, '--sort=-v:refname'],
+    {
+      cwd,
+    },
+  ).catch(() => ({ stdout: '' }));
+  return (
+    stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .find(Boolean) ?? null
+  );
+}
+
 /** Commit subjects in `<ref>..HEAD` (or all of HEAD when ref is null), newest first. */
 export async function commitSubjectsSince(ref: string | null, cwd: string): Promise<string[]> {
   const range = ref === null ? ['HEAD'] : [`${ref}..HEAD`];

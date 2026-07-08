@@ -2152,3 +2152,44 @@ MonitorEventKind
 PhaseLifecycle
 LoopFoldState
 ProcedureLintResult
+
+# --- baseline maintenance (T-harness-workgraph-sync, wg-b52161a5961f, CODE, 2026-07-07): the DATA-shape / seam
+# type exports of the OUTBOUND half + reverse observation (HWS.3/HWS.4/HWS.5). The BEHAVIORAL exports
+# (reconcileHarnessWorkgraph, ccNudgeWriter, buildStaleClosedNudge, defaultOpenMap) carry reachable
+# requirements in ARCHITECTURE.md §10; these are the outbound-delta union + the reconcile-result / writer-seam /
+# wg-reconcile-facade interface shapes — pure data-shape, not a live path, no covering requirement. Same class
+# the release-flow / WGL / loop-monitoring *Deps + *Schema precedent allowlists. ---
+OutboundDelta
+ReconcileResult
+HarnessWriter
+WgReconcileFacade
+
+# --- baseline maintenance (T-arch-quality-gate, wg-82e5a35c8e97, CODE, 2026-07-08): the DATA-shape / helper
+# siblings of the architecture gate (AQG.5). The BEHAVIORAL exports (readActiveArchDetector, recordArch,
+# readArch, checkDesignDocRewrite) carry reachable requirements in ARCHITECTURE.md §10; these two are the
+# injected-reader OPTIONS interface + the pure docs/design/*.md path predicate — pure data-shape / trivial
+# helper, not a live path, no covering requirement. Same class the release-flow / WGL / harness-sync *Deps
+# precedent allowlists. ---
+DesignDocGuardOptions
+isDesignDoc
+
+# --- baseline maintenance (T-opensquid-automated-gitflow, wg-732b2b68a168, CODE, 2026-07-08): the DATA-shape /
+# seam / trivial siblings of the fully-automated git-flow (AGF.1/AGF.3/AGF.5/AGF.6). The BEHAVIORAL exports
+# (readActiveVersioning, patchOfTag, nextLockedTag, nextRcTag, latestPrefixTag, branchNameFor, autoPullMain,
+# addItemWorktree, removeItemWorktree, drainPool, mergeToStage, openStagePr, tagMainRelease) carry reachable
+# requirements in ARCHITECTURE.md §10; these are the injected IO-seam interfaces (WorktreeIo/StageIo/GhIo), the
+# config-shape interfaces (VersioningConfig/PoolConfig), the `real*Io` default-binding consts (thin git/gh
+# wrappers, no branching — the concrete side of the injected seam, exercised via the release/orchestrator live
+# path with stubbed IO under test), the trivial STAGE_BRANCH constant, and the GhAuthError marker class — pure
+# data-shape / seam / trivial, no covering requirement. Same class the release-flow ParsedCommit/ReleaseDeps +
+# harness-sync *Deps precedent allowlists. ---
+VersioningConfig
+WorktreeIo
+PoolConfig
+StageIo
+GhIo
+realWorktreeIo
+realStageIo
+realGhIo
+STAGE_BRANCH
+GhAuthError

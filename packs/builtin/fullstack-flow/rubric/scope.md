@@ -6,7 +6,9 @@ Authored fresh for v2 (not a v1 restore); criteria reference the proven v1 stand
 (`coding-flow/rubric/scope.md`) and add the source-ladder external requirement
 (`docs/design/opensquid-v2-coding-flow-design.md` §4.1).
 
-A pre-research / scope artifact passes (`VERDICT: GUESS_FREE`) ONLY if ALL SIX hold:
+A pre-research / scope artifact passes (`VERDICT: GUESS_FREE`) ONLY if ALL TEN hold (the original six guess-free
+criteria PLUS the four architecture criteria 7–10 — an architecturally-wrong design that is locally simple STILL
+fails):
 
 1. **NEVER-GUESS** — every claim is DERIVED from cited evidence (`file:line`, a memory, or the user's own
    words) OR flagged as an unchecked `- [ ] OPEN QUESTION: …` for the user. No claim presented as fact without
@@ -49,6 +51,20 @@ A pre-research / scope artifact passes (`VERDICT: GUESS_FREE`) ONLY if ALL SIX h
    docs/repo (not blogs), recorded as a `WebSearch`/`WebFetch`/intranet consultation. "Best-solution" (§2) and
    "no existing solution" claims are NOT guess-free without it — 100% confidence/coverage is unreachable from
    local alone. Exempt only a genuinely external-dependency-free scope (diff-derived, not agent-asserted).
+7. **MODULARITY** — each concern lives behind ONE seam with a stated contract; a change to a volatile detail
+   (I/O, a vendor, a schema) must not ripple across unrelated modules. A design that threads one responsibility
+   through many files, or reaches around a seam into another module's internals, is a modularity defect → fails
+   (name the seam and its contract, or state why one boundary genuinely owns both).
+8. **SCALABILITY** — the design's cost stays bounded as its inputs grow; no unbounded buffer, no per-item full
+   scan where an index/cursor fits, no hot path whose work grows with total history. An O(N)-per-tick scan of an
+   ever-growing set, or an unbounded queue, is a scalability defect → fails (bound it, or cite why N is fixed).
+9. **SINGLE-SOURCE-OF-TRUTH** — no datum is stored in two places that can diverge; a NEW store duplicating data
+   an existing store (the DB) already owns is a redundancy defect → fails (use a projection / derived read, not
+   a second store). One writer per datum; every other reader derives.
+10. **PUSH-vs-PULL** — when a producer already knows the moment a value changes, the consumer is PUSHED to (an
+    event / hook / write-through), not left to POLL for it; a poll/pull loop reconstructing state a producer
+    could have handed over is a push-vs-pull defect → fails (push from the known boundary, or cite why the
+    producer cannot signal).
 
 The verdict is deterministic per criterion: an element traces-or-doesn't, a claim is cited-or-not, the external
 rung was reached-or-not. Quality of a chosen source (primary vs secondary) is advisory, not a hard fail.

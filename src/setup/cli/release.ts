@@ -11,35 +11,42 @@ import { promisify } from 'node:util';
 
 import type { Command } from 'commander';
 
+import { latestPrefixTag } from '../../runtime/release/release_core.js';
+import { nextRcTag } from '../../runtime/release/locked_version.js';
 import {
-  mergeToMain,
-  tagAndPushTag,
-  readPackageVersion,
-  writePackageVersion,
-  lastReleaseTag,
-  commitSubjectsSince,
-} from '../../runtime/release/release_core.js';
-import {
-  parseConventionalCommit,
-  bumpLevel,
-  nextVersion,
-} from '../../runtime/release/release_semver.js';
+  mergeToStage,
+  STAGE_BRANCH,
+  realStageIo,
+  type StageIo,
+} from '../../runtime/release/stage_integration.js';
+import { openStagePr, realGhIo, type GhIo } from '../../runtime/release/stage_pr.js';
+import { readActiveVersioning, type VersioningConfig } from '../../packs/discovery.js';
+import { join } from 'node:path';
 
 const execFileP = promisify(execFile);
 
-/** Injectable seams — production defaults do live git; tests inject stubs so the full sequence runs with no I/O.
- *  DATA-shape (allowlisted for coverage): the wiring lives in `runRelease`, the mechanics in REL.1/REL.2. */
+/**
+ * AGF.6 (T-opensquid-automated-gitflow, wg-b9c7c21cb124) — `runRelease` is SUPERSEDED: it no longer fast-forwards
+ * a feature branch STRAIGHT to `main` (the old direct-merge helper) nor GUESSES the bump from commit types (the
+ * naive intent-from-commit semver, `release_semver.ts:39-54`). It now routes through the automated git-flow's SINGLE
+ * path to main: green precondition → auto-merge the item branch into the persistent `stage` integration branch
+ * (suite-gated, `rc`-tagged, AGF.5) → open the batched `stage → main` PR (AGF.6). The ONLY human action is
+ * clicking MERGE on that PR; on merge, the release-tag workflow computes the locked-prefix tag (`0.5.N → 0.5.N+1`)
+ * and CI publishes. There is ONE path to `main` (the PR gate), no direct merge, no intent-from-commit semver.
+ *
+ * Injectable seams — production defaults do live git/gh; tests inject stubs so the full sequence runs with no I/O.
+ */
 export interface ReleaseDeps {
   currentBranch?: (cwd: string) => Promise<string>;
   suiteGreen?: (cwd: string) => Promise<boolean>; // runs the full pre-push suite (scripts/pre-push.sh)
   upToDateWithMain?: (cwd: string) => Promise<boolean>;
-  merge?: (branch: string, cwd: string) => Promise<{ sha: string; ff: boolean }>;
-  tagPush?: (version: string, cwd: string) => Promise<void>;
-  lastTag?: (cwd: string) => Promise<string | null>;
-  subjectsSince?: (ref: string | null, cwd: string) => Promise<string[]>;
-  readVersion?: (cwd: string) => Promise<string>;
-  writeVersion?: (cwd: string, version: string) => Promise<void>;
-  commitBump?: (version: string, cwd: string) => Promise<void>; // stages package.json + a chore(release) commit
+  versioning?: (cwd: string) => Promise<VersioningConfig | null>; // the declared locked-prefix config
+  prefixTag?: (prefix: string, cwd: string) => Promise<string | null>; // AGF.1's prefix-scoped tag read
+  rcTagsFor?: (base: string, cwd: string) => Promise<string[]>; // existing `v<base>-rc.*` tags (rc counter)
+  stageIntegrate?: (branch: string, rcTag: string, cwd: string) => Promise<{ integrated: boolean }>; // AGF.5 mergeToStage
+  openPr?: (title: string, body: string, cwd: string) => Promise<{ url: string }>; // AGF.6 openStagePr
+  stageIo?: StageIo;
+  ghIo?: GhIo;
 }
 
 /** The active branch, from `git rev-parse --abbrev-ref HEAD`. */
@@ -62,11 +69,20 @@ async function isUpToDateWithMain(cwd: string): Promise<boolean> {
     .catch(() => false);
 }
 
-/** Commit the version bump on `main` BEFORE tagging, so the tag points at a commit carrying the bumped version
- *  (else the CI guard reads a stale version). The `chore(release): v<next>` subject satisfies REL.3's gate. */
-async function commitVersionBump(version: string, cwd: string): Promise<void> {
-  await execFileP('git', ['add', 'package.json'], { cwd });
-  await execFileP('git', ['commit', '-m', `chore(release): v${version}`], { cwd });
+/** The declared locked-prefix versioning config from the project's `.opensquid/active.json`, or null when absent. */
+async function readVersioning(cwd: string): Promise<VersioningConfig | null> {
+  return readActiveVersioning(join(cwd, '.opensquid'));
+}
+
+/** The existing `v<base>-rc.*` tags (for the rc counter — single-writer on the one `stage` branch). */
+async function rcTagsForBase(base: string, cwd: string): Promise<string[]> {
+  const { stdout } = await execFileP('git', ['tag', '--list', `v${base}-rc.*`], { cwd }).catch(
+    () => ({ stdout: '' }),
+  );
+  return stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
 }
 
 function fail(msg: string): number {
@@ -74,38 +90,56 @@ function fail(msg: string): number {
   return 1;
 }
 
-/** The full release sequence. Returns the process exit code (0 success / no-op, non-zero refusal). */
+/** AGF.6 — the SUPERSEDED release sequence: green precondition → merge the item branch into the persistent `stage`
+ *  integration branch (suite-gated + `rc`-tagged, AGF.5) → open the batched `stage → main` PR (AGF.6). There is
+ *  ONE path to `main` (the human MERGE on the PR); NO direct merge to `main`, NO intent-from-commit semver. Returns
+ *  the process exit code (0 success, non-zero refusal). */
 export async function runRelease(cwd: string, deps: ReleaseDeps = {}): Promise<number> {
   const branch = await (deps.currentBranch ?? gitCurrentBranch)(cwd);
   // 1. PRECONDITION — refuse a red or behind branch BEFORE any mutating git op (the safety floor).
   if (!(await (deps.suiteGreen ?? runFullSuite)(cwd))) return fail('the branch suite is not green');
   if (!(await (deps.upToDateWithMain ?? isUpToDateWithMain)(cwd)))
     return fail('the branch is behind main');
-  // 2. MERGE feat/* → main (FF else merge commit).
-  const { sha, ff } = await (deps.merge ?? mergeToMain)(branch, cwd);
-  // 3. BUMP — from the conventional commits since the last tag.
-  const tag = await (deps.lastTag ?? lastReleaseTag)(cwd);
-  const subjects = await (deps.subjectsSince ?? commitSubjectsSince)(tag, cwd);
-  const parsed = subjects
-    .map(parseConventionalCommit)
-    .filter((c): c is NonNullable<typeof c> => c !== null);
-  const level = bumpLevel(parsed);
-  if (level === null) {
-    // Nothing releasable → skip bump AND tag (the ask's explicit no-op).
-    process.stdout.write(
-      `Merged ${branch} → main (${ff ? 'ff' : 'merge commit'} ${sha.slice(0, 8)}). ` +
-        `No releasable commits since ${tag ?? 'the initial commit'} — no bump, no tag.\n`,
+  // 2. VERSIONING — the locked-prefix config is REQUIRED (the automated flow versions by declared strategy, never
+  //    by guessing intent from commit types). Absent ⇒ refuse (no naive-semver fallback — that path is superseded).
+  const cfg = await (deps.versioning ?? readVersioning)(cwd);
+  if (cfg === null)
+    return fail(
+      'no `versioning` config declared in .opensquid/active.json (locked-prefix strategy required)',
     );
-    return 0;
+  // 3. rc TAG — the next single-writer rc tag for the `stage` integration (locked-prefix + rc counter).
+  const prefixTag = await (deps.prefixTag ?? latestPrefixTag)(cfg.prefix, cwd);
+  const base = (await import('../../runtime/release/locked_version.js')).nextLockedTag(
+    cfg,
+    prefixTag,
+  );
+  const existingRc = await (deps.rcTagsFor ?? rcTagsForBase)(base, cwd);
+  const rcTag = `v${nextRcTag(cfg, prefixTag, existingRc)}`;
+  // 4. INTEGRATE — merge the item branch → persistent `stage`, re-run the suite, rc-tag on green (AGF.5).
+  const integrate =
+    deps.stageIntegrate ??
+    ((b: string, tag: string, c: string) => mergeToStage(b, tag, c, deps.stageIo ?? realStageIo));
+  const { integrated } = await integrate(branch, rcTag, cwd);
+  if (!integrated) {
+    return fail(
+      `merge of ${branch} into ${STAGE_BRANCH} did not integrate (conflict or red suite on the merge) — ` +
+        `the branch re-drives from fresh main`,
+    );
   }
-  const current = await (deps.readVersion ?? readPackageVersion)(cwd);
-  const next = nextVersion(current, level);
-  await (deps.writeVersion ?? writePackageVersion)(cwd, next);
-  await (deps.commitBump ?? commitVersionBump)(next, cwd); // bump-commit BEFORE the tag (tag carries the version)
-  // 4. TAG v<next> on the bumped commit + push the tag. CI (REL.6) publishes if the version is new.
-  await (deps.tagPush ?? tagAndPushTag)(next, cwd);
+  // 5. PR — open/refresh the batched stage → main PR. The human MERGE is the SOLE gate (never auto-merged here).
+  const open =
+    deps.openPr ??
+    ((title: string, body: string, c: string) =>
+      openStagePr(title, body, c, deps.ghIo ?? realGhIo));
+  const { url } = await open(
+    `Release: ${STAGE_BRANCH} → main`,
+    `Batched integration of ${branch} and prior stage items. ` +
+      `Merging opens the release tag (${base}) + publish.`,
+    cwd,
+  );
   process.stdout.write(
-    `Released v${next} (${level} from ${current}); tag pushed. CI will publish if new.\n`,
+    `Integrated ${branch} → ${STAGE_BRANCH} (${rcTag}); opened stage → main PR: ${url}. ` +
+      `Click MERGE to release ${base}.\n`,
   );
   return 0;
 }
@@ -114,7 +148,7 @@ export function registerRelease(program: Command): Command {
   return program
     .command('release')
     .description(
-      'Release: merge the green branch to main, auto-bump+tag the semver from conventional commits, push the tag (CI publishes)',
+      'Release: merge the green branch into the persistent stage branch (suite-gated + rc-tagged), then open the batched stage → main PR (the human MERGE is the sole gate; CI tags + publishes on merge)',
     )
     .action(async () => {
       process.exit(await runRelease(process.cwd()));

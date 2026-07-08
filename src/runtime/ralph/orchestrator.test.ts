@@ -94,6 +94,9 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphFacad
     },
     listEvents: () => P([]),
     listEdges: () => P([]),
+    listOpsSince: () => P([]),
+    readHighWater: () => P(0),
+    advanceHighWater: () => P(undefined),
   };
   return store;
 }
@@ -597,6 +600,9 @@ describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
       getIssue: (id: string) => P(issues.find((x) => x.id === id) ?? null),
       addEdge: () => P(undefined),
       listEvents: () => P([]),
+      listOpsSince: () => P([]),
+      readHighWater: () => P(0),
+      advanceHighWater: () => P(undefined),
     };
     const narrate = vi.fn();
     const esc = vi.fn(() => P({ escalated: true }));
@@ -631,6 +637,9 @@ describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
       getIssue: (id: string) => P(id === held.id ? held : null),
       addEdge: () => P(undefined),
       listEvents: () => P([]),
+      listOpsSince: () => P([]),
+      readHighWater: () => P(0),
+      advanceHighWater: () => P(undefined),
     };
     const esc = vi.fn(() => P({ escalated: true }));
     const r = await runRalphLoop(cfg(), {
@@ -640,5 +649,79 @@ describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
     expect(r.stopped).toBe('BOARD_EMPTY');
     expect(archived).toEqual([]); // the held task is NOT junk — never reaped
     expect(esc).toHaveBeenCalledTimes(1);
+  });
+
+  // #26 HWS.5(b) — the loop-pass reconcile fires once per drained pass (beside the reaper), fail-open.
+  it('runs loopPassReconcile on a drained pass and narrates its nudge', async () => {
+    const narrate = vi.fn();
+    const reconcile = vi.fn(() => P<string | null>('🦑 out-of-session nudge'));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore([]), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      narrate,
+      loopPassReconcile: reconcile,
+    });
+    expect(r.stopped).toBe('BOARD_EMPTY');
+    expect(reconcile).toHaveBeenCalled();
+    expect(narrate).toHaveBeenCalledWith('🦑 out-of-session nudge');
+  });
+
+  it('a throwing loopPassReconcile never breaks the drain (fail-open, mirrors the reaper)', async () => {
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore([]), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      narrate: vi.fn(),
+      loopPassReconcile: () => Promise.reject(new Error('reconcile down')),
+    });
+    expect(r.stopped).toBe('BOARD_EMPTY'); // the pass still completes
+  });
+});
+
+describe('runRalphLoop — AGF.3 worktree pool attachment (wg-4ae1004c931b)', () => {
+  it('drives the claimed item in its own worktree (add before drive, remove after) + still closes SHIPPED', async () => {
+    const added: string[] = [];
+    const removed: string[] = [];
+    const io = {
+      worktreeAdd: (_b: string, path: string) => {
+        added.push(path);
+        return P(undefined);
+      },
+      worktreeRemove: (path: string) => {
+        removed.push(path);
+        return P(undefined);
+      },
+    };
+    const wg = mockStore(['a']);
+    const r = await runRalphLoop(cfg(), {
+      ...deps(wg, lap({ kind: 'SHIPPED', costUsd: 0 })),
+      pool: { bound: 2, poolRoot: '/pool', mainRoot: '/main', io },
+    });
+    expect(added).toEqual(['/pool/a']); // worktree cut for the item
+    expect(removed).toEqual(['/pool/a']); // torn down after the drive
+    expect(r.closed).toContain('a'); // fold semantics preserved — SHIPPED still closes
+  });
+
+  it('tears down the worktree even when the drive throws (fail-open finally)', async () => {
+    const removed: string[] = [];
+    const io = {
+      worktreeAdd: () => P(undefined),
+      worktreeRemove: (path: string) => {
+        removed.push(path);
+        return P(undefined);
+      },
+    };
+    const wg = mockStore(['a']);
+    await runRalphLoop(cfg(), {
+      ...deps(
+        wg,
+        vi.fn(() => Promise.reject(new Error('lap boom'))),
+      ),
+      supervise: {
+        maxRetries: 0,
+        backoffMs: () => 0,
+        heartbeat: () => undefined,
+        sleep: () => P(undefined),
+      },
+      pool: { bound: 1, poolRoot: '/pool', mainRoot: '/main', io },
+    } as never);
+    expect(removed).toEqual(['/pool/a']); // torn down despite the throw
   });
 });

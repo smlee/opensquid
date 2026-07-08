@@ -26,6 +26,10 @@ import type { LapEscalator } from '../../runtime/ralph/escalate_lap.js';
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
 import { workGraphStore } from '../../workgraph/store.js';
+import { harnessMapStore } from '../../workgraph/harness_map.js';
+import { reconcileHarnessWorkgraph } from '../../workgraph/harness_sync.js';
+import { ccNudgeWriter } from '../../runtime/hooks/harness_writer.js';
+import { resolveWgProject } from '../../runtime/loop/plan_evidence.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
@@ -333,6 +337,22 @@ export function registerRalph(program: Command): Command {
           // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
           // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.
           recordMetric: recordStageMetric,
+          // #26 HWS.5(b) — the loop-pass harness↔workgraph reconcile: once per drained pass, observe
+          // out-of-session wg changes off the shared op-log cursor (empty task list ⇒ wg→harness only) and
+          // return the outbound nudge. Reuses the loop's project-local `wg` + a project-local harness map
+          // (same `storeDir` the pidfile uses), so the tick and the loop-pass share ONE monotonic cursor.
+          loopPassReconcile: async (): Promise<string | null> => {
+            const project = await resolveWgProject(sid);
+            const map = harnessMapStore(`file:${join(storeDir, 'harness_map.db')}`);
+            await map.init();
+            const cursor = await wg.readHighWater();
+            const wgOps = await wg.listOpsSince(cursor);
+            if (wgOps.length === 0) return null; // nothing new since the last reconcile
+            const { outbound } = await reconcileHarnessWorkgraph(project, [], wgOps, wg, map);
+            const nudge = await ccNudgeWriter.apply(outbound);
+            await wg.advanceHighWater(Math.max(...wgOps.map((o) => o.lamport)));
+            return nudge;
+          },
         });
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       } finally {

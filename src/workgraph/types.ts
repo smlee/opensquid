@@ -110,4 +110,15 @@ export interface WorkGraphFacade {
   listEvents(issueId: string): Promise<WgOp[]>;
   /** T2.5 — the project's folded edge projection as `{from,to,type}` triples (deterministic). */
   listEdges(): Promise<{ from: string; to: string; type: EdgeType }[]>;
+  /**
+   * HWS.2 — the STORE-GLOBAL op-log cursor: every `wg_ops` row with `lamport > cursorLamport`, in
+   * (lamport, id) order. The out-of-session eyes of the harness↔workgraph reconcile — a wg mutation from the
+   * ralph loop / another session / an MCP call is observable here with no local Task tick. The counterpart of
+   * the per-issue {@link listEvents} (same projection, `WHERE lamport > ?` instead of `WHERE issue_id = ?`).
+   */
+  listOpsSince(cursorLamport: number): Promise<WgOp[]>;
+  /** HWS.2 — the reconcile's durable high-water-mark (0 for a fresh store — see-everything-once). */
+  readHighWater(): Promise<number>;
+  /** HWS.2 — advance the reconcile watermark MONOTONICALLY (a lower value never rewinds it). */
+  advanceHighWater(lamport: number): Promise<void>;
 }

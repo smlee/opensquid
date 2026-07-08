@@ -38,10 +38,14 @@ export interface PlanWgReader {
 
 /**
  * Resolve the session's project UUID namespace (session→cwd→marker, then env), degrading a null at any step to
- * `'legacy-global'` (the read-must-not-break default). Post-cutover (T-project-local-state PLS.2) this keys ONLY
- * the OUT, still-global, still-uuid-partitioned `harness_map.db` (§4 OUT — the cross-harness task↔issue binding
- * index); it NO LONGER selects the workgraph store, which went project-local (see {@link openWg}, resolved by
- * `resolveLocalStoreDir` with no uuid). Do not re-conflate the two: the OUT map stays uuid-keyed by design.
+ * `'legacy-global'` (the read-must-not-break default). It is the `project` value STAMPED on work-graph ops and
+ * harness-map rows (the in-file namespace column), NOT a store selector: since T-project-local-state PLS.2 the
+ * workgraph store is project-local (see {@link openWg}, resolved by `resolveLocalStoreDir` with no uuid), and
+ * since #26 HWS.1 (CLOSED decision 5) the `harness_map.db` binding overlay ALSO went PROJECT-LOCAL — it lives at
+ * `<root>/.opensquid/harness_map.db` beside the work-graph, resolved by the SAME `resolveLocalStoreDir` opener
+ * (see `defaultOpenMap` in `harness_graph_sync.ts`). This REVERSES the earlier PLS.2 §4-OUT classification that
+ * kept the map global + uuid-partitioned; a project-local db holds one project, so the retained `project`
+ * column is a harmless constant, not a partition key. No store is keyed by this uuid any longer.
  */
 export async function resolveWgProject(sessionId: string): Promise<string> {
   const cwd = await readSessionCwd(sessionId);

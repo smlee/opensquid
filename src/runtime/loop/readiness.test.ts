@@ -116,6 +116,7 @@ describe('codeEvidenceForSession (T2.7 bridge)', () => {
       readinessRan: true,
       deprecatedClean: true,
       suiteGreen: true,
+      archClean: true, // AQG.4 — no arch-detector declared for this session ⇒ fails OPEN to true
     });
   });
 
@@ -171,6 +172,7 @@ describe('codeEvidenceForSession (T2.7 bridge)', () => {
       readinessRan: false,
       deprecatedClean: false,
       suiteGreen: false,
+      archClean: true, // AQG.4 — the fail-closed `closed` object keeps arch fail-OPEN (undeclared ⇒ true)
     });
   });
 });

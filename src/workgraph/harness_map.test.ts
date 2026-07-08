@@ -58,4 +58,27 @@ describe('harnessMapStore', () => {
     await s2.init();
     expect(await s2.get('p1', 'h1')).toBe('wg-1');
   });
+
+  // HWS.1 — the reverse index.
+  it('getByWgId is the REVERSE of get — the bound harness id, single-valued', async () => {
+    const s = await mk();
+    await s.bind('p1', 'h1', 'wg-1');
+    expect(await s.getByWgId('p1', 'wg-1')).toBe('h1');
+  });
+
+  it('getByWgId returns null for an unbound wg id, and is per-project scoped', async () => {
+    const s = await mk();
+    await s.bind('p1', 'h1', 'wg-1');
+    expect(await s.getByWgId('p1', 'wg-none')).toBeNull();
+    expect(await s.getByWgId('p2', 'wg-1')).toBeNull(); // wrong project → not found
+  });
+
+  it('get / getByWgId are inverses over the same bound row; a re-bind (monotonic no-op) leaves both stable', async () => {
+    const s = await mk();
+    await s.bind('p1', 'h1', 'wg-1');
+    await s.bind('p1', 'h1', 'wg-2'); // no-op (monotonic)
+    expect(await s.get('p1', 'h1')).toBe('wg-1');
+    expect(await s.getByWgId('p1', 'wg-1')).toBe('h1');
+    expect(await s.getByWgId('p1', 'wg-2')).toBeNull(); // the no-op bind never created a wg-2 row
+  });
 });

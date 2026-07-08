@@ -36,16 +36,16 @@ rules:
       # The EFFECTIVE post-write content (Write→content, Edit→file with old→new applied) so the audit sees the
       # REAL resulting artifact, not the Edit-empty targs.content (T-FLOW-AUDIT-ARTIFACT).
       - call: effective_content
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        if: '(tool == "Write" || tool == "Edit") && ((contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")) || (contains(targs.file_path, "docs/design/") && contains(targs.file_path, ".md")))'
         as: effective
       # read_rubric resolves the ACTIVE pack (ctx.packId = fullstack-flow, GFR.1) → fullstack-flow/rubric/scope.md.
       - call: read_rubric
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")'
+        if: '(tool == "Write" || tool == "Edit") && ((contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")) || (contains(targs.file_path, "docs/design/") && contains(targs.file_path, ".md")))'
         args: { name: scope }
         as: rubric
       # FAIL-LOUD: only spawn when the rubric loaded (rubric != null). A null rubric ⇒ no cache ⇒ the gate blocks.
       - call: cached_audit
-        if: '(tool == "Write" || tool == "Edit") && contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-") && rubric != null'
+        if: '(tool == "Write" || tool == "Edit") && ((contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")) || (contains(targs.file_path, "docs/design/") && contains(targs.file_path, ".md"))) && rubric != null'
         on_error: continue
         args:
           cache_key: fullstack-flow-scope-audit-cache
@@ -55,11 +55,14 @@ rules:
             You are an adversarial reviewer enforcing the GUESS-FREE SCOPE standard on a pre-research / scope
             artifact. Apply EXACTLY this rubric (the single canonical source,
             packs/builtin/fullstack-flow/rubric/scope.md):\n\n{{rubric}}\n\n
-            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every claim is
-            cited-or-flagged-open AND the simplest-correct solution is justified against alternatives AND it is a
-            full fix (not a patch around a design that should be re-architected) AND coverage + on-topic hold;
-            otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved guess, un-weighed alternative,
-            un-rearchitected patch, coverage gap, or off-topic element. ARTIFACT:\n\n{{effective}}
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if EVERY numbered criterion
+            in the rubric above holds: every claim is cited-or-flagged-open AND the simplest-correct solution is
+            justified against alternatives AND it is a full fix (not a patch around a design that should be
+            re-architected) AND coverage + on-topic hold AND the four ARCHITECTURE criteria hold (MODULARITY,
+            SCALABILITY, SINGLE-SOURCE-OF-TRUTH, PUSH-vs-PULL — an architecturally-wrong design that is locally
+            simple STILL fails); otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved guess, un-weighed
+            alternative, un-rearchitected patch, coverage gap, off-topic element, OR architecture defect.
+            ARTIFACT:\n\n{{effective}}
         as: audit
   # ── AUTHOR: the guess-free audit of the task spec (SIMPLICITY · real-code · coverage —
   #    fullstack-flow/rubric/author.md). Mirrors scope-lifecycle:206-258.
@@ -87,10 +90,13 @@ rules:
             You are an adversarial reviewer enforcing the GUESS-FREE AUTHOR (tasking) standard on a task spec.
             Apply EXACTLY this rubric (the single canonical source,
             packs/builtin/fullstack-flow/rubric/author.md):\n\n{{rubric}}\n\n
-            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every task block carries
-            its required fields with REAL code (no pseudocode), the spec covers the scope with no gap, and the
-            design is the simplest correct one (no over-complection); otherwise `VERDICT: UNRESOLVED` + one
-            bullet per offending block, uncovered element, or over-complected smell. SPEC:\n\n{{effective}}
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if EVERY numbered criterion
+            in the rubric above holds: every task block carries its required fields with REAL code (no
+            pseudocode), the spec covers the scope with no gap, the design is the simplest correct one (no
+            over-complection), AND the spec introduces no SINGLE-SOURCE-OF-TRUTH or MODULARITY defect (no second
+            store of DB-owned data, every concern behind its seam); otherwise `VERDICT: UNRESOLVED` + one bullet
+            per offending block, uncovered element, over-complected smell, OR architecture defect.
+            SPEC:\n\n{{effective}}
         as: audit
   # ── PLAN: the guess-free audit of the work-graph decomposition (no-guess deps · on-topic · re-audit-scope —
   #    fullstack-flow/rubric/plan.md). Artifact is the WORK-GRAPH (serialize_plan), NOT a doc write; the trigger
@@ -152,10 +158,12 @@ rules:
           prompt: >-
             You are an adversarial reviewer enforcing the GUESS-FREE CODE standard on a diff. Apply EXACTLY this
             rubric (the single canonical source, packs/builtin/fullstack-flow/rubric/code.md):\n\n{{rubric}}\n\n
-            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if the diff aligns to the
-            scoped element, uses APIs per their docs (no deprecated/misused), reinvents nothing, is a full fix
-            (not a band-aid, not an MVP/reduced subset), and the AUTHOR spec still holds; otherwise
-            `VERDICT: UNRESOLVED` + one bullet per offending hunk. DIFF:\n\n{{diff}}
+            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if EVERY numbered criterion
+            in the rubric above holds: the diff aligns to the scoped element, uses APIs per their docs (no
+            deprecated/misused), reinvents nothing, is a full fix (not a band-aid, not an MVP/reduced subset),
+            the AUTHOR spec still holds, AND the diff introduces no MODULARITY / SCALABILITY /
+            SINGLE-SOURCE-OF-TRUTH / PUSH-vs-PULL defect; otherwise `VERDICT: UNRESOLVED` + one bullet per
+            offending hunk. DIFF:\n\n{{diff}}
         as: audit
 prose: |
   The guess-free content-audit RUNNER for v2 fullstack-flow: on the advancing artifact write it reads the

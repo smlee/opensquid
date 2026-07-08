@@ -24,6 +24,7 @@ import { rollUpParents } from '../loop/parent_rollup.js'; // WGL.5 — parent au
 import { emitMonitorEvent } from '../loop/monitor_emit.js'; // LMP.2 — push item_shipped/closed/wedged to the feed
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
+import { addItemWorktree, removeItemWorktree, type WorktreeIo } from './worktree_pool.js'; // AGF.3 — worktree-per-item
 
 export interface RalphConfig {
   /** Auth mode from CONFIG (Inv 11; no runtime auto-detect). API → dollar budget; subscription → W. */
@@ -76,6 +77,15 @@ export interface RalphDeps {
    */
   onShipped?: (taskId: string) => Promise<void>;
   /**
+   * #26 HWS.5(b) — the loop-pass harness↔workgraph reconcile: once per drained pass (beside the orphan
+   * reaper), observe OUT-OF-SESSION wg changes off the op-log cursor (no Task tick) and emit the outbound
+   * nudge. INJECTED (the CLI wires the real openers + `ccNudgeWriter`; tests stub or omit it) so the
+   * orchestrator stays db-free/testable. Returns the advisory nudge string (or `null`). Fail-open BY CONTRACT
+   * — the orchestrator wraps the call in try/catch (mirroring the reaper), so a reconcile fault never breaks
+   * the drive pass. Absent → no loop-pass reconcile (tests / the v1 non-project path).
+   */
+  loopPassReconcile?: () => Promise<string | null>;
+  /**
    * LSF.5 (subprocess-harness-push.md §3a) — the per-STAGE metrics writer, INJECTED so the loop stays unit-
    * testable without a real libsql. Called once per completed/exited stage of a `stageLoop` drive with the
    * folded cost/tokens/timing row. Fail-open by contract (the orchestrator swallows a write error) — a metrics
@@ -108,6 +118,19 @@ export interface RalphDeps {
      * (never re-picked → no spin) and awaits interactive human scope, which re-admits it via the FSM write-through.
      */
     scopeGate: (item: Issue) => Promise<'drive' | 'hold'>;
+  };
+  /**
+   * AGF.3 (T-opensquid-automated-gitflow, wg-4ae1004c931b) — the bounded concurrency pool + worktree-per-item.
+   * When PRESENT, the claim-and-drive runs each item in its OWN git worktree (cut from fresh `main`, `auto/wg-<id>`)
+   * so concurrent laps never clobber each other's edits, up to `bound` in flight (`drainPool`). Every git effect is
+   * behind the injected `WorktreeIo` (tests pass a stub — no real git). ABSENT (default) ⇒ the serial in-place
+   * drive (the `bound:1` degenerate case) — unchanged. Opt-in + additive, the framework pattern (like `stageLoop`).
+   */
+  pool?: {
+    bound: number;
+    poolRoot: string;
+    mainRoot: string;
+    io: WorktreeIo;
   };
 }
 
@@ -271,6 +294,14 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       // an empty board. This is the SINGLE per-pass reaper call site (also WGL.4's loop-pass trigger). If the
       // reap archived anything, re-drain (the board changed); only a reap that archives NOTHING NEW is a genuine
       // empty/all-held board → escalate. Converges (the reaper is idempotent, so pass 2 archives nothing).
+      // #26 HWS.5(b) — the loop-pass reconcile: observe out-of-session wg changes off the op-log cursor and
+      // emit the outbound nudge (wg→harness only; no Task tick). Fail-open, exactly like the reaper below.
+      try {
+        const nudge = await deps.loopPassReconcile?.();
+        if (nudge !== undefined && nudge !== null) deps.narrate?.(nudge);
+      } catch {
+        /* fail-open: a loop-pass reconcile fault must never break the drive pass (mirrors the reaper's catch) */
+      }
       let reaped: string[] = [];
       try {
         reaped = await reapOrphans(wg);
@@ -291,7 +322,11 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     if (!won) continue; // another runner/harness won it — it now carries a live claim, excluded next pass
 
     deps.narrate?.(`▶ claim ${item.id} — ${item.title.slice(0, 60)}`);
-    const outcome = await runItemLaps(item, deps, cfg); // GR.3 → LapResult (PSL.3: per-stage when stageLoop present)
+    // AGF.3 — when the pool is enabled, drive the item in its OWN worktree (cut from fresh `main`, `auto/wg-<id>`)
+    // so concurrent laps never clobber each other's edits; the worktree is always torn down (fail-open) even on a
+    // driven-item throw. ABSENT (default) ⇒ the serial in-place drive, unchanged. The claim/fold semantics below
+    // (SHIPPED close, roll-up, onShipped, parked escalate) are PRESERVED — the pool changes WHERE the drive runs.
+    const outcome = await driveMaybePooled(item, deps, cfg); // GR.3 → LapResult (PSL.3 per-stage when stageLoop present)
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
     if (outcome.kind === 'SHIPPED') {
@@ -337,6 +372,28 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       return { stopped: 'BUDGET', spent, closed, parked };
     }
     // No single-item stop: the loop takes the next ready item and runs to exhaustion (BOARD_EMPTY).
+  }
+}
+
+/** AGF.3 — drive one item, in its own worktree when the pool is enabled (else the serial in-place drive). The
+ *  worktree is cut BEFORE the drive (`addItemWorktree`) and torn down AFTER in a `finally` (`removeItemWorktree`,
+ *  fail-open) — the lifecycle is attached to the claim/drive so a concurrent lap gets an isolated checkout, and the
+ *  fold at the call site is unchanged. ABSENT pool ⇒ `runItemLaps` directly (the `bound:1` degenerate case). */
+async function driveMaybePooled(
+  item: Issue,
+  deps: RalphDeps,
+  cfg: RalphConfig,
+): Promise<LapResult> {
+  const pool = deps.pool;
+  if (pool === undefined) return runItemLaps(item, deps, cfg);
+  let path: string | undefined;
+  try {
+    path = await addItemWorktree(item.id, pool.mainRoot, pool.poolRoot, pool.io);
+    deps.narrate?.(`⑃ worktree ${path} (auto/${item.id})`);
+    return await runItemLaps(item, deps, cfg);
+  } finally {
+    if (path !== undefined)
+      await removeItemWorktree(path, pool.mainRoot, pool.io).catch(() => undefined);
   }
 }
 
