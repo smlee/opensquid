@@ -166,40 +166,47 @@ export interface LoopFoldState {
  */
 export function foldEvents(events: MonitorEvent[]): LoopFoldState[] {
   const byWg = new Map<string, LoopFoldState>();
-  for (const e of events) {
-    const s = byWg.get(e.wgId) ?? { wgId: e.wgId, lastEventAtMs: e.atMs, terminal: false };
-    s.lastEventAtMs = e.atMs;
-    switch (e.kind) {
-      case 'stage_advance':
-        s.stage = e.stage;
-        s.phase = undefined;
-        s.index = undefined;
-        s.total = undefined;
-        s.lifecycle = undefined;
-        s.terminal = false; // a re-opened/advancing item is live again
-        break;
-      case 'phase_enter':
-        s.phase = e.phase;
-        s.index = e.index;
-        s.total = e.total;
-        s.lifecycle = 'running';
-        break;
-      case 'phase_leave':
-        s.phase = e.phase;
-        s.index = e.index;
-        s.total = e.total;
-        s.lifecycle = 'done';
-        break;
-      case 'item_shipped':
-      case 'item_closed':
-        s.terminal = true;
-        break;
-      case 'item_wedged':
-        break; // parked, still shown (the feed does not re-derive the reason — §5 OUT)
-    }
-    byWg.set(e.wgId, s);
-  }
+  for (const e of events) applyMonitorEvent(byWg, e);
   return [...byWg.values()];
+}
+
+/**
+ * Apply ONE event to a per-item fold map in place (the reducer step shared by the whole-log {@link foldEvents}
+ * and the incremental {@link foldLatestStateIncremental} — folding is folding, one rule). PURE w.r.t. the DB
+ * (mutates only the passed map). Kept module-private: the two fold entry points are the API.
+ */
+function applyMonitorEvent(byWg: Map<string, LoopFoldState>, e: MonitorEvent): void {
+  const s = byWg.get(e.wgId) ?? { wgId: e.wgId, lastEventAtMs: e.atMs, terminal: false };
+  s.lastEventAtMs = e.atMs;
+  switch (e.kind) {
+    case 'stage_advance':
+      s.stage = e.stage;
+      s.phase = undefined;
+      s.index = undefined;
+      s.total = undefined;
+      s.lifecycle = undefined;
+      s.terminal = false; // a re-opened/advancing item is live again
+      break;
+    case 'phase_enter':
+      s.phase = e.phase;
+      s.index = e.index;
+      s.total = e.total;
+      s.lifecycle = 'running';
+      break;
+    case 'phase_leave':
+      s.phase = e.phase;
+      s.index = e.index;
+      s.total = e.total;
+      s.lifecycle = 'done';
+      break;
+    case 'item_shipped':
+    case 'item_closed':
+      s.terminal = true;
+      break;
+    case 'item_wedged':
+      break; // parked, still shown (the feed does not re-derive the reason — §5 OUT)
+  }
+  byWg.set(e.wgId, s);
 }
 
 /**
@@ -209,6 +216,52 @@ export function foldEvents(events: MonitorEvent[]): LoopFoldState[] {
  */
 export async function foldLatestState(): Promise<LoopFoldState[]> {
   return foldEvents(await tailEventsSince(0));
+}
+
+// ---------------------------------------------------------------------------
+// §C.12 SCALABILITY — the INCREMENTALLY-materialized projection for the write path.
+//
+// `foldLatestState` re-reads the ENTIRE append-only log (`tailEventsSince(0)`) and re-folds it — fine on-demand
+// (a CLI invocation, a watcher's ONE initial fold), but ruinous if run on the emit path: `emitMonitorEvent` fires
+// on every state change, the log grows by one per emit and never prunes, so a full re-fold per emit is O(N) work
+// that grows with history → O(N²) over a project's life. The snapshot writer (SLC.2) needs the current board on
+// every emit, so it uses THIS instead: a module-level materialized fold advanced by a cursor — the first read in a
+// process folds from seq 0 once (O(N)), every subsequent read tails only the NEW events (O(1) amortized), the same
+// cursor discipline `subscribeMonitor` uses so a consumer adds NO per-emit full scan (design §6.3, scalability).
+//
+// The DB log stays the SSOT; this cache is a pure derivation (no writes), rebuilt from 0 on process restart.
+// Concurrent refreshes are serialized through a promise chain so the read-modify-write of the shared map + cursor
+// never interleaves (no double-apply). A tail fault leaves the cursor unadvanced (nothing is applied before the
+// awaited read) → the next call retries; the fault surfaces to THIS caller (the fail-open snapshot writer swallows
+// it) while the chain stays alive for the next refresh.
+// ---------------------------------------------------------------------------
+
+let projectionCursor = 0;
+const projectionState = new Map<string, LoopFoldState>();
+let projectionChain: Promise<void> = Promise.resolve();
+
+/**
+ * The current board, folded INCREMENTALLY from the cursor (the emit-path read — bounds per-emit work to the NEW
+ * events, never a whole-log re-scan). Same result as {@link foldLatestState} (deterministic, chunk-invariant
+ * fold), just materialized across calls within a process.
+ */
+export async function foldLatestStateIncremental(): Promise<LoopFoldState[]> {
+  const step = projectionChain.then(async () => {
+    const batch = await tailEventsSince(projectionCursor);
+    for (const e of batch) applyMonitorEvent(projectionState, e);
+    if (batch.length > 0) projectionCursor = batch[batch.length - 1]!.seq;
+  });
+  // Keep the serialization chain alive even if this step rejects; the rejection is re-thrown to the caller below.
+  projectionChain = step.catch(() => undefined);
+  await step;
+  return [...projectionState.values()];
+}
+
+/** TEST SEAM — reset the process-local projection so a test starts from an empty, cold materialization. */
+export function resetLoopStateProjectionForTest(): void {
+  projectionCursor = 0;
+  projectionState.clear();
+  projectionChain = Promise.resolve();
 }
 
 /**

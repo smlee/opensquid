@@ -13,6 +13,13 @@ vi.mock('./loop_events.js', () => ({
   appendMonitorEvent: vi.fn(() => Promise.resolve()),
 }));
 
+// SLC.2 wired a fail-open snapshot refresh into the choke-point; stub it so THIS unit stays focused on the
+// append-forwarding + fail-open contract (the snapshot side-effect + its own fail-open are proven in
+// statusline_snapshot.test.ts, no real `.opensquid` write here).
+vi.mock('./statusline_snapshot.js', () => ({
+  refreshStatuslineSnapshot: vi.fn(() => Promise.resolve()),
+}));
+
 import { appendMonitorEvent } from './loop_events.js';
 import { emitMonitorEvent } from './monitor_emit.js';
 

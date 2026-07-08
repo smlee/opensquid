@@ -18,7 +18,12 @@
  * Imports from: ./loop_events.js (the fold consumer API).
  * Imported by: src/cli/loop_status.ts (the renderer), the future loop-state UI.
  */
-import { foldLatestState, type PhaseLifecycle } from './loop_events.js';
+import {
+  foldLatestState,
+  foldLatestStateIncremental,
+  type LoopFoldState,
+  type PhaseLifecycle,
+} from './loop_events.js';
 
 /**
  * ONE item's position on the board — the shared contract (§2b). Level 1 = stage (pack vocabulary, OPAQUE to
@@ -57,7 +62,21 @@ export type LoopState = LoopStateItem[];
  * separate, so `--json`/the UI keep the full truth.
  */
 export async function collectLoopState(): Promise<LoopState> {
-  const fold = await foldLatestState(); // ONE stream read — no three-table pull
+  return mapFold(await foldLatestState()); // ONE stream read — no three-table pull
+}
+
+/**
+ * The SAME board as {@link collectLoopState}, folded INCREMENTALLY from a cursor (§C.12) — the read the SLC.2
+ * snapshot writer rides on the emit path, so re-publishing the fragment on every state change is O(new events),
+ * never a whole-log re-scan (which on the emit path is O(N²) over a project's life). On-demand callers (the CLI,
+ * `--json`) keep {@link collectLoopState}; only the per-emit writer needs the materialized cursor.
+ */
+export async function collectLoopStateIncremental(): Promise<LoopState> {
+  return mapFold(await foldLatestStateIncremental());
+}
+
+/** The shared fold→contract mapping (one rule for both the whole-log and incremental reads). */
+function mapFold(fold: LoopFoldState[]): LoopState {
   return fold.map((f) => ({
     wgId: f.wgId,
     stage: f.stage ?? '',

@@ -714,4 +714,44 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: tagMainRelease, from: [release] }
     proof: 'src/runtime/release/stage_pr.test.ts'
+  # T-statusline-compose (SLC.1..SLC.4, wg-c954689147da) — the additive status-line pill's new BEHAVIORAL exports:
+  # one reachable requirement per export, its element proof-test the AUTHORITY. The `from` hints are advisory —
+  # these surface through the `emitMonitorEvent` state-change choke-point (post-tool-use phase writes / the
+  # orchestrator), so a negative static pre-filter never vetoes a passing proof. The DATA-shape siblings
+  # (StatuslineSnapshotDeps injected-seam interface + STATUSLINE_SNAPSHOT_FILE const) are baselined in the
+  # allowlist, per the *Deps / *Path precedent (the forward ratchet, registered AT CODE). The §C.12 emit-path
+  # SCALABILITY fix adds the cursor-materialized fold (foldLatestStateIncremental + collectLoopStateIncremental)
+  # so re-publishing the fragment on every state change is O(new events), never a whole-log re-scan; both are
+  # BEHAVIORAL → one reachable requirement each. Its test-only reset seam (resetLoopStateProjectionForTest) is
+  # allowlisted, per the *ForTest precedent.
+  - id: R-SLC-FRAGMENT
+    intent: 'SLC.1 renderStatuslineFragment: the ~40-col additive pill string — reuses renderItem + the +N more overflow; empty board → "" (NOT the idle line); pure + never-throws'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: renderStatuslineFragment, from: [post-tool-use] }
+    proof: 'src/cli/loop_status.test.ts'
+  - id: R-SLC-SNAPSHOT
+    intent: 'SLC.2 writeStatuslineSnapshot: render the live board → atomically publish the fragment to <root>/.opensquid/loop-statusline (a derived projection, injected seams); terminal board → ""'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: writeStatuslineSnapshot, from: [post-tool-use] }
+    proof: 'src/runtime/loop/statusline_snapshot.test.ts'
+  - id: R-SLC-REFRESH
+    intent: 'SLC.2 refreshStatuslineSnapshot: the fail-open wrapper the emitMonitorEvent choke-point calls — a render/write fault is swallowed to stderr and NEVER breaks the load-bearing mutation'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: refreshStatuslineSnapshot, from: [post-tool-use] }
+    proof: 'src/runtime/loop/statusline_snapshot.test.ts'
+  - id: R-SLC-INCR-FOLD
+    intent: 'SLC.2/§C.12 foldLatestStateIncremental: the cursor-materialized projection — the first read folds from seq 0 once, each later read tails only NEW events, so the emit-path snapshot never re-scans the ever-growing loop_events log (O(N²)→O(1) amortized); same result as foldLatestState, serialized RMW'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: foldLatestStateIncremental, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_events.test.ts'
+  - id: R-SLC-INCR-COLLECT
+    intent: 'SLC.2/§C.12 collectLoopStateIncremental: the LoopState board mapped from the incremental fold — the read the snapshot writer rides on the emit path (on-demand CLI callers keep the whole-log collectLoopState)'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: collectLoopStateIncremental, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
 ```

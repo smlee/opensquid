@@ -15,6 +15,7 @@
  *   src/runtime/ralph/orchestrator.ts (item_shipped / item_closed / item_wedged).
  */
 import { appendMonitorEvent, type NewMonitorEvent } from './loop_events.js';
+import { refreshStatuslineSnapshot } from './statusline_snapshot.js';
 
 /** Push one monitor event; a store fault is swallowed (logged to stderr) and NEVER propagates to the mutation. */
 export async function emitMonitorEvent(ev: NewMonitorEvent): Promise<void> {
@@ -23,4 +24,7 @@ export async function emitMonitorEvent(ev: NewMonitorEvent): Promise<void> {
   } catch (err) {
     process.stderr.write(`[monitor] emit failed (ignored): ${String(err)}\n`);
   }
+  // SLC.2 — re-publish the additive status-line fragment on every state change, riding this ONE choke-point.
+  // Fail-open INSIDE the wrapper: a snapshot render/write fault never breaks the load-bearing mutation.
+  await refreshStatuslineSnapshot();
 }

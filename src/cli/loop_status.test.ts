@@ -8,8 +8,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { renderItem, renderStatusLine, formatRelativeAge } from './loop_status.js';
-import type { LoopState } from '../runtime/loop/loop_state.js';
+import {
+  renderItem,
+  renderStatusLine,
+  renderStatuslineFragment,
+  formatRelativeAge,
+} from './loop_status.js';
+import type { LoopState, LoopStateItem } from '../runtime/loop/loop_state.js';
 
 describe('formatRelativeAge', () => {
   it('renders relative buckets and tolerates a NaN delta', () => {
@@ -119,5 +124,51 @@ describe('renderStatusLine', () => {
     const line = renderStatusLine(items, 30, NOW);
     expect(line).toContain('wg-a · code · test (4/7) ⟳');
     expect(line).toMatch(/\+\d+ more$/);
+  });
+});
+
+describe('renderStatuslineFragment (SLC.1 — the additive pill)', () => {
+  const NOW = 1_000_000;
+  const fresh = (over: Partial<LoopStateItem> & { wgId: string }): LoopStateItem => ({
+    stage: 'code',
+    updatedAt: NOW,
+    lastActivityMs: NOW,
+    terminal: false,
+    ...over,
+  });
+
+  it('returns "" on an empty board (additive: no loop → no pill, NOT the idle line)', () => {
+    const out = renderStatuslineFragment([], 40, NOW);
+    expect(out).toBe('');
+    expect(out).not.toContain('idle'); // never leak IDLE_LINE into the user's own line
+  });
+
+  it('renders one item 🦑-prefixed within the width cap', () => {
+    const out = renderStatuslineFragment([fresh({ wgId: 'wg-x', stage: 'code' })], 40, NOW);
+    expect(out.startsWith('🦑 ')).toBe(true);
+    expect(out).toContain('wg-x · code');
+    expect(out.length).toBeLessThanOrEqual(40);
+  });
+
+  it('overflows to a `+N more` suffix when items exceed the width', () => {
+    const items: LoopState = [
+      fresh({ wgId: 'wg-aaaa', stage: 'code' }),
+      fresh({ wgId: 'wg-bbbb', stage: 'plan' }),
+      fresh({ wgId: 'wg-cccc', stage: 'test' }),
+    ];
+    const out = renderStatuslineFragment(items, 40, NOW);
+    expect(out.startsWith('🦑 ')).toBe(true);
+    expect(out).toMatch(/\+\d+ more/); // reuses the renderStatusLine overflow shape
+  });
+
+  it('never throws on a malformed item (undefined lastActivityMs, NaN age)', () => {
+    const bad = {
+      wgId: 'wg-z',
+      stage: 'x',
+      updatedAt: Number.NaN,
+      terminal: false,
+    } as LoopStateItem;
+    expect(() => renderStatuslineFragment([bad], 40, NOW)).not.toThrow();
+    expect(renderStatuslineFragment([bad], 40, NOW)).toContain('wg-z');
   });
 });

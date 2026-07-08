@@ -112,6 +112,19 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(68); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 13 automated-gitflow
+    // T-statusline-compose (wg-c954689147da, SLC.1..SLC.4) — 5 new behavioral exports of the additive status-line
+    // pill, each MET via its element proof-test (loop_status.test.ts / statusline_snapshot.test.ts / loop_events +
+    // loop_state.test.ts for the §C.12 incremental fold); the data-shape siblings (StatuslineSnapshotDeps /
+    // STATUSLINE_SNAPSHOT_FILE) and the test-only reset seam (resetLoopStateProjectionForTest) are allowlisted.
+    for (const id of [
+      'R-SLC-FRAGMENT',
+      'R-SLC-SNAPSHOT',
+      'R-SLC-REFRESH',
+      'R-SLC-INCR-FOLD',
+      'R-SLC-INCR-COLLECT',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    expect(a.results.length).toBe(73); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 13 automated-gitflow + 5 statusline-compose
   }, 30_000);
 });

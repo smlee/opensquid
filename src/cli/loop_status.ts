@@ -97,6 +97,40 @@ export function renderStatusLine(items: LoopState, width = 120, now: number = Da
   return prefix + joinLine(out);
 }
 
+/**
+ * SLC.1 — the ADDITIVE status-line fragment: the pre-rendered pill STRING the user's own script `cat`s and
+ * appends to the line they already have (add, never replace). REUSES `renderItem` per item + the `+N more`
+ * overflow shape (no second renderer — that would be the SSOT-of-render defect), but with the ~40-col fragment
+ * cap (decision 2 — the embedded pill is ONE segment among the user's many, not the standalone 120-col line) and
+ * ONE net-new behavior vs `renderStatusLine`: an EMPTY board returns `''` (the additive pill contributes NOTHING
+ * — decision 4), NOT the stable `IDLE_LINE` (which would clutter the user's line with "🦑 loop idle" when no loop
+ * runs). PURE + TOTAL — never throws (the never-throws status-line contract the writer in SLC.2 relies on).
+ */
+export function renderStatuslineFragment(
+  items: LoopState,
+  width = 40,
+  now: number = Date.now(),
+): string {
+  if (items.length === 0) return ''; // additive: no loop → no pill (never the idle line here)
+  const prefix = '🦑 ';
+  const rendered = items.map((i) => renderItem(i, now));
+  const out: string[] = [];
+  let used = prefix.length;
+  for (let i = 0; i < rendered.length; i++) {
+    const chunk = rendered[i] ?? '';
+    const sep = out.length > 0 ? '  ' : '';
+    const remaining = rendered.length - i;
+    const suffix = remaining > 1 ? `  +${String(remaining - 1)} more` : '';
+    if (used + sep.length + chunk.length + suffix.length > width && out.length > 0) {
+      out.push(`+${String(remaining)} more`);
+      return prefix + joinLine(out);
+    }
+    out.push(chunk);
+    used += sep.length + chunk.length;
+  }
+  return prefix + joinLine(out);
+}
+
 /** Join rendered chunks; a trailing `+N more` token is glued without the `·`-style separator being ambiguous. */
 function joinLine(chunks: string[]): string {
   return chunks.join('  ');

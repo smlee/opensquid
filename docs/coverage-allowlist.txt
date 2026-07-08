@@ -2193,3 +2193,17 @@ realStageIo
 realGhIo
 STAGE_BRANCH
 GhAuthError
+
+# --- baseline maintenance (T-statusline-compose, wg-c954689147da, CODE, 2026-07-08): the DATA-shape siblings of
+# the additive status-line pill (SLC.2). The BEHAVIORAL exports (renderStatuslineFragment, writeStatuslineSnapshot,
+# refreshStatuslineSnapshot) carry reachable requirements in ARCHITECTURE.md §10; these two are the injected-seam
+# OPTIONS interface + the snapshot file-name const — pure data-shape / trivial constant, no live path, no covering
+# requirement. Same class the release-flow / gitflow / harness-sync *Deps / *Path precedent allowlists. ---
+StatuslineSnapshotDeps
+STATUSLINE_SNAPSHOT_FILE
+
+# --- baseline maintenance (T-statusline-compose §C.12, wg-c954689147da, CODE, 2026-07-08): the emit-path
+# SCALABILITY fix's TEST-ONLY reset seam. foldLatestStateIncremental / collectLoopStateIncremental (behavioral)
+# carry reachable requirements in ARCHITECTURE.md §10; this export exists only so a test can cold-start the
+# process-local materialized projection — the *ForTest seam precedent, no live path, no covering requirement. ---
+resetLoopStateProjectionForTest

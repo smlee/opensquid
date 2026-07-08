@@ -16,7 +16,14 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { appendMonitorEvent, tailEventsSince } from './loop_events.js';
+import {
+  appendMonitorEvent,
+  tailEventsSince,
+  foldLatestState,
+  foldLatestStateIncremental,
+  resetLoopStateProjectionForTest,
+} from './loop_events.js';
+import { withLoopDb } from './loop_db.js';
 
 const savedRoot = process.env.OPENSQUID_PROJECT_ROOT;
 let projectRoot: string;
@@ -90,6 +97,62 @@ describe('appendMonitorEvent / tailEventsSince (LMP.1)', () => {
     ]);
     const all = await tailEventsSince(0);
     expect(all.map((e) => e.wgId).sort()).toEqual(['wg-a', 'wg-b']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §C.12 — the incremental materialized projection: same result as the whole-log fold, but cursor-bounded so the
+// emit path never re-scans history (the O(N²) defect the SLC.2 wiring would otherwise add).
+// ---------------------------------------------------------------------------
+
+describe('foldLatestStateIncremental (§C.12 — cursor-bounded materialization)', () => {
+  beforeEach(() => resetLoopStateProjectionForTest());
+  afterEach(() => resetLoopStateProjectionForTest());
+
+  it('folds to the SAME per-item latest state as the whole-log foldLatestState', async () => {
+    await appendMonitorEvent({ wgId: 'wg-a', kind: 'stage_advance', stage: 'code', atMs: 1 });
+    await appendMonitorEvent({
+      wgId: 'wg-a',
+      kind: 'phase_enter',
+      phase: 'test',
+      index: 4,
+      total: 7,
+      lifecycle: 'running',
+      atMs: 2,
+    });
+    await appendMonitorEvent({ wgId: 'wg-b', kind: 'stage_advance', stage: 'plan', atMs: 3 });
+    const full = [...(await foldLatestState())].sort((a, b) => a.wgId.localeCompare(b.wgId));
+    const incr = [...(await foldLatestStateIncremental())].sort((a, b) =>
+      a.wgId.localeCompare(b.wgId),
+    );
+    expect(incr).toEqual(full);
+    expect(incr).toMatchObject([
+      { wgId: 'wg-a', stage: 'code', phase: 'test', index: 4, total: 7, lifecycle: 'running' },
+      { wgId: 'wg-b', stage: 'plan' },
+    ]);
+  });
+
+  it('advances by a cursor — a second call tails ONLY new events, keeping earlier items from the materialized state (no whole-log re-scan)', async () => {
+    await appendMonitorEvent({ wgId: 'wg-a', kind: 'stage_advance', stage: 'code', atMs: 1 });
+    expect((await foldLatestStateIncremental()).map((s) => s.wgId)).toEqual(['wg-a']);
+    // Delete wg-a's ONLY event from the log. A whole-log re-fold would now lose wg-a; the incremental projection
+    // retains it from the materialized state and tails only the NEW row → proving it does not re-scan history.
+    await withLoopDb((db) => db.execute("DELETE FROM loop_events WHERE wg_id = 'wg-a'"));
+    await appendMonitorEvent({ wgId: 'wg-b', kind: 'stage_advance', stage: 'plan', atMs: 2 });
+    const incr = (await foldLatestStateIncremental()).map((s) => s.wgId).sort();
+    expect(incr).toEqual(['wg-a', 'wg-b']); // wg-a survived from the cache; a from-0 re-fold would drop it
+    expect((await foldLatestState()).map((s) => s.wgId)).toEqual(['wg-b']); // (whole-log genuinely lost wg-a)
+  });
+
+  it('is safe under concurrent refreshes (serialized RMW — no double-apply / lost update)', async () => {
+    await appendMonitorEvent({ wgId: 'wg-a', kind: 'stage_advance', stage: 'code', atMs: 1 });
+    await appendMonitorEvent({ wgId: 'wg-b', kind: 'stage_advance', stage: 'plan', atMs: 2 });
+    const [r1, r2] = await Promise.all([
+      foldLatestStateIncremental(),
+      foldLatestStateIncremental(),
+    ]);
+    expect(r1.map((s) => s.wgId).sort()).toEqual(['wg-a', 'wg-b']);
+    expect(r2.map((s) => s.wgId).sort()).toEqual(['wg-a', 'wg-b']);
   });
 });
 
