@@ -11,6 +11,8 @@ function io(over: Partial<StageIo> = {}): StageIo & { log: string[] } {
     mergeNoFf: (b) => (log.push(`merge:${b}`), Promise.resolve()),
     abortMerge: () => (log.push('abort'), Promise.resolve()),
     resetHard: (ref) => (log.push(`reset:${ref}`), Promise.resolve()),
+    branchExists: () => Promise.resolve(true), // default: `stage` already exists (existing-tree case)
+    createBranch: (b, base) => (log.push(`create:${b}:${base}`), Promise.resolve()),
     runSuite: () => (log.push('suite'), Promise.resolve(true)),
     tagPush: (t) => (log.push(`tag:${t}`), Promise.resolve()),
     ...over,
@@ -24,6 +26,19 @@ describe('AGF.5 mergeToStage', () => {
     const r = await mergeToStage('auto/wg-x', 'v0.5.11-rc.1', '/repo', i);
     expect(r).toEqual({ integrated: true });
     expect(i.log).toEqual([
+      `checkout:${STAGE_BRANCH}`,
+      'merge:auto/wg-x',
+      'suite',
+      'tag:v0.5.11-rc.1',
+    ]);
+  });
+
+  it('when `stage` does NOT exist → cut it from main (create:stage:main) BEFORE checkout, then integrate', async () => {
+    const i = io({ branchExists: () => Promise.resolve(false) });
+    const r = await mergeToStage('auto/wg-x', 'v0.5.11-rc.1', '/repo', i);
+    expect(r).toEqual({ integrated: true });
+    expect(i.log).toEqual([
+      'create:stage:main',
       `checkout:${STAGE_BRANCH}`,
       'merge:auto/wg-x',
       'suite',
