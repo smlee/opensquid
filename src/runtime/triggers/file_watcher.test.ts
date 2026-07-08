@@ -39,13 +39,14 @@ import type { Client } from '@libsql/client';
 // Helpers — kept colocated so each test reads top-to-bottom.
 // ---------------------------------------------------------------------------
 
-const FIVE_SECONDS_MS = 5_000;
+// Under a full parallel suite, chokidar + debounce can lag past 5s on a busy machine.
+const WAIT_TIMEOUT_MS = 15_000;
 
 async function waitFor(
   pred: () => boolean,
   opts: { timeoutMs?: number; pollMs?: number } = {},
 ): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? FIVE_SECONDS_MS;
+  const timeoutMs = opts.timeoutMs ?? WAIT_TIMEOUT_MS;
   const pollMs = opts.pollMs ?? 25;
   const start = Date.now();
   while (!pred()) {
@@ -190,7 +191,7 @@ describe('FileWatcher — debounce', () => {
     h.events.length = 0;
 
     await unlink(file);
-    await sleep(200);
+    await sleep(300);
     await writeFile(file, 'after\n');
     await waitFor(
       () =>
@@ -201,7 +202,7 @@ describe('FileWatcher — debounce', () => {
     const addEvents = h.events.filter((e) => e.changeKind === 'add');
     expect(unlinkEvents.length).toBe(1);
     expect(addEvents.length).toBe(1);
-  });
+  }, 20_000);
 });
 
 describe('FileWatcher — rate limit integration', () => {

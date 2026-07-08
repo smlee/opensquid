@@ -132,13 +132,22 @@ describe('handoff_session_start (tier 3)', () => {
     await writeFile(ledger, '{"turn":[],"session":[]}', 'utf8');
     const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
     await utimes(ledger, old, old);
+    // Ensure mtime is actually backdated (some FS round mtime; retry if needed).
+    for (let i = 0; i < 3; i++) {
+      await utimes(ledger, old, old);
+    }
     const first = await HandoffSessionStart.execute({}, ctx());
     expect(first.ok && first.value?.kind === 'inject_context').toBe(true);
     // ...then simulate the quick restart: ledger fresh again, doc CURRENT
     // (docM >= fsmM), and a NEW fresh session (no stamp for it yet).
-    await writeFile(ledger, '{"turn":[],"session":[]}', 'utf8');
+    // Touch ledger AFTER generation so "fresh" is unambiguous vs doc mtime.
+    await writeFile(ledger, '{"turn":[],"session":[]}\n', 'utf8');
+    const now = new Date();
+    await utimes(ledger, now, now);
     const ctx2 = ctx();
     (ctx2 as { sessionId: string }).sessionId = 'fresh-session-id-0000002';
+    // Re-assert OPENSQUID_HOME for this call (parallel suites can clobber process.env).
+    process.env.OPENSQUID_HOME = home;
     const r = await HandoffSessionStart.execute({}, ctx2);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
