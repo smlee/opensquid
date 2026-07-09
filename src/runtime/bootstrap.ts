@@ -516,8 +516,10 @@ export async function loadActivePacks(_sessionId: string): Promise<Pack[]> {
  * obligation). v2 subsumes v1 (user decision); when all packs are `pack.yaml`, the v1 path empties and is
  * retired.
  */
-export async function loadActiveV2Cartridges(_sessionId: string): Promise<LoadedPackV2[]> {
-  const cwd = process.cwd();
+export async function loadActiveV2Cartridges(
+  _sessionId: string,
+  cwd: string = process.cwd(), // SEAM: the discovery root (resolveProjectScopeRoot walks up from here). Prod default = process.cwd() → ZERO behavior change. Mirrors projectDeclaresOrchestratorOnly(cwd)'s injected-cwd shape.
+): Promise<LoadedPackV2[]> {
   const ctx = await buildDetectionContext(cwd);
   const builtinRoot = resolveBuiltinScopeRoot();
   const projectRoot = await resolveProjectScopeRoot(cwd);
@@ -582,11 +584,13 @@ export function v2PackToPack(loaded: LoadedPackV2): Pack {
  * fires v2 pack skills). ADDITIVE — with no active v2 cartridge this equals `loadActivePacks`. Hook bins use
  * this for their `dispatchEvent` input; non-dispatch `loadActivePacks` callers are unchanged.
  */
-export async function loadActivePacksForDispatch(sessionId: string): Promise<Pack[]> {
-  const cwd = process.cwd();
+export async function loadActivePacksForDispatch(
+  sessionId: string,
+  cwd: string = process.cwd(), // SEAM: injected discovery root, threaded into BOTH discovery + project-context. Prod default = process.cwd().
+): Promise<Pack[]> {
   const [v1, v2, projectContext] = await Promise.all([
     loadActivePacks(sessionId),
-    loadActiveV2Cartridges(sessionId),
+    loadActiveV2Cartridges(sessionId, cwd), // was: loadActiveV2Cartridges(sessionId) reading its own process.cwd()
     // T-project-context: the project's own `.opensquid/context.md` (settings → block-guards +
     // prose → inject_context), auto-loaded as a synthetic project-scoped pack. ADDITIVE — null
     // (no file / no project scope) leaves the dispatch set unchanged.
