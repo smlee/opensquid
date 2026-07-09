@@ -125,6 +125,12 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(77); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1)
+    // T-post-ship-logic-fixes (wg-61c1576cece0, F1c/F5/F3) — 3 new behavioral exports of the monitor-feed +
+    // design-doc-gate correctness fixes, each MET via its element proof-test; the data-shape / seam siblings
+    // (BootSweepReader / SCOPE_AUDIT_SESSION_KEY / ScopeAuditCacheKey) are allowlisted (no orphan drift).
+    for (const id of ['R-PSF-CLOSE-SWEEP', 'R-PSF-SCOPE-CACHE-KEY', 'R-PSF-WATCH-FOLD']) {
+      expect(byId[id]).toBe('met');
+    }
+    expect(a.results.length).toBe(80); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*)
   }, 30_000);
 });

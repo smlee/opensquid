@@ -172,6 +172,12 @@ export function workGraphStore(opts: {
   // WGD.1 — this replica's actor id (the per-HOME UUID; the live openers pass `resolveActorId()`).
   // Default 'legacy' so the existing tests need no actor wiring.
   actorId?: string;
+  // F1a — the ONE close-boundary callback. Invoked (fail-open) whenever `updateIssue` TRANSITIONS an issue's
+  // status to a terminal value (`closed`/`archived`). The loop openers wire it to the monitor `item_closed`
+  // push, so EVERY close path — including the harness-sync reconcile close that emits nothing on its own —
+  // reaches the feed from ONE place (single source of truth). Injected DI keeps the store a generic lower
+  // layer: a caller that passes no callback (the MCP/read openers) simply does not emit. §7-decoupled.
+  onIssueTerminal?: (id: string) => void | Promise<void>;
 }): WorkGraphStore {
   let client: Client | null = null;
   const actorId = opts.actorId ?? 'legacy';
@@ -356,6 +362,20 @@ export function workGraphStore(opts: {
       await appendOp(id, 'issue_set', payload);
       const next = await getIssue(id);
       if (next === null) throw new Error('workgraph: updateIssue lost the issue');
+      // F1a — fire the close-boundary callback on a TRANSITION into terminal (`closed`/`archived`); skip a no-op
+      // re-patch of an already-terminal status so a close pushes exactly ONE event. Fail-open: a callback fault
+      // (the injected monitor emit is itself fail-open) must never break the status write that just committed.
+      if (
+        opts.onIssueTerminal !== undefined &&
+        (patch.status === 'closed' || patch.status === 'archived') &&
+        cur.status !== patch.status
+      ) {
+        try {
+          await opts.onIssueTerminal(id);
+        } catch {
+          /* fail-open: the close is durable regardless of the monitor push */
+        }
+      }
       return next;
     },
 

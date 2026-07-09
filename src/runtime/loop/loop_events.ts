@@ -72,9 +72,28 @@ const CREATE_TABLE_SQL = `
 `;
 const CREATE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_loop_events_wg ON loop_events(wg_id);`;
 
-async function ensureTable(db: Client): Promise<void> {
-  await db.execute(CREATE_TABLE_SQL);
-  await db.execute(CREATE_INDEX_SQL);
+/**
+ * §C.13 DDL HOIST — the `CREATE TABLE/INDEX IF NOT EXISTS` ran on EVERY append + EVERY tail (two round-trips per
+ * op). It is idempotent, so re-running it is pure waste. Memoize it as a once-per-store promise keyed by the
+ * resolved store URL: the first append/tail against a store executes the DDL, every later op reuses the settled
+ * promise (O(1), no round-trip). Keyed by URL — not a bare boolean — so the per-test `OPENSQUID_PROJECT_ROOT`
+ * override (a fresh DB file per test) still gets its own DDL; a REJECTED guard is evicted so the next op retries.
+ */
+const ddlByUrl = new Map<string, Promise<void>>();
+
+function ensureTable(db: Client, url: string): Promise<void> {
+  let guard = ddlByUrl.get(url);
+  if (guard === undefined) {
+    guard = (async () => {
+      await db.execute(CREATE_TABLE_SQL);
+      await db.execute(CREATE_INDEX_SQL);
+    })().catch((e: unknown) => {
+      ddlByUrl.delete(url); // a transient DDL failure must not pin a rejected guard — the next op retries
+      throw e;
+    });
+    ddlByUrl.set(url, guard);
+  }
+  return guard;
 }
 
 /** Coerce a stored `lifecycle` cell to the closed enum (unknown/absent → `running`). */
@@ -94,8 +113,8 @@ function asOptStr(cell: unknown): string | undefined {
  * and the mutation safe. The store assigns `seq` (the input omits it), mirroring `AuditLog.append`.
  */
 export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
-  await withLoopDb(async (db) => {
-    await ensureTable(db);
+  await withLoopDb(async (db, url) => {
+    await ensureTable(db, url);
     await db.execute({
       sql: `INSERT INTO loop_events (wg_id, kind, stage, phase, phase_index, phase_total, lifecycle, at_ms)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -118,8 +137,8 @@ export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
  * consumer resuming from a cursor sees every event exactly once, in order (exactly-once resume, gap-safe).
  */
 export async function tailEventsSince(sinceSeq: number): Promise<MonitorEvent[]> {
-  return withLoopDb(async (db) => {
-    await ensureTable(db);
+  return withLoopDb(async (db, url) => {
+    await ensureTable(db, url);
     const rs = await db.execute({
       sql: `SELECT seq, wg_id, kind, stage, phase, phase_index, phase_total, lifecycle, at_ms
             FROM loop_events WHERE seq > ? ORDER BY seq ASC`,
@@ -185,7 +204,10 @@ function applyMonitorEvent(byWg: Map<string, LoopFoldState>, e: MonitorEvent): v
       s.index = undefined;
       s.total = undefined;
       s.lifecycle = undefined;
-      s.terminal = false; // a re-opened/advancing item is live again
+      // F1b — terminal is ABSORBING: once closed/shipped, a later stray stage_advance does NOT resurrect the item
+      // (the non-atomic close/emit window + a stage_advance emitted for an already-closed item both used to
+      // clear terminal here, so a closed item re-appeared on the feed). Closed-ness has ONE writer (wg status,
+      // §9); the feed only re-opens an item via an explicit event the design does not emit, so `terminal` stays.
       break;
     case 'phase_enter':
       s.phase = e.phase;
@@ -262,6 +284,7 @@ export function resetLoopStateProjectionForTest(): void {
   projectionCursor = 0;
   projectionState.clear();
   projectionChain = Promise.resolve();
+  ddlByUrl.clear(); // also drop the once-per-store DDL guard so a fresh test store re-creates its table
 }
 
 /**

@@ -43,12 +43,19 @@ rules:
         if: '(tool == "Write" || tool == "Edit") && ((contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")) || (contains(targs.file_path, "docs/design/") && contains(targs.file_path, ".md")))'
         args: { name: scope }
         as: rubric
+      # F5 — the BRANCHED cache key: a `docs/design/*.md` verdict keys PER-DOC (from file_path), the pre-research
+      # artifact keeps the session-wide `fullstack-flow-scope-audit-cache` (so v2_supply's scope-stage read is
+      # never stranded). Same derivation the design-doc REWRITE reader uses → writer/reader keys always agree.
+      - call: scope_audit_cache_key
+        if: '(tool == "Write" || tool == "Edit") && ((contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")) || (contains(targs.file_path, "docs/design/") && contains(targs.file_path, ".md")))'
+        args: { file_path: '{{targs.file_path}}' }
+        as: scope_cache_key
       # FAIL-LOUD: only spawn when the rubric loaded (rubric != null). A null rubric ⇒ no cache ⇒ the gate blocks.
       - call: cached_audit
         if: '(tool == "Write" || tool == "Edit") && ((contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")) || (contains(targs.file_path, "docs/design/") && contains(targs.file_path, ".md"))) && rubric != null'
         on_error: continue
         args:
-          cache_key: fullstack-flow-scope-audit-cache
+          cache_key: '{{scope_cache_key}}'
           model: reasoning
           timeout_ms: 340000
           prompt: >-

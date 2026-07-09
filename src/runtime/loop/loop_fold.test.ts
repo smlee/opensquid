@@ -114,6 +114,24 @@ describe('foldEvents (LMP.4 reducer)', () => {
     expect(wedged[0]?.terminal).toBe(false); // parked, still shown
   });
 
+  it('F1b — terminal is ABSORBING: a stray stage_advance AFTER a close does NOT resurrect the item', () => {
+    seq = 0;
+    // a close (with no event, then a late stage_advance emitted for the already-closed item — the resurrection
+    // window). Once terminal, a stage_advance updates the stage but must NOT clear `terminal`.
+    const [closed] = foldEvents([
+      ev({ wgId: 'wg-a', kind: 'stage_advance', stage: 'deploy', atMs: 1 }),
+      ev({ wgId: 'wg-a', kind: 'item_closed', atMs: 2 }),
+      ev({ wgId: 'wg-a', kind: 'stage_advance', stage: 'code', atMs: 3 }),
+    ]);
+    expect(closed?.terminal).toBe(true); // stays dropped — no resurrection
+    // same for a SHIPPED item (both terminal kinds are absorbing).
+    const [shipped] = foldEvents([
+      ev({ wgId: 'wg-b', kind: 'item_shipped', atMs: 1 }),
+      ev({ wgId: 'wg-b', kind: 'stage_advance', stage: 'plan', atMs: 2 }),
+    ]);
+    expect(shipped?.terminal).toBe(true);
+  });
+
   it('is chunk-invariant — the same events in seq order fold identically across two chunkings', () => {
     seq = 0;
     const a = ev({ wgId: 'wg-a', kind: 'stage_advance', stage: 'code', atMs: 1 });

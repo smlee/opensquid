@@ -2211,3 +2211,13 @@ STATUSLINE_SNAPSHOT_FILE
 # carry reachable requirements in ARCHITECTURE.md §10; this export exists only so a test can cold-start the
 # process-local materialized projection — the *ForTest seam precedent, no live path, no covering requirement. ---
 resetLoopStateProjectionForTest
+
+# --- baseline maintenance (T-post-ship-logic-fixes, wg-61c1576cece0, CODE, 2026-07-08): the DATA-shape / seam
+# siblings of the monitor-feed + design-doc-gate fixes. The BEHAVIORAL exports (sweepTerminalBacklog, scopeAuditCacheKey,
+# mapFold) carry reachable requirements in ARCHITECTURE.md; these three are the injected reader-interface, the
+# session-wide key constant, and the registry-seam FunctionDef that just re-exports scopeAuditCacheKey — pure
+# data-shape / trivial constant / registration seam, no live path, no covering requirement. Same class the
+# release-flow / gitflow / statusline *Deps / *Path / FunctionDef precedent allowlists (EffectiveContent et al.). ---
+BootSweepReader
+SCOPE_AUDIT_SESSION_KEY
+ScopeAuditCacheKey

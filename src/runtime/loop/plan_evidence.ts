@@ -22,6 +22,7 @@ import { workGraphStore } from '../../workgraph/store.js';
 
 import { buildCoveredBy, planAudit, scopeToDecomposition } from './plan_audit.js';
 import { extractScope } from './scope_extract.js';
+import { emitMonitorEvent } from './monitor_emit.js';
 
 import type { WorkGraphFacade } from '../../workgraph/types.js';
 
@@ -66,6 +67,11 @@ export async function openWg(sessionId: string): Promise<WorkGraphFacade> {
     dbUrl: `file:${join(dir, 'workgraph.db')}`,
     sourceDir: join(dir, 'store', 'issues'),
     actorId: await resolveActorId(),
+    // F1a — wire the close boundary to the monitor push, so a close through THIS store (notably the
+    // harness-sync `TaskUpdate`→wg reconcile close, which emits nothing on its own) reaches the feed. Fail-open
+    // is intrinsic to `emitMonitorEvent`; `void` discards the async so the callback stays fire-and-forget.
+    onIssueTerminal: (id) =>
+      void emitMonitorEvent({ wgId: id, kind: 'item_closed', atMs: Date.now() }),
   });
   await store.init();
   return store;

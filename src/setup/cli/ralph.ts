@@ -34,6 +34,7 @@ import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
+import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
 import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import { activeDisciplinePack } from './gate.js';
@@ -56,6 +57,10 @@ async function openRalphWorkGraph() {
     dbUrl: `file:${join(dir, 'workgraph.db')}`,
     sourceDir: join(dir, 'store', 'issues'),
     actorId: await resolveActorId(), // WGD.1 — stamp the per-replica id on ops
+    // F1a — the loop's own store pushes a close event from the ONE boundary (replacing the orchestrator's
+    // per-caller manual emits): the SHIPPED close + every rolled-up parent close now reach the feed from here.
+    onIssueTerminal: (id) =>
+      void emitMonitorEvent({ wgId: id, kind: 'item_closed', atMs: Date.now() }),
   });
   await store.init();
   return store;

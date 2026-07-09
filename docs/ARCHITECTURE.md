@@ -775,4 +775,27 @@ requirements:
     wg: wg-a02313251dfb
     assert: { kind: reachable, symbol: parseTolerantStrict, from: [pack-validation] }
     proof: 'src/packs/tolerant_strict.test.ts'
+  # T-post-ship-logic-fixes (wg-61c1576cece0, F1/F3/F5) — 3 new BEHAVIORAL exports of the monitor-feed +
+  # design-doc-gate correctness fixes, each MET via its element proof-test. The data-shape / seam siblings
+  # (BootSweepReader reader-interface, SCOPE_AUDIT_SESSION_KEY constant, ScopeAuditCacheKey registry-seam) are
+  # allowlisted. The remaining fixes touch no new export (F1a onIssueTerminal is a store PARAM; F1b absorbing
+  # terminal + F2 freshest-first are inside already-exported renderers; F4 DDL hoist is store-internal).
+  - id: R-PSF-CLOSE-SWEEP
+    intent: 'F1c sweepTerminalBacklog: the one-time boot drain — a synthetic item_closed for any item that folds LIVE on the feed but reads wg-terminal (a close with no monitor event: the harness-sync reconcile close, or a pre-fix / crash-window close), so no closed item lingers forever. Bounded set-based read, off the hot path, fail-open, pure-fold preserving'
+    spec: 'docs/tasks/T-post-ship-logic-fixes.md'
+    wg: wg-61c1576cece0
+    assert: { kind: reachable, symbol: sweepTerminalBacklog, from: [orchestrator] }
+    proof: 'src/runtime/loop/loop_boot_sweep.test.ts'
+  - id: R-PSF-SCOPE-CACHE-KEY
+    intent: "F5 scopeAuditCacheKey: the BRANCHED scope-audit-cache key — a docs/design/*.md verdict keys PER-DOC (path-normalized + sanitized), every other path (the pre-research/SCOPE artifact) keeps the session-wide fullstack-flow-scope-audit-cache so v2_supply's scope read is never stranded. ONE derivation shared by the skill WRITER and the design-doc REWRITE READER; restores the new-doc-first-write ⇒ ALLOW invariant"
+    spec: 'docs/tasks/T-post-ship-logic-fixes.md'
+    wg: wg-61c1576cece0
+    assert: { kind: reachable, symbol: scopeAuditCacheKey, from: [pre-tool-use] }
+    proof: 'src/runtime/scope_audit_cache_key.test.ts'
+  - id: R-PSF-WATCH-FOLD
+    intent: 'F3 mapFold: the shared fold→board mapping, now EXPORTED so --watch derives its initial board from the ONE seed read (fold the seed, not a SECOND collectLoopState()) → no duplicate line, one fewer DB read, no race window between the board read and the tail cursor'
+    spec: 'docs/tasks/T-post-ship-logic-fixes.md'
+    wg: wg-61c1576cece0
+    assert: { kind: reachable, symbol: mapFold, from: [status-line] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
 ```

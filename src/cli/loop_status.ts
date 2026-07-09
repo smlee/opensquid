@@ -26,6 +26,7 @@ import type { Command } from 'commander';
 import {
   collectLoopState,
   liveItems,
+  mapFold,
   type LoopState,
   type LoopStateItem,
 } from '../runtime/loop/loop_state.js';
@@ -76,7 +77,14 @@ export function renderItem(item: LoopStateItem, now: number = Date.now()): strin
  */
 export function renderStatusLine(items: LoopState, width = 120, now: number = Date.now()): string {
   if (items.length === 0) return IDLE_LINE;
-  const rendered = items.map((i) => renderItem(i, now));
+  // F2 — freshest-first before the `+N more` truncation: the ACTIVELY-moving items must survive the width cut,
+  // not a frozen one that happened to fold first (Map insertion order). Sort by `lastActivityMs` DESC (the doc's
+  // own "oldest-stalest last" intent) on a COPY (pure — never mutate the caller's array); a stable sort keeps
+  // equal-timestamp items in their original order. `updatedAt` is the fallback when `lastActivityMs` is absent.
+  const ordered = [...items].sort(
+    (a, b) => (b.lastActivityMs ?? b.updatedAt) - (a.lastActivityMs ?? a.updatedAt),
+  );
+  const rendered = ordered.map((i) => renderItem(i, now));
   const prefix = '🦑 ';
   const out: string[] = [];
   let used = prefix.length;
@@ -247,10 +255,15 @@ async function runWatch(opts: LoopStatusOpts): Promise<void> {
 
   // Seed from the whole log: render the current live board once, track the live set, and start the tail cursor
   // past the last seen event (so the stream only shows NEW changes).
+  // F3 — derive BOTH the initial board AND the tail cursor from the ONE `seed` read. Folding the seed for the
+  // board (instead of a SECOND `collectLoopState()`) removes a DB read AND the race window where an event landing
+  // between the two reads was rendered in the board AND re-streamed by the tail from the pre-event cursor
+  // (a duplicate line). One read, one fold, one cursor.
   const seed = await tailEventsSince(0);
+  const folded = foldEvents(seed);
   const live = new Set<string>();
-  for (const f of foldEvents(seed)) if (!f.terminal) live.add(f.wgId);
-  const state = liveItems(await collectLoopState());
+  for (const f of folded) if (!f.terminal) live.add(f.wgId);
+  const state = liveItems(mapFold(folded));
   for (const item of state) process.stdout.write(renderItem(item) + '\n');
   if (live.size === 0) {
     process.stdout.write(DRAIN_LINE + '\n');

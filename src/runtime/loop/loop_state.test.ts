@@ -12,8 +12,14 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { appendMonitorEvent, resetLoopStateProjectionForTest } from './loop_events.js';
-import { collectLoopState, collectLoopStateIncremental, liveItems } from './loop_state.js';
+import {
+  appendMonitorEvent,
+  foldEvents,
+  tailEventsSince,
+  resetLoopStateProjectionForTest,
+  type LoopFoldState,
+} from './loop_events.js';
+import { collectLoopState, collectLoopStateIncremental, liveItems, mapFold } from './loop_state.js';
 
 const savedRoot = process.env.OPENSQUID_PROJECT_ROOT;
 let projectRoot: string;
@@ -112,5 +118,47 @@ describe('collectLoopStateIncremental (§C.12 — the emit-path board, same cont
     });
     // Identical to the whole-log read (the incremental cursor changes cost, never the result).
     expect(await collectLoopStateIncremental()).toEqual(await collectLoopState());
+  });
+});
+
+describe('mapFold (F3 — the shared fold→board mapping reused by --watch)', () => {
+  beforeEach(() => resetLoopStateProjectionForTest());
+  afterEach(() => resetLoopStateProjectionForTest());
+
+  it('maps a folded slice onto the LoopStateItem contract (no DB read)', () => {
+    const fold: LoopFoldState[] = [
+      {
+        wgId: 'wg-a',
+        stage: 'code',
+        phase: 'test',
+        index: 4,
+        total: 7,
+        lifecycle: 'running',
+        lastEventAtMs: 2_000,
+        terminal: false,
+      },
+    ];
+    expect(mapFold(fold)).toEqual([
+      {
+        wgId: 'wg-a',
+        stage: 'code',
+        phase: 'test',
+        phaseIndex: 4,
+        phaseTotal: 7,
+        lifecycle: 'running',
+        lastActivityMs: 2_000,
+        updatedAt: 2_000,
+        terminal: false,
+      },
+    ]);
+  });
+
+  it('F3 — folding the ONE seed read yields the SAME board as a second collectLoopState() (--watch dedup)', async () => {
+    await appendMonitorEvent({ wgId: 'wg-a', kind: 'stage_advance', stage: 'plan', atMs: 1_000 });
+    await appendMonitorEvent({ wgId: 'wg-b', kind: 'stage_advance', stage: 'code', atMs: 2_000 });
+    // --watch folds its ONE seed read for the board instead of a second collectLoopState() DB read — the two
+    // must be byte-identical, else the board and the tail would disagree (the duplicate-line race F3 removes).
+    const seed = await tailEventsSince(0);
+    expect(mapFold(foldEvents(seed))).toEqual(await collectLoopState());
   });
 });

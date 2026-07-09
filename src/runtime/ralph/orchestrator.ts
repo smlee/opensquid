@@ -21,7 +21,8 @@ import type { LoopMetricRow } from '../loop/loop_metrics.js';
 import { superviseLap } from './supervisor.js';
 import { reapOrphans } from '../loop/reaper.js'; // WGL.4/WGL.6 — the shared per-pass reaper
 import { rollUpParents } from '../loop/parent_rollup.js'; // WGL.5 — parent auto-close on all-children-terminal
-import { emitMonitorEvent } from '../loop/monitor_emit.js'; // LMP.2 — push item_shipped/closed/wedged to the feed
+import { emitMonitorEvent } from '../loop/monitor_emit.js'; // LMP.2 — push item_closed/wedged to the feed
+import { sweepTerminalBacklog } from '../loop/loop_boot_sweep.js'; // F1c — one-time boot drain of the terminal backlog
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
 import { addItemWorktree, removeItemWorktree, type WorktreeIo } from './worktree_pool.js'; // AGF.3 — worktree-per-item
@@ -240,6 +241,18 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   const parked: { id: string; reason: HumanRequiredReason }[] = [];
   let spent = 0;
 
+  // F1c — ONCE at loop start, drain the pre-existing terminal backlog: any item that still folds LIVE on the feed
+  // but reads wg-terminal (a close that landed before this fix, or in the non-atomic close/emit crash window) gets
+  // a synthetic `item_closed`. Bounded set-based read, off the hot path. Fail-open — a sweep fault (a monitor-store
+  // or wg-read error) must NEVER block the drain.
+  try {
+    const drainedStale = await sweepTerminalBacklog(wg);
+    if (drainedStale > 0)
+      deps.narrate?.(`■ boot sweep drained ${drainedStale} stale terminal item(s)`);
+  } catch {
+    /* fail-open: the boot sweep is best-effort backlog hygiene, never a drain blocker */
+  }
+
   // THE single uniform stop-layer (Inv 5): every reason chat-escalates through ONE path — no per-trigger
   // code paths (rejects Alt D). Two SEPARATE, explicit decisions ride alongside it: (a) wedge-mark ONLY the
   // per-item residual (IRREVERSIBLE_BOUNDARY/SCOPE_FORK/UNRECOVERABLE_WEDGE) — a resource pause
@@ -330,8 +343,10 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
     if (outcome.kind === 'SHIPPED') {
+      // F1a — the close PUSHES its `item_closed` from the store boundary (`onIssueTerminal`, wired by the loop
+      // opener), NOT from a manual emit here. One boundary, every path: this SHIPPED close and every rolled-up
+      // parent close below both flow through `wg.updateIssue`, so neither needs (nor keeps) its own emit.
       await wg.updateIssue(item.id, { status: 'closed' });
-      await emitMonitorEvent({ wgId: item.id, kind: 'item_shipped', atMs: Date.now() }); // LMP.2 — the pushed close event; the live view drops it (staleness fix)
       await deps.stageLoop?.clearStage(item.id); // PSL.3 — the item left the loop; drop its durable stage
       closed.push(item.id);
       deps.narrate?.(`✓ SHIPPED ${item.id} (closed ${closed.length})`);
@@ -342,7 +357,6 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
         const rolled = await rollUpParents(wg, item.id);
         for (const p of rolled) {
           closed.push(p);
-          await emitMonitorEvent({ wgId: p, kind: 'item_closed', atMs: Date.now() }); // LMP.2 — a rolled-up parent drops from the feed too
           deps.narrate?.(`✓ rolled up parent ${p} (all children terminal)`);
         }
       } catch {

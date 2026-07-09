@@ -125,6 +125,40 @@ describe('renderStatusLine', () => {
     expect(line).toContain('wg-a · code · test (4/7) ⟳');
     expect(line).toMatch(/\+\d+ more$/);
   });
+
+  it('F2 — sorts freshest-first before truncation: the ACTIVELY-moving item survives, a frozen one drops', () => {
+    // stale item inserted FIRST (Map insertion order would fold it first); fresh item second. A narrow width fits
+    // only one — the freshest (highest lastActivityMs) must be the survivor, not the stale one.
+    const board: LoopState = [
+      {
+        wgId: 'wg-stale',
+        stage: 'code',
+        lastActivityMs: NOW - 3_600_000,
+        updatedAt: 0,
+        terminal: false,
+      },
+      { wgId: 'wg-fresh', stage: 'code', lastActivityMs: NOW, updatedAt: 0, terminal: false },
+    ];
+    const line = renderStatusLine(board, 30, NOW);
+    expect(line).toContain('wg-fresh');
+    expect(line).not.toContain('wg-stale');
+    expect(line).toMatch(/\+\d+ more$/);
+  });
+
+  it('F2 — the sort is PURE: the caller-supplied array is never mutated', () => {
+    const board: LoopState = [
+      {
+        wgId: 'wg-stale',
+        stage: 'code',
+        lastActivityMs: NOW - 3_600_000,
+        updatedAt: 0,
+        terminal: false,
+      },
+      { wgId: 'wg-fresh', stage: 'code', lastActivityMs: NOW, updatedAt: 0, terminal: false },
+    ];
+    renderStatusLine(board, 200, NOW);
+    expect(board.map((i) => i.wgId)).toEqual(['wg-stale', 'wg-fresh']); // original order intact
+  });
 });
 
 describe('renderStatuslineFragment (SLC.1 — the additive pill)', () => {

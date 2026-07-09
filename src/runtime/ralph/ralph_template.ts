@@ -35,9 +35,13 @@ whole board — the orchestrator takes the next item.
 3. **DECIDE, don't ask.** Surface decisions are yours to settle by the locked principles (rename, format,
    file location, refactor — Simplicity). Decide and proceed. Permission-fishing is drift, not diligence.
 4. **ESCALATE only the genuine residual.** Stop and emit \`HUMAN_REQUIRED\` ONLY for: an irreversible /
-   outward boundary you cannot cross (npm publish, OTP, force-push, prod deploy, drop table) →
-   \`IRREVERSIBLE_BOUNDARY\`; a genuine product/UX fork the principles cannot settle → \`SCOPE_FORK\`. These
-   are the things only the human can own. Everything else, you own.
+   outward boundary you cannot cross (npm publish, OTP, force-push, an actual release to a LIVE production
+   environment/users, drop table) → \`IRREVERSIBLE_BOUNDARY\`; a genuine product/UX fork the principles
+   cannot settle → \`SCOPE_FORK\`. These are the things only the human can own. Everything else, you own.
+   IMPORTANT — the FSM's DEPLOY *stage* is NOT one of these. Its commit + push to your WORKING BRANCH is the
+   automated flow (revertable, on a branch, nothing is published from it), so you SHIP it — you NEVER park
+   for it. The only irreversible release is the PR-merge to the PRODUCTION branch, which the HUMAN owns and
+   CI performs on merge; you never do that, so you never escalate for it.
 5. **Ship gated.** Land the work only through the flow (tests + gates green, commit, push if configured).
    Flush any durable lessons learned.
 

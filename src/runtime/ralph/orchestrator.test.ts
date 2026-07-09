@@ -232,12 +232,17 @@ describe('runRalphLoop', () => {
 });
 
 describe('runRalphLoop — LMP.2 monitor emits (push feed)', () => {
-  it('a SHIPPED lap pushes an item_shipped event (the pushed close event — staleness fix)', async () => {
+  it('a SHIPPED lap CLOSES the item (the close-event push now comes from the store onIssueTerminal boundary — F1a SSOT — not a manual orchestrator emit)', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
-    await runRalphLoop(cfg(), deps(mockStore(['wg-a']), runLap));
+    const wg = mockStore(['wg-a']);
+    await runRalphLoop(cfg(), deps(wg, runLap));
+    // The orchestrator's SHIPPED action is the wg CLOSE — that transition is what fires the store's
+    // onIssueTerminal callback (wired by openRalphWorkGraph → emitMonitorEvent) in production. The push itself
+    // is the STORE boundary's job (single source of truth), covered by store.test.ts F1a; the orchestrator no
+    // longer double-emits. This facade double does not wire the boundary, so no close event is emitted here.
+    expect((await wg.getIssue('wg-a'))?.status).toBe('closed');
     const events = await tailEventsSince(0);
-    const shipped = events.filter((e) => e.kind === 'item_shipped');
-    expect(shipped.map((e) => e.wgId)).toContain('wg-a');
+    expect(events.filter((e) => e.kind === 'item_shipped' || e.kind === 'item_closed')).toEqual([]);
   });
 
   it('a wedged lap pushes an item_wedged event (guarded on a present item)', async () => {

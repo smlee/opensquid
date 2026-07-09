@@ -75,8 +75,12 @@ export async function collectLoopStateIncremental(): Promise<LoopState> {
   return mapFold(await foldLatestStateIncremental());
 }
 
-/** The shared fold→contract mapping (one rule for both the whole-log and incremental reads). */
-function mapFold(fold: LoopFoldState[]): LoopState {
+/**
+ * The shared fold→contract mapping (one rule for both the whole-log and incremental reads). Exported so a caller
+ * that already holds a folded slice (e.g. `--watch`, which folds its ONE seed read) maps it to the board WITHOUT
+ * a second `collectLoopState()` DB read — one read, no race (F3).
+ */
+export function mapFold(fold: LoopFoldState[]): LoopState {
   return fold.map((f) => ({
     wgId: f.wgId,
     stage: f.stage ?? '',

@@ -76,6 +76,7 @@ import { CheckFlowHealth } from '../functions/check_flow_health.js';
 import { HandoffSessionStart } from '../functions/handoff_session_start.js';
 import { SessionStatusManifest } from '../functions/session_status_manifest.js';
 import { EffectiveContent } from '../functions/effective_content.js';
+import { ScopeAuditCacheKey } from '../functions/scope_audit_cache_key.js';
 import { ChatWatcherAutostart } from '../functions/chat_watcher_autostart.js';
 import { ScopeDwellTick } from '../functions/scope_dwell.js';
 import { PathExists } from '../functions/path_exists.js';
@@ -244,6 +245,9 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // content audits evaluate the real resulting file (Edit-safe), not the
   // Edit-empty `tool_args.content` that broke iterative refinement.
   r.register(EffectiveContent);
+  // F5 — the branched scope-audit-cache key: a design-doc verdict keys per-doc, the pre-research keeps the
+  // session-wide key. The content-audit SCOPE rule binds this from `file_path` and passes it as `cache_key`.
+  r.register(ScopeAuditCacheKey);
   // T-CHAT-REALTIME — make SessionStart actually set up chat: a session_start
   // inject_context directing the agent to start the inbound watcher (Monitor +
   // `chat watch`) so messages arrive in real time (no turn-boundary wait, no flag).

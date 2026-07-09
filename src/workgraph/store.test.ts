@@ -806,3 +806,53 @@ describe('workGraphStore soft-archive (WGL.1)', () => {
     }
   });
 });
+
+describe('F1a — the onIssueTerminal close-boundary callback (single-source-of-truth close push)', () => {
+  const openWithHook = async (onIssueTerminal: (id: string) => void | Promise<void>) => {
+    const wg = workGraphStore({ dbUrl: ':memory:', onIssueTerminal });
+    await wg.init();
+    return wg;
+  };
+
+  it('fires ONCE on a transition into closed (and passes the issue id)', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    expect(fired).toEqual([a.id]);
+  });
+
+  it('fires on a transition into archived', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'archived' });
+    expect(fired).toEqual([a.id]);
+  });
+
+  it('does NOT fire on a non-terminal patch (in_progress)', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'in_progress' });
+    expect(fired).toEqual([]);
+  });
+
+  it('does NOT re-fire on a no-op re-patch of an already-terminal status (exactly one close event)', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    await wg.updateIssue(a.id, { status: 'closed', body: 'touched again' });
+    expect(fired).toEqual([a.id]); // still exactly one
+  });
+
+  it('is FAIL-OPEN: a throwing callback never breaks the committed status write', async () => {
+    const wg = await openWithHook(() => {
+      throw new Error('monitor down');
+    });
+    const a = await wg.createIssue({ title: 'x' });
+    await expect(wg.updateIssue(a.id, { status: 'closed' })).resolves.toBeTruthy();
+    expect((await wg.getIssue(a.id))?.status).toBe('closed'); // the close is durable regardless
+  });
+});
