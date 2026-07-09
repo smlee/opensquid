@@ -51,7 +51,8 @@ import { skillServesDomainMatches } from '../../packs/skill_serves.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
-import { CODE_PHASES, emitStageReport, renderStageSummary } from './stage_report.js';
+import { CODE_PHASES, renderStageReport, renderStageSummary } from './stage_report.js';
+import { displayReport } from './report_display.js';
 import { renderFollowReminder } from './follow_reminder.js';
 import { renderFailureReport } from './failure_report.js';
 import { saveProjectReport } from './reports_dir.js';
@@ -147,8 +148,8 @@ const NOOP_BUS = { publish: () => undefined } as unknown as Bus;
 // T2.12 / CADENCE-IN-PACK — the reporting cadence (WHICH stages report, entry-summary vs leave-report) is now
 // PACK DATA, not a hardcoded core map. Each gate state declares `report:` (the after-stage report label emitted
 // on LEAVE) and `summary: true` (a before-stage summary emitted on ENTRY-edge) in pack.yaml. This module keeps
-// only the transition-precise EXECUTOR + the emit FUNCTIONS (emitStageReport / renderStageSummary /
-// surfaceReportToChat) — opensquid provides the functions; the pack owns the cadence. The former hardcoded
+// only the transition-precise EXECUTOR + the render FUNCTIONS (renderStageReport / renderStageSummary), whose
+// bodies are DISPLAYED live (displayReport) — opensquid provides the functions; the pack owns the cadence. The former hardcoded
 // `STAGE` map was deleted; `meta[state].report` is its per-state, in-pack replacement.
 // CODE double-emit: under an autonomous lap (OPENSQUID_AUTOMATION=1) loop_driver.onPhasesComplete owns the CODE
 // after-report, so the emit site below still skips the CODE report (not the summary) under that env (T2.9 wiring).
@@ -858,9 +859,10 @@ export async function runV2Cartridges(
                     ? { goalAligned: (await goalConsult(sessionId, root)).aligned }
                     : {}),
                 };
-                const { body } = await emitStageReport(root, r, now); // dated file + the body
-                process.stderr.write(`[lap ${name}] ✓ ${p.from} done — report emitted\n`); // LIVE channel
-                // T2.12-surface: SHOW the phase report in-session (the injections the hooks emit as
+                const { body } = renderStageReport(r, now); // RD.1 — PURE render (no disk; emitStageReport is gone)
+                displayReport(body); // RD.1 — SHOW the after-stage body LIVE on the loop terminal (stderr →
+                // onStderrLine), REPLACING the old "report emitted" notice. The report is displayed, never filed.
+                // T2.12-surface: SHOW the phase report in-session too (the injections the hooks emit as
                 // additionalContext). LSF.4: the telegram push was removed — visibility is the status line / Monitor.
                 injections.push(body);
                 // The caller mirrors `body` into memory (session-scoped wedge buffer — the real in-runtime
@@ -904,6 +906,8 @@ export async function runV2Cartridges(
                   taskId ?? 'no-active-task',
                   now,
                 );
+                displayReport(body); // RD.2 — SHOW the before-stage "Starting <STAGE> · Will: …" half LIVE too
+                // (the same stderr → onStderrLine channel as the after half); it was injection-only before.
                 injections.push(body);
                 // LSF.4 — telegram push removed; the summary surfaces in-session, visibility via the status line.
                 // V2-ENF.2/7 — the FOLLOW-INSTRUCTIONS anti-drift nudge (reporting-model §5.4c): at the stage
@@ -1092,8 +1096,7 @@ export async function runV2Cartridges(
         // reader buildGuardCtx/the gate use), so a deprecated/failed-readiness task never gets a false
         // guess-free certificate. phases_complete is already true here (the isComplete guard above).
         const code = await codeEvidenceForSession(sessionId);
-        const { body } = await emitStageReport(
-          root,
+        const { body } = renderStageReport(
           {
             stage: 'CODE',
             taskId: trackId,
@@ -1113,9 +1116,9 @@ export async function runV2Cartridges(
           },
           now,
         );
-        // The standardized sinks (stage_report.ts:4-6), matching the transition path: file (emitStageReport)
-        // + injection + the memory mirror — so an in-band CODE completion reaches the wedge buffer too. LSF.4
-        // removed the telegram sink (visibility is the harness status line / Monitor, not chat).
+        displayReport(body); // RD.2 — SHOW the CODE completion after LIVE (body byte-unchanged; the disk save is
+        // gone). The sinks now match the transition path: displayed live + injection + the memory mirror — so an
+        // in-band CODE completion reaches the wedge buffer too. LSF.4 removed the telegram sink.
         injections.push(body);
         await capturePendingLesson(sessionId, {
           id: `stage-report-code-${trackId}-${now.replaceAll(':', '-')}`,

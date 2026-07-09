@@ -1270,7 +1270,6 @@ emitDriftStderrAndExit
 emitMermaid
 emitOf
 emitProbe
-emitStageReport
 encodeProjectPath
 encodeSessionSlug
 ensureChatDaemonRunning
@@ -2233,3 +2232,28 @@ resetLoopStateProjectionForTest
 BootSweepReader
 SCOPE_AUDIT_SESSION_KEY
 ScopeAuditCacheKey
+
+# --- baseline maintenance (T-reporting-display-rebuild, wg-123340ac7a9f, CODE, 2026-07-09): the DATA-shape / seam
+# siblings of the reporting DISPLAY-rebuild (reports are DISPLAYED live, never saved). The BEHAVIORAL export
+# `displayReport` (the print primitive, RD.1) carries a reachable requirement in ARCHITECTURE.md (R-REPORT-DISPLAY);
+# these four are the injected output-sink interface (ReportSink) + the two pure higher-scope render functions
+# (renderScopeBefore/renderScopeAfter, RD.3 — the §4 spine, mirroring the allowlisted renderStageReport/
+# renderStageSummary precedent) + their checklist DATA-shape (ScopeChecklistItem). Pure data-shape / pure render,
+# no live path of their own (their callers — orchestrator/host — carry the behavior), no covering requirement. ---
+ReportSink
+ScopeChecklistItem
+renderScopeAfter
+renderScopeBefore
+
+# --- baseline maintenance (T-consistency-gate, wg-1c620a56b733, CODE, 2026-07-09): the DATA-shape / seam /
+# trivial siblings of the CONSISTENCY GATE (CG.1). The BEHAVIORAL export `durableItemCommitExists` (the
+# pull-at-the-close-boundary predicate) carries a reachable requirement in ARCHITECTURE.md (R-CONSISTENCY-GATE);
+# these four are the injected git-seam interface (RalphGitSeam), its real default binding (makeRalphGitSeam — a
+# thin execFileP('git',…) pass-through, the concrete side of the seam, exercised via the orchestrator live path
+# with a stubbed seam under test, mirroring the allowlisted realStageIo/realGhIo/realWorktreeIo precedent), and
+# the two trivial park-tuning constants (MAX_COMMIT_REDRIVES, NO_DURABLE_COMMIT_LABEL — same trivial-constant
+# class as STAGE_BRANCH). Pure data-shape / seam / trivial, no live path of their own, no covering requirement. ---
+RalphGitSeam
+makeRalphGitSeam
+MAX_COMMIT_REDRIVES
+NO_DURABLE_COMMIT_LABEL

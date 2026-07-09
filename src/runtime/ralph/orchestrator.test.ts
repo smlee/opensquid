@@ -4,6 +4,11 @@ import { join } from 'node:path';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runRalphLoop, resolveParked, type RalphConfig, type RalphDeps } from './orchestrator.js';
+import {
+  MAX_COMMIT_REDRIVES,
+  NO_DURABLE_COMMIT_LABEL,
+  type RalphGitSeam,
+} from './consistency_gate.js';
 import type { Issue, WorkGraphFacade } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
 import type { LoopMetricRow } from '../loop/loop_metrics.js';
@@ -728,5 +733,166 @@ describe('runRalphLoop — AGF.3 worktree pool attachment (wg-4ae1004c931b)', ()
       pool: { bound: 1, poolRoot: '/pool', mainRoot: '/main', io },
     } as never);
     expect(removed).toEqual(['/pool/a']); // torn down despite the throw
+  });
+});
+
+// ---- CG.2 — the CONSISTENCY GATE wiring: an item closes SHIPPED only if a durable item-owned commit exists ----
+// A scripted RalphGitSeam over per-read queues (last value repeats when the queue is exhausted). `tip` MUST be
+// modelled as a queue because the gate reads baseSha := git.tip() BEFORE the drive, then re-reads tip() at each
+// close-time check — a "commit exists" case therefore needs tip to ADVANCE (base → new sha) across those reads,
+// while the "tip unmoved" (reporting-item) case returns the SAME sha on every read. Optional `log` records the
+// read order so the "baseSha before the drive" ordering can be asserted against the lap's own log entry.
+interface GitScript {
+  tip: string[];
+  committed: string[][];
+  dirty?: string[][];
+}
+function scriptedGit(s: GitScript, log?: string[]): RalphGitSeam {
+  let ti = 0;
+  let ci = 0;
+  let di = 0;
+  const at = <T>(a: T[], i: number): T => a[Math.min(i, a.length - 1)]!;
+  return {
+    tip: () => {
+      log?.push('tip');
+      return P(at(s.tip, ti++));
+    },
+    committedSince: () => {
+      log?.push('committed');
+      return P(at(s.committed, ci++));
+    },
+    uncommittedPaths: () => {
+      log?.push('dirty');
+      return P(at(s.dirty ?? [[]], di++));
+    },
+  };
+}
+/** A SHIPPED lap that also records 'lap' into a shared order-log (for the baseSha-before-drive assertion). */
+const loggingLap = (log: string[]): RalphDeps['runLap'] =>
+  vi.fn(() => {
+    log.push('lap');
+    return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+  });
+
+describe('runRalphLoop — CG.1 consistency gate (SHIPPED ⟺ a durable commit exists)', () => {
+  it('git seam ABSENT → the SHIPPED-close is byte-unchanged (backward compat)', async () => {
+    // The base deps() carries NO `git`, so the gate is a total no-op — every prior case in this file relies on this.
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0.04 });
+    const wg = mockStore(['a']);
+    const r = await runRalphLoop(cfg(), deps(wg, runLap));
+    expect(r.closed).toEqual(['a']);
+    expect(r.parked).toEqual([]);
+    expect(runLap).toHaveBeenCalledTimes(1); // no re-drive when the gate is absent
+    expect((await wg.getIssue('a'))?.status).toBe('closed');
+  });
+
+  it('durable commit exists (tip advanced + clean) → item closes, no re-drive, no park', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const git = scriptedGit({ tip: ['BASE', 'TIP'], committed: [['a.ts']], dirty: [[]] });
+    const r = await runRalphLoop(cfg(), { ...deps(mockStore(['a']), runLap), git });
+    expect(r.closed).toEqual(['a']);
+    expect(r.parked).toEqual([]);
+    expect(runLap).toHaveBeenCalledTimes(1); // gate satisfied on the first check
+  });
+
+  it('baseSha is read BEFORE the drive (tip() precedes the first lap)', async () => {
+    const order: string[] = [];
+    const git = scriptedGit({ tip: ['BASE', 'TIP'], committed: [['a.ts']], dirty: [[]] }, order);
+    await runRalphLoop(cfg(), { ...deps(mockStore(['a']), loggingLap(order)), git });
+    // the FIRST recorded op is the pre-drive tip() read; the first lap runs strictly after it.
+    expect(order[0]).toBe('tip');
+    expect(order.indexOf('tip')).toBeLessThan(order.indexOf('lap'));
+  });
+
+  it('unrelated drive-by dirt (disjoint from the committed set) → still closes (drive-by tolerated)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const git = scriptedGit({
+      tip: ['BASE', 'TIP'],
+      committed: [['a.ts']],
+      dirty: [['some/unrelated/driveby.ts']],
+    });
+    const r = await runRalphLoop(cfg(), { ...deps(mockStore(['a']), runLap), git });
+    expect(r.closed).toEqual(['a']);
+    expect(r.parked).toEqual([]);
+  });
+
+  it('tip UNMOVED → re-drives MAX_COMMIT_REDRIVES times, then parks NO_DURABLE_COMMIT (NOT closed)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const narrate = vi.fn();
+    const wg = mockStore(['a']);
+    // tip constant BASE on every read ⇒ never advanced ⇒ gate never satisfied.
+    const git = scriptedGit({ tip: ['BASE'], committed: [[]], dirty: [['x.ts']] });
+    const r = await runRalphLoop(cfg(), { ...deps(wg, runLap), git, narrate });
+    expect(r.closed).not.toContain('a');
+    expect(r.parked).toEqual([{ id: 'a', reason: 'NO_DURABLE_COMMIT' }]); // parked exactly once
+    expect(runLap).toHaveBeenCalledTimes(1 + MAX_COMMIT_REDRIVES); // initial + bounded re-drives
+    expect((await wg.getIssue('a'))?.status).not.toBe('closed');
+    expect(narrate.mock.calls.flat().join(' ')).toContain(NO_DURABLE_COMMIT_LABEL); // surfaced live
+  });
+
+  it('item work left dirty (a committed file is also in the dirty set) → re-drive → park (partial-commit guard)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const wg = mockStore(['a']);
+    // tip advanced, but the committed file `a.ts` is ALSO dirty ⇒ itemWorkClean false ⇒ never satisfied.
+    const git = scriptedGit({ tip: ['BASE', 'TIP'], committed: [['a.ts']], dirty: [['a.ts']] });
+    const r = await runRalphLoop(cfg(), { ...deps(wg, runLap), git });
+    expect(r.closed).not.toContain('a');
+    expect(r.parked).toEqual([{ id: 'a', reason: 'NO_DURABLE_COMMIT' }]);
+    expect(runLap).toHaveBeenCalledTimes(1 + MAX_COMMIT_REDRIVES);
+  });
+
+  it('emits item_wedged EXACTLY once for a NO_DURABLE_COMMIT park (no double-park)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const git = scriptedGit({ tip: ['BASE'], committed: [[]], dirty: [['x.ts']] });
+    await runRalphLoop(cfg(), { ...deps(mockStore(['a']), runLap), git });
+    const events = await tailEventsSince(0);
+    expect(events.filter((e) => e.kind === 'item_wedged').map((e) => e.wgId)).toEqual(['a']); // once
+  });
+
+  it('a re-drive that LANDS the commit → item closes on the later check (bounded-loop success path)', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const wg = mockStore(['a']);
+    // check #1: tip advanced but committed empty (no commit) → false → re-drive; check #2: committed lands → true.
+    const git = scriptedGit({ tip: ['BASE', 'TIP'], committed: [[], ['a.ts']], dirty: [[]] });
+    const r = await runRalphLoop(cfg(), { ...deps(wg, runLap), git });
+    expect(r.closed).toEqual(['a']);
+    expect(r.parked).toEqual([]);
+    expect(runLap).toHaveBeenCalledTimes(2); // initial + one successful re-drive
+  });
+
+  it('a re-drive that itself ESCALATES → the uniform park path (its own reason, parked once)', async () => {
+    // first drive SHIPPED-without-commit → re-drive returns HUMAN_REQUIRED{SCOPE_FORK} → uniform park with THAT reason.
+    let n = 0;
+    const runLap = vi.fn(() => {
+      n++;
+      return P<LapResult>(
+        n === 1
+          ? { kind: 'SHIPPED', costUsd: 0 }
+          : { kind: 'HUMAN_REQUIRED', reason: 'SCOPE_FORK', costUsd: 0 },
+      );
+    });
+    const git = scriptedGit({ tip: ['BASE'], committed: [[]], dirty: [['x.ts']] });
+    const r = await runRalphLoop(cfg(), { ...deps(mockStore(['a']), runLap), git });
+    expect(r.closed).not.toContain('a');
+    expect(r.parked).toEqual([{ id: 'a', reason: 'SCOPE_FORK' }]); // the re-drive's own reason, parked once
+    expect(runLap).toHaveBeenCalledTimes(2); // initial + the escalating re-drive (loop broke, no further re-drive)
+  });
+
+  it('HEADLINE — the reporting-item scenario (wg-123340ac7a9f: SHIPPED, tip unmoved, report files dirty) is NOT closed', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const narrate = vi.fn();
+    const wg = mockStore(['wg-123340ac7a9f']);
+    // Model the observed defect: tip never moved, nothing committed, the reporting rebuild's files sit dirty.
+    const git = scriptedGit({
+      tip: ['BASE'],
+      committed: [[]],
+      dirty: [['src/runtime/loop/report_display.ts', 'src/runtime/loop/scope_report.ts']],
+    });
+    const r = await runRalphLoop(cfg(), { ...deps(wg, runLap), git, narrate });
+    expect(r.closed).not.toContain('wg-123340ac7a9f'); // the gate STOPS the silent close
+    expect(r.parked).toContainEqual({ id: 'wg-123340ac7a9f', reason: 'NO_DURABLE_COMMIT' });
+    expect(runLap).toHaveBeenCalledTimes(1 + MAX_COMMIT_REDRIVES);
+    expect(narrate.mock.calls.flat().join(' ')).toContain(NO_DURABLE_COMMIT_LABEL);
+    expect((await wg.getIssue('wg-123340ac7a9f'))?.status).not.toBe('closed');
   });
 });

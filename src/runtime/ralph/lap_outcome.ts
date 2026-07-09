@@ -19,6 +19,11 @@ export type HumanRequiredReason =
   | 'IRREVERSIBLE_BOUNDARY'
   | 'SCOPE_FORK'
   | 'UNRECOVERABLE_WEDGE'
+  // CG.1 — the consistency-gate park reason: an item SHIPPED but no durable commit for its work landed. This
+  // exists in the TYPE (orchestrator-constructible, routable through parkAndEscalate/escalateLap) but is
+  // DELIBERATELY absent from HUMAN_REQUIRED_REASONS below — the gate is the SOLE authority for it, so a
+  // subprocess lap can never self-declare "I committed" (spoof) nor parse/emit NO_DURABLE_COMMIT in its exit tag.
+  | 'NO_DURABLE_COMMIT'
   | 'BUDGET'
   | 'RATE_BUDGET'
   | 'BOARD_EMPTY';

@@ -33,10 +33,12 @@ import { resolveWgProject } from '../../runtime/loop/plan_evidence.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
+import { makeRalphGitSeam } from '../../runtime/ralph/consistency_gate.js'; // CG.1 — the consistency-gate git seam
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
 import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
 import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
+import { displayReport } from '../../runtime/loop/report_display.js'; // RD.2/RD.3 — the live-display primitive
 import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
 import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
@@ -323,11 +325,18 @@ export function registerRalph(program: Command): Command {
           // so a detached `opensquid loop > loop.log` is watchable via `tail -f loop.log`.
           narrate: (msg: string) =>
             process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
+          // RD.3 — the orchestrator's live report channel: DISPLAY the task/session before/after bodies on the
+          // loop terminal (the parent's live channel is stdout — no onStderrLine indirection here).
+          display: (body: string) => displayReport(body, process.stdout),
+          // CG.1 — the CONSISTENCY GATE: PRODUCTION always enforces it. The seam reads the loop repo root's live
+          // git state at the SHIPPED-close boundary, so an item that ships without a durable commit for its work
+          // is re-driven then parked `no-durable-commit` (never silently closed). Bound to `root` once (a factory).
+          git: makeRalphGitSeam(root),
           ...(stageLoop === undefined ? {} : { stageLoop }),
           // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
           // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
           onShipped: async (taskId) => {
-            const { next } = await onPhasesComplete(
+            const { next, report } = await onPhasesComplete(
               sid,
               root,
               taskId,
@@ -337,15 +346,21 @@ export function registerRalph(program: Command): Command {
               },
               new Date().toISOString(),
             );
+            // RD.2 — SHOW the CODE 7-phase after report LIVE on the loop terminal (was saved + silent). The
+            // orchestrator (parent) writes to stdout; the body is byte-unchanged from the render.
+            displayReport(report, process.stdout);
             process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
             // INTERIM (fast-slice loop-fix, 2026-07-08): the fragile per-item stage-integration was REMOVED. It
             // ran `mergeToStage`/`reset --hard` in the MAIN checkout against a never-created `stage` and swallowed
             // its own failure (fail-open) — silently no-op'ing while items showed SHIPPED (phantom ships that lost
             // work). Durable landing is now owned by the item's DEPLOY commit+push (deploy.md:47-55) straight to
-            // the loop branch; `onShipped` only computes the next run-group. The full config-driven git-flow
-            // (version-control.environments, consistency gate, semantic branches, whoever's-ahead reconcile,
-            // auto-PR) is re-driven THROUGH the loop as its own scoped items — see the private design doc
-            // ~/projects/loop/docs/research/opensquid-gitflow-integration-fix-pre-research-2026-07-08.md.
+            // the loop branch; `onShipped` only computes the next run-group. The CONSISTENCY GATE that made
+            // "SHIPPED ⟺ a durable commit exists" structural (this note's own former TODO) is now WIRED — the
+            // `git: makeRalphGitSeam(root)` dep above verifies a durable item commit landed before the SHIPPED
+            // close, re-driving then parking `no-durable-commit` otherwise (CG.1, wg-1c620a56b733). The rest of
+            // the config-driven git-flow (version-control.environments, semantic branches, whoever's-ahead
+            // reconcile, auto-PR) is re-driven THROUGH the loop as its own scoped items — see the private design
+            // doc ~/projects/loop/docs/research/opensquid-gitflow-integration-fix-pre-research-2026-07-08.md.
           },
           // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
           // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.

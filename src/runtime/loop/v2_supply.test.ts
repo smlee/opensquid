@@ -1386,11 +1386,12 @@ describe('buildGuardCtx — T2.3 verdict dual-shape', () => {
   });
 });
 
-// ── T2.12 — the LIVE per-stage report trigger (leaving any of the 5 stages emits its report) ──────────────
-// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, emits a dated
-// <project>/.opensquid/reports/ file (V2-ENF.2/4, never the legacy docs/reports/) + memory mirror +
-// in-session injection + best-effort chat. CODE fires here too (loop_driver was never
-// wired). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
+// ── T2.12 / RD.1-4 — the LIVE per-stage report trigger (leaving any of the 5 stages DISPLAYS its report) ────
+// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, DISPLAYS that stage's after
+// report live (the body reaches the in-session injections + the stderr loop-terminal channel) + a memory mirror.
+// RD.4 removed the `.opensquid/reports/` disk save — a communication report is SHOWN, never filed (the tests
+// assert the body is in `d.injections` AND that no report file was written). CODE fires here too (interactively).
+// All deterministic: iso (NOW) injected, unique session ids, a temp project root.
 
 /** A one-state gate pack whose state is named `<stage>` and PASSES (advances to terminal) on a tool_call.
  *  Leaving `<stage>` is the transition the T2.12 trigger reports on. */
@@ -1464,7 +1465,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     ['code', 'CODE'], // CODE now fires HERE too (loop_driver was never wired) — the report's live emitter
     ['deploy', 'DEPLOY'],
   ] as const) {
-    it(`leaving ${stageUpper} emits its dated report file + a memory mirror`, async () => {
+    it(`leaving ${stageUpper} DISPLAYS its after report (no file) + a memory mirror`, async () => {
       const sid = `sess-t212-${stateName}`;
       const root = await newProjectRoot(sid);
       await writeActiveTask(sid, {
@@ -1478,16 +1479,17 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       const d = await runV2Cartridges(sid, writeCall(), NOW);
       expect(d.exitCode).toBe(0);
 
-      // 1) the dated file under the SESSION CWD's .opensquid/reports/ (NOT the real repo).
-      const reportPath = join(root, '.opensquid', 'reports', `${stateName}-T-rep-2026-06-22.md`);
-      expect(await exists(reportPath)).toBe(true);
-      const body = await readFile(reportPath, 'utf8');
+      // 1) RD.1/RD.4 — the after body is DISPLAYED live (present in the in-session injections), never filed.
+      const body = d.injections.join('\n');
       expect(body).toContain(`After-stage report — ${stageUpper} complete · T-rep ·`);
       expect(body).toContain('Summary:');
       expect(body).toContain('Evidence:'); // the gate predicates that backed the phase
       expect(body).toContain('Next →');
+      // no `.opensquid/reports/` communication file was written (the report is shown, not saved).
+      const reportPath = join(root, '.opensquid', 'reports', `${stateName}-T-rep-2026-06-22.md`);
+      expect(await exists(reportPath)).toBe(false);
 
-      // 2) the memory mirror — a pending lesson whose content is the report body.
+      // 2) the memory mirror — a pending lesson whose content is the report body (resume/wedge buffer, kept).
       const lessonsDir = join(pendingLessonsDir(sid), 'potential-lessons');
       const files = await readdir(lessonsDir);
       expect(files.length).toBe(1);
@@ -1502,17 +1504,18 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('code')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'code-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live (injected), not read off disk
     expect(body).toContain('After-stage report — CODE complete · T-rep ·');
     expect(body).toContain('Phases:'); // the long, stand-out 7-step chart
     expect(body).toContain('[x] pre_research');
     expect(body).toContain('[x] fix');
     expect(body).toContain('Evidence:'); // the CODE gate predicates
+    // RD.4 — no communication file written.
+    expect(await exists(join(root, '.opensquid', 'reports', 'code-T-rep-2026-06-22.md'))).toBe(
+      false,
+    );
   });
 
   it('#12 — CODE report fires on a COMPLETING log_phase (in-band fallback), ONCE per task', async () => {
@@ -1576,16 +1579,13 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
   // T2.10 — the SCOPE report's goal-alignment line is now the LIVE consumer of goalConsult.
   it('SCOPE report carries the goal-alignment line (no goal map → on the captured goal)', async () => {
     const sid = 'sess-t210-scope-nogoal';
-    const root = await newProjectRoot(sid);
+    await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('scope')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'scope-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live
     expect(body).toContain('Goal: on the captured goal'); // absent goal → aligned:true (not a drift signal)
   });
 
@@ -1602,27 +1602,21 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await appendAsk(sid, 'tweak the homepage banner colors'); // disjoint from the goal
     mockLoad.mockResolvedValue([stageGatePack('scope')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'scope-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live
     expect(body).toContain('OFF the captured goal — destination drift');
   });
 
   it('a non-SCOPE stage report carries NO goal-alignment line (the check belongs at scope-time)', async () => {
     const sid = 'sess-t210-plan-noline';
-    const root = await newProjectRoot(sid);
+    await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('plan')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'plan-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live
     expect(body).not.toContain('## Goal alignment');
   });
 

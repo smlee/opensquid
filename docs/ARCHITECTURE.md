@@ -354,6 +354,12 @@ requirements:
     wg: wg-0baaae4bcf2e
     assert: { kind: reachable, symbol: renderFollowReminder, from: [post-tool-use] }
     proof: 'src/runtime/loop/follow_reminder.test.ts'
+  - id: R-REPORT-DISPLAY
+    intent: 'the before/after COMMUNICATION report is DISPLAYED live on the terminal (the print primitive), never saved (reporting-model — RD.1)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#2'
+    wg: wg-123340ac7a9f
+    assert: { kind: reachable, symbol: displayReport, from: [post-tool-use] }
+    proof: 'src/runtime/loop/report_display.test.ts'
   # T-project-local-state (wg-6a079c496944) — workgraph/loop/checkpoints become PROJECT-LOCAL (like .git).
   # New IN-path exports introduced by PLS.1 (the foundational root resolver + the shared opener locator). The
   # proof-test is the authority (static `from` advisory — these are deep path utilities the openers consume).
@@ -798,4 +804,15 @@ requirements:
     wg: wg-61c1576cece0
     assert: { kind: reachable, symbol: mapFold, from: [status-line] }
     proof: 'src/runtime/loop/loop_state.test.ts'
+  # CG.1 (T-consistency-gate, wg-1c620a56b733) — the CONSISTENCY GATE at the SHIPPED-close boundary. The
+  # BEHAVIORAL predicate durableItemCommitExists carries a reachable requirement; the injected git seam
+  # (RalphGitSeam interface), its real default binding (makeRalphGitSeam — a thin execFileP('git',…) wrapper,
+  # the concrete side of the seam, mirroring realStageIo), and the trivial MAX_COMMIT_REDRIVES /
+  # NO_DURABLE_COMMIT_LABEL consts are allowlisted (data-shape / seam / trivial — no covering requirement).
+  - id: R-CONSISTENCY-GATE
+    intent: "CG.1 durableItemCommitExists: the pull-at-the-close-boundary predicate that makes SHIPPED ⟺ a durable item-owned commit exists — TRUE only when the target tip advanced past the pre-drive baseSha with real committed file content AND none of the item's committed files is left dirty (partial-commit guard); tolerates unrelated drive-by dirt. Read through the injected RalphGitSeam, so an item that ships without committing its work is re-driven then parked no-durable-commit, never silently closed"
+    spec: 'docs/tasks/T-consistency-gate.md'
+    wg: wg-1c620a56b733
+    assert: { kind: reachable, symbol: durableItemCommitExists, from: [orchestrator] }
+    proof: 'src/runtime/ralph/consistency_gate.test.ts'
 ```

@@ -131,6 +131,16 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     for (const id of ['R-PSF-CLOSE-SWEEP', 'R-PSF-SCOPE-CACHE-KEY', 'R-PSF-WATCH-FOLD']) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(80); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*)
+    // T-reporting-display-rebuild (wg-123340ac7a9f, RD.1) — the display primitive `displayReport` (reports are
+    // DISPLAYED live, never saved), reachable from post-tool-use, MET via its proof-test report_display.test.ts;
+    // the data-shape / seam siblings (ReportSink / ScopeChecklistItem / renderScopeBefore / renderScopeAfter) are
+    // allowlisted (no orphan drift).
+    expect(byId['R-REPORT-DISPLAY']).toBe('met');
+    // T-consistency-gate (wg-1c620a56b733, CG.1) — the durable-commit predicate `durableItemCommitExists`
+    // (SHIPPED ⟺ a durable item-owned commit exists), reachable from the orchestrator, MET via its proof-test
+    // consistency_gate.test.ts; the seam / trivial siblings (RalphGitSeam / makeRalphGitSeam /
+    // MAX_COMMIT_REDRIVES / NO_DURABLE_COMMIT_LABEL) are allowlisted (no orphan drift).
+    expect(byId['R-CONSISTENCY-GATE']).toBe('met');
+    expect(a.results.length).toBe(82); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE)
   }, 30_000);
 });

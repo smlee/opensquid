@@ -34,7 +34,7 @@ import type { Envelope } from '../bus/types.js';
 import { fromFlat, soleState, step, validateFsm, type Fsm } from '../fsm.js';
 import { Topology } from '../topology/topology.js';
 import { OPENSQUID_HOME, discoverLeasePaths } from '../paths.js';
-import { writeShutdownMarker } from '../genesis/shutdown_marker.js';
+import { writeShutdownMarker, type ShutdownMarker } from '../genesis/shutdown_marker.js';
 import { buildGenesisWorld, runGenesis } from '../genesis/boot.js';
 import { writeStartupReport } from '../genesis/startup_report_file.js';
 import { discoverLiveStubs, seedAgentRegistry } from '../registry/agent_registry.js';
@@ -74,6 +74,13 @@ export interface StartHostOpts {
   digest?: () => string;
   /** T3c — surface the genesis `StartupReport` (its CLI surface is T4). Default: no-op. */
   onStartupReport?: (report: StartupReport) => void;
+  /**
+   * RD.3 — the after-SYSTEM report observer, symmetric to `onStartupReport` (before-system). Fired in `stop()`
+   * right AFTER `writeShutdownMarker` persists the resume marker, so the production binding can DISPLAY the
+   * shutdown communication report live while the marker STATE keeps persisting (both happen — the display is
+   * added ALONGSIDE the persistence, never replacing it). Default: no-op.
+   */
+  onShutdownReport?: (marker: ShutdownMarker) => void;
 }
 
 /** Read the persisted workspace (projects) state; absent/corrupt ⇒ null (a fresh workspace = new_start). */
@@ -224,7 +231,9 @@ export async function startHost(opts: StartHostOpts = {}): Promise<HostHandle> {
       advance('drain'); // running → draining
       clearTimeout(idleTimer);
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await writeShutdownMarker(digest(), home); // persist-then-marker (clean resume signal)
+      const marker: ShutdownMarker = { status: 'clean', digest: digest(), ts: Date.now() };
+      await writeShutdownMarker(marker.digest, home); // persist-then-marker (clean resume signal) — UNCHANGED
+      opts.onShutdownReport?.(marker); // RD.3 — DISPLAY the after-system report live (marker STATE still persisted)
       await unlinkRuntimeState(home); // discovery file gone → clients auto-start next time
       await release(); // release the boot lock LAST (a new host can now own the topology)
       advance('stopped'); // draining → stopped
