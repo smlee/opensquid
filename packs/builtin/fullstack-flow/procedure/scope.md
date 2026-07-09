@@ -13,6 +13,11 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
 - Write the pre-research artifact to `docs/research/<track>-pre-research-<date>.md`. Every claim is cited
   (`file:line` / memory / the user's words) OR flagged as an unchecked `- [ ] OPEN QUESTION: …`.
 - Capture the FULL scope against the design you cite — no MVP / convenient-slice reduction (see the rubric).
+- CITE THE AUTHORITATIVE design-of-record. Before scoping, confirm the design you cite is the CURRENT one, NOT a
+  superseded or narrower predecessor: check for a newer doc on the same topic that says it SUPERSEDES this one —
+  if two cover the same ground, the superseding one wins. Scoping against a stale/narrow design yields a
+  "complete" scope of the WRONG target (the reporting-MVP failure: the build faithfully matched a superseded
+  narrow task instead of the full model).
 - Resolve every open question here (ask the user only if it is unanswerable after research OR an
   architecture-changing fork). CHECK the box / remove the item before you leave SCOPE.
 
