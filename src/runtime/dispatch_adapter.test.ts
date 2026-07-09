@@ -42,6 +42,8 @@ const toolCall = (tool: string): Event =>
 
 let origHome: string | undefined;
 let home: string;
+let origCwd: string | undefined; // restored in afterEach
+let projectDir: string | undefined; // the hermetic temp PROJECT scope, rm'd in afterEach
 /** Point OPENSQUID_HOME at a fresh temp with the given active.json (the real loadActiveV2Cartridges + the
  *  FSM-state + registry all read OPENSQUID_HOME live). loadActivePacks's realPacksPromise is module-cached
  *  at import (the globalSetup home) so it is unaffected — the v2 side is what varies. */
@@ -51,6 +53,25 @@ async function setHome(activePacks: string[]): Promise<void> {
   await writeFile(join(home, 'active.json'), JSON.stringify({ packs: activePacks }), 'utf8');
   process.env.OPENSQUID_HOME = home;
 }
+/** Establish a hermetic PROJECT scope: a temp dir carrying `.opensquid/active.json = { packs }`, chdir'd into so
+ *  v2 discovery (loadActiveV2Cartridges → resolveProjectScopeRoot(cwd) → partitionActivePacks reads
+ *  <scope>/active.json) finds the listed pack deterministically from packs/builtin — with ZERO reliance on
+ *  whatever ambient `.opensquid/` sits above the real cwd (locally the repo's own → passes by accident; on CI
+ *  none → fullstack-flow undefined). Restored + removed in afterEach. This INVERTS the ADDITIVE test's inline
+ *  neutral chdir (:78-96): that one asserts NO pack by chdir'ing to a scope-LESS cwd; this asserts a pack ACTIVE
+ *  by chdir'ing to a scope that LISTS it. OPENSQUID_HOME (setHome) is left untouched — it drives the HOME-scoped
+ *  FSM-state / active-task / registry, NOT the v2 active-cartridge SET (bootstrap.ts:519-531). */
+async function enterProjectScope(activePacks: string[]): Promise<void> {
+  origCwd = process.cwd();
+  projectDir = await mkdtemp(join(tmpdir(), 'osq-s1-proj-'));
+  await mkdir(join(projectDir, '.opensquid'), { recursive: true });
+  await writeFile(
+    join(projectDir, '.opensquid', 'active.json'),
+    JSON.stringify({ packs: activePacks }),
+    'utf8',
+  );
+  process.chdir(projectDir);
+}
 beforeEach(() => {
   origHome = process.env.OPENSQUID_HOME;
 });
@@ -58,6 +79,14 @@ afterEach(async () => {
   if (origHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = origHome;
   if (home) await rm(home, { recursive: true, force: true });
+  if (origCwd !== undefined) {
+    process.chdir(origCwd);
+    origCwd = undefined;
+  }
+  if (projectDir) {
+    await rm(projectDir, { recursive: true, force: true });
+    projectDir = undefined;
+  }
 });
 
 describe('v2PackToPack (S1 adapter)', () => {
@@ -97,6 +126,7 @@ describe('loadActivePacksForDispatch (S1)', () => {
 
   it('appends the adapted v2 pack (with its skills) when fullstack-flow is active', async () => {
     await setHome(['fullstack-flow']);
+    await enterProjectScope(['fullstack-flow']); // temp PROJECT scope so v2 discovery finds fullstack-flow
     const packs = await loadActivePacksForDispatch('sess-app');
     const fsf = packs.find((p) => p.name === 'fullstack-flow');
     expect(fsf, 'fullstack-flow adapted into the dispatch set').toBeDefined();
@@ -107,6 +137,7 @@ describe('loadActivePacksForDispatch (S1)', () => {
 describe('live dispatch fires the v2 pack skills (S1 integration, real path)', () => {
   async function seedPostScope(sid: string): Promise<void> {
     await setHome(['fullstack-flow']);
+    await enterProjectScope(['fullstack-flow']); // temp PROJECT scope so loadActivePacksForDispatch finds the pack
     await clearActiveTask(sid); // null taskId → the shared key fsm-fullstack-flow (read_fsm_state reads it)
     await persistActorState(sid, 'fullstack-flow', 'code', NOW, null); // past `scope`
   }
