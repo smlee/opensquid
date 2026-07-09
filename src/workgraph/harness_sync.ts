@@ -14,9 +14,10 @@
  * by "does it differ from the current state"). PURE over injected deps (a work-graph facade + the map store),
  * so it is exhaustively unit-testable with in-memory stubs — no I/O, no clock, no globals.
  *
- * Imports from: (types only).
+ * Imports from: ./types.js (WgOp, type-only).
  * Imported by: src/runtime/hooks/harness_graph_sync.ts, src/workgraph/harness_sync.test.ts.
  */
+import type { WgOp } from './types.js';
 
 /** The harness task shape the sync reads — structurally the `HarnessTask` of `active_task_mirror.ts` and the
  *  full-task rows of `transcript_tasks.ts` (same `{id, subject, status, metadata?}`). */
@@ -31,7 +32,10 @@ export interface HarnessTaskLike {
  *  INJECTED, so the sync never imports the store internals — the live caller passes the project-bound facade. */
 export interface WgSyncFacade {
   createIssue(input: { title: string; body?: string }): Promise<{ id: string }>;
-  getIssue(id: string): Promise<{ id: string; status: string } | null>;
+  // HWS.3 — `getIssue` now also exposes `title` (for a `create` outbound delta) and `body` (for the
+  // echo-guard `isHarnessOwnedBody`). The live `WorkGraphStore` already returns the full `Issue`, so this
+  // widen is type-only; every in-memory test stub gains the two fields.
+  getIssue(id: string): Promise<{ id: string; status: string; title: string; body: string } | null>;
   updateIssue(id: string, patch: { status?: 'open' | 'closed' }): Promise<unknown>;
 }
 
@@ -39,6 +43,8 @@ export interface WgSyncFacade {
 export interface HarnessMapReaderWriter {
   get(project: string, harnessId: string): Promise<string | null>;
   bind(project: string, harnessId: string, wgId: string): Promise<void>;
+  /** HWS.1 — the reverse resolve wg → harness (the outbound reconcile's binding lookup; `null` ⇒ `create`). */
+  getByWgId(project: string, wgId: string): Promise<string | null>;
 }
 
 const HARNESS_OPEN = new Set(['pending', 'in_progress']);
@@ -140,4 +146,110 @@ export async function syncHarnessToWorkgraph(
   }
 
   return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// HWS.3 — the OUTBOUND half + bidirectional reconcile.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The wg → harness outbound delta — STATUS + EXISTENCE ONLY (decision 6: a flat harness list cannot model
+ * edges / claims / wedge, so those are NEVER emitted). Each names the harness id (or, for a `create`, the wg
+ * id + title) so the {@link import('../runtime/hooks/harness_writer.js').HarnessWriter} can render/apply it.
+ */
+export type OutboundDelta =
+  | { kind: 'create'; wgId: string; title: string } // a wg issue with no bound harness task
+  | { kind: 'status'; harnessId: string; status: 'closed' } // a bound task whose wg went terminal
+  | { kind: 'close'; harnessId: string }; // stale-closed (generalizes staleOpenHarnessIds)
+
+/** The two-way reconcile result: the shipped inbound {@link SyncResult} + the outbound delta-set. */
+export interface ReconcileResult extends SyncResult {
+  /** The status+existence delta-set the {@link HarnessWriter} renders/applies (decision 6). */
+  outbound: OutboundDelta[];
+}
+
+/** wg terminal states (from the harness's view): both `closed` and the soft-`archived` retire the task. */
+function isWgTerminal(status: string): boolean {
+  return status === 'closed' || status === 'archived';
+}
+
+/** Only these op types carry EXISTENCE / STATUS semantics — the reconcile ignores structure ops (dep_*,
+ *  claim_*, wedge_*) so decision 6 (structure never outbound) holds by construction, not by after-filter. */
+const EXISTENCE_OPS: ReadonlySet<WgOp['type']> = new Set([
+  'issue_created',
+  'issue_set',
+  'issue_archived',
+  'issue_unarchived',
+]);
+
+/** Distinct subject issue ids of the existence/status ops in `wgOps`, first-seen order (structure ops omitted). */
+function existenceIssueIds(wgOps: WgOp[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const op of wgOps) {
+    if (!EXISTENCE_OPS.has(op.type)) continue; // structure op → never an outbound delta (decision 6)
+    if (seen.has(op.issueId)) continue;
+    seen.add(op.issueId);
+    out.push(op.issueId);
+  }
+  return out;
+}
+
+/**
+ * The TWO-WAY reconcile: the shipped inbound half ({@link syncHarnessToWorkgraph}, harness → wg) COMPOSED with
+ * the outbound half (wg → harness delta-set), resolving each field by its authority (decisions 2/4/6):
+ *
+ *   - status ← harness      — the inbound half projects harness status onto the issue (unchanged).
+ *   - structure ← workgraph — edges / claims / wedge are NEVER emitted outbound (structure ops are filtered
+ *                             out of the candidate set; decision 6).
+ *   - title/body ← LWW      — the op-log already applied LWW-by-lamport inbound (`events.ts` `issue_set`
+ *                             guarded `WHERE lww <= ?`); the OUTBOUND is status+existence only, so a title/body
+ *                             op produces NO delta (the wg value stands, the harness value is lamport-less).
+ *   - monotonic-closed      — kept: a `closed` wg issue is never reopened; its still-open task emits a `close`.
+ *
+ * Echo-guarded: an op whose issue body {@link isHarnessOwnedBody} is a harness-materialized MIRROR — pushing a
+ * delta for it would push back the very change the harness just pushed in (an infinite sync loop), so it is
+ * suppressed. PURE: `wg` / `map` are injected seams and `wgOps` / `tasks` are data — no clock, no globals; a
+ * rerun over unchanged input yields an empty outbound set (idempotent).
+ */
+export async function reconcileHarnessWorkgraph(
+  project: string,
+  tasks: HarnessTaskLike[],
+  wgOps: WgOp[],
+  wg: WgSyncFacade,
+  map: HarnessMapReaderWriter,
+): Promise<ReconcileResult> {
+  const inbound = await syncHarnessToWorkgraph(project, tasks, wg, map); // shipped inbound half, unchanged
+  const outbound: OutboundDelta[] = [];
+  const emittedHarness = new Set<string>(); // dedupe: a harness id gets at most one existence/status delta
+
+  // Stale-closed → a `close` existence delta (generalizes inbound.staleOpenHarnessIds: task open, bound wg closed).
+  for (const hId of inbound.staleOpenHarnessIds) {
+    if (emittedHarness.has(hId)) continue;
+    emittedHarness.add(hId);
+    outbound.push({ kind: 'close', harnessId: hId });
+  }
+
+  // wg-originated existence/status ops (from the cursor) → create/status deltas, echo-guarded + reverse-resolved.
+  for (const issueId of existenceIssueIds(wgOps)) {
+    const issue = await wg.getIssue(issueId);
+    if (issue === null) continue; // the issue is gone (rebuild/prune) → nothing to mirror
+    if (isHarnessOwnedBody(issue.body)) continue; // echo-guard: a harness-materialized mirror → no push-back
+    const harnessId = await map.getByWgId(project, issueId); // HWS.1 reverse index
+    if (harnessId === null) {
+      // No bound harness task. Mirror it as a NEW task ONLY when it is still live — creating-then-closing a
+      // wg issue that is already terminal is churn (mirrors the inbound "terminal-and-unmapped → skip").
+      if (!isWgTerminal(issue.status))
+        outbound.push({ kind: 'create', wgId: issueId, title: issue.title });
+      continue;
+    }
+    // Bound: emit a status delta only when the wg issue went terminal while the task may still be open.
+    if (isWgTerminal(issue.status) && !emittedHarness.has(harnessId)) {
+      emittedHarness.add(harnessId);
+      outbound.push({ kind: 'status', harnessId, status: 'closed' });
+    }
+    // title/body: outbound is status+existence only (decision 6) → no delta; the wg value stands (LWW inbound).
+  }
+
+  return { ...inbound, outbound };
 }

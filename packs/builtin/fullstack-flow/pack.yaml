@@ -72,6 +72,18 @@ commit_gate:
   require_phase_ledger: true
   require_suite_green: true
 
+# AGF.1 (T-opensquid-automated-gitflow, wg-01d5a9233026) — the PACK-declared DEFAULT versioning strategy for the
+# automated git-flow. This is DATA (never a core literal): core reads it, it never assumes intent-from-commit-type
+# (feat→minor / BREAKING→major). A project inherits this default when its `.opensquid/active.json` omits `versioning`
+# or declares only a subset (e.g. just the `prefix`); the project object OVERRIDES the pack default field-by-field
+# (`resolveVersioning`, one-directional project-over-pack — no third store, SSOT). The `0.5` prefix is HUMAN-held:
+# the loop only ever bumps the patch (`0.5.N → 0.5.N+1`); moving off the prefix is a manual edit here or in the
+# project active.json, never an automated bump.
+versioning:
+  strategy: locked-prefix
+  prefix: '0.5'
+  bump: patch-per-release
+
 # Guard registry (ref → if:-expression, evaluated by RegistryGuardEvaluator over buildGuardCtx).
 guards:
   # T2.4 / GS1 — the SCOPE gate: a deterministic, zero-LLM predicate. The `!scope.is_advance` short-circuit passes
@@ -131,7 +143,13 @@ guards:
   # ADVANCE. FAIL-OPEN to true (no active task / no committed sub-issues / a workgraph read error → resolved), so
   # a leaf task with no decomposition passes exactly as before. This is where "mandatory reporting" bites: a
   # parent task cannot leave CODE while its committed checklist has a silently-open item (design §6, §7.3).
-  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && report.resolved && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
+  # SGG.2/3 (T-code-suite-green-gate) — + the SUITE-GREEN facet: `code.suite_green` = the recorded FULL declared
+  # verifySuite (`.opensquid/active.json` verifySuite — for opensquid `bash scripts/pre-push.sh`) came back green,
+  # repo-wide. This kills the FALSE-GREEN SLICE: CODE's `test` phase must run the whole pre-push bar DEPLOY runs
+  # (procedure/code.md), not a self-selected subset — a slice that passes while the full suite is red no longer
+  # advances CODE. FAIL-CLOSED (no record / red → false), mirroring DEPLOY's `deploy.clean` suite floor
+  # (deploy_evidence.ts). Grouped with the deterministic `code.*` facets, before `report.resolved`.
+  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green && report.resolved && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
   # T2.8 — the DEPLOY gate: a deterministic, zero-LLM predicate. `deploy.capability_ok` = the shipped
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.

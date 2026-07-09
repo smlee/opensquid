@@ -2,18 +2,21 @@
  * S1 (T-v2-dispatch-adapter) — the dispatcher adapter: a v2 cartridge's authored skills (T2.9 pause-guard,
  * T2.13 lenses) fire via the LIVE dispatch skill-walk when adapted into the Pack[] the hook bins dispatch over.
  *
- * Integration uses the REAL path (no mock of loadActiveV2Cartridges — it's called internally by
- * loadActivePacksForDispatch, which a module mock can't intercept): a temp OPENSQUID_HOME with
- * active.json = ["fullstack-flow"] makes the real loadActiveV2Cartridges load it from builtinRoot.
- * A `verdict:block` → exit 2; a `verdict:surface` (the lenses) → the warn buffer (stderr), NOT
- * contextInjections (dispatch.ts:32-50, defaultPolicyForLevel: block→block_tool/exit2, surface→warn/stderr).
+ * Injection-clean by construction (T-dispatch-adapter-correct-tests, wg-b7ab125c1876): a test injects its
+ * discovery root via the OPTIONAL `cwd` arg of loadActivePacksForDispatch(sid, dir) — the real
+ * loadActiveV2Cartridges resolves the active v2 SET from `resolveProjectScopeRoot(dir)`, so a temp dir carrying
+ * `.opensquid/active.json = { packs }` deterministically drives discovery with NO working-directory change. FSM
+ * state / active-task isolate by the UNIQUE sessionId under the run-wide temp home dir (globalSetup), so NO
+ * home-env mutation is needed either. A `verdict:block` → exit 2; a `verdict:surface` (the
+ * lenses) → the warn buffer (stderr), NOT contextInjections (dispatch.ts:32-50, defaultPolicyForLevel:
+ * block→block_tool/exit2, surface→warn/stderr).
  */
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadPackV2 } from '../packs/loader_v2.js';
 import {
@@ -40,24 +43,24 @@ const NOW = '2026-06-26T00:00:00.000Z';
 const toolCall = (tool: string): Event =>
   ({ kind: 'tool_call', tool, args: {} }) as unknown as Event;
 
-let origHome: string | undefined;
-let home: string;
-/** Point OPENSQUID_HOME at a fresh temp with the given active.json (the real loadActiveV2Cartridges + the
- *  FSM-state + registry all read OPENSQUID_HOME live). loadActivePacks's realPacksPromise is module-cached
- *  at import (the globalSetup home) so it is unaffected — the v2 side is what varies. */
-async function setHome(activePacks: string[]): Promise<void> {
-  home = await mkdtemp(join(tmpdir(), 'osq-s1-'));
-  await mkdir(home, { recursive: true });
-  await writeFile(join(home, 'active.json'), JSON.stringify({ packs: activePacks }), 'utf8');
-  process.env.OPENSQUID_HOME = home;
+const tempDirs: string[] = [];
+/** A hermetic PROJECT scope: a temp dir carrying `.opensquid/active.json = { packs }`, RETURNED as a path
+ *  (NOT chdir'd into). The discovery-root seam (loadActivePacksForDispatch(sid, dir)) reads it by injection —
+ *  resolveProjectScopeRoot(dir) finds the `.opensquid/`, so v2 discovery loads the listed pack from
+ *  packs/builtin with ZERO reliance on any ambient `.opensquid/` above the real cwd. */
+async function makeProjectScope(activePacks: string[]): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'osq-s1-proj-'));
+  tempDirs.push(dir);
+  await mkdir(join(dir, '.opensquid'), { recursive: true });
+  await writeFile(
+    join(dir, '.opensquid', 'active.json'),
+    JSON.stringify({ packs: activePacks }),
+    'utf8',
+  );
+  return dir;
 }
-beforeEach(() => {
-  origHome = process.env.OPENSQUID_HOME;
-});
 afterEach(async () => {
-  if (origHome === undefined) delete process.env.OPENSQUID_HOME;
-  else process.env.OPENSQUID_HOME = origHome;
-  if (home) await rm(home, { recursive: true, force: true });
+  for (const d of tempDirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
 describe('v2PackToPack (S1 adapter)', () => {
@@ -76,28 +79,21 @@ describe('v2PackToPack (S1 adapter)', () => {
 
 describe('loadActivePacksForDispatch (S1)', () => {
   it('is ADDITIVE — equals loadActivePacks (modulo the cwd project-context pack) when no v2 cartridge is active', async () => {
-    // Hermeticity: loadActivePacksForDispatch resolves a v2 cartridge set from BOTH OPENSQUID_HOME and the
-    // PROJECT scope walked up from process.cwd(). Running inside the opensquid repo (whose own active.json may
-    // list a v2 pack like fullstack-flow) would leak that in — so run from a NEUTRAL cwd with no `.opensquid`
-    // ancestor to genuinely assert "no v2 cartridge active".
-    const prevCwd = process.cwd();
+    // A neutral temp root with NO `.opensquid/` ancestor → resolveProjectScopeRoot(neutral) === null →
+    // partitionActivePacks short-circuits to { v2: [] }; loadProjectContextPack(neutral) === null. So the
+    // dispatch set equals loadActivePacks (after filtering the cwd project-context pack) BY CONSTRUCTION —
+    // no working-directory change, no home-env write.
     const neutral = await mkdtemp(join(tmpdir(), 'osq-s1-neutral-'));
-    process.chdir(neutral);
-    try {
-      await setHome([]);
-      const dispatch = (await loadActivePacksForDispatch('sess-add')).filter(
-        (p) => p.name !== 'project-context',
-      );
-      expect(dispatch).toEqual(await loadActivePacks('sess-add'));
-    } finally {
-      process.chdir(prevCwd);
-      await rm(neutral, { recursive: true, force: true });
-    }
+    tempDirs.push(neutral);
+    const dispatch = (await loadActivePacksForDispatch('sess-add', neutral)).filter(
+      (p) => p.name !== 'project-context',
+    );
+    expect(dispatch).toEqual(await loadActivePacks('sess-add'));
   });
 
   it('appends the adapted v2 pack (with its skills) when fullstack-flow is active', async () => {
-    await setHome(['fullstack-flow']);
-    const packs = await loadActivePacksForDispatch('sess-app');
+    const projectDir = await makeProjectScope(['fullstack-flow']); // inject the scope root — no chdir
+    const packs = await loadActivePacksForDispatch('sess-app', projectDir);
     const fsf = packs.find((p) => p.name === 'fullstack-flow');
     expect(fsf, 'fullstack-flow adapted into the dispatch set').toBeDefined();
     expect(fsf!.skills.map((s) => s.name)).toContain('pause-guard');
@@ -105,20 +101,25 @@ describe('loadActivePacksForDispatch (S1)', () => {
 });
 
 describe('live dispatch fires the v2 pack skills (S1 integration, real path)', () => {
-  async function seedPostScope(sid: string): Promise<void> {
-    await setHome(['fullstack-flow']);
+  /** Seed a hermetic post-scope state: a temp PROJECT scope listing fullstack-flow (RETURNED as a path, injected
+   *  via the seam) + the session's FSM state past `scope`. FSM state is keyed by the run-wide home dir + the
+   *  UNIQUE sessionId (globalSetup's temp home) → isolated by construction; no per-test home override. */
+  async function seedPostScope(sid: string): Promise<string> {
+    const projectDir = await makeProjectScope(['fullstack-flow']);
     await clearActiveTask(sid); // null taskId → the shared key fsm-fullstack-flow (read_fsm_state reads it)
     await persistActorState(sid, 'fullstack-flow', 'code', NOW, null); // past `scope`
+    return projectDir;
   }
 
   it('post-scope AskUserQuestion is BLOCKED by the pause-guard (exit 2)', async () => {
-    // The pause-guard's `no-pause-past-scope` rule is automation-gated (is_automation_mode must be
-    // true for the verdict to fire). Turn automation ON for this test so the block engages.
+    // The pause-guard's `no-pause-past-scope` rule is automation-gated (is_automation_mode must be true for
+    // the verdict to fire). OPENSQUID_AUTOMATION is a FEATURE-GATE, not the discovery defect — kept with its
+    // try/finally toggle (out-of-universe for the no-working-dir-change / no-home-env end-state).
     process.env.OPENSQUID_AUTOMATION = '1';
     try {
       const sid = 'sess-disp-block';
-      await seedPostScope(sid);
-      const packs = await loadActivePacksForDispatch(sid);
+      const projectDir = await seedPostScope(sid);
+      const packs = await loadActivePacksForDispatch(sid, projectDir);
       const r = await dispatchEvent(toolCall('AskUserQuestion'), packs, await buildRegistry(), sid);
       expect(r.exitCode).toBe(2);
       expect(r.stderr).toContain('Past SCOPE there are no pauses');
@@ -129,8 +130,8 @@ describe('live dispatch fires the v2 pack skills (S1 integration, real path)', (
 
   it('a tool_call surfaces the engineering lenses (verdict:surface → stderr)', async () => {
     const sid = 'sess-disp-lens';
-    await seedPostScope(sid);
-    const packs = await loadActivePacksForDispatch(sid);
+    const projectDir = await seedPostScope(sid);
+    const packs = await loadActivePacksForDispatch(sid, projectDir);
     const r = await dispatchEvent(toolCall('Read'), packs, await buildRegistry(), sid);
     expect(r.exitCode).toBe(0); // a non-pause tool → not blocked
     expect(r.stderr.toLowerCase()).toContain('lens'); // the engineering lenses surfaced their guidance

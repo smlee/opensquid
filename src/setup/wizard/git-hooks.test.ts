@@ -105,6 +105,7 @@ describe('GF.2 — git-hooks installer', () => {
     const res = await installGitHooks(repo);
     expect(res).toEqual([
       { name: 'pre-commit', state: 'installed' },
+      { name: 'commit-msg', state: 'installed' },
       { name: 'pre-push', state: 'installed' },
       { name: 'post-commit', state: 'installed' },
     ]);
@@ -113,8 +114,12 @@ describe('GF.2 — git-hooks installer', () => {
     expect(body).toContain('opensquid gate commit');
     const attest = await readFile(join(repo, '.git', 'hooks', 'post-commit'), 'utf8');
     expect(attest).toContain('opensquid gate attest');
+    // REL.3 — the commit-msg hook forwards the message-file path as a quoted $1.
+    const commitMsg = await readFile(join(repo, '.git', 'hooks', 'commit-msg'), 'utf8');
+    expect(commitMsg).toContain('opensquid gate commit-msg "$1"');
     expect(await checkGitHooks(repo)).toEqual([
       { name: 'pre-commit', state: 'installed' },
+      { name: 'commit-msg', state: 'installed' },
       { name: 'pre-push', state: 'installed' },
       { name: 'post-commit', state: 'installed' },
     ]);
@@ -158,8 +163,17 @@ describe('GF.2 — git-hooks installer', () => {
   it('check reports missing when no hooks present', async () => {
     expect(await checkGitHooks(repo)).toEqual([
       { name: 'pre-commit', state: 'missing' },
+      { name: 'commit-msg', state: 'missing' },
       { name: 'pre-push', state: 'missing' },
       { name: 'post-commit', state: 'missing' },
     ]);
+  });
+
+  it('REL.3 — composeHook(commit-msg) forwards the message file as a quoted $1', () => {
+    const composed = composeHook(null, 'commit-msg');
+    expect(composed).toContain('opensquid gate commit-msg "$1" || exit $?');
+    expect(composed).toContain(OPENSQUID_HOOK_MARKER);
+    // idempotent + gate-first
+    expect(composeHook(composed, 'commit-msg')).toBe(composed);
   });
 });

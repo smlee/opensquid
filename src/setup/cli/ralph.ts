@@ -11,10 +11,11 @@
  * Imports from: commander, node:net, ../../runtime/paths.js, ../../runtime/spawn_lifecycle.js,
  * ../../runtime/ralph/*, ../../workgraph/*, ../wizard/ralph_writer.js.
  */
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { Command } from 'commander';
-import { OPENSQUID_HOME, resolveLocalStoreDir } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, loopPidPath, resolveLocalStoreDir } from '../../runtime/paths.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import {
   loadChannelsConfig,
@@ -25,12 +26,19 @@ import type { LapEscalator } from '../../runtime/ralph/escalate_lap.js';
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
 import { workGraphStore } from '../../workgraph/store.js';
+import { harnessMapStore } from '../../workgraph/harness_map.js';
+import { reconcileHarnessWorkgraph } from '../../workgraph/harness_sync.js';
+import { ccNudgeWriter } from '../../runtime/hooks/harness_writer.js';
+import { resolveWgProject } from '../../runtime/loop/plan_evidence.js';
 import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
+import { makeRalphGitSeam } from '../../runtime/ralph/consistency_gate.js'; // CG.1 — the consistency-gate git seam
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
+import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
 import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
+import { displayReport } from '../../runtime/loop/report_display.js'; // RD.2/RD.3 — the live-display primitive
 import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
 import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
@@ -51,6 +59,10 @@ async function openRalphWorkGraph() {
     dbUrl: `file:${join(dir, 'workgraph.db')}`,
     sourceDir: join(dir, 'store', 'issues'),
     actorId: await resolveActorId(), // WGD.1 — stamp the per-replica id on ops
+    // F1a — the loop's own store pushes a close event from the ONE boundary (replacing the orchestrator's
+    // per-caller manual emits): the SHIPPED close + every rolled-up parent close now reach the feed from here.
+    onIssueTerminal: (id) =>
+      void emitMonitorEvent({ wgId: id, kind: 'item_closed', atMs: Date.now() }),
   });
   await store.init();
   return store;
@@ -259,6 +271,29 @@ export function registerRalph(program: Command): Command {
       const wg = await openRalphWorkGraph();
       const sid = process.env.CLAUDE_SESSION_ID ?? '<cli>';
       const root = process.cwd();
+      // ATL.2 — the loop's PROJECT-LOCAL liveness surface: write our own pid FIRST (so ensureLoopRunning's
+      // waitForPidfile sees it fast on the next scope-exit), remove it on EVERY exit path. Placed AFTER the
+      // config guard (a worker that exits early on missing config must not leave a stale pidfile). The pidfile
+      // lives under the project store (resolveLocalStoreDir(root)) — per-project, not OPENSQUID_HOME.
+      const storeDir = await resolveLocalStoreDir(root);
+      const loopPidFile = loopPidPath(storeDir);
+      await mkdir(dirname(loopPidFile), { recursive: true });
+      await writeFile(loopPidFile, `${process.pid}\n`);
+      const removeLoopPid = (): void => {
+        try {
+          rmSync(loopPidFile, { force: true });
+        } catch {
+          /* race-tolerant — a concurrent reclaim may have unlinked it already */
+        }
+      };
+      process.once('SIGINT', () => {
+        removeLoopPid();
+        process.exit(130);
+      });
+      process.once('SIGTERM', () => {
+        removeLoopPid();
+        process.exit(143);
+      });
       // PSL.3 — drive a fullstack-flow item per-stage (one fresh-context lap per automated stage); any other
       // pack (v1 coding-flow) keeps the open-ended per-item lap. Detected from the project's active discipline.
       const pack = await activeDisciplinePack(root);
@@ -280,36 +315,79 @@ export function registerRalph(program: Command): Command {
               scopeGate: (item: Issue): Promise<'drive' | 'hold'> => scopeGate(item.id),
             }
           : undefined;
-      const result = await runRalphLoop(cfg, {
-        wg,
-        claimAudience,
-        runLap: makeSpawnLap(cfg, file),
-        escalate: await resolveLoopEscalator(root),
-        // Live play-by-play: one timestamped line per step (claim / stage lap / advance / ship / park / drain)
-        // so a detached `opensquid loop > loop.log` is watchable via `tail -f loop.log`.
-        narrate: (msg: string) =>
-          process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
-        ...(stageLoop === undefined ? {} : { stageLoop }),
-        // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
-        // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
-        onShipped: async (taskId) => {
-          const { next } = await onPhasesComplete(
-            sid,
-            root,
-            taskId,
-            {
-              listReadyIds: async () => (await wg.listReady()).map((i) => i.id),
-              listEdges: () => wg.listEdges(),
-            },
-            new Date().toISOString(),
-          );
-          process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
-        },
-        // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
-        // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.
-        recordMetric: recordStageMetric,
-      });
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      try {
+        const result = await runRalphLoop(cfg, {
+          wg,
+          claimAudience,
+          runLap: makeSpawnLap(cfg, file),
+          escalate: await resolveLoopEscalator(root),
+          // Live play-by-play: one timestamped line per step (claim / stage lap / advance / ship / park / drain)
+          // so a detached `opensquid loop > loop.log` is watchable via `tail -f loop.log`.
+          narrate: (msg: string) =>
+            process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
+          // RD.3 — the orchestrator's live report channel: DISPLAY the task/session before/after bodies on the
+          // loop terminal (the parent's live channel is stdout — no onStderrLine indirection here).
+          display: (body: string) => displayReport(body, process.stdout),
+          // CG.1 — the CONSISTENCY GATE: PRODUCTION always enforces it. The seam reads the loop repo root's live
+          // git state at the SHIPPED-close boundary, so an item that ships without a durable commit for its work
+          // is re-driven then parked `no-durable-commit` (never silently closed). Bound to `root` once (a factory).
+          git: makeRalphGitSeam(root),
+          ...(stageLoop === undefined ? {} : { stageLoop }),
+          // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
+          // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
+          onShipped: async (taskId) => {
+            const { next, report } = await onPhasesComplete(
+              sid,
+              root,
+              taskId,
+              {
+                listReadyIds: async () => (await wg.listReady()).map((i) => i.id),
+                listEdges: () => wg.listEdges(),
+              },
+              new Date().toISOString(),
+            );
+            // RD.2 — SHOW the CODE 7-phase after report LIVE on the loop terminal (was saved + silent). The
+            // orchestrator (parent) writes to stdout; the body is byte-unchanged from the render.
+            displayReport(report, process.stdout);
+            process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
+            // INTERIM (fast-slice loop-fix, 2026-07-08): the fragile per-item stage-integration was REMOVED. It
+            // ran `mergeToStage`/`reset --hard` in the MAIN checkout against a never-created `stage` and swallowed
+            // its own failure (fail-open) — silently no-op'ing while items showed SHIPPED (phantom ships that lost
+            // work). Durable landing is now owned by the item's DEPLOY commit+push (deploy.md:47-55) straight to
+            // the loop branch; `onShipped` only computes the next run-group. The CONSISTENCY GATE that made
+            // "SHIPPED ⟺ a durable commit exists" structural (this note's own former TODO) is now WIRED — the
+            // `git: makeRalphGitSeam(root)` dep above verifies a durable item commit landed before the SHIPPED
+            // close, re-driving then parking `no-durable-commit` otherwise (CG.1, wg-1c620a56b733). The rest of
+            // the config-driven git-flow (version-control.environments, semantic branches, whoever's-ahead
+            // reconcile, auto-PR) is re-driven THROUGH the loop as its own scoped items — see the private design
+            // doc ~/projects/loop/docs/research/opensquid-gitflow-integration-fix-pre-research-2026-07-08.md.
+          },
+          // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
+          // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.
+          recordMetric: recordStageMetric,
+          // #26 HWS.5(b) — the loop-pass harness↔workgraph reconcile: once per drained pass, observe
+          // out-of-session wg changes off the shared op-log cursor (empty task list ⇒ wg→harness only) and
+          // return the outbound nudge. Reuses the loop's project-local `wg` + a project-local harness map
+          // (same `storeDir` the pidfile uses), so the tick and the loop-pass share ONE monotonic cursor.
+          loopPassReconcile: async (): Promise<string | null> => {
+            const project = await resolveWgProject(sid);
+            const map = harnessMapStore(`file:${join(storeDir, 'harness_map.db')}`);
+            await map.init();
+            const cursor = await wg.readHighWater();
+            const wgOps = await wg.listOpsSince(cursor);
+            if (wgOps.length === 0) return null; // nothing new since the last reconcile
+            const { outbound } = await reconcileHarnessWorkgraph(project, [], wgOps, wg, map);
+            const nudge = await ccNudgeWriter.apply(outbound);
+            await wg.advanceHighWater(Math.max(...wgOps.map((o) => o.lamport)));
+            return nudge;
+          },
+        });
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } finally {
+        // BOARD_EMPTY exhaustion, budget stop, or a throw — the pidfile always goes, so the NEXT scope-exit
+        // re-triggers a fresh loop (the ask's "the next scope-exit re-triggers"), never a false already-running.
+        removeLoopPid();
+      }
     });
 
   loop

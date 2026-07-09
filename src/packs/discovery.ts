@@ -207,6 +207,19 @@ export interface ActiveJson {
    */
   verifySuite?: string;
   /**
+   * AQG.4 (T-arch-quality-gate) — the per-project ARCHITECTURE-DETECTOR command: a project-declared check that
+   * deterministically fails a mechanical architecture defect (e.g. a redundant-store / duplicate-schema linter).
+   * The `code.arch_clean` facet routes on whether THIS command passed: the CODE procedure runs exactly this
+   * command, a PostToolUse reaction records its real exit code (verification.ts `recordArch`), and `archClean`
+   * reads it. The COMMAND itself is PROJECT policy — core runs a declared command and reads an exit code, it
+   * NEVER knows what "redundant store" means (the qualitative criteria live in the rubric, not core). Mirrors
+   * {@link verifySuite} EXACTLY except the fail policy: ABSENT ⇒ no detector declared ⇒ `code.arch_clean` fails
+   * OPEN to `true` (a legacy project ships as today, mirroring `verifySuite`'s legacy skip); DECLARED ⇒ the
+   * facet fails CLOSED (unrun / red → blocks). opensquid itself declares NO detector — the mechanism ships, the
+   * concrete detector command is a separate per-project policy choice.
+   */
+  archDetector?: string;
+  /**
    * REVERSIBLE-DEPLOY — when `true`, the project's deploy is reversible (e.g. a feature-flag roll-out, a
    * preview-channel push, a staged infra change with an instant rollback path). A reversible deploy auto-advances
    * the `accept` decision to `accepted` without a human `opensquid accept <taskId>` (the acceptance audit item
@@ -214,6 +227,27 @@ export interface ActiveJson {
    * FAIL-CLOSED: unknown or absent ⇒ irreversible ⇒ the human must accept.
    */
   reversible?: boolean;
+  /**
+   * AGF.1 (T-opensquid-automated-gitflow) — the per-project VERSIONING strategy: DATA in active.json, READ by
+   * core, NEVER hardcoded intent-from-commit-type (design §3 step 8). `strategy`/`bump` are single-member unions
+   * today (the seams for a future strategy); `prefix` (e.g. "0.5") is the HUMAN-held major.minor the loop NEVER
+   * moves — it only bumps the patch (`0.5.N → 0.5.N+1`, `nextLockedTag`). The concrete object is PROJECT config
+   * here (mirroring {@link verifySuite}/{@link reversible}); the PACK declares the recommended default so a
+   * project that omits it still resolves. ABSENT/malformed ⇒ `readActiveVersioning` → null ⇒ core falls back to
+   * the PACK default. SUPERSEDES the naive `bumpLevel`/`nextVersion` (release_semver.ts:39-54) in the automated
+   * flow — that intent-from-commit semver is no longer consulted once the locked-prefix path is active.
+   */
+  versioning?: VersioningConfig;
+}
+
+/**
+ * AGF.1 — the declared version strategy shape (see {@link ActiveJson.versioning}). `strategy`/`bump` are
+ * single-member unions today — the extension points for a future strategy; `prefix` is the HUMAN-held major.minor.
+ */
+export interface VersioningConfig {
+  strategy: 'locked-prefix';
+  prefix: string;
+  bump: 'patch-per-release';
 }
 
 /**
@@ -404,6 +438,124 @@ export async function readActiveVerifySuite(scopeRoot: string | null): Promise<s
   } catch {
     return null;
   }
+}
+
+/**
+ * AQG.4 (T-arch-quality-gate) — read the per-project ARCHITECTURE-DETECTOR command from a scope's `active.json`
+ * (see {@link ActiveJson.archDetector}), or `null` when absent/unconfigured/unreadable. A byte-for-byte sibling
+ * of {@link readActiveVerifySuite}: `null` means NO detector is declared → the `code.arch_clean` facet fails
+ * OPEN to `true` (a legacy project ships as today). `scopeRoot` is the `.opensquid` dir already
+ * (`resolveProjectScopeRoot`), so `join(scopeRoot, 'active.json')`. Lenient: absent scope / ENOENT / any fault
+ * → `null`.
+ */
+export async function readActiveArchDetector(scopeRoot: string | null): Promise<string | null> {
+  if (scopeRoot === null) return null;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const v = (JSON.parse(raw) as ActiveJson).archDetector;
+    return typeof v === 'string' && v.trim().length > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AGF.1 (T-opensquid-automated-gitflow) — read the per-project VERSIONING config from a scope's `active.json`
+ * (see {@link ActiveJson.versioning}), or `null` when absent/malformed/unreadable (→ core falls back to the PACK
+ * default). A byte-for-byte sibling of {@link readActiveVerifySuite} that returns a validated `VersioningConfig`
+ * rather than a string: it validates the `locked-prefix` discriminant + a non-empty `prefix`, and defaults `bump`
+ * to `patch-per-release`. Lenient: absent scope / ENOENT / any parse fault → `null`. Core carries NO prefix
+ * literal — the `0.5` default lives in the PACK; this reads the concrete project object.
+ */
+export async function readActiveVersioning(
+  scopeRoot: string | null,
+): Promise<VersioningConfig | null> {
+  if (scopeRoot === null) return null;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const v = (JSON.parse(raw) as ActiveJson).versioning;
+    if (
+      v?.strategy === 'locked-prefix' &&
+      typeof v.prefix === 'string' &&
+      v.prefix.trim().length > 0
+    ) {
+      return { strategy: 'locked-prefix', prefix: v.prefix, bump: v.bump ?? 'patch-per-release' };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AGF.1 — read the RAW (possibly PARTIAL) project `versioning` object from a scope's `active.json`, unvalidated,
+ * for the pack-default MERGE ({@link resolveVersioning}). Unlike {@link readActiveVersioning} (which returns a
+ * fully-validated config or null), this preserves a project that declares only a subset (e.g. just `{prefix}`)
+ * so the merge can fill the rest from the pack default. Lenient: absent scope / ENOENT / any parse fault → null.
+ */
+async function readRawProjectVersioning(
+  scopeRoot: string | null,
+): Promise<Partial<VersioningConfig> | null> {
+  if (scopeRoot === null) return null;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const v = (JSON.parse(raw) as { versioning?: Partial<VersioningConfig> }).versioning;
+    return v ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AGF.1 — the PURE one-directional versioning merge: the PROJECT object OVERRIDES the PACK default field-by-field
+ * (SSOT — no third store), then the merged shape is validated. A project that declares only `{prefix:'0.5'}` still
+ * resolves `strategy`/`bump` from the pack default; a project that declares nothing inherits the pack default
+ * whole; both absent → null. Returns a validated `VersioningConfig` or null when the merged shape is not a
+ * well-formed locked-prefix config (no valid `strategy`/`prefix` from either source).
+ */
+export function mergeVersioning(
+  packDefault: Partial<VersioningConfig> | null,
+  project: Partial<VersioningConfig> | null,
+): VersioningConfig | null {
+  if (packDefault === null && project === null) return null;
+  const merged = { ...(packDefault ?? {}), ...(project ?? {}) }; // project overrides pack (one-directional)
+  if (
+    merged.strategy === 'locked-prefix' &&
+    typeof merged.prefix === 'string' &&
+    merged.prefix.trim().length > 0
+  ) {
+    return {
+      strategy: 'locked-prefix',
+      prefix: merged.prefix,
+      bump: merged.bump ?? 'patch-per-release',
+    };
+  }
+  return null;
+}
+
+/**
+ * AGF.1 — RESOLVE the effective versioning config for a scope: the RAW project object (possibly partial) merged
+ * OVER the active pack's declared default ({@link mergeVersioning}, project-over-pack). This is the reader the
+ * automated git-flow consumes (release.ts) so a project that declares only the `prefix` — or omits `versioning`
+ * entirely — still resolves the `strategy`/`bump` from the PACK (design §6: "versioning strategy defaulted in the
+ * pack + the prefix in the project active.json"). The pack default is the FIRST active v2 pack that declares a
+ * `versioning` block; a pack-load fault never breaks resolution (the project object may already suffice → null
+ * pack default). Returns the validated config or null when neither source yields a well-formed locked-prefix shape.
+ */
+export async function resolveVersioning(
+  scopeRoot: string | null,
+  builtinRoot: string | null = null,
+  userScopeRoot: string | null = null,
+): Promise<VersioningConfig | null> {
+  const project = await readRawProjectVersioning(scopeRoot);
+  let packDefault: Partial<VersioningConfig> | null = null;
+  try {
+    const { v2 } = await partitionActivePacks(scopeRoot, null, builtinRoot, userScopeRoot);
+    packDefault = v2.map((p) => p.pack.versioning).find((v) => v !== undefined) ?? null;
+  } catch {
+    packDefault = null; // a pack-load fault must never break versioning resolution
+  }
+  return mergeVersioning(packDefault, project);
 }
 
 /**

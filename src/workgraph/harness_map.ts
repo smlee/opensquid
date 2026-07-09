@@ -26,6 +26,14 @@ export interface HarnessMapStore {
   bind(project: string, harnessId: string, wgId: string): Promise<void>;
   /** The work-graph issue id bound to `harnessId` in `project`, or `null` if unbound. */
   get(project: string, harnessId: string): Promise<string | null>;
+  /**
+   * HWS.1 — the REVERSE of {@link get}: the harness task id bound to `wgId` in `project`, or `null`. The
+   * outbound reconcile (`reconcileHarnessWorkgraph`) uses it to resolve a wg issue → its harness task (a
+   * `null` result ⇒ a `create` outbound delta). SINGLE-VALUED: the monotonic `bind` (its `(project,
+   * harness_task_id)` PK + `DO NOTHING`) guarantees at most one harness id per (project, wg), so the reverse
+   * read never has to disambiguate. Backed by the `(project, wg_issue_id)` index added in `init()`.
+   */
+  getByWgId(project: string, wgId: string): Promise<string | null>;
 }
 
 export function harnessMapStore(dbUrl: string): HarnessMapStore {
@@ -41,6 +49,10 @@ export function harnessMapStore(dbUrl: string): HarnessMapStore {
         `CREATE TABLE IF NOT EXISTS harness_map (
            project TEXT NOT NULL, harness_task_id TEXT NOT NULL, wg_issue_id TEXT NOT NULL,
            bound_at TEXT NOT NULL, PRIMARY KEY (project, harness_task_id))`,
+      );
+      // HWS.1 — the reverse index backing `getByWgId` (the outbound resolve wg → harness). Idempotent.
+      await c.execute(
+        `CREATE INDEX IF NOT EXISTS idx_harness_map_wg ON harness_map (project, wg_issue_id)`,
       );
       client = c;
     },
@@ -61,6 +73,16 @@ export function harnessMapStore(dbUrl: string): HarnessMapStore {
       });
       const row = rs.rows[0];
       return row ? asStr(row.wg_issue_id) : null;
+    },
+
+    async getByWgId(project, wgId) {
+      // The reverse of `get` — single-valued by the monotonic bind (one harness id per (project, wg)).
+      const rs = await db().execute({
+        sql: 'SELECT harness_task_id FROM harness_map WHERE project = ? AND wg_issue_id = ?',
+        args: [project, wgId],
+      });
+      const row = rs.rows[0];
+      return row ? asStr(row.harness_task_id) : null;
     },
   };
 }

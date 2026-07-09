@@ -1,0 +1,47 @@
+# .github/workflows/release-tag.yml — AGF.6 (T-opensquid-automated-gitflow, wg-b9c7c21cb124): on merge to `main`
+# (the human MERGE of the batched `stage → main` PR — the SOLE gate), compute the locked-prefix release tag
+# (`nextLockedTag`, patch-per-release, prefix-scoped so it never chases an off-prefix tag) + push `v<prefix>.N`,
+# which triggers the EXISTING publish.yml (`on: push: tags: ['v*']`) — its clean-env re-run + versionAlreadyPublished
+# guard + publish-only-when-new are KEPT verbatim. FAIL-SAFE: an already-tagged HEAD is a no-op (never a spurious
+# double-bump). The full tag history is fetched so `latestPrefixTag` sees the real tag set (else it mis-seeds .0).
+name: Release tag
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # push the tag
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for latestPrefixTag (else it mis-seeds v<prefix>.0)
+          fetch-tags: true
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build # dist/ carries the locked-prefix computer (nextLockedTag / tagMainRelease)
+      - name: Compute + push the locked release tag
+        run: |
+          if git tag --points-at HEAD | grep -q '^v'; then
+            echo "HEAD already carries a release tag — no-op (idempotent)."
+            exit 0
+          fi
+          node -e "
+            Promise.all([
+              import('./dist/packs/discovery.js'),
+              import('./dist/runtime/release/stage_pr.js'),
+            ]).then(async ([disc, pr]) => {
+              const cfg = await disc.readActiveVersioning('.opensquid');
+              if (!cfg) { console.log('no versioning config declared — no release tag'); return; }
+              const tag = await pr.tagMainRelease(cfg, process.cwd(), pr.realGhIo);
+              console.log('pushed ' + tag + ' (triggers publish.yml)');
+            }).catch((e) => { console.error(e); process.exit(1); });
+          "

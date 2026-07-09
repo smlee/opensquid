@@ -254,6 +254,15 @@ export type SkillServesBlock = z.infer<typeof SkillServesBlock>;
 export const SkillServes = z.union([SkillServesBlock, z.array(SkillServesBlock).min(1)]);
 export type SkillServes = z.infer<typeof SkillServes>;
 
+// AGF.1 (T-opensquid-automated-gitflow) — the pack-declared default versioning strategy shape. Mirrors
+// discovery.ts `VersioningConfig` (the project-config sibling): `strategy`/`bump` single-member unions today,
+// `prefix` the human-held major.minor.
+const VersioningStrategy = z.object({
+  strategy: z.literal('locked-prefix'),
+  prefix: z.string().min(1),
+  bump: z.literal('patch-per-release').default('patch-per-release'),
+});
+
 export const PackV2 = z
   .object({
     name: z.string().min(1),
@@ -279,6 +288,11 @@ export const PackV2 = z
     // `fullstack-flow-*` key literal. Optional/additive: a pack that omits it (v1 `coding-flow`) keeps the
     // session-FSM gate path. The reader (runtime/commit_gate_evidence.ts) resolves this block module-relative.
     commit_gate: CommitGateBlock.optional(),
+    // AGF.1 (T-opensquid-automated-gitflow) — the PACK-declared default VERSIONING strategy for the automated
+    // git-flow: the recommended default a project inherits when its active.json omits `versioning` (project-over-
+    // pack override). Optional/additive: a pack that omits it keeps no default (core then needs the project object).
+    // The `prefix` literal lives HERE (data), never in core logic.
+    versioning: VersioningStrategy.optional(),
     foundation: z.unknown().optional(), // pure expertise (manifest/lessons) — neither fsm nor gates
   })
   .strict()

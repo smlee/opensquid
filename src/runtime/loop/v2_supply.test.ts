@@ -751,6 +751,16 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
       mockLoad.mockResolvedValue([scopeWriteGatePack()]);
       await appendAsk(sid, 'add login screen'); // still needed: scope.anchors_ok checks against captured ask
       expect(await countScope1()).toBe(0); // clean baseline
+      // WGL.2/WGL.3 — decomposition now stamps OWNERSHIP (a parent-child edge from the decompose-root task),
+      // so it requires an active task id whose issue exists (addEdge validates endpoints). Seed both.
+      const wdir = await resolveLocalStoreDir(process.cwd());
+      const wstore = workGraphStore({
+        dbUrl: `file:${join(wdir, 'workgraph.db')}`,
+        sourceDir: join(wdir, 'store', 'issues'),
+      });
+      await wstore.init();
+      const parent = await wstore.createIssue({ title: 'root task', body: '' });
+      await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: parent.id });
       const p = await writePreResearch('1. Login [ask: "add login screen"]');
       await runV2Cartridges(sid, advanceWrite(p), NOW);
       // the artifact's element (scope-1) was stamped into a work-graph issue → plan.complete can now hold
@@ -947,11 +957,13 @@ const codeEv = {
   exit_code: 0,
 } as unknown as Event;
 
-/** Injectable pure CODE deps — a fixed task + the three facets a test wants the producer to read. */
+/** Injectable pure CODE deps — a fixed task + the four facets a test wants the producer to read. The 4th
+ *  (`suiteGreen`, SGG.2) DEFAULTS to true so the pre-existing three-arg callers keep asserting a green suite. */
 const codeDeps = (
   phasesComplete: boolean,
   ran: boolean,
   deprecatedClean: boolean,
+  suiteGreen: boolean | null = true,
 ): CodeEvidenceDeps => ({
   activeTaskId: () => Promise.resolve('T2.7'),
   // a PhaseState whose `isComplete` is `phasesComplete`: all-7 when complete, one phase when not.
@@ -965,15 +977,26 @@ const codeDeps = (
         : { task_id: 'T2.7', phases: ['pre_research'] },
     ),
   readiness: () => Promise.resolve({ ran, deprecatedClean }),
+  suite: () => Promise.resolve(suiteGreen), // SGG.2 — injected suite record (null = no record → fail-closed)
+  // AQG.4 — NO arch-detector declared by default ⇒ archClean fails OPEN to true, so the pre-existing callers'
+  // `code_ready` evaluation is unaffected (opensquid itself declares none).
+  archDetectorDeclared: () => Promise.resolve(false),
+  arch: () => Promise.resolve(null),
 });
 
-// The real `code_ready` guard expression, evaluated over the nested `code` object buildGuardCtx binds.
+// The real `code_ready` guard expression (its deterministic `code.*` clauses), evaluated over the nested `code`
+// object buildGuardCtx binds. Includes `code.suite_green` (SGG.3 — the appended suite-green term).
 const CODE_GUARD = new RegistryGuardEvaluator(
-  new Map([['code_ready', 'code.phases_complete && code.readiness_ran && code.deprecated_clean']]),
+  new Map([
+    [
+      'code_ready',
+      'code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green',
+    ],
+  ]),
 );
 
 describe('buildGuardCtx — T2.7 CODE binding', () => {
-  it('binds code.phases_complete/readiness_ran/deprecated_clean dual-shape (flat + nested)', async () => {
+  it('binds code.phases_complete/readiness_ran/deprecated_clean/suite_green dual-shape (flat + nested)', async () => {
     const ctx = await buildGuardCtx(
       codeEv,
       'sess-code-shape',
@@ -984,14 +1007,21 @@ describe('buildGuardCtx — T2.7 CODE binding', () => {
     expect(ctx.has('code.phases_complete')).toBe(true);
     expect(ctx.has('code.readiness_ran')).toBe(true);
     expect(ctx.has('code.deprecated_clean')).toBe(true);
+    expect(ctx.has('code.suite_green')).toBe(true); // SGG.2 — flat Map key present
+    expect(ctx.has('code.arch_clean')).toBe(true); // AQG.4 — flat Map key present
+    expect(ctx.get('code.arch_clean')).toBe(true); // undeclared detector ⇒ fail-open true
     const nested = ctx.get('code') as {
       phases_complete: boolean;
       readiness_ran: boolean;
       deprecated_clean: boolean;
+      suite_green: boolean;
+      arch_clean: boolean;
     };
+    expect(typeof nested.arch_clean).toBe('boolean'); // AQG.4 — nested prop present
     expect(typeof nested.phases_complete).toBe('boolean');
     expect(typeof nested.readiness_ran).toBe('boolean');
     expect(typeof nested.deprecated_clean).toBe('boolean');
+    expect(typeof nested.suite_green).toBe('boolean'); // SGG.2 — nested prop present
   });
 
   it('complete phases + clean readiness → all true → code_ready PASSES (gate advances)', async () => {
@@ -1043,6 +1073,45 @@ describe('buildGuardCtx — T2.7 CODE binding', () => {
     );
     expect(ctx.get('code.readiness_ran')).toBe(false);
     expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('SGG.2/3: a RED suite → suite_green:false (all else green) → code_ready BLOCKS (kills the false-green slice)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-suite-red',
+      'code',
+      undefined,
+      codeDeps(true, true, true, false),
+    );
+    expect(ctx.get('code.phases_complete')).toBe(true);
+    expect(ctx.get('code.readiness_ran')).toBe(true);
+    expect(ctx.get('code.deprecated_clean')).toBe(true);
+    expect(ctx.get('code.suite_green')).toBe(false); // …but a red/slice suite BLOCKS
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('SGG.2/3: NO suite record (null) → suite_green:false → code_ready BLOCKS (fail-closed)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-suite-absent',
+      'code',
+      undefined,
+      codeDeps(true, true, true, null),
+    );
+    expect(ctx.get('code.suite_green')).toBe(false);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(false);
+  });
+
+  it('SGG.2/3: a GREEN full suite (all else green) → suite_green:true → code_ready PASSES (gate advances)', async () => {
+    const ctx = await buildGuardCtx(
+      codeEv,
+      'sess-code-suite-green',
+      'code',
+      undefined,
+      codeDeps(true, true, true, true),
+    );
+    expect(ctx.get('code.suite_green')).toBe(true);
+    expect(CODE_GUARD.eval('code_ready', ctx)).toBe(true);
   });
 
   it('FAIL-CLOSED: no active task (default deps, no signal) → all false → BLOCKS', async () => {
@@ -1317,11 +1386,12 @@ describe('buildGuardCtx — T2.3 verdict dual-shape', () => {
   });
 });
 
-// ── T2.12 — the LIVE per-stage report trigger (leaving any of the 5 stages emits its report) ──────────────
-// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, emits a dated
-// <project>/.opensquid/reports/ file (V2-ENF.2/4, never the legacy docs/reports/) + memory mirror +
-// in-session injection + best-effort chat. CODE fires here too (loop_driver was never
-// wired). All deterministic: iso (NOW) injected, unique session ids, a temp project root.
+// ── T2.12 / RD.1-4 — the LIVE per-stage report trigger (leaving any of the 5 stages DISPLAYS its report) ────
+// runV2Cartridges, on each FSM transition leaving SCOPE/PLAN/AUTHOR/CODE/DEPLOY, DISPLAYS that stage's after
+// report live (the body reaches the in-session injections + the stderr loop-terminal channel) + a memory mirror.
+// RD.4 removed the `.opensquid/reports/` disk save — a communication report is SHOWN, never filed (the tests
+// assert the body is in `d.injections` AND that no report file was written). CODE fires here too (interactively).
+// All deterministic: iso (NOW) injected, unique session ids, a temp project root.
 
 /** A one-state gate pack whose state is named `<stage>` and PASSES (advances to terminal) on a tool_call.
  *  Leaving `<stage>` is the transition the T2.12 trigger reports on. */
@@ -1395,7 +1465,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     ['code', 'CODE'], // CODE now fires HERE too (loop_driver was never wired) — the report's live emitter
     ['deploy', 'DEPLOY'],
   ] as const) {
-    it(`leaving ${stageUpper} emits its dated report file + a memory mirror`, async () => {
+    it(`leaving ${stageUpper} DISPLAYS its after report (no file) + a memory mirror`, async () => {
       const sid = `sess-t212-${stateName}`;
       const root = await newProjectRoot(sid);
       await writeActiveTask(sid, {
@@ -1409,16 +1479,17 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
       const d = await runV2Cartridges(sid, writeCall(), NOW);
       expect(d.exitCode).toBe(0);
 
-      // 1) the dated file under the SESSION CWD's .opensquid/reports/ (NOT the real repo).
-      const reportPath = join(root, '.opensquid', 'reports', `${stateName}-T-rep-2026-06-22.md`);
-      expect(await exists(reportPath)).toBe(true);
-      const body = await readFile(reportPath, 'utf8');
+      // 1) RD.1/RD.4 — the after body is DISPLAYED live (present in the in-session injections), never filed.
+      const body = d.injections.join('\n');
       expect(body).toContain(`After-stage report — ${stageUpper} complete · T-rep ·`);
       expect(body).toContain('Summary:');
       expect(body).toContain('Evidence:'); // the gate predicates that backed the phase
       expect(body).toContain('Next →');
+      // no `.opensquid/reports/` communication file was written (the report is shown, not saved).
+      const reportPath = join(root, '.opensquid', 'reports', `${stateName}-T-rep-2026-06-22.md`);
+      expect(await exists(reportPath)).toBe(false);
 
-      // 2) the memory mirror — a pending lesson whose content is the report body.
+      // 2) the memory mirror — a pending lesson whose content is the report body (resume/wedge buffer, kept).
       const lessonsDir = join(pendingLessonsDir(sid), 'potential-lessons');
       const files = await readdir(lessonsDir);
       expect(files.length).toBe(1);
@@ -1433,17 +1504,18 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('code')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'code-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live (injected), not read off disk
     expect(body).toContain('After-stage report — CODE complete · T-rep ·');
     expect(body).toContain('Phases:'); // the long, stand-out 7-step chart
     expect(body).toContain('[x] pre_research');
     expect(body).toContain('[x] fix');
     expect(body).toContain('Evidence:'); // the CODE gate predicates
+    // RD.4 — no communication file written.
+    expect(await exists(join(root, '.opensquid', 'reports', 'code-T-rep-2026-06-22.md'))).toBe(
+      false,
+    );
   });
 
   it('#12 — CODE report fires on a COMPLETING log_phase (in-band fallback), ONCE per task', async () => {
@@ -1507,16 +1579,13 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
   // T2.10 — the SCOPE report's goal-alignment line is now the LIVE consumer of goalConsult.
   it('SCOPE report carries the goal-alignment line (no goal map → on the captured goal)', async () => {
     const sid = 'sess-t210-scope-nogoal';
-    const root = await newProjectRoot(sid);
+    await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('scope')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'scope-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live
     expect(body).toContain('Goal: on the captured goal'); // absent goal → aligned:true (not a drift signal)
   });
 
@@ -1533,27 +1602,21 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await appendAsk(sid, 'tweak the homepage banner colors'); // disjoint from the goal
     mockLoad.mockResolvedValue([stageGatePack('scope')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'scope-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live
     expect(body).toContain('OFF the captured goal — destination drift');
   });
 
   it('a non-SCOPE stage report carries NO goal-alignment line (the check belongs at scope-time)', async () => {
     const sid = 'sess-t210-plan-noline';
-    const root = await newProjectRoot(sid);
+    await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-rep' });
     mockLoad.mockResolvedValue([stageGatePack('plan')]);
 
-    await runV2Cartridges(sid, writeCall(), NOW);
+    const d = await runV2Cartridges(sid, writeCall(), NOW);
 
-    const body = await readFile(
-      join(root, '.opensquid', 'reports', 'plan-T-rep-2026-06-22.md'),
-      'utf8',
-    );
+    const body = d.injections.join('\n'); // RD.1 — displayed live
     expect(body).not.toContain('## Goal alignment');
   });
 

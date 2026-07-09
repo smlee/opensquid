@@ -13,6 +13,11 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
 - Write the pre-research artifact to `docs/research/<track>-pre-research-<date>.md`. Every claim is cited
   (`file:line` / memory / the user's words) OR flagged as an unchecked `- [ ] OPEN QUESTION: …`.
 - Capture the FULL scope against the design you cite — no MVP / convenient-slice reduction (see the rubric).
+- CITE THE AUTHORITATIVE design-of-record. Before scoping, confirm the design you cite is the CURRENT one, NOT a
+  superseded or narrower predecessor: check for a newer doc on the same topic that says it SUPERSEDES this one —
+  if two cover the same ground, the superseding one wins. Scoping against a stale/narrow design yields a
+  "complete" scope of the WRONG target (the reporting-MVP failure: the build faithfully matched a superseded
+  narrow task instead of the full model).
 - Resolve every open question here (ask the user only if it is unanswerable after research OR an
   architecture-changing fork). CHECK the box / remove the item before you leave SCOPE.
 
@@ -21,9 +26,15 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
 As you move through SCOPE, emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor
 shows where this item is (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
 
-- `set_loop_phase(phase: "research", index: 1, total: 3)` while researching,
-- `set_loop_phase(phase: "write-artifact", index: 2, total: 3)` while writing the pre-research artifact,
-- `set_loop_phase(phase: "confirm", index: 3, total: 3)` when you present the scope for the user's confirmation.
+Emit each phase with `lifecycle: "running"` on ENTER (⟳) and `lifecycle: "done"` on LEAVE (✓), so the feed
+shows whether the phase is in flight or finished:
+
+- `set_loop_phase(phase: "research", index: 1, total: 3, lifecycle: "running")` while researching,
+  then `set_loop_phase(phase: "research", index: 1, total: 3, lifecycle: "done")` when it is complete,
+- `set_loop_phase(phase: "write-artifact", index: 2, total: 3, lifecycle: "running")` while writing the
+  pre-research artifact (leave with `lifecycle: "done"`),
+- `set_loop_phase(phase: "confirm", index: 3, total: 3, lifecycle: "running")` when you present the scope for
+  the user's confirmation (leave with `lifecycle: "done"`).
 
 ## Gate during SCOPE (scope → scope_write): `scope_ready`
 

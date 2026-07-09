@@ -19,6 +19,28 @@ You are in the CODE stage. Drive the active task to a shipped, gated unit. CODE 
 Run pre_research → learn → code → test → audit → post_research → fix. **Log ALL 7 via `log_phase`** as you
 complete them — this is the agent-controllable completion signal the gate reads. Run the readiness surfacers.
 
+- **`test` runs the project's DECLARED verifySuite, VERBATIM.** Read `.opensquid/active.json` `verifySuite`
+  (for opensquid: `bash scripts/pre-push.sh` — `pnpm lint` → `typecheck` → `build` → the FULL test suite →
+  `format:check`) and run EXACTLY that command, repo-wide, requiring EXIT 0. This is the SAME command DEPLOY
+  runs (`procedure/deploy.md` §1) — CODE must not self-select a subset. Do NOT log the `test` phase (4/7)
+  complete on a partial / single-file / slice run: a slice that passes while the full suite is red is a
+  FALSE GREEN (the exact regression this closes — a 116-test slice hid 4 real reds). `code_ready` now gates on
+  the recorded full-suite result (`code.suite_green`), so a slice run cannot advance CODE.
+
+## Emit your phase to the live status feed
+
+As you run each of the 7 phases, ALSO emit it to the live status feed via the `set_loop_phase` MCP tool — enter
+with `lifecycle: "running"` (⟳), leave with `lifecycle: "done"` (✓) — IN ADDITION to `log_phase`. The two stores
+serve DIFFERENT consumers and are never conflated: `log_phase` is the session-keyed commit-gate ledger;
+`set_loop_phase` is the wg-keyed push feed the harness status line / Monitor reads. Without this, CODE — the
+longest stage — is SILENT on the feed (it shows only `wg-… · code`). `wg_id` defaults to this lap's item — do
+not pass it:
+
+- `set_loop_phase(phase: "pre_research", index: 1, total: 7, lifecycle: "running")` on enter,
+  then `set_loop_phase(phase: "pre_research", index: 1, total: 7, lifecycle: "done")` on leave,
+- and the same enter+leave pair for each remaining phase:
+  learn (2/7) · code (3/7) · test (4/7) · audit (5/7) · post_research (6/7) · fix (7/7).
+
 ## Research AFTER coding (audit) — another layer
 
 - FAN OUT adversarial audit subagents with the appropriate skills, one per lens, each trying to REFUTE that
@@ -38,4 +60,6 @@ later stage to catch it. This is CODE starting the same fix loop DEPLOY would ot
 ## Gate to advance (code → deploy): `code_ready`
 
 Passes when `code.phases_complete` (all 7 phases logged for the active task) ∧ `code.readiness_ran` ∧
-`code.deprecated_clean` (readiness found NO deprecated call). Log all 7 + run readiness clean and it advances.
+`code.deprecated_clean` (readiness found NO deprecated call) ∧ `code.suite_green` (the FULL declared verifySuite
+was run and recorded green — not a slice). Log all 7, run readiness clean, AND run the whole verifySuite green
+(EXIT 0), and it advances.

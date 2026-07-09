@@ -75,6 +75,30 @@ export async function readSuite(sid: string, taskId: string): Promise<boolean | 
   }
 }
 
+// AQG.4 (T-arch-quality-gate) — the DETERMINISTIC project ARCHITECTURE-DETECTOR record, a byte-for-byte sibling
+// of recordSuite/readSuite. The detector command is EXPENSIVE (a lint over the tree), so the AGENT runs it in
+// the CODE procedure and a PostToolUse reaction (v2_supply) records its REAL exit code HERE on a verbatim match;
+// `archClean` READS this record. The state key is DISTINCT from `suiteKey` (a shared key would conflate the two
+// facets). Fail policy is the caller's (code_evidence): declared+no-record → fail-closed, undeclared → fail-open.
+const archKey = (taskId: string): string => `fullstack-flow-arch-${taskId}`;
+
+/** Record the deterministic result of the agent's arch-detector run (its real exit code) for the task. */
+export async function recordArch(sid: string, taskId: string, passed: boolean): Promise<void> {
+  await atomicWriteFile(sessionStateFile(sid, archKey(taskId)), JSON.stringify({ passed }));
+}
+
+/** The recorded arch-detector result, or `null` when none/unreadable (the caller decides skip-vs-fail-closed). */
+export async function readArch(sid: string, taskId: string): Promise<boolean | null> {
+  try {
+    const p = JSON.parse(await readFile(sessionStateFile(sid, archKey(taskId)), 'utf8')) as {
+      passed?: unknown;
+    };
+    return typeof p.passed === 'boolean' ? p.passed : null;
+  } catch {
+    return null; // never-run / unreadable / malformed
+  }
+}
+
 // DBL.2 — bound the bug-fix loop. The `verify` decision routes bugs→AUTHOR; an UNFIXABLE bug would cycle
 // deploy→author→code→deploy forever. Count the rounds (durable, per-task) and escalate at the cap, so a stuck
 // bug becomes a genuine human residual instead of an infinite grind (integrity over an endless loop).

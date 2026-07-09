@@ -25,8 +25,8 @@
  */
 import { join } from 'node:path';
 
-import { OPENSQUID_HOME } from '../paths.js';
-import { readActiveTask } from '../session_state.js';
+import { resolveLocalStoreDir } from '../paths.js';
+import { readActiveTask, readSessionCwd } from '../session_state.js';
 import { resolveWgProject } from './plan_evidence.js';
 import { harnessMapStore } from '../../workgraph/harness_map.js';
 
@@ -36,18 +36,24 @@ export interface CheckpointKeyDeps {
   itemId: () => string | undefined;
   /** The active harness task (its `.id` is the harness_map key), or null when no task is active. */
   readActiveTask: (sessionId: string) => Promise<{ id: string } | null>;
-  /** The project uuid namespace keying the OUT global `harness_map.db` (NOT the project-local workgraph). */
+  /** The project namespace stamped in the `harness_map.db` rows (a harmless constant now the map is project-local). */
   resolveProject: (sessionId: string) => Promise<string>;
-  /** Forward map: harness task id → bound wg issue id (null when unbound). */
-  mapGet: (project: string, harnessId: string) => Promise<string | null>;
+  /** Forward map: harness task id → bound wg issue id (null when unbound). `sessionId` selects the project-local store. */
+  mapGet: (project: string, harnessId: string, sessionId: string) => Promise<string | null>;
 }
 
 const defaultDeps: CheckpointKeyDeps = {
   itemId: () => process.env.OPENSQUID_ITEM_ID,
   readActiveTask,
   resolveProject: resolveWgProject,
-  mapGet: async (project, harnessId) => {
-    const store = harnessMapStore(`file:${join(OPENSQUID_HOME(), 'harness_map.db')}`);
+  // #26 HWS.1 (decision 5) — the binding overlay moved PROJECT-LOCAL. This reader MUST open the SAME
+  // `<root>/.opensquid/harness_map.db` that `harness_graph_sync.ts`'s `defaultOpenMap` WRITES to (resolved by
+  // the shared `resolveLocalStoreDir(cwd)`), or it would read a stale/empty GLOBAL map and null-skip every
+  // interactive checkpoint. cwd is derived from the session, exactly as `defaultOpenMap`.
+  mapGet: async (project, harnessId, sessionId) => {
+    const cwd = (await readSessionCwd(sessionId)) ?? process.cwd();
+    const dir = await resolveLocalStoreDir(cwd);
+    const store = harnessMapStore(`file:${join(dir, 'harness_map.db')}`);
     await store.init();
     return store.get(project, harnessId);
   },
@@ -66,5 +72,5 @@ export async function resolveCheckpointKey(
   const active = await deps.readActiveTask(sessionId);
   if (active === null) return null; // no active task → no key → skip the write
   const project = await deps.resolveProject(sessionId);
-  return deps.mapGet(project, active.id); // INTERACTIVE: forward-map harness id → wg id (null → skip)
+  return deps.mapGet(project, active.id, sessionId); // INTERACTIVE: forward-map harness id → wg id (null → skip)
 }

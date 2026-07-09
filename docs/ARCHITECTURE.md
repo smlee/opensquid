@@ -354,6 +354,12 @@ requirements:
     wg: wg-0baaae4bcf2e
     assert: { kind: reachable, symbol: renderFollowReminder, from: [post-tool-use] }
     proof: 'src/runtime/loop/follow_reminder.test.ts'
+  - id: R-REPORT-DISPLAY
+    intent: 'the before/after COMMUNICATION report is DISPLAYED live on the terminal (the print primitive), never saved (reporting-model — RD.1)'
+    spec: 'loop/docs/design/opensquid-reporting-model.md#2'
+    wg: wg-123340ac7a9f
+    assert: { kind: reachable, symbol: displayReport, from: [post-tool-use] }
+    proof: 'src/runtime/loop/report_display.test.ts'
   # T-project-local-state (wg-6a079c496944) — workgraph/loop/checkpoints become PROJECT-LOCAL (like .git).
   # New IN-path exports introduced by PLS.1 (the foundational root resolver + the shared opener locator). The
   # proof-test is the authority (static `from` advisory — these are deep path utilities the openers consume).
@@ -369,4 +375,444 @@ requirements:
     wg: wg-6a079c496944
     assert: { kind: reachable, symbol: resolveLocalStoreDir, from: [pre-tool-use] }
     proof: 'src/runtime/paths.test.ts'
+  # wg-fecabb8ff29f (auto-trigger loop on scope-exit) — the loop auto-starts on the human scope→scope_write
+  # advance. One reachable requirement per new BEHAVIORAL export; the proof-test is the authority (the static
+  # `from` hint is advisory — these surface through the scope-exit checkpoint-writer path, not a hook builder,
+  # so a negative static pre-filter does not veto a passing proof). Data-shape exports (loopPidPath/loopLockPath
+  # path builders + LoopStatus/LoopAutoSpawnResult/EnsureLoopRunningDeps types + the resolveLoopEntrypoint seam)
+  # are baselined in the allowlist, per the chatDaemon*Path / resolveCliEntrypoint / *Deps precedent.
+  - id: R-LOOP-AUTOSPAWN
+    intent: 'the loop auto-starts on scope-exit — idempotent, single-flight, fail-open (ask BUILD §2/§3/§4)'
+    wg: wg-fecabb8ff29f
+    assert: { kind: reachable, symbol: ensureLoopRunning, from: [post-tool-use] }
+    proof: 'src/runtime/ralph/loop_autospawn.test.ts'
+  - id: R-LOOP-STATUS
+    intent: 'project-local loop liveness (pidfile + kill -0) — the idempotency probe (ask BUILD §2)'
+    wg: wg-fecabb8ff29f
+    assert: { kind: reachable, symbol: loopStatus, from: [post-tool-use] }
+    proof: 'src/runtime/ralph/loop_autospawn.test.ts'
+  - id: R-LOOP-START
+    intent: 'detached background spawn of `dist/cli.js loop`, waiting for the worker pidfile (ask BUILD §2)'
+    wg: wg-fecabb8ff29f
+    assert: { kind: reachable, symbol: startLoop, from: [post-tool-use] }
+    proof: 'src/runtime/ralph/loop_autospawn.test.ts'
+
+  # T-opensquid-release-flow (REL.1..REL.4) — the release flow's new BEHAVIORAL exports: one reachable
+  # requirement per export, its element test the proof (the authority). The `from` hints are advisory — these
+  # surface through the `opensquid release` CLI / the commit-msg git hook / the CI publish guard, not a hook
+  # builder, so a negative static pre-filter never vetoes a passing proof. The DATA-shape exports (ParsedCommit /
+  # BumpLevel / NpmView / ReleaseDeps) are baselined in the allowlist, per the *Deps / *Path precedent.
+  - id: R-RELEASE-MERGE
+    intent: 'REL.1 mergeToMain: FF else merge-commit feat/* → main (mechanics only, no policy)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: mergeToMain, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-TAG
+    intent: 'REL.1 tagAndPushTag: git tag v<version> on HEAD + push the tag'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: tagAndPushTag, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-READ-VERSION
+    intent: 'REL.1 readPackageVersion: read package.json version'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: readPackageVersion, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-WRITE-VERSION
+    intent: 'REL.1 writePackageVersion: targeted field replace (no re-serialize; preserves formatting)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: writePackageVersion, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-LAST-TAG
+    intent: 'REL.1 lastReleaseTag: newest v* tag or null (git describe)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: lastReleaseTag, from: [release] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-SUBJECTS
+    intent: 'REL.1 commitSubjectsSince: commit subjects in <ref>..HEAD (the bump input)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: commitSubjectsSince, from: [release, commit-msg] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-PUBLISHED
+    intent: 'REL.1 versionAlreadyPublished: the version-difference guard (npm view exact-version probe, fail-safe)'
+    wg: wg-5de59d0b8f2b
+    assert: { kind: reachable, symbol: versionAlreadyPublished, from: [publish-ci] }
+    proof: 'src/runtime/release/release_core.test.ts'
+  - id: R-RELEASE-PARSE
+    intent: 'REL.2 parseConventionalCommit: parse type(scope)!: subject + BREAKING footer → ParsedCommit | null'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: parseConventionalCommit, from: [release, commit-msg] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-VALIDATE-MSG
+    intent: 'REL.2/REL.3 validateConventionalMessage: the shared commit-msg gate predicate (single parser)'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: validateConventionalMessage, from: [commit-msg] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-BUMP-LEVEL
+    intent: 'REL.2 bumpLevel: fold parsed commits → highest bump (breaking>feat>fix>null)'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: bumpLevel, from: [release] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-NEXT-VERSION
+    intent: 'REL.2 nextVersion: apply a BumpLevel to a semver (null → unchanged, the no-bump signal)'
+    wg: wg-d759463d71b3
+    assert: { kind: reachable, symbol: nextVersion, from: [release] }
+    proof: 'src/runtime/release/release_semver.test.ts'
+  - id: R-RELEASE-COMMIT-MSG-GATE
+    intent: 'REL.3 runCommitMsgGate: block a non-conventional agent commit (scoped fail-closed, gated ∧ agent)'
+    wg: wg-d043e1002f6d
+    assert: { kind: reachable, symbol: runCommitMsgGate, from: [commit-msg] }
+    proof: 'src/setup/cli/gate.test.ts'
+  - id: R-RELEASE-RUN
+    intent: 'REL.4 runRelease: the sequence (precondition → merge → bump → tag), refuse-red, skip-when-null'
+    wg: wg-7bf3ae9f592b
+    assert: { kind: reachable, symbol: runRelease, from: [release] }
+    proof: 'src/setup/cli/release.test.ts'
+  - id: R-RELEASE-REGISTER
+    intent: 'REL.4 registerRelease: the `opensquid release` top-level command wired into cli.ts'
+    wg: wg-7bf3ae9f592b
+    assert: { kind: reachable, symbol: registerRelease, from: [release] }
+    proof: 'src/setup/cli/release.test.ts'
+  # WGL (wg-141e0ffd9955) — workgraph item-lifecycle + ownership + GC: one covering requirement per BEHAVIORAL
+  # export of the eight scoped elements (docs/tasks/T-workgraph-lifecycle.md). Each names the primary export +
+  # its proof-test (the authority; the static `from` hint is advisory). Data-shape exports (the DecomposeOwner
+  # / ReapGateDeps type shapes + the WgArchive/WgUnarchive zod consts) are baselined in the allowlist.
+  - id: R-WGL-OWNERSHIP-GENID
+    intent: 'WGL.2 deriveGenerationId: a PURE content hash of the artifact element universe — idempotent re-fire, change-sensitive (lets WGL.3 detect a superseded generation by mismatch)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: deriveGenerationId, from: [post-tool-use] }
+    proof: 'src/runtime/loop/auto_decompose.test.ts'
+  - id: R-WGL-RECONCILE
+    intent: 'WGL.3 reconcileDecomposition: re-decompose reconcile by run-id mismatch (idempotent / supersede-by-archive / first) — replaces the any-covered short-circuit'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: reconcileDecomposition, from: [post-tool-use] }
+    proof: 'src/runtime/loop/decompose_reconcile.test.ts'
+  - id: R-WGL-REAP-ORPHANS
+    intent: 'WGL.4 reapOrphans: archive OPEN, ownerless sourceElementId stubs (the orphan drain) — soft + idempotent'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: reapOrphans, from: [orchestrator, session-end] }
+    proof: 'src/runtime/loop/reaper.test.ts'
+  - id: R-WGL-IS-ORPHAN
+    intent: 'WGL.4 isOrphan: the narrow orphan predicate (open + sourceElementId body + no incoming parent-child edge) — a real human task is never reaped'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: isOrphan, from: [orchestrator, session-end] }
+    proof: 'src/runtime/loop/reaper.test.ts'
+  - id: R-WGL-REAP-SESSION-END
+    intent: 'WGL.4 reapOrphansIfAllowed: the session-end reaper seam (injectable, fail-open owned by the caller, no destructive gate — archive is reversible)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: reapOrphansIfAllowed, from: [session-end] }
+    proof: 'src/runtime/hooks/session_end_reap.test.ts'
+  - id: R-WGL-PARENT-ROLLUP
+    intent: 'WGL.5 rollUpParents: auto-close a parent once every child is non-drivable (closed/archived/wedged); recurses upward; never buries a wedge'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: rollUpParents, from: [orchestrator] }
+    proof: 'src/runtime/loop/parent_rollup.test.ts'
+  - id: R-WGL-MCP-ARCHIVE
+    intent: 'WGL.7 handleWgArchive: the MCP soft-archive tool (thin validate → facade.archiveIssue → JSON)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: handleWgArchive, from: [server] }
+    proof: 'src/mcp/tools/workgraph.test.ts'
+  - id: R-WGL-MCP-UNARCHIVE
+    intent: 'WGL.7 handleWgUnarchive: the MCP restore tool (reverses workgraph_archive → open)'
+    spec: 'docs/tasks/T-workgraph-lifecycle.md'
+    wg: wg-141e0ffd9955
+    assert: { kind: reachable, symbol: handleWgUnarchive, from: [server] }
+    proof: 'src/mcp/tools/workgraph.test.ts'
+  # T-loop-monitoring-pushstream (wg-61db3ededf19, LMP.1..7) — the loop monitor becomes a PUSH / LIVE-STREAM
+  # feed: one durable append-only `loop_events` log, consumers fold/tail, the pull machinery removed. One
+  # reachable requirement per new BEHAVIORAL export; the proof-test is the authority (the static `from` hint is
+  # advisory — these surface through the mutation choke-points / the loop-status CLI / the pack test, not a hook
+  # builder, so a negative static pre-filter never vetoes a passing proof). The DATA-shape exports (MonitorEvent /
+  # NewMonitorEvent / MonitorEventKind / PhaseLifecycle / LoopFoldState / ProcedureLintResult) are baselined in
+  # the allowlist, per the *Deps / *Schema precedent.
+  - id: R-MONITOR-APPEND
+    intent: 'LMP.1 appendMonitorEvent: append one MonitorEvent to the durable append-only loop_events log (store-assigned monotonic seq)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.1'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: appendMonitorEvent, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_events.test.ts'
+  - id: R-MONITOR-TAIL
+    intent: 'LMP.1 tailEventsSince: the raw cursor read — every event after a seq, in order (exactly-once resume)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.1'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: tailEventsSince, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_events.test.ts'
+  - id: R-MONITOR-EMIT
+    intent: 'LMP.2 emitMonitorEvent: the fail-open emit at the mutation choke-points (a store fault never breaks the mutation)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.1'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: emitMonitorEvent, from: [post-tool-use] }
+    proof: 'src/runtime/loop/monitor_emit.test.ts'
+  - id: R-MONITOR-FOLD
+    intent: 'LMP.4 foldEvents: the pure, chunk-invariant reducer folding the ordered log into per-item latest state'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.2'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: foldEvents, from: [status-line] }
+    proof: 'src/runtime/loop/loop_fold.test.ts'
+  - id: R-MONITOR-FOLD-LATEST
+    intent: 'LMP.4 foldLatestState: the full-truth materialization (terminal items included) — the collectLoopState contract'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.2'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: foldLatestState, from: [status-line] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
+  - id: R-MONITOR-SUBSCRIBE
+    intent: 'LMP.4 subscribeMonitor: the live cursor tail — exactly-once per new event (the --watch/Monitor primitive)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.3'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: subscribeMonitor, from: [status-line] }
+    proof: 'src/runtime/loop/loop_fold.test.ts'
+  - id: R-MONITOR-LIVE-ITEMS
+    intent: 'LMP.5 liveItems: the pushed close event terminal flag IS the drop (staleness fix — no seen-table, no pull-join)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.2'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: liveItems, from: [status-line] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
+  - id: R-MONITOR-AGE
+    intent: 'LMP.5 formatRelativeAge: the always-rendered relative-freshness token (push cadence = freshness)'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.5'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: formatRelativeAge, from: [status-line] }
+    proof: 'src/cli/loop_status.test.ts'
+  - id: R-MONITOR-PHASE-LINT
+    intent: 'LMP.3 lintPhaseEmits: the no-silent-stage pack-lint — every procedure stage emits an enter+leave pair'
+    spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.6'
+    wg: wg-61db3ededf19
+    assert: { kind: reachable, symbol: lintPhaseEmits, from: [pack-validation] }
+    proof: 'src/packs/phase_emit_lint.test.ts'
+  # T-harness-workgraph-sync (wg-b52161a5961f, HWS.1..6) — the OUTBOUND half + reverse observation + conflict
+  # of the harness task-list ↔ work-graph sync. One reachable requirement per new BEHAVIORAL export; the
+  # proof-test is the authority (the static `from` hint is advisory — these surface through the PreToolUse tick
+  # / the orchestrator loop-pass, not a hook builder). The DATA-shape exports (OutboundDelta / ReconcileResult /
+  # HarnessWriter / WgReconcileFacade) are baselined in the allowlist, per the *Deps / *Schema precedent. The
+  # cursor primitives (listOpsSince / readHighWater / advanceHighWater) + getByWgId are object-literal METHODS,
+  # not top-level exports, so they carry no orphan; their behavior is proven by the store/map unit tests.
+  - id: R-HWS-RECONCILE
+    intent: 'HWS.3 reconcileHarnessWorkgraph: the two-way reconcile — inbound (composed) + outbound status+existence delta-set, per-field authority (status←harness, structure omitted, LWW), echo-guarded + idempotent'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert:
+      { kind: reachable, symbol: reconcileHarnessWorkgraph, from: [pre-tool-use, orchestrator] }
+    proof: 'src/workgraph/harness_sync.test.ts'
+  - id: R-HWS-CC-WRITER
+    intent: 'HWS.4 ccNudgeWriter: the default CC advisory-nudge writer — renders create/status/close, byte-for-byte the shipped stale-closed nudge, writes nothing (agent-executed)'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert: { kind: reachable, symbol: ccNudgeWriter, from: [pre-tool-use, orchestrator] }
+    proof: 'src/runtime/hooks/harness_writer.test.ts'
+  - id: R-HWS-STALE-NUDGE
+    intent: 'HWS.4 buildStaleClosedNudge: the shipped stale-closed reconcile line, preserved verbatim so the generalized writer never regresses the live message'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert: { kind: reachable, symbol: buildStaleClosedNudge, from: [pre-tool-use] }
+    proof: 'src/runtime/hooks/harness_writer.test.ts'
+  - id: R-HWS-OPEN-MAP
+    intent: 'HWS.1 defaultOpenMap: the binding overlay opens PROJECT-LOCAL at <root>/.opensquid/harness_map.db (decision 5), resolved by the shared resolveLocalStoreDir — not OPENSQUID_HOME'
+    spec: 'docs/tasks/T-harness-workgraph-sync.md'
+    wg: wg-b52161a5961f
+    assert: { kind: reachable, symbol: defaultOpenMap, from: [pre-tool-use] }
+    proof: 'src/runtime/hooks/harness_graph_sync.test.ts'
+  # T-arch-quality-gate (wg-82e5a35c8e97, AQG.4/AQG.5) — the deterministic ARCHITECTURE facet + the interactive
+  # design-doc REWRITE gate. One reachable requirement per new BEHAVIORAL export; the proof-test is the authority
+  # (the `from` hint is advisory — these surface through the PreToolUse tick / the post-tool-call verbatim record
+  # / the code-evidence deps). The DATA-shape / helper siblings (DesignDocGuardOptions interface, the isDesignDoc
+  # path predicate, and the ActiveJson.archDetector / CodeEvidence.archClean field additions) are baselined in the
+  # allowlist, per the *Deps / *Schema precedent. The archClean facet itself is a field on the already-covered
+  # codeEvidenceForSession — its behavior is proven by the code_evidence archClean matrix (no new export symbol).
+  - id: R-ARCH-DETECTOR
+    intent: 'AQG.4 readActiveArchDetector: the per-project arch-detector command read from active.json (sibling of readActiveVerifySuite); null ⇒ undeclared ⇒ code.arch_clean fails OPEN'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: readActiveArchDetector, from: [post-tool-use] }
+    proof: 'src/packs/discovery.test.ts'
+  - id: R-ARCH-RECORD
+    intent: 'AQG.4 recordArch: the verbatim-match arch-detector exit-code record (sibling of recordSuite) on a DISTINCT state key, written by the post-tool-call reaction in v2_supply'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: recordArch, from: [post-tool-use] }
+    proof: 'src/runtime/loop/verification.test.ts'
+  - id: R-ARCH-READ
+    intent: 'AQG.4 readArch: the recorded arch-detector pass/fail (sibling of readSuite); read by the code_evidence archClean facet in buildGuardCtx — declared+no-record ⇒ fail-CLOSED'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: readArch, from: [pre-tool-use] }
+    proof: 'src/runtime/loop/verification.test.ts'
+  - id: R-ARCH-DESIGN-REWRITE
+    intent: 'AQG.5 checkDesignDocRewrite: the orchestrator-guard teeth — a docs/design/*.md rewrite whose scope-audit verdict is present-and-not-GUESS_FREE is denied; fail-open on no-cache / read-error / agent_id / non-design'
+    spec: 'docs/tasks/T-arch-quality-gate.md'
+    wg: wg-82e5a35c8e97
+    assert: { kind: reachable, symbol: checkDesignDocRewrite, from: [pre-tool-use] }
+    proof: 'src/runtime/guard/orchestrator_guard.test.ts'
+  # T-opensquid-automated-gitflow (AGF.1..AGF.7, wg-732b2b68a168) — the fully-automated git-flow's new BEHAVIORAL
+  # exports: one reachable requirement per export, its element proof-test the AUTHORITY. The `from` hints are
+  # advisory — these surface through the `opensquid release` CLI (stage → PR flow), the orchestrator's worktree
+  # pool, and the CI release-tag workflow (dist), not a hook builder, so a negative static pre-filter never vetoes
+  # a passing proof. The DATA-shape / seam exports (VersioningConfig / WorktreeIo / PoolConfig / StageIo / GhIo
+  # interfaces + the real{Worktree,Stage,Gh}Io default bindings + STAGE_BRANCH + GhAuthError) are baselined in the
+  # allowlist, per the release-flow ParsedCommit/ReleaseDeps precedent (the forward ratchet, registered AT CODE).
+  - id: R-AGF-READ-VERSIONING
+    intent: 'AGF.1 readActiveVersioning: read the declared locked-prefix versioning config from active.json (sibling of readActiveVerifySuite); absent/malformed → null → core falls back to the pack default'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: readActiveVersioning, from: [release] }
+    proof: 'src/packs/read_active_versioning.test.ts'
+  - id: R-AGF-MERGE-VERSIONING
+    intent: 'AGF.1 mergeVersioning: the PURE one-directional project-over-pack versioning merge — a project that declares only the prefix resolves strategy+bump from the pack default; both absent → null'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: mergeVersioning, from: [release] }
+    proof: 'src/packs/read_active_versioning.test.ts'
+  - id: R-AGF-RESOLVE-VERSIONING
+    intent: 'AGF.1 resolveVersioning: the effective versioning = the raw project object merged OVER the active pack default (design §6 — strategy defaulted in the pack, prefix human-held in the project); the reader release.ts consumes'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: resolveVersioning, from: [release] }
+    proof: 'src/packs/read_active_versioning.test.ts'
+  - id: R-AGF-PATCH-OF-TAG
+    intent: 'AGF.1 patchOfTag: parse the patch int off a v<prefix>.<patch> tag (dots escaped, leading v optional), null off-prefix'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: patchOfTag, from: [release] }
+    proof: 'src/runtime/release/locked_version.test.ts'
+  - id: R-AGF-NEXT-LOCKED-TAG
+    intent: 'AGF.1 nextLockedTag: <prefix>.<patch+1> from the highest prefix tag, <prefix>.0 when none/off-prefix — NEVER intent-from-commit (no feat→minor/BREAKING→major)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: nextLockedTag, from: [release] }
+    proof: 'src/runtime/release/locked_version.test.ts'
+  - id: R-AGF-NEXT-RC-TAG
+    intent: 'AGF.1 nextRcTag: <nextLockedTag>-rc.<n> single-writer on the one stage branch (n = 1 + highest existing rc for the base)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: nextRcTag, from: [release] }
+    proof: 'src/runtime/release/locked_version.test.ts'
+  - id: R-AGF-LATEST-PREFIX-TAG
+    intent: 'AGF.1 latestPrefixTag: the PREFIX-SCOPED git-tag list (v<prefix>.* sorted) — ignores an off-prefix newest tag (v0.7.2), never reuses lastReleaseTag'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: latestPrefixTag, from: [release] }
+    proof: 'src/runtime/release/latest_prefix_tag.test.ts'
+  - id: R-AGF-BRANCH-NAME
+    intent: 'AGF.2 branchNameFor: the auto/wg-<id> branch-name SSOT (never double-prefixed) shared by the worktree cut + push + stage merge'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: branchNameFor, from: [orchestrator] }
+    proof: 'src/runtime/ralph/auto_pull.test.ts'
+  - id: R-AGF-AUTO-PULL
+    intent: 'AGF.2 autoPullMain: fetch + fast-forward-only pull of main (never a stale base); a diverged local main REJECTS (surfaced, no silent merge commit)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: autoPullMain, from: [orchestrator] }
+    proof: 'src/runtime/ralph/auto_pull.test.ts'
+  - id: R-AGF-ADD-WORKTREE
+    intent: 'AGF.3 addItemWorktree: cut auto/wg-<id> from fresh main into its own checkout at <poolRoot>/<id> (git worktree add)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: addItemWorktree, from: [orchestrator] }
+    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+  - id: R-AGF-REMOVE-WORKTREE
+    intent: 'AGF.3 removeItemWorktree: git worktree remove --force teardown of the item checkout (fail-open)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: removeItemWorktree, from: [orchestrator] }
+    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+  - id: R-AGF-DRAIN-POOL
+    intent: 'AGF.3 drainPool: drive ≤bound items concurrently, each in its own worktree, fold outcomes; a driven-item fault is isolated + its worktree torn down (never breaks the drain)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: drainPool, from: [orchestrator] }
+    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+  - id: R-AGF-MERGE-STAGE
+    intent: 'AGF.5 mergeToStage: --no-ff merge auto/wg-<id> → persistent stage, re-run the suite, rc-tag on green; a conflict (abort) or red suite (reset HEAD~1) → no integration, stage stays green'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: mergeToStage, from: [release] }
+    proof: 'src/runtime/release/stage_integration.test.ts'
+  - id: R-AGF-OPEN-PR
+    intent: 'AGF.6 openStagePr: gh pr create --base main --head stage for the batched PR; FAIL-CLOSED on no gh auth (GhAuthError, no PR); NEVER auto-merges (the human MERGE is the sole gate)'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: openStagePr, from: [release] }
+    proof: 'src/runtime/release/stage_pr.test.ts'
+  - id: R-AGF-TAG-MAIN-RELEASE
+    intent: 'AGF.6 tagMainRelease: on merge to main, compute the prefix-scoped locked release tag (nextLockedTag) + push v<prefix>.N, triggering the KEPT publish.yml'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: tagMainRelease, from: [release] }
+    proof: 'src/runtime/release/stage_pr.test.ts'
+  - id: R-AGF-INTEGRATE-BRANCH
+    intent: 'AGF.5+AGF.6 integrateBranchToStage: the SSOT the `opensquid release` command AND the live loop onShipped fold both reuse — rc-tag → mergeToStage → openStagePr (no precondition); a no-versioning project skips, a non-integrating merge opens no PR'
+    wg: wg-732b2b68a168
+    assert: { kind: reachable, symbol: integrateBranchToStage, from: [release] }
+    proof: 'src/setup/cli/release.test.ts'
+  # T-statusline-compose (SLC.1..SLC.4, wg-c954689147da) — the additive status-line pill's new BEHAVIORAL exports:
+  # one reachable requirement per export, its element proof-test the AUTHORITY. The `from` hints are advisory —
+  # these surface through the `emitMonitorEvent` state-change choke-point (post-tool-use phase writes / the
+  # orchestrator), so a negative static pre-filter never vetoes a passing proof. The DATA-shape siblings
+  # (StatuslineSnapshotDeps injected-seam interface + STATUSLINE_SNAPSHOT_FILE const) are baselined in the
+  # allowlist, per the *Deps / *Path precedent (the forward ratchet, registered AT CODE). The §C.12 emit-path
+  # SCALABILITY fix adds the cursor-materialized fold (foldLatestStateIncremental + collectLoopStateIncremental)
+  # so re-publishing the fragment on every state change is O(new events), never a whole-log re-scan; both are
+  # BEHAVIORAL → one reachable requirement each. Its test-only reset seam (resetLoopStateProjectionForTest) is
+  # allowlisted, per the *ForTest precedent.
+  - id: R-SLC-FRAGMENT
+    intent: 'SLC.1 renderStatuslineFragment: the ~40-col additive pill string — reuses renderItem + the +N more overflow; empty board → "" (NOT the idle line); pure + never-throws'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: renderStatuslineFragment, from: [post-tool-use] }
+    proof: 'src/cli/loop_status.test.ts'
+  - id: R-SLC-SNAPSHOT
+    intent: 'SLC.2 writeStatuslineSnapshot: render the live board → atomically publish the fragment to <root>/.opensquid/loop-statusline (a derived projection, injected seams); terminal board → ""'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: writeStatuslineSnapshot, from: [post-tool-use] }
+    proof: 'src/runtime/loop/statusline_snapshot.test.ts'
+  - id: R-SLC-REFRESH
+    intent: 'SLC.2 refreshStatuslineSnapshot: the fail-open wrapper the emitMonitorEvent choke-point calls — a render/write fault is swallowed to stderr and NEVER breaks the load-bearing mutation'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: refreshStatuslineSnapshot, from: [post-tool-use] }
+    proof: 'src/runtime/loop/statusline_snapshot.test.ts'
+  - id: R-SLC-INCR-FOLD
+    intent: 'SLC.2/§C.12 foldLatestStateIncremental: the cursor-materialized projection — the first read folds from seq 0 once, each later read tails only NEW events, so the emit-path snapshot never re-scans the ever-growing loop_events log (O(N²)→O(1) amortized); same result as foldLatestState, serialized RMW'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: foldLatestStateIncremental, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_events.test.ts'
+  - id: R-SLC-INCR-COLLECT
+    intent: 'SLC.2/§C.12 collectLoopStateIncremental: the LoopState board mapped from the incremental fold — the read the snapshot writer rides on the emit path (on-demand CLI callers keep the whole-log collectLoopState)'
+    spec: 'docs/tasks/T-statusline-compose.md'
+    wg: wg-c954689147da
+    assert: { kind: reachable, symbol: collectLoopStateIncremental, from: [post-tool-use] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
+  - id: R-CLR-1
+    intent: 'CLR.1 parseTolerantStrict: the ONE tolerant-strict pack-config seam behind BOTH loadPackV2 (PackV2.parse) and parseYamlString (v1 manifest/drift_response) — a ZodError whose issues are ALL unrecognized_keys → warn (name source + keys) + strip + re-parse the same .strict() schema; ANY other error re-thrown UNCHANGED (fail-loud). One bad config line no longer process.exits the loop; a genuinely-broken pack still stops it. Deterministic (all-issues-are-unrecognized_keys), typo-visibility preserved'
+    spec: 'docs/tasks/T-config-load-resilience.md'
+    wg: wg-a02313251dfb
+    assert: { kind: reachable, symbol: parseTolerantStrict, from: [pack-validation] }
+    proof: 'src/packs/tolerant_strict.test.ts'
+  # T-post-ship-logic-fixes (wg-61c1576cece0, F1/F3/F5) — 3 new BEHAVIORAL exports of the monitor-feed +
+  # design-doc-gate correctness fixes, each MET via its element proof-test. The data-shape / seam siblings
+  # (BootSweepReader reader-interface, SCOPE_AUDIT_SESSION_KEY constant, ScopeAuditCacheKey registry-seam) are
+  # allowlisted. The remaining fixes touch no new export (F1a onIssueTerminal is a store PARAM; F1b absorbing
+  # terminal + F2 freshest-first are inside already-exported renderers; F4 DDL hoist is store-internal).
+  - id: R-PSF-CLOSE-SWEEP
+    intent: 'F1c sweepTerminalBacklog: the one-time boot drain — a synthetic item_closed for any item that folds LIVE on the feed but reads wg-terminal (a close with no monitor event: the harness-sync reconcile close, or a pre-fix / crash-window close), so no closed item lingers forever. Bounded set-based read, off the hot path, fail-open, pure-fold preserving'
+    spec: 'docs/tasks/T-post-ship-logic-fixes.md'
+    wg: wg-61c1576cece0
+    assert: { kind: reachable, symbol: sweepTerminalBacklog, from: [orchestrator] }
+    proof: 'src/runtime/loop/loop_boot_sweep.test.ts'
+  - id: R-PSF-SCOPE-CACHE-KEY
+    intent: "F5 scopeAuditCacheKey: the BRANCHED scope-audit-cache key — a docs/design/*.md verdict keys PER-DOC (path-normalized + sanitized), every other path (the pre-research/SCOPE artifact) keeps the session-wide fullstack-flow-scope-audit-cache so v2_supply's scope read is never stranded. ONE derivation shared by the skill WRITER and the design-doc REWRITE READER; restores the new-doc-first-write ⇒ ALLOW invariant"
+    spec: 'docs/tasks/T-post-ship-logic-fixes.md'
+    wg: wg-61c1576cece0
+    assert: { kind: reachable, symbol: scopeAuditCacheKey, from: [pre-tool-use] }
+    proof: 'src/runtime/scope_audit_cache_key.test.ts'
+  - id: R-PSF-WATCH-FOLD
+    intent: 'F3 mapFold: the shared fold→board mapping, now EXPORTED so --watch derives its initial board from the ONE seed read (fold the seed, not a SECOND collectLoopState()) → no duplicate line, one fewer DB read, no race window between the board read and the tail cursor'
+    spec: 'docs/tasks/T-post-ship-logic-fixes.md'
+    wg: wg-61c1576cece0
+    assert: { kind: reachable, symbol: mapFold, from: [status-line] }
+    proof: 'src/runtime/loop/loop_state.test.ts'
+  # CG.1 (T-consistency-gate, wg-1c620a56b733) — the CONSISTENCY GATE at the SHIPPED-close boundary. The
+  # BEHAVIORAL predicate durableItemCommitExists carries a reachable requirement; the injected git seam
+  # (RalphGitSeam interface), its real default binding (makeRalphGitSeam — a thin execFileP('git',…) wrapper,
+  # the concrete side of the seam, mirroring realStageIo), and the trivial MAX_COMMIT_REDRIVES /
+  # NO_DURABLE_COMMIT_LABEL consts are allowlisted (data-shape / seam / trivial — no covering requirement).
+  - id: R-CONSISTENCY-GATE
+    intent: "CG.1 durableItemCommitExists: the pull-at-the-close-boundary predicate that makes SHIPPED ⟺ a durable item-owned commit exists — TRUE only when the target tip advanced past the pre-drive baseSha with real committed file content AND none of the item's committed files is left dirty (partial-commit guard); tolerates unrelated drive-by dirt. Read through the injected RalphGitSeam, so an item that ships without committing its work is re-driven then parked no-durable-commit, never silently closed"
+    spec: 'docs/tasks/T-consistency-gate.md'
+    wg: wg-1c620a56b733
+    assert: { kind: reachable, symbol: durableItemCommitExists, from: [orchestrator] }
+    proof: 'src/runtime/ralph/consistency_gate.test.ts'
 ```

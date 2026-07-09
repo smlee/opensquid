@@ -1,7 +1,7 @@
 /**
  * LSF.1/LSF.2/LSF.5 — the shared opener for the loop-status feature's durable stores.
  *
- * The wg-keyed phase store (`loop_phases`, LSF.2) and the metrics history (`loop_metrics`, LSF.5) live in the
+ * The push-stream monitor log (`loop_events`, LMP.1) and the metrics history (`loop_metrics`, LSF.5) live in the
  * SAME libsql store the task checkpoints use — the PROJECT-LOCAL `<root>/.opensquid/opensquid.db` (`loopDbUrl`),
  * co-located with `task_checkpoints` (T-project-local-state PLS.3; subprocess-harness-push.md §1 UPDATE).
  * Co-locating them means the whole loop-status data layer relocates in one move, never split across two stores.
@@ -14,7 +14,7 @@
  * lap / the daemon / a concurrent CLI read never trips `SQLITE_BUSY`. Mirrors `withTaskCheckpointStore`.
  *
  * Imports from: node:path, @libsql/client, ../paths.js, ../../storage/sqlite_concurrency.js.
- * Imported by: ./loop_phase_store.ts, ./loop_metrics.ts.
+ * Imported by: ./loop_events.ts, ./loop_metrics.ts.
  */
 import { join } from 'node:path';
 
@@ -34,13 +34,15 @@ export async function loopDbUrl(): Promise<string> {
 /**
  * Open a short-lived libsql client against {@link loopDbUrl} with the shared concurrency posture, run `fn`, and
  * ALWAYS close the client. The posture is AWAITED (not fire-and-forget) so `busy_timeout` is in force before the
- * first read/write.
+ * first read/write. `fn` receives the resolved store URL too (already computed here) so a consumer can memoize
+ * per-store one-time work — e.g. the `loop_events` DDL guard — WITHOUT re-walking `resolveLocalStoreDir`.
  */
-export async function withLoopDb<T>(fn: (db: Client) => Promise<T>): Promise<T> {
-  const client = createClient({ url: await loopDbUrl() });
+export async function withLoopDb<T>(fn: (db: Client, url: string) => Promise<T>): Promise<T> {
+  const url = await loopDbUrl();
+  const client = createClient({ url });
   await applyConcurrencyPragmas(client);
   try {
-    return await fn(client);
+    return await fn(client, url);
   } finally {
     try {
       client.close();

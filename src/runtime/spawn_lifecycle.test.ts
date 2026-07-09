@@ -5,116 +5,180 @@
  * helper spawn detaches as group leader, nested spawns join the ancestor's
  * group); OPENSQUID_SUBAGENT hook-policy marker only when markSubagent.
  *
- * Real child processes throughout — the SIGTERM-ignoring fixture is the
- * exact behavior observed live from orphaned `claude -p` reviewers.
+ * HERMETIC (T-spawn-lifecycle-hermetic-tests, wg-23fd463ab434): every case
+ * drives the FSM through an INJECTED `procControl` seam (a recording fake
+ * `spawn` returning an EventEmitter-based fake child, plus `vi.useFakeTimers()`
+ * for the grace/timeout windows) — NO real subprocess, NO temp files, NO
+ * wall-clock `waitMs`. The one genuine OS-behavior a fake cannot prove (a real
+ * detached grandchild actually reaped by the group SIGKILL) lives in the
+ * opt-in e2e job (test/e2e/spawn-lifecycle.e2e.test.ts), off the always-on
+ * suite. This removed the CI ENOENT flake (a fixed 700ms wall-clock wait racing a real
+ * spawn-chain + file-write on a loaded runner). Mirrors the StageIo DI
+ * convention (release/stage_integration.test.ts).
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { insideSupervisedTree, runOneShotCli } from './spawn_lifecycle.js';
+import {
+  insideSupervisedTree,
+  runOneShotCli,
+  realProcControl,
+  type ProcControl,
+} from './spawn_lifecycle.js';
 
-let tmpRoot: string;
+/** The `SpawnOptions` shape — derived from the seam itself (not imported from the real child-process module) so
+ *  the unit file stays free of any real-spawn import the hermetic guard forbids. */
+type SpawnOptions = Parameters<ProcControl['spawn']>[2];
 
-beforeEach(async () => {
-  tmpRoot = await mkdtemp(join(tmpdir(), 'opensquid-spawnlc-'));
-});
+/** The minimal child surface `runOneShotCli` touches: `.pid`, `.stdout`/`.stderr` data streams, `.stdin`,
+ *  `.on('error'|'close')` / `.emit`, and `.kill(signal)` recording the signal (the nested non-detached sweep). */
+class FakeChild extends EventEmitter {
+  pid = 4242;
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  stdin = { write: vi.fn(), end: vi.fn() };
+  signals: (NodeJS.Signals | number)[] = [];
+  kill(sig: NodeJS.Signals | number): boolean {
+    this.signals.push(sig);
+    return true;
+  }
+}
 
-afterEach(async () => {
-  await rm(tmpRoot, { recursive: true, force: true });
-  delete process.env.OPENSQUID_SUPERVISED;
-});
+interface SpawnRecord {
+  cli: string;
+  args: string[];
+  options: SpawnOptions;
+  child: FakeChild;
+}
+
+/** A recording `procControl`: fake `spawn` (records {cli,args,options} + the child), a `kill` that RECORDS the
+ *  detached group sweep instead of firing a real signal, captured `onExit`/`offExit` registrations, and KEEPING
+ *  `realProcControl`'s LAZY timers so `vi.useFakeTimers()` (which patches the globals) drives them. */
+function recordingProcControl(): {
+  pc: ProcControl;
+  spawns: SpawnRecord[];
+  groupKills: { pid: number; signal: NodeJS.Signals | number }[];
+  exitHandlers: (() => void)[];
+} {
+  const spawns: SpawnRecord[] = [];
+  const groupKills: { pid: number; signal: NodeJS.Signals | number }[] = [];
+  const exitHandlers: (() => void)[] = [];
+  const pc: ProcControl = {
+    spawn: (cli, args, options) => {
+      const child = new FakeChild();
+      spawns.push({ cli, args, options, child });
+      return child as unknown as ReturnType<ProcControl['spawn']>;
+    },
+    kill: (pid, signal) => {
+      groupKills.push({ pid, signal }); // records the detached group sweep — no real signal
+    },
+    setTimeout: realProcControl.setTimeout, // lazy: vitest fake timers patch the global these call through to
+    clearTimeout: realProcControl.clearTimeout,
+    onExit: (fn) => {
+      exitHandlers.push(fn);
+    },
+    offExit: (fn) => {
+      const i = exitHandlers.indexOf(fn);
+      if (i >= 0) exitHandlers.splice(i, 1);
+    },
+  };
+  return { pc, spawns, groupKills, exitHandlers };
+}
 
 const timeoutError = (ms: number): Error => new Error(`timeout after ${ms}ms`);
 
-const waitMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+afterEach(() => {
+  vi.useRealTimers();
+  delete process.env.OPENSQUID_SUPERVISED;
+});
 
 describe('runOneShotCli — basic contracts', () => {
   it('exit 0 → resolves raw stdout (no trim)', async () => {
-    const script = join(tmpRoot, 'ok.js');
-    await writeFile(script, "process.stdout.write('out \\n');", 'utf8');
-    await expect(
-      runOneShotCli({
-        cli: process.execPath,
-        args: [script],
-        prompt: '',
-        timeoutMs: 10_000,
-        markSubagent: false,
-        timeoutError,
-      }),
-    ).resolves.toBe('out \n');
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: ['ok'],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      procControl: pc,
+    });
+    spawns[0]!.child.stdout.emit('data', Buffer.from('out \n'));
+    spawns[0]!.child.emit('close', 0);
+    await expect(p).resolves.toBe('out \n');
   });
 
   it('non-zero exit → rejects with the prefixed message', async () => {
-    const script = join(tmpRoot, 'fail.js');
-    await writeFile(script, "process.stderr.write('boom'); process.exit(3);", 'utf8');
-    await expect(
-      runOneShotCli({
-        cli: process.execPath,
-        args: [script],
-        prompt: '',
-        timeoutMs: 10_000,
-        markSubagent: false,
-        timeoutError,
-        errorPrefix: 'subscription cli ',
-      }),
-    ).rejects.toThrow('subscription cli exit 3: boom');
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: ['fail'],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      errorPrefix: 'subscription cli ',
+      procControl: pc,
+    });
+    spawns[0]!.child.stderr.emit('data', Buffer.from('boom'));
+    spawns[0]!.child.emit('close', 3);
+    await expect(p).rejects.toThrow('subscription cli exit 3: boom');
   });
 
   it('spawn failure → rejects with the prefixed message', async () => {
-    await expect(
-      runOneShotCli({
-        cli: join(tmpRoot, 'does-not-exist'),
-        args: [],
-        prompt: '',
-        timeoutMs: 1_000,
-        markSubagent: false,
-        timeoutError,
-      }),
-    ).rejects.toThrow(/spawn failed/);
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: 'does-not-exist',
+      args: [],
+      prompt: '',
+      timeoutMs: 1_000,
+      markSubagent: false,
+      timeoutError,
+      procControl: pc,
+    });
+    spawns[0]!.child.emit('error', new Error('ENOENT'));
+    await expect(p).rejects.toThrow(/spawn failed/);
   });
 });
 
 describe('runOneShotCli — markers', () => {
   it('markSubagent: child sees SUBAGENT + SUPERVISED', async () => {
-    const script = join(tmpRoot, 'env.js');
-    await writeFile(
-      script,
-      'process.stdout.write(`${process.env.OPENSQUID_SUBAGENT}/${process.env.OPENSQUID_SUPERVISED}`);',
-      'utf8',
-    );
-    await expect(
-      runOneShotCli({
-        cli: process.execPath,
-        args: [script],
-        prompt: '',
-        timeoutMs: 10_000,
-        markSubagent: true,
-        timeoutError,
-      }),
-    ).resolves.toBe('1/1');
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: ['env'],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: true,
+      timeoutError,
+      procControl: pc,
+    });
+    const env = spawns[0]!.options.env ?? {};
+    expect(env.OPENSQUID_SUBAGENT).toBe('1');
+    expect(env.OPENSQUID_SUPERVISED).toBe('1');
+    spawns[0]!.child.emit('close', 0); // settle the promise
+    await p;
   });
 
   it('bridge spawn (markSubagent false): SUPERVISED but NOT SUBAGENT — the spec-audit finding-1 scenario', async () => {
-    const script = join(tmpRoot, 'env2.js');
-    await writeFile(
-      script,
-      'process.stdout.write(`${process.env.OPENSQUID_SUBAGENT}/${process.env.OPENSQUID_SUPERVISED}`);',
-      'utf8',
-    );
-    await expect(
-      runOneShotCli({
-        cli: process.execPath,
-        args: [script],
-        prompt: '',
-        timeoutMs: 10_000,
-        markSubagent: false,
-        timeoutError,
-      }),
-    ).resolves.toBe('undefined/1');
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: ['env2'],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      procControl: pc,
+    });
+    const env = spawns[0]!.options.env ?? {};
+    expect(env.OPENSQUID_SUBAGENT).toBeUndefined();
+    expect(env.OPENSQUID_SUPERVISED).toBe('1');
+    spawns[0]!.child.emit('close', 0);
+    await p;
   });
 
   it('insideSupervisedTree reads the exact-"1" marker', () => {
@@ -123,192 +187,156 @@ describe('runOneShotCli — markers', () => {
     expect(insideSupervisedTree({ OPENSQUID_SUPERVISED: '0' })).toBe(false);
   });
 
-  it('nested (SUPERVISED already set): child is NOT a group leader (pgid ≠ pid)', async () => {
+  it('nested (SUPERVISED already set): child is NOT detached (joins the ancestor group); unmarked → detached leader', async () => {
+    // The pgid-leadership check reduces to the `detached` arg the seam records — the OS honoring `detached`
+    // (group-leader semantics) is Node's contract, not opensquid's to re-verify with a real process.
     process.env.OPENSQUID_SUPERVISED = '1';
-    const script = join(tmpRoot, 'pgid.js');
-    // A group LEADER has pgid === pid; a non-detached child inherits ours.
-    await writeFile(
-      script,
-      "const{execSync}=require('node:child_process');" +
-        'const pgid=execSync(`ps -o pgid= -p ${process.pid}`).toString().trim();' +
-        'process.stdout.write(`${process.pid}:${pgid}`);',
-      'utf8',
-    );
-    const out = await runOneShotCli({
+    const nested = recordingProcControl();
+    const pNested = runOneShotCli({
       cli: process.execPath,
-      args: [script],
+      args: ['pgid'],
       prompt: '',
       timeoutMs: 10_000,
       markSubagent: false,
       timeoutError,
+      procControl: nested.pc,
     });
-    const [pid, pgid] = out.split(':');
-    expect(pid).not.toBe(pgid); // joined OUR group, not its own
+    expect(nested.spawns[0]!.options.detached).toBe(false); // joined OUR group, not its own
+    nested.spawns[0]!.child.emit('close', 0);
+    await pNested;
+
+    delete process.env.OPENSQUID_SUPERVISED;
+    const outer = recordingProcControl();
+    const pOuter = runOneShotCli({
+      cli: process.execPath,
+      args: ['pgid'],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      procControl: outer.pc,
+    });
+    expect(outer.spawns[0]!.options.detached).toBe(true); // outermost spawn detaches as group leader
+    outer.spawns[0]!.child.emit('close', 0);
+    await pOuter;
   });
 });
 
 describe('runOneShotCli — SIGTERM → grace → group SIGKILL', () => {
-  it('SIGTERM-ignoring child is dead within grace (the observed orphan class)', async () => {
-    const script = join(tmpRoot, 'ignore-term.js');
-    await writeFile(
-      script,
-      "process.on('SIGTERM', () => {}); process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);",
-      'utf8',
-    );
+  it('SIGTERM at timeout, then group SIGKILL after grace (the observed orphan class)', async () => {
+    vi.useFakeTimers();
+    const { pc, spawns, groupKills } = recordingProcControl();
     const p = runOneShotCli({
       cli: process.execPath,
-      args: [script],
+      args: ['ignore-term'],
       prompt: '',
       timeoutMs: 400,
       markSubagent: true,
       timeoutError,
       graceMs: 300,
+      procControl: pc,
     }).catch((e: unknown) => e as Error);
 
-    // Rejects at the timeout (not after grace).
-    const t0 = Date.now();
+    await vi.advanceTimersByTimeAsync(400); // fire the timeout → SIGTERM + arm grace + register the exit handler
     const err = await p;
-    expect(Date.now() - t0).toBeLessThan(1_500);
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe('timeout after 400ms');
+    expect((err as Error).message).toBe('timeout after 400ms'); // rejects AT the timeout, not after grace
+    expect(spawns[0]!.child.signals).toContain('SIGTERM'); // the child got SIGTERM at the timeout
+    expect(groupKills).toHaveLength(0); // not yet — grace has not elapsed
 
-    // The stdout handler captured the pid before the kill; poll it down.
-    // (stdout was abandoned at rejection — re-derive the pid via ps over the
-    // fixture script name instead.)
-    await waitMs(700); // timeout(0 already passed) + grace 300 + margin
-    const { execSync } = await import('node:child_process');
-    const survivors = execSync(
-      `ps -ax -o pid,command | grep 'ignore-term.js' | grep -v grep || true`,
-    )
-      .toString()
-      .trim();
-    expect(survivors).toBe('');
-  }, 15_000);
+    await vi.advanceTimersByTimeAsync(300); // grace expiry → the group SIGKILL sweep
+    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // process.kill(-pid,'SIGKILL') ISSUED (detached)
+  });
 
-  it('group sweep: the grandchild dies with the child', async () => {
-    const grand = join(tmpRoot, 'grand.js');
-    await writeFile(grand, "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);", 'utf8');
-    const child = join(tmpRoot, 'child-spawner.js');
-    await writeFile(
-      child,
-      "process.on('SIGTERM', () => {});" +
-        "const{spawn}=require('node:child_process');" +
-        `spawn(process.execPath,['${grand}'],{stdio:'ignore'});` +
-        'setInterval(() => {}, 1000);',
-      'utf8',
-    );
-    await runOneShotCli({
+  it('group sweep issues the detached process.kill(-pid) after grace (real-grandchild reaping → e2e)', async () => {
+    // The unit assertion proves the control flow ISSUES the group sweep. The real-grandchild-reaping VALUE
+    // (the OS honoring process.kill(-pid,'SIGKILL')) moves to test/e2e/spawn-lifecycle.e2e.test.ts — a fake
+    // proves the signal was issued, not OS-honored.
+    vi.useFakeTimers();
+    const { pc, spawns, groupKills } = recordingProcControl();
+    runOneShotCli({
       cli: process.execPath,
-      args: [child],
+      args: ['child-spawner'],
       prompt: '',
       timeoutMs: 400,
       markSubagent: true,
       timeoutError,
       graceMs: 300,
+      procControl: pc,
     }).catch(() => undefined);
 
-    await waitMs(900);
-    const { execSync } = await import('node:child_process');
-    const survivors = execSync(
-      `ps -ax -o pid,command | grep -E 'grand\\.js|child-spawner\\.js' | grep -v grep || true`,
-    )
-      .toString()
-      .trim();
-    expect(survivors).toBe('');
-  }, 15_000);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(spawns[0]!.child.signals).toContain('SIGTERM');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // the detached group sweep was issued
+  });
 
-  it('FXK.1: SHORT-LIVED supervisor (the hook-bin shape) — exit handler kills the child the timer cannot', async () => {
-    // The 0.5.398 hole class: vitest workers are long-lived, so the timer
-    // path always worked IN TESTS while hook bins (which process.exit()
-    // milliseconds after the rejection) never fired it. This test runs the
-    // BUILT helper inside a real short-lived supervisor process.
-    const { pathToFileURL, fileURLToPath } = await import('node:url');
-    const path = await import('node:path');
-    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-    const helperUrl = pathToFileURL(path.resolve(repoRoot, 'dist/runtime/spawn_lifecycle.js')).href;
+  it('FXK.1: a supervisor exiting BEFORE grace kills the child via the exit handler (the 0.5.398 hole)', async () => {
+    // The hook-bin shape: the supervisor calls process.exit() milliseconds after the rejection, which destroys
+    // ANY timer, ref'd or not. The sync 'exit' handler — captured here as exitHandlers[0] — must issue the kill
+    // the (60s) grace timer never gets to fire.
+    vi.useFakeTimers();
+    const { pc, groupKills, exitHandlers } = recordingProcControl();
+    runOneShotCli({
+      cli: process.execPath,
+      args: ['fxk-child'],
+      prompt: '',
+      timeoutMs: 300,
+      markSubagent: true,
+      timeoutError,
+      graceMs: 60_000, // 60s away — if the child dies now, it was the EXIT HANDLER, not the timer
+      procControl: pc,
+    }).catch(() => undefined);
 
-    const child = join(tmpRoot, 'fxk-child.js');
-    await writeFile(
-      child,
-      "process.on('SIGTERM', () => {});" +
-        "require('fs').writeFileSync(process.env.PIDFILE, String(process.pid));" +
-        'setInterval(() => {}, 1000);',
-      'utf8',
-    );
-    const pidFile = join(tmpRoot, 'fxk-pid');
-    const supervisor = join(tmpRoot, 'fxk-supervisor.mjs');
-    await writeFile(
-      supervisor,
-      `import { runOneShotCli } from '${helperUrl}';\n` +
-        `runOneShotCli({ cli: process.execPath, args: ['${child}'], prompt: '', ` +
-        `timeoutMs: 300, graceMs: 60000, markSubagent: true, ` +
-        `timeoutError: (ms) => new Error('timeout ' + ms) })` +
-        `.catch(() => process.exit(2)); // the hook-bin shape: exit AT the rejection\n`,
-      'utf8',
-    );
+    await vi.advanceTimersByTimeAsync(300); // term_sent; the sync 'exit' escalation is registered
+    expect(exitHandlers).toHaveLength(1);
+    exitHandlers[0]!(); // simulate process.exit() BEFORE grace — the hook-bin shape
+    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // the EXIT HANDLER issued the kill the timer didn't
+  });
 
-    const { spawn: spawnProc } = await import('node:child_process');
-    await new Promise<void>((res) => {
-      const sup = spawnProc(process.execPath, [supervisor], {
-        stdio: 'ignore',
-        env: { ...process.env, PIDFILE: pidFile },
-      });
-      sup.on('close', () => res());
-    });
-    // graceMs is 60s — if the child dies, it was the EXIT HANDLER, not the timer.
-    await waitMs(700);
-    const { readFileSync } = await import('node:fs');
-    const pid = Number(readFileSync(pidFile, 'utf8'));
-    let alive = true;
-    try {
-      process.kill(pid, 0);
-    } catch {
-      alive = false;
-    }
-    if (alive) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        /* cleanup */
-      }
-    }
-    expect(alive).toBe(false);
-  }, 20_000);
-
-  it('FXK.1: exit-listener count returns to baseline across sequential calls (bridge-daemon hygiene)', async () => {
-    const baseline = process.listenerCount('exit');
-    const script = join(tmpRoot, 'obey2.js');
-    await writeFile(script, 'setInterval(() => {}, 1000);', 'utf8');
+  it('FXK.1: exit-listener registrations return to baseline across sequential calls (bridge-daemon hygiene)', async () => {
+    vi.useFakeTimers();
+    const { pc, spawns, exitHandlers } = recordingProcControl();
     for (let i = 0; i < 5; i++) {
-      await runOneShotCli({
+      const p = runOneShotCli({
         cli: process.execPath,
-        args: [script],
+        args: ['obey2'],
         prompt: '',
         timeoutMs: 200,
         markSubagent: false,
         timeoutError,
         graceMs: 500,
+        procControl: pc,
       }).catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(200); // timeout → term_sent, onExit registered
+      expect(exitHandlers).toHaveLength(1);
+      spawns[i]!.child.emit('close', 0); // child obeys SIGTERM within grace → closed_late → offExit
+      await p;
+      expect(exitHandlers).toHaveLength(0); // every onExit registration is matched by an offExit removal
     }
-    await waitMs(900); // let every closed_late / timer path settle
-    expect(process.listenerCount('exit')).toBe(baseline);
-  }, 15_000);
+    expect(exitHandlers).toHaveLength(0); // count returns to baseline
+  });
 
-  it('SIGTERM-obeying child clears the grace timer (closed_late path — vitest exits promptly)', async () => {
-    const script = join(tmpRoot, 'obey-term.js');
-    await writeFile(script, 'setInterval(() => {}, 1000);', 'utf8'); // default SIGTERM = die
-    const t0 = Date.now();
-    await runOneShotCli({
+  it('SIGTERM-obeying child clears the grace timer (closed_late path — no leaked timer, no group kill)', async () => {
+    vi.useFakeTimers();
+    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
+    const p = runOneShotCli({
       cli: process.execPath,
-      args: [script],
+      args: ['obey-term'],
       prompt: '',
       timeoutMs: 300,
       markSubagent: false,
       timeoutError,
-      graceMs: 60_000, // a LEAKED ref'd timer at this size would hang the worker — the pass proves clearance
+      graceMs: 60_000, // a LEAKED ref'd timer at this size would linger — the pass proves clearance
+      procControl: pc,
     }).catch(() => undefined);
-    // Give 'close' a beat to fire and clear the grace timer.
-    await waitMs(500);
-    expect(Date.now() - t0).toBeLessThan(5_000);
-  }, 15_000);
+
+    await vi.advanceTimersByTimeAsync(300); // timeout → term_sent, grace armed
+    spawns[0]!.child.emit('close', 0); // child obeys SIGTERM within grace → closed_late clears grace + offExit
+    await p;
+    expect(exitHandlers).toHaveLength(0); // offExit was called
+
+    await vi.advanceTimersByTimeAsync(60_000); // advance PAST grace — the grace timer was cleared
+    expect(groupKills).toHaveLength(0); // no group kill fired (grace timer cleared in closed_late)
+  });
 });

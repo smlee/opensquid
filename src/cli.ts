@@ -59,6 +59,7 @@ import { registerSetupWizardMcp } from './setup/cli/mcp.js';
 import { registerMemory } from './setup/cli/memory.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerRalph } from './setup/cli/ralph.js';
+import { registerRelease } from './setup/cli/release.js';
 import { registerSchedule } from './setup/cli/schedule.js';
 import { registerTraceCommand } from './setup/cli/trace.js';
 import { registerStatusCli } from './setup/cli/status.js';
@@ -274,6 +275,7 @@ function runCli(): void {
   // a force-fire entry and the daemon picks it up via subsequent integration.
   registerSchedule(program);
   registerRalph(program);
+  registerRelease(program); // REL.4 — `opensquid release` (green branch → main → auto-bump+tag; CI publishes)
 
   // OBSERVE.2 — `opensquid trace <runId> | tail | export <runId>`.
   // Registered via a sibling module to keep the verb tree's commander wiring

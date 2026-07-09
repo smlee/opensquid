@@ -8,12 +8,16 @@ import { describe, expect, it } from 'vitest';
 import { workGraphStore } from '../../workgraph/store.js';
 
 import {
+  WgArchiveSchema,
+  WgUnarchiveSchema,
   handleWgAddEdge,
+  handleWgArchive,
   handleWgCreate,
   handleWgEvents,
   handleWgGet,
   handleWgList,
   handleWgReady,
+  handleWgUnarchive,
   handleWgUpdate,
 } from './workgraph.js';
 
@@ -64,5 +68,47 @@ describe('workgraph MCP handlers', () => {
     expect((JSON.parse(await handleWgGet({ id: a.id }, s)) as { status: string }).status).toBe(
       'in_progress',
     );
+  });
+
+  // WGL.7 (wg-141e0ffd9955) — archive/unarchive MCP surface for the soft-archive op.
+  it('archive → unarchive round-trips an issue open → archived → open; the reason is recorded', async () => {
+    const s = await fresh();
+    const a = JSON.parse(await handleWgCreate({ title: 'stub' }, s)) as { id: string };
+
+    const arch = JSON.parse(await handleWgArchive({ id: a.id, reason: 'orphan' }, s)) as {
+      ok: boolean;
+      status: string;
+    };
+    expect(arch).toEqual({ ok: true, id: a.id, status: 'archived' });
+    const archived = JSON.parse(await handleWgGet({ id: a.id }, s)) as {
+      status: string;
+      archiveReason?: string;
+    };
+    expect(archived.status).toBe('archived');
+    expect(archived.archiveReason).toBe('orphan');
+    // archived → off ready
+    expect((JSON.parse(await handleWgReady({}, s)) as { id: string }[]).map((i) => i.id)).toEqual(
+      [],
+    );
+
+    const un = JSON.parse(await handleWgUnarchive({ id: a.id }, s)) as {
+      ok: boolean;
+      status: string;
+    };
+    expect(un).toEqual({ ok: true, id: a.id, status: 'open' });
+    const reopened = JSON.parse(await handleWgGet({ id: a.id }, s)) as {
+      status: string;
+      archiveReason?: string;
+    };
+    expect(reopened.status).toBe('open');
+    expect(reopened.archiveReason).toBeUndefined(); // cleared on unarchive
+  });
+
+  it('WgArchiveSchema requires a non-empty id + optional reason; WgUnarchiveSchema takes only id', () => {
+    expect(WgArchiveSchema.safeParse({ id: '' }).success).toBe(false);
+    expect(WgArchiveSchema.safeParse({ id: 'wg-1' }).success).toBe(true); // reason optional
+    expect(WgArchiveSchema.safeParse({ id: 'wg-1', reason: 'x' }).success).toBe(true);
+    expect(WgUnarchiveSchema.safeParse({ id: 'wg-1' }).success).toBe(true);
+    expect(WgUnarchiveSchema.safeParse({ id: '' }).success).toBe(false);
   });
 });

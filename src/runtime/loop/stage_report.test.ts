@@ -1,20 +1,16 @@
 /**
- * T2.12 — stage_report renderer + emitter (zero LLM, deterministic, iso injected).
+ * T2.12 / RD.1-4 — stage_report PURE renderers (zero LLM, deterministic, iso injected).
  *
  * Covers the STANDARDIZED format: the plain (no-🦑, reserved for drift/gate notices) header, Summary, the CODE
- * phase-chart, the "Next → <stage>: <work>" line, and the SCOPE-only Goal line. The renderer returns a
- * root-relative FILENAME (no directory); emitStageReport SAVES it under `<project>/.opensquid/reports/`
- * (V2-ENF.2/4 — never the legacy `docs/reports/`, never the global home) and returns {path, body}.
+ * phase-chart, the "Next → <stage>: <work>" line, and the SCOPE-only Goal line. RD.4 removed `emitStageReport`
+ * (the `.opensquid/reports/` disk writer) — the COMMUNICATION report is DISPLAYED live now (see
+ * report_display.test.ts), never saved. `renderStageReport` returns a root-relative FILENAME + the body; the
+ * body is the live-shown artifact.
  */
 import { describe, expect, it } from 'vitest';
 
-import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import {
   CODE_PHASES,
-  emitStageReport,
   renderStageReport,
   renderStageSummary,
   type StageReport,
@@ -64,7 +60,7 @@ describe('renderStageReport (pure, standardized format)', () => {
       nextWork: 'author the spec + real code covering every scoped element', // pack data (the next state's `does:`)
     };
     const { path, body } = renderStageReport(r, ISO);
-    expect(path).toBe('plan-T-x-2026-06-22.md'); // root-relative FILENAME only (dir resolved by emitStageReport)
+    expect(path).toBe('plan-T-x-2026-06-22.md'); // root-relative FILENAME only (the body is DISPLAYED, not filed)
     expect(body).toContain('After-stage report — PLAN complete · T-x · 2026-06-22');
     expect(body).not.toContain('🦑'); // no drift/gate glyph in a report body (design §4)
     expect(body).toContain('Summary: plan complete');
@@ -178,38 +174,5 @@ describe('renderStageReport (pure, standardized format)', () => {
       ISO,
     );
     expect(path).toBe('author-T-a-2026-06-22.md');
-  });
-});
-
-describe('emitStageReport (SAVES under <project>/.opensquid/reports/)', () => {
-  it('saves the body atomically under the project reports dir + returns the ABSOLUTE saved path + body', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'stage-report-'));
-    const scope = join(root, '.opensquid'); // the project marker `saveProjectReport` walks up to
-    await mkdir(scope, { recursive: true });
-    const r: StageReport = {
-      stage: 'DEPLOY',
-      taskId: 'T-deploy',
-      summary: 'deploy complete',
-      nextDirective: 'accepted',
-    };
-    const { path, body } = await emitStageReport(root, r, ISO);
-    // V2-ENF.2/4 — SAVED under the project `.opensquid/reports/`, never `docs/reports/`, never the global home.
-    expect(path).toBe(join(scope, 'reports', 'deploy-T-deploy-2026-06-22.md'));
-    expect(await readFile(path, 'utf8')).toBe(body);
-    expect(body).toBe(renderStageReport(r, ISO).body);
-  });
-
-  it('degrades to surfaced-only (bare filename, no write) when no project scope resolves', async () => {
-    const bare = await mkdtemp(join(tmpdir(), 'stage-report-bare-')); // no `.opensquid` marker
-    const r: StageReport = {
-      stage: 'DEPLOY',
-      taskId: 'T-deploy',
-      summary: 'deploy complete',
-      nextDirective: 'accepted',
-    };
-    const { path, body } = await emitStageReport(bare, r, ISO);
-    // no project scope → saveProjectReport returns null → path falls back to the bare filename, nothing written.
-    expect(path).toBe('deploy-T-deploy-2026-06-22.md');
-    expect(body).toBe(renderStageReport(r, ISO).body);
   });
 });

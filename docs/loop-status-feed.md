@@ -59,6 +59,41 @@ Monitor({
 Each transition (`wg-… · code · fix (7/7)`) arrives as its own notification; you keep working and react the
 moment an item advances. No `tail -f`, no in-session polling.
 
+## Surface 3 — the ADDITIVE pill (compose into your OWN status line)
+
+Surface 1 REPLACES your status line and spawns a `node` process on every ~300ms harness render. If you already
+have a status line you like (repo · branch · cost · model · …) and just want to ADD a live loop pill to it, use
+this surface instead: opensquid publishes a pre-rendered fragment STRING to `<root>/.opensquid/loop-statusline`
+on each loop state change (fail-open, off the hot path — `src/runtime/loop/statusline_snapshot.ts`), and your own
+script reads it with a bare `cat`. No `node` spawn, no `jq`, zero render cost. `opensquid` never owns your line.
+
+Paste this into your `~/.claude/statusline-command.sh` just before the final `printf "%b\n" "$out"` (keep it
+wherever you like in `$out`):
+
+```sh
+# --- opensquid loop pill (additive; reads the pre-rendered fragment opensquid publishes on each state change) ---
+root="$PWD"
+while [ "$root" != "/" ] && [ ! -d "$root/.opensquid" ]; do root=$(dirname "$root"); done
+frag="$root/.opensquid/loop-statusline"
+# fresh (published within 2 min = a live loop) AND non-empty → append as one dim pill; a dead loop's file goes
+# stale (find matches nothing) so the pill disappears — never a frozen live line.
+if [ -f "$frag" ] && [ -n "$(find "$frag" -mmin -2 2>/dev/null)" ]; then
+  pill=$(cat "$frag")
+  if [ -n "$pill" ]; then out="${out} ${PIPE} ${DIM}${pill}${RESET}"; fi
+fi
+# --- end opensquid loop pill ---
+```
+
+The block walks UP from `$PWD` for a `.opensquid/` dir (git-style), so the pill works from any subdirectory. The
+`find "$frag" -mmin -2` freshness guard is REQUIRED: a live loop emits phase events well inside 2 minutes, so its
+file stays fresh; a crashed loop (which never published the graceful-drain blank) leaves a frozen file that goes
+stale, so `find` matches nothing and the pill disappears — never a frozen live line (decision 4). Tune the
+`-mmin -2` window to your loop's phase cadence. The fragment already carries each item's age
+(`🦑 wg-… · code · test (4/7) ⟳ · 3m ago`), so a quiet-but-live loop still reads honestly. No loop running → an
+empty fragment → no pill (your line is unchanged). It is POSIX `sh` (`find -mmin`, `dirname`, `cat` — portable
+across macOS/Linux; no `stat -f`/`stat -c`), and the pill reuses your script's own `${DIM}`/`${RESET}`/`${PIPE}`
+vars, so no ANSI codes are baked into the fragment.
+
 ## The metrics history (`--metrics`)
 
 Beyond the live "where is it now," `loop_metrics` is the durable cost/performance time series — one row per

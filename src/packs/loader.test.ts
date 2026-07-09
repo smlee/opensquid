@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { loadPack } from './loader.js';
 
@@ -355,15 +355,63 @@ describe('loadPack — error + edge cases', () => {
     expect(pack.driftResponse).toBeUndefined();
   });
 
-  it('surfaces a drift_response.yaml schema error verbatim (typo top-level key under .strict())', async () => {
+  it('warns and LOADS on an unknown drift_response.yaml top-level key (was: fail-loud, wg-a02313251dfb)', async () => {
+    const warned: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((c: string | Uint8Array): boolean => (warned.push(String(c)), true));
+    try {
+      await writeFile(
+        join(dir, 'manifest.yaml'),
+        ['name: bad-drift', 'version: 0.1.0', 'scope: workflow', 'goal: bad drift'].join('\n') +
+          '\n',
+        'utf8',
+      );
+      // `defualt:` typo — a genuinely-unknown top-level key now warns + strips, not crash.
+      await writeFile(join(dir, 'drift_response.yaml'), 'defualt: warn\n', 'utf8');
+
+      const pack = await loadPack(dir); // NO throw now
+      expect(pack).toBeDefined();
+      expect(warned.join('')).toContain('drift_response.yaml'); // source named
+      expect(warned.join('')).toContain("'defualt'"); // key NAMED in the warning
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('warns and LOADS on an unknown manifest.yaml top-level key (fail-loud softens, wg-a02313251dfb)', async () => {
+    const warned: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((c: string | Uint8Array): boolean => (warned.push(String(c)), true));
+    try {
+      await writeFile(
+        join(dir, 'manifest.yaml'),
+        [
+          'name: fwd-manifest',
+          'version: 0.1.0',
+          'scope: workflow',
+          'goal: forward key',
+          'future_flag: true', // genuinely-unknown top-level key
+        ].join('\n') + '\n',
+        'utf8',
+      );
+      const pack = await loadPack(dir); // NO throw
+      expect(pack).toBeDefined();
+      expect(warned.join('')).toContain('manifest.yaml');
+      expect(warned.join('')).toContain("'future_flag'");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('STILL fails loud on a manifest.yaml missing a required field (source label preserved)', async () => {
+    // No `name` — a genuine (missing-required) error still stops the loop.
     await writeFile(
       join(dir, 'manifest.yaml'),
-      ['name: bad-drift', 'version: 0.1.0', 'scope: workflow', 'goal: bad drift'].join('\n') + '\n',
+      ['version: 0.1.0', 'scope: workflow', 'goal: no name'].join('\n') + '\n',
       'utf8',
     );
-    // `defualt:` typo — `.strict()` rejects unknown top-level keys.
-    await writeFile(join(dir, 'drift_response.yaml'), 'defualt: warn\n', 'utf8');
-
     let caught: unknown;
     try {
       await loadPack(dir);
@@ -371,8 +419,7 @@ describe('loadPack — error + edge cases', () => {
       caught = e;
     }
     expect(caught).toBeInstanceOf(Error);
-    const msg = (caught as Error).message;
-    expect(msg).toContain('drift_response.yaml');
+    expect((caught as Error).message).toContain('manifest.yaml');
   });
 
   it('surfaces a drift_response.yaml schema error verbatim (unknown policy enum value)', async () => {

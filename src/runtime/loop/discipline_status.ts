@@ -5,19 +5,19 @@
  *   - the active task (active-task.json) — null ⇒ the discipline is DORMANT (no in_progress task to key off);
  *   - per active v2 pack: the per-task FSM state + EVERY gate's pass/fail evaluated through the REAL
  *     RegistryGuardEvaluator over buildGuardCtx (the exact predicates the hooks enforce), with each guard's
- *     expression so the failing facet is visible;
- *   - the stage reports SAVED under `<project>/.opensquid/reports/` (V2-ENF.2/4, not the legacy docs/reports/).
+ *     expression so the failing facet is visible.
+ *
+ * RD.4 removed the reports-POLL surface (the `.opensquid/reports/` listing): the before/after communication
+ * reports are DISPLAYED live on the terminal now (reporting-model, RD.1-3), so there is nothing to poll for
+ * visibility. This inspector reports only the live gate/FSM discipline state.
  *
  * The gate evaluation uses a NEUTRAL `post_tool_call` event (no tool), so it reports the STANDING gate state —
  * "if a transition were attempted right now, which gates hold" — not an action-specific verdict. Read-only: it
  * NEVER advances the FSM or writes state. Reused by the `opensquid status` CLI + (optionally) an MCP tool.
  */
-import { readdir } from 'node:fs/promises';
-
 import { loadActiveV2Cartridges } from '../bootstrap.js';
-import { projectReportsDirFor } from './reports_dir.js';
 import { readFsmState } from '../fsm_state.js';
-import { readActiveTask, readActiveTaskId, readSessionCwd } from '../session_state.js';
+import { readActiveTask, readActiveTaskId } from '../session_state.js';
 import type { Event } from '../types.js';
 
 import { buildGuardCtx } from './v2_supply.js';
@@ -41,7 +41,6 @@ export interface DisciplineStatus {
   activeTask: { id: string; subject: string } | null;
   dormant: boolean;
   packs: PackStatus[];
-  reports: string[];
 }
 
 /** Build the live discipline status for a session. Read-only; never advances the FSM. */
@@ -83,26 +82,11 @@ export async function disciplineStatus(sessionId: string): Promise<DisciplineSta
     packs.push({ pack: name, fsmState, gates });
   }
 
-  let reports: string[] = [];
-  const root = await readSessionCwd(sessionId);
-  if (root !== null) {
-    // V2-ENF.2/4 — SAVED reports live under `<project>/.opensquid/reports/`, not the legacy `docs/reports/`.
-    const reportsDir = await projectReportsDirFor(root);
-    if (reportsDir !== null) {
-      try {
-        reports = (await readdir(reportsDir)).filter((f) => f.endsWith('.md')).sort();
-      } catch {
-        // no reports dir yet — leave empty
-      }
-    }
-  }
-
   return {
     sessionId,
     activeTask: task !== null ? { id: task.id, subject: task.subject } : null,
     dormant: taskId === null,
     packs,
-    reports,
   };
 }
 
@@ -126,10 +110,6 @@ export function formatDisciplineStatus(s: DisciplineStatus): string {
       lines.push(`    ${g.pass ? '✅' : '⛔'} ${g.ref.padEnd(20)} ${g.expr}`);
     }
   }
-  lines.push(
-    s.reports.length > 0
-      ? `• Reports emitted (.opensquid/reports/): ${s.reports.join(', ')}`
-      : '• Reports emitted: none yet.',
-  );
+  // RD.4 — the reports-poll listing is GONE: reports are DISPLAYED live now, not filed + polled.
   return lines.join('\n');
 }

@@ -1,13 +1,14 @@
 /**
- * T2.9 — `onPhasesComplete` loop-driver tests (zero LLM, deterministic).
+ * T2.9 / RD.2 — `onPhasesComplete` loop-driver tests (zero LLM, deterministic).
  *
- * Covers: (1) the CODE stage report file is SAVED under a TEMP project's .opensquid/reports/ (V2-ENF.2/4 —
- * (2) the returned next run-group matches `batchDecide` — independent issues → singletons, sibling batch →
- * one group. Uses a stub `LoopWorkGraph` (no real store / no DB) + a temp dir, with an injected `iso`.
+ * Covers: (1) the CODE after report body is RETURNED (byte-unchanged 7-phase ledger) and NO `.opensquid/reports/`
+ * file is written (RD.4 removed the disk save — the caller DISPLAYS the returned body live); (2) the returned
+ * next run-group matches `batchDecide` — independent issues → singletons, sibling batch → one group. Uses a stub
+ * `LoopWorkGraph` (no real store / no DB) + a temp dir, with an injected `iso`.
  */
 import { describe, expect, it } from 'vitest';
 
-import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,13 +25,12 @@ function stubWg(readyIds: string[], edges: Edge[]): LoopWorkGraph {
 }
 
 describe('onPhasesComplete (T2.9 loop driver)', () => {
-  it('emits the CODE stage report file under the project reports dir (the AF.3 per-task report)', async () => {
+  it('RETURNS the CODE after body (7-phase ledger) and writes NO .opensquid/reports/ file (RD.2/RD.4)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'loop-driver-'));
-    await mkdir(join(root, '.opensquid'), { recursive: true }); // project marker → saveProjectReport resolves
-    await onPhasesComplete('sid-1', root, 'T-code', stubWg([], []), ISO);
-    // V2-ENF.2/4 — SAVED under `<project>/.opensquid/reports/`, never the legacy `docs/reports/`.
-    const path = join(root, '.opensquid', 'reports', 'code-T-code-2026-06-22.md');
-    const body = await readFile(path, 'utf8');
+    const scope = join(root, '.opensquid');
+    await mkdir(scope, { recursive: true }); // a project marker exists — yet NO report file may be written now
+    const { report: body } = await onPhasesComplete('sid-1', root, 'T-code', stubWg([], []), ISO);
+    // RD.2 — the CODE after body is RETURNED (displayed live by the caller), byte-unchanged.
     expect(body).toContain('After-stage report — CODE complete · T-code · 2026-06-22');
     expect(body).not.toContain('🦑'); // reports never use the drift/gate glyph (design §4)
     // the long, stand-out CODE report: the 7-phase step chart
@@ -42,6 +42,8 @@ describe('onPhasesComplete (T2.9 loop driver)', () => {
     expect(body).toContain('Evidence: phases_complete ✓ · readiness_ran ✓ · deprecated_clean ✓');
     // CODE report carries NO goal line (only SCOPE does — T2.10).
     expect(body).not.toContain('Goal:');
+    // RD.4 — the COMMUNICATION report is DISPLAYED, never filed: no reports dir was created.
+    await expect(readdir(join(scope, 'reports'))).rejects.toThrow(); // ENOENT — no file written
   });
 
   it('independent ready issues → each its own singleton run-group', async () => {

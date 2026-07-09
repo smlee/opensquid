@@ -9,8 +9,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  checkDesignDocRewrite,
   checkOrchestratorGuard,
   isCodeFileMutation,
+  isDesignDoc,
   isDocumentPath,
   isMutatingCall,
 } from './orchestrator_guard.js';
@@ -217,5 +219,61 @@ describe('checkOrchestratorGuard — documents pass, coding files gated by permi
       { agent_id: 'executor-abc' },
     );
     expect(r.deny).toBe(false);
+  });
+});
+
+describe('isDesignDoc — only a docs/design/*.md scope-of-record (AQG.5)', () => {
+  it('matches a docs/design/ .md/.mdx path (relative or absolute)', () => {
+    expect(isDesignDoc('docs/design/foo.md')).toBe(true);
+    expect(isDesignDoc('/repo/docs/design/foo.mdx')).toBe(true);
+  });
+  it('does NOT match a task spec, a research doc, or a source file', () => {
+    expect(isDesignDoc('docs/tasks/T-foo.md')).toBe(false);
+    expect(isDesignDoc('docs/research/foo-pre-research-x.md')).toBe(false);
+    expect(isDesignDoc('src/x.ts')).toBe(false);
+    expect(isDesignDoc('docs/design/foo.ts')).toBe(false); // design dir but not a markdown doc
+  });
+});
+
+describe('checkDesignDocRewrite — the interactive design-doc REWRITE gate (AQG.5)', () => {
+  // A pure injected verdict reader; `throws` makes it reject (the fail-open branch).
+  const gate = (
+    verdict: string | undefined,
+    opts: { hookInput?: { agent_id?: string }; throws?: boolean } = {},
+    file_path = 'docs/design/x.md',
+    tool = 'Write',
+  ) =>
+    checkDesignDocRewrite(tool, { file_path }, opts.hookInput, {
+      readScopeVerdict: () =>
+        opts.throws ? Promise.reject(new Error('unreadable')) : Promise.resolve(verdict),
+    });
+
+  it('present-and-not-GUESS_FREE (UNRESOLVED) rewrite → deny', async () => {
+    expect((await gate('VERDICT: UNRESOLVED\n- a redundancy defect')).deny).toBe(true);
+  });
+
+  it('GUESS_FREE verdict → allow', async () => {
+    expect((await gate('VERDICT: GUESS_FREE')).deny).toBe(false);
+  });
+
+  it('no cache (undefined — the first write) → allow (REWRITE-gate seeds the audit)', async () => {
+    expect((await gate(undefined)).deny).toBe(false);
+  });
+
+  it('a throwing reader → allow (fail-open, never a hard stall)', async () => {
+    expect((await gate(undefined, { throws: true })).deny).toBe(false);
+  });
+
+  it('executor (agent_id) → allow even on an UNRESOLVED verdict (exempt, as checkOrchestratorGuard)', async () => {
+    expect((await gate('VERDICT: UNRESOLVED', { hookInput: { agent_id: 'a' } })).deny).toBe(false);
+  });
+
+  it('a non-design write (src/, docs/tasks/) → allow even on an UNRESOLVED verdict (only design docs gated)', async () => {
+    expect((await gate('VERDICT: UNRESOLVED', {}, 'src/x.ts')).deny).toBe(false);
+    expect((await gate('VERDICT: UNRESOLVED', {}, 'docs/tasks/T-x.md')).deny).toBe(false);
+  });
+
+  it('a non-Write/Edit tool on a design path → allow (only file writes are gated)', async () => {
+    expect((await gate('VERDICT: UNRESOLVED', {}, 'docs/design/x.md', 'Read')).deny).toBe(false);
   });
 });

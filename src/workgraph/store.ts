@@ -39,7 +39,10 @@ const newIssueId = (
 
 const str = (r: Row, k: string): string => (typeof r[k] === 'string' ? r[k] : '');
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0));
-const toStatus = (s: string): IssueStatus => (s === 'in_progress' || s === 'closed' ? s : 'open');
+// WGL.1 — 'archived' MUST be preserved (a soft, reversible terminal state); any other unknown value still
+// coerces to 'open'. Miss this and an archived row would read back as 'open' and re-enter listReady.
+const toStatus = (s: string): IssueStatus =>
+  s === 'in_progress' || s === 'closed' || s === 'archived' ? s : 'open';
 const optStr = (r: Row, k: string): string | undefined => {
   const v = r[k];
   return typeof v === 'string' && v !== '' ? v : undefined;
@@ -58,6 +61,7 @@ const rowToIssue = (r: Row): Issue => {
   const claimAudience = parseAudience(r);
   const claimExpiresAt = optStr(r, 'claim_expires_at');
   const wedgeReason = optStr(r, 'wedge_reason');
+  const archiveReason = optStr(r, 'archive_reason'); // WGL.1
   return {
     id: str(r, 'id'),
     title: str(r, 'title'),
@@ -69,6 +73,7 @@ const rowToIssue = (r: Row): Issue => {
     ...(claimAudience === undefined ? {} : { claimAudience }),
     ...(claimExpiresAt === undefined ? {} : { claimExpiresAt }),
     ...(wedgeReason === undefined ? {} : { wedgeReason }),
+    ...(archiveReason === undefined ? {} : { archiveReason }),
   };
 };
 
@@ -87,17 +92,25 @@ async function createSchema(client: Client): Promise<void> {
     status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     lww INTEGER NOT NULL DEFAULT 0,
     claim_token TEXT, claim_audience TEXT, claim_expires_at TEXT, wedge_reason TEXT,
+    archive_reason TEXT,
     project TEXT NOT NULL DEFAULT 'legacy-global',
     created_lamport INTEGER NOT NULL DEFAULT 0, actor_id TEXT);`);
   await client.execute(`CREATE TABLE IF NOT EXISTS wg_edges (
     edge_key TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL,
     project TEXT NOT NULL DEFAULT 'legacy-global');`);
+  // HWS.2 — a tiny durable per-store high-water-mark for the harness↔workgraph reconcile (the outbound
+  // cursor over `wg_ops.lamport`). Keyed by a `name` so a future consumer can carry its own watermark; the
+  // reconcile uses name='harness'. Idempotent CREATE, same template as wg_ops.
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS sync_cursor (name TEXT PRIMARY KEY, lamport INTEGER NOT NULL DEFAULT 0);`,
+  );
   // GR.1/GR.3 + project — additive columns for a pre-existing schema (idempotent; already-migrated throws).
   for (const ddl of [
     `ALTER TABLE wg_issues ADD COLUMN claim_token TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN claim_audience TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN claim_expires_at TEXT`,
     `ALTER TABLE wg_issues ADD COLUMN wedge_reason TEXT`,
+    `ALTER TABLE wg_issues ADD COLUMN archive_reason TEXT`, // WGL.1 (idempotent; already-migrated throws → caught)
     `ALTER TABLE wg_ops ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
     `ALTER TABLE wg_issues ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
     `ALTER TABLE wg_edges ADD COLUMN project TEXT NOT NULL DEFAULT 'legacy-global'`,
@@ -159,6 +172,12 @@ export function workGraphStore(opts: {
   // WGD.1 — this replica's actor id (the per-HOME UUID; the live openers pass `resolveActorId()`).
   // Default 'legacy' so the existing tests need no actor wiring.
   actorId?: string;
+  // F1a — the ONE close-boundary callback. Invoked (fail-open) whenever `updateIssue` TRANSITIONS an issue's
+  // status to a terminal value (`closed`/`archived`). The loop openers wire it to the monitor `item_closed`
+  // push, so EVERY close path — including the harness-sync reconcile close that emits nothing on its own —
+  // reaches the feed from ONE place (single source of truth). Injected DI keeps the store a generic lower
+  // layer: a caller that passes no callback (the MCP/read openers) simply does not emit. §7-decoupled.
+  onIssueTerminal?: (id: string) => void | Promise<void>;
 }): WorkGraphStore {
   let client: Client | null = null;
   const actorId = opts.actorId ?? 'legacy';
@@ -343,6 +362,20 @@ export function workGraphStore(opts: {
       await appendOp(id, 'issue_set', payload);
       const next = await getIssue(id);
       if (next === null) throw new Error('workgraph: updateIssue lost the issue');
+      // F1a — fire the close-boundary callback on a TRANSITION into terminal (`closed`/`archived`); skip a no-op
+      // re-patch of an already-terminal status so a close pushes exactly ONE event. Fail-open: a callback fault
+      // (the injected monitor emit is itself fail-open) must never break the status write that just committed.
+      if (
+        opts.onIssueTerminal !== undefined &&
+        (patch.status === 'closed' || patch.status === 'archived') &&
+        cur.status !== patch.status
+      ) {
+        try {
+          await opts.onIssueTerminal(id);
+        } catch {
+          /* fail-open: the close is durable regardless of the monitor push */
+        }
+      }
       return next;
     },
 
@@ -360,13 +393,16 @@ export function workGraphStore(opts: {
       // unclaimed (query-time expiry — no reaper). ISO-8601 UTC sorts lexically == chronologically. The
       // store is project-LOCAL, so no project filter — every row IS this project's.
       const now = new Date().toISOString();
+      // WGL.1 — the `status = 'open'` predicate already hides archived ROWS; the one non-obvious ready-filter
+      // edit is the blocks sub-query below (`NOT IN ('closed','archived')`) so archiving a SUPERSEDED BLOCKER
+      // unblocks its consumer (an archived blocker must no longer hold its dependent).
       const rs = await db().execute({
         sql: `SELECT * FROM wg_issues WHERE status = 'open'
           AND (claim_token IS NULL OR claim_expires_at <= ?)
           AND wedge_reason IS NULL
           AND id NOT IN (
             SELECT e.to_id FROM wg_edges e JOIN wg_issues x ON x.id = e.from_id
-            WHERE e.type = 'blocks' AND x.status != 'closed') ORDER BY created_lamport, actor_id`,
+            WHERE e.type = 'blocks' AND x.status NOT IN ('closed','archived')) ORDER BY created_lamport, actor_id`,
         args: [now],
       });
       return rs.rows.map(rowToIssue);
@@ -380,6 +416,18 @@ export function workGraphStore(opts: {
     async clearWedge(id) {
       if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
       await appendOp(id, 'wedge_cleared', {});
+    },
+
+    // WGL.1 — soft-archive to the reversible `archived` terminal state (a new op, LWW, surviving replay). The
+    // row is KEPT (history-preserving); listReady excludes it. `unarchiveIssue` restores it to `open`.
+    async archiveIssue(id, reason?: string) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(id, 'issue_archived', reason === undefined ? {} : { reason });
+    },
+
+    async unarchiveIssue(id) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      await appendOp(id, 'issue_unarchived', {});
     },
 
     async releaseClaim(id) {
@@ -419,6 +467,49 @@ export function workGraphStore(opts: {
           actorId: str(r, 'actor_id') || 'legacy',
         }),
       );
+    },
+
+    // HWS.2 — the STORE-GLOBAL sibling of `listEvents`: every op with `lamport > cursorLamport`, in
+    // (lamport, id) order (the id tie-break makes a same-lamport cross-process race deterministic, exactly
+    // as `listEvents`). `wg_ops.lamport` is already store-global monotonic (appendOp's MAX+1), so this is a
+    // WHERE-clause widen of the per-issue read — no new counter. The reconcile filters the types it cares
+    // about; the store stays a general cursor (single responsibility).
+    async listOpsSince(cursorLamport) {
+      const rs = await db().execute({
+        sql: 'SELECT id, issue_id, lamport, type, payload, project, actor_id FROM wg_ops WHERE lamport > ? ORDER BY lamport, id',
+        args: [cursorLamport],
+      });
+      return rs.rows.map(
+        (r): WgOp => ({
+          id: str(r, 'id'),
+          issueId: str(r, 'issue_id'),
+          lamport: num(r.lamport),
+          type: str(r, 'type') as WgOp['type'],
+          payload: JSON.parse(str(r, 'payload') || '{}') as Record<string, unknown>,
+          project: str(r, 'project'),
+          actorId: str(r, 'actor_id') || 'legacy',
+        }),
+      );
+    },
+
+    // HWS.2 — the durable high-water-mark for the harness reconcile. A fresh store returns 0 (see-everything
+    // once on first run).
+    async readHighWater() {
+      const rs = await db().execute({
+        sql: 'SELECT lamport FROM sync_cursor WHERE name = ?',
+        args: ['harness'],
+      });
+      return rs.rows[0] ? num(rs.rows[0].lamport) : 0;
+    },
+
+    // MONOTONIC upsert — a lower value NEVER rewinds the cursor, so two concurrent reconciles (a PreToolUse
+    // tick + a loop-pass) can both advance safely and neither re-emits the other's ops.
+    async advanceHighWater(lamport) {
+      await db().execute({
+        sql: `INSERT INTO sync_cursor (name, lamport) VALUES ('harness', ?)
+              ON CONFLICT(name) DO UPDATE SET lamport = MAX(sync_cursor.lamport, excluded.lamport)`,
+        args: [lamport],
+      });
     },
   };
 }

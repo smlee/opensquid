@@ -24,10 +24,14 @@ import { join } from 'node:path';
 
 export const OPENSQUID_HOOK_MARKER = '@opensquid managed hook';
 
-type HookBoundary = 'commit' | 'push' | 'attest';
+type HookBoundary = 'commit' | 'push' | 'attest' | 'commit-msg';
 
 const HOOKS: readonly { name: string; boundary: HookBoundary }[] = [
   { name: 'pre-commit', boundary: 'commit' },
+  // REL.3 (T-opensquid-release-flow) — commit-msg is the ONLY boundary that sees the message
+  // before the commit lands (pre-commit fires before the message exists; post-commit is too
+  // late to block). It enforces the conventional-commit format auto-versioning depends on.
+  { name: 'commit-msg', boundary: 'commit-msg' },
   { name: 'pre-push', boundary: 'push' },
   // PGB.2 — post-commit records flow provenance (attestations.jsonl) so a later
   // session can push these commits without re-proving the flow. `gate attest`
@@ -35,7 +39,13 @@ const HOOKS: readonly { name: string; boundary: HookBoundary }[] = [
   { name: 'post-commit', boundary: 'attest' },
 ];
 
-const gateLine = (boundary: HookBoundary): string => `opensquid gate ${boundary} || exit $?`;
+// REL.3: commit-msg receives the message-file path as $1 — forward it (quoted). git invokes
+// `commit-msg <path-to-COMMIT_EDITMSG>`; an unquoted/missing $1 would read the wrong file and the
+// gate would pass everything (a silent hole). This is the one deviation from the uniform shape.
+const gateLine = (boundary: HookBoundary): string =>
+  boundary === 'commit-msg'
+    ? `opensquid gate commit-msg "$1" || exit $?`
+    : `opensquid gate ${boundary} || exit $?`;
 const managedBlock = (boundary: HookBoundary): string =>
   `# ${OPENSQUID_HOOK_MARKER}\n${gateLine(boundary)}`;
 

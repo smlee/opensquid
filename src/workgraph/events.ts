@@ -115,6 +115,24 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
         args: [edgeKey(s(p.from), s(p.to))],
       });
       return;
+    case 'issue_archived':
+      // WGL.1 — soft-retire as an LWW status update, mirroring 'issue_set' (NOT the single-transition wedge
+      // shape): a stale op (lower lww) is a no-op; the winner stamps lww = lamport. So a replayed out-of-order
+      // archive/unarchive pair cannot resurrect an archived item. Records the optional reason.
+      await client.execute({
+        sql: `UPDATE wg_issues SET status = 'archived', archive_reason = ?, updated_at = ?, lww = ?
+              WHERE id = ? AND lww <= ?`,
+        args: [s(p.reason), s(p.ts), op.lamport, op.issueId, op.lamport],
+      });
+      return;
+    case 'issue_unarchived':
+      // WGL.1 — reverse the soft-retire back to 'open' (LWW, clearing the reason).
+      await client.execute({
+        sql: `UPDATE wg_issues SET status = 'open', archive_reason = NULL, updated_at = ?, lww = ?
+              WHERE id = ? AND lww <= ?`,
+        args: [s(p.ts), op.lamport, op.issueId, op.lamport],
+      });
+      return;
     case 'claim_acquired':
       // GR.1 — exactly-once CAS at the projection: the claim lands ONLY if the item is currently
       // unclaimed OR its prior claim already expired (claim_expires_at <= this op's ts). Replaying

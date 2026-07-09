@@ -174,3 +174,59 @@ export function checkOrchestratorGuard(
   if (opts?.codeWritePermitted === true) return { deny: false }; // standing human permission granted
   return { deny: true, message: DENY_MESSAGE };
 }
+
+/**
+ * AQG.5 (T-arch-quality-gate) — a `docs/design/*.md` scope-of-record. The orchestrator-guard's design-doc REWRITE
+ * gate fires ONLY on these (a `docs/tasks/T-*.md` or a `src/` path is out of scope — those are owned by the
+ * AUTHOR rule / the code-file guard). Case-sensitive on the `docs/design/` segment (matching the content-audit
+ * trigger AQG.3 widened), matching both absolute (`/repo/docs/design/x.md`) and repo-relative paths.
+ */
+export function isDesignDoc(path: string): boolean {
+  return path.includes('docs/design/') && (path.endsWith('.md') || path.endsWith('.mdx'));
+}
+
+/** Caller-resolved inputs the pure design-doc gate can't read itself (the audit cache lives in the runtime). */
+export interface DesignDocGuardOptions {
+  /**
+   * Reads the scope-audit verdict for the design artifact (the `fullstack-flow-scope-audit-cache` value AQG.3's
+   * widened trigger writes). `undefined` ⇒ no cache yet (the FIRST write, before any audit) ⇒ ALLOW (this is a
+   * REWRITE-gate). A throw ⇒ ALLOW (fail-open, never a hard stall on a synchronous audit read).
+   */
+  readScopeVerdict(): Promise<string | undefined>;
+}
+
+/**
+ * AQG.5 orchestrator design-doc REWRITE gate: a Write/Edit of a `docs/design/*.md` scope-of-record by the MAIN
+ * LOOP (no `agent_id`) is DENIED when its scope-audit verdict is present-and-not-`GUESS_FREE`. It is a
+ * REWRITE-gate because `cached_audit` is a synchronous spawn with NO cache on the first write: the first write
+ * always passes (seeding the audit, AQG.3), and a REWRITE while the verdict is `UNRESOLVED` blocks (the
+ * "re-audit at the next boundary" model). FAIL-OPEN on any read error / missing cache; executor subagents
+ * (`agent_id`) stay exempt exactly as `checkOrchestratorGuard`. Core reads ONLY the verdict STRING — no
+ * architecture criterion enters core (they live in the rubric prose).
+ */
+export async function checkDesignDocRewrite(
+  tool: string,
+  args: Record<string, unknown>,
+  hookInput: HookInput | undefined,
+  opts: DesignDocGuardOptions,
+): Promise<OrchestratorGuardResult> {
+  if (hookInput?.agent_id !== undefined) return { deny: false }; // executor exempt (as checkOrchestratorGuard)
+  if (tool !== 'Write' && tool !== 'Edit') return { deny: false }; // only file writes are gated
+  const fp = typeof args.file_path === 'string' ? args.file_path : undefined;
+  if (fp === undefined || !isDesignDoc(fp)) return { deny: false }; // only design-doc writes are gated
+  let verdict: string | undefined;
+  try {
+    verdict = await opts.readScopeVerdict();
+  } catch {
+    return { deny: false }; // fail-open on a read error — never a hard stall
+  }
+  if (verdict === undefined) return { deny: false }; // no cache yet (first write) ⇒ REWRITE-gate ⇒ allow
+  if (verdict.includes('VERDICT: GUESS_FREE')) return { deny: false };
+  return {
+    deny: true,
+    message:
+      '🦑 [orchestrator guard] Design-doc rewrite blocked: the scope-audit verdict for this design doc is not ' +
+      'GUESS_FREE. Resolve the flagged architecture/guess issues (modularity, scalability, single-source-of-truth, ' +
+      'push-vs-pull), then rewrite.',
+  };
+}

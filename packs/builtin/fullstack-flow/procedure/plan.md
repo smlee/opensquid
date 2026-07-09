@@ -23,8 +23,12 @@ You are in the PLAN stage. The scope is guess-free; turn it into an executable, 
 Emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor shows where this item is
 (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
 
-- `set_loop_phase(phase: "research", index: 1, total: 2)` while researching / re-auditing the SCOPE,
-- `set_loop_phase(phase: "decompose", index: 2, total: 2)` while creating the work-graph issues + edges.
+Emit each phase with `lifecycle: "running"` on ENTER (⟳) and `lifecycle: "done"` on LEAVE (✓):
+
+- `set_loop_phase(phase: "research", index: 1, total: 2, lifecycle: "running")` while researching / re-auditing
+  the SCOPE, then `set_loop_phase(phase: "research", index: 1, total: 2, lifecycle: "done")` when it is complete,
+- `set_loop_phase(phase: "decompose", index: 2, total: 2, lifecycle: "running")` while creating the work-graph
+  issues + edges (leave with `lifecycle: "done"`).
 
 ## Gate to advance (plan → author): `plan_ready`
 

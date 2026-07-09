@@ -33,6 +33,114 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     expect(byId['R-HANDOFF-DEDUP']).toBe('met'); // handoff key-drift + double-send dedup
     expect(byId['R-FAILURE-REPORT']).toBe('met'); // failure_report.ts (§5.4b — report WHY on any fail)
     expect(byId['R-FOLLOW-REMINDER']).toBe('met'); // follow_reminder.ts (§5.4c — anti-drift nudge)
-    expect(a.results.length).toBe(13); // 4 original seeds + 7 V2-ENF.2 + 2 T-project-local-state (PLS.1)
+    // wg-fecabb8ff29f (auto-trigger loop on scope-exit) — 3 new behavioral exports, each MET via its passing
+    // proof-test (loop_autospawn.test.ts); the data-shape siblings are allowlisted (no orphan drift).
+    expect(byId['R-LOOP-AUTOSPAWN']).toBe('met'); // ensureLoopRunning (idempotent/single-flight/fail-open)
+    expect(byId['R-LOOP-STATUS']).toBe('met'); // loopStatus (project-local pidfile liveness)
+    expect(byId['R-LOOP-START']).toBe('met'); // startLoop (detached background spawn)
+    // T-opensquid-release-flow (REL.1..REL.4) — 14 new behavioral exports, each MET via its element proof-test;
+    // the data-shape siblings (ParsedCommit/BumpLevel/NpmView/ReleaseDeps) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-RELEASE-MERGE',
+      'R-RELEASE-TAG',
+      'R-RELEASE-READ-VERSION',
+      'R-RELEASE-WRITE-VERSION',
+      'R-RELEASE-LAST-TAG',
+      'R-RELEASE-SUBJECTS',
+      'R-RELEASE-PUBLISHED',
+      'R-RELEASE-PARSE',
+      'R-RELEASE-VALIDATE-MSG',
+      'R-RELEASE-BUMP-LEVEL',
+      'R-RELEASE-NEXT-VERSION',
+      'R-RELEASE-COMMIT-MSG-GATE',
+      'R-RELEASE-RUN',
+      'R-RELEASE-REGISTER',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-loop-monitoring-pushstream (wg-61db3ededf19, LMP.1..5) — 9 new behavioral exports of the PUSH/STREAM
+    // monitor feed, each MET via its element proof-test; the data-shape siblings (MonitorEvent/NewMonitorEvent/
+    // MonitorEventKind/PhaseLifecycle/LoopFoldState/ProcedureLintResult) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-MONITOR-APPEND',
+      'R-MONITOR-TAIL',
+      'R-MONITOR-EMIT',
+      'R-MONITOR-FOLD',
+      'R-MONITOR-FOLD-LATEST',
+      'R-MONITOR-SUBSCRIBE',
+      'R-MONITOR-LIVE-ITEMS',
+      'R-MONITOR-AGE',
+      'R-MONITOR-PHASE-LINT',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-harness-workgraph-sync (wg-b52161a5961f, HWS.1..6) — 4 new behavioral exports of the OUTBOUND half +
+    // reverse observation, each MET via its element proof-test; the data-shape siblings (OutboundDelta/
+    // ReconcileResult/HarnessWriter/WgReconcileFacade) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-HWS-RECONCILE',
+      'R-HWS-CC-WRITER',
+      'R-HWS-STALE-NUDGE',
+      'R-HWS-OPEN-MAP',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-arch-quality-gate (wg-82e5a35c8e97, AQG.4/AQG.5) — 4 new behavioral exports of the architecture gate,
+    // each MET via its element proof-test; the data-shape siblings (DesignDocGuardOptions / isDesignDoc + the
+    // ActiveJson.archDetector / CodeEvidence.archClean field additions) are allowlisted (no orphan drift).
+    for (const id of ['R-ARCH-DETECTOR', 'R-ARCH-RECORD', 'R-ARCH-READ', 'R-ARCH-DESIGN-REWRITE']) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-opensquid-automated-gitflow (wg-732b2b68a168, AGF.1..AGF.7) — 13 new behavioral exports of the fully-
+    // automated git-flow, each MET via its element proof-test; the data-shape / seam siblings (VersioningConfig /
+    // WorktreeIo / PoolConfig / StageIo / GhIo + the real*Io default bindings + STAGE_BRANCH + GhAuthError) are
+    // allowlisted (no orphan drift — the forward ratchet registered AT CODE).
+    for (const id of [
+      'R-AGF-READ-VERSIONING',
+      'R-AGF-PATCH-OF-TAG',
+      'R-AGF-NEXT-LOCKED-TAG',
+      'R-AGF-NEXT-RC-TAG',
+      'R-AGF-LATEST-PREFIX-TAG',
+      'R-AGF-BRANCH-NAME',
+      'R-AGF-AUTO-PULL',
+      'R-AGF-ADD-WORKTREE',
+      'R-AGF-REMOVE-WORKTREE',
+      'R-AGF-DRAIN-POOL',
+      'R-AGF-MERGE-STAGE',
+      'R-AGF-OPEN-PR',
+      'R-AGF-TAG-MAIN-RELEASE',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-statusline-compose (wg-c954689147da, SLC.1..SLC.4) — 5 new behavioral exports of the additive status-line
+    // pill, each MET via its element proof-test (loop_status.test.ts / statusline_snapshot.test.ts / loop_events +
+    // loop_state.test.ts for the §C.12 incremental fold); the data-shape siblings (StatuslineSnapshotDeps /
+    // STATUSLINE_SNAPSHOT_FILE) and the test-only reset seam (resetLoopStateProjectionForTest) are allowlisted.
+    for (const id of [
+      'R-SLC-FRAGMENT',
+      'R-SLC-SNAPSHOT',
+      'R-SLC-REFRESH',
+      'R-SLC-INCR-FOLD',
+      'R-SLC-INCR-COLLECT',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-post-ship-logic-fixes (wg-61c1576cece0, F1c/F5/F3) — 3 new behavioral exports of the monitor-feed +
+    // design-doc-gate correctness fixes, each MET via its element proof-test; the data-shape / seam siblings
+    // (BootSweepReader / SCOPE_AUDIT_SESSION_KEY / ScopeAuditCacheKey) are allowlisted (no orphan drift).
+    for (const id of ['R-PSF-CLOSE-SWEEP', 'R-PSF-SCOPE-CACHE-KEY', 'R-PSF-WATCH-FOLD']) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-reporting-display-rebuild (wg-123340ac7a9f, RD.1) — the display primitive `displayReport` (reports are
+    // DISPLAYED live, never saved), reachable from post-tool-use, MET via its proof-test report_display.test.ts;
+    // the data-shape / seam siblings (ReportSink / ScopeChecklistItem / renderScopeBefore / renderScopeAfter) are
+    // allowlisted (no orphan drift).
+    expect(byId['R-REPORT-DISPLAY']).toBe('met');
+    // T-consistency-gate (wg-1c620a56b733, CG.1) — the durable-commit predicate `durableItemCommitExists`
+    // (SHIPPED ⟺ a durable item-owned commit exists), reachable from the orchestrator, MET via its proof-test
+    // consistency_gate.test.ts; the seam / trivial siblings (RalphGitSeam / makeRalphGitSeam /
+    // MAX_COMMIT_REDRIVES / NO_DURABLE_COMMIT_LABEL) are allowlisted (no orphan drift).
+    expect(byId['R-CONSISTENCY-GATE']).toBe('met');
+    expect(a.results.length).toBe(82); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE)
   }, 30_000);
 });

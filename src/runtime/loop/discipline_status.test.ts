@@ -62,6 +62,8 @@ describe('disciplineStatus', () => {
     expect(refs).toContain('plan_ready');
     expect(refs).toContain('code_frontend_clean');
     for (const g of fsf?.gates ?? []) expect(typeof g.pass).toBe('boolean');
+    // RD.4 — the reports-POLL surface is GONE: no `reports` field on the status (reports are DISPLAYED live now).
+    expect('reports' in s).toBe(false);
   });
 
   it('marks the discipline DORMANT when there is no active task', async () => {
@@ -86,5 +88,7 @@ describe('disciplineStatus', () => {
     expect(out).toMatch(/FSM state: scope/);
     expect(out).toMatch(/scope_ready/);
     expect(out).toMatch(/[✅⛔]/u);
+    // RD.4 — no reports-poll line in the formatted block (the listing surface was retired).
+    expect(out).not.toMatch(/Reports emitted/);
   });
 });

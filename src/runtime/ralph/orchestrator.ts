@@ -19,8 +19,20 @@ import type { HumanRequiredReason } from './lap_outcome.js';
 import type { LapResult, SuperviseOpts } from './supervisor.js';
 import type { LoopMetricRow } from '../loop/loop_metrics.js';
 import { superviseLap } from './supervisor.js';
+import { reapOrphans } from '../loop/reaper.js'; // WGL.4/WGL.6 — the shared per-pass reaper
+import { rollUpParents } from '../loop/parent_rollup.js'; // WGL.5 — parent auto-close on all-children-terminal
+import { emitMonitorEvent } from '../loop/monitor_emit.js'; // LMP.2 — push item_closed/wedged to the feed
+import { sweepTerminalBacklog } from '../loop/loop_boot_sweep.js'; // F1c — one-time boot drain of the terminal backlog
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
+import { addItemWorktree, removeItemWorktree, type WorktreeIo } from './worktree_pool.js'; // AGF.3 — worktree-per-item
+import { renderScopeBefore, renderScopeAfter } from '../loop/scope_report.js'; // RD.3 — task/session before/after bodies
+import {
+  durableItemCommitExists,
+  MAX_COMMIT_REDRIVES,
+  NO_DURABLE_COMMIT_LABEL,
+  type RalphGitSeam,
+} from './consistency_gate.js'; // CG.1 — the consistency gate at the SHIPPED-close boundary
 
 export interface RalphConfig {
   /** Auth mode from CONFIG (Inv 11; no runtime auto-detect). API → dollar budget; subscription → W. */
@@ -67,11 +79,29 @@ export interface RalphDeps {
   /** Optional per-step progress narration for a live play-by-play (the CLI wires stdout; omit → silent, as in tests). */
   narrate?: (msg: string) => void;
   /**
+   * RD.3 — the orchestrator's live REPORT channel: DISPLAY a rendered before/after body for the higher scopes
+   * (task at claim/close, session at run start/end). The CLI binds it to `displayReport(body, process.stdout)`
+   * (the orchestrator runs in the PARENT process, so its live channel is stdout — there is no `onStderrLine`
+   * indirection here). OPTIONAL + fail-safe: omitting it (tests, non-wired callers) is a silent no-op — no
+   * behavior break — mirroring `narrate`. Distinct from `narrate` (a one-line play-by-play): `display` shows
+   * the full before/after report body.
+   */
+  display?: (body: string) => void;
+  /**
    * T2.9 loop-driver hook — called after a lap SHIPS a task (phases_complete). The CLI wires this to
    * `onPhasesComplete` (emit the CODE stage report + compute the next run-group via batchDecide). Optional +
    * fail-open: a report/grouping error must never break the drain loop.
    */
   onShipped?: (taskId: string) => Promise<void>;
+  /**
+   * #26 HWS.5(b) — the loop-pass harness↔workgraph reconcile: once per drained pass (beside the orphan
+   * reaper), observe OUT-OF-SESSION wg changes off the op-log cursor (no Task tick) and emit the outbound
+   * nudge. INJECTED (the CLI wires the real openers + `ccNudgeWriter`; tests stub or omit it) so the
+   * orchestrator stays db-free/testable. Returns the advisory nudge string (or `null`). Fail-open BY CONTRACT
+   * — the orchestrator wraps the call in try/catch (mirroring the reaper), so a reconcile fault never breaks
+   * the drive pass. Absent → no loop-pass reconcile (tests / the v1 non-project path).
+   */
+  loopPassReconcile?: () => Promise<string | null>;
   /**
    * LSF.5 (subprocess-harness-push.md §3a) — the per-STAGE metrics writer, INJECTED so the loop stays unit-
    * testable without a real libsql. Called once per completed/exited stage of a `stageLoop` drive with the
@@ -106,6 +136,28 @@ export interface RalphDeps {
      */
     scopeGate: (item: Issue) => Promise<'drive' | 'hold'>;
   };
+  /**
+   * AGF.3 (T-opensquid-automated-gitflow, wg-4ae1004c931b) — the bounded concurrency pool + worktree-per-item.
+   * When PRESENT, the claim-and-drive runs each item in its OWN git worktree (cut from fresh `main`, `auto/wg-<id>`)
+   * so concurrent laps never clobber each other's edits, up to `bound` in flight (`drainPool`). Every git effect is
+   * behind the injected `WorktreeIo` (tests pass a stub — no real git). ABSENT (default) ⇒ the serial in-place
+   * drive (the `bound:1` degenerate case) — unchanged. Opt-in + additive, the framework pattern (like `stageLoop`).
+   */
+  pool?: {
+    bound: number;
+    poolRoot: string;
+    mainRoot: string;
+    io: WorktreeIo;
+  };
+  /**
+   * CG.1 (T-consistency-gate, wg-1c620a56b733) — the injected git seam the CONSISTENCY GATE reads through.
+   * PRESENT ⇒ before an item's drive the orchestrator records the target tip (`baseSha`), and at the SHIPPED
+   * close it VERIFIES a durable item-owned commit landed (`durableItemCommitExists`); if not, it re-drives up to
+   * MAX_COMMIT_REDRIVES then PARKS `NO_DURABLE_COMMIT` (never a silent close). ABSENT (default; every existing
+   * test, v1 coding-flow) ⇒ the gate is a NO-OP and the SHIPPED-close is byte-unchanged (backward compatible).
+   * Optional + additive, exactly like `stageLoop?`/`pool?`/`recordMetric?`. The CLI wires `makeRalphGitSeam(root)`.
+   */
+  git?: RalphGitSeam;
 }
 
 /** PSL.3 — a stage that reports the SAME stage this many times in a row (no advance) is genuinely stuck.
@@ -214,6 +266,58 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   const parked: { id: string; reason: HumanRequiredReason }[] = [];
   let spent = 0;
 
+  // F1c — ONCE at loop start, drain the pre-existing terminal backlog: any item that still folds LIVE on the feed
+  // but reads wg-terminal (a close that landed before this fix, or in the non-atomic close/emit crash window) gets
+  // a synthetic `item_closed`. Bounded set-based read, off the hot path. Fail-open — a sweep fault (a monitor-store
+  // or wg-read error) must NEVER block the drain.
+  try {
+    const drainedStale = await sweepTerminalBacklog(wg);
+    if (drainedStale > 0)
+      deps.narrate?.(`■ boot sweep drained ${drainedStale} stale terminal item(s)`);
+  } catch {
+    /* fail-open: the boot sweep is best-effort backlog hygiene, never a drain blocker */
+  }
+
+  // RD.3 — the SESSION scope's before/after communication report (an orchestrator run = one sitting), DISPLAYED
+  // live (never saved). before-session: a reconcile-before over the ready board — "Will: drive N ready item(s)".
+  // The after-session is the handoff summary (`displayAfterSession`), fired at EVERY run-end return (BOARD_EMPTY,
+  // the resource-pause returns, BUDGET) so a session never ends without its after. The handoff RESUME STATE keeps
+  // persisting in its own subsystem — this only DISPLAYS the session-communication report. Fail-open by contract.
+  try {
+    const readyAtStart = await wg.listReady();
+    deps.display?.(
+      renderScopeBefore(
+        'session',
+        `${readyAtStart.length} ready item(s)`,
+        readyAtStart.length > 0
+          ? readyAtStart.map((i) => `${i.id} — ${i.title.slice(0, 60)}`)
+          : ['(board empty at start)'],
+        new Date().toISOString(),
+      ).body,
+    );
+  } catch {
+    /* fail-open: a before-session display fault must never break the drive */
+  }
+  const displayAfterSession = (stopped: RalphStop): void => {
+    try {
+      deps.display?.(
+        renderScopeAfter(
+          'session',
+          `${stopped} · closed ${closed.length} / parked ${parked.length}`,
+          [
+            ...closed.map((id) => ({ item: id, done: true })),
+            ...parked.map((p) => ({ item: p.id, done: false, note: p.reason })),
+          ],
+          closed.length > 0 ? `closed ${closed.join(', ')}` : undefined,
+          parked.length > 0 ? `resume ${parked.map((p) => p.id).join(', ')}` : undefined,
+          new Date().toISOString(),
+        ).body,
+      );
+    } catch {
+      /* fail-open: an after-session display fault must never break the return */
+    }
+  };
+
   // THE single uniform stop-layer (Inv 5): every reason chat-escalates through ONE path — no per-trigger
   // code paths (rejects Alt D). Two SEPARATE, explicit decisions ride alongside it: (a) wedge-mark ONLY the
   // per-item residual (IRREVERSIBLE_BOUNDARY/SCOPE_FORK/UNRECOVERABLE_WEDGE) — a resource pause
@@ -223,6 +327,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   const parkAndEscalate = async (reason: HumanRequiredReason, item?: Issue): Promise<void> => {
     if (item !== undefined && !isResourcePause(reason)) {
       await wg.wedgeMark(item.id, reason); // a marked item SKIPS on re-attempt (residual only — GR.3)
+      await emitMonitorEvent({ wgId: item.id, kind: 'item_wedged', atMs: Date.now() }); // LMP.2 — GUARDED on a present item (the item-less BOARD_EMPTY park emits none)
       parked.push({ id: item.id, reason });
     }
     // GR.3 — undroppable for a RESIDUAL per-item escalation (IRREVERSIBLE_BOUNDARY / SCOPE_FORK /
@@ -263,25 +368,118 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     }
     if (item === undefined) {
       // Nothing automation-eligible (an empty board, OR every ready item is unscoped/held) → automation is
-      // drained. Escalate + STOP (not a silent stop); the held items await interactive human scope.
+      // drained. WGL.6 (§6.6) — before declaring BOARD_EMPTY, REAP orphaned stubs so junk never masquerades as
+      // an empty board. This is the SINGLE per-pass reaper call site (also WGL.4's loop-pass trigger). If the
+      // reap archived anything, re-drain (the board changed); only a reap that archives NOTHING NEW is a genuine
+      // empty/all-held board → escalate. Converges (the reaper is idempotent, so pass 2 archives nothing).
+      // #26 HWS.5(b) — the loop-pass reconcile: observe out-of-session wg changes off the op-log cursor and
+      // emit the outbound nudge (wg→harness only; no Task tick). Fail-open, exactly like the reaper below.
+      try {
+        const nudge = await deps.loopPassReconcile?.();
+        if (nudge !== undefined && nudge !== null) deps.narrate?.(nudge);
+      } catch {
+        /* fail-open: a loop-pass reconcile fault must never break the drive pass (mirrors the reaper's catch) */
+      }
+      let reaped: string[] = [];
+      try {
+        reaped = await reapOrphans(wg);
+      } catch {
+        /* fail-open: a reap error must never break the drain — fall through to BOARD_EMPTY */
+      }
+      if (reaped.length > 0) {
+        deps.narrate?.(`■ reaped ${reaped.length} orphan(s) before BOARD_EMPTY — re-draining`);
+        continue; // re-evaluate: the orphans are gone; the held/real items are re-considered
+      }
       deps.narrate?.(
         `■ board drained — BOARD_EMPTY (closed ${closed.length}, parked ${parked.length})`,
       );
       await parkAndEscalate('BOARD_EMPTY');
+      displayAfterSession('BOARD_EMPTY'); // RD.3 — after-session handoff summary (displayed live)
       return { stopped: 'BOARD_EMPTY', spent, closed, parked };
     }
     const { won } = await wg.claimIssue(item.id, deps.claimAudience(), cfg.claimTtlSec); // GR.1 atomic CAS
     if (!won) continue; // another runner/harness won it — it now carries a live claim, excluded next pass
 
     deps.narrate?.(`▶ claim ${item.id} — ${item.title.slice(0, 60)}`);
-    const outcome = await runItemLaps(item, deps, cfg); // GR.3 → LapResult (PSL.3: per-stage when stageLoop present)
+    // RD.3 — before-task: DISPLAY "Before-task · <id> · Will: <title>" live at the claim boundary (§5.2 before-task).
+    deps.display?.(renderScopeBefore('task', item.id, [item.title], new Date().toISOString()).body);
+    // AGF.3 — when the pool is enabled, drive the item in its OWN worktree (cut from fresh `main`, `auto/wg-<id>`)
+    // so concurrent laps never clobber each other's edits; the worktree is always torn down (fail-open) even on a
+    // driven-item throw. ABSENT (default) ⇒ the serial in-place drive, unchanged. The claim/fold semantics below
+    // (SHIPPED close, roll-up, onShipped, parked escalate) are PRESERVED — the pool changes WHERE the drive runs.
+    // CG.1 — the CONSISTENCY GATE: record the integration target's tip BEFORE the drive (per-item by
+    // construction — one binding per for-loop iteration, which drives exactly one claimed item; generalizes to
+    // a per-item-keyed record in the future pool drainer with NO logic change). Absent seam ⇒ undefined ⇒ no gate.
+    const baseSha = deps.git ? await deps.git.tip() : undefined;
+    let outcome = await driveMaybePooled(item, deps, cfg); // GR.3 → LapResult (PSL.3 per-stage when stageLoop present)
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
+    // CG.1 — a SHIPPED lap that produced NO durable item commit is re-driven up to MAX_COMMIT_REDRIVES, then
+    // PARKED `NO_DURABLE_COMMIT` (never silently closed). `baseSha` is recorded ONCE (before the FIRST drive) and
+    // reused across re-drives, so a late-landing commit reads as advanced past the ORIGINAL base. The gate is a
+    // no-op when the seam is absent (backward compatible) — the whole block is skipped.
+    if (outcome.kind === 'SHIPPED' && deps.git !== undefined && baseSha !== undefined) {
+      let redrives = 0;
+      let parkedNoCommit = false;
+      while (!(await durableItemCommitExists(deps.git, baseSha))) {
+        if (redrives >= MAX_COMMIT_REDRIVES) {
+          deps.narrate?.(
+            `⚠ ${item.id} SHIPPED without a durable commit — parking (${NO_DURABLE_COMMIT_LABEL})`,
+          );
+          deps.display?.(
+            `⚠ ${item.id}: ${NO_DURABLE_COMMIT_LABEL} — work not committed after ${MAX_COMMIT_REDRIVES} re-drives; NOT closed`,
+          );
+          await parkAndEscalate('NO_DURABLE_COMMIT', item); // non-resource residual → wedge-mark + item_wedged + undroppable escalate
+          parkedNoCommit = true;
+          break;
+        }
+        redrives++;
+        deps.narrate?.(
+          `  ↻ ${item.id} re-drive ${redrives}/${MAX_COMMIT_REDRIVES} to land the commit`,
+        );
+        const re = await driveMaybePooled(item, deps, cfg);
+        spent += re.costUsd;
+        if (re.kind !== 'SHIPPED') {
+          outcome = re; // a re-drive that itself escalates → fall into the uniform park path below (parked once there)
+          break;
+        }
+      }
+      // Divert PAST the SHIPPED-close AND the else-park: the item is ALREADY parked once here, so `continue` to
+      // the next ready item (mirrors the picker's `continue` idiom) — no double-park, no double SHIPPED-close.
+      if (parkedNoCommit) continue;
+    }
+
     if (outcome.kind === 'SHIPPED') {
+      // F1a — the close PUSHES its `item_closed` from the store boundary (`onIssueTerminal`, wired by the loop
+      // opener), NOT from a manual emit here. One boundary, every path: this SHIPPED close and every rolled-up
+      // parent close below both flow through `wg.updateIssue`, so neither needs (nor keeps) its own emit.
       await wg.updateIssue(item.id, { status: 'closed' });
       await deps.stageLoop?.clearStage(item.id); // PSL.3 — the item left the loop; drop its durable stage
       closed.push(item.id);
       deps.narrate?.(`✓ SHIPPED ${item.id} (closed ${closed.length})`);
+      // RD.3 — after-task: DISPLAY the task-completion report live at the SHIPPED close (§5.2 after-task).
+      deps.display?.(
+        renderScopeAfter(
+          'task',
+          item.id,
+          [{ item: item.title, done: true }],
+          `closed ${closed.length}`,
+          undefined,
+          new Date().toISOString(),
+        ).body,
+      );
+      // WGL.5 — parent roll-up: after the child's close is durable, close every ancestor parent whose children
+      // are ALL non-drivable (closed/archived/wedged). A wedged child stays independently escalated (never
+      // buried). Fail-open: a roll-up error must never break the drain (mirrors the onShipped hook).
+      try {
+        const rolled = await rollUpParents(wg, item.id);
+        for (const p of rolled) {
+          closed.push(p);
+          deps.narrate?.(`✓ rolled up parent ${p} (all children terminal)`);
+        }
+      } catch {
+        /* fail-open: never break the drain over the parent roll-up */
+      }
       // T2.9: the loop-driver lives here — on phases_complete (a SHIPPED lap) emit the CODE report + compute the
       // next run-group. Fail-open: a report/grouping error must never break the drain.
       try {
@@ -297,15 +495,41 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
         outcome.kind === 'HUMAN_REQUIRED' ? outcome.reason : 'UNRECOVERABLE_WEDGE';
       deps.narrate?.(`⚠ parked ${item.id}: ${reason}`);
       await parkAndEscalate(reason, item);
-      if (isResourcePause(reason)) return { stopped: reason, spent, closed, parked }; // e.g. lap-emitted RATE_BUDGET
+      if (isResourcePause(reason)) {
+        displayAfterSession(reason); // RD.3 — after-session on a resource-pause stop (reason narrowed to RalphStop)
+        return { stopped: reason, spent, closed, parked }; // e.g. lap-emitted RATE_BUDGET
+      }
       // else (IRREVERSIBLE_BOUNDARY / SCOPE_FORK / UNRECOVERABLE_WEDGE): parked, take the next item
     }
 
     if (cfg.authMode === 'api' && spent > cfg.maxBudgetUsd) {
       await parkAndEscalate('BUDGET'); // Inv 11 API bound (verified total_cost_usd) → resource pause → STOP
+      displayAfterSession('BUDGET'); // RD.3 — after-session on the budget stop
       return { stopped: 'BUDGET', spent, closed, parked };
     }
     // No single-item stop: the loop takes the next ready item and runs to exhaustion (BOARD_EMPTY).
+  }
+}
+
+/** AGF.3 — drive one item, in its own worktree when the pool is enabled (else the serial in-place drive). The
+ *  worktree is cut BEFORE the drive (`addItemWorktree`) and torn down AFTER in a `finally` (`removeItemWorktree`,
+ *  fail-open) — the lifecycle is attached to the claim/drive so a concurrent lap gets an isolated checkout, and the
+ *  fold at the call site is unchanged. ABSENT pool ⇒ `runItemLaps` directly (the `bound:1` degenerate case). */
+async function driveMaybePooled(
+  item: Issue,
+  deps: RalphDeps,
+  cfg: RalphConfig,
+): Promise<LapResult> {
+  const pool = deps.pool;
+  if (pool === undefined) return runItemLaps(item, deps, cfg);
+  let path: string | undefined;
+  try {
+    path = await addItemWorktree(item.id, pool.mainRoot, pool.poolRoot, pool.io);
+    deps.narrate?.(`⑃ worktree ${path} (auto/${item.id})`);
+    return await runItemLaps(item, deps, cfg);
+  } finally {
+    if (path !== undefined)
+      await removeItemWorktree(path, pool.mainRoot, pool.io).catch(() => undefined);
   }
 }
 

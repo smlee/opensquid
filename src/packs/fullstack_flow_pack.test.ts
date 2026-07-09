@@ -9,11 +9,13 @@
  */
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
 import { validateFsm } from '../runtime/fsm.js';
 import { loadPackV2, type LoadedPackV2 } from './loader_v2.js';
+import { lintPhaseEmits } from './phase_emit_lint.js';
 import { V2ObservedActor } from '../runtime/loop/v2_observed_actor.js';
 import type { Effect } from '../runtime/actor/port.js';
 import type { Envelope, MessageKind } from '../runtime/bus/types.js';
@@ -130,24 +132,83 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(codeExpr).toContain('code.phases_complete');
     expect(codeExpr).toContain('code.readiness_ran');
     expect(codeExpr).toContain('code.deprecated_clean');
+    expect(codeExpr).toContain('code.suite_green'); // SGG.3 — the appended FULL-verifySuite-green term
     expect(codeExpr).toContain('report.resolved'); // V2-ENF.2/3 — block-on-unresolved report-resolution facet
     expect(codeExpr).toContain('contains(audit.code, "VERDICT: GUESS_FREE")'); // GFR.2
     expect(codeExpr).toContain('contains(audit.author, "VERDICT: GUESS_FREE")'); // GFR.3 rolling
   });
 
-  it('T2.7: the inner CODE gate PASSES on phases_complete ∧ readiness_ran ∧ deprecated_clean', async () => {
+  it('SGG.1: procedure/code.md `test`-phase mandate names the declared verifySuite + EXIT 0 (not vague)', () => {
+    const codeMd = readFileSync(join(BUILTIN_DIR, 'procedure', 'code.md'), 'utf8');
+    // the mandate must name the DECLARED suite (not hardcode a command) and require a clean full run…
+    expect(codeMd).toContain('verifySuite');
+    expect(codeMd).toContain('EXIT 0');
+    // …and forbid the false-green slice + tie to the gate (so a future edit that re-vaguens it fails here).
+    expect(codeMd).toContain('code.suite_green');
+    expect(codeMd.toLowerCase()).toContain('slice');
+  });
+
+  it('LMP.3: every built-in procedure stage emits an enter+leave phase pair (no silent stage — the live path)', () => {
+    const stages = ['scope', 'scope_write', 'plan', 'author', 'code', 'deploy'];
+    const procs = stages.map((s) => ({
+      stage: s,
+      text: readFileSync(join(BUILTIN_DIR, 'procedure', `${s}.md`), 'utf8'),
+    }));
+    const results = lintPhaseEmits(procs);
+    // No stage is silent — CODE (the longest, historically 0 emits) included; a failure NAMES the silent stage.
+    const bad = results.filter((r) => !r.ok);
+    expect(bad, `silent stages: ${JSON.stringify(bad)}`).toEqual([]);
+    // and a synthetic silent procedure (log_phase only, no set_loop_phase) is caught, missing NAMED.
+    const neg = lintPhaseEmits([{ stage: 'x', text: 'log_phase(pre_research) only' }]);
+    expect(neg[0]?.ok).toBe(false);
+    expect(neg[0]?.missing).toContain('no set_loop_phase emit');
+    // an enter emit with no `lifecycle:"done"` leave is also caught.
+    const noLeave = lintPhaseEmits([
+      { stage: 'y', text: 'set_loop_phase(phase: "code", lifecycle: "running")' },
+    ]);
+    expect(noLeave[0]?.ok).toBe(false);
+    expect(noLeave[0]?.missing).toContain('no leave (lifecycle:"done") emit');
+  });
+
+  it('T2.7: the inner CODE gate PASSES on phases_complete ∧ readiness_ran ∧ deprecated_clean ∧ suite_green', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
     const child = childActor(loaded);
     expect(child.state.current).toBe('coding');
-    // the three facets + the CODE verdict (GFR.2) + the prior AUTHOR verdict (GFR.3 rolling) + the resolved
-    // report-checklist facet (V2-ENF.2/3 — the block-on-unresolved clause; resolved here so it doesn't hold).
+    // the four `code.*` facets (incl. SGG.2 suite_green) + the CODE verdict (GFR.2) + the prior AUTHOR verdict
+    // (GFR.3 rolling) + the resolved report-checklist facet (V2-ENF.2/3 — resolved here so it doesn't hold).
     const ready = {
-      code: { phases_complete: true, readiness_ran: true, deprecated_clean: true },
+      code: {
+        phases_complete: true,
+        readiness_ran: true,
+        deprecated_clean: true,
+        suite_green: true,
+        arch_clean: true, // AQG.4 — undeclared detector fails OPEN; the gate now includes && code.arch_clean
+      },
       report: { resolved: true },
       audit: { author: GF, code: GF },
     };
     await child.receive(env('post_tool_call', ready));
     expect(child.state.current).toBe('committed'); // gate passed → nested terminal (emits `coded`)
+  });
+
+  it('SGG.2/3: a red/absent full suite (suite_green:false) BLOCKS — kills the false-green slice', async () => {
+    const loaded = await loadPackV2(BUILTIN_DIR);
+    const child = childActor(loaded);
+    // every other CODE facet green, but the FULL declared verifySuite was not recorded green (a slice run) →
+    // suite_green:false → code_ready BLOCKS. This is the exact false-green a 116-test slice hid before SGG.
+    const sliceRun = {
+      code: {
+        phases_complete: true,
+        readiness_ran: true,
+        deprecated_clean: true,
+        suite_green: false,
+      },
+      report: { resolved: true },
+      audit: { author: GF, code: GF },
+    };
+    const effects = await child.receive(env('post_tool_call', sliceRun));
+    expect(child.state.current).toBe('coding'); // blocked → stayed
+    expect(blockedIn(effects)).toBe(true);
   });
 
   it('T2.7: a deprecated hit (deprecated_clean:false) BLOCKS — proves results-gating, not just "ran"', async () => {

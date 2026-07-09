@@ -8,7 +8,9 @@
  */
 export type EdgeType = 'blocks' | 'parent-child' | 'discovered-from' | 'related';
 
-export type IssueStatus = 'open' | 'in_progress' | 'closed';
+// WGL.1 — `'archived'` is a SOFT, reversible, history-preserving terminal state (the row is KEPT, filtered
+// off `listReady`; produced by the `issue_archived` op, reversed by `issue_unarchived`). NOT a hard-delete.
+export type IssueStatus = 'open' | 'in_progress' | 'closed' | 'archived';
 
 /**
  * Who claimed an item, derived at claim time from the GDC env markers the gate already trusts
@@ -35,6 +37,8 @@ export interface Issue {
   claimExpiresAt?: string; // ISO 8601
   // GR.3 wedge-mark — a re-attempt SKIPS a wedge-marked item (escalate, don't crash-loop the wall).
   wedgeReason?: string;
+  // WGL.1 soft-archive reason — absent unless archived-with-reason (mirrors wedgeReason). Cleared on unarchive.
+  archiveReason?: string;
 }
 
 /** Event-sourced op-log types (slice 1d). Ops are the source of truth; issues/edges are folded. */
@@ -43,6 +47,8 @@ export type WgOpType =
   | 'issue_set'
   | 'dep_added'
   | 'dep_removed'
+  | 'issue_archived' // WGL.1 — soft-retire (a new op surviving replay; NOT a log rewrite)
+  | 'issue_unarchived' // WGL.1 — reverse the soft-retire (reversible per §6.1)
   | 'claim_acquired'
   | 'wedge_marked'
   | 'wedge_cleared'
@@ -88,6 +94,10 @@ export interface WorkGraphFacade {
     patch: { status?: IssueStatus; title?: string; body?: string },
   ): Promise<Issue>;
   addEdge(fromId: string, toId: string, type: EdgeType): Promise<void>;
+  // WGL.1 — soft-archive an issue to the reversible `archived` terminal state (records an optional reason);
+  // `unarchiveIssue` restores it to `open`. History-preserving (a new op, surviving replay).
+  archiveIssue(id: string, reason?: string): Promise<void>;
+  unarchiveIssue(id: string): Promise<void>;
   listReady(): Promise<Issue[]>;
   claimIssue(
     id: string,
@@ -100,4 +110,15 @@ export interface WorkGraphFacade {
   listEvents(issueId: string): Promise<WgOp[]>;
   /** T2.5 — the project's folded edge projection as `{from,to,type}` triples (deterministic). */
   listEdges(): Promise<{ from: string; to: string; type: EdgeType }[]>;
+  /**
+   * HWS.2 — the STORE-GLOBAL op-log cursor: every `wg_ops` row with `lamport > cursorLamport`, in
+   * (lamport, id) order. The out-of-session eyes of the harness↔workgraph reconcile — a wg mutation from the
+   * ralph loop / another session / an MCP call is observable here with no local Task tick. The counterpart of
+   * the per-issue {@link listEvents} (same projection, `WHERE lamport > ?` instead of `WHERE issue_id = ?`).
+   */
+  listOpsSince(cursorLamport: number): Promise<WgOp[]>;
+  /** HWS.2 — the reconcile's durable high-water-mark (0 for a fresh store — see-everything-once). */
+  readHighWater(): Promise<number>;
+  /** HWS.2 — advance the reconcile watermark MONOTONICALLY (a lower value never rewinds it). */
+  advanceHighWater(lamport: number): Promise<void>;
 }

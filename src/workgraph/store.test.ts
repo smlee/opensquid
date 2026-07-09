@@ -99,6 +99,45 @@ describe('workGraphStore (event-sourced)', () => {
   });
 });
 
+// HWS.2 — the store-global op-log cursor + the durable high-water-mark.
+describe('workGraphStore op-log cursor (HWS.2)', () => {
+  it('listOpsSince(0) returns every op in (lamport, id) order; listOpsSince(max) is empty (no re-emit)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'a' });
+    await wg.createIssue({ title: 'b' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    const all = await wg.listOpsSince(0);
+    expect(all.length).toBeGreaterThanOrEqual(3); // 2× issue_created + 1× issue_set
+    // strictly ascending lamport (the store-global monotonic clock) — the exactly-once resume ordering.
+    for (let i = 1; i < all.length; i++)
+      expect(all[i]!.lamport).toBeGreaterThanOrEqual(all[i - 1]!.lamport);
+    const max = Math.max(...all.map((o) => o.lamport));
+    expect(await wg.listOpsSince(max)).toEqual([]); // nothing after the last op
+  });
+
+  it('the cursor projection matches listEvents (same store-global lamport, no new counter)', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'a' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    const viaCursor = (await wg.listOpsSince(0))
+      .filter((o) => o.issueId === a.id)
+      .map((o) => o.lamport);
+    const viaEvents = (await wg.listEvents(a.id)).map((o) => o.lamport);
+    expect(viaCursor).toEqual(viaEvents); // identical lamports — the cursor reuses wg_ops.lamport
+  });
+
+  it('readHighWater is 0 fresh; advanceHighWater is MONOTONIC (a lower value never rewinds it)', async () => {
+    const wg = await fresh();
+    expect(await wg.readHighWater()).toBe(0); // fresh store → see-everything-once
+    await wg.advanceHighWater(5);
+    expect(await wg.readHighWater()).toBe(5);
+    await wg.advanceHighWater(3); // stale/lower — must NOT rewind
+    expect(await wg.readHighWater()).toBe(5);
+    await wg.advanceHighWater(9);
+    expect(await wg.readHighWater()).toBe(9);
+  });
+});
+
 describe('workGraphStore per-file source + rebuild', () => {
   let dir: string;
   beforeEach(async () => {
@@ -693,4 +732,127 @@ describe('GS-durability — atomic Lamport under concurrency', () => {
       expect(await c.listIssues()).toHaveLength(M);
     },
   );
+});
+
+// WGL.1 (wg-141e0ffd9955) — soft-archive terminal state: a new reversible op, LWW, surviving replay; the row
+// is KEPT (history), filtered off listReady, and an archived BLOCKER no longer blocks its consumer.
+describe('workGraphStore soft-archive (WGL.1)', () => {
+  it('archiveIssue → archived (row kept, in the op-log); listReady excludes it; unarchive restores open', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'stub', body: 'x' });
+    await wg.archiveIssue(a.id, 'reaped');
+    const arch = await wg.getIssue(a.id);
+    expect(arch?.status).toBe('archived');
+    expect(arch?.archiveReason).toBe('reaped');
+    expect(await wg.listIssues()).toHaveLength(1); // row KEPT, not deleted
+    expect((await wg.listEvents(a.id)).map((o) => o.type)).toEqual([
+      'issue_created',
+      'issue_archived',
+    ]);
+    expect((await wg.listReady()).map((i) => i.id)).not.toContain(a.id);
+
+    await wg.unarchiveIssue(a.id);
+    const un = await wg.getIssue(a.id);
+    expect(un?.status).toBe('open');
+    expect(un?.archiveReason).toBeUndefined(); // cleared
+    expect((await wg.listReady()).map((i) => i.id)).toContain(a.id);
+  });
+
+  it('an archived BLOCKER no longer blocks its consumer (listReady NOT IN (closed,archived))', async () => {
+    const wg = await fresh();
+    const blocker = await wg.createIssue({ title: 'A' });
+    const consumer = await wg.createIssue({ title: 'B' });
+    await wg.addEdge(blocker.id, consumer.id, 'blocks');
+    expect((await wg.listReady()).map((i) => i.id)).toEqual([blocker.id]); // B blocked
+    await wg.archiveIssue(blocker.id, 'superseded');
+    expect((await wg.listReady()).map((i) => i.id)).toEqual([consumer.id]); // B unblocked by the archive
+  });
+
+  it('archiveIssue/unarchiveIssue reject a missing id', async () => {
+    const wg = await fresh();
+    await expect(wg.archiveIssue('wg-nope')).rejects.toThrow(/no issue/);
+    await expect(wg.unarchiveIssue('wg-nope')).rejects.toThrow(/no issue/);
+  });
+
+  it('archive SURVIVES rebuild replay (event-sourcing integrity — a new op the replay re-folds)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wgl-arch-'));
+    try {
+      const wg = await open({ dbUrl: `file:${join(dir, 'wg.db')}`, sourceDir: dir });
+      const a = await wg.createIssue({ title: 'x' });
+      await wg.archiveIssue(a.id, 'reaped');
+      const rebuiltUrl = `file:${join(dir, 'rebuilt.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const wg2 = await open({ dbUrl: rebuiltUrl });
+      expect((await wg2.getIssue(a.id))?.status).toBe('archived'); // reconstructed from the op-files
+      expect((await wg2.getIssue(a.id))?.archiveReason).toBe('reaped');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('LWW: the highest-lamport archive/unarchive wins on replay (unarchive after archive → open)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wgl-lww-'));
+    try {
+      const wg = await open({ dbUrl: `file:${join(dir, 'wg.db')}`, sourceDir: dir });
+      const a = await wg.createIssue({ title: 'x' });
+      await wg.archiveIssue(a.id, 'r'); // lamport N
+      await wg.unarchiveIssue(a.id); // lamport N+1 (later → wins)
+      const rebuiltUrl = `file:${join(dir, 'r.db')}`;
+      await rebuildWorkGraph({ dbUrl: rebuiltUrl, sourceDir: dir });
+      const wg2 = await open({ dbUrl: rebuiltUrl });
+      expect((await wg2.getIssue(a.id))?.status).toBe('open'); // the later op wins under LWW
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('F1a — the onIssueTerminal close-boundary callback (single-source-of-truth close push)', () => {
+  const openWithHook = async (onIssueTerminal: (id: string) => void | Promise<void>) => {
+    const wg = workGraphStore({ dbUrl: ':memory:', onIssueTerminal });
+    await wg.init();
+    return wg;
+  };
+
+  it('fires ONCE on a transition into closed (and passes the issue id)', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    expect(fired).toEqual([a.id]);
+  });
+
+  it('fires on a transition into archived', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'archived' });
+    expect(fired).toEqual([a.id]);
+  });
+
+  it('does NOT fire on a non-terminal patch (in_progress)', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'in_progress' });
+    expect(fired).toEqual([]);
+  });
+
+  it('does NOT re-fire on a no-op re-patch of an already-terminal status (exactly one close event)', async () => {
+    const fired: string[] = [];
+    const wg = await openWithHook((id) => void fired.push(id));
+    const a = await wg.createIssue({ title: 'x' });
+    await wg.updateIssue(a.id, { status: 'closed' });
+    await wg.updateIssue(a.id, { status: 'closed', body: 'touched again' });
+    expect(fired).toEqual([a.id]); // still exactly one
+  });
+
+  it('is FAIL-OPEN: a throwing callback never breaks the committed status write', async () => {
+    const wg = await openWithHook(() => {
+      throw new Error('monitor down');
+    });
+    const a = await wg.createIssue({ title: 'x' });
+    await expect(wg.updateIssue(a.id, { status: 'closed' })).resolves.toBeTruthy();
+    expect((await wg.getIssue(a.id))?.status).toBe('closed'); // the close is durable regardless
+  });
 });

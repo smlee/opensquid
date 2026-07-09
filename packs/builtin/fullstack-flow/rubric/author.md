@@ -5,7 +5,9 @@ content-audit prompt AND injected to the agent before authoring. Edit HERE only.
 criteria reference the proven v1 standard (`coding-flow/rubric/author.md`) and add EXISTING-SOLUTION search
 (user 2026-06-28: existing-solutions belong AT tasking — reuse shortens coding) + the rolling re-audit.
 
-A task spec passes (`VERDICT: GUESS_FREE` / `SPEC_COMPLETE`) ONLY if ALL SIX hold:
+A task spec passes (`VERDICT: GUESS_FREE` / `SPEC_COMPLETE`) ONLY if ALL EIGHT hold (the original six PLUS the
+two architecture criteria 7–8 — SSOT + MODULARITY, so a spec that bakes in a redundant store or cross-module
+coupling STILL fails):
 
 1. **11-FIELD CONTRACT** — every `### Task` block has all 11 fields; every Key-code-shapes block is REAL code
    (not pseudocode); every 7-phase step names concrete files/decisions.
@@ -24,7 +26,15 @@ A task spec passes (`VERDICT: GUESS_FREE` / `SPEC_COMPLETE`) ONLY if ALL SIX hol
    shows an existing-solution search was done (local codebase + external/primary docs, recorded as a
    consultation) and either reuses what exists or cites why none fits. Speccing a reinvention with no recorded
    search is a guess about novelty → fails. Exempt a trivial edit / no-external-dep task (diff-derived).
-7. **RE-AUDIT PLAN (ROLLING)** — the PLAN this spec authors against still holds `GUESS_FREE` at AUTHOR time
+7. **SINGLE-SOURCE-OF-TRUTH** — the spec introduces no second store of a datum an existing store (the DB)
+   already owns; every derived read is a projection, not a duplicate store that can diverge. A task that bakes
+   in a redundant flat file / table for data the DB already owns is a redundancy defect → fails (spec the
+   projection / derived read, or cite why one writer genuinely owns both).
+8. **MODULARITY** — each concern the spec introduces lives behind ONE seam with a stated contract; the spec
+   does not thread one responsibility across unrelated modules or reach around a seam into another module's
+   internals. A spec that bakes in cross-module coupling for a volatile detail (I/O, a vendor, a schema) is a
+   modularity defect → fails (name the seam and its contract, or state why one boundary genuinely owns both).
+9. **RE-AUDIT PLAN (ROLLING)** — the PLAN this spec authors against still holds `GUESS_FREE` at AUTHOR time
    (re-evaluated). A plan that drifted since its gate fails here.
 
-(Six mandatory + the rolling re-audit; deterministic per criterion.)
+(Eight mandatory + the rolling re-audit; deterministic per criterion.)

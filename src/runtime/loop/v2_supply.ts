@@ -25,11 +25,16 @@ import { taskCheckpointExists, upsertTaskStage } from '../ralph/loop_stage.js';
 import { resolveCheckpointKey } from './checkpoint_key.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
-import { readActiveVerifyCommand, readActiveVerifySuite } from '../../packs/discovery.js';
+import {
+  readActiveArchDetector,
+  readActiveVerifyCommand,
+  readActiveVerifySuite,
+} from '../../packs/discovery.js';
 import {
   bumpBugfixRounds,
   readBugfixRounds,
   readNeedsRedesign,
+  recordArch,
   recordNeedsRedesign,
   recordSuite,
   recordVerification,
@@ -46,7 +51,8 @@ import { skillServesDomainMatches } from '../../packs/skill_serves.js';
 import { InMemorySkillRuntime, onStateEntry, onStateLeave } from '../skill/state_skills.js';
 import { capturePendingLesson } from '../wedge/capture.js';
 import { goalConsult } from './goal_consult.js';
-import { CODE_PHASES, emitStageReport, renderStageSummary } from './stage_report.js';
+import { CODE_PHASES, renderStageReport, renderStageSummary } from './stage_report.js';
+import { displayReport } from './report_display.js';
 import { renderFollowReminder } from './follow_reminder.js';
 import { renderFailureReport } from './failure_report.js';
 import { saveProjectReport } from './reports_dir.js';
@@ -93,8 +99,7 @@ import { deployEvidenceForSession, type DeployEvidenceDeps } from './deploy_evid
 import { planEvidence, openWg } from './plan_evidence.js';
 import { resolveChecklist, type ChecklistSubIssue } from './report_checklist.js';
 import { reportResolved } from './report_resolution.js';
-import { autoDecompose } from './auto_decompose.js';
-import { buildCoveredBy } from './plan_audit.js';
+import { reconcileDecomposition } from './decompose_reconcile.js';
 import { extractScope } from './scope_extract.js';
 import { gatherReadiness, recordReadiness, readinessResult } from './readiness.js';
 import { externalNeededForSession } from './external_dependency_evidence.js';
@@ -143,8 +148,8 @@ const NOOP_BUS = { publish: () => undefined } as unknown as Bus;
 // T2.12 / CADENCE-IN-PACK — the reporting cadence (WHICH stages report, entry-summary vs leave-report) is now
 // PACK DATA, not a hardcoded core map. Each gate state declares `report:` (the after-stage report label emitted
 // on LEAVE) and `summary: true` (a before-stage summary emitted on ENTRY-edge) in pack.yaml. This module keeps
-// only the transition-precise EXECUTOR + the emit FUNCTIONS (emitStageReport / renderStageSummary /
-// surfaceReportToChat) — opensquid provides the functions; the pack owns the cadence. The former hardcoded
+// only the transition-precise EXECUTOR + the render FUNCTIONS (renderStageReport / renderStageSummary), whose
+// bodies are DISPLAYED live (displayReport) — opensquid provides the functions; the pack owns the cadence. The former hardcoded
 // `STAGE` map was deleted; `meta[state].report` is its per-state, in-pack replacement.
 // CODE double-emit: under an autonomous lap (OPENSQUID_AUTOMATION=1) loop_driver.onPhasesComplete owns the CODE
 // after-report, so the emit site below still skips the CODE report (not the summary) under that env (T2.9 wiring).
@@ -358,18 +363,30 @@ export async function buildGuardCtx(
   m.set('report.resolved', reportResolvedFacet);
   m.set('report', { resolved: reportResolvedFacet });
 
-  // T2.7 — CODE gate evidence. THREE facets: `phases_complete` (the shipped 7-phase ledger `isComplete` for the
-  // active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧ `deprecated_clean` (the
-  // recorded readiness found NO deprecated call — the BLOCKING result, gates on the RESULT not merely "ran").
-  // DUAL-SHAPE like T2.4/T2.5/T2.6: a nested `code` object (the path the guard
-  // `code.phases_complete && code.readiness_ran && code.deprecated_clean` resolves) PLUS flat `code.*` Map keys
-  // (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `codeDeps` is injectable
-  // (tests pass pure readers); the default binds the shipped runtime readers. FAIL-CLOSED on no active task /
-  // any throw → {false,false,false}: an unprovable CODE blocks (never auto-"ready").
+  // T2.7 + SGG.2 — CODE gate evidence. FOUR deterministic facets: `phases_complete` (the shipped 7-phase ledger
+  // `isComplete` for the active task) ∧ `readiness_ran` (the three readiness surfacers ran + recorded) ∧
+  // `deprecated_clean` (the recorded readiness found NO deprecated call — the BLOCKING result, gates on the
+  // RESULT not merely "ran") ∧ `suite_green` (SGG.2 — the recorded FULL declared verifySuite came back green, not
+  // a self-selected slice). DUAL-SHAPE like T2.4/T2.5/T2.6: a nested `code` object (the path the guard
+  // `code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green` resolves) PLUS flat
+  // `code.*` Map keys (the coverage binding-extractor sees the literal `.set` keys; unit asserts hold). `codeDeps`
+  // is injectable (tests pass pure readers); the default binds the shipped runtime readers. FAIL-CLOSED on no
+  // active task / any throw → {false,false,false,false}: an unprovable CODE blocks (never auto-"ready").
   const co = await codeEvidenceForSession(sessionId, codeDeps);
   m.set('code.phases_complete', co.phasesComplete);
   m.set('code.readiness_ran', co.readinessRan);
   m.set('code.deprecated_clean', co.deprecatedClean);
+  // SGG.2 — the FOURTH deterministic CODE facet: `suite_green` = the recorded FULL declared verifySuite came
+  // back green (the `test` phase ran the whole pre-push bar, not a self-selected slice). FAIL-CLOSED (no record
+  // / red → false), mirroring DEPLOY's `deploy.clean` suite read. This kills the false-green slice: a CODE lap
+  // that ran only a subset leaves no green suite record → `code.suite_green:false` → `code_ready` blocks.
+  m.set('code.suite_green', co.suiteGreen);
+  // AQG.4 (T-arch-quality-gate) — the deterministic ARCHITECTURE facet: `arch_clean` = the project-declared
+  // arch-detector came back green. DELIBERATELY asymmetric to `suite_green`: fails OPEN (true) when NO detector
+  // is declared (a legacy project ships as today), fails CLOSED once one IS declared (unrun / red → false →
+  // `code_ready` blocks). Core runs a declared command and reads an exit code; the qualitative architecture
+  // criteria live in the rubric (AQG.1), never in core. Dual-shape like `suite_green` (flat key + nested prop).
+  m.set('code.arch_clean', co.archClean);
   // E2c/E2a — the external half of the CODE gate, CONDITIONAL on `external_needed` (same diff-derived predicate
   // as AUTHOR). `consulted_before` (E2c: read the task's APIs in the official docs BEFORE coding — the `before`
   // bucket) ∧ `audited` (E2a: the CODE·after AUDIT is a SECOND research run reaching EXTERNAL — the `after`
@@ -382,6 +399,8 @@ export async function buildGuardCtx(
     phases_complete: co.phasesComplete,
     readiness_ran: co.readinessRan,
     deprecated_clean: co.deprecatedClean,
+    suite_green: co.suiteGreen, // SGG.2 — nested prop (the path the guard `code.suite_green` resolves)
+    arch_clean: co.archClean, // AQG.4 — nested prop (the path the guard `code.arch_clean` resolves)
     consulted_before: consult.before,
     audited: consult.after,
     external_needed: externalNeeded,
@@ -566,6 +585,7 @@ export async function runV2Cartridges(
         const scopeRoot = await resolveProjectScopeRoot(cwd);
         const verifyCmd = await readActiveVerifyCommand(scopeRoot);
         const suiteCmd = await readActiveVerifySuite(scopeRoot);
+        const archCmd = await readActiveArchDetector(scopeRoot);
         const taskId = await readActiveTaskId(sessionId);
         const cmd = command.trim();
         const passed = (event as { exit_code?: number }).exit_code === 0;
@@ -579,6 +599,11 @@ export async function runV2Cartridges(
             // suite re-run (not only a verify→author transition) bounds the in-place loop, so an unfixable
             // mechanical failure escalates at the cap instead of looping forever inside `deploy_fix`.
             if (!passed) await bumpBugfixRounds(sessionId, taskId);
+          }
+          // AQG.4 (T-arch-quality-gate) — record the arch-detector exit code ONLY on a verbatim match of the
+          // declared command (a sibling of the suiteCmd branch); `code.arch_clean` reads this record.
+          if (archCmd !== null && cmd === archCmd.trim()) {
+            await recordArch(sessionId, taskId, passed);
           }
         }
       }
@@ -834,9 +859,10 @@ export async function runV2Cartridges(
                     ? { goalAligned: (await goalConsult(sessionId, root)).aligned }
                     : {}),
                 };
-                const { body } = await emitStageReport(root, r, now); // dated file + the body
-                process.stderr.write(`[lap ${name}] ✓ ${p.from} done — report emitted\n`); // LIVE channel
-                // T2.12-surface: SHOW the phase report in-session (the injections the hooks emit as
+                const { body } = renderStageReport(r, now); // RD.1 — PURE render (no disk; emitStageReport is gone)
+                displayReport(body); // RD.1 — SHOW the after-stage body LIVE on the loop terminal (stderr →
+                // onStderrLine), REPLACING the old "report emitted" notice. The report is displayed, never filed.
+                // T2.12-surface: SHOW the phase report in-session too (the injections the hooks emit as
                 // additionalContext). LSF.4: the telegram push was removed — visibility is the status line / Monitor.
                 injections.push(body);
                 // The caller mirrors `body` into memory (session-scoped wedge buffer — the real in-runtime
@@ -880,6 +906,8 @@ export async function runV2Cartridges(
                   taskId ?? 'no-active-task',
                   now,
                 );
+                displayReport(body); // RD.2 — SHOW the before-stage "Starting <STAGE> · Will: …" half LIVE too
+                // (the same stderr → onStderrLine channel as the after half); it was injection-only before.
                 injections.push(body);
                 // LSF.4 — telegram push removed; the summary surfaces in-session, visibility via the status line.
                 // V2-ENF.2/7 — the FOLLOW-INSTRUCTIONS anti-drift nudge (reporting-model §5.4c): at the stage
@@ -923,12 +951,16 @@ export async function runV2Cartridges(
             try {
               const artifact = await readPreResearchPath(sessionId);
               const ext = artifact === null ? null : await extractScope(artifact);
-              if (artifact !== null && ext !== null && ext.authoredElements.length > 0) {
+              if (
+                artifact !== null &&
+                ext !== null &&
+                ext.authoredElements.length > 0 &&
+                taskId !== null
+              ) {
+                // WGL.3 — RUN-ID reconcile (replaces the any-covered short-circuit): idempotent on the same
+                // generation, supersede-by-archive on a re-authored generation, else first decomposition.
                 const wg = await openWg(sessionId);
-                const ids = ext.authoredElements.map((el) => el.id);
-                const covered = buildCoveredBy(ids, await wg.listIssues());
-                const already = Object.values(covered).some((c) => c.length > 0);
-                if (!already) await autoDecompose(artifact, wg); // first decomposition of this scope
+                await reconcileDecomposition(wg, taskId, artifact, ext);
               }
             } catch (err) {
               process.stderr.write(`[v2-supply] auto-decompose failed (ignored): ${String(err)}\n`);
@@ -1064,8 +1096,7 @@ export async function runV2Cartridges(
         // reader buildGuardCtx/the gate use), so a deprecated/failed-readiness task never gets a false
         // guess-free certificate. phases_complete is already true here (the isComplete guard above).
         const code = await codeEvidenceForSession(sessionId);
-        const { body } = await emitStageReport(
-          root,
+        const { body } = renderStageReport(
           {
             stage: 'CODE',
             taskId: trackId,
@@ -1079,14 +1110,15 @@ export async function runV2Cartridges(
               { label: 'phases_complete', ok: code.phasesComplete },
               { label: 'readiness_ran', ok: code.readinessRan },
               { label: 'deprecated_clean', ok: code.deprecatedClean },
+              { label: 'suite_green', ok: code.suiteGreen }, // SGG.2 — the FULL verifySuite ran green (not a slice)
             ],
             phases: CODE_PHASES.map((name) => ({ name, done: true })),
           },
           now,
         );
-        // The standardized sinks (stage_report.ts:4-6), matching the transition path: file (emitStageReport)
-        // + injection + the memory mirror — so an in-band CODE completion reaches the wedge buffer too. LSF.4
-        // removed the telegram sink (visibility is the harness status line / Monitor, not chat).
+        displayReport(body); // RD.2 — SHOW the CODE completion after LIVE (body byte-unchanged; the disk save is
+        // gone). The sinks now match the transition path: displayed live + injection + the memory mirror — so an
+        // in-band CODE completion reaches the wedge buffer too. LSF.4 removed the telegram sink.
         injections.push(body);
         await capturePendingLesson(sessionId, {
           id: `stage-report-code-${trackId}-${now.replaceAll(':', '-')}`,

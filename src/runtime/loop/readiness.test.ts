@@ -17,6 +17,7 @@ import { appendPhase } from '../workflow_phases.js';
 import { writeActiveTask } from '../session_state.js';
 
 import { codeEvidenceForSession } from './code_evidence.js';
+import { recordSuite } from './verification.js';
 import {
   gatherReadiness,
   readinessResult,
@@ -105,15 +106,28 @@ describe('codeEvidenceForSession (T2.7 bridge)', () => {
     for (const p of REQUIRED) await appendPhase(s, taskId, p);
   }
 
-  it('complete ledger + clean readiness → all three facets true (PASS)', async () => {
+  it('complete ledger + clean readiness + green suite → all four facets true (PASS)', async () => {
     const s = sid();
     await seedComplete(s, 'T2.7');
     await recordReadiness(s, 'T2.7', { affected: [], existingDefs: [], deprecated: [] });
+    await recordSuite(s, 'T2.7', true); // SGG.2 — the FULL verifySuite recorded green
     expect(await codeEvidenceForSession(s)).toEqual({
       phasesComplete: true,
       readinessRan: true,
       deprecatedClean: true,
+      suiteGreen: true,
+      archClean: true, // AQG.4 — no arch-detector declared for this session ⇒ fails OPEN to true
     });
+  });
+
+  it('SGG.2: complete + clean readiness but NO/red suite record → suiteGreen:false (the slice is caught)', async () => {
+    const s = sid();
+    await seedComplete(s, 'T2.7');
+    await recordReadiness(s, 'T2.7', { affected: [], existingDefs: [], deprecated: [] });
+    // no recordSuite → readSuite null → fail-closed false (a CODE lap that ran only a slice cannot advance)
+    expect((await codeEvidenceForSession(s)).suiteGreen).toBe(false);
+    await recordSuite(s, 'T2.7', false); // an explicitly-red full suite → still false
+    expect((await codeEvidenceForSession(s)).suiteGreen).toBe(false);
   });
 
   it('a deprecated hit → deprecatedClean:false (BLOCK), proves results-gating not just "ran"', async () => {
@@ -157,6 +171,8 @@ describe('codeEvidenceForSession (T2.7 bridge)', () => {
       phasesComplete: false,
       readinessRan: false,
       deprecatedClean: false,
+      suiteGreen: false,
+      archClean: true, // AQG.4 — the fail-closed `closed` object keeps arch fail-OPEN (undeclared ⇒ true)
     });
   });
 });

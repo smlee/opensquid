@@ -90,19 +90,23 @@ import {
 } from './tools/store-lesson.js';
 import {
   WgAddEdgeSchema,
+  WgArchiveSchema,
   WgClaimSchema,
   WgCreateSchema,
   WgIdSchema,
   WgListSchema,
   WgReadySchema,
+  WgUnarchiveSchema,
   WgUpdateSchema,
   handleWgAddEdge,
+  handleWgArchive,
   handleWgClaim,
   handleWgCreate,
   handleWgEvents,
   handleWgGet,
   handleWgList,
   handleWgReady,
+  handleWgUnarchive,
   handleWgUpdate,
 } from './tools/workgraph.js';
 import { DecisionClassifySchema, handleDecisionClassify } from './tools/ralph.js';
@@ -306,6 +310,15 @@ const ToolHandlers = {
     schema: WgAddEdgeSchema,
     handle: async (a: z.infer<typeof WgAddEdgeSchema>) => handleWgAddEdge(a, await getWorkGraph()),
   },
+  workgraph_archive: {
+    schema: WgArchiveSchema,
+    handle: async (a: z.infer<typeof WgArchiveSchema>) => handleWgArchive(a, await getWorkGraph()),
+  },
+  workgraph_unarchive: {
+    schema: WgUnarchiveSchema,
+    handle: async (a: z.infer<typeof WgUnarchiveSchema>) =>
+      handleWgUnarchive(a, await getWorkGraph()),
+  },
   workgraph_ready: {
     schema: WgReadySchema,
     handle: async (a: z.infer<typeof WgReadySchema>) => handleWgReady(a, await getWorkGraph()),
@@ -400,6 +413,8 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   workgraph_create_issue: LOCAL_WRITE,
   workgraph_update_issue: LOCAL_WRITE,
   workgraph_add_edge: LOCAL_WRITE,
+  workgraph_archive: LOCAL_WRITE, // WGL.7 — a mutation (archive op), never READ_ONLY
+  workgraph_unarchive: LOCAL_WRITE,
   workgraph_claim: LOCAL_WRITE,
   decision_classify: READ_ONLY,
   // Kanban overlay (KANBAN.2): sync MAPS the work-graph onto a board (a write); board is a pure read.
@@ -446,6 +461,10 @@ const descriptions: Record<ToolName, string> = {
     'Update a work-graph issue {id, status?(open|in_progress|closed), title?, body?}. Returns the updated issue.',
   workgraph_add_edge:
     'Add a dependency edge {from, to, type(blocks|parent-child|discovered-from|related)} between two issues (re-typing the same pair updates the type).',
+  workgraph_archive:
+    'Soft-archive a work-graph issue {id, reason?} — a reversible terminal state that keeps the row + history and removes it from `ready` (NOT a delete). Use to retire an orphaned/superseded item out-of-band.',
+  workgraph_unarchive:
+    'Restore an archived work-graph issue {id} to `open` (reverses workgraph_archive).',
   workgraph_ready:
     'List READY issues: open issues with no un-closed `blocks` blocker, oldest-first — the work to do next.',
   workgraph_get: 'Get one work-graph issue by id (or null).',

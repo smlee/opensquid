@@ -2,8 +2,8 @@
  * T2.9 — the AF.3 EXECUTE loop driver.
  *
  * On `phases_complete` for a task, the driver does TWO things deterministically (zero LLM):
- *   1. emits the per-task CODE stage report (AF.3) via `emitStageReport` (stage 'CODE') — the named live
- *      caller of the CODE report (stage_report.ts notes CODE is owned by THIS module, not v2_supply).
+ *   1. RENDERS the per-task CODE stage report (AF.3) via `renderStageReport` (stage 'CODE') and returns its
+ *      body so the live caller (`onShipped`) DISPLAYS it — RD.4 removed the disk save; CODE is owned HERE.
  *   2. computes the NEXT run-group from the work-graph via `batchDecide` (T2.14) and returns it, so the
  *      caller (the FSM driver, T2.1/T2.15) can dispatch the next group and the loop advances autonomously.
  *
@@ -25,7 +25,7 @@
  * Imported by: (deferred) T2.1/T2.15 FSM driver + its test.
  */
 import { batchDecide, type Edge } from './batch_decide.js';
-import { CODE_PHASES, emitStageReport } from './stage_report.js';
+import { CODE_PHASES, renderStageReport } from './stage_report.js';
 
 /**
  * The minimal work-graph view the driver needs — injectable so the driver never touches the concrete store.
@@ -50,15 +50,17 @@ export async function onPhasesComplete(
   wg: LoopWorkGraph,
   iso: string,
 ): Promise<{ next: string[][]; report: string }> {
-  // sid threads through for symmetry with the FSM caller (T2.1) which keys session-scoped state by it; the
-  // CODE report itself is a per-project artifact (no sessionId in emitStageReport's signature — see its JSDoc).
+  // sid threads through for symmetry with the FSM caller (T2.1) which keys session-scoped state by it; `root`
+  // is retained on the signature for that same symmetry (the caller passes the session cwd), but RD.4 removed
+  // the disk save so the pure render needs neither — the body is DISPLAYED live by the caller (`onShipped`).
   void sid;
+  void root;
   // The CODE report is the long, stand-out one: it carries the 7-phase coding-cycle chart. At
-  // `phases_complete` the gate has confirmed all 7 ran, so every box is checked. `report.body` is
-  // returned so the (deferred T2.1/T2.15) live caller can SHOW it in-session + chat, exactly as
+  // `phases_complete` the gate has confirmed all 7 ran, so every box is checked. RD.2: the body is RENDERED
+  // pure (byte-identical to what emitStageReport wrapped — the ask locks "the 7 phase is correct") and
+  // returned so the live caller (ralph.ts `onShipped`) DISPLAYS it on the loop terminal, exactly as
   // v2_supply does for the other stages.
-  const { body } = await emitStageReport(
-    root,
+  const { body } = renderStageReport(
     {
       stage: 'CODE',
       taskId,

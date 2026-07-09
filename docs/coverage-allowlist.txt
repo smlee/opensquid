@@ -1270,7 +1270,6 @@ emitDriftStderrAndExit
 emitMermaid
 emitOf
 emitProbe
-emitStageReport
 encodeProjectPath
 encodeSessionSlug
 ensureChatDaemonRunning
@@ -2084,11 +2083,9 @@ runReaudit
 # Surfaced, not hidden: the global AUTHOR manifest_complete facet requires the baseline be current; greening a
 # sibling's drift is on-topic maintenance (NOT this task's own code — T-project-local-state adds no gated export
 # at AUTHOR). The loop-status task recreates + records these properly when it lands (design §6.1). ---
-DEFAULT_SURFACE
 LapUsage
 LoopAggregateRow
 LoopMetricRow
-LoopPhaseRow
 LoopState
 LoopStateItem
 MetricsFilter
@@ -2096,18 +2093,167 @@ SetLoopPhaseArgs
 SetLoopPhaseOutput
 SetLoopPhaseSchema
 TaskCheckpointRow
-TerminalSeenStore
 aggregatePerLoop
 collectLoopState
-filterLiveView
 handleSetLoopPhase
-libsqlTerminalSeenStore
-listLoopPhases
 loopDbUrl
 readMetrics
 recordStageMetric
 registerLoopStatus
 renderItem
 renderStatusLine
-setLoopPhase
 withLoopDb
+# --- baseline maintenance (wg-fecabb8ff29f, CODE, 2026-07-07): the DATA-shape / seam exports of the loop
+# autospawn (T-auto-trigger-loop-on-scope-exit). The BEHAVIORAL exports (ensureLoopRunning/loopStatus/startLoop)
+# carry reachable requirements in ARCHITECTURE.md §10; these are pure `join`-string path builders, the injected
+# LoopStatus/LoopAutoSpawnResult/EnsureLoopRunningDeps type shapes, and the resolveLoopEntrypoint test seam —
+# the same class the chat-daemon precedent allowlists (chatDaemon*Path / resolveCliEntrypoint / EnsureChatDaemonDeps
+# / AutoSpawnResult / DaemonStatus). Data-shape, not a live path — no covering requirement. ---
+EnsureLoopRunningDeps
+LoopAutoSpawnResult
+LoopStatus
+loopLockPath
+loopPidPath
+resolveLoopEntrypoint
+
+# --- baseline maintenance (T-opensquid-release-flow, CODE, 2026-07-07): the DATA-shape / seam type exports of
+# the release flow (REL.1/REL.2/REL.4). The BEHAVIORAL exports (mergeToMain/…/versionAlreadyPublished,
+# parseConventionalCommit/…/nextVersion, runCommitMsgGate, runRelease/registerRelease) carry reachable
+# requirements in ARCHITECTURE.md §10; these are pure type/interface shapes (the parsed-commit + bump-level
+# types, the injectable npm-view + release-deps seams) — data-shape, not a live path, no covering requirement.
+# Same class the loop-autospawn / chat-daemon *Deps precedent allowlists. ---
+ParsedCommit
+BumpLevel
+NpmView
+ReleaseDeps
+
+# --- baseline maintenance (T-workgraph-lifecycle, wg-141e0ffd9955, CODE, 2026-07-07): the DATA-shape / schema
+# exports of the workgraph item-lifecycle (WGL.2/4/7). The BEHAVIORAL exports (deriveGenerationId,
+# reconcileDecomposition, reapOrphans/isOrphan/reapOrphansIfAllowed, rollUpParents, handleWgArchive/
+# handleWgUnarchive) carry reachable requirements in ARCHITECTURE.md §10; these are the injected DecomposeOwner /
+# ReapGateDeps seam type shapes + the WgArchive/WgUnarchive zod schema consts — data-shape, not a live path, no
+# covering requirement. Same class the release-flow / loop-autospawn *Deps + *Schema precedent allowlists. ---
+DecomposeOwner
+ReapGateDeps
+WgArchiveSchema
+WgUnarchiveSchema
+
+# --- baseline maintenance (T-loop-monitoring-pushstream, wg-61db3ededf19, CODE, 2026-07-07): the DATA-shape
+# exports of the PUSH / LIVE-STREAM monitor feed (LMP.1/LMP.3/LMP.4). The BEHAVIORAL exports (appendMonitorEvent/
+# tailEventsSince, emitMonitorEvent, foldEvents/foldLatestState/subscribeMonitor, liveItems, formatRelativeAge,
+# lintPhaseEmits) carry reachable requirements in ARCHITECTURE.md §10; these are the MonitorEvent/NewMonitorEvent
+# event type + the MonitorEventKind/PhaseLifecycle enums + the LoopFoldState / ProcedureLintResult shapes — pure
+# data-shape, not a live path, no covering requirement. Same class the release-flow / WGL *Deps + *Schema
+# precedent allowlists. ---
+MonitorEvent
+NewMonitorEvent
+MonitorEventKind
+PhaseLifecycle
+LoopFoldState
+ProcedureLintResult
+
+# --- baseline maintenance (T-harness-workgraph-sync, wg-b52161a5961f, CODE, 2026-07-07): the DATA-shape / seam
+# type exports of the OUTBOUND half + reverse observation (HWS.3/HWS.4/HWS.5). The BEHAVIORAL exports
+# (reconcileHarnessWorkgraph, ccNudgeWriter, buildStaleClosedNudge, defaultOpenMap) carry reachable
+# requirements in ARCHITECTURE.md §10; these are the outbound-delta union + the reconcile-result / writer-seam /
+# wg-reconcile-facade interface shapes — pure data-shape, not a live path, no covering requirement. Same class
+# the release-flow / WGL / loop-monitoring *Deps + *Schema precedent allowlists. ---
+OutboundDelta
+ReconcileResult
+HarnessWriter
+WgReconcileFacade
+
+# --- baseline maintenance (T-arch-quality-gate, wg-82e5a35c8e97, CODE, 2026-07-08): the DATA-shape / helper
+# siblings of the architecture gate (AQG.5). The BEHAVIORAL exports (readActiveArchDetector, recordArch,
+# readArch, checkDesignDocRewrite) carry reachable requirements in ARCHITECTURE.md §10; these two are the
+# injected-reader OPTIONS interface + the pure docs/design/*.md path predicate — pure data-shape / trivial
+# helper, not a live path, no covering requirement. Same class the release-flow / WGL / harness-sync *Deps
+# precedent allowlists. ---
+DesignDocGuardOptions
+isDesignDoc
+
+# --- baseline maintenance (T-opensquid-automated-gitflow, wg-732b2b68a168, CODE, 2026-07-08): the DATA-shape /
+# seam / trivial siblings of the fully-automated git-flow (AGF.1/AGF.3/AGF.5/AGF.6). The BEHAVIORAL exports
+# (readActiveVersioning, patchOfTag, nextLockedTag, nextRcTag, latestPrefixTag, branchNameFor, autoPullMain,
+# addItemWorktree, removeItemWorktree, drainPool, mergeToStage, openStagePr, tagMainRelease) carry reachable
+# requirements in ARCHITECTURE.md §10; these are the injected IO-seam interfaces (WorktreeIo/StageIo/GhIo), the
+# config-shape interfaces (VersioningConfig/PoolConfig), the `real*Io` default-binding consts (thin git/gh
+# wrappers, no branching — the concrete side of the injected seam, exercised via the release/orchestrator live
+# path with stubbed IO under test), the trivial STAGE_BRANCH/STAGE_BASE_BRANCH constants (the `stage` branch name
+# and its `main` cut-from base, used by mergeToStage's create-if-absent — STAGE_BASE_BRANCH drifted in after AGF's
+# AUTHOR gate via commit 4175dc1, same trivial-constant class as STAGE_BRANCH), and the GhAuthError marker class — pure
+# data-shape / seam / trivial, no covering requirement. Same class the release-flow ParsedCommit/ReleaseDeps +
+# harness-sync *Deps precedent allowlists. ---
+VersioningConfig
+WorktreeIo
+PoolConfig
+StageIo
+GhIo
+realWorktreeIo
+realStageIo
+realGhIo
+STAGE_BRANCH
+STAGE_BASE_BRANCH
+GhAuthError
+IntegrationResult
+
+# --- baseline maintenance (T-spawn-lifecycle-hermetic-tests, wg-23fd463ab434, CODE, 2026-07-09): the injected
+# process-control seam that makes runOneShotCli hermetically testable (SLH.1). `ProcControl` is the seam
+# interface (type-erased at emit — likely never a gated JS export) and `realProcControl` is its `real*`
+# default-binding const — thin LAZY pass-throughs to node:child_process spawn / process.kill / the global
+# timers / process exit-hook, no branching (the concrete side of the injected seam, exercised via the live path
+# — production callers pass no `procControl` so the default runs — with stubbed IO under test in
+# spawn_lifecycle.test.ts). runOneShotCli/insideSupervisedTree already carry their requirements and are
+# signature-unchanged. Pure data-shape / seam / trivial, no covering requirement. Same class the git-flow
+# StageIo/realStageIo seam block above. ---
+ProcControl
+realProcControl
+
+# --- baseline maintenance (T-statusline-compose, wg-c954689147da, CODE, 2026-07-08): the DATA-shape siblings of
+# the additive status-line pill (SLC.2). The BEHAVIORAL exports (renderStatuslineFragment, writeStatuslineSnapshot,
+# refreshStatuslineSnapshot) carry reachable requirements in ARCHITECTURE.md §10; these two are the injected-seam
+# OPTIONS interface + the snapshot file-name const — pure data-shape / trivial constant, no live path, no covering
+# requirement. Same class the release-flow / gitflow / harness-sync *Deps / *Path precedent allowlists. ---
+StatuslineSnapshotDeps
+STATUSLINE_SNAPSHOT_FILE
+
+# --- baseline maintenance (T-statusline-compose §C.12, wg-c954689147da, CODE, 2026-07-08): the emit-path
+# SCALABILITY fix's TEST-ONLY reset seam. foldLatestStateIncremental / collectLoopStateIncremental (behavioral)
+# carry reachable requirements in ARCHITECTURE.md §10; this export exists only so a test can cold-start the
+# process-local materialized projection — the *ForTest seam precedent, no live path, no covering requirement. ---
+resetLoopStateProjectionForTest
+
+# --- baseline maintenance (T-post-ship-logic-fixes, wg-61c1576cece0, CODE, 2026-07-08): the DATA-shape / seam
+# siblings of the monitor-feed + design-doc-gate fixes. The BEHAVIORAL exports (sweepTerminalBacklog, scopeAuditCacheKey,
+# mapFold) carry reachable requirements in ARCHITECTURE.md; these three are the injected reader-interface, the
+# session-wide key constant, and the registry-seam FunctionDef that just re-exports scopeAuditCacheKey — pure
+# data-shape / trivial constant / registration seam, no live path, no covering requirement. Same class the
+# release-flow / gitflow / statusline *Deps / *Path / FunctionDef precedent allowlists (EffectiveContent et al.). ---
+BootSweepReader
+SCOPE_AUDIT_SESSION_KEY
+ScopeAuditCacheKey
+
+# --- baseline maintenance (T-reporting-display-rebuild, wg-123340ac7a9f, CODE, 2026-07-09): the DATA-shape / seam
+# siblings of the reporting DISPLAY-rebuild (reports are DISPLAYED live, never saved). The BEHAVIORAL export
+# `displayReport` (the print primitive, RD.1) carries a reachable requirement in ARCHITECTURE.md (R-REPORT-DISPLAY);
+# these four are the injected output-sink interface (ReportSink) + the two pure higher-scope render functions
+# (renderScopeBefore/renderScopeAfter, RD.3 — the §4 spine, mirroring the allowlisted renderStageReport/
+# renderStageSummary precedent) + their checklist DATA-shape (ScopeChecklistItem). Pure data-shape / pure render,
+# no live path of their own (their callers — orchestrator/host — carry the behavior), no covering requirement. ---
+ReportSink
+ScopeChecklistItem
+renderScopeAfter
+renderScopeBefore
+
+# --- baseline maintenance (T-consistency-gate, wg-1c620a56b733, CODE, 2026-07-09): the DATA-shape / seam /
+# trivial siblings of the CONSISTENCY GATE (CG.1). The BEHAVIORAL export `durableItemCommitExists` (the
+# pull-at-the-close-boundary predicate) carries a reachable requirement in ARCHITECTURE.md (R-CONSISTENCY-GATE);
+# these four are the injected git-seam interface (RalphGitSeam), its real default binding (makeRalphGitSeam — a
+# thin execFileP('git',…) pass-through, the concrete side of the seam, exercised via the orchestrator live path
+# with a stubbed seam under test, mirroring the allowlisted realStageIo/realGhIo/realWorktreeIo precedent), and
+# the two trivial park-tuning constants (MAX_COMMIT_REDRIVES, NO_DURABLE_COMMIT_LABEL — same trivial-constant
+# class as STAGE_BRANCH). Pure data-shape / seam / trivial, no live path of their own, no covering requirement. ---
+RalphGitSeam
+makeRalphGitSeam
+MAX_COMMIT_REDRIVES
+NO_DURABLE_COMMIT_LABEL

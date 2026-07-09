@@ -31,6 +31,7 @@ import {
   clearMergeCache,
   discoverActivePacks,
   hasActiveProjectPacks,
+  readActiveArchDetector,
   readActiveDeployReversible,
   readActiveVerifyCommand,
   resolvePackStateDir,
@@ -87,6 +88,30 @@ describe('readActiveVerifyCommand — the per-project DEPLOY verification comman
   it('is lenient on malformed JSON → null', async () => {
     await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
     await expect(readActiveVerifyCommand(scopeRoot)).resolves.toBeNull();
+  });
+});
+
+describe('readActiveArchDetector — the per-project ARCHITECTURE-DETECTOR command (AQG.4)', () => {
+  it('null scopeRoot / absent active.json / unconfigured → null (undeclared → arch_clean fails OPEN)', async () => {
+    await expect(readActiveArchDetector(null)).resolves.toBeNull();
+    await expect(readActiveArchDetector(scopeRoot)).resolves.toBeNull(); // ENOENT
+    await writeActive({ packs: ['fullstack-flow'] });
+    await expect(readActiveArchDetector(scopeRoot)).resolves.toBeNull(); // key absent
+  });
+
+  it('returns the configured detector command verbatim', async () => {
+    await writeActive({ packs: ['fullstack-flow'], archDetector: 'pnpm arch:check' });
+    await expect(readActiveArchDetector(scopeRoot)).resolves.toBe('pnpm arch:check');
+  });
+
+  it('treats a blank/whitespace command as unconfigured (null)', async () => {
+    await writeActive({ packs: ['fullstack-flow'], archDetector: '   ' });
+    await expect(readActiveArchDetector(scopeRoot)).resolves.toBeNull();
+  });
+
+  it('is lenient on malformed JSON → null (unreadable → undeclared → fail-open)', async () => {
+    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
+    await expect(readActiveArchDetector(scopeRoot)).resolves.toBeNull();
   });
 });
 

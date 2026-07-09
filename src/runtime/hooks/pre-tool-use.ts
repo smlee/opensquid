@@ -44,12 +44,31 @@ import { extractSessionId } from './session_id.js';
 import { checkSafety } from '../guard/safety_floor.js';
 import { loadSafetyPolicy } from '../guard/safety_policy.js';
 import { isYoloMode } from '../guard/yolo.js';
-import { checkOrchestratorGuard } from '../guard/orchestrator_guard.js';
+import { checkDesignDocRewrite, checkOrchestratorGuard } from '../guard/orchestrator_guard.js';
+import { scopeAuditCacheKey } from '../scope_audit_cache_key.js';
 import { appendProjectDriftEvent } from '../drift_catalog.js';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { resolveProjectScopeRoot } from '../paths.js';
+import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
 import { readSettings } from '../orchestrator_settings.js';
+
+/**
+ * AQG.5 (T-arch-quality-gate) — FAIL-OPEN read of the scope-audit-cache verdict for the design-doc REWRITE gate.
+ * Mirrors the shipped `readVerdict` shape (v2_supply.ts): the flat `{ verdict: string }` at
+ * `fullstack-flow-scope-audit-cache`; ANY error / missing cache → `undefined` (the first write, before any audit
+ * → the gate allows — a REWRITE-gate, never a hard stall).
+ */
+async function readScopeAuditVerdict(sessionId: string, key: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(sessionStateFile(sessionId, key), 'utf8')) as {
+      verdict?: unknown;
+    };
+    return typeof parsed.verdict === 'string' ? parsed.verdict : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 interface PreToolUsePayload {
   tool?: string;
@@ -296,6 +315,31 @@ async function main(): Promise<void> {
         );
         if (verdict.deny) {
           process.stdout.write(JSON.stringify(buildPreToolUseDeny(verdict.message ?? '', '')));
+          process.exit(0);
+        }
+        // AQG.5 (T-arch-quality-gate) — the interactive design-doc REWRITE gate: a `docs/design/*.md` rewrite by
+        // the main loop is denied when its scope-audit verdict (produced by AQG.3's widened trigger) is
+        // present-and-not-GUESS_FREE. REWRITE-gate: the first write has no cache → allow (seeds the audit). The
+        // reader is the shipped `readVerdict` shape (`fullstack-flow-scope-audit-cache` → `.verdict`); `.catch`
+        // fail-open so a synchronous audit read never hard-stalls the loop. Executor subagents (agent_id) exempt.
+        const design = await checkDesignDocRewrite(
+          parsed.data.tool,
+          parsed.data.args,
+          agentId !== undefined ? { agent_id: agentId } : undefined,
+          // F5 — key the verdict PER-DOC from the design-doc path the guard is about to gate, so a NEW doc's
+          // first write reads `undefined` (⇒ ALLOW) instead of inheriting a prior doc's stale verdict.
+          {
+            readScopeVerdict: () => {
+              const dfp = (parsed.data as { args?: Record<string, unknown> }).args?.file_path;
+              return readScopeAuditVerdict(
+                sessionId,
+                scopeAuditCacheKey(typeof dfp === 'string' ? dfp : ''),
+              );
+            },
+          },
+        ).catch(() => ({ deny: false as const }));
+        if (design.deny) {
+          process.stdout.write(JSON.stringify(buildPreToolUseDeny(design.message ?? '', '')));
           process.exit(0);
         }
       }
