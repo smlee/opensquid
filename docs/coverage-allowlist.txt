@@ -2198,6 +2198,18 @@ STAGE_BASE_BRANCH
 GhAuthError
 IntegrationResult
 
+# --- baseline maintenance (T-spawn-lifecycle-hermetic-tests, wg-23fd463ab434, CODE, 2026-07-09): the injected
+# process-control seam that makes runOneShotCli hermetically testable (SLH.1). `ProcControl` is the seam
+# interface (type-erased at emit — likely never a gated JS export) and `realProcControl` is its `real*`
+# default-binding const — thin LAZY pass-throughs to node:child_process spawn / process.kill / the global
+# timers / process exit-hook, no branching (the concrete side of the injected seam, exercised via the live path
+# — production callers pass no `procControl` so the default runs — with stubbed IO under test in
+# spawn_lifecycle.test.ts). runOneShotCli/insideSupervisedTree already carry their requirements and are
+# signature-unchanged. Pure data-shape / seam / trivial, no covering requirement. Same class the git-flow
+# StageIo/realStageIo seam block above. ---
+ProcControl
+realProcControl
+
 # --- baseline maintenance (T-statusline-compose, wg-c954689147da, CODE, 2026-07-08): the DATA-shape siblings of
 # the additive status-line pill (SLC.2). The BEHAVIORAL exports (renderStatuslineFragment, writeStatuslineSnapshot,
 # refreshStatuslineSnapshot) carry reachable requirements in ARCHITECTURE.md §10; these two are the injected-seam

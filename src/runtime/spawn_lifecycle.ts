@@ -46,7 +46,51 @@
  *   runtime/agent_bridge/agent_loop_subscription.ts.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
+
+/**
+ * Injectable process-control surfaces `runOneShotCli` touches — default binds
+ * the real `node:child_process` spawn / global `process.kill` / global timers /
+ * `process` exit-hook. Mirrors the StageIo DI convention
+ * (release/stage_integration.ts:20): a single bundled seam object with a
+ * `real*` default binding. An omitted `procControl` ⇒ `realProcControl` ⇒
+ * production is byte-for-byte unchanged; a test injects a recording fake to
+ * exercise the SIGTERM → grace → group-SIGKILL FSM hermetically (no real
+ * subprocess, no temp files, fake timers for the grace/timeout windows).
+ */
+export interface ProcControl {
+  /** Returns a piped-stdio child (runOneShotCli always spawns with `stdio: ['pipe','pipe','pipe']`, so the three
+   *  streams are non-null — the `WithoutNullStreams` variant, matching the concrete real-`spawn` overload). */
+  spawn: (cli: string, args: string[], options: SpawnOptions) => ChildProcessWithoutNullStreams;
+  /** The detached group sweep uses the GLOBAL process.kill(-pid, sig) (groupKill :123) — NOT a child
+   *  method — so it is seamed here for a test to RECORD it without firing a real signal on a pid collision. */
+  kill: (pid: number, signal: NodeJS.Signals | number) => void;
+  setTimeout: (fn: () => void, ms: number) => NodeJS.Timeout;
+  clearTimeout: (t: NodeJS.Timeout | undefined) => void;
+  onExit: (fn: () => void) => void; // process.once('exit', fn) — the supervisor-exit escalation registration
+  offExit: (fn: () => void) => void; // process.removeListener('exit', fn)
+}
+
+/**
+ * The default real ProcControl — LAZY pass-throughs (each member calls the
+ * global at CALL time, e.g. `globalThis.setTimeout(fn, ms)`), so (a) an omitted
+ * `procControl` is byte-for-byte production behavior and (b) a test's
+ * `vi.useFakeTimers()` (which patches the globals) transparently drives the
+ * default timers. Do NOT eager-capture a global (`setTimeout: globalThis.setTimeout`)
+ * — that would freeze the ORIGINAL timer and silently defeat fake timers.
+ */
+export const realProcControl: ProcControl = {
+  // The generic-SpawnOptions overload of `spawn` widens to ChildProcess; runOneShotCli always passes piped
+  // stdio, so the streams are non-null — narrow to the WithoutNullStreams variant the seam contract promises.
+  spawn: (cli, args, options) => spawn(cli, args, options) as ChildProcessWithoutNullStreams,
+  kill: (pid, signal) => process.kill(pid, signal),
+  setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+  clearTimeout: (t) => {
+    if (t !== undefined) globalThis.clearTimeout(t);
+  },
+  onExit: (fn) => void process.once('exit', fn),
+  offExit: (fn) => void process.removeListener('exit', fn),
+};
 
 export interface OneShotOpts {
   cli: string;
@@ -76,6 +120,11 @@ export interface OneShotOpts {
    * parent sees it immediately and can surface it. No chat, no daemon, no log-scraping.
    */
   onStderrLine?: (line: string) => void;
+  /**
+   * Injected process-control seam (spawn / kill / timers / exit-hook). Omitted ⇒ `realProcControl` ⇒ production
+   * unchanged; a hermetic test injects a recording fake to drive the lifecycle FSM with no real subprocess.
+   */
+  procControl?: ProcControl;
 }
 
 type LifecyclePhase =
@@ -92,6 +141,7 @@ export const insideSupervisedTree = (env: NodeJS.ProcessEnv = process.env): bool
 
 export function runOneShotCli(opts: OneShotOpts): Promise<string> {
   const prefix = opts.errorPrefix ?? '';
+  const pc = opts.procControl ?? realProcControl; // omitted ⇒ real impls ⇒ prod byte-unchanged
   return new Promise<string>((resolve, reject) => {
     // Detach predicate = the SUPERVISED marker, NOT the hook-policy marker
     // (spec-audit finding 1): a reviewer spawned from an UNMARKED bridge
@@ -104,7 +154,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       ...(opts.markSubagent ? { OPENSQUID_SUBAGENT: '1' } : {}),
       ...(opts.env ?? {}), // per-spawn overrides (e.g. OPENSQUID_ITEM_ID) — last so they win
     };
-    const proc = spawn(opts.cli, opts.args, {
+    const proc = pc.spawn(opts.cli, opts.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached,
       env,
@@ -120,7 +170,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       state = { phase: 'group_killed' };
       try {
         if (detached && typeof proc.pid === 'number') {
-          process.kill(-proc.pid, 'SIGKILL');
+          pc.kill(-proc.pid, 'SIGKILL');
         } else {
           proc.kill('SIGKILL'); // nested: the ancestor's group sweep covers the rest
         }
@@ -135,7 +185,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       if (state.phase === 'term_sent') groupKill();
     };
 
-    const timer = setTimeout(() => {
+    const timer = pc.setTimeout(() => {
       if (state.phase !== 'running') return;
       state = { phase: 'term_sent' };
       proc.kill('SIGTERM');
@@ -145,9 +195,9 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       // bins call process.exit() milliseconds after this rejection, which
       // destroys ANY timer, ref'd or not — the 0.5.398 hole). 'closed_late'
       // clears both for well-behaved children.
-      process.once('exit', exitKill);
-      graceTimer = setTimeout(() => {
-        process.removeListener('exit', exitKill);
+      pc.onExit(exitKill);
+      graceTimer = pc.setTimeout(() => {
+        pc.offExit(exitKill);
         groupKill();
       }, opts.graceMs ?? 5_000);
       reject(opts.timeoutError(opts.timeoutMs));
@@ -172,7 +222,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
     proc.on('error', (e) => {
       if (state.phase !== 'running') return;
       state = { phase: 'spawn_failed' };
-      clearTimeout(timer);
+      pc.clearTimeout(timer);
       opts.onStreams?.({ stdout, stderr, code: null });
       reject(new Error(`${prefix}spawn failed: ${e.message}`));
     });
@@ -181,13 +231,13 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       opts.onStreams?.({ stdout, stderr, code }); // best-effort stream capture for logging (any exit code)
       if (state.phase === 'running') {
         state = { phase: 'closed' };
-        clearTimeout(timer);
+        pc.clearTimeout(timer);
         if (code === 0) resolve(stdout);
         else reject(new Error(`${prefix}exit ${code}: ${stderr.trim()}`));
       } else if (state.phase === 'term_sent') {
         state = { phase: 'closed_late' }; // child obeyed SIGTERM inside grace
-        if (graceTimer !== undefined) clearTimeout(graceTimer);
-        process.removeListener('exit', exitKill); // hygiene: long-lived callers
+        if (graceTimer !== undefined) pc.clearTimeout(graceTimer);
+        pc.offExit(exitKill); // hygiene: long-lived callers
       }
       // closed / spawn_failed / group_killed: terminal — nothing to do.
     });
@@ -198,7 +248,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
     } catch (e) {
       if (state.phase === 'running') {
         state = { phase: 'spawn_failed' };
-        clearTimeout(timer);
+        pc.clearTimeout(timer);
         reject(new Error(`${prefix}stdin write failed: ${String(e)}`));
       }
     }
