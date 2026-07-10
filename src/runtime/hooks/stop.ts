@@ -18,7 +18,7 @@
  * Fail-open on any internal error — see `main().catch()` below.
  */
 import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
-import { exitIfSubagent } from './subagent_guard.js';
+import { exitIfSubagent, isLoopLap } from './subagent_guard.js';
 import { Event } from '../types.js';
 
 import { dispatchEvent } from './dispatch.js';
@@ -126,25 +126,31 @@ async function main(): Promise<void> {
     emitDriftStderrAndExit(exitCode, peek === null ? stderr : `${stderr}\n\n${peek}`);
   }
 
-  // Interactive responder: this live session claims its umbrella's chat lease
-  // (acquire-if-free) so the drive below owns the turn + the headless stands
-  // down. No-op in `responder: headless` mode or when another session holds it.
-  await claimUmbrellaLeaseForSession(sessionId, cwd);
+  // scope-1 (T-in-lap-gating) — the interactive-responder branch is lap-guarded: a headless ralph lap is NOT the
+  // chat responder, so it does not claim the umbrella lease, stream output, or drive inbound. The lap still ENTERS
+  // the bin above (drift dispatch, phase-logging, honesty-ledger, maybeIngestTurn RAG all ran) — guard the branch,
+  // not the bin. A non-lap session runs the responder path unchanged.
+  if (!isLoopLap()) {
+    // Interactive responder: this live session claims its umbrella's chat lease
+    // (acquire-if-free) so the drive below owns the turn + the headless stands
+    // down. No-op in `responder: headless` mode or when another session holds it.
+    await claimUmbrellaLeaseForSession(sessionId, cwd);
 
-  // CAT.3 — "see": if THIS just-completed turn was chat-driven (CAT.2 left the
-  // marker), stream the agent's answer back to the source topic automatically
-  // (reply-to-source; the agent never picks the channel). No-op otherwise.
-  const assistantText = parsed.data.kind === 'stop' ? parsed.data.assistantText : '';
-  await maybeStreamOutput(sessionId, cwd, assistantText);
+    // CAT.3 — "see": if THIS just-completed turn was chat-driven (CAT.2 left the
+    // marker), stream the agent's answer back to the source topic automatically
+    // (reply-to-source; the agent never picks the channel). No-op otherwise.
+    const assistantText = parsed.data.kind === 'stop' ? parsed.data.assistantText : '';
+    await maybeStreamOutput(sessionId, cwd, assistantText);
 
-  // CAT.2 — "drive": if this session holds the umbrella's chat lease and has
-  // unacked inbound, block the stop and feed the inbound as the next turn so a
-  // chat message DRIVES a turn without a keystroke (the remote-terminal "drive").
-  const driveReason = await maybeDriveInbound(sessionId, cwd);
-  if (driveReason !== null) {
-    if (stderr.length > 0) process.stderr.write(squidPrefix(stderr) + '\n');
-    process.stdout.write(JSON.stringify({ decision: 'block', reason: driveReason }) + '\n');
-    process.exit(0);
+    // CAT.2 — "drive": if this session holds the umbrella's chat lease and has
+    // unacked inbound, block the stop and feed the inbound as the next turn so a
+    // chat message DRIVES a turn without a keystroke (the remote-terminal "drive").
+    const driveReason = await maybeDriveInbound(sessionId, cwd);
+    if (driveReason !== null) {
+      if (stderr.length > 0) process.stderr.write(squidPrefix(stderr) + '\n');
+      process.stdout.write(JSON.stringify({ decision: 'block', reason: driveReason }) + '\n');
+      process.exit(0);
+    }
   }
 
   emitDriftStderrAndExit(0, stderr);

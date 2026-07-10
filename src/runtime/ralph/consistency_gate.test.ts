@@ -15,6 +15,46 @@ const seam = (o: { tip: string; committed: string[]; dirty: string[] }): RalphGi
   uncommittedPaths: () => Promise.resolve(o.dirty),
 });
 
+// GF.2 — a seam that CAPTURES the ref each read is called with, and returns per-ref scripted tip/committed,
+// proving `durableItemCommitExists(git, base, targetRef)` forwards the CONFIGURED integration target to the seam.
+const refSeam = (
+  byRef: Record<string, { tip: string; committed: string[] }>,
+  dirty: string[] = [],
+): { git: RalphGitSeam; refs: (string | undefined)[] } => {
+  const refs: (string | undefined)[] = [];
+  const at = (ref?: string) => byRef[ref ?? 'HEAD'] ?? { tip: 'MISSING', committed: [] };
+  return {
+    refs,
+    git: {
+      tip: (ref) => (refs.push(ref), Promise.resolve(at(ref).tip)),
+      committedSince: (_base, ref) => Promise.resolve(at(ref).committed),
+      uncommittedPaths: () => Promise.resolve(dirty),
+    },
+  };
+};
+
+describe('durableItemCommitExists — GF.2 config-target-aware (targetRef forwarding)', () => {
+  const BASE = 'base000';
+  it('targetRef given → reads the target branch tip/committed (landed on target → true)', async () => {
+    const s = refSeam({
+      stage: { tip: 'stagetip', committed: ['a.ts'] },
+      HEAD: { tip: BASE, committed: [] },
+    });
+    expect(await durableItemCommitExists(s.git, BASE, 'stage')).toBe(true);
+    // the predicate forwarded `stage` to BOTH reads (never defaulted to HEAD)
+    expect(s.refs).toEqual(['stage']);
+  });
+  it('targetRef given, target not advanced → false (missing durable target commit → the existing park)', async () => {
+    const s = refSeam({ stage: { tip: BASE, committed: [] } });
+    expect(await durableItemCommitExists(s.git, BASE, 'stage')).toBe(false);
+  });
+  it('targetRef OMITTED → HEAD (byte-identical to the shipped base gate)', async () => {
+    const s = refSeam({ HEAD: { tip: 'headtip', committed: ['a.ts'] } });
+    expect(await durableItemCommitExists(s.git, BASE)).toBe(true);
+    expect(s.refs).toEqual([undefined]);
+  });
+});
+
 describe('consistency_gate — constants', () => {
   it('MAX_COMMIT_REDRIVES is a small bound (2), NOT MAX_STAGE_RETRIES (10)', () => {
     expect(MAX_COMMIT_REDRIVES).toBe(2);

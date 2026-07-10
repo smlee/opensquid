@@ -148,26 +148,31 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(codeMd.toLowerCase()).toContain('slice');
   });
 
-  it('LMP.3: every built-in procedure stage emits an enter+leave phase pair (no silent stage — the live path)', () => {
+  it('LMP.3 (repurposed, scope-3): CODE drives the enforced log_phase feed + no procedure carries the retired "silent" false promise (the live path)', () => {
     const stages = ['scope', 'scope_write', 'plan', 'author', 'code', 'deploy'];
     const procs = stages.map((s) => ({
       stage: s,
       text: readFileSync(join(BUILTIN_DIR, 'procedure', `${s}.md`), 'utf8'),
     }));
     const results = lintPhaseEmits(procs);
-    // No stage is silent — CODE (the longest, historically 0 emits) included; a failure NAMES the silent stage.
+    // The enforced-feed invariant holds for all six real procedures: CODE drives log_phase, none carries the
+    // retired "Without this … silent" false promise; a failure NAMES the offending stage.
     const bad = results.filter((r) => !r.ok);
-    expect(bad, `silent stages: ${JSON.stringify(bad)}`).toEqual([]);
-    // and a synthetic silent procedure (log_phase only, no set_loop_phase) is caught, missing NAMED.
-    const neg = lintPhaseEmits([{ stage: 'x', text: 'log_phase(pre_research) only' }]);
+    expect(bad, `offending stages: ${JSON.stringify(bad)}`).toEqual([]);
+    // and a synthetic CODE procedure that dropped the log_phase mandate is caught, missing NAMED.
+    const neg = lintPhaseEmits([{ stage: 'code', text: 'run the 7 phases; set_loop_phase only.' }]);
     expect(neg[0]?.ok).toBe(false);
-    expect(neg[0]?.missing).toContain('no set_loop_phase emit');
-    // an enter emit with no `lifecycle:"done"` leave is also caught.
-    const noLeave = lintPhaseEmits([
-      { stage: 'y', text: 'set_loop_phase(phase: "code", lifecycle: "running")' },
+    expect(neg[0]?.missing).toContain(
+      'CODE must drive the enforced log_phase feed (no log_phase( mandate)',
+    );
+    // a procedure carrying the retired "Without this … silent" false promise is also caught.
+    const falsePromise = lintPhaseEmits([
+      { stage: 'code', text: 'log_phase(<phase>). Without this, CODE is SILENT on the feed.' },
     ]);
-    expect(noLeave[0]?.ok).toBe(false);
-    expect(noLeave[0]?.missing).toContain('no leave (lifecycle:"done") emit');
+    expect(falsePromise[0]?.ok).toBe(false);
+    expect(falsePromise[0]?.missing).toContain(
+      'carries the retired set_loop_phase "silent" false promise',
+    );
   });
 
   it('T2.7: the inner CODE gate PASSES on phases_complete ∧ readiness_ran ∧ deprecated_clean ∧ suite_green', async () => {

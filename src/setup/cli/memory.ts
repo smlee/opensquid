@@ -177,7 +177,7 @@ export function registerMemory(parent: Command, deps: MemoryCliDeps = {}): Comma
   const m = parent.command('memory').description('Memory migration + maintenance (G.6 + G.7)');
 
   m.command('import-auto')
-    .description('Bulk-import Claude Code auto-memory files into loop-engine')
+    .description('Bulk-import Claude Code auto-memory files into the libSQL memory store')
     .option('--dry-run', 'preview without writing', false)
     .option('--project <path>', 'override which project dir to read (default: cwd)')
     .option('--auto-memory-root <path>', 'override ~/.claude/projects/ root')

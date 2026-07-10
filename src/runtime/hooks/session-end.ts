@@ -18,7 +18,7 @@
  * Fail-open on any internal error.
  */
 import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
-import { exitIfSubagent } from './subagent_guard.js';
+import { exitIfSubagent, isLoopLap } from './subagent_guard.js';
 import { clearFsmState } from '../fsm_state.js';
 import { runCompression } from '../compression_orchestrator.js';
 import { makeConsolidateRunner } from '../wedge/compression_deps.js';
@@ -240,20 +240,29 @@ async function main(): Promise<void> {
   // clobbered the MEMORY.md resume block. Back up ONLY when the dying session
   // holds resumable state; the explicit command and the SessionStart lazy
   // generator are unaffected.
-  try {
-    // AHO.4: ONE substance predicate shared with the tier-3 lazy generator
-    // (the AHO.3 FSM-exists probe passed for scope-intent trivia whose FSM
-    // this very hook then deleted — the evidence self-erased).
-    const { hasResumableState } = await import('../handoff/substance.js');
-    if (await hasResumableState(sessionId)) {
-      const { runHandoff } = await import('../handoff/index.js');
-      const result = await runHandoff(sessionId, process.cwd());
-      process.stderr.write(`opensquid: auto-handoff written — ${result.docPath}\n`);
-    } else {
-      process.stderr.write('opensquid: auto-handoff skipped — no resumable state\n');
+  // scope-1 (T-in-lap-gating) — a short-lived headless ralph lap must NOT emit an interactive handoff dump (the
+  // SUB.1 spam vector, subagent_guard.ts:4): skip the runHandoff branch under a lap. RAG gist/retire + the
+  // session-end indication below still run — guard only the handoff-dump action, not the whole bin.
+  if (isLoopLap()) {
+    process.stderr.write(
+      'opensquid: auto-handoff skipped — headless ralph lap (OPENSQUID_LOOP_LAP)\n',
+    );
+  } else {
+    try {
+      // AHO.4: ONE substance predicate shared with the tier-3 lazy generator
+      // (the AHO.3 FSM-exists probe passed for scope-intent trivia whose FSM
+      // this very hook then deleted — the evidence self-erased).
+      const { hasResumableState } = await import('../handoff/substance.js');
+      if (await hasResumableState(sessionId)) {
+        const { runHandoff } = await import('../handoff/index.js');
+        const result = await runHandoff(sessionId, process.cwd());
+        process.stderr.write(`opensquid: auto-handoff written — ${result.docPath}\n`);
+      } else {
+        process.stderr.write('opensquid: auto-handoff skipped — no resumable state\n');
+      }
+    } catch (e) {
+      process.stderr.write(`opensquid: auto-handoff skipped — ${String(e)}\n`);
     }
-  } catch (e) {
-    process.stderr.write(`opensquid: auto-handoff skipped — ${String(e)}\n`);
   }
 
   // AP.2 / rule #16 — archive (not delete) the active-task signal at session

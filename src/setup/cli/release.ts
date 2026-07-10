@@ -19,8 +19,17 @@ import {
   realStageIo,
   type StageIo,
 } from '../../runtime/release/stage_integration.js';
-import { openStagePr, realGhIo, type GhIo } from '../../runtime/release/stage_pr.js';
-import { resolveVersioning, type VersioningConfig } from '../../packs/discovery.js';
+import {
+  openStagePr,
+  ensureProductionPr,
+  realGhIo,
+  type GhIo,
+} from '../../runtime/release/stage_pr.js';
+import {
+  resolveVersioning,
+  type VersioningConfig,
+  type ResolvedEnvironments,
+} from '../../packs/discovery.js';
 import { resolveBuiltinScopeRoot, resolveUserScopeRoot } from '../../runtime/paths.js';
 import { join } from 'node:path';
 
@@ -48,6 +57,13 @@ export interface ReleaseDeps {
   openPr?: (title: string, body: string, cwd: string) => Promise<{ url: string }>; // AGF.6 openStagePr
   stageIo?: StageIo;
   ghIo?: GhIo;
+  /**
+   * GF.3/GF.7 (T-gitflow-integration-fix) — the resolved config-driven environments. PRESENT ⇒ the integration
+   * routes through the CONFIG branch names (`staging` is the integration branch, GF.4's fixed context) and the
+   * PR is the idempotent config-driven `ensureProductionPr(env)` (base=production, head=staging). ABSENT ⇒ the
+   * legacy manual path (STAGE_BRANCH → `openStagePr('stage'→'main')`) — back-compat for `opensquid release`.
+   */
+  environments?: ResolvedEnvironments;
 }
 
 /** The active branch, from `git rev-parse --abbrev-ref HEAD`. */
@@ -130,19 +146,28 @@ export async function integrateBranchToStage(
   const base = nextLockedTag(cfg, prefixTag);
   const existingRc = await (deps.rcTagsFor ?? rcTagsForBase)(base, cwd);
   const rcTag = `v${nextRcTag(cfg, prefixTag, existingRc)}`;
-  // INTEGRATE — merge the item branch → persistent `stage`, re-run the suite, rc-tag on green (AGF.5).
+  // INTEGRATE — merge the item branch → the staging branch, re-run the suite, rc-tag on green (AGF.5 + GF.4). The
+  // staging branch NAME is CONFIG-DRIVEN (`environments.staging`, GF.1) when present, else the legacy STAGE_BRANCH;
+  // GF.4's fixed `mergeToStage` isolates the destructive ops to the staging worktree (never the main tree).
+  const stageBranch = deps.environments?.staging ?? STAGE_BRANCH;
   const integrate =
     deps.stageIntegrate ??
-    ((b: string, tag: string, c: string) => mergeToStage(b, tag, c, deps.stageIo ?? realStageIo));
+    ((b: string, tag: string, c: string) =>
+      mergeToStage(b, stageBranch, tag, c, deps.stageIo ?? realStageIo));
   const { integrated } = await integrate(branch, rcTag, cwd);
   if (!integrated) return { integrated: false, base, rcTag, reason: 'not-integrated' };
-  // PR — open/refresh the batched stage → main PR. The human MERGE is the SOLE gate (never auto-merged here).
+  // PR — open/refresh the batched integration → production PR. The human MERGE is the SOLE gate (never auto-merged
+  // here). GF.7: with a configured `environments`, route through the IDEMPOTENT config-driven `ensureProductionPr`
+  // (base=production, head=staging); else the legacy `openStagePr('stage'→'main')` (back-compat).
+  const env = deps.environments;
   const open =
     deps.openPr ??
     ((title: string, body: string, c: string) =>
-      openStagePr(title, body, c, deps.ghIo ?? realGhIo));
+      env !== undefined
+        ? ensureProductionPr(env, c, deps.ghIo ?? realGhIo)
+        : openStagePr(title, body, c, deps.ghIo ?? realGhIo));
   const { url } = await open(
-    `Release: ${STAGE_BRANCH} → main`,
+    `Release: ${stageBranch} → main`,
     `Batched integration of ${branch} and prior stage items. ` +
       `Merging opens the release tag (${base}) + publish.`,
     cwd,

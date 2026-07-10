@@ -43,6 +43,12 @@ import {
   type McpWriteResult,
 } from '../wizard/mcp-writer.js';
 import {
+  projectCodexMcp,
+  readCodexConfig,
+  writeCodexMcp,
+  type CodexConfig,
+} from '../wizard/codex-mcp-writer.js';
+import {
   ALL_HOSTS,
   parseHosts,
   resolveHost,
@@ -63,6 +69,11 @@ export interface McpCliFlags {
 export interface McpCliDeps {
   writer?: (path: string, root?: string) => Promise<McpWriteResult>;
   reader?: (path: string) => Promise<unknown>;
+  /** Codex TOML writer (per-host dispatch; default `writeCodexMcp`). */
+  codexWriter?: (path: string, root?: string) => Promise<McpWriteResult>;
+  /** Codex TOML reader for the dry-run projection (default `readCodexConfig` —
+   *  the JSON reader would throw on an existing `config.toml`). */
+  codexReader?: (path: string) => Promise<CodexConfig>;
   cwd?: () => string;
   home?: () => string;
   stdout?: (s: string) => void;
@@ -77,6 +88,8 @@ export interface McpCliDeps {
 interface ResolvedDeps {
   writer: (path: string, root?: string) => Promise<McpWriteResult>;
   reader: (path: string) => Promise<unknown>;
+  codexWriter: (path: string, root?: string) => Promise<McpWriteResult>;
+  codexReader: (path: string) => Promise<CodexConfig>;
   cwd: () => string;
   home: () => string;
   out: (s: string) => void;
@@ -90,6 +103,8 @@ function buildDeps(deps: McpCliDeps): ResolvedDeps {
   return {
     writer: deps.writer ?? writeOpensquidMcp,
     reader: deps.reader ?? readClaudeUserConfig,
+    codexWriter: deps.codexWriter ?? writeCodexMcp,
+    codexReader: deps.codexReader ?? readCodexConfig,
     cwd: deps.cwd ?? ((): string => process.cwd()),
     home: deps.home ?? homedir,
     out: deps.stdout ?? ((s): void => void process.stdout.write(s)),
@@ -179,8 +194,14 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
         r.out(`  ${t.label}: not detected (${dirname(t.configPath)}) — would skip\n`);
         continue;
       }
-      const input = (await r.reader(t.configPath)) as Parameters<typeof projectOpensquidMcp>[0];
-      const { added, replaced, preserved } = projectOpensquidMcp(input, root);
+      // Per-host projection: codex reads/parses TOML + projects TOML tables; every other host is JSON.
+      const { added, replaced, preserved } =
+        t.id === 'codex'
+          ? projectCodexMcp(await r.codexReader(t.configPath), root)
+          : projectOpensquidMcp(
+              (await r.reader(t.configPath)) as Parameters<typeof projectOpensquidMcp>[0],
+              root,
+            );
       r.out(
         `  ${t.label} (${t.configPath}): would add [${added.join(', ')}], replace [${replaced.join(
           ', ',
@@ -200,7 +221,9 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
         r.out(`  ${t.label}: not detected (${dirname(t.configPath)}) — skipped\n`);
         continue;
       }
-      const result = await r.writer(t.configPath, root);
+      // Per-host writer: codex → TOML config.toml; every other host → JSON.
+      const writer = t.id === 'codex' ? r.codexWriter : r.writer;
+      const result = await writer(t.configPath, root);
       r.out(
         `  ${t.label} (${t.configPath}): added [${result.added.join(
           ', ',
@@ -240,14 +263,14 @@ export function registerSetupWizardMcp(wizard: Command, deps: McpCliDeps = {}): 
   wizard
     .command('mcp')
     .description(
-      'Register opensquid MCP servers into Claude-ecosystem hosts (default: Claude Code)',
+      'Register opensquid MCP servers into supported hosts — Claude Code/Desktop, Cursor, Codex (default: Claude Code)',
     )
     .option('--dry-run', 'preview the projected changes without writing any file', false)
     .option('--opensquid-root <path>', 'override the auto-detected opensquid repo root')
     .option('--no-detect-project-cleanup', 'skip the project-level .mcp.json cleanup advisory')
     .option(
       '--hosts <list>',
-      'comma-list of hosts (claude-code, claude-desktop, cursor) or "all"; default: claude-code',
+      'comma-list of hosts (claude-code, claude-desktop, cursor, codex) or "all"; default: claude-code',
     )
     .action(async (flags: McpCliFlags) => {
       await runMcpWizard(flags, deps);

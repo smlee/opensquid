@@ -10,11 +10,17 @@
  *     reality" — now a plain filesystem round-trip, no engine).
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  foldEvents,
+  resetLoopStateProjectionForTest,
+  tailEventsSince,
+} from '../../runtime/loop/loop_events.js';
 
 // E4: partial-mock bootstrap so `loadActiveV2Cartridges` is controllable. Default → [] (no active v2 pack →
 // fail-open), so the pre-existing tests are unaffected; E4 tests opt in by setting a fullstack-flow cartridge.
@@ -38,6 +44,7 @@ const FSF_CARTRIDGE = {
 } as unknown as Awaited<ReturnType<typeof loadActiveV2Cartridges>>[number];
 
 let tempHome: string;
+let projectRoot: string;
 let priorEnv: Record<string, string | undefined> = {};
 const SID = 'sess-lp';
 
@@ -49,9 +56,23 @@ beforeEach(async () => {
     OPENSQUID_HOME: process.env.OPENSQUID_HOME,
     CLAUDE_SESSION_ID: process.env.CLAUDE_SESSION_ID,
     OPENSQUID_SESSION_ID: process.env.OPENSQUID_SESSION_ID,
+    OPENSQUID_PROJECT_ROOT: process.env.OPENSQUID_PROJECT_ROOT,
+    OPENSQUID_ITEM_ID: process.env.OPENSQUID_ITEM_ID,
   };
   tempHome = await mkdtemp(join(tmpdir(), 'opensquid-logphase-'));
   process.env.OPENSQUID_HOME = tempHome;
+  // A headless ralph lap sets OPENSQUID_ITEM_ID in the env; readActiveTask uses it as a FALLBACK active task when
+  // active-task.json is absent (session_state.ts:372-404). Clear it so the file-absent cases (e.g. "no active
+  // task") stay hermetic; the OPENSQUID_ITEM_ID-keying cases below set it explicitly.
+  delete process.env.OPENSQUID_ITEM_ID;
+  // scope-1 (DPM.1) — handleLogPhase now emits a derived phase_leave monitor event via emitMonitorEvent, which
+  // resolves the PROJECT-LOCAL `<root>/.opensquid/opensquid.db` (loop_db.ts:30-32, honoring only
+  // OPENSQUID_PROJECT_ROOT) AND re-publishes the status-line snapshot to `<root>/.opensquid/`. Pin a temp project
+  // root so the emit + snapshot land in an ISOLATED store, never the real repo db (the loop_events.test.ts idiom).
+  projectRoot = await mkdtemp(join(tmpdir(), 'opensquid-logphase-proj-'));
+  await mkdir(join(projectRoot, '.opensquid'), { recursive: true });
+  process.env.OPENSQUID_PROJECT_ROOT = projectRoot;
+  resetLoopStateProjectionForTest(); // start from a cold, empty incremental projection (per-store DDL guard too)
   delete process.env.CLAUDE_SESSION_ID;
   delete process.env.OPENSQUID_SESSION_ID;
   vi.mocked(loadActiveV2Cartridges).mockResolvedValue([]); // default: no active v2 pack (fail-open)
@@ -63,6 +84,7 @@ afterEach(async () => {
     else process.env[k] = v;
   }
   await rm(tempHome, { recursive: true, force: true });
+  await rm(projectRoot, { recursive: true, force: true });
 });
 
 describe('handleLogPhase', () => {
@@ -184,5 +206,68 @@ describe('handleLogPhase', () => {
     // no persistActorState → per-task FSM absent
     const out = await handleLogPhase({ phase: 'code' });
     expect(out.phases_logged).toEqual(['code']);
+  });
+
+  // scope-1/scope-4 (T-deterministic-phase-monitor) — the ENFORCED log_phase write DRIVES a wg-keyed phase_leave
+  // (done ✓) monitor event, isolated to the temp OPENSQUID_PROJECT_ROOT loop db the beforeEach pinned.
+  describe('DPM.1/DPM.4 — derived phase_leave monitor emit', () => {
+    it('(a/b/d) an enforced log_phase (FSM=code) emits ONE wg-keyed phase_leave (done ✓), keyed via OPENSQUID_ITEM_ID; folds to (3/7) ✓; gate semantics preserved', async () => {
+      process.env.OPENSQUID_ITEM_ID = 'wg-item'; // (b) the lap's driven item is the fallback active task + the key
+      await recordCurrentSession(SID);
+      // no writeActiveTask → active resolves from OPENSQUID_ITEM_ID (session_state.ts:372,402), so wgId === the env
+      vi.mocked(loadActiveV2Cartridges).mockResolvedValue([FSF_CARTRIDGE]);
+      await persistActorState(SID, 'fullstack-flow', 'code', 'z', 'wg-item');
+
+      const out = await handleLogPhase({ phase: 'code' });
+
+      // (d) gate semantics preserved alongside the new emit.
+      expect(out.task_id).toBe('wg-item');
+      expect(out.phases_logged).toEqual(['code']);
+      expect(out.complete).toBe(false);
+      // (a) exactly one derived phase_leave with the right shape (index 3 = REQUIRED_PHASES.indexOf('code')+1).
+      const events = await tailEventsSince(0);
+      const emitted = events.filter((e) => e.wgId === 'wg-item' && e.kind === 'phase_leave');
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({
+        wgId: 'wg-item',
+        kind: 'phase_leave',
+        phase: 'code',
+        index: 3,
+        total: 7,
+        lifecycle: 'done',
+      });
+      // the render path (foldEvents) shows `code (3/7) ✓`, not just the raw store row.
+      const [folded] = foldEvents(events).filter((s) => s.wgId === 'wg-item');
+      expect(folded).toMatchObject({ phase: 'code', index: 3, total: 7, lifecycle: 'done' });
+    });
+
+    it('(c) a REJECTED pre-code phase (FSM=plan) emits NO monitor event (the E4 guard precedes the emit)', async () => {
+      process.env.OPENSQUID_ITEM_ID = 'wg-pc';
+      await recordCurrentSession(SID);
+      vi.mocked(loadActiveV2Cartridges).mockResolvedValue([FSF_CARTRIDGE]);
+      await persistActorState(SID, 'fullstack-flow', 'plan', 'z', 'wg-pc');
+
+      await expect(handleLogPhase({ phase: 'code' })).rejects.toThrow(/not the CODE stage/);
+      expect(await tailEventsSince(0)).toEqual([]);
+    });
+
+    it('(e) FAIL-OPEN — a throwing monitor store never breaks log_phase (the ledger + gate still write)', async () => {
+      process.env.OPENSQUID_ITEM_ID = 'wg-fo';
+      await recordCurrentSession(SID);
+      vi.mocked(loadActiveV2Cartridges).mockResolvedValue([FSF_CARTRIDGE]);
+      await persistActorState(SID, 'fullstack-flow', 'code', 'z', 'wg-fo');
+      // Point the loop db at a project root whose `.opensquid/` does NOT exist → the libsql open/DDL throws inside
+      // withLoopDb → appendMonitorEvent throws → emitMonitorEvent swallows it (monitor_emit.ts:21-30). log_phase
+      // must still return ok with the ledger written (the OPENSQUID_HOME-backed ledger is unaffected).
+      const badRoot = await mkdtemp(join(tmpdir(), 'opensquid-logphase-badroot-'));
+      process.env.OPENSQUID_PROJECT_ROOT = badRoot; // deliberately NO .opensquid subdir
+
+      const out = await handleLogPhase({ phase: 'code' });
+
+      expect(out.ok).toBe(true);
+      expect(out.phases_logged).toEqual(['code']);
+      expect((await readPhaseLedger('wg-fo')).phases_logged).toEqual(['code']);
+      await rm(badRoot, { recursive: true, force: true });
+    });
   });
 });

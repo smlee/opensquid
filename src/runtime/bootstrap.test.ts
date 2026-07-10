@@ -2,21 +2,20 @@
  * Bootstrap regression test.
  *
  * Asserts:
- *  - T-loop-engine-reintegration T.3 wires the RAG primitives
- *    (`recall`, `embed`, `store_lesson`) into the registry. These were
- *    documented as "intentionally not registered" in Phase 1; a refactor
+ *  - bootstrap wires the RAG primitives (`recall`, `embed`, `store_lesson`)
+ *    into the registry on the libSQL backend (retire-Rust / RES-1). These
+ *    were documented as "intentionally not registered" in Phase 1; a refactor
  *    reverting that registration must be caught here.
- *  - T-loop-engine-reintegration T.6 wires the wedge gate lesson surface
- *    (`propose_lesson`, `promote_lesson`, `recall_lesson`). Skipping
- *    these would break the entire competitive moat (per
+ *  - bootstrap wires the wedge gate lesson surface (`propose_lesson`,
+ *    `promote_lesson`, `recall_lesson`) on the libSQL wedge-lesson store.
+ *    Skipping these would break the entire competitive moat (per
  *    `project_2026_05_12_strategic_pivot`).
  *
  * Uses a stub RagBackend via `buildRegistry({ backend })` so we don't
- * spawn a real loop-engine subprocess or open a libsql file during
- * unit-test runs. Passes `lessonStore: null` to skip lesson
- * registration for tests that aren't asserting on the lesson surface
- * (so they don't construct a real EngineClient and lazily connect to
- * a daemon socket).
+ * spawn a real RAG backend or open a libsql file during unit-test runs.
+ * Passes `lessonStore: null` to skip lesson registration for tests that
+ * aren't asserting on the lesson surface (so they don't construct a real
+ * libSQL wedge-lesson store during the run).
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

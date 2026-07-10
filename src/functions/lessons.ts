@@ -1,8 +1,8 @@
 /**
  * Lesson primitives: `propose_lesson`, `promote_lesson`, `recall_lesson`.
  *
- * T-loop-engine-reintegration T.6 — surfaces the loop-engine wedge gate
- * to skills. Three atomic primitives compose into capture/promote/recall
+ * retire-Rust / RES-1 — surfaces the wedge gate on the libSQL wedge-lesson
+ * store to skills. Three atomic primitives compose into capture/promote/recall
  * workflows; the gate itself lives in `engine/src/engine/lessons/gate.rs`.
  *
  * Why these three (and only these three):
@@ -100,7 +100,8 @@ const RecallLessonArgs = z.object({
 });
 
 export function registerLessonFunctions(registry: FunctionRegistry, store: WedgeLessonStore): void {
-  // DURABLE.2 — all three primitives touch the loop-engine UDS. `propose` and
+  // DURABLE.2 — all three primitives operate on the libSQL wedge-lesson store
+  // (`WedgeLessonStore`). `propose` and
   // `promote` are durable side-effecting writes (re-running on resume creates
   // a duplicate lesson or re-fires the gate). They are NOT memoizable —
   // memoizing a write would silently no-op the second insert. `recall` is

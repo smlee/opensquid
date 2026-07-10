@@ -580,7 +580,7 @@ requirements:
     assert: { kind: reachable, symbol: formatRelativeAge, from: [status-line] }
     proof: 'src/cli/loop_status.test.ts'
   - id: R-MONITOR-PHASE-LINT
-    intent: 'LMP.3 lintPhaseEmits: the no-silent-stage pack-lint — every procedure stage emits an enter+leave pair'
+    intent: 'LMP.3 lintPhaseEmits (repurposed, T-deterministic-phase-monitor scope-3): the no-silent-stage pack-lint now guards the ENFORCED feed — CODE must drive log_phase( and no procedure may carry the retired set_loop_phase "silent" false promise'
     spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.6'
     wg: wg-61db3ededf19
     assert: { kind: reachable, symbol: lintPhaseEmits, from: [pack-validation] }
@@ -690,15 +690,15 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: latestPrefixTag, from: [release] }
     proof: 'src/runtime/release/latest_prefix_tag.test.ts'
-  - id: R-AGF-BRANCH-NAME
-    intent: 'AGF.2 branchNameFor: the auto/wg-<id> branch-name SSOT (never double-prefixed) shared by the worktree cut + push + stage merge'
-    wg: wg-732b2b68a168
-    assert: { kind: reachable, symbol: branchNameFor, from: [orchestrator] }
+  - id: R-GF-FEAT-BRANCH
+    intent: 'GF.5 featBranchFor: the SEMANTIC per-item branch name feat/<slug-of-item.title> (retires the mechanical auto/wg-<id> branchNameFor); DORMANT parallel-only (serial commits to env.local) — proof-backed, static reachability advisory'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: featBranchFor, from: [orchestrator] }
     proof: 'src/runtime/ralph/auto_pull.test.ts'
-  - id: R-AGF-AUTO-PULL
-    intent: 'AGF.2 autoPullMain: fetch + fast-forward-only pull of main (never a stale base); a diverged local main REJECTS (surfaced, no silent merge commit)'
-    wg: wg-732b2b68a168
-    assert: { kind: reachable, symbol: autoPullMain, from: [orchestrator] }
+  - id: R-GF-RECONCILE-BASE
+    intent: 'GF.6 reconcileBase: the preserve-whoever-is-ahead base-refresh (replaces autoPullMain --ff-only); four-state FSM over (behind, ahead) — ff / kept-local / MERGE-both / conflict-surfaced; NO reset/rebase (hot patch never lost); base branch = environments.production'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: reconcileBase, from: [orchestrator] }
     proof: 'src/runtime/ralph/auto_pull.test.ts'
   - id: R-AGF-ADD-WORKTREE
     intent: 'AGF.3 addItemWorktree: cut auto/wg-<id> from fresh main into its own checkout at <poolRoot>/<id> (git worktree add)'
@@ -735,6 +735,36 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: integrateBranchToStage, from: [release] }
     proof: 'src/setup/cli/release.test.ts'
+  # T-gitflow-integration-fix (GF.1..GF.8, wg-e20fb6b080e0) — the config-driven git-flow's new BEHAVIORAL exports:
+  # one reachable requirement per export, its element proof-test the AUTHORITY (the `from` hints are advisory — a
+  # negative static pre-filter never vetoes a passing proof). The DATA-shape / injected-seam / trivial siblings
+  # (EnvironmentsConfig/VersionControlConfig/ResolvedEnvironments/ReconcileIo/ReconcileOutcome/realReconcileIo/
+  # slugify/RouteDeps/RouteResult/writeEnvironmentsElicitation) are baselined in docs/coverage-allowlist.txt.
+  - id: R-GF-RESOLVE-ENV
+    intent: 'GF.1 resolveEnvironments: the deterministic version-control.environments reader — {production, staging?, local} with local resolved to the current branch when unset; null when production absent/malformed (fail-soft, not on the automated git-flow)'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: resolveEnvironments, from: [release] }
+    proof: 'src/packs/discovery.test.ts'
+  - id: R-GF-REVERSIBILITY
+    intent: 'GF.8 reversibilityBoundaryFor: the DEPLOY reversibility DERIVED from environments (env !== null ⇒ reversible by construction; the sole irreversible act is the human PR-merge) — subsumes the ad-hoc reversible flag'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: reversibilityBoundaryFor, from: [release] }
+    proof: 'src/packs/discovery.test.ts'
+  - id: R-GF-MERGE-ENV
+    intent: 'GF.1 mergeEnvironmentsBlock: the PURE elicitation merge folding version-control.environments into active.json (preserving packs/verifySuite/versioning; production required, empty staging/local dropped; idempotent)'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: mergeEnvironmentsBlock, from: [orchestrator] }
+    proof: 'src/setup/cli/hooks.test.ts'
+  - id: R-GF-ENSURE-PR
+    intent: 'GF.7 ensureProductionPr: the IDEMPOTENT config-driven auto-PR (gh pr view || create) head=(staging ?? local) base=production; existing PR is a no-op returning its url; no gh auth → GhAuthError; NEVER merges (human MERGE is the sole gate)'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: ensureProductionPr, from: [release] }
+    proof: 'src/runtime/release/stage_pr.test.ts'
+  - id: R-GF-ROUTE-ON-SHIPPED
+    intent: 'GF.3 routeOnShipped: the TOTAL config-driven fail-visible integration route — has-stage → integrate into staging then production PR; no-stage → production PR direct; an integration failure is SURFACED (integrated:false), never swallowed'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: routeOnShipped, from: [orchestrator] }
+    proof: 'src/runtime/ralph/route_on_shipped.test.ts'
   # T-statusline-compose (SLC.1..SLC.4, wg-c954689147da) — the additive status-line pill's new BEHAVIORAL exports:
   # one reachable requirement per export, its element proof-test the AUTHORITY. The `from` hints are advisory —
   # these surface through the `emitMonitorEvent` state-change choke-point (post-tool-use phase writes / the
@@ -815,4 +845,112 @@ requirements:
     wg: wg-1c620a56b733
     assert: { kind: reachable, symbol: durableItemCommitExists, from: [orchestrator] }
     proof: 'src/runtime/ralph/consistency_gate.test.ts'
+  # T-multi-harness-lap (wg-348c691ae27e, MHL.1..8) — the harness-neutral loop lap: a LapHarness adapter selected
+  # by a `kind: 'claude'|'codex'` discriminator, neutral core (audit-grep-empty), fail-loud on an unimplemented
+  # kind. 4 new BEHAVIORAL exports, each MET via its element proof-test; the seam / data-shape siblings
+  # (LapHarness / LapEnvelope / LapHarnessCfg / HarnessKind / LAP_HARNESS_KINDS + the claude/codex adapter
+  # consts' interface types) are allowlisted (no orphan drift — the forward ratchet registered AT CODE).
+  - id: R-LAP-RESOLVE
+    intent: 'MHL.3 resolveLapHarness: the kind→adapter resolver — returns the shipped adapter for a known kind, THROWS naming the implemented kinds on an unresolved kind (mirrors dispatcher.ts:70-73); the runtime boundary reinforcing the load-time fail-loud (MHL.2). The neutral core carries no vendor invocation/envelope literal (audit-grep-empty)'
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: resolveLapHarness, from: [orchestrator] }
+    proof: 'src/runtime/ralph/lap_harness.test.ts'
+  - id: R-LAP-OUTCOME-FOLD
+    intent: 'MHL.3 outcomeFromEnvelope: the NEUTRAL envelope→outcome fold (the vendor-free half of the former parseLapOutcome), FAIL-CLOSED (FCE.1, Codex P1 #4) — isError ⇒ CRASH; else a valid RALPH-EXIT tag ⇒ its outcome; a present-but-invalid tag ⇒ WEDGE; an absent tag ⇒ CRASH; NEVER a default SHIPPED; cost/tokens pass through. Vendor-free by construction; the harness adapter owns turning raw stdout into a LapEnvelope'
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: outcomeFromEnvelope, from: [orchestrator] }
+    proof: 'src/runtime/ralph/lap_outcome.test.ts'
+  # T-fail-closed-typed-exit (wg-2bba2e5f17bc, FCE.1) — the fail-closed fold's tag-presence signal. ONE new
+  # behavioral gated export (tagIsPresent), MET via its unit in lap_outcome.test.ts; no data-shape/allowlist add.
+  - id: R-LAP-TAG-PRESENT
+    intent: 'FCE.1 tagIsPresent: the locked "present" signal for the fail-closed fold — true iff the literal RALPH-EXIT: tag occurs in the result text (lastIndexOf !== -1), regardless of whether valid JSON follows; the fold consults it when extractTypedExit returns null to split WEDGE (present-but-invalid, deterministic → human) from CRASH (truly absent, retryable). Pure + total, never throws'
+    spec: 'docs/tasks/T-fail-closed-typed-exit.md'
+    wg: wg-e7e10c0ca0ed
+    assert: { kind: reachable, symbol: tagIsPresent, from: [orchestrator] }
+    proof: 'src/runtime/ralph/lap_outcome.test.ts'
+  - id: R-LAP-CLAUDE-ADAPTER
+    intent: "MHL.4 claudeLapHarness: today's Claude lap behavior extracted VERBATIM (the regression floor) — the byte-identical ralph.ts:137-144 flag array, the stdin prompt, the single-JSON-envelope reads (total_cost_usd/usage/is_error/result) incl. the unparseable/non-object → isError path"
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: claudeLapHarness, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/claude_lap_harness.test.ts'
+  - id: R-LAP-CODEX-ADAPTER
+    intent: 'MHL.5 codexLapHarness: the Codex adapter — codex exec --json (LIVE-confirmed 0.144.0 flags: --sandbox + -c approval_policy, NOT --dangerously-*; plus -m <model> when configured, CFS.1), the JSONL fold (agent_message concat + turn.completed.usage tokens; costUsd is 0 at parse-time then the REAL configured per-model dollar figure via the priceUsd seam, CFS.1), and a preflight that fails loud on missing auth, SURFACES the effective billing path (CFS.2), and fail-closed REFUSES an uncounted API-billed lap (CFS.3) before the spawn'
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: codexLapHarness, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  # T-codex-financial-safety (wg-38bc88490cd8, CFS.1..4) — real Codex dollar accounting + effective-billing
+  # detection + fail-closed refuse: one reachable requirement per new BEHAVIORAL export, each proven by
+  # codex_lap_harness.test.ts. The data-shape siblings (CodexPricing / CodexBillingPath) are allowlisted.
+  - id: R-CFS-COST
+    intent: 'CFS.1 codexLapCostUsd: the pure per-model dollar fold (tokens × configured $/1M rate; cfg.model ?? pricing.default, unknown-model ⇒ HIGHEST-rate conservative over-count, absent/empty map ⇒ 0) — wired as codexLapHarness.priceUsd, applied at the ralph.ts wire so the orchestrator budget sum is meaningful'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-1dd25b2a94b5
+    assert: { kind: reachable, symbol: codexLapCostUsd, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  - id: R-CFS-CLASSIFY
+    intent: 'CFS.2 classifyCodexBilling: the pure effective-billing-path classifier — codex login status is the authority, the local env/auth.json signals the precedence-honoring fallback (auth.json takes precedence over a stray env key)'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-f39b7fffcdca
+    assert: { kind: reachable, symbol: classifyCodexBilling, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  - id: R-CFS-LOGIN-STATUS
+    intent: 'CFS.2 codexLoginStatus: the injectable shell seam (execFile codex login status, short timeout) — returns trimmed stdout or null on any error/timeout, never throws/hangs the lap'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-f39b7fffcdca
+    assert: { kind: reachable, symbol: codexLoginStatus, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  - id: R-CFS-REFUSE
+    intent: 'CFS.3 assertCodexBillingCounted: the fail-closed refuse predicate — throws (fail-loud, before the spawn) iff the effective path is api AND accounting is not real (no non-empty pricing); subscription and API-with-real-pricing proceed'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-8541724ae8df
+    assert: { kind: reachable, symbol: assertCodexBillingCounted, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  # T-in-lap-gating (wg-e3c9f944140e) — the recursion-only lap marker: a ralph lap runs FULLY hooked
+  # (OPENSQUID_LOOP_LAP, orthogonal to the reviewer-silencing OPENSQUID_SUBAGENT), the marker only blocking a
+  # nested loop + the stop-responder/session-end-handoff actions. One covering requirement per new gated export.
+  - id: R-INLAP-LAP-MARKER
+    intent: 'isLoopLap marks a ralph lap WITHOUT silencing hooks — the recursion-only marker consumed by the entrypoint guard, cli.ts update-suppression, and the stop/session-end per-bin guards (orthogonal to isOpensquidSubagent; never fed to exitIfSubagent)'
+    spec: 'docs/tasks/T-in-lap-gating.md'
+    wg: wg-e3c9f944140e
+    assert: { kind: reachable, symbol: isLoopLap, from: [stop, session-end] }
+    proof: 'src/runtime/hooks/subagent_guard.test.ts'
+  - id: R-INLAP-LAP-ENV
+    intent: 'LOOP_LAP_ENV is the recursion-only lap marker env var (OPENSQUID_LOOP_LAP), published by the lap spawn via the per-spawn env override — orthogonal to OPENSQUID_SUBAGENT, never merged'
+    spec: 'docs/tasks/T-in-lap-gating.md'
+    wg: wg-e3c9f944140e
+    assert: { kind: reachable, symbol: LOOP_LAP_ENV, from: [ralph] }
+    proof: 'src/runtime/hooks/subagent_guard.test.ts'
+  # T-codex-e2e-setup (wg-6489ea2be964, CE.1..4) — register the opensquid MCP for Codex + $CODEX_HOME host/auth
+  # + auth PRESENCE via `codex login status`: one reachable requirement per new BEHAVIORAL export. The `from`
+  # hints are advisory (the proof-test is the authority) — these surface through the `wizard mcp` codex dispatch
+  # and the codex lap preflight, not a hook builder. The data-shape siblings (CodexConfig / CodexMcpServerEntry)
+  # + the trivial fs reader (readCodexConfig — sibling of the allowlisted readClaudeUserConfig) are allowlisted.
+  - id: R-CE-CODEX-MCP-PROJECT
+    intent: 'CE.1 projectCodexMcp: the pure Codex config.toml projection — overwrites the two opensquid [mcp_servers.<id>] tables by key (idempotent), preserves every unrelated table, reports added/replaced/preserved (disk-untouched; used by the writer + --dry-run)'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-78ced1503c65
+    assert: { kind: reachable, symbol: projectCodexMcp, from: [setup] }
+    proof: 'src/setup/wizard/codex-mcp-writer.test.ts'
+  - id: R-CE-CODEX-MCP-WRITE
+    intent: 'CE.1/CE.2 writeCodexMcp: the idempotent TOML-merge writer (parse→merge-our-two-tables→stringify via smol-toml, .bak snapshot BEFORE mutation) that registers opensquid (required=true) + opensquid-chat (not required) into config.toml so a Codex lap is not item-blind; replaces a pre-existing unfenced manual table with no duplicate-table error'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-78ced1503c65
+    assert: { kind: reachable, symbol: writeCodexMcp, from: [setup] }
+    proof: 'src/setup/wizard/codex-mcp-writer.test.ts'
+  - id: R-CE-CODEX-HOME
+    intent: 'CE.1 resolveCodexHome: the $CODEX_HOME reader ($CODEX_HOME ?? ~/.codex) — the host-path half of the two-readers-of-one-source lock; a custom $CODEX_HOME lands config.toml in the right file'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-78ced1503c65
+    assert: { kind: reachable, symbol: resolveCodexHome, from: [setup] }
+    proof: 'src/setup/wizard/mcp-hosts.test.ts'
+  - id: R-CE-CODEX-AUTH
+    intent: 'CE.3 hasCodexAuth: the pure/total auth PRESENCE predicate — env key OR $CODEX_HOME auth.json OR a positive `codex login status` (the /logged in/ + !/not logged in/ guard load-bearing); admits a valid login the hardcoded ~/.codex gate rejected, still fails-loud on true total absence'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-f166de25d186
+    assert: { kind: reachable, symbol: hasCodexAuth, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
 ```

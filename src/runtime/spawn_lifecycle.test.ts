@@ -340,3 +340,144 @@ describe('runOneShotCli — SIGTERM → grace → group SIGKILL', () => {
     expect(groupKills).toHaveLength(0); // no group kill fired (grace timer cleared in closed_late)
   });
 });
+
+describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, both streams)', () => {
+  it('rejects fail-loud when stdout exceeds maxCaptureBytes and group-kills the child', async () => {
+    const { pc, spawns, groupKills } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      maxCaptureBytes: 16,
+      procControl: pc,
+    });
+    spawns[0]!.child.stdout.emit('data', Buffer.from('X'.repeat(64))); // 64 > 16 bytes
+    await expect(p).rejects.toThrow(/capture cap exceeded: stdout exceeded 16 bytes/);
+    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // the runaway child was killed (detached)
+  });
+
+  it('rejects fail-loud when stderr exceeds maxCaptureBytes — independently of stdout', async () => {
+    const { pc, spawns, groupKills } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      maxCaptureBytes: 16,
+      procControl: pc,
+    });
+    spawns[0]!.child.stderr.emit('data', Buffer.from('E'.repeat(64)));
+    await expect(p).rejects.toThrow(/capture cap exceeded: stderr exceeded 16 bytes/);
+    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]);
+  });
+
+  it('measures BYTES not UTF-16 code units (a multibyte stream trips at the true byte cap)', async () => {
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      maxCaptureBytes: 4,
+      procControl: pc,
+    });
+    // '€€' is 2 UTF-16 code units (string .length === 2, under the cap) but 6 UTF-8 bytes (over the cap).
+    const multibyte = Buffer.from('€€', 'utf8');
+    expect(multibyte.length).toBe(6);
+    spawns[0]!.child.stdout.emit('data', multibyte);
+    await expect(p).rejects.toThrow(/capture cap exceeded: stdout/); // bytes (6) > cap (4), not chars (2)
+  });
+
+  it('resolves normally when both streams stay under the cap (cap branch never taken)', async () => {
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      maxCaptureBytes: 1024,
+      procControl: pc,
+    });
+    spawns[0]!.child.stdout.emit('data', Buffer.from('small out'));
+    spawns[0]!.child.stderr.emit('data', Buffer.from('small err'));
+    spawns[0]!.child.emit('close', 0);
+    await expect(p).resolves.toBe('small out'); // byte-unchanged: the whole stdout is returned
+  });
+
+  it('boundary: exactly cap passes, cap+1 fails (> cap, strict)', async () => {
+    const atCap = recordingProcControl();
+    const pAt = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      maxCaptureBytes: 8,
+      procControl: atCap.pc,
+    });
+    atCap.spawns[0]!.child.stdout.emit('data', Buffer.from('12345678')); // exactly 8 → passes
+    atCap.spawns[0]!.child.emit('close', 0);
+    await expect(pAt).resolves.toBe('12345678');
+
+    const overCap = recordingProcControl();
+    const pOver = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      maxCaptureBytes: 8,
+      procControl: overCap.pc,
+    });
+    overCap.spawns[0]!.child.stdout.emit('data', Buffer.from('123456789')); // 9 → fails
+    await expect(pOver).rejects.toThrow(/capture cap exceeded: stdout/);
+  });
+
+  it('default (maxCaptureBytes omitted) does not trip on small fixtures', async () => {
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      procControl: pc, // no maxCaptureBytes → the 10 MiB default, never hit by a tiny fixture
+    });
+    spawns[0]!.child.stdout.emit('data', Buffer.from('ok'));
+    spawns[0]!.child.emit('close', 0);
+    await expect(p).resolves.toBe('ok');
+  });
+
+  it('onStreams fires at most once on an over-cap (via the close after groupKill, not in failCapExceeded)', async () => {
+    const onStreams = vi.fn();
+    const { pc, spawns } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: '',
+      timeoutMs: 10_000,
+      markSubagent: false,
+      timeoutError,
+      maxCaptureBytes: 16,
+      onStreams,
+      procControl: pc,
+    }).catch(() => undefined);
+    spawns[0]!.child.stdout.emit('data', Buffer.from('X'.repeat(64))); // over-cap → reject (onStreams NOT called here)
+    await p;
+    expect(onStreams).not.toHaveBeenCalled(); // failCapExceeded does not call onStreams
+    spawns[0]!.child.emit('close', 0); // the child's close after groupKill calls onStreams exactly once
+    expect(onStreams).toHaveBeenCalledTimes(1);
+  });
+});

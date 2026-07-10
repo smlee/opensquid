@@ -160,6 +160,17 @@ describe('hook subprocess integration', () => {
     expect(r.stderr).toBe('');
   }, 15000);
 
+  // T-in-lap-gating scope-1/scope-5 (ILG.5) — the stop responder branch is lap-guarded: a headless ralph lap is
+  // NOT the chat responder, so under OPENSQUID_LOOP_LAP=1 the bin ENTERS (drift dispatch / phase-log / RAG ran) but
+  // NEVER claims the umbrella lease / streams output / blocks-to-drive-inbound. Observable proof: it exits 0 clean
+  // with NO `decision:block` envelope on stdout (the responder path emits the only block this bin can produce).
+  it('stop: under a lap (OPENSQUID_LOOP_LAP) → exit 0, responder skipped (no decision:block)', async () => {
+    const stdin = JSON.stringify({ assistantText: 'task done' });
+    const r = await runHook('stop.ts', stdin, { OPENSQUID_LOOP_LAP: '1' });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).not.toContain('"decision":"block"'); // the responder never drove — the branch was skipped
+  }, 15000);
+
   it('user-prompt-submit: valid payload → exit 0', async () => {
     const stdin = JSON.stringify({ prompt: 'hello' });
     const r = await runHook('user-prompt-submit.ts', stdin);
@@ -174,6 +185,20 @@ describe('hook subprocess integration', () => {
     // AHO.3: trivial sessions must produce NO surfaces — just the skip note.
     expect(r.stderr).toContain('auto-handoff skipped — no resumable state');
     expect(r.stderr).not.toContain('auto-handoff written');
+  }, 15000);
+
+  // T-in-lap-gating scope-1/scope-5 (ILG.5) — the session-end handoff-dump branch is lap-guarded: a short-lived
+  // headless lap must NOT emit an interactive handoff dump (the SUB.1 spam vector). Under OPENSQUID_LOOP_LAP=1 the
+  // bin still RUNS (dispatch + the session-end indication below still fire — guard the branch, not the bin), but the
+  // whole runHandoff branch is replaced by the lap-skip note: the LAP guard fires (distinct from the substance gate).
+  it('session-end: under a lap (OPENSQUID_LOOP_LAP) → handoff skipped by the LAP guard, bin body still runs', async () => {
+    const stdin = JSON.stringify({ sessionId: 'lap-guard-test' });
+    const r = await runHook('session-end.ts', stdin, { OPENSQUID_LOOP_LAP: '1' });
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain('auto-handoff skipped — headless ralph lap (OPENSQUID_LOOP_LAP)'); // the LAP guard
+    expect(r.stderr).not.toContain('auto-handoff skipped — no resumable state'); // NOT the substance gate branch
+    expect(r.stderr).not.toContain('auto-handoff written');
+    expect(r.stderr).toContain('ended'); // the session-end indication still ran — the bin body executed in-lap
   }, 15000);
 
   it('pre-tool-use: snake_case payload normalized to camelCase', async () => {

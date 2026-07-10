@@ -1,18 +1,25 @@
 /**
  * GR.2 — the typed-exit contract for a gated-ralph lap (Inv 5: ONE typed exit).
  *
- * A lap is a headless `claude -p … --output-format json` run of `RALPH.md`. Its envelope is the
- * empirically-verified shape `{ result, is_error, subtype, total_cost_usd, … }` (verified 2026-06-13).
- * The lap signals its outcome by emitting a single greppable line in `result`:
+ * A lap is a headless run of `RALPH.md` through whatever harness the config selects. Each harness adapter
+ * (MHL.4/MHL.5) folds its own raw output into the NEUTRAL `LapEnvelope` (lap_harness.ts); this file owns only
+ * the vendor-free half — mapping that envelope to a `LapOutcome`. The lap signals its outcome by emitting a
+ * single greppable line in its result text:
  *
  *     RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"SCOPE_FORK","payload":{…}}
  *
- * `parseLapOutcome` is a TOTAL mapping of every envelope shape to a `LapOutcome` — it never throws and
- * never returns a false `SHIPPED`: an unparseable envelope or `is_error` becomes `CRASH`; a clean
- * envelope with no tag becomes `SHIPPED`. The orchestrator (GR.4) switches on the result.
+ * `outcomeFromEnvelope` is a TOTAL mapping of every envelope to a `LapOutcome` — it never throws and never
+ * returns a false `SHIPPED` (fail-CLOSED, Codex P1 #4): an errored envelope becomes `CRASH`; a clean envelope
+ * with a valid tag becomes that tag's outcome; a clean envelope with a present-but-invalid tag becomes `WEDGE`
+ * (a deterministic attempted-exit-that-produced-garbage → human); a clean envelope with NO tag becomes `CRASH`
+ * (the lap may have forgotten to print it → a fresh lap can recover). SHIPPED requires an explicit well-formed
+ * SHIPPED tag. The orchestrator (GR.4) switches on the result. This file carries NO vendor invocation/envelope
+ * literal (audit-grep-empty, MHL.8) — those live only in the adapters (`./harnesses/*_lap_harness.ts`).
  *
- * Imported by: src/runtime/ralph/orchestrator.ts (GR.4), src/runtime/ralph/supervisor.ts (GR.3).
+ * Imported by: src/runtime/ralph/orchestrator.ts (GR.4), src/runtime/ralph/supervisor.ts (GR.3),
+ * src/setup/cli/ralph.ts (the wire, MHL.6).
  */
+import type { LapEnvelope } from './lap_harness.js';
 
 /** The only escalation vocabulary — every human-required exit is one of these (Inv 5/8). */
 export type HumanRequiredReason =
@@ -55,8 +62,9 @@ const TAG = 'RALPH-EXIT:';
 
 /**
  * Scan the lap's free-text result for the LAST `RALPH-EXIT: {json}` line and validate it into a
- * `LapOutcome`. Returns null when there is no well-formed tag (caller defaults to SHIPPED on a clean
- * exit). Defensive by construction — a malformed tag is treated as "no tag".
+ * `LapOutcome`. Returns null when there is no well-formed tag — the caller (`outcomeFromEnvelope`)
+ * classifies a null as WEDGE when a tag is present (via `tagIsPresent`) else CRASH, NEVER SHIPPED.
+ * Defensive by construction — a malformed tag is treated as "no valid tag".
  */
 export function extractTypedExit(resultText: string): LapOutcome | null {
   const idx = resultText.lastIndexOf(TAG);
@@ -95,6 +103,16 @@ export function extractTypedExit(resultText: string): LapOutcome | null {
   }
 }
 
+/**
+ * FCE.1 — the locked "present" signal (pure, total). True iff the lap ATTEMPTED a structured exit: the literal
+ * `RALPH-EXIT:` tag occurs anywhere in the result text, regardless of whether valid JSON follows. The fail-
+ * closed fold uses this to split a null `extractTypedExit` into WEDGE (present-but-invalid, deterministic →
+ * human) vs CRASH (truly absent, possibly-transient → retryable). §5-Q1 lock. Reuses the module-private `TAG`.
+ */
+export function tagIsPresent(resultText: string): boolean {
+  return resultText.lastIndexOf(TAG) !== -1;
+}
+
 /** The lap's cost + token usage, folded from the envelope for the LSF.5 loop_metrics history (§3a). */
 export interface LapUsage {
   costUsd: number;
@@ -102,33 +120,23 @@ export interface LapUsage {
   outputTokens: number;
 }
 
-/** Read `usage.input_tokens`/`usage.output_tokens` from the headless envelope (0 when absent). */
-function readUsage(env: Record<string, unknown>): { inputTokens: number; outputTokens: number } {
-  const u = env.usage;
-  if (u === null || typeof u !== 'object') return { inputTokens: 0, outputTokens: 0 };
-  const rec = u as Record<string, unknown>;
-  const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
-  return { inputTokens: num(rec.input_tokens), outputTokens: num(rec.output_tokens) };
-}
-
-/** Parse the headless JSON envelope into a total `LapOutcome` + the lap's cost + token usage. Never throws. */
-export function parseLapOutcome(stdout: string): { outcome: LapOutcome } & LapUsage {
-  let env: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (parsed === null || typeof parsed !== 'object')
-      return { outcome: { kind: 'CRASH' }, costUsd: 0, inputTokens: 0, outputTokens: 0 };
-    env = parsed as Record<string, unknown>;
-  } catch {
-    // unparseable envelope = CRASH, never SHIPPED
-    return { outcome: { kind: 'CRASH' }, costUsd: 0, inputTokens: 0, outputTokens: 0 };
-  }
-  const costUsd = typeof env.total_cost_usd === 'number' ? env.total_cost_usd : 0;
-  const { inputTokens, outputTokens } = readUsage(env);
-  if (env.is_error === true)
-    return { outcome: { kind: 'CRASH' }, costUsd, inputTokens, outputTokens };
-  const tagged = extractTypedExit(typeof env.result === 'string' ? env.result : '');
-  return { outcome: tagged ?? { kind: 'SHIPPED' }, costUsd, inputTokens, outputTokens }; // clean exit, no tag = SHIPPED
+/**
+ * MHL.3 — the NEUTRAL envelope→outcome fold (the vendor-free half of the former `parseLapOutcome`). The
+ * harness adapter (MHL.4/MHL.5) owns turning its raw stdout into a `LapEnvelope`; this maps that envelope to a
+ * total `LapOutcome` + usage, FAIL-CLOSED (Codex P1 #4, never a default SHIPPED): `isError` ⇒ CRASH; else a
+ * valid RALPH-EXIT tag ⇒ its outcome; a present-but-invalid tag ⇒ WEDGE; an absent tag ⇒ CRASH; cost/tokens
+ * pass through. Never throws — vendor-free by construction.
+ */
+export function outcomeFromEnvelope(env: LapEnvelope): { outcome: LapOutcome } & LapUsage {
+  const { costUsd, inputTokens, outputTokens } = env;
+  if (env.isError) return { outcome: { kind: 'CRASH' }, costUsd, inputTokens, outputTokens };
+  const tagged = extractTypedExit(env.resultText);
+  // FAIL-CLOSED (never default SHIPPED): a valid tag ⇒ its outcome; a present-but-invalid tag ⇒ WEDGE
+  // (deterministic garbage → human, no retry); a truly absent tag ⇒ CRASH (the lap may have forgotten to
+  // print the tag; a fresh lap can recover → bounded retry). §5-Q1 split; "present" = tag occurs (locked).
+  const outcome: LapOutcome =
+    tagged ?? (tagIsPresent(env.resultText) ? { kind: 'WEDGE' } : { kind: 'CRASH' });
+  return { outcome, costUsd, inputTokens, outputTokens };
 }
 
 /** Return the first balanced `{…}` JSON object substring starting at `s[0]`, or null. */

@@ -20,6 +20,7 @@ import { join } from 'node:path';
 
 import { Command } from 'commander';
 
+import { isLoopLap } from './runtime/hooks/subagent_guard.js';
 import { registerChatDaemon, runChatDaemonWorkerEntry } from './channels/daemon/cli.js';
 import { registerAgentBridge } from './runtime/agent_bridge/cli.js';
 import { registerPackCli } from './cli/pack.js';
@@ -113,7 +114,7 @@ function maybeNotifyUpdate(current: string): void {
         process.stderr.write(`${line}\n`);
         await writeUpdateCache({ ...cache, notified_at: new Date(now).toISOString() });
       }
-      if (isStale(cache, now) && process.env.OPENSQUID_SUBAGENT !== '1') {
+      if (isStale(cache, now) && process.env.OPENSQUID_SUBAGENT !== '1' && !isLoopLap()) {
         const { spawn } = await import('node:child_process');
         const { fileURLToPath } = await import('node:url');
         spawn(process.execPath, [fileURLToPath(import.meta.url), 'update', '--check-only'], {
@@ -440,8 +441,8 @@ function runCli(): void {
   registerYoloCli(program);
 
   // G.6 — `opensquid memory import-auto`. Bulk-imports Claude Code auto-memory
-  // files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the loop-engine
-  // via direct `engine.memoryCreate` RPC, bypassing the MCP write overhead for
+  // files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the libSQL
+  // memory store via a direct backend write, bypassing the MCP write overhead for
   // bulk ingest. Dedupe by frontmatter `name` round-tripped through `origin.host`.
   // All imports tagged `authored_by: 'user'` (eviction-immune).
   registerMemory(program);

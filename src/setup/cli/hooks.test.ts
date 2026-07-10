@@ -18,7 +18,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { resolveTargets, runHooksWizard } from './hooks.js';
+import { mergeEnvironmentsBlock, resolveTargets, runHooksWizard } from './hooks.js';
 
 let root: string;
 let stdoutBuf: string;
@@ -228,5 +228,64 @@ describe('runHooksWizard — project context.md (T-project-context)', () => {
 
     expect(stdoutBuf).toMatch(/would scaffold .*context\.md if absent/);
     await expect(readCtx(projRoot)).rejects.toThrow();
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * GF.1 (scope-1) — mergeEnvironmentsBlock: the PURE elicitation merge that
+ * folds `version-control.environments` into an existing active.json object.
+ * production is REQUIRED (trimmed); whitespace/empty staging/local are DROPPED;
+ * other top-level keys are preserved; the input is NEVER mutated.
+ * ──────────────────────────────────────────────────────────────────── */
+describe('mergeEnvironmentsBlock — pure version-control.environments merge (GF.1)', () => {
+  it('production only → environments === {production} (trimmed), staging/local absent', () => {
+    const out = mergeEnvironmentsBlock({}, { production: '  main  ' });
+    const vc = out['version-control'] as { environments: Record<string, unknown> };
+    expect(vc.environments).toEqual({ production: 'main' });
+    expect('staging' in vc.environments).toBe(false);
+    expect('local' in vc.environments).toBe(false);
+  });
+
+  it('drops empty/whitespace staging and local', () => {
+    const out = mergeEnvironmentsBlock({}, { production: 'main', staging: '  ', local: '' });
+    const vc = out['version-control'] as { environments: Record<string, unknown> };
+    expect(vc.environments).toEqual({ production: 'main' });
+  });
+
+  it('includes staging + local (trimmed) when non-empty', () => {
+    const out = mergeEnvironmentsBlock(
+      {},
+      {
+        production: 'main',
+        staging: ' stage ',
+        local: ' develop ',
+      },
+    );
+    const vc = out['version-control'] as { environments: Record<string, unknown> };
+    expect(vc.environments).toEqual({ production: 'main', staging: 'stage', local: 'develop' });
+  });
+
+  it('preserves existing top-level keys and merges over a prior version-control object', () => {
+    const existing = {
+      packs: ['fullstack-flow'],
+      verifySuite: 'bash scripts/pre-push.sh',
+      'version-control': { versioning: { strategy: 'locked-prefix', prefix: '0.5' } },
+    };
+    const out = mergeEnvironmentsBlock(existing, { production: 'main' });
+    expect(out.packs).toEqual(['fullstack-flow']);
+    expect(out.verifySuite).toBe('bash scripts/pre-push.sh');
+    const vc = out['version-control'] as Record<string, unknown>;
+    // prior versioning sub-block preserved; environments folded in.
+    expect(vc.versioning).toEqual({ strategy: 'locked-prefix', prefix: '0.5' });
+    expect(vc.environments).toEqual({ production: 'main' });
+  });
+
+  it('does NOT mutate the input object', () => {
+    const existing: Record<string, unknown> = { packs: ['fullstack-flow'] };
+    const snapshot = JSON.stringify(existing);
+    const out = mergeEnvironmentsBlock(existing, { production: 'main' });
+    expect(JSON.stringify(existing)).toBe(snapshot); // input unchanged
+    expect(out).not.toBe(existing); // new object returned
+    expect('version-control' in existing).toBe(false);
   });
 });

@@ -15,17 +15,15 @@
  *     modes. The `Promise<Pack[]>` signature is pinned now so the Phase 2
  *     swap is body-only — call sites do not refactor.
  *
- * RAG wiring (T-loop-engine-reintegration / T.3 — first-ever production
- * registration of recall/embed/store_lesson):
- *   `registerRagFunctions(registry, backend)` is now called per-bootstrap
+ * RAG wiring (retire-Rust / RES-1 — the RAG primitives recall/embed/
+ * store_lesson are registered per-bootstrap):
+ *   `registerRagFunctions(registry, backend)` is called per-bootstrap
  *   with a backend chosen by `resolveBackendConfig()` (env > config.json >
- *   default = loop-engine if engine binary discoverable, else libsql-qwen3).
- *   The cost concerns that justified Phase 1 omission are resolved: the
- *   default `loop-engine` path connects to a shared UDS daemon (T.4), so
- *   per-hook boot cost is one socket-connect + one ping, not a full libsql
- *   open. `buildRegistry()` becomes async to accommodate `backend.init()`
- *   (engine handshake / libsql CREATE TABLE depending on backend). All
- *   four hook bins already await it.
+ *   default = `libsql-fastembed`, engine-free). The Rust engine backend
+ *   has been removed, so boot opens a libSQL backend directly —
+ *   `backend.init()` is a libSQL `CREATE TABLE`, not an engine handshake
+ *   over a UDS daemon. `buildRegistry()` is async to accommodate that
+ *   `backend.init()`. All four hook bins already await it.
  *
  * Two env-var test seams (subprocess hook bridge):
  *
@@ -261,11 +259,10 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // ASC.5's reframed scope-decomposer handoff rules can shape their
   // directive next_action.args from the persisted stage. memoizable:false
   // because the chain transitions mid-session via the ASC.1 writers.
-  // T-loop-engine-reintegration T.3 — FIRST-EVER production wiring of the
-  // RAG primitives. Resolves backend choice (env > ~/.opensquid/rag-config
-  // .json > default), constructs, inits, registers. Tests override via
-  // `opts.backend` to skip the resolver + a real init (which may need a
-  // live engine binary).
+  // retire-Rust / RES-1 — production wiring of the RAG primitives. Resolves
+  // backend choice (env > ~/.opensquid/rag-config.json > `libsql-fastembed`
+  // default), constructs, inits, registers. Tests override via `opts.backend`
+  // to skip the resolver + a real libSQL init.
   const backend = opts.backend ?? createBackend(await resolveBackendConfig());
   await backend.init();
   registerRagFunctions(r, backend);
@@ -276,10 +273,10 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   // dispatcher's skill-trigger filter.
   registerRecallPreInjectFunction(r, backend);
 
-  // T-loop-engine-reintegration T.6 — wire the wedge gate lesson surface
-  // (`propose_lesson`, `promote_lesson`, `recall_lesson`). Lessons need a
-  // direct EngineClient handle (the RAG backend handles memory.* calls; the
-  // lesson.* wedge gate still routes through the engine — RES-3 will port it).
+  // retire-Rust / RES-1 — wire the wedge gate lesson surface
+  // (`propose_lesson`, `promote_lesson`, `recall_lesson`). The lesson.* wedge
+  // gate runs on the libSQL wedge-lesson store (libSQL + per-file source), the
+  // same engine-free backend the RAG memory.* primitives use — no engine.
   // Construct + init the wedge lesson store (libSQL + per-file source), then
   // register the lesson primitives against it. Tests pass `lessonStore: null`
   // to skip registration; `lessonStore: <stub>` to inject a store.

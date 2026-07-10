@@ -1,44 +1,66 @@
 /**
- * LMP.3 — the no-silent-stage lint unit. (The LIVE path — the lint over the 6 real built-in procedures — is in
- * fullstack_flow_pack.test.ts.) Here we pin the pure verdict: a stage passes iff it has ≥1 set_loop_phase emit
- * AND an enter+leave pair; a failure NAMES the missing half.
+ * LMP.3 (REPURPOSED — T-deterministic-phase-monitor scope-3) — the no-silent-stage lint unit. (The LIVE path —
+ * the lint over the 6 real built-in procedures — is in fullstack_flow_pack.test.ts.) Here we pin the pure
+ * verdict against the ENFORCED-feed invariant: the CODE procedure must DRIVE `log_phase(`, and NO procedure may
+ * carry the retired "Without this … silent" false promise; a failure NAMES the gap. `set_loop_phase` is an
+ * OPTIONAL supplement everywhere (a non-code stage is not required to emit it — it appears via `stage_advance`).
  */
 import { describe, expect, it } from 'vitest';
 
 import { lintPhaseEmits } from './phase_emit_lint.js';
 
 describe('lintPhaseEmits', () => {
-  it('passes a stage with an enter+leave pair', () => {
+  it('passes a CODE stage that drives the enforced log_phase feed', () => {
     const [r] = lintPhaseEmits([
       {
         stage: 'code',
-        text: 'set_loop_phase(phase: "test", lifecycle: "running") … set_loop_phase(phase: "test", lifecycle: "done")',
+        text: 'Log ALL 7 via log_phase(<phase>) as you complete them — the enforced feed.',
       },
     ]);
     expect(r?.ok).toBe(true);
     expect(r?.missing).toEqual([]);
   });
 
-  it('fails a stage with NO set_loop_phase emit (log_phase only) and names the gap', () => {
-    const [r] = lintPhaseEmits([{ stage: 'x', text: 'log_phase(pre_research) done' }]);
-    expect(r?.ok).toBe(false);
-    expect(r?.missing).toContain('no set_loop_phase emit');
-  });
-
-  it('fails a stage with an enter emit but no lifecycle:"done" leave', () => {
+  it('fails a CODE stage that dropped the log_phase mandate and names the gap', () => {
     const [r] = lintPhaseEmits([
-      { stage: 'y', text: 'set_loop_phase(phase: "code", lifecycle: "running")' },
+      {
+        stage: 'code',
+        text: 'run the 7 phases; emit set_loop_phase(phase: "code", lifecycle: "done")',
+      },
     ]);
     expect(r?.ok).toBe(false);
-    expect(r?.missing).toContain('no leave (lifecycle:"done") emit');
+    expect(r?.missing).toContain(
+      'CODE must drive the enforced log_phase feed (no log_phase( mandate)',
+    );
   });
 
-  it('is presence-based, not count-based (a 3-phase and a 7-phase stage both pass)', () => {
-    const text3 = 'set_loop_phase(a, lifecycle: "running") set_loop_phase(a, lifecycle: "done")';
-    const results = lintPhaseEmits([
-      { stage: 'scope', text: text3 },
-      { stage: 'code', text: text3 },
+  it('a NON-code stage is NOT required to emit set_loop_phase (it appears via stage_advance)', () => {
+    const [r] = lintPhaseEmits([
+      {
+        stage: 'scope',
+        text: 'Research first; write the pre-research artifact. (Optional) set_loop_phase.',
+      },
     ]);
-    expect(results.every((r) => r.ok)).toBe(true);
+    expect(r?.ok).toBe(true);
+    expect(r?.missing).toEqual([]);
+  });
+
+  it('a non-code stage with NO phase emit at all still passes (stage_advance covers it)', () => {
+    const [r] = lintPhaseEmits([
+      { stage: 'plan', text: 'Decompose the scope into a work-graph. No emits.' },
+    ]);
+    expect(r?.ok).toBe(true);
+    expect(r?.missing).toEqual([]);
+  });
+
+  it('fails ANY stage that carries the retired "Without this … silent" false promise', () => {
+    const [r] = lintPhaseEmits([
+      {
+        stage: 'code',
+        text: 'log_phase(<phase>). Without this, CODE — the longest stage — is SILENT on the feed.',
+      },
+    ]);
+    expect(r?.ok).toBe(false);
+    expect(r?.missing).toContain('carries the retired set_loop_phase "silent" false promise');
   });
 });

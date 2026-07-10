@@ -1,7 +1,7 @@
 /**
  * GR.4 — the `opensquid loop` CLI: the user-invoked entry that ASSEMBLES the orchestrator's injected deps
  * and runs the gated-ralph loop. A thin wire — all logic lives in the unit-tested pieces it composes
- * (runRalphLoop, chatEscalator, parseLapOutcome, the GR.1–3 store ops). The loop is a CLI COMMAND, not a
+ * (runRalphLoop, chatEscalator, the harness adapter + outcomeFromEnvelope, the GR.1–3 store ops). The loop is a CLI COMMAND, not a
  * daemon (opensquid stays an MCP server / tool provider; the agent loop runs inside the spawned harness).
  *
  * Commands:
@@ -34,14 +34,26 @@ import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
 import { makeRalphGitSeam } from '../../runtime/ralph/consistency_gate.js'; // CG.1 — the consistency-gate git seam
+import { resolveEnvironments } from '../../packs/discovery.js'; // GF.1 — the config-driven git-flow environments reader
+import { reconcileBase } from '../../runtime/ralph/auto_pull.js'; // GF.6 — the base-refresh reconcile
+import { routeOnShipped } from '../../runtime/ralph/route_on_shipped.js'; // GF.3 — the config-driven onShipped route
+import { integrateBranchToStage } from './release.js'; // GF.3/GF.7 — the config-driven integrate SSOT
+import { ensureProductionPr } from '../../runtime/release/stage_pr.js'; // GF.7 — the idempotent auto-PR
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
 import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
-import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
+import {
+  clearLoopStage,
+  readLoopStage,
+  scopeGate,
+  upsertTaskStage,
+} from '../../runtime/ralph/loop_stage.js';
+import { LOOP_LAP_ENV, isLoopLap } from '../../runtime/hooks/subagent_guard.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import { displayReport } from '../../runtime/loop/report_display.js'; // RD.2/RD.3 — the live-display primitive
 import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
-import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
+import { outcomeFromEnvelope } from '../../runtime/ralph/lap_outcome.js';
+import { resolveLapHarness, type LapHarnessCfg } from '../../runtime/ralph/lap_harness.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
 import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
@@ -89,8 +101,9 @@ export function buildRalphConfig(
   };
 }
 
-/** Build the per-lap runner: spawn `claude -p RALPH.md --item <id>`, parse the typed exit. A deadline
- * overrun (group-SIGKILL) becomes the typed TIMEOUT, NOT a CRASH; a genuine spawn failure rethrows → CRASH. */
+/** Build the per-lap runner: resolve the harness adapter from the config `kind`, spawn the RALPH.md lap
+ * through it, fold its envelope → the typed exit. A deadline overrun (group-SIGKILL) becomes the typed
+ * TIMEOUT, NOT a CRASH; a genuine spawn failure rethrows → CRASH. */
 export function makeSpawnLap(
   cfg: RalphConfig,
   file: RalphConfigFile,
@@ -128,27 +141,39 @@ export function makeSpawnLap(
         .then(() => appendFile(logPath, body, 'utf8'))
         .catch(() => undefined); // logging is best-effort — swallow any fs error
     };
+    // MHL.6 — resolve the harness adapter from the config's `kind` (throws on an unresolved kind, reinforcing
+    // the load-time fail-loud). ALL harness-specifics (flags, prompt delivery, envelope parse, auth preflight)
+    // come from the adapter; this core stays neutral (audit-grep-empty, MHL.8).
+    const adapter = resolveLapHarness(file.harness.kind);
+    const lapCfg: LapHarnessCfg = {
+      maxBudgetUsd: cfg.maxBudgetUsd,
+      ...(file.harness.sandbox === undefined ? {} : { sandbox: file.harness.sandbox }),
+      ...(file.harness.askForApproval === undefined
+        ? {}
+        : { askForApproval: file.harness.askForApproval }),
+      ...(file.harness.model === undefined ? {} : { model: file.harness.model }),
+      ...(file.harness.pricing === undefined ? {} : { pricing: file.harness.pricing }),
+    };
+    // Fail-loud setup check BEFORE the spawn (Codex: auth diagnostics; Claude: no-op) — a setup problem, not a
+    // retryable CRASH, alongside the RALPH.md read above.
+    await adapter.preflight?.(lapCfg);
+    // onStreams fires at process close (BEFORE runCli resolves), so capturedStderr is set by the time the
+    // post-await parse runs — the adapter's parseEnvelope may read a stderr signal (e.g. Codex).
+    let capturedStderr = '';
     let stdout: string;
     try {
       stdout = await runCli({
         cli: file.harness.cli, // Inv 10 — harness is a parameter
-        // NO `--item` (not a claude flag → crash) and no `-p <path>` (that passes the path string as the
-        // prompt). `-p` + prompt-via-stdin; `--max-budget-usd` is valid ("only works with --print").
-        args: [
-          '-p',
-          '--output-format',
-          'json',
-          '--max-budget-usd',
-          String(cfg.maxBudgetUsd),
-          '--dangerously-skip-permissions',
-        ],
-        prompt,
+        args: adapter.spawnArgs(lapCfg), // the harness-specific flags (was the hardcoded Claude array)
+        prompt: adapter.deliverPrompt(prompt).stdin, // the harness-specific prompt delivery (was the bare prompt)
         timeoutMs: file.wallClockMs,
-        markSubagent: true,
-        // T-active-task-mirror — publish the lap's item id so the lap's FSM hook (v2_supply) can WRITE THROUGH to
-        // the item-keyed loop-stage projection. claude inherits this env → its hook bins inherit it (mirrors how
-        // OPENSQUID_AUTOMATION reaches the hooks). This is the ONLY channel that tells the lap process its item id.
-        env: { OPENSQUID_ITEM_ID: item.id },
+        // scope-4 (T-in-lap-gating) — the lap runs FULLY HOOKED: PreToolUse enforcement, stage_inject
+        // procedure/rubric delivery, and the PostToolUse FSM write-through (v2_supply → upsertTaskStage) ALL fire
+        // in-lap. It sets the recursion-only OPENSQUID_LOOP_LAP marker (NOT markSubagent → NOT OPENSQUID_SUBAGENT),
+        // which the six hook bins IGNORE (they run for the lap) and which only blocks a NESTED loop (the entrypoint
+        // guard) + the stop-responder / session-end-handoff actions. OPENSQUID_ITEM_ID is still published so the
+        // MCP tools the lap calls (set_loop_phase/log_phase/workgraph_*, in the MCP server process) have item context.
+        env: { OPENSQUID_ITEM_ID: item.id, [LOOP_LAP_ENV]: '1' },
         timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),
         // LIVE channel — each lap stderr line surfaces immediately in the loop's own output (the subprocess→
         // session message channel; no chat, no daemon, no log-scraping). Watch `opensquid loop` and you see
@@ -156,18 +181,27 @@ export function makeSpawnLap(
         onStderrLine: (line: string) =>
           process.stdout.write(`    │ ${item.id.slice(3, 11)} ${line}\n`),
         // Log BOTH streams at close (any exit code) — stderr is where a wedged lap's hook/gate errors land.
-        onStreams: ({ stdout: out, stderr, code }) =>
+        onStreams: ({ stdout: out, stderr, code }) => {
+          capturedStderr = stderr; // capture for the adapter parse (a harness may signal on stderr)
           appendLog(
             `# lap ${item.id} · exit=${code} · ${new Date().toISOString()}\n` +
               `=== STDERR ===\n${stderr.trim() || '(empty)'}\n\n=== STDOUT (tail) ===\n${out.slice(-6000)}\n`,
-          ),
+          );
+        },
       });
     } catch (e) {
       appendLog(`\n=== LAP ERROR ===\n${e instanceof Error ? e.message : String(e)}\n`);
       if ((e as { __timeout?: boolean }).__timeout === true) return { kind: 'TIMEOUT', costUsd: 0 };
       throw e; // genuine spawn/IO failure → superviseLap maps it to CRASH
     }
-    const { outcome, costUsd, inputTokens, outputTokens } = parseLapOutcome(stdout);
+    // CFS.1 — price the parsed envelope via the optional adapter seam BEFORE the fold: an adapter whose raw
+    // stream carries no cost (Codex) supplies costUsd here from the token counts × the configured rate; an
+    // adapter without `priceUsd` (Claude — its cost is already real) is a no-op. Generic call → neutrality holds.
+    const rawEnv = adapter.parseEnvelope(stdout, capturedStderr);
+    const env = adapter.priceUsd
+      ? { ...rawEnv, costUsd: adapter.priceUsd(rawEnv, lapCfg) }
+      : rawEnv;
+    const { outcome, costUsd, inputTokens, outputTokens } = outcomeFromEnvelope(env);
     appendLog(
       `\n=== PARSED OUTCOME === ${JSON.stringify(outcome)} · cost=$${costUsd} · ` +
         `${String(inputTokens)}in/${String(outputTokens)}out\n`,
@@ -252,6 +286,16 @@ export function registerRalph(program: Command): Command {
   loop
     .option('--max-budget-usd <n>', 'API-mode dollar budget for this run (overrides config)')
     .action(async (opts: { maxBudgetUsd?: string }) => {
+      // scope-1 (T-in-lap-gating) — RECURSION GUARD: a lap already owns this process tree (it publishes
+      // OPENSQUID_LOOP_LAP=1). Refuse to start a NESTED loop — the genuine recursion protection the retired
+      // markSubagent silencing used to provide (a lap must not spawn its own child laps).
+      if (isLoopLap()) {
+        process.stderr.write(
+          '🦑 loop OFF: refusing to start a nested loop inside a lap (OPENSQUID_LOOP_LAP set).\n',
+        );
+        process.exitCode = 1;
+        return;
+      }
       const file = await readRalphConfig();
       if (file === null) {
         process.stderr.write(
@@ -308,13 +352,22 @@ export function registerRalph(program: Command): Command {
               stagePrompt: (_item: Issue, stage: string): Promise<string> =>
                 Promise.resolve(perStageDirective(stage)),
               readStage: readLoopStage,
-              // No writeStage — the FSM transition (v2_supply write-through) is the SINGLE writer of the
-              // durable task checkpoint; the orchestrator only READS it (+ scopeGate's corrective reset).
+              // scope-3 (T-in-lap-gating) — the in-lap FSM write-through (v2_supply → upsertTaskStage) is the
+              // authoritative SINGLE writer of the durable checkpoint DURING the lap (hooks live). The orchestrator
+              // READS it and, on detected divergence (the write-through did not land), reconciles THROUGH that SAME
+              // single seam — a defensive fallback writer, never a divergent second writer. The `null` artifact is
+              // deliberate: upsertTaskStage touches artifacts ONLY when non-null (loop_stage.ts:124), so the
+              // reconcile corrects only the `stage` column and NEVER erases a recorded scope proof.
+              reconcileStage: (id: string, stage: string): Promise<void> =>
+                upsertTaskStage(id, stage, Date.now(), null),
               clearStage: clearLoopStage,
               // D — the scope gate: verify real scope proof before an item is driven past scope.
               scopeGate: (item: Issue): Promise<'drive' | 'hold'> => scopeGate(item.id),
             }
           : undefined;
+      // GF.1/GF.2 — resolve the config-driven git-flow environments ONCE for the run (the consistency gate's
+      // target + the base-refresh production branch). null ⇒ unconfigured ⇒ the gate is HEAD-based + no refresh.
+      const environments = await resolveEnvironments(root);
       try {
         const result = await runRalphLoop(cfg, {
           wg,
@@ -332,6 +385,14 @@ export function registerRalph(program: Command): Command {
           // git state at the SHIPPED-close boundary, so an item that ships without a durable commit for its work
           // is re-driven then parked `no-durable-commit` (never silently closed). Bound to `root` once (a factory).
           git: makeRalphGitSeam(root),
+          // GF.2 — the config-target-aware consistency gate: the gate verifies the durable commit landed on the
+          // configured integration target (staging ?? local), not merely HEAD. null ⇒ omit ⇒ HEAD-based (unchanged).
+          ...(environments === null ? {} : { environments }),
+          // GF.6 — the LIVE per-pass base-refresh: reconcile the base (environments.production) preserving
+          // whoever's ahead (a trunk hot patch is never lost). null ⇒ omit ⇒ no base-refresh (unconfigured project).
+          ...(environments === null
+            ? {}
+            : { baseRefresh: () => reconcileBase(root, environments.production) }),
           ...(stageLoop === undefined ? {} : { stageLoop }),
           // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
           // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
@@ -350,17 +411,37 @@ export function registerRalph(program: Command): Command {
             // orchestrator (parent) writes to stdout; the body is byte-unchanged from the render.
             displayReport(report, process.stdout);
             process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
-            // INTERIM (fast-slice loop-fix, 2026-07-08): the fragile per-item stage-integration was REMOVED. It
-            // ran `mergeToStage`/`reset --hard` in the MAIN checkout against a never-created `stage` and swallowed
-            // its own failure (fail-open) — silently no-op'ing while items showed SHIPPED (phantom ships that lost
-            // work). Durable landing is now owned by the item's DEPLOY commit+push (deploy.md:47-55) straight to
-            // the loop branch; `onShipped` only computes the next run-group. The CONSISTENCY GATE that made
-            // "SHIPPED ⟺ a durable commit exists" structural (this note's own former TODO) is now WIRED — the
-            // `git: makeRalphGitSeam(root)` dep above verifies a durable item commit landed before the SHIPPED
-            // close, re-driving then parking `no-durable-commit` otherwise (CG.1, wg-1c620a56b733). The rest of
-            // the config-driven git-flow (version-control.environments, semantic branches, whoever's-ahead
-            // reconcile, auto-PR) is re-driven THROUGH the loop as its own scoped items — see the private design
-            // doc ~/projects/loop/docs/research/opensquid-gitflow-integration-fix-pre-research-2026-07-08.md.
+            // GF.3 (T-gitflow-integration-fix) — the CONFIG-DRIVEN, FAIL-VISIBLE integration route. Resolve the
+            // `version-control.environments` (GF.1); when unconfigured (null) do nothing further (a non-automated
+            // project ships as today). When configured, `routeOnShipped` is a TOTAL function over the environments:
+            // has-stage → integrate into `staging` (GF.4's FIXED context via the `integrateBranchToStage` SSOT) +
+            // the staging→production PR (GF.7); no-stage → the loop-branch→production PR directly (GF.7). A failed
+            // integration is SURFACED (logged live below) — it leaves NO durable target commit, so CG.1/GF.2's gate
+            // blocks the SHIPPED close (never a swallowed phantom ship). Fail-open on the ROUTE call itself only so
+            // an infra fault (no gh auth) never breaks the drain — the consistency gate still blocks the close.
+            try {
+              const env = await resolveEnvironments(root);
+              if (env !== null) {
+                const routed = await routeOnShipped(env, {
+                  taskId,
+                  root,
+                  integrateToStaging: async (e, r) => {
+                    const res = await integrateBranchToStage(e.local, r, { environments: e });
+                    return res.url !== undefined
+                      ? { integrated: res.integrated, prUrl: res.url }
+                      : { integrated: res.integrated };
+                  },
+                  ensureProductionPr: (e, r) => ensureProductionPr(e, r),
+                });
+                process.stdout.write(`🦑 git-flow route: ${JSON.stringify(routed)}\n`);
+              }
+            } catch (e) {
+              // FAIL-VISIBLE but non-fatal to the drain: log the fault; the missing durable target commit still
+              // blocks the SHIPPED close via the consistency gate (GF.2). NEVER a silent swallow of the outcome.
+              process.stdout.write(
+                `🦑 git-flow route error (surfaced): ${e instanceof Error ? e.message : String(e)}\n`,
+              );
+            }
           },
           // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
           // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.

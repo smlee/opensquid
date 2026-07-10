@@ -18,9 +18,9 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export type HostId = 'claude-code' | 'claude-desktop' | 'cursor';
+export type HostId = 'claude-code' | 'claude-desktop' | 'cursor' | 'codex';
 
-export const ALL_HOSTS: readonly HostId[] = ['claude-code', 'claude-desktop', 'cursor'];
+export const ALL_HOSTS: readonly HostId[] = ['claude-code', 'claude-desktop', 'cursor', 'codex'];
 
 export interface HostTarget {
   id: HostId;
@@ -41,6 +41,17 @@ export interface HostResolveEnv {
 /** Default resolution context from the live process. */
 export function liveResolveEnv(): HostResolveEnv {
   return { platform: process.platform, home: homedir(), env: process.env };
+}
+
+/**
+ * Codex's config/auth dir: `$CODEX_HOME`, else `~/.codex` (Codex docs). This is
+ * the HOST-path half of the two-readers-of-one-source lock — the AUTH-path half
+ * lives in `codex_lap_harness.ts` (the same 1-liner, read independently to keep
+ * the setup-writer / lap-preflight scopes disjoint; the env var is the single
+ * store, both merely read it). Pure.
+ */
+export function resolveCodexHome(e: HostResolveEnv): string {
+  return e.env.CODEX_HOME ?? join(e.home, '.codex');
 }
 
 /** Resolve a host id to its per-platform config path. Pure. */
@@ -74,6 +85,13 @@ export function resolveHost(id: HostId, e: HostResolveEnv): HostTarget {
         id,
         configPath: join(e.home, '.cursor', 'mcp.json'),
         label: 'Cursor',
+        needsRestart: true,
+      };
+    case 'codex':
+      return {
+        id,
+        configPath: join(resolveCodexHome(e), 'config.toml'),
+        label: 'Codex',
         needsRestart: true,
       };
   }

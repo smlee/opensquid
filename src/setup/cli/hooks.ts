@@ -28,9 +28,11 @@
  */
 
 import { homedir } from 'node:os';
+import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveProjectScopeRoot } from '../../runtime/paths.js';
+import type { EnvironmentsConfig } from '../../packs/discovery.js';
 
 import {
   projectOpensquidHooks,
@@ -232,11 +234,86 @@ export async function runHooksWizard(flags: HooksCliFlags, deps: HooksCliDeps = 
 }
 
 /**
+ * GF.1 (T-gitflow-integration-fix, scope-1) — the PURE elicitation merge: fold the elicited
+ * `version-control.environments` block INTO an existing `active.json` object, preserving `packs`/`verifySuite`/
+ * `versioning`/everything else (idempotent — re-running rewrites cleanly). `production` is REQUIRED; a
+ * whitespace/empty `staging`/`local` is dropped (absent ⇒ has-stage off / local defaults to the current branch at
+ * read time). Returns the NEW object (never mutates the input) — the command owns the fs read/write. PURE + testable.
+ */
+export function mergeEnvironmentsBlock(
+  existing: Record<string, unknown>,
+  values: { production: string; staging?: string; local?: string },
+): Record<string, unknown> {
+  const environments: EnvironmentsConfig = { production: values.production.trim() };
+  if (values.staging !== undefined && values.staging.trim().length > 0)
+    environments.staging = values.staging.trim();
+  if (values.local !== undefined && values.local.trim().length > 0)
+    environments.local = values.local.trim();
+  const priorVc =
+    typeof existing['version-control'] === 'object' && existing['version-control'] !== null
+      ? (existing['version-control'] as Record<string, unknown>)
+      : {};
+  return { ...existing, 'version-control': { ...priorVc, environments } };
+}
+
+/** GF.1 — the install-time elicitation write-through: read the scope's `active.json`, merge the elicited
+ *  environments block, write it back. Automation-safe: under `OPENSQUID_AUTOMATION` the on-disk block is NEVER
+ *  clobbered (a headless run keeps the configured project as-is). Returns 'written' | 'skipped-automation'. */
+export async function writeEnvironmentsElicitation(
+  scopeRoot: string,
+  values: { production: string; staging?: string; local?: string },
+): Promise<'written' | 'skipped-automation'> {
+  if (process.env.OPENSQUID_AUTOMATION === '1') return 'skipped-automation';
+  const path = join(scopeRoot, 'active.json');
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(await fs.readFile(path, 'utf-8')) as Record<string, unknown>;
+  } catch {
+    existing = {}; // absent/malformed ⇒ start fresh (the writer creates a well-formed block)
+  }
+  const next = mergeEnvironmentsBlock(existing, values);
+  await fs.writeFile(path, `${JSON.stringify(next, null, 2)}\n`, 'utf-8');
+  return 'written';
+}
+
+/**
  * Register the `wizard hooks` subcommand under the supplied `setup` parent.
  * Returns the wizard subgroup so callers can chain additional wizards.
  */
 export function registerSetupWizard(setup: Command, deps: HooksCliDeps = {}): Command {
   const wizard = setup.command('wizard').description('Setup wizards (multi-step config writers)');
+
+  // GF.1 (scope-1) — elicit + write the CONFIG-DRIVEN git-flow `version-control.environments` block. Presence of
+  // `--staging` is the has-stage toggle (no `enabled` flag); `--production` is required; `--local` defaults to the
+  // current branch at read time when omitted. Idempotent (re-running rewrites cleanly, current values as defaults);
+  // under OPENSQUID_AUTOMATION the on-disk block is never clobbered.
+  wizard
+    .command('environments')
+    .description(
+      'Elicit + write the config-driven git-flow branches (version-control.environments) into active.json',
+    )
+    .requiredOption(
+      '--production <branch>',
+      'the production branch (PR base + reconcile base) — REQUIRED',
+    )
+    .option('--staging <branch>', 'the staging branch (presence = has-stage; omit for no-stage)')
+    .option('--local <branch>', 'the serial landing branch (default: the current branch)')
+    .action(async (opts: { production: string; staging?: string; local?: string }) => {
+      const r = buildDeps(deps);
+      const scopeRoot = await resolveProjectScopeRoot(r.cwd());
+      if (scopeRoot === null) {
+        r.err('no project .opensquid scope found (run `opensquid setup` first)\n');
+        process.exitCode = 1;
+        return;
+      }
+      const result = await writeEnvironmentsElicitation(scopeRoot, opts);
+      if (result === 'skipped-automation')
+        r.out('  environments: skipped (OPENSQUID_AUTOMATION — on-disk block kept)\n');
+      else
+        r.out(
+          `  environments: wrote version-control.environments to ${join(scopeRoot, 'active.json')}\n`,
+        );
+    });
 
   wizard
     .command('hooks')

@@ -101,8 +101,13 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
       'R-AGF-NEXT-LOCKED-TAG',
       'R-AGF-NEXT-RC-TAG',
       'R-AGF-LATEST-PREFIX-TAG',
-      'R-AGF-BRANCH-NAME',
-      'R-AGF-AUTO-PULL',
+      'R-GF-FEAT-BRANCH',
+      'R-GF-RECONCILE-BASE',
+      'R-GF-RESOLVE-ENV',
+      'R-GF-REVERSIBILITY',
+      'R-GF-MERGE-ENV',
+      'R-GF-ENSURE-PR',
+      'R-GF-ROUTE-ON-SHIPPED',
       'R-AGF-ADD-WORKTREE',
       'R-AGF-REMOVE-WORKTREE',
       'R-AGF-DRAIN-POOL',
@@ -141,6 +146,34 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     // consistency_gate.test.ts; the seam / trivial siblings (RalphGitSeam / makeRalphGitSeam /
     // MAX_COMMIT_REDRIVES / NO_DURABLE_COMMIT_LABEL) are allowlisted (no orphan drift).
     expect(byId['R-CONSISTENCY-GATE']).toBe('met');
-    expect(a.results.length).toBe(82); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE)
+    // T-multi-harness-lap (wg-348c691ae27e, MHL.1..8) — the harness-neutral lap: 4 new behavioral exports, each
+    // MET via its element proof-test; the seam / data-shape siblings (LapHarness/LapEnvelope/LapHarnessCfg/
+    // HarnessKind/LAP_HARNESS_KINDS) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-LAP-RESOLVE',
+      'R-LAP-OUTCOME-FOLD',
+      'R-LAP-CLAUDE-ADAPTER',
+      'R-LAP-CODEX-ADAPTER',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-codex-financial-safety (wg-38bc88490cd8, CFS.1..4) — real Codex dollar accounting + effective-billing
+    // detection + fail-closed refuse: 4 new behavioral exports, each MET via its proof-test
+    // (codex_lap_harness.test.ts); the data-shape siblings (CodexPricing / CodexBillingPath) are allowlisted.
+    for (const id of ['R-CFS-COST', 'R-CFS-CLASSIFY', 'R-CFS-LOGIN-STATUS', 'R-CFS-REFUSE']) {
+      expect(byId[id]).toBe('met');
+    }
+    // T-codex-e2e-setup (wg-6489ea2be964, CE.1..4) — register the opensquid MCP for Codex: 4 new behavioral
+    // exports, each MET via its proof-test; the data-shapes (CodexConfig/CodexMcpServerEntry) + trivial reader
+    // (readCodexConfig) are allowlisted.
+    for (const id of [
+      'R-CE-CODEX-MCP-PROJECT',
+      'R-CE-CODEX-MCP-WRITE',
+      'R-CE-CODEX-HOME',
+      'R-CE-CODEX-AUTH',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    expect(a.results.length).toBe(102); // +4 codex-e2e-setup (R-CE-CODEX-MCP-PROJECT/-MCP-WRITE/-HOME/-AUTH) // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 14 automated-gitflow (2 retired: R-AGF-BRANCH-NAME/R-AGF-AUTO-PULL → superseded by the R-GF-* set below) + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE) + 4 multi-harness-lap (R-LAP-*) + 7 gitflow-integration-fix (R-GF-FEAT-BRANCH/R-GF-RECONCILE-BASE/R-GF-RESOLVE-ENV/R-GF-REVERSIBILITY/R-GF-MERGE-ENV/R-GF-ENSURE-PR/R-GF-ROUTE-ON-SHIPPED) + 2 in-lap-gating (R-INLAP-LAP-MARKER/R-INLAP-LAP-ENV) + 1 fail-closed-typed-exit (R-LAP-TAG-PRESENT) + 4 codex-financial-safety (R-CFS-COST/R-CFS-CLASSIFY/R-CFS-LOGIN-STATUS/R-CFS-REFUSE)
   }, 30_000);
 });

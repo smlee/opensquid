@@ -375,6 +375,7 @@ HandoffArtifact
 HandoffGitRepo
 HandoffSessionStart
 HandoffState
+HarnessKind
 HarnessRow
 HarnessTask
 HasActiveTask
@@ -460,11 +461,15 @@ KnowledgeLookupResult
 KnowledgeRule
 KnowledgeSeverity
 KnowledgeSource
+LAP_HARNESS_KINDS
 LBracket
 LEGACY_OPENSQUID_PATTERN
 LParen
 Lane
+LapEnvelope
 LapEscalator
+LapHarness
+LapHarnessCfg
 LapOutcome
 LapResult
 LastActive
@@ -1512,7 +1517,6 @@ parseChannel
 parseDurationToMs
 parseExpression
 parseHosts
-parseLapOutcome
 parseLimit
 parseMemoryFile
 parseShow
@@ -2257,3 +2261,55 @@ RalphGitSeam
 makeRalphGitSeam
 MAX_COMMIT_REDRIVES
 NO_DURABLE_COMMIT_LABEL
+
+# --- baseline maintenance (T-gitflow-integration-fix, wg-e20fb6b080e0, CODE, 2026-07-09): the DATA-shape / seam /
+# trivial siblings of the config-driven git-flow (GF.1..GF.8). The BEHAVIORAL exports (resolveEnvironments,
+# reversibilityBoundaryFor, mergeEnvironmentsBlock, reconcileBase, featBranchFor, ensureProductionPr, routeOnShipped)
+# carry reachable requirements in ARCHITECTURE.md §10; these are the config-shape interfaces (EnvironmentsConfig/
+# VersionControlConfig/ResolvedEnvironments), the injected reconcile-seam interface + its `real*` default binding +
+# outcome union (ReconcileIo/realReconcileIo/ReconcileOutcome — the concrete side of the seam, exercised via the
+# orchestrator/release live path with a stubbed seam under test, mirroring the allowlisted realStageIo/realGhIo
+# precedent), the pure trivial slug helper (slugify), the routeOnShipped injected-deps + result data-shapes
+# (RouteDeps/RouteResult), and the thin fs write-through around the pure mergeEnvironmentsBlock
+# (writeEnvironmentsElicitation — a setup-wizard writer, same class the release-flow / harness-sync *Deps writers
+# baseline). Pure data-shape / seam / trivial, no covering requirement. Same class the git-flow StageIo/realStageIo
+# / VersioningConfig block above. ---
+EnvironmentsConfig
+VersionControlConfig
+ResolvedEnvironments
+ReconcileIo
+ReconcileOutcome
+realReconcileIo
+slugify
+RouteDeps
+RouteResult
+writeEnvironmentsElicitation
+
+# --- T-codex-financial-safety (wg-38bc88490cd8, CFS.1..4, CODE 2026-07-10): the DATA-shape siblings of the
+# Codex financial-safety exports. The BEHAVIORAL exports (codexLapCostUsd, classifyCodexBilling,
+# codexLoginStatus, assertCodexBillingCounted) carry reachable requirements in ARCHITECTURE.md §10; these are
+# the per-model rate-map config shape (CodexPricing, on lap_harness.ts) + the effective-billing-path union
+# (CodexBillingPath, on codex_lap_harness.ts). Pure data-shape, no live path of their own, no covering
+# requirement — same class as the LapHarness/LapEnvelope/LapHarnessCfg seam shapes above. ---
+CodexPricing
+CodexBillingPath
+
+# --- T-codex-e2e-setup (wg-6489ea2be964, CE.1..4, CODE 2026-07-10): register the opensquid MCP for Codex. The
+# BEHAVIORAL exports (projectCodexMcp, writeCodexMcp, resolveCodexHome, hasCodexAuth) carry reachable
+# requirements in ARCHITECTURE.md §10; these are the Codex config.toml DATA-shape interfaces (CodexConfig /
+# CodexMcpServerEntry, on codex-mcp-writer.ts — same class as the allowlisted McpServerEntry/ClaudeUserConfig
+# JSON-writer shapes) + the trivial ENOENT→{} fs reader (readCodexConfig — the TOML sibling of the allowlisted
+# readClaudeUserConfig, exercised via the wizard mcp codex dry-run path + codex-mcp-writer.test.ts). ---
+CodexConfig
+CodexMcpServerEntry
+readCodexConfig
+
+# --- T-codex-hardening (wg-b2484f3afa3e, CH.1, CODE 2026-07-10): the SSOT approval/sandbox value types. Pure
+# data-shape TYPES (a union of string literals, on codex_lap_harness.ts — HOMED in the Codex adapter, not the
+# neutral lap_harness.ts seam, because their VALUES are Codex vendor vocabulary the MHL.8 neutrality audit keeps
+# out of the neutral core) with no runtime call site of their own to prove `reachable` — same class as the
+# HarnessKind/CodexPricing/CodexBillingPath data-shape siblings above. They are the SINGLE source of truth read
+# by BOTH the ralph_writer.ts z.enum tuples AND LapHarnessCfg's sandbox/askForApproval fields (schema/cfg
+# cannot drift). ---
+CodexApprovalPolicy
+CodexSandboxMode

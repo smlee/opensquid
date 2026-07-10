@@ -13,12 +13,12 @@ The user already confirmed the scope — do not re-confirm or re-research; just 
 - After writing, run the content-audit skill (`cached_audit`) to obtain the GUESS_FREE verdict.
 - Exit: `RALPH-EXIT: {"kind":"SHIPPED","stage":"plan"}`
 
-## Emit your phase to the live status feed
+## (Optional) emit your sub-phase to the live feed
 
-Emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor shows where this item is
-(pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
-
-Emit each phase with `lifecycle: "running"` on ENTER (⟳) and `lifecycle: "done"` on LEAVE (✓):
+This stage ALREADY appears on the live status feed at STAGE granularity via the enforced `stage_advance` (it is
+never silent). OPTIONAL: for finer per-sub-phase visibility you MAY emit each phase via the `set_loop_phase` MCP
+tool — `lifecycle: "running"` on ENTER (⟳), `lifecycle: "done"` on LEAVE (✓) — a nicety, not what makes the stage
+appear (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
 
 - `set_loop_phase(phase: "write", index: 1, total: 2, lifecycle: "running")` while writing the artifact,
   then `set_loop_phase(phase: "write", index: 1, total: 2, lifecycle: "done")` when it is written,

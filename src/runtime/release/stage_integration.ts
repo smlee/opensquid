@@ -7,14 +7,25 @@
 // orchestrator's onShipped wiring (the LIVE integration).
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { join, dirname } from 'node:path';
+
+import { slugify } from '../ralph/auto_pull.js';
 
 const execFileP = promisify(execFile);
 
-/** The persistent integration branch — long-lived, accumulating item merges between releases (design §6). */
+/** The persistent integration branch — long-lived, accumulating item merges between releases (design §6). LEGACY
+ *  default for the manual `opensquid release` path; the CONFIG-DRIVEN flow passes the branch name from
+ *  `environments.staging` (GF.1), so no core literal `'stage'` is the flow's source of truth (GF.4). */
 export const STAGE_BRANCH = 'stage';
 
 /** The base `stage` is cut from on first use (a fresh repo / the first item after a release has no `stage` yet). */
 export const STAGE_BASE_BRANCH = 'main';
+
+/** GF.4 — the DEDICATED worktree path for a staging integration (a sibling of the main checkout, keyed by the
+ *  staging branch name). The destructive merge/reset run HERE, never in the main working tree — the work-loss fix. */
+function stageWorktreePath(mainRoot: string, stageBranch: string): string {
+  return join(dirname(mainRoot), `.opensquid-stage-worktree-${slugify(stageBranch)}`);
+}
 
 /** Injectable git + suite effects — default binds real `execFileP('git', …)` + the full pre-push suite. */
 export interface StageIo {
@@ -26,6 +37,9 @@ export interface StageIo {
   createBranch: (branch: string, base: string, cwd: string) => Promise<void>; // `git branch <branch> <base>` — cut when absent
   runSuite: (cwd: string) => Promise<boolean>; // the full verifySuite; green === true (release.ts:52-56)
   tagPush: (tag: string, cwd: string) => Promise<void>; // `git tag <tag>` + push (tagAndPushTag shape)
+  // GF.4 — the STAGING branch's OWN checkout, so the destructive ops never touch the main working tree.
+  worktreeAddOrReuse: (branch: string, worktreePath: string, mainRoot: string) => Promise<string>; // idempotent `git worktree add`
+  worktreeRemove: (worktreePath: string, mainRoot: string) => Promise<void>; // `git worktree remove --force`
 }
 
 /** The default real StageIo — the concrete git + suite mechanics behind the seam. */
@@ -57,6 +71,23 @@ export const realStageIo: StageIo = {
     await execFileP('git', ['tag', tag], { cwd });
     await execFileP('git', ['push', 'origin', tag], { cwd });
   },
+  worktreeAddOrReuse: async (branch, worktreePath, mainRoot) => {
+    // Idempotent: a long-lived staging worktree is REUSED, not re-added (mirrors the create-if-absent branch).
+    const registered = await execFileP('git', ['worktree', 'list', '--porcelain'], {
+      cwd: mainRoot,
+    })
+      .then((r) => r.stdout.includes(worktreePath))
+      .catch(() => false);
+    if (!registered) {
+      await execFileP('git', ['worktree', 'add', worktreePath, branch], { cwd: mainRoot });
+    }
+    return worktreePath;
+  },
+  worktreeRemove: async (worktreePath, mainRoot) => {
+    await execFileP('git', ['worktree', 'remove', '--force', worktreePath], {
+      cwd: mainRoot,
+    }).catch(() => undefined); // fail-open teardown
+  },
 };
 
 /** Merge `branch` into the persistent `stage` branch (`--no-ff`, a real integration commit), gate on the suite,
@@ -65,29 +96,37 @@ export const realStageIo: StageIo = {
  *  no tag; the item re-drives from fresh `main` (the loop's existing re-drive). */
 export async function mergeToStage(
   branch: string,
+  stageBranch: string,
   rcTag: string,
-  cwd: string,
+  mainRoot: string,
   io: StageIo,
 ): Promise<{ integrated: boolean }> {
-  // CREATE-IF-ABSENT — a fresh repo (or the first item after a release) has no `stage` yet. Without this, `checkout`
-  // throws, and the caller's fail-open wrapper (release.ts onShipped) SWALLOWS it — the item shows SHIPPED while its
-  // work never integrates (the core git-flow leak). Cut `stage` from `main` on first use so integration always runs.
-  if (!(await io.branchExists(STAGE_BRANCH, cwd))) {
-    await io.createBranch(STAGE_BRANCH, STAGE_BASE_BRANCH, cwd);
+  // CREATE-IF-ABSENT — a fresh repo (or the first item after a release) has no staging branch yet. Cut it from
+  // `main` on first use so integration always runs. (Runs in `mainRoot` — a non-destructive `git branch`.)
+  if (!(await io.branchExists(stageBranch, mainRoot))) {
+    await io.createBranch(stageBranch, STAGE_BASE_BRANCH, mainRoot);
   }
-  await io.checkout(STAGE_BRANCH, cwd);
+  // GF.4 — THE DESTRUCTIVE-CONTEXT FIX: the checkout/merge/reset run in the STAGING branch's OWN worktree, NEVER
+  // the main working tree. The original bug ran `checkout stage` + `merge` + `reset --hard HEAD~1` in `mainRoot`,
+  // checking the main tree away from the loop branch and resetting it = WORK-LOSS. The worktree physically
+  // isolates the destructive ops to a separate directory (durability-first).
+  const wt = await io.worktreeAddOrReuse(
+    stageBranch,
+    stageWorktreePath(mainRoot, stageBranch),
+    mainRoot,
+  );
   const merged = await io
-    .mergeNoFf(branch, cwd)
+    .mergeNoFf(branch, wt)
     .then(() => true)
     .catch(() => false);
   if (!merged) {
-    await io.abortMerge(cwd).catch(() => undefined); // conflict → no integration; the item re-drives from fresh main
+    await io.abortMerge(wt).catch(() => undefined); // conflict → no integration; the item re-drives from fresh main
     return { integrated: false };
   }
-  if (!(await io.runSuite(cwd))) {
-    await io.resetHard('HEAD~1', cwd); // red-on-merge → roll the merge back; stage stays green
+  if (!(await io.runSuite(wt))) {
+    await io.resetHard('HEAD~1', wt); // red-on-merge → roll the merge back IN THE WORKTREE; stage stays green
     return { integrated: false };
   }
-  await io.tagPush(rcTag, cwd); // rc tag on the green integration (step 7 — no untagged state)
+  await io.tagPush(rcTag, wt); // rc tag on the green integration (step 7 — no untagged state)
   return { integrated: true };
 }

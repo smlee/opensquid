@@ -9,8 +9,11 @@ import {
   NO_DURABLE_COMMIT_LABEL,
   type RalphGitSeam,
 } from './consistency_gate.js';
+import type { ReconcileOutcome } from './auto_pull.js';
 import type { Issue, WorkGraphFacade } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
+import { codexLapCostUsd } from './harnesses/codex_lap_harness.js';
+import type { CodexPricing } from './lap_harness.js';
 import type { LoopMetricRow } from '../loop/loop_metrics.js';
 import { tailEventsSince } from '../loop/loop_events.js';
 
@@ -196,6 +199,37 @@ describe('runRalphLoop', () => {
     expect(r.spent).toBe(5);
   });
 
+  it('CFS.4: a REAL Codex-priced cost sums past maxBudgetUsd → BUDGET stop (the once-dead :569 check is live)', async () => {
+    // Source the tripping cost from the REAL CFS.1 pricing fold (not a hardcoded literal), proving the
+    // CFS.1→budget path: 2M input tokens @ $1.25/1M = $2.50 > maxBudgetUsd $1 under authMode:'api'.
+    const pricing: CodexPricing = {
+      models: { 'gpt-5-codex': { inputPerMTok: 1.25, outputPerMTok: 10 } },
+      default: 'gpt-5-codex',
+    };
+    const priced = codexLapCostUsd(
+      { resultText: '', costUsd: 0, inputTokens: 2_000_000, outputTokens: 0, isError: false },
+      { maxBudgetUsd: 1, pricing },
+    );
+    expect(priced).toBeCloseTo(2.5);
+    const runLap = lap({ kind: 'SHIPPED', costUsd: priced });
+    const r = await runRalphLoop(
+      cfg({ authMode: 'api', maxBudgetUsd: 1 }),
+      deps(mockStore(['a', 'b']), runLap),
+    );
+    expect(r.stopped).toBe('BUDGET');
+    expect(r.spent).toBeCloseTo(2.5);
+  });
+
+  it('CFS.4: a costUsd:0 lap (subscription / no pricing) does NOT trip the budget', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const r = await runRalphLoop(
+      cfg({ authMode: 'api', maxBudgetUsd: 1 }),
+      deps(mockStore(['a']), runLap),
+    );
+    expect(r.stopped).toBe('BOARD_EMPTY'); // 0 spent never exceeds the bound
+    expect(r.spent).toBe(0);
+  });
+
   it('claimIssue won:false → item skipped (no lap), excluded next pass → BOARD_EMPTY', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
     const r = await runRalphLoop(cfg(), deps(mockStore(['a'], new Set(['a'])), runLap));
@@ -319,6 +353,62 @@ function stageLoopStub(
     scopeGate,
   };
 }
+
+// T-in-lap-gating scope-3 — the belt-and-suspenders durable-stage reconcile: conditional, seam-routed, single-emit.
+describe('runRalphLoop — scope-3 conditional durable-stage reconcile', () => {
+  // A stageLoop whose readStage is fully controlled + a reconcileStage spy. advance maps scope_write → a
+  // NON-automated stage so exactly ONE automated advance runs (then the boundary lap completes the item).
+  function reconcileStageLoop(
+    durableAfterLap: string | null,
+    reconcileStage?: (id: string, stage: string) => Promise<void>,
+  ): NonNullable<RalphDeps['stageLoop']> {
+    // advance map (scope_write → the non-automated `deploy`) lives in `oneAutoLap` below — one auto lap then boundary.
+    return {
+      initialStage: 'scope_write',
+      isAutomated: (s: string) => AUTOMATED.has(s),
+      stagePrompt: (_item: Issue, stage: string) => P(`DO ${stage}`),
+      // After the automated lap advanced in-memory to `next`, the durable re-read returns this fixed value.
+      readStage: (_id: string) => P(durableAfterLap),
+      clearStage: (_id: string) => P(undefined),
+      scopeGate: () => P('drive'),
+      ...(reconcileStage === undefined ? {} : { reconcileStage }),
+    };
+  }
+  const oneAutoLap = vi.fn((_item: Issue, sp?: string) => {
+    if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }); // deploy boundary → item done
+    const next = { scope_write: 'deploy' }[sp.replace('DO ', '') as 'scope_write'];
+    return P<LapResult>({ kind: 'SHIPPED', stage: next, costUsd: 0 });
+  });
+
+  it('divergence: reconciles ONCE with the accepted `next` when the in-lap write-through did not land', async () => {
+    const reconcileStage = vi.fn((_id: string, _stage: string) => P(undefined));
+    // durable re-read still shows the OLD stage (write-through did not persist) → divergence.
+    await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), oneAutoLap),
+      stageLoop: reconcileStageLoop('scope_write', reconcileStage),
+    });
+    expect(reconcileStage).toHaveBeenCalledTimes(1);
+    expect(reconcileStage).toHaveBeenCalledWith('a', 'deploy'); // the FSM-accepted transition, not a blind stamp
+  });
+
+  it('no divergence: does NOT reconcile when the durable stage already equals `next` (single-emit preserved)', async () => {
+    const reconcileStage = vi.fn((_id: string, _stage: string) => P(undefined));
+    // durable re-read already shows `next` (the in-lap write-through landed) → NO second write / NO second emit.
+    await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), oneAutoLap),
+      stageLoop: reconcileStageLoop('deploy', reconcileStage),
+    });
+    expect(reconcileStage).not.toHaveBeenCalled();
+  });
+
+  it('backward-compat: a stageLoop WITHOUT reconcileStage drives with no reconcile and no throw', async () => {
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), oneAutoLap),
+      stageLoop: reconcileStageLoop('scope_write'), // reconcileStage absent (optional-additive)
+    });
+    expect(r.closed).toEqual(['a']); // drives to completion exactly as before
+  });
+});
 
 describe('runRalphLoop — PSL.3 per-stage loop', () => {
   it('drives each automated stage as its own lap (advancing via the reported stage), then the boundary lap', async () => {
@@ -894,5 +984,93 @@ describe('runRalphLoop — CG.1 consistency gate (SHIPPED ⟺ a durable commit e
     expect(runLap).toHaveBeenCalledTimes(1 + MAX_COMMIT_REDRIVES);
     expect(narrate.mock.calls.flat().join(' ')).toContain(NO_DURABLE_COMMIT_LABEL);
     expect((await wg.getIssue('wg-123340ac7a9f'))?.status).not.toBe('closed');
+  });
+});
+
+// ---- GF.2 / GF.6 — the CONFIG-DRIVEN git-flow ORCHESTRATOR WIRING (T-gitflow-integration-fix) ----
+// The pure predicates are unit-tested in consistency_gate.test.ts (durableItemCommitExists(targetRef)) and
+// auto_pull.test.ts (reconcileBase four-state). These cases prove the ORCHESTRATOR actually THREADS the configured
+// target into the gate (GF.2) and CALLS baseRefresh live once per pass, surfacing a conflict (GF.6 BLOCKING-1 fix).
+describe('runRalphLoop — GF.2/GF.6 config-driven git-flow wiring', () => {
+  it('GF.2 — the consistency gate reads the CONFIGURED target (staging ?? local), never HEAD', async () => {
+    const refs: (string | undefined)[] = [];
+    const tips = ['BASE', 'TIP']; // tip advances across the pre-drive record + the close-time re-read
+    let ti = 0;
+    const git: RalphGitSeam = {
+      tip: (ref) => {
+        refs.push(ref);
+        return P(tips[Math.min(ti++, tips.length - 1)]!);
+      },
+      committedSince: (_b, ref) => {
+        refs.push(ref);
+        return P(['a.ts']);
+      },
+      uncommittedPaths: () => P([]),
+    };
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      git,
+      environments: { production: 'main', staging: 'stage', local: 'work' },
+    });
+    expect(r.closed).toEqual(['a']); // a durable commit on the target ⇒ closes
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.every((ref) => ref === 'stage')).toBe(true); // staging is the per-item target (NOT production/HEAD)
+  });
+
+  it('GF.2 — no staging → the target falls back to local (still config-driven, not HEAD)', async () => {
+    const refs: (string | undefined)[] = [];
+    const git: RalphGitSeam = {
+      tip: (ref) => {
+        refs.push(ref);
+        return P('BASE'); // never advances ⇒ no durable commit on the target
+      },
+      committedSince: (_b, ref) => {
+        refs.push(ref);
+        return P([]);
+      },
+      uncommittedPaths: () => P([]),
+    };
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      git,
+      environments: { production: 'main', local: 'work' },
+    });
+    expect(r.parked).toEqual([{ id: 'a', reason: 'NO_DURABLE_COMMIT' }]); // no target commit ⇒ park
+    expect(refs.every((ref) => ref === 'work')).toBe(true); // local is the target when staging is absent
+  });
+
+  it('GF.6 — baseRefresh fires LIVE once per pass (the BLOCKING-1 per-pass wiring)', async () => {
+    const baseRefresh = vi.fn(() => P<ReconcileOutcome>({ kind: 'fast-forwarded' }));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      baseRefresh,
+    });
+    expect(r.closed).toEqual(['a']);
+    // pass 1 (drives 'a') + pass 2 (board drained → BOARD_EMPTY): the reconcile runs at the TOP of every pass.
+    expect(baseRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('GF.6 — a base-reconcile CONFLICT surfaces SCOPE_FORK once (no spin); the drive still proceeds', async () => {
+    const esc = vi.fn(() => P({ escalated: true }));
+    const narrate = vi.fn();
+    const baseRefresh = vi.fn(() => P<ReconcileOutcome>({ kind: 'conflict' }));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 }), esc),
+      baseRefresh,
+      narrate,
+    });
+    expect(narrate.mock.calls.flat().join(' ')).toContain('base reconcile conflict');
+    expect(r.closed).toEqual(['a']); // the conflict never auto-picks a side or aborts the drive
+    expect(baseRefresh).toHaveBeenCalledTimes(1); // guarded after the first surfacing ⇒ no escalate-spin
+    expect(esc).toHaveBeenCalledTimes(2); // SCOPE_FORK (item-less) once + BOARD_EMPTY once
+  });
+
+  it('GF.6 — a transient baseRefresh throw is FAIL-OPEN (the pass proceeds, item closes)', async () => {
+    const baseRefresh = vi.fn(() => Promise.reject(new Error('fetch timeout')));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      baseRefresh,
+    });
+    expect(r.closed).toEqual(['a']); // a transient fetch/reconcile fault must never break the drive pass
   });
 });

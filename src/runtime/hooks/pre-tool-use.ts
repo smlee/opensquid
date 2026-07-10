@@ -292,8 +292,10 @@ async function main(): Promise<void> {
   // still grants when present, so an in-the-wild flag keeps working until it is migrated away.
   //
   // Executor exemption: a Task/Agent subagent's PreToolUse payload carries `agent_id` (per the CC hook docs) —
-  // `checkOrchestratorGuard` passes those through untouched. `exitIfSubagent` (above) already terminated
-  // OPENSQUID_SUBAGENT=1 laps/reviewers, so this guard only sees the main loop and CC-native Task/Agent children.
+  // `checkOrchestratorGuard` passes those through untouched. `exitIfSubagent` (above) terminates ONLY
+  // OPENSQUID_SUBAGENT=1 reviewers; a ralph lap (OPENSQUID_LOOP_LAP, NOT silenced — T-in-lap-gating scope-1) now
+  // RUNS this guard (the intended in-lap enforcement), so this guard sees the main loop, ralph laps, and
+  // CC-native Task/Agent children.
   // Reads + orchestration commands (git, pnpm, grep, cd, Read, Agent, mcp__*) are not coding-file mutations →
   // always allowed. FAIL-OPEN: any error here never blocks the call.
   if (parsed.data.kind === 'tool_call') {

@@ -38,8 +38,9 @@
  * Task/Agent executor subagent — exempt from GS1. Claude Code populates `agent_id`
  * in the hook stdin JSON ONLY inside a subagent (per the CC hook docs).
  * (The `OPENSQUID_SUBAGENT=1` guard in `subagent_guard.ts` handles opensquid-spawned
- * reviewers and ralph laps BEFORE this guard runs; `agent_id` covers Claude Code–native
- * Task/Agent children, which do NOT carry that env marker.)
+ * REVIEWERS before this guard runs; a ralph LAP now runs FULLY hooked — it REACHES this GS1
+ * guard (the intended in-lap enforcement — T-in-lap-gating scope-1). `agent_id` covers
+ * Claude Code–native Task/Agent children, which do NOT carry that env marker.)
  *
  * FAIL-OPEN: any error in this module must never block the call — the caller
  * (pre-tool-use.ts) wraps the check in a try/catch.

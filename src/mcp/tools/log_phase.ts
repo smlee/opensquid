@@ -21,7 +21,10 @@
  * No agent-loop logic: opensquid persists what the agent declares. No engine
  * dependency — the durable ledger is TS-owned filesystem YAML.
  *
- * Imports from: zod, ../../runtime/*.
+ * scope-1 (T-deterministic-phase-monitor) — this ENFORCED write ALSO drives the wg-keyed phase monitor event, so
+ * CODE's 7 phases always show on the live feed WITHOUT the agent calling the discretionary `set_loop_phase`.
+ *
+ * Imports from: zod, ../../runtime/* (incl. ../../runtime/loop/monitor_emit.js for the derived phase feed).
  * Imported by: mcp/server.ts (handler map).
  */
 
@@ -30,6 +33,7 @@ import { z } from 'zod';
 import { loadActiveV2Cartridges } from '../../runtime/bootstrap.js';
 import { readFsmStateFile } from '../../runtime/fsm_state.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
+import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
 import { writePhaseLedger } from '../../runtime/phase_ledger.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { REQUIRED_PHASES, appendPhase, isComplete } from '../../runtime/workflow_phases.js';
@@ -66,10 +70,12 @@ export async function handleLogPhase(args: LogPhaseArgs): Promise<LogPhaseOutput
         'OPENSQUID_SESSION_ID env, and .current-session absent.',
     );
   }
-  // scope-4 (§4): a headless ralph lap runs hooks-off (OPENSQUID_SUBAGENT), so the AP.1 mirror never writes
-  // active-task.json — resolve the driven item from OPENSQUID_ITEM_ID so a lap can log its 7 CODE phases (the
-  // ledger the commit gate requires). id === taskId === the wg id, so these phases key identically to the gate's
+  // scope-4 (§4; premise corrected by T-in-lap-gating scope-4): a ralph lap now runs FULLY hooked
+  // (OPENSQUID_LOOP_LAP, NOT OPENSQUID_SUBAGENT), so the AP.1 PreToolUse mirror DOES write active-task.json in-lap —
+  // the OPENSQUID_ITEM_ID resolution below is now REDUNDANT-BUT-HARMLESS (it fires only when the on-disk signal is
+  // absent). id === taskId === the wg id, so these phases still key identically to the gate's
   // isComplete(phases, active.id) check. Interactively OPENSQUID_ITEM_ID is unset → pure active-task.json read.
+  // (Retiring the now-redundant fallback is a tracked follow-up, T-in-lap-gating §4 OUT — NOT done here.)
   const active = await readActiveTask(sessionId, process.env.OPENSQUID_ITEM_ID);
   if (active === null) {
     throw new Error(
@@ -105,6 +111,24 @@ export async function handleLogPhase(args: LogPhaseArgs): Promise<LogPhaseOutput
   // (b) gate-readable session state
   const state = await appendPhase(sessionId, active.id, args.phase);
   const complete = isComplete(state, active.id);
+  // scope-1 (T-deterministic-phase-monitor) — DETERMINISTIC monitor feed: the ENFORCED log_phase write DRIVES the
+  // wg-keyed phase event, so CODE's 7 phases always show on loop-status / --watch WITHOUT the agent calling the
+  // discretionary set_loop_phase. Keyed by active.id (= OPENSQUID_ITEM_ID = the wg id, :73) — identical to the
+  // gate's isComplete key and to set_loop_phase's. log_phase fires ONCE per phase at COMPLETION (it is called on
+  // leave), so the derived event is phase_leave (done ✓) — PLAN §5.1; a mid-phase running (⟳) marker has no cheap
+  // start-signal and stays the OPTIONAL set_loop_phase supplement. Placed AFTER the E4 guard (:96-101), so a
+  // REJECTED pre-code phase (which throws before the ledger writes) emits NOTHING. FAIL-OPEN by construction:
+  // emitMonitorEvent swallows any store fault (monitor_emit.ts:21-30), so a monitor hiccup NEVER breaks the
+  // load-bearing ledger write (identical posture to set_loop_phase.ts:88, loop_stage.ts:128).
+  await emitMonitorEvent({
+    wgId: active.id,
+    kind: 'phase_leave',
+    phase: args.phase,
+    index: REQUIRED_PHASES.indexOf(args.phase) + 1, // 1-based position in the canonical 7-phase set
+    total: REQUIRED_PHASES.length, // 7
+    lifecycle: 'done',
+    atMs: Date.now(),
+  });
   // The 7-phase progress signal is now consumed by the opt-in `coding-flow`
   // pack: its `phase-advance` skill fires on the PostToolUse hook for
   // this MCP call and advances the lifecycle FSM (re-deriving completeness via

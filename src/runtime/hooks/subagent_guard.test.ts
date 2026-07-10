@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { isOpensquidSubagent } from './subagent_guard.js';
+import { isOpensquidSubagent, isLoopLap, LOOP_LAP_ENV } from './subagent_guard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../../..');
@@ -32,6 +32,30 @@ describe('isOpensquidSubagent', () => {
     expect(isOpensquidSubagent({ OPENSQUID_SUBAGENT: '0' })).toBe(false);
     expect(isOpensquidSubagent({ OPENSQUID_SUBAGENT: 'true' })).toBe(false);
     expect(isOpensquidSubagent({ OPENSQUID_SUBAGENT: '' })).toBe(false);
+  });
+});
+
+// T-in-lap-gating scope-1/scope-5 — the recursion-only lap marker is ORTHOGONAL to the reviewer-silencing marker.
+describe('isLoopLap (the recursion-only ralph-lap marker)', () => {
+  it('LOOP_LAP_ENV is the OPENSQUID_LOOP_LAP env var', () => {
+    expect(LOOP_LAP_ENV).toBe('OPENSQUID_LOOP_LAP');
+  });
+
+  it('true only on the exact string "1"', () => {
+    expect(isLoopLap({ OPENSQUID_LOOP_LAP: '1' })).toBe(true);
+    expect(isLoopLap({})).toBe(false);
+    expect(isLoopLap({ OPENSQUID_LOOP_LAP: '0' })).toBe(false);
+    expect(isLoopLap({ OPENSQUID_LOOP_LAP: 'true' })).toBe(false);
+    expect(isLoopLap({ OPENSQUID_LOOP_LAP: '' })).toBe(false);
+  });
+
+  it('scope-1: a lap is NOT a reviewer — the marker never feeds isOpensquidSubagent (bins run for a lap)', () => {
+    // The whole fix: a lap marker does NOT silence hooks. isOpensquidSubagent stays keyed ONLY on OPENSQUID_SUBAGENT.
+    expect(isLoopLap({ OPENSQUID_LOOP_LAP: '1' })).toBe(true);
+    expect(isOpensquidSubagent({ OPENSQUID_LOOP_LAP: '1' })).toBe(false); // → exitIfSubagent does NOT fire for a lap
+    // ...and a reviewer is still silenced and is NOT a lap.
+    expect(isOpensquidSubagent({ OPENSQUID_SUBAGENT: '1' })).toBe(true);
+    expect(isLoopLap({ OPENSQUID_SUBAGENT: '1' })).toBe(false);
   });
 });
 
@@ -88,5 +112,17 @@ describe('hook bin short-circuit (tsx source spawn)', () => {
     const stateDir = join(tempHome, 'sessions', 'subguard-test-session', 'state');
     const entries = existsSync(stateDir) ? await readdir(stateDir) : [];
     expect(entries).toContain('tool-ledger.json');
+  }, 30_000);
+
+  // T-in-lap-gating scope-2 (ILG.2) — a LAP is NOT silenced: with OPENSQUID_LOOP_LAP=1 (and OPENSQUID_SUBAGENT
+  // UNSET) the pre-tool-use bin does NOT skip — its body RUNS (enforcement + state mint), unlike a reviewer. The
+  // tool-ledger appearing is the observable proof the bin body executed in-lap (the mechanism the fix restores).
+  it('lap-marked (OPENSQUID_LOOP_LAP): NOT skipped — the bin runs and mints the ledger in-lap', async () => {
+    const res = await runHookBin({ OPENSQUID_HOME: tempHome, OPENSQUID_LOOP_LAP: '1' }, payload);
+    expect(res.code).toBe(0);
+    expect(res.stderr).not.toContain('skipped (OPENSQUID_SUBAGENT)'); // a lap is not silenced
+    const stateDir = join(tempHome, 'sessions', 'subguard-test-session', 'state');
+    const entries = existsSync(stateDir) ? await readdir(stateDir) : [];
+    expect(entries).toContain('tool-ledger.json'); // the bin body executed (enforcement path reached) in-lap
   }, 30_000);
 });
