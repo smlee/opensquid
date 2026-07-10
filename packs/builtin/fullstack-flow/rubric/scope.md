@@ -48,11 +48,27 @@ fails):
 5. **ON-TOPIC / NO UNASKED ADDITION** — every scoped element TRACES TO THE CAPTURED USER ASK. An
    evidence-derived element outside the ask is an ADDITION → route it (backlog / ask / reject), never fold it
    in silently. Citing a `file:line` does NOT make an unasked element on-topic.
-6. **SOURCE-LADDER / EXTERNAL EVIDENCE (NEW)** — research climbs local-first (user's words → memory → prior
-   research → local code) and, when local cannot answer, REACHES the external rung: the tool's OWN primary
-   docs/repo (not blogs), recorded as a `WebSearch`/`WebFetch`/intranet consultation. "Best-solution" (§2) and
-   "no existing solution" claims are NOT guess-free without it — 100% confidence/coverage is unreachable from
-   local alone. Exempt only a genuinely external-dependency-free scope (diff-derived, not agent-asserted).
+6. **SOURCE-LADDER / EXTERNAL EVIDENCE** — research climbs local-first (user's words → memory → prior
+   research → local code) and REACHES the external rung: the tool's OWN primary docs/repo/source (not blogs),
+   recorded as a `WebSearch`/`WebFetch`/source consultation. "Best-solution" (§2) and "no existing solution"
+   claims are NOT guess-free without it — 100% confidence/coverage is unreachable from local alone.
+   - **EXTERNAL-SUBJECT ⇒ MANDATORY + EXHAUSTIVE.** When the task's subject OR a load-bearing dependency IS an
+     external tool / service / library (e.g. integrating a harness, adapter, or SDK), the external rung is NOT
+     optional and NOT satisfied by a few fetches. Sweep the tool's ENTIRE relevant CAPABILITY SURFACE against
+     its primary sources and cite each element (or flag it `- [ ] OPEN QUESTION`): install/detect; EVERY
+     invocation mode incl. non-interactive/headless + its exact I/O framing (stdin/EOF, streaming, arg-vs-stdin);
+     output/result + usage/cost format; config file location(s) + schema; auth; the extension/plugin API; AND
+     EACH sub-capability the workflow actually requires (subagent / fan-out, hook / enforcement interception,
+     MCP client, …) — do not assume a barebones tool has a capability the procedures depend on; version-specific
+     behavior; and any first-party bridge / adapter / example. Prefer a fanned-out primary-docs research
+     subagent that reads docs + repo + examples, not serial skims by the main agent.
+   - **PUBLIC ⇒ GROUND-NOW (a findable fact may NOT be deferred).** A fact that is publicly documented or
+     discoverable MUST be grounded in SCOPE — it may NOT be parked as an `- [ ] OPEN QUESTION`, deferred to
+     PLAN, or offloaded to a later live-acceptance. Deferral is reserved for the genuinely non-public (behavior
+     observable only by running an uninstalled / private binary) or an architecture fork (§1). "It could be
+     found on the web" is DISQUALIFYING for a deferral, and a scope that leans on downstream review to surface
+     web-findable facts has failed this criterion (drift signal per §1).
+   - Exempt only a genuinely external-dependency-free scope (diff-derived, not agent-asserted).
 7. **MODULARITY** — each concern lives behind ONE seam with a stated contract; a change to a volatile detail
    (I/O, a vendor, a schema) must not ripple across unrelated modules. A design that threads one responsibility
    through many files, or reaches around a seam into another module's internals, is a modularity defect → fails

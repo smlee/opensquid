@@ -4,12 +4,22 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
 
 ## Do
 
-- Research first (need ≥3 real research calls this turn: `recall` + Read + Grep) before writing anything.
+- Research first (need ≥3 real research calls this turn: `recall` + Read + Grep) before writing anything —
+  AND when the task's subject or a load-bearing dependency is an EXTERNAL tool/service, at least one external
+  primary-source call (`WebSearch` / `WebFetch` / repo read) is PART OF that mandatory minimum, not optional.
+  A scope of an external tool with zero external-source calls has not met the research bar.
 - FAN OUT parallel research subagents, each with the skills appropriate to its angle (e.g. a codebase-explorer
   over the affected subsystems, an external/primary-docs researcher, an existing-solution scout). They burn
   THEIR context; you keep only the cited synthesis — that is how the main context stays clean.
-- Climb the source ladder: the user's words → memory → prior research → local code → and when local cannot
-  answer, the EXTERNAL primary source (the tool's own docs/repo, via WebSearch/WebFetch) — record it.
+- Climb the source ladder: the user's words → memory → prior research → local code → and the EXTERNAL primary
+  source (the tool's own docs/repo, via WebSearch/WebFetch) — record it.
+- **EXTERNAL-SUBJECT ⇒ mandatory exhaustive web grounding (rubric §6).** When the task's subject or a
+  load-bearing dependency IS an external tool/service (e.g. adding a harness), the local `recall`+Read+Grep bar
+  is NOT enough: also sweep the tool's FULL capability surface against its primary docs/repo/examples
+  (invocation + I/O framing, output/cost format, config, auth, extension API, and EVERY sub-capability the
+  procedures require — subagents/fan-out, hooks/enforcement, MCP — do not assume a barebones tool has one).
+  A publicly-findable fact MUST be grounded here — it may NOT be parked as an OPEN QUESTION or deferred to
+  PLAN / a live-acceptance. Leaning on downstream review to surface web-findable facts is a scope failure.
 - Write the pre-research artifact to `docs/research/<track>-pre-research-<date>.md`. Every claim is cited
   (`file:line` / memory / the user's words) OR flagged as an unchecked `- [ ] OPEN QUESTION: …`.
 - Capture the FULL scope against the design you cite — no MVP / convenient-slice reduction (see the rubric).
