@@ -877,10 +877,37 @@ requirements:
     assert: { kind: reachable, symbol: claudeLapHarness, from: [orchestrator] }
     proof: 'src/runtime/ralph/harnesses/claude_lap_harness.test.ts'
   - id: R-LAP-CODEX-ADAPTER
-    intent: 'MHL.5 codexLapHarness: the Codex adapter — codex exec --json (LIVE-confirmed 0.144.0 flags: --sandbox + -c approval_policy, NOT --dangerously-*), the JSONL fold (agent_message concat + turn.completed.usage tokens + notional-0 cost), and a fail-loud auth preflight before the spawn'
+    intent: 'MHL.5 codexLapHarness: the Codex adapter — codex exec --json (LIVE-confirmed 0.144.0 flags: --sandbox + -c approval_policy, NOT --dangerously-*; plus -m <model> when configured, CFS.1), the JSONL fold (agent_message concat + turn.completed.usage tokens; costUsd is 0 at parse-time then the REAL configured per-model dollar figure via the priceUsd seam, CFS.1), and a preflight that fails loud on missing auth, SURFACES the effective billing path (CFS.2), and fail-closed REFUSES an uncounted API-billed lap (CFS.3) before the spawn'
     spec: 'docs/tasks/T-multi-harness-lap.md'
     wg: wg-348c691ae27e
     assert: { kind: reachable, symbol: codexLapHarness, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  # T-codex-financial-safety (wg-38bc88490cd8, CFS.1..4) — real Codex dollar accounting + effective-billing
+  # detection + fail-closed refuse: one reachable requirement per new BEHAVIORAL export, each proven by
+  # codex_lap_harness.test.ts. The data-shape siblings (CodexPricing / CodexBillingPath) are allowlisted.
+  - id: R-CFS-COST
+    intent: 'CFS.1 codexLapCostUsd: the pure per-model dollar fold (tokens × configured $/1M rate; cfg.model ?? pricing.default, unknown-model ⇒ HIGHEST-rate conservative over-count, absent/empty map ⇒ 0) — wired as codexLapHarness.priceUsd, applied at the ralph.ts wire so the orchestrator budget sum is meaningful'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-1dd25b2a94b5
+    assert: { kind: reachable, symbol: codexLapCostUsd, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  - id: R-CFS-CLASSIFY
+    intent: 'CFS.2 classifyCodexBilling: the pure effective-billing-path classifier — codex login status is the authority, the local env/auth.json signals the precedence-honoring fallback (auth.json takes precedence over a stray env key)'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-f39b7fffcdca
+    assert: { kind: reachable, symbol: classifyCodexBilling, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  - id: R-CFS-LOGIN-STATUS
+    intent: 'CFS.2 codexLoginStatus: the injectable shell seam (execFile codex login status, short timeout) — returns trimmed stdout or null on any error/timeout, never throws/hangs the lap'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-f39b7fffcdca
+    assert: { kind: reachable, symbol: codexLoginStatus, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  - id: R-CFS-REFUSE
+    intent: 'CFS.3 assertCodexBillingCounted: the fail-closed refuse predicate — throws (fail-loud, before the spawn) iff the effective path is api AND accounting is not real (no non-empty pricing); subscription and API-with-real-pricing proceed'
+    spec: 'docs/tasks/T-codex-financial-safety.md'
+    wg: wg-8541724ae8df
+    assert: { kind: reachable, symbol: assertCodexBillingCounted, from: [orchestrator] }
     proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
   # T-in-lap-gating (wg-e3c9f944140e) — the recursion-only lap marker: a ralph lap runs FULLY hooked
   # (OPENSQUID_LOOP_LAP, orthogonal to the reviewer-silencing OPENSQUID_SUBAGENT), the marker only blocking a

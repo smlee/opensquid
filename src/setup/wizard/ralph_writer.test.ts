@@ -133,4 +133,47 @@ describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
     const parsed = RalphConfigFileSchema.parse(defaultRalphConfig(home));
     expect('args' in parsed.harness).toBe(false);
   });
+
+  it('CFS.1: harness.model + harness.pricing round-trip through the schema', () => {
+    const parsed = RalphConfigFileSchema.parse({
+      ...defaultRalphConfig(home),
+      harness: {
+        cli: 'codex',
+        ralphMdPath: '/x/RALPH.md',
+        kind: 'codex',
+        model: 'gpt-5-codex',
+        pricing: {
+          models: { 'gpt-5-codex': { inputPerMTok: 1.25, outputPerMTok: 10 } },
+          default: 'gpt-5-codex',
+        },
+      },
+    });
+    expect(parsed.harness).toMatchObject({
+      model: 'gpt-5-codex',
+      pricing: {
+        models: { 'gpt-5-codex': { inputPerMTok: 1.25, outputPerMTok: 10 } },
+        default: 'gpt-5-codex',
+      },
+    });
+  });
+
+  it('CFS.1: a config OMITTING harness.model/pricing parses byte-unchanged (default-preservation)', () => {
+    const parsed = RalphConfigFileSchema.parse(defaultRalphConfig(home));
+    expect('model' in parsed.harness).toBe(false);
+    expect('pricing' in parsed.harness).toBe(false);
+  });
+
+  it('CFS.1: the schema rejects a negative per-model rate (fail-loud on a bad rate)', () => {
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: {
+          cli: 'codex',
+          ralphMdPath: '/x/RALPH.md',
+          kind: 'codex',
+          pricing: { models: { m: { inputPerMTok: -1, outputPerMTok: 1 } } },
+        },
+      }),
+    ).toThrow();
+  });
 });

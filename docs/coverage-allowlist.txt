@@ -2284,3 +2284,12 @@ slugify
 RouteDeps
 RouteResult
 writeEnvironmentsElicitation
+
+# --- T-codex-financial-safety (wg-38bc88490cd8, CFS.1..4, CODE 2026-07-10): the DATA-shape siblings of the
+# Codex financial-safety exports. The BEHAVIORAL exports (codexLapCostUsd, classifyCodexBilling,
+# codexLoginStatus, assertCodexBillingCounted) carry reachable requirements in ARCHITECTURE.md §10; these are
+# the per-model rate-map config shape (CodexPricing, on lap_harness.ts) + the effective-billing-path union
+# (CodexBillingPath, on codex_lap_harness.ts). Pure data-shape, no live path of their own, no covering
+# requirement — same class as the LapHarness/LapEnvelope/LapHarnessCfg seam shapes above. ---
+CodexPricing
+CodexBillingPath

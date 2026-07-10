@@ -12,6 +12,8 @@ import {
 import type { ReconcileOutcome } from './auto_pull.js';
 import type { Issue, WorkGraphFacade } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
+import { codexLapCostUsd } from './harnesses/codex_lap_harness.js';
+import type { CodexPricing } from './lap_harness.js';
 import type { LoopMetricRow } from '../loop/loop_metrics.js';
 import { tailEventsSince } from '../loop/loop_events.js';
 
@@ -195,6 +197,37 @@ describe('runRalphLoop', () => {
     expect(r.stopped).toBe('BUDGET');
     expect(r.closed).toEqual(['a']); // a shipped, then budget tripped before b
     expect(r.spent).toBe(5);
+  });
+
+  it('CFS.4: a REAL Codex-priced cost sums past maxBudgetUsd → BUDGET stop (the once-dead :569 check is live)', async () => {
+    // Source the tripping cost from the REAL CFS.1 pricing fold (not a hardcoded literal), proving the
+    // CFS.1→budget path: 2M input tokens @ $1.25/1M = $2.50 > maxBudgetUsd $1 under authMode:'api'.
+    const pricing: CodexPricing = {
+      models: { 'gpt-5-codex': { inputPerMTok: 1.25, outputPerMTok: 10 } },
+      default: 'gpt-5-codex',
+    };
+    const priced = codexLapCostUsd(
+      { resultText: '', costUsd: 0, inputTokens: 2_000_000, outputTokens: 0, isError: false },
+      { maxBudgetUsd: 1, pricing },
+    );
+    expect(priced).toBeCloseTo(2.5);
+    const runLap = lap({ kind: 'SHIPPED', costUsd: priced });
+    const r = await runRalphLoop(
+      cfg({ authMode: 'api', maxBudgetUsd: 1 }),
+      deps(mockStore(['a', 'b']), runLap),
+    );
+    expect(r.stopped).toBe('BUDGET');
+    expect(r.spent).toBeCloseTo(2.5);
+  });
+
+  it('CFS.4: a costUsd:0 lap (subscription / no pricing) does NOT trip the budget', async () => {
+    const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
+    const r = await runRalphLoop(
+      cfg({ authMode: 'api', maxBudgetUsd: 1 }),
+      deps(mockStore(['a']), runLap),
+    );
+    expect(r.stopped).toBe('BOARD_EMPTY'); // 0 spent never exceeds the bound
+    expect(r.spent).toBe(0);
   });
 
   it('claimIssue won:false → item skipped (no lap), excluded next pass → BOARD_EMPTY', async () => {

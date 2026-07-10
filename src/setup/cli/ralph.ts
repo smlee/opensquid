@@ -151,6 +151,8 @@ export function makeSpawnLap(
       ...(file.harness.askForApproval === undefined
         ? {}
         : { askForApproval: file.harness.askForApproval }),
+      ...(file.harness.model === undefined ? {} : { model: file.harness.model }),
+      ...(file.harness.pricing === undefined ? {} : { pricing: file.harness.pricing }),
     };
     // Fail-loud setup check BEFORE the spawn (Codex: auth diagnostics; Claude: no-op) — a setup problem, not a
     // retryable CRASH, alongside the RALPH.md read above.
@@ -192,9 +194,14 @@ export function makeSpawnLap(
       if ((e as { __timeout?: boolean }).__timeout === true) return { kind: 'TIMEOUT', costUsd: 0 };
       throw e; // genuine spawn/IO failure → superviseLap maps it to CRASH
     }
-    const { outcome, costUsd, inputTokens, outputTokens } = outcomeFromEnvelope(
-      adapter.parseEnvelope(stdout, capturedStderr),
-    );
+    // CFS.1 — price the parsed envelope via the optional adapter seam BEFORE the fold: an adapter whose raw
+    // stream carries no cost (Codex) supplies costUsd here from the token counts × the configured rate; an
+    // adapter without `priceUsd` (Claude — its cost is already real) is a no-op. Generic call → neutrality holds.
+    const rawEnv = adapter.parseEnvelope(stdout, capturedStderr);
+    const env = adapter.priceUsd
+      ? { ...rawEnv, costUsd: adapter.priceUsd(rawEnv, lapCfg) }
+      : rawEnv;
+    const { outcome, costUsd, inputTokens, outputTokens } = outcomeFromEnvelope(env);
     appendLog(
       `\n=== PARSED OUTCOME === ${JSON.stringify(outcome)} · cost=$${costUsd} · ` +
         `${String(inputTokens)}in/${String(outputTokens)}out\n`,

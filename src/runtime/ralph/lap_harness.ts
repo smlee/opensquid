@@ -23,11 +23,23 @@ import { codexLapHarness } from './harnesses/codex_lap_harness.js';
  *  config enum and the resolver cannot drift; SSOT with LAP_HARNESS_KINDS below). */
 export type HarnessKind = 'claude' | 'codex';
 
+/** A per-model rate map (generic — a rate-bearing adapter prices its token counts by it; Claude ignores it,
+ *  its cost is vendor-provided). Rates are $ per 1,000,000 tokens — CONFIG (operator-supplied), never a
+ *  checked-in constant, because per-model rates drift over model version. */
+export interface CodexPricing {
+  models: Record<string, { inputPerMTok: number; outputPerMTok: number }>; // $ per 1,000,000 tokens
+  // the model id to price by when the lap's model is not otherwise resolved. `| undefined` (not a bare
+  // optional) so the zod-`.optional()` config shape flows in verbatim under exactOptionalPropertyTypes.
+  default?: string | undefined;
+}
+
 /** The small, vendor-free config an adapter reads (assembled at the wire from cfg.maxBudgetUsd + file.harness). */
 export interface LapHarnessCfg {
   maxBudgetUsd: number;
   sandbox?: string;
   askForApproval?: string;
+  model?: string; // resolved model id — a rate-bearing adapter passes it AND prices by it (run == priced)
+  pricing?: CodexPricing; // per-model $/1M-token rates (Codex; Claude ignores — its cost is vendor-provided)
 }
 
 /** The harness-agnostic parse result — feeds the vendor-free `outcomeFromEnvelope` (lap_outcome.ts). Field
@@ -52,6 +64,10 @@ export interface LapHarness {
   /** OPTIONAL fail-loud setup check run BEFORE the spawn (Claude omits it; Codex implements auth diagnostics).
    *  Absent ⇒ no preflight. */
   preflight?(cfg: LapHarnessCfg): void | Promise<void>;
+  /** OPTIONAL post-parse dollar pricing. An adapter whose raw stream carries no per-call cost figure computes
+   *  costUsd from the envelope's token counts × the configured per-model rate; an adapter whose cost is already
+   *  vendor-provided omits it. Absent ⇒ the envelope's own costUsd stands. */
+  priceUsd?(env: LapEnvelope, cfg: LapHarnessCfg): number;
 }
 
 /** SSOT of the implemented kinds — read by the config load-time gate (ralph_writer.ts superRefine, MHL.2), so a

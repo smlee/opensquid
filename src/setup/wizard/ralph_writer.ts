@@ -57,6 +57,23 @@ export const RalphConfigFileSchema = z
        *  adapter (MHL.5): sandbox='workspace-write', approval_policy='never'. */
       sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
       askForApproval: z.string().optional(),
+      /** Codex financial-safety (CFS.1): the resolved model id + the per-model $/1M-token rate map. Both
+       *  optional → every existing config parses byte-unchanged (the same load-bearing default-preservation
+       *  contract as `kind`). `model` (when set) is passed as `codex exec -m <model>` AND priced by, so the
+       *  RUN model == the PRICED model. `pricing` rates are $ per 1,000,000 tokens, operator-supplied (OpenAI
+       *  per-model rates drift over version — CONFIG, never a checked-in constant). Claude ignores both. */
+      model: z.string().min(1).optional(),
+      pricing: z
+        .object({
+          models: z.record(
+            z.object({
+              inputPerMTok: z.number().nonnegative(),
+              outputPerMTok: z.number().nonnegative(),
+            }),
+          ),
+          default: z.string().min(1).optional(),
+        })
+        .optional(),
     }),
   })
   .refine((c) => c.claimTtlSec * 1000 > c.wallClockMs, {
