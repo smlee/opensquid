@@ -10,21 +10,17 @@
  *      values surface as an error at boot rather than silently defaulting.
  *   2. `~/.opensquid/rag-config.json` — persisted user choice. Same kind
  *      vocabulary. Phase 1 ships read-only; setup wizard writes it.
- *   3. Default: `loop-engine` when the engine binary is discoverable
- *      via `resolveEngineBin()`; else `libsql-fastembed` (self-contained
+ *   3. Default: `libsql-fastembed` — the UNCONDITIONAL default
+ *      (retire-Rust / RES-1: the Rust `loop-engine` backend is removed, so
+ *      engine-binary presence no longer changes selection). A self-contained
  *      in-process embedder — works out-of-box with NO Ollama; E2-validated
- *      recall parity with Qwen3). `libsql-qwen3` stays available via override.
- *
- * The discoverability check is non-blocking — if the engine binary
- * lookup throws, we fall back to libsql-fastembed with a stderr note. This
- * keeps boot resilient to a half-migrated engine path while still
- * preferring the engine when it's wired up correctly.
+ *      recall parity with Qwen3. `libsql-qwen3` stays available via override.
  *
  * Each variant's tunable opts (`dbUrl`, `ollamaUrl`, `mode`) accept
  * config-file overrides. Sensible defaults baked in so a missing
  * config file produces a working backend without any user setup.
  *
- * Imports from: ../engine/config.js, ./backend_factory.js.
+ * Imports from: ./backend_factory.js.
  * Imported by: src/runtime/bootstrap.ts.
  */
 

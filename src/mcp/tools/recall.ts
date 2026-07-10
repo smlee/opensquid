@@ -8,16 +8,15 @@
  * pipeline (T.1.H).
  *
  * Routing: `resolveBackendConfig()` picks the configured backend (env >
- * persisted file > engine-binary-discovery default). For users with the
- * loop-engine binary on PATH this hits the engine daemon's
- * `memory.search` over the T.4 UDS singleton — zero per-call subprocess
- * cost. For users without the binary it falls back to libsql-qwen3.
+ * persisted file > `libsql-fastembed` default, engine-free). recall resolves
+ * the configured libSQL backend and issues `memory.search` against it — the
+ * Rust engine's binary-discovery routing was removed (retire-Rust / RES-1);
+ * `libsql-qwen3` stays available via override.
  *
- * Backend is instantiated per call (cheap — engine connection itself is
- * pooled by `acquireOrSpawnEngine()`). Module-level caching is a
- * deliberate follow-up: keeping the handler stateless avoids cache
- * invalidation when a user rewrites `~/.opensquid/rag-config.json` mid-
- * session.
+ * Backend is instantiated per call (cheap — a libSQL open). Module-level
+ * caching is a deliberate follow-up: keeping the handler stateless avoids
+ * cache invalidation when a user rewrites `~/.opensquid/rag-config.json`
+ * mid-session.
  *
  * Output formatting matches the other read-only tools — text content,
  * one line per result, score truncated to 3 decimal places, source tag

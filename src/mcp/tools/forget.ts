@@ -3,13 +3,13 @@
  *
  * G.3 architectural exception (read-only invariant): destruction must remain user-controllable.
  * Post retire-Rust write-path cutover (T-RETIRE-RUST-CUTOVER) this routes through the configured
- * `RagBackend.deleteLesson` (like `recall`/`memorize`), not the engine directly — so engine-present
- * users hit the engine and no-engine users hit libSQL, the same seam.
+ * `RagBackend.deleteLesson` (like `recall`/`memorize`) — the Rust engine is removed, so every
+ * user hits the configured libSQL backend through the same seam.
  *
  * The user-authored eviction-immunity invariant (`feedback_user_authored_lessons_immune`) is
  * enforced by the backend: `deleteLesson` throws `UserAuthoredImmunityError` for a `user`-authored
- * lesson unless `force` is set (libSQL checks the row's author; loop-engine maps the engine's
- * USER_MEMORY_IMMUNE/-32003). A not-found id returns `{ deleted: false }`, which this handler maps
+ * lesson unless `force` is set (the libSQL backend checks the row's author). A not-found id returns
+ * `{ deleted: false }`, which this handler maps
  * to a typed `MemoryNotFoundError` (mirrors the old memoryGet existence pre-check). Explicit user
  * deletion is allowed (with force); automatic deletion is never wired here (the no-auto-delete
  * invariant).

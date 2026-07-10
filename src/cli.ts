@@ -440,8 +440,8 @@ function runCli(): void {
   registerYoloCli(program);
 
   // G.6 — `opensquid memory import-auto`. Bulk-imports Claude Code auto-memory
-  // files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the loop-engine
-  // via direct `engine.memoryCreate` RPC, bypassing the MCP write overhead for
+  // files (`~/.claude/projects/<encoded-path>/memory/*.md`) into the libSQL
+  // memory store via a direct backend write, bypassing the MCP write overhead for
   // bulk ingest. Dedupe by frontmatter `name` round-tripped through `origin.host`.
   // All imports tagged `authored_by: 'user'` (eviction-immune).
   registerMemory(program);

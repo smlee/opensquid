@@ -5,35 +5,34 @@
  * "⚠️ ARCHITECTURE REVISION" block) + pre-research §4 D1/D2/D3
  * (`docs/research/T-compression-pre-research-2026-05-27.md`).
  *
- * ⚠️ ARCHITECTURE REVISION (2026-05-27): the verify+delete safety
- * contract MOVED INTO the loop-engine (`memory.consolidate`). The
- * loop-engine is a UNIVERSAL substrate, so recall-replay verification +
- * gated non-immune predecessor deletion is universal memory INTEGRITY
- * every consumer needs — NOT opensquid policy. The engine guarantees
- * the safe-HOW (atomic, race-free, fail-closed); opensquid decides the
- * WHEN/WHAT.
+ * ARCHITECTURE NOTE (2026-05-27 revision, superseded by retire-Rust / RES-1):
+ * the verify+delete safety contract once lived in the Rust engine
+ * (`memory.consolidate`). That Rust engine has been REMOVED — the contract is
+ * now realized by the in-process TS `consolidate(ids)` (RES-4b, engine-free).
+ * Recall-replay verification + gated non-immune predecessor deletion is the
+ * safe-HOW (atomic, race-free, fail-closed); this module decides the WHEN/WHAT.
  *
  * THIS MODULE NO LONGER ISSUES ANY `memory.delete` AND NO LONGER RUNS
- * RECALL-REPLAY. Both now live inside the engine's `memory.consolidate`
- * op. opensquid's role is purely policy:
+ * RECALL-REPLAY. Both live inside the TS `consolidate(ids)` call this module
+ * delegates to (see `:23-24`). opensquid's role is purely policy:
  *
  *   D1 (WHEN): only run for a group whose satisfaction probe answered
  *     "satisfied". No satisfied probe → no-op (return []).
  *   WHAT: read the group's CMP.3 candidate windows; call
  *     the TS `consolidate(ids)` (RES-4b) per window — engine-free.
- *   SURFACE: report the engine's outcome (deleted / kept_immune /
- *     verified); emit a drift event when `!verified` (the engine kept
+ *   SURFACE: report `consolidate`'s outcome (deleted / kept_immune /
+ *     verified); emit a drift event when `!verified` (`consolidate` kept
  *     `Mc` alongside the predecessors — nothing was lost, but the
  *     window wasn't safe to consolidate yet).
  *
- * The engine's `memory.consolidate` enforces the locked D2/D3 contract
+ * The TS `consolidate(ids)` enforces the locked D2/D3 contract
  * internally: a predecessor is force-deleted ONLY after (a) compression
  * succeeds, (b) the recall-replay gate passes for EVERY predecessor,
  * and (c) that predecessor is not user-cited
  * (`consumed_by_user_lessons === 0`). Any failure → delete nothing,
  * `verified: false`. The memory trace is never lost.
  *
- * Imports from: ../engine/client.js, ./drift_catalog.js,
+ * Imports from: ../rag/memory/consolidate.js, ./drift_catalog.js,
  *   ./satisfaction_probe.js, ./wedge/compress_candidates.js.
  * Imported by: (a session-boundary / automation-cycle trigger, TBD wiring).
  */

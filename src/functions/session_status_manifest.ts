@@ -15,19 +15,19 @@
  *   • Flow:    gates active ✅ / INACTIVE ⛔ — <problems> (preserves the F3 signal)
  *   • Packs:   loaded names + count
  *   • Daemon:  always-on chat-daemon reachable ✅ / down 🔌
- *   • Engine:  loop-engine memory up ✅ / down 🔌
+ *   • Memory:  resolved libSQL RAG backend kind ✅ / unavailable 🔌
  *
  * DRY: the Flow section reuses `flowEnforcementProblems` (the exact detection
- * behind `check_flow_health`). Chat/Packs/Daemon/Engine are composed from the
+ * behind `check_flow_health`). Chat/Packs/Daemon/Memory are composed from the
  * shared library functions. (Track-2 cleanup: when the session attaches to the
  * daemon as the live receiver, `check_chat_connection`/`check_flow_health` — now
  * registered-but-unwired — retire in favor of this manifest.)
  *
  * Fail-quiet, NEVER throws (a SessionStart hook must exit 0): each section is
  * independently guarded — one probe failing degrades to "<section>: unknown"
- * and never blanks the others. Engine/daemon probes NEVER spawn (daemon = ping
- * an existing UDS; engine = sock-exists + pid-alive), so a status read cannot
- * start a subsystem.
+ * and never blanks the others. Memory/daemon probes NEVER spawn (daemon = ping
+ * an existing UDS; memory = `resolveBackendConfig()`, a pure config read — no
+ * socket, no daemon), so a status read cannot start a subsystem.
  *
  * Imports from: node:fs, node:fs/promises, node:path, zod, ../channels/routing.js,
  *   ../chat_daemon/client.js, ../runtime/chat/live_session_lease.js,
