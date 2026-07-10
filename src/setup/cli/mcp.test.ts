@@ -379,6 +379,118 @@ describe('runMcpWizard — multi-host (--hosts)', () => {
     expect(stdoutBuf).toContain('Cursor: not detected');
   });
 
+  it('dispatches codex → codexWriter (TOML), claude-code → writer (JSON) (CE.1)', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+    const codexDir = join(fakeHome, '.codex');
+
+    const jsonPaths: string[] = [];
+    const tomlPaths: string[] = [];
+    await runMcpWizard(
+      { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false, hosts: 'codex,claude-code' },
+      {
+        writer: (path) => {
+          jsonPaths.push(path);
+          return Promise.resolve({
+            added: ['opensquid'],
+            replaced: [],
+            preserved: 0,
+            backupPath: '',
+          });
+        },
+        codexWriter: (path) => {
+          tomlPaths.push(path);
+          return Promise.resolve({
+            added: ['opensquid', 'opensquid-chat'],
+            replaced: [],
+            preserved: 0,
+            backupPath: `${path}.bak`,
+          });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        platform: () => 'darwin',
+        dirExists: (p) => Promise.resolve(p === codexDir), // ~/.codex present
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+
+    expect(jsonPaths).toEqual([join(fakeHome, '.claude.json')]); // JSON writer for claude-code only
+    expect(tomlPaths).toEqual([join(codexDir, 'config.toml')]); // TOML writer for codex only
+    expect(stdoutBuf).toContain('Codex');
+    expect(stdoutBuf).toContain('restart Codex');
+  });
+
+  it('skips codex when ~/.codex is absent (not fabricated) (CE.1)', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+
+    let codexWriterCalls = 0;
+    await runMcpWizard(
+      { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false, hosts: 'codex' },
+      {
+        codexWriter: () => {
+          codexWriterCalls += 1;
+          return Promise.resolve({ added: [], replaced: [], preserved: 0, backupPath: '' });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        platform: () => 'darwin',
+        dirExists: () => Promise.resolve(false), // ~/.codex absent
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+
+    expect(codexWriterCalls).toBe(0);
+    expect(stdoutBuf).toContain('Codex: not detected');
+  });
+
+  it('codex dry-run uses codexReader + projectCodexMcp (never the JSON reader) (CE.1)', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+    const codexDir = join(fakeHome, '.codex');
+
+    let jsonReaderCalls = 0;
+    let codexReaderCalls = 0;
+    await runMcpWizard(
+      {
+        dryRun: true,
+        opensquidRoot: '/fake/opensquid',
+        detectProjectCleanup: false,
+        hosts: 'codex',
+      },
+      {
+        reader: () => {
+          jsonReaderCalls += 1;
+          return Promise.resolve({});
+        },
+        codexReader: () => {
+          codexReaderCalls += 1;
+          return Promise.resolve({ mcp_servers: { other: { command: 'x' } } });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        platform: () => 'darwin',
+        dirExists: (p) => Promise.resolve(p === codexDir),
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+
+    expect(jsonReaderCalls).toBe(0); // codex never touches the JSON reader (would throw on TOML)
+    expect(codexReaderCalls).toBe(1);
+    expect(stdoutBuf).toContain('DRY RUN');
+    expect(stdoutBuf).toContain('preserve 1 unrelated'); // projectCodexMcp counted `other`
+  });
+
   it('errors with exit code 1 when no valid host is selected', async () => {
     const fakeHome = join(root, 'home');
     const fakeCwd = join(root, 'cwd');

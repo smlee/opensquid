@@ -2293,3 +2293,13 @@ writeEnvironmentsElicitation
 # requirement — same class as the LapHarness/LapEnvelope/LapHarnessCfg seam shapes above. ---
 CodexPricing
 CodexBillingPath
+
+# --- T-codex-e2e-setup (wg-6489ea2be964, CE.1..4, CODE 2026-07-10): register the opensquid MCP for Codex. The
+# BEHAVIORAL exports (projectCodexMcp, writeCodexMcp, resolveCodexHome, hasCodexAuth) carry reachable
+# requirements in ARCHITECTURE.md §10; these are the Codex config.toml DATA-shape interfaces (CodexConfig /
+# CodexMcpServerEntry, on codex-mcp-writer.ts — same class as the allowlisted McpServerEntry/ClaudeUserConfig
+# JSON-writer shapes) + the trivial ENOENT→{} fs reader (readCodexConfig — the TOML sibling of the allowlisted
+# readClaudeUserConfig, exercised via the wizard mcp codex dry-run path + codex-mcp-writer.test.ts). ---
+CodexConfig
+CodexMcpServerEntry
+readCodexConfig

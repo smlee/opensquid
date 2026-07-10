@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALL_HOSTS,
   parseHosts,
+  resolveCodexHome,
   resolveHost,
   type HostId,
   type HostResolveEnv,
@@ -69,6 +70,22 @@ describe('resolveHost', () => {
     expect(t.configPath).toBe('/home/u/.cursor/mcp.json');
     expect(t.needsRestart).toBe(true);
   });
+
+  it('resolves Codex to $CODEX_HOME/config.toml, defaulting to ~/.codex (CE.1)', () => {
+    const dflt = resolveHost('codex', env());
+    expect(dflt.configPath).toBe('/home/u/.codex/config.toml');
+    expect(dflt.label).toBe('Codex');
+    expect(dflt.needsRestart).toBe(true);
+    const custom = resolveHost('codex', env({ env: { CODEX_HOME: '/custom' } }));
+    expect(custom.configPath).toBe('/custom/config.toml');
+  });
+});
+
+describe('resolveCodexHome (CE.1 — the CODEX_HOME reader)', () => {
+  it('honors $CODEX_HOME, else falls back to ~/.codex', () => {
+    expect(resolveCodexHome(env())).toBe('/home/u/.codex');
+    expect(resolveCodexHome(env({ env: { CODEX_HOME: '/xyz' } }))).toBe('/xyz');
+  });
 });
 
 describe('parseHosts', () => {
@@ -82,8 +99,14 @@ describe('parseHosts', () => {
     expect(parseHosts('   ', noWarn)).toEqual(['claude-code']);
   });
 
-  it('expands "all" to every host', () => {
+  it('expands "all" to every host (incl. codex)', () => {
     expect(parseHosts('all', noWarn)).toEqual([...ALL_HOSTS]);
+    expect(ALL_HOSTS).toContain('codex');
+  });
+
+  it('parses codex as a valid id', () => {
+    expect(parseHosts('codex', noWarn)).toEqual(['codex']);
+    expect(parseHosts('codex,claude-code', noWarn)).toEqual(['codex', 'claude-code']);
   });
 
   it('parses a comma list', () => {

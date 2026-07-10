@@ -5,7 +5,7 @@
  * empty/malformed-line handling). NO real `codex` here — the only real-binary test is the opt-in live smoke.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,7 @@ import {
   codexLapCostUsd,
   classifyCodexBilling,
   codexLoginStatus,
+  hasCodexAuth,
   assertCodexBillingCounted,
 } from './codex_lap_harness.js';
 import { outcomeFromEnvelope } from '../lap_outcome.js';
@@ -162,6 +163,91 @@ describe('codexLapHarness.preflight (auth diagnostics + billing-path detect + fa
       (process.stderr as { write: unknown }).write = orig;
     }
     expect(lines.join('')).toMatch(/Codex effective billing path: subscription/);
+  });
+});
+
+describe('hasCodexAuth — auth PRESENCE predicate (CE.3)', () => {
+  it('env key alone ⇒ present', () => {
+    expect(hasCodexAuth(null, { hasEnvKey: true, hasAuthFile: false })).toBe(true);
+  });
+  it('auth.json alone ⇒ present', () => {
+    expect(hasCodexAuth(null, { hasEnvKey: false, hasAuthFile: true })).toBe(true);
+  });
+  it('a positive "Logged in using ChatGPT" ALONE ⇒ present (any case)', () => {
+    expect(hasCodexAuth('Logged in using ChatGPT', { hasEnvKey: false, hasAuthFile: false })).toBe(
+      true,
+    );
+    expect(hasCodexAuth('LOGGED IN using ChatGPT', { hasEnvKey: false, hasAuthFile: false })).toBe(
+      true,
+    );
+  });
+  it('the negative guard: "Not logged in" + all-absent ⇒ ABSENT (load-bearing — /logged in/ alone would match)', () => {
+    expect(hasCodexAuth('Not logged in', { hasEnvKey: false, hasAuthFile: false })).toBe(false);
+  });
+  it('null status + all-absent ⇒ absent', () => {
+    expect(hasCodexAuth(null, { hasEnvKey: false, hasAuthFile: false })).toBe(false);
+  });
+});
+
+describe('codexLapHarness.preflight — $CODEX_HOME auth resolution + single-spawn (CE.3)', () => {
+  const saved = {
+    CODEX_API_KEY: process.env.CODEX_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    CODEX_HOME: process.env.CODEX_HOME,
+    HOME: process.env.HOME,
+    PATH: process.env.PATH,
+  };
+  let tmp: string;
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    if (tmp) rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('admits a login under a custom $CODEX_HOME (auth.json NOT under ~/.codex) that the hardcoded gate would reject', async () => {
+    delete process.env.CODEX_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    process.env.PATH = ''; // codexLoginStatus → null (no real spawn); presence rides the $CODEX_HOME auth.json
+    tmp = mkdtempSync(join(tmpdir(), 'codex-home-'));
+    process.env.HOME = join(tmp, 'empty-home'); // ~/.codex/auth.json ABSENT here
+    mkdirSync(join(tmp, 'custom'));
+    writeFileSync(join(tmp, 'custom', 'auth.json'), '{}');
+    process.env.CODEX_HOME = join(tmp, 'custom'); // auth.json lives under $CODEX_HOME, not ~/.codex
+    await expect(codexLapHarness.preflight?.({ maxBudgetUsd: 10 })).resolves.toBeUndefined();
+  });
+
+  it('STILL throws fail-loud on total absence, naming $CODEX_HOME as an admit path', async () => {
+    delete process.env.CODEX_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    process.env.PATH = '';
+    tmp = mkdtempSync(join(tmpdir(), 'codex-noauth-'));
+    process.env.HOME = tmp; // no ~/.codex/auth.json
+    process.env.CODEX_HOME = join(tmp, 'also-empty'); // no auth.json under $CODEX_HOME either
+    await expect(codexLapHarness.preflight?.({ maxBudgetUsd: 10 })).rejects.toThrow(/\$CODEX_HOME/);
+  });
+
+  it('shells `codex login status` EXACTLY ONCE per preflight (reused for presence AND billing)', async () => {
+    // A fake `codex` on PATH that logs each invocation — a genuine call-count, not a value-only check. Env key
+    // + real pricing ⇒ preflight proceeds; the fake reports "Not logged in" so classifyCodexBilling falls to the
+    // env-key api path (accounting real via PRICING). The call log must show exactly one `login status`.
+    tmp = mkdtempSync(join(tmpdir(), 'codex-spawn-'));
+    const bin = join(tmp, 'bin');
+    mkdirSync(bin);
+    const log = join(tmp, 'calls.log');
+    writeFileSync(join(bin, 'codex'), `#!/bin/sh\necho "$@" >> ${log}\necho "Not logged in"\n`);
+    chmodSync(join(bin, 'codex'), 0o755);
+    process.env.PATH = bin;
+    process.env.CODEX_API_KEY = 'sk-test';
+    delete process.env.OPENAI_API_KEY;
+    process.env.HOME = tmp; // no auth.json → env-key api path
+    delete process.env.CODEX_HOME;
+    await expect(
+      codexLapHarness.preflight?.({ maxBudgetUsd: 10, pricing: PRICING }),
+    ).resolves.toBeUndefined();
+    const calls = readFileSync(log, 'utf-8').trim().split('\n').filter(Boolean);
+    expect(calls).toEqual(['login status']); // exactly one spawn, and it was `codex login status`
   });
 });
 

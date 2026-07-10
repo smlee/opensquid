@@ -924,4 +924,33 @@ requirements:
     wg: wg-e3c9f944140e
     assert: { kind: reachable, symbol: LOOP_LAP_ENV, from: [ralph] }
     proof: 'src/runtime/hooks/subagent_guard.test.ts'
+  # T-codex-e2e-setup (wg-6489ea2be964, CE.1..4) — register the opensquid MCP for Codex + $CODEX_HOME host/auth
+  # + auth PRESENCE via `codex login status`: one reachable requirement per new BEHAVIORAL export. The `from`
+  # hints are advisory (the proof-test is the authority) — these surface through the `wizard mcp` codex dispatch
+  # and the codex lap preflight, not a hook builder. The data-shape siblings (CodexConfig / CodexMcpServerEntry)
+  # + the trivial fs reader (readCodexConfig — sibling of the allowlisted readClaudeUserConfig) are allowlisted.
+  - id: R-CE-CODEX-MCP-PROJECT
+    intent: 'CE.1 projectCodexMcp: the pure Codex config.toml projection — overwrites the two opensquid [mcp_servers.<id>] tables by key (idempotent), preserves every unrelated table, reports added/replaced/preserved (disk-untouched; used by the writer + --dry-run)'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-78ced1503c65
+    assert: { kind: reachable, symbol: projectCodexMcp, from: [setup] }
+    proof: 'src/setup/wizard/codex-mcp-writer.test.ts'
+  - id: R-CE-CODEX-MCP-WRITE
+    intent: 'CE.1/CE.2 writeCodexMcp: the idempotent TOML-merge writer (parse→merge-our-two-tables→stringify via smol-toml, .bak snapshot BEFORE mutation) that registers opensquid (required=true) + opensquid-chat (not required) into config.toml so a Codex lap is not item-blind; replaces a pre-existing unfenced manual table with no duplicate-table error'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-78ced1503c65
+    assert: { kind: reachable, symbol: writeCodexMcp, from: [setup] }
+    proof: 'src/setup/wizard/codex-mcp-writer.test.ts'
+  - id: R-CE-CODEX-HOME
+    intent: 'CE.1 resolveCodexHome: the $CODEX_HOME reader ($CODEX_HOME ?? ~/.codex) — the host-path half of the two-readers-of-one-source lock; a custom $CODEX_HOME lands config.toml in the right file'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-78ced1503c65
+    assert: { kind: reachable, symbol: resolveCodexHome, from: [setup] }
+    proof: 'src/setup/wizard/mcp-hosts.test.ts'
+  - id: R-CE-CODEX-AUTH
+    intent: 'CE.3 hasCodexAuth: the pure/total auth PRESENCE predicate — env key OR $CODEX_HOME auth.json OR a positive `codex login status` (the /logged in/ + !/not logged in/ guard load-bearing); admits a valid login the hardcoded ~/.codex gate rejected, still fails-loud on true total absence'
+    spec: 'docs/tasks/T-codex-e2e-setup.md'
+    wg: wg-f166de25d186
+    assert: { kind: reachable, symbol: hasCodexAuth, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
 ```

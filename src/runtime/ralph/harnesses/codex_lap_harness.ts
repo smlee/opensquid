@@ -66,14 +66,24 @@ export const codexLapHarness: LapHarness = {
   // REFUSE an API-billed lap whose dollar accounting is not real.
   preflight: async (cfg: LapHarnessCfg): Promise<void> => {
     const hasEnv = !!process.env.CODEX_API_KEY || !!process.env.OPENAI_API_KEY;
-    const hasAuthFile = existsSync(join(homedir(), '.codex', 'auth.json'));
-    if (!hasEnv && !hasAuthFile)
+    // CE.3 — $CODEX_HOME-aware auth.json (was hardcoded ~/.codex): a valid login under a custom $CODEX_HOME
+    // must not be missed. The AUTH-path half of the two-readers-of-one-source lock (mcp-hosts.ts resolveCodexHome
+    // is the HOST-path half — the same 1-liner, read independently to keep the setup/lap scopes disjoint).
+    const codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex');
+    const hasAuthFile = existsSync(join(codexHome, 'auth.json'));
+    // CE.3 — shell `codex login status` ONCE at the top, reused for BOTH presence AND billing (no double spawn).
+    const loginStatus = await codexLoginStatus();
+    // CE.3 — PRESENCE via the login authority: env key OR $CODEX_HOME auth.json OR a positive `codex login status`.
+    // A true total absence still fails-loud before the spawn (a setup error, NOT a retryable CRASH).
+    if (!hasCodexAuth(loginStatus, { hasEnvKey: hasEnv, hasAuthFile }))
       throw new Error(
-        'Codex auth not found — set CODEX_API_KEY/OPENAI_API_KEY or run `codex login` to seed ~/.codex/auth.json (fail-loud before the lap)',
+        'Codex auth not found — set CODEX_API_KEY/OPENAI_API_KEY, run `codex login`, or set $CODEX_HOME ' +
+          'to your auth.json location (fail-loud before the lap)',
       );
     // CFS.2 — bind the effective billing to the ACTUAL credential (not the authMode config), and SURFACE it on
-    // the LIVE stderr channel (ralph.ts streams each preflight stderr line) so the truth is observable.
-    const path = classifyCodexBilling(await codexLoginStatus(), { hasAuthFile, hasEnvKey: hasEnv });
+    // the LIVE stderr channel (ralph.ts streams each preflight stderr line) so the truth is observable. Reuses
+    // the SAME loginStatus string (no second `codex login status` spawn).
+    const path = classifyCodexBilling(loginStatus, { hasAuthFile, hasEnvKey: hasEnv });
     process.stderr.write(
       `Codex effective billing path: ${path} (authMode config: informational)\n`,
     );
@@ -141,6 +151,23 @@ export function codexLapCostUsd(env: LapEnvelope, cfg: LapHarnessCfg): number {
     Object.values(p.models).reduce((hi, r) => (r.inputPerMTok > hi.inputPerMTok ? r : hi));
   return (
     (env.inputTokens / 1e6) * rate.inputPerMTok + (env.outputTokens / 1e6) * rate.outputPerMTok
+  );
+}
+
+/**
+ * CE.3 — auth PRESENCE (pure/total): auth is PRESENT iff an env key, OR an auth.json ($CODEX_HOME-resolved by
+ * the caller), OR a POSITIVE `codex login status`. Keyed on the robust 0.144.0 phrasing ("Logged in using
+ * ChatGPT"); the `!/not logged in/i` guard is load-bearing — without it "Not logged in" matches `/logged in/i`
+ * and a logged-OUT machine would read as present and skip the fail-loud. REUSES the EXISTING codexLoginStatus
+ * authority (the string is passed in — no spawn here). Never throws.
+ */
+export function hasCodexAuth(
+  loginStatus: string | null,
+  signals: { hasEnvKey: boolean; hasAuthFile: boolean },
+): boolean {
+  if (signals.hasEnvKey || signals.hasAuthFile) return true;
+  return (
+    loginStatus !== null && /logged in/i.test(loginStatus) && !/not logged in/i.test(loginStatus)
   );
 }
 
