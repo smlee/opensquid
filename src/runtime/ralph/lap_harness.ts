@@ -18,6 +18,10 @@
  */
 import { claudeLapHarness } from './harnesses/claude_lap_harness.js';
 import { codexLapHarness } from './harnesses/codex_lap_harness.js';
+// The Codex approval/sandbox SSOT value types are homed in the Codex adapter (their VALUES are Codex vendor
+// vocabulary — MHL.8 keeps such literals out of this neutral seam). Imported as TYPES ONLY (erased at compile
+// time — the literal text never enters this file), so LapHarnessCfg below can share the exact schema type.
+import type { CodexApprovalPolicy, CodexSandboxMode } from './harnesses/codex_lap_harness.js';
 
 /** The lap-harness discriminator — ONE shared type (the schema enum in ralph_writer.ts references it so the
  *  config enum and the resolver cannot drift; SSOT with LAP_HARNESS_KINDS below). */
@@ -36,8 +40,8 @@ export interface CodexPricing {
 /** The small, vendor-free config an adapter reads (assembled at the wire from cfg.maxBudgetUsd + file.harness). */
 export interface LapHarnessCfg {
   maxBudgetUsd: number;
-  sandbox?: string;
-  askForApproval?: string;
+  sandbox?: CodexSandboxMode; // was `string` — now the shared SSOT type (schema/cfg cannot drift)
+  askForApproval?: CodexApprovalPolicy; // was `string` — now the shared SSOT type
   model?: string; // resolved model id — a rate-bearing adapter passes it AND prices by it (run == priced)
   pricing?: CodexPricing; // per-model $/1M-token rates (Codex; Claude ignores — its cost is vendor-provided)
 }

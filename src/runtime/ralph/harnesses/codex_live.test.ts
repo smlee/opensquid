@@ -39,8 +39,8 @@ const LIVE_PRICING: CodexPricing = {
   default: 'gpt-5-codex',
 };
 
-describe.skipIf(!LIVE)('codex live smoke (opt-in, real binary)', () => {
-  it('a real codex exec reply is folded to a well-formed outcome', () => {
+describe.skipIf(!LIVE)('codex live e2e (opt-in, real binary — CRASH fails)', () => {
+  it('a real codex exec lap completes a turn, reports usage, and folds to the exact SHIPPED outcome', () => {
     const prompt =
       'Reply with EXACTLY this line and nothing else:\nRALPH-EXIT: {"kind":"SHIPPED","stage":"code"}';
     const args = codexLapHarness.spawnArgs({
@@ -53,13 +53,36 @@ describe.skipIf(!LIVE)('codex live smoke (opt-in, real binary)', () => {
       encoding: 'utf8',
       timeout: 120_000,
     });
-    // The binary must at least run; a spawn error here means Codex is not installed/authed (opt-in expectation).
+    // The binary must run; a spawn error here means Codex is not installed/authed (opt-in expectation).
     expect(res.error).toBeUndefined();
-    const env = codexLapHarness.parseEnvelope(res.stdout ?? '', res.stderr ?? '');
+    const stdout = res.stdout ?? '';
+
+    // (1) a real turn.completed was observed in the RAW stream (the direct authority — not an aborted/empty
+    // stream). Parse the JSONL the same way the adapter does (split('\n') + JSON.parse).
+    const sawTurnCompleted = stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .some((l) => {
+        try {
+          return (JSON.parse(l) as { type?: unknown }).type === 'turn.completed';
+        } catch {
+          return false;
+        }
+      });
+    expect(sawTurnCompleted).toBe(true);
+
+    // (2) non-zero token usage (turn.completed.usage populated the fold). isError:false corroborates the raw
+    // scan through the fold path (isError = sawError || !sawCompletion → false requires a seen completion).
+    const env = codexLapHarness.parseEnvelope(stdout, res.stderr ?? '');
+    expect(env.isError).toBe(false);
+    expect(env.inputTokens).toBeGreaterThan(0);
+    expect(env.outputTokens).toBeGreaterThan(0);
+
+    // (3) the EXACT outcome — a real completed lap. CRASH (fail-closed no-tag, FCE.1), WEDGE, and
+    // HUMAN_REQUIRED all FAIL here — the old `toContain` membership that let CRASH pass is GONE.
     const { outcome } = outcomeFromEnvelope(env);
-    // A well-formed outcome (the model usually echoes the tag → SHIPPED; fail-closed, a clean no-tag reply is
-    // now CRASH, not SHIPPED — FCE.1). All four kinds are well-formed for this liveness bar.
-    expect(['SHIPPED', 'WEDGE', 'CRASH', 'HUMAN_REQUIRED']).toContain(outcome.kind);
+    expect(outcome).toEqual({ kind: 'SHIPPED', stage: 'code' });
   }, 130_000);
 });
 

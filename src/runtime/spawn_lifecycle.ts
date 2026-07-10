@@ -112,6 +112,11 @@ export interface OneShotOpts {
   errorPrefix?: string;
   /** Grace before the group SIGKILL. Default 5_000. */
   graceMs?: number;
+  /** Max BYTES retained per captured stream (stdout AND stderr, independently). A runaway lap that exceeds this
+   *  is FAILED-LOUD — the promise rejects with a typed cap error and the child group is killed — NOT silently
+   *  truncated (a truncated JSONL stream would corrupt the fold, codex_lap_harness.ts:99). Default 10 MiB.
+   *  Sibling to graceMs; omitted ⇒ the default ⇒ every existing caller is byte-unchanged. Harness-neutral. */
+  maxCaptureBytes?: number;
   /** Extra env vars merged OVER the inherited process env for the child (e.g. OPENSQUID_ITEM_ID for a ralph lap). */
   env?: NodeJS.ProcessEnv;
   /**
@@ -145,9 +150,14 @@ type LifecyclePhase =
 export const insideSupervisedTree = (env: NodeJS.ProcessEnv = process.env): boolean =>
   env.OPENSQUID_SUPERVISED === '1';
 
+/** Default per-stream capture cap (10 MiB) — generous for any normal lap, operator-overridable via
+ *  OneShotOpts.maxCaptureBytes. A runaway lap that spews past it is failed-loud (§5-Q2), not truncated. */
+const DEFAULT_MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
+
 export function runOneShotCli(opts: OneShotOpts): Promise<string> {
   const prefix = opts.errorPrefix ?? '';
   const pc = opts.procControl ?? realProcControl; // omitted ⇒ real impls ⇒ prod byte-unchanged
+  const cap = opts.maxCaptureBytes ?? DEFAULT_MAX_CAPTURE_BYTES;
   return new Promise<string>((resolve, reject) => {
     // Detach predicate = the SUPERVISED marker, NOT the hook-policy marker
     // (spec-audit finding 1): a reviewer spawned from an UNMARKED bridge
@@ -170,6 +180,8 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
     let stdout = '';
     let stderr = '';
     let stderrLineBuf = ''; // carries a partial (un-newlined) tail between data chunks for onStderrLine
+    let stdoutBytes = 0; // TRUE byte counters (incoming Buffer.length), not UTF-16 string length
+    let stderrBytes = 0;
     let graceTimer: NodeJS.Timeout | undefined;
 
     const groupKill = (): void => {
@@ -209,10 +221,30 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       reject(opts.timeoutError(opts.timeoutMs));
     }, opts.timeoutMs);
 
+    // Fail-loud on a runaway stream: reject with a typed cap error + kill the child. Guarded to the live phase
+    // (mirrors proc.on('error') :229) so a cap trip after a timeout/close/error no-ops. Does NOT call onStreams —
+    // the pending 'close' after groupKill calls it exactly once (the at-most-once contract, :120).
+    const failCapExceeded = (stream: 'stdout' | 'stderr'): void => {
+      if (state.phase !== 'running') return;
+      state = { phase: 'spawn_failed' }; // terminal — close/error/timeout handlers no-op on non-running
+      pc.clearTimeout(timer);
+      groupKill(); // stop the runaway (re-marks state 'group_killed'; still terminal)
+      reject(
+        new Error(
+          `${prefix}capture cap exceeded: ${stream} exceeded ${cap} bytes ` +
+            `(runaway lap — fail-loud, not truncated; raise OneShotOpts.maxCaptureBytes to override)`,
+        ),
+      );
+    };
+
     proc.stdout.on('data', (d: Buffer) => {
+      stdoutBytes += d.length; // TRUE byte length of the incoming chunk (not UTF-16 string length)
+      if (stdoutBytes > cap) return failCapExceeded('stdout'); // > cap: a stream exactly at the cap passes
       stdout += d.toString('utf8');
     });
     proc.stderr.on('data', (d: Buffer) => {
+      stderrBytes += d.length;
+      if (stderrBytes > cap) return failCapExceeded('stderr'); // drop the chunk — no append, no onStderrLine drain
       const chunk = d.toString('utf8');
       stderr += chunk;
       if (opts.onStderrLine !== undefined) {

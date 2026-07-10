@@ -49,7 +49,7 @@ describe('codexLapHarness.spawnArgs + deliverPrompt (MHL.5)', () => {
     const args = codexLapHarness.spawnArgs({
       maxBudgetUsd: 10,
       sandbox: 'read-only',
-      askForApproval: 'on-failure',
+      askForApproval: 'on-request', // a supported non-default value (was `on-failure`, removed in 0.144.0)
     });
     expect(args).toEqual([
       'exec',
@@ -57,7 +57,7 @@ describe('codexLapHarness.spawnArgs + deliverPrompt (MHL.5)', () => {
       '--sandbox',
       'read-only',
       '-c',
-      'approval_policy=on-failure',
+      'approval_policy=on-request',
       '-',
     ]);
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');

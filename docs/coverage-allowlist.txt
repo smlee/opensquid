@@ -2303,3 +2303,13 @@ CodexBillingPath
 CodexConfig
 CodexMcpServerEntry
 readCodexConfig
+
+# --- T-codex-hardening (wg-b2484f3afa3e, CH.1, CODE 2026-07-10): the SSOT approval/sandbox value types. Pure
+# data-shape TYPES (a union of string literals, on codex_lap_harness.ts — HOMED in the Codex adapter, not the
+# neutral lap_harness.ts seam, because their VALUES are Codex vendor vocabulary the MHL.8 neutrality audit keeps
+# out of the neutral core) with no runtime call site of their own to prove `reachable` — same class as the
+# HarnessKind/CodexPricing/CodexBillingPath data-shape siblings above. They are the SINGLE source of truth read
+# by BOTH the ralph_writer.ts z.enum tuples AND LapHarnessCfg's sandbox/askForApproval fields (schema/cfg
+# cannot drift). ---
+CodexApprovalPolicy
+CodexSandboxMode

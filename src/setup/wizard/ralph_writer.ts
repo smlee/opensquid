@@ -17,16 +17,37 @@
  * ../../runtime/ralph/ralph_template.js, zod.
  */
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { z } from 'zod';
 import { atomicWriteFile } from '../../runtime/atomic_write.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 import { RALPH_MD } from '../../runtime/ralph/ralph_template.js';
 import { LAP_HARNESS_KINDS, type HarnessKind } from '../../runtime/ralph/lap_harness.js';
+// The Codex approval/sandbox SSOT value types are homed in the Codex adapter (MHL.8 keeps vendor value literals
+// out of the neutral lap_harness.ts seam). The config schema is neutrality-exempt, so the value tuples live here.
+import type {
+  CodexApprovalPolicy,
+  CodexSandboxMode,
+} from '../../runtime/ralph/harnesses/codex_lap_harness.js';
 
 /** SSOT: the schema enum's members ARE the resolver's HarnessKind — `satisfies` is a compile-time drift guard
  *  (adding a kind here that the resolver's HarnessKind doesn't know is a type error, and vice-versa via the enum). */
 const HARNESS_KINDS = ['claude', 'codex'] as const satisfies readonly HarnessKind[];
+
+/** SSOT value tuples with a compile-time drift-guard (mirrors HARNESS_KINDS satisfies above): the schema z.enum
+ *  reads the tuple, the shared type in lap_harness.ts guards it, LapHarnessCfg reads the SAME type → the schema
+ *  enum and the adapter cfg cannot diverge. The values are written ONCE here (the types are the guard, not a
+ *  second list). Grounded in codex-cli 0.144.0 `--ask-for-approval`/`--sandbox` possible-values (§2.1). */
+const CODEX_APPROVAL_POLICIES = [
+  'untrusted',
+  'on-request',
+  'never',
+] as const satisfies readonly CodexApprovalPolicy[];
+const CODEX_SANDBOX_MODES = [
+  'read-only',
+  'workspace-write',
+  'danger-full-access',
+] as const satisfies readonly CodexSandboxMode[];
 
 export const RalphConfigFileSchema = z
   .object({
@@ -50,13 +71,15 @@ export const RalphConfigFileSchema = z
        *  `.default('claude')` is LOAD-BEARING: every existing config (no `kind`) parses byte-unchanged. An
        *  unimplemented kind is rejected fail-loud by the superRefine below (MHL.2). */
       kind: z.enum(HARNESS_KINDS).default('claude'),
-      /** Per-kind Codex policy (FORK LOCKED §5 Q1) — explicit, NOT an auto-translation of --dangerously-*.
+      /** Per-kind Codex policy — explicit, NOT an auto-translation of --dangerously-*.
        *  `sandbox` → `codex exec --sandbox <v>`; `askForApproval` → `codex exec -c approval_policy=<v>`
-       *  (--ask-for-approval is not a `codex exec` flag in 0.144.0). `askForApproval` stays a permissive
-       *  string so a new policy vocabulary needs no schema bump. Autonomous-lap defaults live in the Codex
-       *  adapter (MHL.5): sandbox='workspace-write', approval_policy='never'. */
-      sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
-      askForApproval: z.string().optional(),
+       *  (--ask-for-approval is not a `codex exec` flag in 0.144.0). Both are enum-validated against the
+       *  grounded codex-cli 0.144.0 vocabulary (SSOT: CodexSandboxMode / CodexApprovalPolicy). The approval
+       *  enum SUPERSEDES the prior permissive-string lock (user-sanctioned reversal, 2026-07-10): an
+       *  unsupported value (e.g. the removed `on-failure`) is now REJECTED at load, not silently forwarded.
+       *  Autonomous-lap defaults live in the Codex adapter (MHL.5): sandbox='workspace-write', approval='never'. */
+      sandbox: z.enum(CODEX_SANDBOX_MODES).optional(),
+      askForApproval: z.enum(CODEX_APPROVAL_POLICIES).optional(),
       /** Codex financial-safety (CFS.1): the resolved model id + the per-model $/1M-token rate map. Both
        *  optional → every existing config parses byte-unchanged (the same load-bearing default-preservation
        *  contract as `kind`). `model` (when set) is passed as `codex exec -m <model>` AND priced by, so the
@@ -95,6 +118,26 @@ export const RalphConfigFileSchema = z
         message:
           `harness.kind "${c.harness.kind}" has no lap adapter — implemented kinds: ` +
           `${[...LAP_HARNESS_KINDS].join(' | ')}. Add a LapHarness adapter (see lap_harness.ts) before configuring it.`,
+      });
+    }
+  })
+  .superRefine((c, ctx) => {
+    // CROSS-FIELD kind/cli gate (scope-1a) — a sibling to the MHL.2 adapter-existence gate. `cli` and `kind`
+    // validate INDEPENDENTLY above, so `{ kind:'codex', cli:'claude' }` passes load and fails only at exec (the
+    // codex-kind config spawns the `claude` binary with `codex exec --json` args). REJECT when the cli's basename
+    // is ANOTHER registered kind's binary name (∈ LAP_HARNESS_KINDS) that differs from harness.kind — catching
+    // the OTHER kind's binary while TOLERATING a wrapper path whose basename matches no registered kind (e.g.
+    // `/opt/wrap/codex-runner`). Reuses LAP_HARNESS_KINDS as the canonical-binary-name SSOT (no second name list).
+    // `.default('claude')` on `kind` runs BEFORE this object-level refinement, so a defaulted kind is seen here.
+    const cliBase = basename(c.harness.cli);
+    if ((LAP_HARNESS_KINDS as ReadonlySet<string>).has(cliBase) && cliBase !== c.harness.kind) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['harness', 'cli'],
+        message:
+          `harness.cli "${c.harness.cli}" resolves to the "${cliBase}" harness binary but harness.kind is ` +
+          `"${c.harness.kind}" — a kind/cli mismatch spawns the wrong binary (fail-loud at load, not at exec). ` +
+          `Set harness.cli to a "${c.harness.kind}" binary (or a wrapper whose basename is not another kind).`,
       });
     }
   });

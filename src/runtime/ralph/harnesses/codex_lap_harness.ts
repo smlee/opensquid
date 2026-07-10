@@ -40,8 +40,19 @@ import type { LapEnvelope, LapHarness, LapHarnessCfg } from '../lap_harness.js';
 
 const execFileP = promisify(execFile);
 
-const DEFAULT_SANDBOX = 'workspace-write'; // explicit autonomous-lap policy (open-Q1) — NOT --dangerously-*
-const DEFAULT_APPROVAL = 'never'; // explicit approval policy via -c approval_policy (open-Q1)
+/** The supported Codex approval-policy values (codex-cli 0.144.0 `--ask-for-approval` possible-values:
+ *  `untrusted | on-request | never`; the earlier `on-failure` is REMOVED). SSOT: the config schema's z.enum
+ *  (ralph_writer.ts) AND LapHarnessCfg.askForApproval (lap_harness.ts) both read this ONE type, so they cannot
+ *  drift. Homed HERE (the Codex adapter) — not the neutral lap_harness.ts core — because these are Codex vendor
+ *  vocabulary; MHL.8 (lap_neutrality.test.ts) keeps such invocation/value literals OUT of the neutral seam and
+ *  ONLY under harnesses/** + the config schema. */
+export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never';
+/** The supported Codex sandbox modes (codex-cli 0.144.0 `--sandbox` possible-values). SSOT + adapter-homed (as
+ *  above). */
+export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+
+const DEFAULT_SANDBOX: CodexSandboxMode = 'workspace-write'; // explicit autonomous-lap policy — NOT --dangerously-*
+const DEFAULT_APPROVAL: CodexApprovalPolicy = 'never'; // explicit approval policy via -c approval_policy
 
 export const codexLapHarness: LapHarness = {
   // LIVE-confirmed (0.144.0): `codex exec --json --sandbox <mode> -c approval_policy=<v> -` (stdin prompt).
