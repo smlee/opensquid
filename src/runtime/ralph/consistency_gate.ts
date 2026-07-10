@@ -42,10 +42,11 @@ export const NO_DURABLE_COMMIT_LABEL = 'no-durable-commit';
  *  reads the shared working tree / loop-branch HEAD; parallel (future): the seam is bound to the item's
  *  worktree/branch — SAME predicate, only the binding changes. */
 export interface RalphGitSeam {
-  /** The integration target's current tip sha (`git rev-parse HEAD`). */
-  tip: () => Promise<string>;
-  /** File paths COMMITTED on the target since baseSha (`git diff --name-only <baseSha>..HEAD`); [] ⇒ no commit landed. */
-  committedSince: (baseSha: string) => Promise<string[]>;
+  /** The integration target's current tip sha (`git rev-parse <ref ?? HEAD>`). GF.2: an optional `ref` resolves
+   *  the CONFIGURED integration-target branch; ABSENT ⇒ HEAD (byte-identical to the shipped base gate). */
+  tip: (ref?: string) => Promise<string>;
+  /** File paths COMMITTED on the target since baseSha (`git diff --name-only <baseSha>..<ref ?? HEAD>`); [] ⇒ none. */
+  committedSince: (baseSha: string, ref?: string) => Promise<string[]>;
   /** The working-tree dirty set — staged + unstaged + untracked (`git status --porcelain` paths). */
   uncommittedPaths: () => Promise<string[]>;
 }
@@ -55,9 +56,12 @@ export interface RalphGitSeam {
  *  carries no cwd plumbing. */
 export function makeRalphGitSeam(cwd: string): RalphGitSeam {
   return {
-    tip: async () => (await execFileP('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim(),
-    committedSince: async (baseSha) =>
-      (await execFileP('git', ['diff', '--name-only', `${baseSha}..HEAD`], { cwd })).stdout
+    tip: async (ref) =>
+      (await execFileP('git', ['rev-parse', ref ?? 'HEAD'], { cwd })).stdout.trim(),
+    committedSince: async (baseSha, ref) =>
+      (
+        await execFileP('git', ['diff', '--name-only', `${baseSha}..${ref ?? 'HEAD'}`], { cwd })
+      ).stdout
         .split('\n')
         .map((l) => l.trim())
         .filter((l) => l.length > 0),
@@ -77,9 +81,12 @@ export function makeRalphGitSeam(cwd: string): RalphGitSeam {
 export async function durableItemCommitExists(
   git: RalphGitSeam,
   baseSha: string,
+  targetRef?: string,
 ): Promise<boolean> {
-  const tip = await git.tip();
-  const committed = await git.committedSince(baseSha);
+  // GF.2 (open-Q2) — resolve the tip/committed-set on the CONFIGURED integration target when `targetRef` is given
+  // (staging ?? local); ABSENT ⇒ HEAD, byte-identical to the shipped 6436a220 predicate (backward-compatible).
+  const tip = await git.tip(targetRef);
+  const committed = await git.committedSince(baseSha, targetRef);
   const advanced = tip !== baseSha && committed.length > 0; // tip moved AND ≥1 file committed (not an empty commit)
   if (!advanced) return false; // headline: reporting item — tip unmoved / nothing committed
   const dirty = new Set(await git.uncommittedPaths());

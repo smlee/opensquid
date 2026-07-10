@@ -34,6 +34,11 @@ import { claimAudience } from '../../workgraph/audience.js';
 import type { Issue } from '../../workgraph/types.js';
 import { runRalphLoop, resolveParked, type RalphConfig } from '../../runtime/ralph/orchestrator.js';
 import { makeRalphGitSeam } from '../../runtime/ralph/consistency_gate.js'; // CG.1 — the consistency-gate git seam
+import { resolveEnvironments } from '../../packs/discovery.js'; // GF.1 — the config-driven git-flow environments reader
+import { reconcileBase } from '../../runtime/ralph/auto_pull.js'; // GF.6 — the base-refresh reconcile
+import { routeOnShipped } from '../../runtime/ralph/route_on_shipped.js'; // GF.3 — the config-driven onShipped route
+import { integrateBranchToStage } from './release.js'; // GF.3/GF.7 — the config-driven integrate SSOT
+import { ensureProductionPr } from '../../runtime/release/stage_pr.js'; // GF.7 — the idempotent auto-PR
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
 import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
 import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
@@ -331,6 +336,9 @@ export function registerRalph(program: Command): Command {
               scopeGate: (item: Issue): Promise<'drive' | 'hold'> => scopeGate(item.id),
             }
           : undefined;
+      // GF.1/GF.2 — resolve the config-driven git-flow environments ONCE for the run (the consistency gate's
+      // target + the base-refresh production branch). null ⇒ unconfigured ⇒ the gate is HEAD-based + no refresh.
+      const environments = await resolveEnvironments(root);
       try {
         const result = await runRalphLoop(cfg, {
           wg,
@@ -348,6 +356,14 @@ export function registerRalph(program: Command): Command {
           // git state at the SHIPPED-close boundary, so an item that ships without a durable commit for its work
           // is re-driven then parked `no-durable-commit` (never silently closed). Bound to `root` once (a factory).
           git: makeRalphGitSeam(root),
+          // GF.2 — the config-target-aware consistency gate: the gate verifies the durable commit landed on the
+          // configured integration target (staging ?? local), not merely HEAD. null ⇒ omit ⇒ HEAD-based (unchanged).
+          ...(environments === null ? {} : { environments }),
+          // GF.6 — the LIVE per-pass base-refresh: reconcile the base (environments.production) preserving
+          // whoever's ahead (a trunk hot patch is never lost). null ⇒ omit ⇒ no base-refresh (unconfigured project).
+          ...(environments === null
+            ? {}
+            : { baseRefresh: () => reconcileBase(root, environments.production) }),
           ...(stageLoop === undefined ? {} : { stageLoop }),
           // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
           // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
@@ -366,17 +382,37 @@ export function registerRalph(program: Command): Command {
             // orchestrator (parent) writes to stdout; the body is byte-unchanged from the render.
             displayReport(report, process.stdout);
             process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
-            // INTERIM (fast-slice loop-fix, 2026-07-08): the fragile per-item stage-integration was REMOVED. It
-            // ran `mergeToStage`/`reset --hard` in the MAIN checkout against a never-created `stage` and swallowed
-            // its own failure (fail-open) — silently no-op'ing while items showed SHIPPED (phantom ships that lost
-            // work). Durable landing is now owned by the item's DEPLOY commit+push (deploy.md:47-55) straight to
-            // the loop branch; `onShipped` only computes the next run-group. The CONSISTENCY GATE that made
-            // "SHIPPED ⟺ a durable commit exists" structural (this note's own former TODO) is now WIRED — the
-            // `git: makeRalphGitSeam(root)` dep above verifies a durable item commit landed before the SHIPPED
-            // close, re-driving then parking `no-durable-commit` otherwise (CG.1, wg-1c620a56b733). The rest of
-            // the config-driven git-flow (version-control.environments, semantic branches, whoever's-ahead
-            // reconcile, auto-PR) is re-driven THROUGH the loop as its own scoped items — see the private design
-            // doc ~/projects/loop/docs/research/opensquid-gitflow-integration-fix-pre-research-2026-07-08.md.
+            // GF.3 (T-gitflow-integration-fix) — the CONFIG-DRIVEN, FAIL-VISIBLE integration route. Resolve the
+            // `version-control.environments` (GF.1); when unconfigured (null) do nothing further (a non-automated
+            // project ships as today). When configured, `routeOnShipped` is a TOTAL function over the environments:
+            // has-stage → integrate into `staging` (GF.4's FIXED context via the `integrateBranchToStage` SSOT) +
+            // the staging→production PR (GF.7); no-stage → the loop-branch→production PR directly (GF.7). A failed
+            // integration is SURFACED (logged live below) — it leaves NO durable target commit, so CG.1/GF.2's gate
+            // blocks the SHIPPED close (never a swallowed phantom ship). Fail-open on the ROUTE call itself only so
+            // an infra fault (no gh auth) never breaks the drain — the consistency gate still blocks the close.
+            try {
+              const env = await resolveEnvironments(root);
+              if (env !== null) {
+                const routed = await routeOnShipped(env, {
+                  taskId,
+                  root,
+                  integrateToStaging: async (e, r) => {
+                    const res = await integrateBranchToStage(e.local, r, { environments: e });
+                    return res.url !== undefined
+                      ? { integrated: res.integrated, prUrl: res.url }
+                      : { integrated: res.integrated };
+                  },
+                  ensureProductionPr: (e, r) => ensureProductionPr(e, r),
+                });
+                process.stdout.write(`🦑 git-flow route: ${JSON.stringify(routed)}\n`);
+              }
+            } catch (e) {
+              // FAIL-VISIBLE but non-fatal to the drain: log the fault; the missing durable target commit still
+              // blocks the SHIPPED close via the consistency gate (GF.2). NEVER a silent swallow of the outcome.
+              process.stdout.write(
+                `🦑 git-flow route error (surfaced): ${e instanceof Error ? e.message : String(e)}\n`,
+              );
+            }
           },
           // LSF.5 (§3a) — fold each completed stage's cost/tokens/timing into the project-local loop_metrics
           // history. Injected so the orchestrator stays db-free/testable; the orchestrator wraps it fail-open.

@@ -690,15 +690,15 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: latestPrefixTag, from: [release] }
     proof: 'src/runtime/release/latest_prefix_tag.test.ts'
-  - id: R-AGF-BRANCH-NAME
-    intent: 'AGF.2 branchNameFor: the auto/wg-<id> branch-name SSOT (never double-prefixed) shared by the worktree cut + push + stage merge'
-    wg: wg-732b2b68a168
-    assert: { kind: reachable, symbol: branchNameFor, from: [orchestrator] }
+  - id: R-GF-FEAT-BRANCH
+    intent: 'GF.5 featBranchFor: the SEMANTIC per-item branch name feat/<slug-of-item.title> (retires the mechanical auto/wg-<id> branchNameFor); DORMANT parallel-only (serial commits to env.local) — proof-backed, static reachability advisory'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: featBranchFor, from: [orchestrator] }
     proof: 'src/runtime/ralph/auto_pull.test.ts'
-  - id: R-AGF-AUTO-PULL
-    intent: 'AGF.2 autoPullMain: fetch + fast-forward-only pull of main (never a stale base); a diverged local main REJECTS (surfaced, no silent merge commit)'
-    wg: wg-732b2b68a168
-    assert: { kind: reachable, symbol: autoPullMain, from: [orchestrator] }
+  - id: R-GF-RECONCILE-BASE
+    intent: 'GF.6 reconcileBase: the preserve-whoever-is-ahead base-refresh (replaces autoPullMain --ff-only); four-state FSM over (behind, ahead) — ff / kept-local / MERGE-both / conflict-surfaced; NO reset/rebase (hot patch never lost); base branch = environments.production'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: reconcileBase, from: [orchestrator] }
     proof: 'src/runtime/ralph/auto_pull.test.ts'
   - id: R-AGF-ADD-WORKTREE
     intent: 'AGF.3 addItemWorktree: cut auto/wg-<id> from fresh main into its own checkout at <poolRoot>/<id> (git worktree add)'
@@ -735,6 +735,36 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: integrateBranchToStage, from: [release] }
     proof: 'src/setup/cli/release.test.ts'
+  # T-gitflow-integration-fix (GF.1..GF.8, wg-e20fb6b080e0) — the config-driven git-flow's new BEHAVIORAL exports:
+  # one reachable requirement per export, its element proof-test the AUTHORITY (the `from` hints are advisory — a
+  # negative static pre-filter never vetoes a passing proof). The DATA-shape / injected-seam / trivial siblings
+  # (EnvironmentsConfig/VersionControlConfig/ResolvedEnvironments/ReconcileIo/ReconcileOutcome/realReconcileIo/
+  # slugify/RouteDeps/RouteResult/writeEnvironmentsElicitation) are baselined in docs/coverage-allowlist.txt.
+  - id: R-GF-RESOLVE-ENV
+    intent: 'GF.1 resolveEnvironments: the deterministic version-control.environments reader — {production, staging?, local} with local resolved to the current branch when unset; null when production absent/malformed (fail-soft, not on the automated git-flow)'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: resolveEnvironments, from: [release] }
+    proof: 'src/packs/discovery.test.ts'
+  - id: R-GF-REVERSIBILITY
+    intent: 'GF.8 reversibilityBoundaryFor: the DEPLOY reversibility DERIVED from environments (env !== null ⇒ reversible by construction; the sole irreversible act is the human PR-merge) — subsumes the ad-hoc reversible flag'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: reversibilityBoundaryFor, from: [release] }
+    proof: 'src/packs/discovery.test.ts'
+  - id: R-GF-MERGE-ENV
+    intent: 'GF.1 mergeEnvironmentsBlock: the PURE elicitation merge folding version-control.environments into active.json (preserving packs/verifySuite/versioning; production required, empty staging/local dropped; idempotent)'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: mergeEnvironmentsBlock, from: [orchestrator] }
+    proof: 'src/setup/cli/hooks.test.ts'
+  - id: R-GF-ENSURE-PR
+    intent: 'GF.7 ensureProductionPr: the IDEMPOTENT config-driven auto-PR (gh pr view || create) head=(staging ?? local) base=production; existing PR is a no-op returning its url; no gh auth → GhAuthError; NEVER merges (human MERGE is the sole gate)'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: ensureProductionPr, from: [release] }
+    proof: 'src/runtime/release/stage_pr.test.ts'
+  - id: R-GF-ROUTE-ON-SHIPPED
+    intent: 'GF.3 routeOnShipped: the TOTAL config-driven fail-visible integration route — has-stage → integrate into staging then production PR; no-stage → production PR direct; an integration failure is SURFACED (integrated:false), never swallowed'
+    wg: wg-e20fb6b080e0
+    assert: { kind: reachable, symbol: routeOnShipped, from: [orchestrator] }
+    proof: 'src/runtime/ralph/route_on_shipped.test.ts'
   # T-statusline-compose (SLC.1..SLC.4, wg-c954689147da) — the additive status-line pill's new BEHAVIORAL exports:
   # one reachable requirement per export, its element proof-test the AUTHORITY. The `from` hints are advisory —
   # these surface through the `emitMonitorEvent` state-change choke-point (post-tool-use phase writes / the

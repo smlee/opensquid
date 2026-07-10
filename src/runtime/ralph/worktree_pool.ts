@@ -9,9 +9,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 
-import { branchNameFor } from './auto_pull.js';
-
 const execFileP = promisify(execFile);
+
+/** DORMANT (GF.9) — the mechanical per-item branch name for the parallel worktree pool. GF.5 RETIRED the shared
+ *  `branchNameFor` export from the LIVE path (the environment branches are the semantic names now); the still-dormant
+ *  pool keeps its own local name so it compiles until parallelism is turned on (then it adopts GF.5's `featBranchFor`).
+ *  The id already carries the `wg-` prefix → `auto/wg-abc123` (never double-prefixed). */
+const dormantBranchNameFor = (id: string): string => `auto/${id}`;
 
 /** The injectable git effects — default binds real `git worktree add/remove`; tests pass a pure stub. */
 export interface WorktreeIo {
@@ -49,7 +53,7 @@ export async function addItemWorktree(
   io: WorktreeIo,
 ): Promise<string> {
   const path = join(poolRoot, id);
-  await io.worktreeAdd(branchNameFor(id), path, 'main', mainRoot);
+  await io.worktreeAdd(dormantBranchNameFor(id), path, 'main', mainRoot);
   return path;
 }
 

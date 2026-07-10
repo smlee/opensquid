@@ -9,7 +9,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import type { VersioningConfig } from '../../packs/discovery.js';
+import type { VersioningConfig, ResolvedEnvironments } from '../../packs/discovery.js';
 import { STAGE_BRANCH } from './stage_integration.js';
 import { nextLockedTag } from './locked_version.js';
 
@@ -21,6 +21,7 @@ export class GhAuthError extends Error {}
 /** Injectable `gh` + git effects — default binds real `gh`/`git`; tests pass a pure stub (no network). */
 export interface GhIo {
   ghAuthOk: (cwd: string) => Promise<boolean>; // `gh auth status` exit 0
+  prView: (head: string, base: string, cwd: string) => Promise<string | null>; // GF.7 — `gh pr view <head> --json url` → url | null (idempotency probe)
   prCreate: (
     a: { base: string; head: string; title: string; body: string },
     cwd: string,
@@ -35,6 +36,14 @@ export const realGhIo: GhIo = {
     execFileP('gh', ['auth', 'status'], { cwd })
       .then(() => true)
       .catch(() => false),
+  prView: async (head, _base, cwd) => {
+    // `gh pr view <head> --json url` → the OPEN PR's url, or null when none exists (a non-zero exit / no PR).
+    const { stdout } = await execFileP('gh', ['pr', 'view', head, '--json', 'url', '-q', '.url'], {
+      cwd,
+    }).catch(() => ({ stdout: '' }));
+    const url = stdout.trim();
+    return url.length > 0 ? url : null;
+  },
   prCreate: async (a, cwd) => {
     const { stdout } = await execFileP(
       'gh',
@@ -65,6 +74,34 @@ export async function openStagePr(
   if (!(await io.ghAuthOk(cwd)))
     throw new GhAuthError('gh is not authenticated — cannot open the stage→main PR');
   const url = await io.prCreate({ base: 'main', head: STAGE_BRANCH, title, body }, cwd);
+  return { url };
+}
+
+/** GF.7 (scope-7) — ensure ONE PR (the integration branch → production) is open, IDEMPOTENTLY. head =
+ *  `staging ?? local` (config-driven, GF.1), base = `production` — NO hardcoded `main`/`stage`. `prView` first:
+ *  an existing PR is a no-op (its url returned; GitHub auto-tracks later pushes); else `prCreate`. FAIL-VISIBLE:
+ *  no `gh` auth → `GhAuthError` (surfaced, never swallowed). NEVER merges — the human MERGE is the SOLE gate
+ *  (this path NEVER shells the merge — the human clicks it in the GitHub UI; that click triggers the CI publish, the one irreversible act). */
+export async function ensureProductionPr(
+  env: ResolvedEnvironments,
+  cwd: string,
+  io: GhIo = realGhIo,
+): Promise<{ url: string }> {
+  if (!(await io.ghAuthOk(cwd)))
+    throw new GhAuthError('gh is not authenticated — cannot open the → production PR');
+  const head = env.staging ?? env.local; // staging if set, else the loop branch — config-driven
+  const base = env.production;
+  const existing = await io.prView(head, base, cwd);
+  if (existing !== null) return { url: existing }; // idempotent — the PR is already open, tracks new pushes
+  const url = await io.prCreate(
+    {
+      base,
+      head,
+      title: `Release: ${head} → ${base}`,
+      body: `Automated integration PR (${head} → ${base}). Merging opens the release tag + publish.`,
+    },
+    cwd,
+  );
   return { url };
 }
 

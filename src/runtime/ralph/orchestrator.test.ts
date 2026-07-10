@@ -9,6 +9,7 @@ import {
   NO_DURABLE_COMMIT_LABEL,
   type RalphGitSeam,
 } from './consistency_gate.js';
+import type { ReconcileOutcome } from './auto_pull.js';
 import type { Issue, WorkGraphFacade } from '../../workgraph/types.js';
 import type { LapResult } from './supervisor.js';
 import type { LoopMetricRow } from '../loop/loop_metrics.js';
@@ -894,5 +895,93 @@ describe('runRalphLoop — CG.1 consistency gate (SHIPPED ⟺ a durable commit e
     expect(runLap).toHaveBeenCalledTimes(1 + MAX_COMMIT_REDRIVES);
     expect(narrate.mock.calls.flat().join(' ')).toContain(NO_DURABLE_COMMIT_LABEL);
     expect((await wg.getIssue('wg-123340ac7a9f'))?.status).not.toBe('closed');
+  });
+});
+
+// ---- GF.2 / GF.6 — the CONFIG-DRIVEN git-flow ORCHESTRATOR WIRING (T-gitflow-integration-fix) ----
+// The pure predicates are unit-tested in consistency_gate.test.ts (durableItemCommitExists(targetRef)) and
+// auto_pull.test.ts (reconcileBase four-state). These cases prove the ORCHESTRATOR actually THREADS the configured
+// target into the gate (GF.2) and CALLS baseRefresh live once per pass, surfacing a conflict (GF.6 BLOCKING-1 fix).
+describe('runRalphLoop — GF.2/GF.6 config-driven git-flow wiring', () => {
+  it('GF.2 — the consistency gate reads the CONFIGURED target (staging ?? local), never HEAD', async () => {
+    const refs: (string | undefined)[] = [];
+    const tips = ['BASE', 'TIP']; // tip advances across the pre-drive record + the close-time re-read
+    let ti = 0;
+    const git: RalphGitSeam = {
+      tip: (ref) => {
+        refs.push(ref);
+        return P(tips[Math.min(ti++, tips.length - 1)]!);
+      },
+      committedSince: (_b, ref) => {
+        refs.push(ref);
+        return P(['a.ts']);
+      },
+      uncommittedPaths: () => P([]),
+    };
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      git,
+      environments: { production: 'main', staging: 'stage', local: 'work' },
+    });
+    expect(r.closed).toEqual(['a']); // a durable commit on the target ⇒ closes
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.every((ref) => ref === 'stage')).toBe(true); // staging is the per-item target (NOT production/HEAD)
+  });
+
+  it('GF.2 — no staging → the target falls back to local (still config-driven, not HEAD)', async () => {
+    const refs: (string | undefined)[] = [];
+    const git: RalphGitSeam = {
+      tip: (ref) => {
+        refs.push(ref);
+        return P('BASE'); // never advances ⇒ no durable commit on the target
+      },
+      committedSince: (_b, ref) => {
+        refs.push(ref);
+        return P([]);
+      },
+      uncommittedPaths: () => P([]),
+    };
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      git,
+      environments: { production: 'main', local: 'work' },
+    });
+    expect(r.parked).toEqual([{ id: 'a', reason: 'NO_DURABLE_COMMIT' }]); // no target commit ⇒ park
+    expect(refs.every((ref) => ref === 'work')).toBe(true); // local is the target when staging is absent
+  });
+
+  it('GF.6 — baseRefresh fires LIVE once per pass (the BLOCKING-1 per-pass wiring)', async () => {
+    const baseRefresh = vi.fn(() => P<ReconcileOutcome>({ kind: 'fast-forwarded' }));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      baseRefresh,
+    });
+    expect(r.closed).toEqual(['a']);
+    // pass 1 (drives 'a') + pass 2 (board drained → BOARD_EMPTY): the reconcile runs at the TOP of every pass.
+    expect(baseRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('GF.6 — a base-reconcile CONFLICT surfaces SCOPE_FORK once (no spin); the drive still proceeds', async () => {
+    const esc = vi.fn(() => P({ escalated: true }));
+    const narrate = vi.fn();
+    const baseRefresh = vi.fn(() => P<ReconcileOutcome>({ kind: 'conflict' }));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 }), esc),
+      baseRefresh,
+      narrate,
+    });
+    expect(narrate.mock.calls.flat().join(' ')).toContain('base reconcile conflict');
+    expect(r.closed).toEqual(['a']); // the conflict never auto-picks a side or aborts the drive
+    expect(baseRefresh).toHaveBeenCalledTimes(1); // guarded after the first surfacing ⇒ no escalate-spin
+    expect(esc).toHaveBeenCalledTimes(2); // SCOPE_FORK (item-less) once + BOARD_EMPTY once
+  });
+
+  it('GF.6 — a transient baseRefresh throw is FAIL-OPEN (the pass proceeds, item closes)', async () => {
+    const baseRefresh = vi.fn(() => Promise.reject(new Error('fetch timeout')));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), lap({ kind: 'SHIPPED', costUsd: 0 })),
+      baseRefresh,
+    });
+    expect(r.closed).toEqual(['a']); // a transient fetch/reconcile fault must never break the drive pass
   });
 });

@@ -3,7 +3,14 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openStagePr, tagMainRelease, GhAuthError, type GhIo } from './stage_pr.js';
+import {
+  openStagePr,
+  ensureProductionPr,
+  tagMainRelease,
+  GhAuthError,
+  type GhIo,
+} from './stage_pr.js';
+import type { ResolvedEnvironments } from '../../packs/discovery.js';
 
 const cfg = { strategy: 'locked-prefix', prefix: '0.5', bump: 'patch-per-release' } as const;
 
@@ -12,6 +19,7 @@ function io(over: Partial<GhIo> = {}): GhIo & { pr: unknown[][]; tags: string[] 
   const tags: string[] = [];
   const base: GhIo = {
     ghAuthOk: () => Promise.resolve(true),
+    prView: () => Promise.resolve(null), // default: no existing PR open
     prCreate: (a) => (pr.push([a]), Promise.resolve('https://example/pr/7')),
     latestPrefixTag: () => Promise.resolve('v0.5.547'),
     tagPush: (t) => (tags.push(t), Promise.resolve()),
@@ -41,6 +49,52 @@ describe('AGF.6 openStagePr — the human MERGE is the sole gate', () => {
   it('the module never shells `gh pr merge` (step 5 is deliberately NOT automated)', () => {
     const src = readFileSync(join(__dirname, 'stage_pr.ts'), 'utf8');
     expect(src).not.toMatch(/pr['"\s,]*merge|pr merge/);
+  });
+});
+
+describe('GF.7 ensureProductionPr — idempotent, config-driven head/base, human MERGE is the sole gate', () => {
+  it('has-stage: head=staging, base=production; prView null → prCreate ONCE with base main head stage', async () => {
+    const i = io();
+    const env: ResolvedEnvironments = { production: 'main', staging: 'stage', local: 'feat/x' };
+    const r = await ensureProductionPr(env, '/repo', i);
+    expect(r.url).toBe('https://example/pr/7');
+    expect(i.pr).toHaveLength(1);
+    expect((i.pr[0] as { base: string; head: string }[])[0]).toMatchObject({
+      base: 'main',
+      head: 'stage',
+    });
+  });
+
+  it('no-stage: head falls back to local (feat/x), base=production', async () => {
+    const i = io();
+    const env: ResolvedEnvironments = { production: 'main', local: 'feat/x' };
+    const r = await ensureProductionPr(env, '/repo', i);
+    expect(r.url).toBe('https://example/pr/7');
+    expect(i.pr).toHaveLength(1);
+    expect((i.pr[0] as { base: string; head: string }[])[0]).toMatchObject({
+      base: 'main',
+      head: 'feat/x',
+    });
+  });
+
+  it('idempotent: an existing open PR → returns its url, prCreate NOT called', async () => {
+    const i = io({ prView: () => Promise.resolve('https://existing/pr/1') });
+    const env: ResolvedEnvironments = { production: 'main', staging: 'stage', local: 'feat/x' };
+    const r = await ensureProductionPr(env, '/repo', i);
+    expect(r.url).toBe('https://existing/pr/1');
+    expect(i.pr).toHaveLength(0);
+  });
+
+  it('FAIL-VISIBLE: no gh auth → GhAuthError, neither prView nor prCreate called', async () => {
+    let viewed = false;
+    const i = io({
+      ghAuthOk: () => Promise.resolve(false),
+      prView: () => ((viewed = true), Promise.resolve(null)),
+    });
+    const env: ResolvedEnvironments = { production: 'main', staging: 'stage', local: 'feat/x' };
+    await expect(ensureProductionPr(env, '/repo', i)).rejects.toBeInstanceOf(GhAuthError);
+    expect(viewed).toBe(false);
+    expect(i.pr).toHaveLength(0);
   });
 });
 

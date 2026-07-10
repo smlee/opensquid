@@ -33,8 +33,12 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { OPENSQUID_HOME } from '../runtime/paths.js';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+
+const execFileP = promisify(execFile);
 
 import { matchesDetectedBy, type DetectionContext } from '../runtime/detection.js';
 import type { Pack } from '../runtime/types.js';
@@ -238,6 +242,16 @@ export interface ActiveJson {
    * flow — that intent-from-commit semver is no longer consulted once the locked-prefix path is active.
    */
   versioning?: VersioningConfig;
+  /**
+   * GF.1 (T-gitflow-integration-fix, scope-1) — the CONFIG-DRIVEN git-flow environments. The whole automated
+   * flow derives its branch names from here (presence of `staging` IS the has-stage toggle — no `enabled` flag),
+   * so NO core module carries a literal `main`/`stage`. The hyphenated on-disk JSON key is `"version-control"`;
+   * a `versionControl` camelCase alias is accepted for forward-friendliness. The locked-prefix `versioning` folds
+   * UNDER `version-control` (the top-level {@link versioning} field is KEPT for back-compat read). ABSENT (or a
+   * malformed/missing `production`) ⇒ {@link resolveEnvironments} → null ⇒ the project is NOT on the automated
+   * git-flow (every routing element skips its hop — mirrors {@link resolveVersioning}→null).
+   */
+  versionControl?: VersionControlConfig;
 }
 
 /**
@@ -248,6 +262,84 @@ export interface VersioningConfig {
   strategy: 'locked-prefix';
   prefix: string;
   bump: 'patch-per-release';
+}
+
+/**
+ * GF.1 (scope-1) — the user-named environment branches. Presence of `staging` IS the has-stage toggle (no
+ * `enabled` flag). `production` is REQUIRED (the PR base + the reconcile base). `local`/`staging` optional.
+ * Branch-name strings ONLY — no core literal `main`/`stage`.
+ */
+export interface EnvironmentsConfig {
+  production: string;
+  staging?: string;
+  local?: string;
+}
+
+/**
+ * GF.1 (scope-1, §3.7.1) — the `version-control` block: the environments plus the locked-prefix `versioning`
+ * folded UNDER it (the top-level {@link ActiveJson.versioning} is kept for back-compat read).
+ */
+export interface VersionControlConfig {
+  environments: EnvironmentsConfig;
+  versioning?: VersioningConfig;
+}
+
+/**
+ * GF.1 (scope-1) — the reader's OUTPUT contract that every routing element consumes: `local` is always resolved
+ * (to the current branch when unset); `production` is guaranteed present; `staging` present iff configured.
+ */
+export interface ResolvedEnvironments {
+  production: string;
+  staging?: string;
+  local: string;
+}
+
+/**
+ * GF.1 (scope-1) — read the RAW `version-control.environments` block from a scope's `active.json`, unvalidated.
+ * Accepts the hyphenated on-disk key `"version-control"` or the `versionControl` camelCase alias. Lenient: absent
+ * scope / ENOENT / any parse fault → null (a non-automated project). INTERNAL (not exported) — the validated
+ * {@link resolveEnvironments} is the public reader.
+ */
+async function readRawEnvironments(
+  scopeRoot: string | null,
+): Promise<EnvironmentsConfig | undefined> {
+  if (scopeRoot === null) return undefined;
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const json = JSON.parse(raw) as ActiveJson & { 'version-control'?: VersionControlConfig };
+    return (json['version-control'] ?? json.versionControl)?.environments;
+  } catch {
+    return undefined; // unreadable / malformed ⇒ not on the automated git-flow
+  }
+}
+
+/**
+ * GF.1 (scope-1, open-Q3) — the deterministic reader every routing element (GF.2/3/4/5/6/7/8) calls. Reads
+ * `active.json`'s `version-control.environments`, resolving `local` to `git rev-parse --abbrev-ref HEAD` when
+ * absent (the serial landing branch). Returns null when `production` is absent/malformed/unreadable (FAIL-SOFT:
+ * an unconfigured project is not on the automated git-flow, mirroring {@link resolveVersioning}→null /
+ * {@link readActiveDeployReversible}→false). Presence of `staging` is the ONLY has-stage signal. PURE reads —
+ * no mutation.
+ */
+export async function resolveEnvironments(
+  scopeRoot: string | null,
+): Promise<ResolvedEnvironments | null> {
+  const env = await readRawEnvironments(scopeRoot);
+  if (env === undefined || typeof env.production !== 'string' || env.production.length === 0)
+    return null;
+  const local =
+    typeof env.local === 'string' && env.local.length > 0
+      ? env.local
+      : (
+          await execFileP('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+            cwd: dirname(scopeRoot!),
+          }).catch(() => ({ stdout: 'HEAD' }))
+        ).stdout.trim();
+  return {
+    production: env.production,
+    ...(typeof env.staging === 'string' && env.staging.length > 0 ? { staging: env.staging } : {}),
+    local,
+  };
 }
 
 /**
@@ -565,6 +657,12 @@ export async function resolveVersioning(
  * Mirrors {@link readActiveVerifyCommand}.
  */
 export async function readActiveDeployReversible(scopeRoot: string | null): Promise<boolean> {
+  // GF.8 (scope-8) — a configured git-flow project's DEPLOY stage is reversible BY CONSTRUCTION (the commit+push
+  // to a working branch and the merge-to-staging are revertable; only the PR-merge to production is irreversible).
+  // So the environments-derived boundary is the SOURCE OF TRUTH; the explicit `reversible` flag is a back-compat
+  // fallback ONLY for a project not on the `version-control.environments` block.
+  const env = await resolveEnvironments(scopeRoot);
+  if (env !== null) return reversibilityBoundaryFor(env);
   if (scopeRoot === null) return false;
   try {
     const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
@@ -573,6 +671,17 @@ export async function readActiveDeployReversible(scopeRoot: string | null): Prom
   } catch {
     return false; // fail-closed: unreadable / malformed ⇒ treat as irreversible
   }
+}
+
+/**
+ * GF.8 (scope-8) — the reversibility boundary DERIVED from `version-control.environments` (subsumes the ad-hoc
+ * `reversible` flag): a project ON the automated git-flow (`env !== null`) has a reversible DEPLOY stage — the
+ * commit+push to a working branch (and the merge-to-staging) are revertable; the SOLE irreversible act is the
+ * human PR-merge to production (which triggers the CI publish, GF.7). So has-stage/no-stage is ONE config-derived
+ * boundary, not a separate flag consulted ad hoc.
+ */
+export function reversibilityBoundaryFor(env: ResolvedEnvironments | null): boolean {
+  return env !== null;
 }
 
 /**

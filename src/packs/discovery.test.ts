@@ -34,7 +34,9 @@ import {
   readActiveArchDetector,
   readActiveDeployReversible,
   readActiveVerifyCommand,
+  resolveEnvironments,
   resolvePackStateDir,
+  reversibilityBoundaryFor,
   validatePackId,
 } from './discovery.js';
 
@@ -142,6 +144,120 @@ describe('readActiveDeployReversible — reversible deploy flag (REVERSIBLE-DEPL
   it('malformed JSON → false (fail-closed: unreadable = irreversible)', async () => {
     await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
     await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(false);
+  });
+
+  // GF.8 (scope-8) — env-derived boundary WINS over the ad-hoc flag; the flag is a back-compat
+  // fallback ONLY for a project not on the version-control.environments block.
+  it('env-precedence: environments.production set AND reversible:false → true (env boundary wins)', async () => {
+    await writeActive({
+      packs: ['fullstack-flow'],
+      reversible: false,
+      'version-control': { environments: { production: 'main', staging: 'stage' } },
+    });
+    await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(true);
+  });
+
+  it('fallback: NO environments block but reversible:true → true (flag fallback path)', async () => {
+    await writeActive({ packs: ['fullstack-flow'], reversible: true });
+    await expect(readActiveDeployReversible(scopeRoot)).resolves.toBe(true);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────
+ * GF.1 (scope-1) — resolveEnvironments: the config-driven git-flow reader.
+ * The on-disk key is the HYPHENATED "version-control"; production is REQUIRED;
+ * presence of `staging` IS the has-stage toggle; `local` resolves to the
+ * current branch (or 'HEAD') when unset.
+ * ──────────────────────────────────────────────────────────────────── */
+describe('resolveEnvironments — config-driven git-flow reader (GF.1)', () => {
+  it('production-only block → {production:"main", local:<branch>}, no staging', async () => {
+    await writeActive({
+      packs: ['fullstack-flow'],
+      'version-control': { environments: { production: 'main' } },
+    });
+    const result = await resolveEnvironments(scopeRoot);
+    expect(result).not.toBeNull();
+    expect(result?.production).toBe('main');
+    expect(result?.staging).toBeUndefined();
+    // local resolves via git rev-parse in the (non-repo) tmp dir → falls back to 'HEAD'.
+    expect(typeof result?.local === 'string' && (result?.local.length ?? 0) > 0).toBe(true);
+  });
+
+  it('production + staging → staging present', async () => {
+    await writeActive({
+      packs: ['fullstack-flow'],
+      'version-control': { environments: { production: 'main', staging: 'stage' } },
+    });
+    const result = await resolveEnvironments(scopeRoot);
+    expect(result?.production).toBe('main');
+    expect(result?.staging).toBe('stage');
+    expect(typeof result?.local === 'string' && (result?.local.length ?? 0) > 0).toBe(true);
+  });
+
+  it('explicit local → local === "develop" exactly', async () => {
+    await writeActive({
+      packs: ['fullstack-flow'],
+      'version-control': {
+        environments: { production: 'main', staging: 'stage', local: 'develop' },
+      },
+    });
+    const result = await resolveEnvironments(scopeRoot);
+    expect(result?.local).toBe('develop');
+  });
+
+  it('local ABSENT → resolves to a non-empty branch string (git rev-parse / HEAD fallback)', async () => {
+    await writeActive({
+      packs: ['fullstack-flow'],
+      'version-control': { environments: { production: 'main' } },
+    });
+    const result = await resolveEnvironments(scopeRoot);
+    expect(result).not.toBeNull();
+    expect(typeof result?.local).toBe('string');
+    expect((result?.local.length ?? 0) > 0).toBe(true);
+  });
+
+  it('production absent (environments without production) → null', async () => {
+    await writeActive({
+      packs: ['fullstack-flow'],
+      'version-control': { environments: { staging: 'stage' } },
+    });
+    await expect(resolveEnvironments(scopeRoot)).resolves.toBeNull();
+  });
+
+  it('production empty string → null', async () => {
+    await writeActive({
+      packs: ['fullstack-flow'],
+      'version-control': { environments: { production: '' } },
+    });
+    await expect(resolveEnvironments(scopeRoot)).resolves.toBeNull();
+  });
+
+  it('no version-control block → null (project not on the automated git-flow)', async () => {
+    await writeActive({ packs: ['fullstack-flow'] });
+    await expect(resolveEnvironments(scopeRoot)).resolves.toBeNull();
+  });
+
+  it('malformed active.json → null', async () => {
+    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
+    await expect(resolveEnvironments(scopeRoot)).resolves.toBeNull();
+  });
+
+  it('absent active.json (ENOENT) → null', async () => {
+    await expect(resolveEnvironments(scopeRoot)).resolves.toBeNull();
+  });
+
+  it('null scopeRoot → null', async () => {
+    await expect(resolveEnvironments(null)).resolves.toBeNull();
+  });
+});
+
+describe('reversibilityBoundaryFor — env-derived reversibility boundary (GF.8)', () => {
+  it('null env → false', () => {
+    expect(reversibilityBoundaryFor(null)).toBe(false);
+  });
+
+  it('resolved env → true', () => {
+    expect(reversibilityBoundaryFor({ production: 'main', local: 'x' })).toBe(true);
   });
 });
 

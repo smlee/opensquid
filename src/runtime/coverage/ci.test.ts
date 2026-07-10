@@ -101,8 +101,13 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
       'R-AGF-NEXT-LOCKED-TAG',
       'R-AGF-NEXT-RC-TAG',
       'R-AGF-LATEST-PREFIX-TAG',
-      'R-AGF-BRANCH-NAME',
-      'R-AGF-AUTO-PULL',
+      'R-GF-FEAT-BRANCH',
+      'R-GF-RECONCILE-BASE',
+      'R-GF-RESOLVE-ENV',
+      'R-GF-REVERSIBILITY',
+      'R-GF-MERGE-ENV',
+      'R-GF-ENSURE-PR',
+      'R-GF-ROUTE-ON-SHIPPED',
       'R-AGF-ADD-WORKTREE',
       'R-AGF-REMOVE-WORKTREE',
       'R-AGF-DRAIN-POOL',
@@ -152,6 +157,6 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(86); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE) + 4 multi-harness-lap (R-LAP-*)
+    expect(a.results.length).toBe(91); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 14 automated-gitflow (2 retired: R-AGF-BRANCH-NAME/R-AGF-AUTO-PULL → superseded by the R-GF-* set below) + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE) + 4 multi-harness-lap (R-LAP-*) + 7 gitflow-integration-fix (R-GF-FEAT-BRANCH/R-GF-RECONCILE-BASE/R-GF-RESOLVE-ENV/R-GF-REVERSIBILITY/R-GF-MERGE-ENV/R-GF-ENSURE-PR/R-GF-ROUTE-ON-SHIPPED)
   }, 30_000);
 });

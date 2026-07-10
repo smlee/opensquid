@@ -33,6 +33,8 @@ import {
   NO_DURABLE_COMMIT_LABEL,
   type RalphGitSeam,
 } from './consistency_gate.js'; // CG.1 — the consistency gate at the SHIPPED-close boundary
+import type { ResolvedEnvironments } from '../../packs/discovery.js'; // GF.1 — the config-driven git-flow environments
+import type { ReconcileOutcome } from './auto_pull.js'; // GF.6 — the base-refresh reconcile outcome
 
 export interface RalphConfig {
   /** Auth mode from CONFIG (Inv 11; no runtime auto-detect). API → dollar budget; subscription → W. */
@@ -158,6 +160,24 @@ export interface RalphDeps {
    * Optional + additive, exactly like `stageLoop?`/`pool?`/`recordMetric?`. The CLI wires `makeRalphGitSeam(root)`.
    */
   git?: RalphGitSeam;
+  /**
+   * GF.2 (T-gitflow-integration-fix, scope-1/scope-2) — the resolved config-driven git-flow environments
+   * (`version-control.environments`, GF.1's `resolveEnvironments(root)`). PRESENT ⇒ the consistency gate verifies
+   * the durable item commit landed on the CONFIGURED integration target (`staging ?? local`), not merely `HEAD`;
+   * `baseSha` is recorded on the target tip. ABSENT (default; unconfigured project, every existing test) ⇒ the
+   * gate is the current HEAD-based check (no behavior change). Optional + additive, like `git?`. The CLI wires
+   * `resolveEnvironments(root)`.
+   */
+  environments?: ResolvedEnvironments;
+  /**
+   * GF.6 (scope-6) — the LIVE per-pass base-refresh reconcile (BLOCKING-1 fix: `autoPullMain` had ZERO live
+   * callers). Called ONCE PER PASS at the top of the drive loop (before `listReady`), mirroring the existing
+   * per-pass `loopPassReconcile?`. Reconciles the local base (`environments.production`) with origin PRESERVING
+   * whoever is ahead (a trunk hot patch is never lost); a `conflict` outcome routes to the human-surface/park
+   * path. The CLI wires `reconcileBase(root, env.production)`. ABSENT (default) ⇒ no base-refresh (a non-automated
+   * project never refreshes a base it did not declare). Fail-open on a transient fetch fault (mirrors the reaper).
+   */
+  baseRefresh?: () => Promise<ReconcileOutcome>;
 }
 
 /** PSL.3 — a stage that reports the SAME stage this many times in a row (no advance) is genuinely stuck.
@@ -351,7 +371,28 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     }
   };
 
+  // GF.6 — a genuine base-reconcile conflict is surfaced+escalated ONCE, then the reconcile is skipped on later
+  // passes (the merge was aborted by `reconcileBase`, so the base is clean/unchanged; a human resolves the
+  // divergence out of band). This prevents both work-loss (nothing auto-picked) AND an escalate-spin.
+  let baseConflictSurfaced = false;
   for (;;) {
+    // GF.6 (BLOCKING-1 fix) — the LIVE per-pass base-refresh: reconcile the base BEFORE driving so a trunk hot
+    // patch is pulled into the base (never later reverted). Fail-open on a transient fetch fault (mirrors the
+    // reaper's catch); a genuine `conflict` is surfaced to a human, never auto-resolved.
+    if (deps.baseRefresh !== undefined && !baseConflictSurfaced) {
+      try {
+        const rc = await deps.baseRefresh();
+        if (rc.kind === 'conflict') {
+          baseConflictSurfaced = true;
+          deps.narrate?.(
+            '⚠ base reconcile conflict — surfacing to a human (base left unchanged; drive continues on the un-refreshed base)',
+          );
+          await parkAndEscalate('SCOPE_FORK'); // item-less escalate (undroppable); no wedge-mark, no spin
+        }
+      } catch {
+        /* fail-open: a transient fetch/reconcile fault must never break the drive pass (mirrors the reaper) */
+      }
+    }
     const ready = await wg.listReady(); // GR.1 ordering, claim+wedge aware (live-claimed items excluded)
     // GS1 — THE SCOPE GATE, as the PICKER's eligibility filter (automation must NEVER scope). Iterate the ready
     // list oldest-first and drive the first AUTOMATION-ELIGIBLE (really-scoped) item. An unscoped item is NON-
@@ -410,7 +451,12 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     // CG.1 — the CONSISTENCY GATE: record the integration target's tip BEFORE the drive (per-item by
     // construction — one binding per for-loop iteration, which drives exactly one claimed item; generalizes to
     // a per-item-keyed record in the future pool drainer with NO logic change). Absent seam ⇒ undefined ⇒ no gate.
-    const baseSha = deps.git ? await deps.git.tip() : undefined;
+    // GF.2 — the CONFIGURED integration target (staging ?? local); `undefined` for an unconfigured project ⇒ the
+    // gate defaults to HEAD (byte-identical to the shipped base gate). `baseSha` is recorded on the TARGET's tip.
+    const target = deps.environments
+      ? (deps.environments.staging ?? deps.environments.local)
+      : undefined;
+    const baseSha = deps.git ? await deps.git.tip(target) : undefined;
     let outcome = await driveMaybePooled(item, deps, cfg); // GR.3 → LapResult (PSL.3 per-stage when stageLoop present)
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
@@ -421,7 +467,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     if (outcome.kind === 'SHIPPED' && deps.git !== undefined && baseSha !== undefined) {
       let redrives = 0;
       let parkedNoCommit = false;
-      while (!(await durableItemCommitExists(deps.git, baseSha))) {
+      while (!(await durableItemCommitExists(deps.git, baseSha, target))) {
         if (redrives >= MAX_COMMIT_REDRIVES) {
           deps.narrate?.(
             `⚠ ${item.id} SHIPPED without a durable commit — parking (${NO_DURABLE_COMMIT_LABEL})`,
