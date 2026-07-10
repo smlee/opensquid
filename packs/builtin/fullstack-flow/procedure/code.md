@@ -27,19 +27,20 @@ complete them — this is the agent-controllable completion signal the gate read
   FALSE GREEN (the exact regression this closes — a 116-test slice hid 4 real reds). `code_ready` now gates on
   the recorded full-suite result (`code.suite_green`), so a slice run cannot advance CODE.
 
-## Emit your phase to the live status feed
+## Your CODE phases show on the live feed AUTOMATICALLY
 
-As you run each of the 7 phases, ALSO emit it to the live status feed via the `set_loop_phase` MCP tool — enter
-with `lifecycle: "running"` (⟳), leave with `lifecycle: "done"` (✓) — IN ADDITION to `log_phase`. The two stores
-serve DIFFERENT consumers and are never conflated: `log_phase` is the session-keyed commit-gate ledger;
-`set_loop_phase` is the wg-keyed push feed the harness status line / Monitor reads. Without this, CODE — the
-longest stage — is SILENT on the feed (it shows only `wg-… · code`). `wg_id` defaults to this lap's item — do
-not pass it:
+Your CODE phases appear on the live status feed (`loop-status --watch`: `code · <phase> (idx/7) ✓`) as a
+DETERMINISTIC side-effect of the ENFORCED phase ledger — the commit gate forces you to `log_phase(<phase>)` for
+all 7 phases, and each such write DRIVES the wg-keyed phase event. You do NOT need `set_loop_phase` for CODE to
+appear on the feed; keep logging every phase via `log_phase(` and the feed advances `1/7 → 7/7` on its own.
 
-- `set_loop_phase(phase: "pre_research", index: 1, total: 7, lifecycle: "running")` on enter,
-  then `set_loop_phase(phase: "pre_research", index: 1, total: 7, lifecycle: "done")` on leave,
-- and the same enter+leave pair for each remaining phase:
-  learn (2/7) · code (3/7) · test (4/7) · audit (5/7) · post_research (6/7) · fix (7/7).
+OPTIONAL: the derived feed marks each phase done (✓) on `log_phase`. If you want a mid-phase `running` (⟳) marker
+BEFORE a phase completes, you MAY also call `set_loop_phase(phase, lifecycle: "running")` — a nicety, not the
+feed. `wg_id` defaults to this lap's item — do not pass it. Example:
+
+- `set_loop_phase(phase: "code", index: 3, total: 7, lifecycle: "running")` while a phase is in flight,
+  then let the enforced `log_phase(code)` mark it done (✓) on completion — the same for each of the 7 phases:
+  pre_research (1/7) · learn (2/7) · code (3/7) · test (4/7) · audit (5/7) · post_research (6/7) · fix (7/7).
 
 ## Research AFTER coding (audit) — another layer
 

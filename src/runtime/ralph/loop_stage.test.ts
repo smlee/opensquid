@@ -19,7 +19,7 @@ import {
   upsertTaskStage,
 } from './loop_stage.js';
 import { ensureLoopRunning } from './loop_autospawn.js';
-import { tailEventsSince } from '../loop/loop_events.js';
+import { tailEventsSince, foldEvents } from '../loop/loop_events.js';
 
 import type { Client } from '@libsql/client';
 
@@ -218,6 +218,15 @@ describe('loop_stage — scope-3 loop-autospawn trigger (ATL.3: fire on scope_wr
     expect(advances).toHaveLength(1);
     expect(advances[0]).toMatchObject({ stage: 'code', atMs: 42 });
     expect(await readLoopStage('wg-adv')).toBe('code'); // the checkpoint advanced too
+  });
+
+  it('scope-2 (DPM.4b): a NON-code stage advance still folds to a stage-granular row with phase CLEARED (no regression)', async () => {
+    // The enforced stage_advance is the ONLY feed a non-code stage needs — it appears at stage granularity with no
+    // phase, no set_loop_phase required (DPM.2's coverage invariant). Confirm DPM.1/DPM.3 did not regress it.
+    await upsertTaskStage('wg-ncr', 'author', 7);
+    const [folded] = foldEvents(await tailEventsSince(0)).filter((s) => s.wgId === 'wg-ncr');
+    expect(folded).toMatchObject({ wgId: 'wg-ncr', stage: 'author' });
+    expect(folded?.phase).toBeUndefined(); // stage-granular: a fresh stage has no phase yet (loop_events.ts:201-211)
   });
 
   it('a trigger throw NEVER breaks the checkpoint write (fail-open — the ask invariant)', async () => {

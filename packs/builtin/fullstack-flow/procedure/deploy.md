@@ -74,12 +74,12 @@ git push origin <branch> --follow-tags            # push the auto/wg-<id> branch
   (that would race all N concurrent items to the same patch). Do NOT push a version tag from here.
 - A RED suite yields NO commit — the fix-loop (§2) owns it first. Commit is reached only from green.
 
-## Emit your phase to the live status feed
+## (Optional) emit your sub-phase to the live feed
 
-At each step of the DEPLOY loop, emit the phase via the `set_loop_phase` MCP tool so the harness status line /
-Monitor shows where this item is (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
-
-Emit each phase with `lifecycle: "running"` on ENTER (⟳) and `lifecycle: "done"` on LEAVE (✓):
+This stage ALREADY appears on the live status feed at STAGE granularity via the enforced `stage_advance` (it is
+never silent). OPTIONAL: at each step of the DEPLOY loop you MAY emit the phase via the `set_loop_phase` MCP tool
+— `lifecycle: "running"` on ENTER (⟳), `lifecycle: "done"` on LEAVE (✓) — a nicety, not what makes the stage
+appear (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
 
 - `set_loop_phase(phase: "verify", index: 1, total: 4, lifecycle: "running")` while running the full suite (§1),
   then `set_loop_phase(phase: "verify", index: 1, total: 4, lifecycle: "done")` when it is green,

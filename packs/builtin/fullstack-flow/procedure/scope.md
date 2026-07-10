@@ -21,13 +21,13 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
 - Resolve every open question here (ask the user only if it is unanswerable after research OR an
   architecture-changing fork). CHECK the box / remove the item before you leave SCOPE.
 
-## Emit your phase to the live status feed
+## (Optional) emit your sub-phase to the live feed
 
-As you move through SCOPE, emit each phase via the `set_loop_phase` MCP tool so the harness status line / Monitor
-shows where this item is (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
-
-Emit each phase with `lifecycle: "running"` on ENTER (⟳) and `lifecycle: "done"` on LEAVE (✓), so the feed
-shows whether the phase is in flight or finished:
+This stage ALREADY appears on the live status feed at STAGE granularity via the enforced `stage_advance` (it is
+never silent — every stage transition pushes it). OPTIONAL: for finer per-sub-phase visibility you MAY emit each
+phase via the `set_loop_phase` MCP tool — `lifecycle: "running"` on ENTER (⟳), `lifecycle: "done"` on LEAVE (✓)
+— a nicety, not what makes the stage appear (pack-owned cadence; `wg_id` defaults to this lap's item — do not
+pass it):
 
 - `set_loop_phase(phase: "research", index: 1, total: 3, lifecycle: "running")` while researching,
   then `set_loop_phase(phase: "research", index: 1, total: 3, lifecycle: "done")` when it is complete,

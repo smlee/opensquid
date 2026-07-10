@@ -125,6 +125,17 @@ export async function upsertTaskStage(
   });
   // LMP.2 — PUSH the stage advance to the live monitor stream, AFTER the durable checkpoint write. Fail-open:
   // `emitMonitorEvent` swallows a store fault so a monitor-feed hiccup never breaks the load-bearing advance.
+  // scope-2 (T-deterministic-phase-monitor) — THIS unconditional emit is the ENFORCED, stage-granular feed for
+  // EVERY stage (scope/plan/author/scope_write/deploy AND code): `upsertTaskStage` is the SINGLE stage writer
+  // (both scope-exit paths funnel here — the automated v2_supply lap AND the interactive /scope-done handoff,
+  // :129-135), so NO stage's APPEARANCE on the feed depends on the agent-discretionary `set_loop_phase` (which
+  // only ever ADDS optional sub-phase detail). `foldEvents` renders a stage_advance by setting `stage` and
+  // CLEARING `phase` (loop_events.ts:201-211), so each stage shows as `stage · (no phase)` with no emit needed.
+  // CODE's 7 SUB-phases additionally ride the ENFORCED `log_phase` derivation (log_phase.ts, scope-1). NAMED
+  // DEFERRAL (pre-research §4): per-SUB-phase determinism for the 5 NON-code stages is OUT of scope — `log_phase`
+  // is CODE-only and rejects pre-code (log_phase.ts:39,96-101), so no enforced per-sub-phase ledger exists for
+  // them, and building one into each gate is disproportionate for a visibility-only fix; `set_loop_phase` stays
+  // an OPTIONAL supplement there.
   await emitMonitorEvent({ wgId, kind: 'stage_advance', stage, atMs: nowMs });
   // POLICY (ATL.3): the human-granted scope-exit reaches scope_write HERE — the SOLE writer both scope-exit
   // paths funnel through (the automated `v2_supply` lap AND the interactive `/scope-done` handoff, which

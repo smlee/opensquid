@@ -580,7 +580,7 @@ requirements:
     assert: { kind: reachable, symbol: formatRelativeAge, from: [status-line] }
     proof: 'src/cli/loop_status.test.ts'
   - id: R-MONITOR-PHASE-LINT
-    intent: 'LMP.3 lintPhaseEmits: the no-silent-stage pack-lint — every procedure stage emits an enter+leave pair'
+    intent: 'LMP.3 lintPhaseEmits (repurposed, T-deterministic-phase-monitor scope-3): the no-silent-stage pack-lint now guards the ENFORCED feed — CODE must drive log_phase( and no procedure may carry the retired set_loop_phase "silent" false promise'
     spec: 'docs/design/opensquid-loop-monitoring-fix.md#6.6'
     wg: wg-61db3ededf19
     assert: { kind: reachable, symbol: lintPhaseEmits, from: [pack-validation] }
