@@ -22,6 +22,11 @@ import { z } from 'zod';
 import { atomicWriteFile } from '../../runtime/atomic_write.js';
 import { OPENSQUID_HOME } from '../../runtime/paths.js';
 import { RALPH_MD } from '../../runtime/ralph/ralph_template.js';
+import { LAP_HARNESS_KINDS, type HarnessKind } from '../../runtime/ralph/lap_harness.js';
+
+/** SSOT: the schema enum's members ARE the resolver's HarnessKind — `satisfies` is a compile-time drift guard
+ *  (adding a kind here that the resolver's HarnessKind doesn't know is a type error, and vice-versa via the enum). */
+const HARNESS_KINDS = ['claude', 'codex'] as const satisfies readonly HarnessKind[];
 
 export const RalphConfigFileSchema = z
   .object({
@@ -36,8 +41,23 @@ export const RalphConfigFileSchema = z
     /** Supervisor retry cap R (CRASH/TIMEOUT only) and the backoff base for exponential backoff. */
     maxRetries: z.number().int().nonnegative(),
     backoffBaseMs: z.number().int().positive(),
-    /** Harness is a PARAMETER (Inv 10): the lap CLI + the RALPH.md path it reads. */
-    harness: z.object({ cli: z.string().min(1), ralphMdPath: z.string().min(1) }),
+    /** Harness is a PARAMETER (Inv 10): the lap CLI + the RALPH.md path it reads, PLUS the lap-harness
+     *  discriminator + per-kind settings (MHL.1). */
+    harness: z.object({
+      cli: z.string().min(1), // the opaque binary name/path (unchanged)
+      ralphMdPath: z.string().min(1),
+      /** The lap-harness discriminator (scope-1). Selects the LapHarness adapter (MHL.3 resolver). The
+       *  `.default('claude')` is LOAD-BEARING: every existing config (no `kind`) parses byte-unchanged. An
+       *  unimplemented kind is rejected fail-loud by the superRefine below (MHL.2). */
+      kind: z.enum(HARNESS_KINDS).default('claude'),
+      /** Per-kind Codex policy (FORK LOCKED §5 Q1) — explicit, NOT an auto-translation of --dangerously-*.
+       *  `sandbox` → `codex exec --sandbox <v>`; `askForApproval` → `codex exec -c approval_policy=<v>`
+       *  (--ask-for-approval is not a `codex exec` flag in 0.144.0). `askForApproval` stays a permissive
+       *  string so a new policy vocabulary needs no schema bump. Autonomous-lap defaults live in the Codex
+       *  adapter (MHL.5): sandbox='workspace-write', approval_policy='never'. */
+      sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
+      askForApproval: z.string().optional(),
+    }),
   })
   .refine((c) => c.claimTtlSec * 1000 > c.wallClockMs, {
     // HARD INVARIANT (S7): the claim TTL T must exceed the lap deadline W — else a legitimately long lap
@@ -46,6 +66,20 @@ export const RalphConfigFileSchema = z
     message:
       'claimTtlSec*1000 must exceed wallClockMs (T > W) — else a long lap outruns its claim → double-ship',
     path: ['claimTtlSec'],
+  })
+  .superRefine((c, ctx) => {
+    // MHL.2 — the SEMANTIC "has an adapter" gate (mirrors dispatcher.ts:70-73). The enum above is the SYNTACTIC
+    // gate; this reads the resolver's SSOT implemented-kind set (LAP_HARNESS_KINDS) so a future enum value with
+    // NO shipped adapter is caught at LOAD, not at spawn. SSOT-backed — no second kind-list to drift.
+    if (!LAP_HARNESS_KINDS.has(c.harness.kind)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['harness', 'kind'],
+        message:
+          `harness.kind "${c.harness.kind}" has no lap adapter — implemented kinds: ` +
+          `${[...LAP_HARNESS_KINDS].join(' | ')}. Add a LapHarness adapter (see lap_harness.ts) before configuring it.`,
+      });
+    }
   });
 export type RalphConfigFile = z.infer<typeof RalphConfigFileSchema>;
 
@@ -64,7 +98,9 @@ export function defaultRalphConfig(home: string = OPENSQUID_HOME()): RalphConfig
     // budget/wall-clock on a lap that's structurally stuck rather than flaky (user call, 2026-06-28).
     maxRetries: 3,
     backoffBaseMs: 2000,
-    harness: { cli: 'claude', ralphMdPath: ralphMdPath(home) },
+    // MHL.1 — explicit default kind; sandbox/askForApproval omitted for Claude. An existing config file
+    // without `kind` still loads (the schema default fills it) → byte-compatible.
+    harness: { cli: 'claude', ralphMdPath: ralphMdPath(home), kind: 'claude' },
   };
 }
 

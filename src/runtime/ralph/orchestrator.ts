@@ -2,8 +2,8 @@
  * GR.4 — the gated-ralph orchestrator: a thin, non-LLM loop that composes GR.1–3.
  *
  * One pass: read the oldest ready item (GR.1 `listReady`) → atomically claim it (GR.1 CAS) → run a
- * supervised lap (GR.3 `superviseLap` over an injected lap-runner that wraps `claude -p RALPH.md` +
- * GR.2 `parseLapOutcome`) → act on the typed `LapOutcome` (GR.2) → repeat until BOARD_EMPTY or a
+ * supervised lap (GR.3 `superviseLap` over an injected lap-runner that wraps the resolved harness lap +
+ * GR.2 `outcomeFromEnvelope`) → act on the typed `LapOutcome` (GR.2) → repeat until BOARD_EMPTY or a
  * stopping escalation. No new state store (claim/wedge are work-graph ops); no new gate logic (the lap
  * is gated by the same coding-flow); ONE uniform escalation (GR.3 `escalateLap`).
  *
@@ -68,7 +68,7 @@ export interface RalphDeps {
   /** Env-derived claim audience (GR.1 — never caller input). */
   claimAudience: () => ClaimAudience;
   /**
-   * Run ONE lap for an item → its typed outcome + cost. The CLI wraps `claude -p RALPH.md` + parseLapOutcome.
+   * Run ONE lap for an item → its typed outcome + cost. The CLI wraps the resolved harness lap + outcomeFromEnvelope.
    * `stagePrompt` (T-v2-per-stage-loop PSL.3): when present, the per-stage bundle + directive prepended to the
    * lap's prompt so the lap completes ONLY that stage and reports its resulting `stage` in RALPH-EXIT. Absent →
    * the open-ended per-item lap (unchanged).

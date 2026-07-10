@@ -1,7 +1,7 @@
 /**
  * GR.4 — the `opensquid loop` CLI: the user-invoked entry that ASSEMBLES the orchestrator's injected deps
  * and runs the gated-ralph loop. A thin wire — all logic lives in the unit-tested pieces it composes
- * (runRalphLoop, chatEscalator, parseLapOutcome, the GR.1–3 store ops). The loop is a CLI COMMAND, not a
+ * (runRalphLoop, chatEscalator, the harness adapter + outcomeFromEnvelope, the GR.1–3 store ops). The loop is a CLI COMMAND, not a
  * daemon (opensquid stays an MCP server / tool provider; the agent loop runs inside the spawned harness).
  *
  * Commands:
@@ -41,7 +41,8 @@ import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import { displayReport } from '../../runtime/loop/report_display.js'; // RD.2/RD.3 — the live-display primitive
 import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
-import { parseLapOutcome } from '../../runtime/ralph/lap_outcome.js';
+import { outcomeFromEnvelope } from '../../runtime/ralph/lap_outcome.js';
+import { resolveLapHarness, type LapHarnessCfg } from '../../runtime/ralph/lap_harness.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
 import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
@@ -89,8 +90,9 @@ export function buildRalphConfig(
   };
 }
 
-/** Build the per-lap runner: spawn `claude -p RALPH.md --item <id>`, parse the typed exit. A deadline
- * overrun (group-SIGKILL) becomes the typed TIMEOUT, NOT a CRASH; a genuine spawn failure rethrows → CRASH. */
+/** Build the per-lap runner: resolve the harness adapter from the config `kind`, spawn the RALPH.md lap
+ * through it, fold its envelope → the typed exit. A deadline overrun (group-SIGKILL) becomes the typed
+ * TIMEOUT, NOT a CRASH; a genuine spawn failure rethrows → CRASH. */
 export function makeSpawnLap(
   cfg: RalphConfig,
   file: RalphConfigFile,
@@ -128,26 +130,36 @@ export function makeSpawnLap(
         .then(() => appendFile(logPath, body, 'utf8'))
         .catch(() => undefined); // logging is best-effort — swallow any fs error
     };
+    // MHL.6 — resolve the harness adapter from the config's `kind` (throws on an unresolved kind, reinforcing
+    // the load-time fail-loud). ALL harness-specifics (flags, prompt delivery, envelope parse, auth preflight)
+    // come from the adapter; this core stays neutral (audit-grep-empty, MHL.8).
+    const adapter = resolveLapHarness(file.harness.kind);
+    const lapCfg: LapHarnessCfg = {
+      maxBudgetUsd: cfg.maxBudgetUsd,
+      ...(file.harness.sandbox === undefined ? {} : { sandbox: file.harness.sandbox }),
+      ...(file.harness.askForApproval === undefined
+        ? {}
+        : { askForApproval: file.harness.askForApproval }),
+    };
+    // Fail-loud setup check BEFORE the spawn (Codex: auth diagnostics; Claude: no-op) — a setup problem, not a
+    // retryable CRASH, alongside the RALPH.md read above.
+    await adapter.preflight?.(lapCfg);
+    // onStreams fires at process close (BEFORE runCli resolves), so capturedStderr is set by the time the
+    // post-await parse runs — the adapter's parseEnvelope may read a stderr signal (e.g. Codex).
+    let capturedStderr = '';
     let stdout: string;
     try {
       stdout = await runCli({
         cli: file.harness.cli, // Inv 10 — harness is a parameter
-        // NO `--item` (not a claude flag → crash) and no `-p <path>` (that passes the path string as the
-        // prompt). `-p` + prompt-via-stdin; `--max-budget-usd` is valid ("only works with --print").
-        args: [
-          '-p',
-          '--output-format',
-          'json',
-          '--max-budget-usd',
-          String(cfg.maxBudgetUsd),
-          '--dangerously-skip-permissions',
-        ],
-        prompt,
+        args: adapter.spawnArgs(lapCfg), // the harness-specific flags (was the hardcoded Claude array)
+        prompt: adapter.deliverPrompt(prompt).stdin, // the harness-specific prompt delivery (was the bare prompt)
         timeoutMs: file.wallClockMs,
         markSubagent: true,
-        // T-active-task-mirror — publish the lap's item id so the lap's FSM hook (v2_supply) can WRITE THROUGH to
-        // the item-keyed loop-stage projection. claude inherits this env → its hook bins inherit it (mirrors how
-        // OPENSQUID_AUTOMATION reaches the hooks). This is the ONLY channel that tells the lap process its item id.
+        // The lap runs hooks-OFF: OPENSQUID_SUBAGENT=1 short-circuits every hook bin (exitIfSubagent), so the
+        // PostToolUse FSM write-through is SILENCED — advancement rides the RALPH-EXIT `stage` tag (the
+        // orchestrator advances on it), NOT the lap's own hooks (§2b). OPENSQUID_ITEM_ID is published so the
+        // MCP tools the lap calls (set_loop_phase/log_phase/workgraph_*, in the MCP server process — never a
+        // hook bin) have the item context. (MHL.7 — was a misleading "the FSM hook can WRITE THROUGH" note.)
         env: { OPENSQUID_ITEM_ID: item.id },
         timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),
         // LIVE channel — each lap stderr line surfaces immediately in the loop's own output (the subprocess→
@@ -156,18 +168,22 @@ export function makeSpawnLap(
         onStderrLine: (line: string) =>
           process.stdout.write(`    │ ${item.id.slice(3, 11)} ${line}\n`),
         // Log BOTH streams at close (any exit code) — stderr is where a wedged lap's hook/gate errors land.
-        onStreams: ({ stdout: out, stderr, code }) =>
+        onStreams: ({ stdout: out, stderr, code }) => {
+          capturedStderr = stderr; // capture for the adapter parse (a harness may signal on stderr)
           appendLog(
             `# lap ${item.id} · exit=${code} · ${new Date().toISOString()}\n` +
               `=== STDERR ===\n${stderr.trim() || '(empty)'}\n\n=== STDOUT (tail) ===\n${out.slice(-6000)}\n`,
-          ),
+          );
+        },
       });
     } catch (e) {
       appendLog(`\n=== LAP ERROR ===\n${e instanceof Error ? e.message : String(e)}\n`);
       if ((e as { __timeout?: boolean }).__timeout === true) return { kind: 'TIMEOUT', costUsd: 0 };
       throw e; // genuine spawn/IO failure → superviseLap maps it to CRASH
     }
-    const { outcome, costUsd, inputTokens, outputTokens } = parseLapOutcome(stdout);
+    const { outcome, costUsd, inputTokens, outputTokens } = outcomeFromEnvelope(
+      adapter.parseEnvelope(stdout, capturedStderr),
+    );
     appendLog(
       `\n=== PARSED OUTCOME === ${JSON.stringify(outcome)} · cost=$${costUsd} · ` +
         `${String(inputTokens)}in/${String(outputTokens)}out\n`,

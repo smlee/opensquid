@@ -1,18 +1,22 @@
 /**
  * GR.2 — the typed-exit contract for a gated-ralph lap (Inv 5: ONE typed exit).
  *
- * A lap is a headless `claude -p … --output-format json` run of `RALPH.md`. Its envelope is the
- * empirically-verified shape `{ result, is_error, subtype, total_cost_usd, … }` (verified 2026-06-13).
- * The lap signals its outcome by emitting a single greppable line in `result`:
+ * A lap is a headless run of `RALPH.md` through whatever harness the config selects. Each harness adapter
+ * (MHL.4/MHL.5) folds its own raw output into the NEUTRAL `LapEnvelope` (lap_harness.ts); this file owns only
+ * the vendor-free half — mapping that envelope to a `LapOutcome`. The lap signals its outcome by emitting a
+ * single greppable line in its result text:
  *
  *     RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"SCOPE_FORK","payload":{…}}
  *
- * `parseLapOutcome` is a TOTAL mapping of every envelope shape to a `LapOutcome` — it never throws and
- * never returns a false `SHIPPED`: an unparseable envelope or `is_error` becomes `CRASH`; a clean
- * envelope with no tag becomes `SHIPPED`. The orchestrator (GR.4) switches on the result.
+ * `outcomeFromEnvelope` is a TOTAL mapping of every envelope to a `LapOutcome` — it never throws and never
+ * returns a false `SHIPPED`: an errored envelope becomes `CRASH`; a clean envelope with no tag becomes
+ * `SHIPPED`. The orchestrator (GR.4) switches on the result. This file carries NO vendor invocation/envelope
+ * literal (audit-grep-empty, MHL.8) — those live only in the adapters (`./harnesses/*_lap_harness.ts`).
  *
- * Imported by: src/runtime/ralph/orchestrator.ts (GR.4), src/runtime/ralph/supervisor.ts (GR.3).
+ * Imported by: src/runtime/ralph/orchestrator.ts (GR.4), src/runtime/ralph/supervisor.ts (GR.3),
+ * src/setup/cli/ralph.ts (the wire, MHL.6).
  */
+import type { LapEnvelope } from './lap_harness.js';
 
 /** The only escalation vocabulary — every human-required exit is one of these (Inv 5/8). */
 export type HumanRequiredReason =
@@ -102,32 +106,16 @@ export interface LapUsage {
   outputTokens: number;
 }
 
-/** Read `usage.input_tokens`/`usage.output_tokens` from the headless envelope (0 when absent). */
-function readUsage(env: Record<string, unknown>): { inputTokens: number; outputTokens: number } {
-  const u = env.usage;
-  if (u === null || typeof u !== 'object') return { inputTokens: 0, outputTokens: 0 };
-  const rec = u as Record<string, unknown>;
-  const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
-  return { inputTokens: num(rec.input_tokens), outputTokens: num(rec.output_tokens) };
-}
-
-/** Parse the headless JSON envelope into a total `LapOutcome` + the lap's cost + token usage. Never throws. */
-export function parseLapOutcome(stdout: string): { outcome: LapOutcome } & LapUsage {
-  let env: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (parsed === null || typeof parsed !== 'object')
-      return { outcome: { kind: 'CRASH' }, costUsd: 0, inputTokens: 0, outputTokens: 0 };
-    env = parsed as Record<string, unknown>;
-  } catch {
-    // unparseable envelope = CRASH, never SHIPPED
-    return { outcome: { kind: 'CRASH' }, costUsd: 0, inputTokens: 0, outputTokens: 0 };
-  }
-  const costUsd = typeof env.total_cost_usd === 'number' ? env.total_cost_usd : 0;
-  const { inputTokens, outputTokens } = readUsage(env);
-  if (env.is_error === true)
-    return { outcome: { kind: 'CRASH' }, costUsd, inputTokens, outputTokens };
-  const tagged = extractTypedExit(typeof env.result === 'string' ? env.result : '');
+/**
+ * MHL.3 — the NEUTRAL envelope→outcome fold (the vendor-free half of the former `parseLapOutcome`). The
+ * harness adapter (MHL.4/MHL.5) owns turning its raw stdout into a `LapEnvelope`; this maps that envelope to a
+ * total `LapOutcome` + usage: `isError` ⇒ CRASH; else the RALPH-EXIT scan (a clean envelope with no tag ⇒
+ * SHIPPED); cost/tokens pass through. Never throws — vendor-free by construction.
+ */
+export function outcomeFromEnvelope(env: LapEnvelope): { outcome: LapOutcome } & LapUsage {
+  const { costUsd, inputTokens, outputTokens } = env;
+  if (env.isError) return { outcome: { kind: 'CRASH' }, costUsd, inputTokens, outputTokens };
+  const tagged = extractTypedExit(env.resultText);
   return { outcome: tagged ?? { kind: 'SHIPPED' }, costUsd, inputTokens, outputTokens }; // clean exit, no tag = SHIPPED
 }
 

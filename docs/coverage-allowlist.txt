@@ -375,6 +375,7 @@ HandoffArtifact
 HandoffGitRepo
 HandoffSessionStart
 HandoffState
+HarnessKind
 HarnessRow
 HarnessTask
 HasActiveTask
@@ -460,11 +461,15 @@ KnowledgeLookupResult
 KnowledgeRule
 KnowledgeSeverity
 KnowledgeSource
+LAP_HARNESS_KINDS
 LBracket
 LEGACY_OPENSQUID_PATTERN
 LParen
 Lane
+LapEnvelope
 LapEscalator
+LapHarness
+LapHarnessCfg
 LapOutcome
 LapResult
 LastActive
@@ -1512,7 +1517,6 @@ parseChannel
 parseDurationToMs
 parseExpression
 parseHosts
-parseLapOutcome
 parseLimit
 parseMemoryFile
 parseShow

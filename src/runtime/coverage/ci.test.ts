@@ -141,6 +141,17 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     // consistency_gate.test.ts; the seam / trivial siblings (RalphGitSeam / makeRalphGitSeam /
     // MAX_COMMIT_REDRIVES / NO_DURABLE_COMMIT_LABEL) are allowlisted (no orphan drift).
     expect(byId['R-CONSISTENCY-GATE']).toBe('met');
-    expect(a.results.length).toBe(82); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE)
+    // T-multi-harness-lap (wg-348c691ae27e, MHL.1..8) — the harness-neutral lap: 4 new behavioral exports, each
+    // MET via its element proof-test; the seam / data-shape siblings (LapHarness/LapEnvelope/LapHarnessCfg/
+    // HarnessKind/LAP_HARNESS_KINDS) are allowlisted (no orphan drift).
+    for (const id of [
+      'R-LAP-RESOLVE',
+      'R-LAP-OUTCOME-FOLD',
+      'R-LAP-CLAUDE-ADAPTER',
+      'R-LAP-CODEX-ADAPTER',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    expect(a.results.length).toBe(86); // 4 original + 7 V2-ENF.2 + 2 PLS.1 + 3 loop-autospawn + 14 release + 8 WGL + 9 loop-monitoring + 4 harness-wg-sync + 4 arch-quality-gate + 16 automated-gitflow + 5 statusline-compose + 1 config-load-resilience (R-CLR-1) + 3 post-ship-logic-fixes (R-PSF-*) + 1 reporting-display-rebuild (R-REPORT-DISPLAY) + 1 consistency-gate (R-CONSISTENCY-GATE) + 4 multi-harness-lap (R-LAP-*)
   }, 30_000);
 });

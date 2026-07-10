@@ -87,3 +87,50 @@ describe('readRalphConfig', () => {
     expect(() => RalphConfigFileSchema.parse(defaultRalphConfig(home))).not.toThrow();
   });
 });
+
+describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
+  it('an existing config with NO `kind` parses → kind defaults to claude (backward-compat)', () => {
+    const parsed = RalphConfigFileSchema.parse({
+      authMode: 'subscription',
+      maxBudgetUsd: 10,
+      claimTtlSec: 3600,
+      wallClockMs: 1_800_000,
+      maxRetries: 3,
+      backoffBaseMs: 2000,
+      harness: { cli: 'claude', ralphMdPath: '/x/RALPH.md' }, // no `kind` — the old on-disk shape
+    });
+    expect(parsed.harness.kind).toBe('claude');
+  });
+
+  it('a kind:codex config with sandbox + askForApproval round-trips through the schema', () => {
+    const parsed = RalphConfigFileSchema.parse({
+      ...defaultRalphConfig(home),
+      harness: {
+        cli: 'codex',
+        ralphMdPath: '/x/RALPH.md',
+        kind: 'codex',
+        sandbox: 'workspace-write',
+        askForApproval: 'never',
+      },
+    });
+    expect(parsed.harness).toMatchObject({
+      kind: 'codex',
+      sandbox: 'workspace-write',
+      askForApproval: 'never',
+    });
+  });
+
+  it('fail-loud: an unimplemented harness.kind is REJECTED at load (no false capability)', () => {
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: { cli: 'gemini', ralphMdPath: '/x/RALPH.md', kind: 'gemini' },
+      }),
+    ).toThrow();
+  });
+
+  it('the config carries NO raw args[] override field (adapter-owned invariant, §5 Q4)', () => {
+    const parsed = RalphConfigFileSchema.parse(defaultRalphConfig(home));
+    expect('args' in parsed.harness).toBe(false);
+  });
+});

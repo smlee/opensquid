@@ -15,7 +15,7 @@ const FILE: RalphConfigFile = {
   wallClockMs: 60_000,
   maxRetries: 2,
   backoffBaseMs: 2000,
-  harness: { cli: 'claude', ralphMdPath: '/home/.opensquid/RALPH.md' },
+  harness: { cli: 'claude', ralphMdPath: '/home/.opensquid/RALPH.md', kind: 'claude' },
 };
 const ITEM: Issue = {
   id: 'a',

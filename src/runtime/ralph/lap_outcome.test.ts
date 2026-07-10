@@ -1,13 +1,21 @@
 /**
- * GR.2 — the typed-exit contract. parseLapOutcome is a TOTAL mapping (never throws, never a false
- * SHIPPED); extractTypedExit defensively scans the RALPH-EXIT tag.
+ * GR.2 — the typed-exit contract. outcomeFromEnvelope (MHL.3) is a TOTAL mapping of a neutral LapEnvelope
+ * (never throws, never a false SHIPPED); extractTypedExit defensively scans the RALPH-EXIT tag. The Claude
+ * envelope-reading half now lives in claude_lap_harness.ts (see claude_lap_harness.test.ts).
  */
 import { describe, expect, it } from 'vitest';
 
-import { extractTypedExit, parseLapOutcome } from './lap_outcome.js';
+import { extractTypedExit, outcomeFromEnvelope } from './lap_outcome.js';
+import type { LapEnvelope } from './lap_harness.js';
 
-const envelope = (result: string, extra: Record<string, unknown> = {}): string =>
-  JSON.stringify({ result, is_error: false, subtype: 'success', total_cost_usd: 0.04, ...extra });
+const env = (over: Partial<LapEnvelope> = {}): LapEnvelope => ({
+  resultText: '',
+  costUsd: 0.04,
+  inputTokens: 0,
+  outputTokens: 0,
+  isError: false,
+  ...over,
+});
 
 describe('extractTypedExit', () => {
   it('parses a HUMAN_REQUIRED tag with reason + payload', () => {
@@ -63,9 +71,9 @@ describe('extractTypedExit', () => {
   });
 });
 
-describe('parseLapOutcome', () => {
-  it('a clean envelope with no tag → SHIPPED', () => {
-    expect(parseLapOutcome(envelope('did the work, tests pass'))).toEqual({
+describe('outcomeFromEnvelope (MHL.3 — the neutral envelope→outcome fold)', () => {
+  it('a clean envelope with no tag → SHIPPED (cost/tokens pass through)', () => {
+    expect(outcomeFromEnvelope(env({ resultText: 'did the work, tests pass' }))).toEqual({
       outcome: { kind: 'SHIPPED' },
       costUsd: 0.04,
       inputTokens: 0,
@@ -73,23 +81,23 @@ describe('parseLapOutcome', () => {
     });
   });
 
-  it('extracts a HUMAN_REQUIRED exit from the result', () => {
-    const r = parseLapOutcome(envelope('RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"BUDGET"}'));
+  it('extracts a HUMAN_REQUIRED exit from the result text', () => {
+    const r = outcomeFromEnvelope(
+      env({ resultText: 'RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"BUDGET"}' }),
+    );
     expect(r.outcome).toEqual({ kind: 'HUMAN_REQUIRED', reason: 'BUDGET' });
     expect(r.costUsd).toBe(0.04);
   });
 
-  it('an unparseable envelope → CRASH (never SHIPPED)', () => {
-    expect(parseLapOutcome('not json at all')).toEqual({
-      outcome: { kind: 'CRASH' },
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    });
+  it('a SHIPPED tag carries the resulting stage through the fold', () => {
+    expect(
+      outcomeFromEnvelope(env({ resultText: 'RALPH-EXIT: {"kind":"SHIPPED","stage":"code"}' }))
+        .outcome,
+    ).toEqual({ kind: 'SHIPPED', stage: 'code' });
   });
 
-  it('is_error:true → CRASH, still reporting cost', () => {
-    expect(parseLapOutcome(envelope('boom', { is_error: true, total_cost_usd: 0.02 }))).toEqual({
+  it('isError → CRASH (never SHIPPED), still reporting cost/tokens', () => {
+    expect(outcomeFromEnvelope(env({ resultText: 'boom', isError: true, costUsd: 0.02 }))).toEqual({
       outcome: { kind: 'CRASH' },
       costUsd: 0.02,
       inputTokens: 0,
@@ -97,25 +105,10 @@ describe('parseLapOutcome', () => {
     });
   });
 
-  it('a non-object JSON envelope → CRASH', () => {
-    expect(parseLapOutcome('42')).toEqual({
-      outcome: { kind: 'CRASH' },
-      costUsd: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-    });
-  });
-
-  it('missing total_cost_usd defaults cost to 0', () => {
-    expect(parseLapOutcome(JSON.stringify({ result: 'ok', is_error: false })).costUsd).toBe(0);
-  });
-
-  // LSF.5 (§3a) — the token fold: usage.input_tokens/output_tokens surface for the loop_metrics history.
-  it('folds usage.input_tokens/output_tokens from the envelope', () => {
-    const r = parseLapOutcome(
-      envelope('done', { usage: { input_tokens: 1200, output_tokens: 340 } }),
-    );
-    expect(r).toEqual({
+  it('passes token usage through for the loop_metrics history (LSF.5)', () => {
+    expect(
+      outcomeFromEnvelope(env({ resultText: 'done', inputTokens: 1200, outputTokens: 340 })),
+    ).toEqual({
       outcome: { kind: 'SHIPPED' },
       costUsd: 0.04,
       inputTokens: 1200,
@@ -123,21 +116,11 @@ describe('parseLapOutcome', () => {
     });
   });
 
-  it('tokens default to 0 when usage is absent or malformed', () => {
-    expect(parseLapOutcome(envelope('done', { usage: null }))).toMatchObject({
-      inputTokens: 0,
-      outputTokens: 0,
-    });
-    expect(parseLapOutcome(envelope('done', { usage: { input_tokens: 'x' } }))).toMatchObject({
-      inputTokens: 0,
-      outputTokens: 0,
-    });
-  });
-
-  it('reports tokens even on a CRASH (is_error:true) so the resource burn is captured', () => {
-    const r = parseLapOutcome(
-      envelope('boom', { is_error: true, usage: { input_tokens: 50, output_tokens: 10 } }),
-    );
-    expect(r).toMatchObject({ outcome: { kind: 'CRASH' }, inputTokens: 50, outputTokens: 10 });
+  it('reports tokens even on a CRASH (isError) so the resource burn is captured', () => {
+    expect(
+      outcomeFromEnvelope(
+        env({ resultText: 'boom', isError: true, inputTokens: 50, outputTokens: 10 }),
+      ),
+    ).toMatchObject({ outcome: { kind: 'CRASH' }, inputTokens: 50, outputTokens: 10 });
   });
 });

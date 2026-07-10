@@ -815,4 +815,33 @@ requirements:
     wg: wg-1c620a56b733
     assert: { kind: reachable, symbol: durableItemCommitExists, from: [orchestrator] }
     proof: 'src/runtime/ralph/consistency_gate.test.ts'
+  # T-multi-harness-lap (wg-348c691ae27e, MHL.1..8) — the harness-neutral loop lap: a LapHarness adapter selected
+  # by a `kind: 'claude'|'codex'` discriminator, neutral core (audit-grep-empty), fail-loud on an unimplemented
+  # kind. 4 new BEHAVIORAL exports, each MET via its element proof-test; the seam / data-shape siblings
+  # (LapHarness / LapEnvelope / LapHarnessCfg / HarnessKind / LAP_HARNESS_KINDS + the claude/codex adapter
+  # consts' interface types) are allowlisted (no orphan drift — the forward ratchet registered AT CODE).
+  - id: R-LAP-RESOLVE
+    intent: 'MHL.3 resolveLapHarness: the kind→adapter resolver — returns the shipped adapter for a known kind, THROWS naming the implemented kinds on an unresolved kind (mirrors dispatcher.ts:70-73); the runtime boundary reinforcing the load-time fail-loud (MHL.2). The neutral core carries no vendor invocation/envelope literal (audit-grep-empty)'
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: resolveLapHarness, from: [orchestrator] }
+    proof: 'src/runtime/ralph/lap_harness.test.ts'
+  - id: R-LAP-OUTCOME-FOLD
+    intent: 'MHL.3 outcomeFromEnvelope: the NEUTRAL envelope→outcome fold (the vendor-free half of the former parseLapOutcome) — isError ⇒ CRASH; else the RALPH-EXIT scan (clean no-tag ⇒ SHIPPED); cost/tokens pass through. Vendor-free by construction; the harness adapter owns turning raw stdout into a LapEnvelope'
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: outcomeFromEnvelope, from: [orchestrator] }
+    proof: 'src/runtime/ralph/lap_outcome.test.ts'
+  - id: R-LAP-CLAUDE-ADAPTER
+    intent: "MHL.4 claudeLapHarness: today's Claude lap behavior extracted VERBATIM (the regression floor) — the byte-identical ralph.ts:137-144 flag array, the stdin prompt, the single-JSON-envelope reads (total_cost_usd/usage/is_error/result) incl. the unparseable/non-object → isError path"
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: claudeLapHarness, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/claude_lap_harness.test.ts'
+  - id: R-LAP-CODEX-ADAPTER
+    intent: 'MHL.5 codexLapHarness: the Codex adapter — codex exec --json (LIVE-confirmed 0.144.0 flags: --sandbox + -c approval_policy, NOT --dangerously-*), the JSONL fold (agent_message concat + turn.completed.usage tokens + notional-0 cost), and a fail-loud auth preflight before the spawn'
+    spec: 'docs/tasks/T-multi-harness-lap.md'
+    wg: wg-348c691ae27e
+    assert: { kind: reachable, symbol: codexLapHarness, from: [orchestrator] }
+    proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
 ```
