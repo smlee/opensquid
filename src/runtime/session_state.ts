@@ -356,14 +356,15 @@ export async function writeActiveTask(sessionId: string, task: ActiveTask): Prom
 }
 
 /**
- * scope-4 (deploy-commit-gate §4) — the headless-lap active-task fallback. A ralph lap runs with
- * `OPENSQUID_SUBAGENT=1`, which short-circuits EVERY hook bin (`exitIfSubagent`), so the AP.1 PreToolUse
- * mirror never runs and `active-task.json` is never written — the reporting-wedge failure ("active-task.json
- * missing under the headless lap"). The lap DOES publish the driven work-graph id as `OPENSQUID_ITEM_ID`; when
- * the on-disk signal is absent AND that id is supplied, active-task RESOLUTION (a core mechanism, design §4a)
- * synthesizes the signal from it — `id` AND `taskId` BOTH the wg id, so every keying path agrees (the commit
- * gate's `active.id`, `readActiveTaskId`, the loop-stage checkpoint key). This runs INDEPENDENT of hook policy
- * because the two real consumers — the `opensquid gate` CLI and the `log_phase` MCP tool — call it directly.
+ * scope-4 (deploy-commit-gate §4; premise corrected by T-in-lap-gating scope-4) — the headless-lap active-task
+ * fallback. POST-FIX a ralph lap runs FULLY hooked (recursion-only `OPENSQUID_LOOP_LAP`, NOT `OPENSQUID_SUBAGENT`),
+ * so the AP.1 PreToolUse mirror (`writeActiveTask`, above) DOES run in-lap and DOES write `active-task.json` — the
+ * old "silenced hook → never written" premise is now FALSE, so this synthesis is REDUNDANT-BUT-HARMLESS: it fires
+ * only when the on-disk signal is absent AND `OPENSQUID_ITEM_ID` is supplied. When it does, active-task RESOLUTION
+ * (a core mechanism, design §4a) synthesizes the signal — `id` AND `taskId` BOTH the wg id, so every keying path
+ * agrees (the commit gate's `active.id`, `readActiveTaskId`, the loop-stage checkpoint key). This runs INDEPENDENT
+ * of hook policy because the two real consumers — the `opensquid gate` CLI and the `log_phase` MCP tool — call it
+ * directly. (RETIRING the now-redundant fallback is a tracked follow-up, T-in-lap-gating §4 OUT — NOT done here.)
  *
  * INJECTED, never ambient: `lapItemId` is an explicit argument (production passes `process.env.OPENSQUID_ITEM_ID`
  * at the two call sites). It defaults to `undefined` so a bare `readActiveTask(sid)` keeps the pure file-read

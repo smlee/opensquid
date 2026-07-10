@@ -874,4 +874,19 @@ requirements:
     wg: wg-348c691ae27e
     assert: { kind: reachable, symbol: codexLapHarness, from: [orchestrator] }
     proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  # T-in-lap-gating (wg-e3c9f944140e) — the recursion-only lap marker: a ralph lap runs FULLY hooked
+  # (OPENSQUID_LOOP_LAP, orthogonal to the reviewer-silencing OPENSQUID_SUBAGENT), the marker only blocking a
+  # nested loop + the stop-responder/session-end-handoff actions. One covering requirement per new gated export.
+  - id: R-INLAP-LAP-MARKER
+    intent: 'isLoopLap marks a ralph lap WITHOUT silencing hooks — the recursion-only marker consumed by the entrypoint guard, cli.ts update-suppression, and the stop/session-end per-bin guards (orthogonal to isOpensquidSubagent; never fed to exitIfSubagent)'
+    spec: 'docs/tasks/T-in-lap-gating.md'
+    wg: wg-e3c9f944140e
+    assert: { kind: reachable, symbol: isLoopLap, from: [stop, session-end] }
+    proof: 'src/runtime/hooks/subagent_guard.test.ts'
+  - id: R-INLAP-LAP-ENV
+    intent: 'LOOP_LAP_ENV is the recursion-only lap marker env var (OPENSQUID_LOOP_LAP), published by the lap spawn via the per-spawn env override — orthogonal to OPENSQUID_SUBAGENT, never merged'
+    spec: 'docs/tasks/T-in-lap-gating.md'
+    wg: wg-e3c9f944140e
+    assert: { kind: reachable, symbol: LOOP_LAP_ENV, from: [ralph] }
+    proof: 'src/runtime/hooks/subagent_guard.test.ts'
 ```

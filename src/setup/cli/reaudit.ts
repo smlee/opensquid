@@ -4,12 +4,14 @@
  *
  * THE WEDGE IT CLOSES: the commit gate (`gate.ts`) fail-closes unless the CODE producer's EXTERNAL guess-free
  * verdict is cached under the pack-declared `auditCacheKey`, staleness-anchored on `sha256(git diff HEAD)`
- * (`codeAuditCertifiesCurrentDiff`). Interactively the `content-audit` skill produces that verdict on the
- * `log_phase(audit)` PostToolUse reaction — but a ralph lap runs with `OPENSQUID_SUBAGENT=1`, which DISABLES the
- * hooks, so the lap had NO in-band way to (re)generate the exact artifact the gate checks. It could do the work
- * honestly and still wedge at commit. This command is that missing in-band path: it runs the SAME CODE audit on
- * the CURRENT diff and writes the SAME `{verdict, subjectHash}` shape `cached_audit` writes, so an honest lap
- * clears the gate without gate-gaming.
+ * (`codeAuditCertifiesCurrentDiff`). The `content-audit` skill produces that verdict on the `log_phase(audit)`
+ * PostToolUse reaction. (Premise corrected by T-in-lap-gating scope-4: a ralph lap now runs FULLY hooked —
+ * recursion-only `OPENSQUID_LOOP_LAP`, NOT `OPENSQUID_SUBAGENT` — so that PostToolUse reaction now DOES fire
+ * in-lap; the lap thus HAS an in-band audit path. This command stays a valid EXPLICIT CLI path — for a human, or a
+ * belt-and-suspenders re-run — that runs the SAME CODE audit on the CURRENT diff and writes the SAME
+ * `{verdict, subjectHash}` shape `cached_audit` writes, so an honest producer clears the gate without gate-gaming.
+ * Whether reaudit is still LOAD-BEARING inside a lap now that hooks are live is a tracked RE-EXAMINE, T-in-lap-gating
+ * §4 OUT — NOT a retirement done here.)
  *
  * ANTI-SELF-GRADING (the whole point): the verdict comes from a REAL adversarial model dispatch on the REAL diff
  * (the `reasoning` alias, mirroring `cached_audit`), and the freshness anchor is `sha256(diff)` — a lap CANNOT

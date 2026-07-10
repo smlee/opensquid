@@ -321,6 +321,62 @@ function stageLoopStub(
   };
 }
 
+// T-in-lap-gating scope-3 — the belt-and-suspenders durable-stage reconcile: conditional, seam-routed, single-emit.
+describe('runRalphLoop — scope-3 conditional durable-stage reconcile', () => {
+  // A stageLoop whose readStage is fully controlled + a reconcileStage spy. advance maps scope_write → a
+  // NON-automated stage so exactly ONE automated advance runs (then the boundary lap completes the item).
+  function reconcileStageLoop(
+    durableAfterLap: string | null,
+    reconcileStage?: (id: string, stage: string) => Promise<void>,
+  ): NonNullable<RalphDeps['stageLoop']> {
+    // advance map (scope_write → the non-automated `deploy`) lives in `oneAutoLap` below — one auto lap then boundary.
+    return {
+      initialStage: 'scope_write',
+      isAutomated: (s: string) => AUTOMATED.has(s),
+      stagePrompt: (_item: Issue, stage: string) => P(`DO ${stage}`),
+      // After the automated lap advanced in-memory to `next`, the durable re-read returns this fixed value.
+      readStage: (_id: string) => P(durableAfterLap),
+      clearStage: (_id: string) => P(undefined),
+      scopeGate: () => P('drive'),
+      ...(reconcileStage === undefined ? {} : { reconcileStage }),
+    };
+  }
+  const oneAutoLap = vi.fn((_item: Issue, sp?: string) => {
+    if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }); // deploy boundary → item done
+    const next = { scope_write: 'deploy' }[sp.replace('DO ', '') as 'scope_write'];
+    return P<LapResult>({ kind: 'SHIPPED', stage: next, costUsd: 0 });
+  });
+
+  it('divergence: reconciles ONCE with the accepted `next` when the in-lap write-through did not land', async () => {
+    const reconcileStage = vi.fn((_id: string, _stage: string) => P(undefined));
+    // durable re-read still shows the OLD stage (write-through did not persist) → divergence.
+    await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), oneAutoLap),
+      stageLoop: reconcileStageLoop('scope_write', reconcileStage),
+    });
+    expect(reconcileStage).toHaveBeenCalledTimes(1);
+    expect(reconcileStage).toHaveBeenCalledWith('a', 'deploy'); // the FSM-accepted transition, not a blind stamp
+  });
+
+  it('no divergence: does NOT reconcile when the durable stage already equals `next` (single-emit preserved)', async () => {
+    const reconcileStage = vi.fn((_id: string, _stage: string) => P(undefined));
+    // durable re-read already shows `next` (the in-lap write-through landed) → NO second write / NO second emit.
+    await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), oneAutoLap),
+      stageLoop: reconcileStageLoop('deploy', reconcileStage),
+    });
+    expect(reconcileStage).not.toHaveBeenCalled();
+  });
+
+  it('backward-compat: a stageLoop WITHOUT reconcileStage drives with no reconcile and no throw', async () => {
+    const r = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), oneAutoLap),
+      stageLoop: reconcileStageLoop('scope_write'), // reconcileStage absent (optional-additive)
+    });
+    expect(r.closed).toEqual(['a']); // drives to completion exactly as before
+  });
+});
+
 describe('runRalphLoop — PSL.3 per-stage loop', () => {
   it('drives each automated stage as its own lap (advancing via the reported stage), then the boundary lap', async () => {
     // T-active-task-mirror E: a fresh item seeds at `scope_write` (the first AUTOMATED stage) — no initial human

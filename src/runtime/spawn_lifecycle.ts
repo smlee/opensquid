@@ -29,7 +29,11 @@
  *
  * Two ORTHOGONAL env markers — never merge them:
  *   - OPENSQUID_SUBAGENT  (hook policy, SUB.1): set only when
- *     `markSubagent: true` (reviewer spawns). Hook bins short-circuit.
+ *     `markSubagent: true` (REVIEWER spawns — subscription_cli.ts). Hook bins
+ *     short-circuit. A ralph LAP does NOT set this — it sets the recursion-only
+ *     OPENSQUID_LOOP_LAP marker (subagent_guard.ts, T-in-lap-gating scope-1) via
+ *     its per-spawn `env` override, so the lap runs FULLY hooked; that marker
+ *     only blocks a nested loop + the stop-responder/session-end-handoff actions.
  *   - OPENSQUID_SUPERVISED (kill-tree, THIS module): set on EVERY helper
  *     spawn. The OUTERMOST helper spawn in a tree detaches as group leader;
  *     every deeper helper spawn joins the ancestor's group — a reviewer
@@ -98,8 +102,10 @@ export interface OneShotOpts {
   /** Prompt body written to the child's stdin then EOF. */
   prompt: string;
   timeoutMs: number;
-  /** SUB.1 hook-policy marker: reviewer spawns mark the child tree; bridge spawns do not. */
-  markSubagent: boolean;
+  /** SUB.1 hook-policy marker: reviewer spawns mark the child tree; bridge spawns + ralph laps do not (a lap
+   *  publishes the orthogonal recursion-only OPENSQUID_LOOP_LAP marker via `env` instead). Optional: omitted ⇒
+   *  not silenced (falsy at :158). */
+  markSubagent?: boolean;
   /** Typed rejection factory — each site keeps its own timeout error contract. */
   timeoutError: (timeoutMs: number) => Error;
   /** Prefix for spawn/exit/stdin error messages (bridge: 'subscription cli '). */

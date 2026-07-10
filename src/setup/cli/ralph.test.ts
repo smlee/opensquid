@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
-import { buildRalphConfig, makeSpawnLap } from './ralph.js';
+import { Command } from 'commander';
+import { buildRalphConfig, makeSpawnLap, registerRalph } from './ralph.js';
 import type { RalphConfigFile } from '../wizard/ralph_writer.js';
 import type { Issue } from '../../workgraph/types.js';
 import type { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
@@ -79,6 +80,20 @@ describe('makeSpawnLap', () => {
     expect(seen?.prompt).toContain('a'); // the item id
   });
 
+  it('scope-1: the lap spawn sets OPENSQUID_LOOP_LAP=1 (hooks run) and does NOT markSubagent (T-in-lap-gating)', async () => {
+    let seen: { env?: Record<string, string>; markSubagent?: boolean } | undefined;
+    const runCli = vi.fn((o: { env?: Record<string, string>; markSubagent?: boolean }) => {
+      seen = o;
+      return Promise.resolve('{"result":"done","is_error":false,"total_cost_usd":0}');
+    }) as unknown as typeof runOneShotCli;
+    await makeSpawnLap(cfg, localFile, runCli)(ITEM);
+    // The recursion-only marker is published so the six hook bins RUN for the lap (enforcement/injection/FSM).
+    expect(seen?.env?.OPENSQUID_LOOP_LAP).toBe('1');
+    expect(seen?.env?.OPENSQUID_ITEM_ID).toBe('a'); // still published for the MCP tools' item context
+    // The whole fix: a lap must NOT be silenced — markSubagent stays off (so OPENSQUID_SUBAGENT is never set).
+    expect(seen?.markSubagent).toBeUndefined();
+  });
+
   it('a deadline overrun (__timeout) → typed TIMEOUT, not CRASH', async () => {
     const runCli = vi.fn(() =>
       Promise.reject(Object.assign(new Error('lap timeout'), { __timeout: true })),
@@ -99,5 +114,36 @@ describe('makeSpawnLap', () => {
     const runCli = vi.fn(() => Promise.resolve('{}')) as unknown as typeof runOneShotCli;
     await expect(makeSpawnLap(cfg, badFile, runCli)(ITEM)).rejects.toThrow(/RALPH\.md not found/);
     expect(runCli).not.toHaveBeenCalled();
+  });
+});
+
+// T-in-lap-gating scope-1/scope-5 — the `opensquid loop` entrypoint recursion guard: a lap cannot start a nested loop.
+describe('opensquid loop — nested-loop recursion guard', () => {
+  it('refuses to start when OPENSQUID_LOOP_LAP is set (exit 1, fail-loud, before any config read)', async () => {
+    const prevMarker = process.env.OPENSQUID_LOOP_LAP;
+    const prevExit = process.exitCode;
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((s: string | Uint8Array) => {
+      writes.push(typeof s === 'string' ? s : s.toString());
+      return true;
+    });
+    try {
+      process.env.OPENSQUID_LOOP_LAP = '1';
+      process.exitCode = undefined;
+      const program = new Command();
+      program.exitOverride(); // never let commander call process.exit in a test
+      registerRalph(program);
+      await program.parseAsync(['node', 'opensquid', 'loop']);
+      // The guard fires at the TOP of the action (before readRalphConfig) — refusal message + exit 1.
+      expect(process.exitCode).toBe(1);
+      expect(writes.join('')).toContain('refusing to start a nested loop inside a lap');
+      // It must NOT reach the config guard (whose message is the "no ~/.opensquid/ralph.config.json" line).
+      expect(writes.join('')).not.toContain('ralph.config.json');
+    } finally {
+      spy.mockRestore();
+      if (prevMarker === undefined) delete process.env.OPENSQUID_LOOP_LAP;
+      else process.env.OPENSQUID_LOOP_LAP = prevMarker;
+      process.exitCode = prevExit;
+    }
   });
 });

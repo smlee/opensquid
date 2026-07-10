@@ -41,7 +41,13 @@ import { integrateBranchToStage } from './release.js'; // GF.3/GF.7 — the conf
 import { ensureProductionPr } from '../../runtime/release/stage_pr.js'; // GF.7 — the idempotent auto-PR
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
 import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
-import { clearLoopStage, readLoopStage, scopeGate } from '../../runtime/ralph/loop_stage.js';
+import {
+  clearLoopStage,
+  readLoopStage,
+  scopeGate,
+  upsertTaskStage,
+} from '../../runtime/ralph/loop_stage.js';
+import { LOOP_LAP_ENV, isLoopLap } from '../../runtime/hooks/subagent_guard.js';
 import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import { displayReport } from '../../runtime/loop/report_display.js'; // RD.2/RD.3 — the live-display primitive
 import { activeDisciplinePack } from './gate.js';
@@ -159,13 +165,13 @@ export function makeSpawnLap(
         args: adapter.spawnArgs(lapCfg), // the harness-specific flags (was the hardcoded Claude array)
         prompt: adapter.deliverPrompt(prompt).stdin, // the harness-specific prompt delivery (was the bare prompt)
         timeoutMs: file.wallClockMs,
-        markSubagent: true,
-        // The lap runs hooks-OFF: OPENSQUID_SUBAGENT=1 short-circuits every hook bin (exitIfSubagent), so the
-        // PostToolUse FSM write-through is SILENCED — advancement rides the RALPH-EXIT `stage` tag (the
-        // orchestrator advances on it), NOT the lap's own hooks (§2b). OPENSQUID_ITEM_ID is published so the
-        // MCP tools the lap calls (set_loop_phase/log_phase/workgraph_*, in the MCP server process — never a
-        // hook bin) have the item context. (MHL.7 — was a misleading "the FSM hook can WRITE THROUGH" note.)
-        env: { OPENSQUID_ITEM_ID: item.id },
+        // scope-4 (T-in-lap-gating) — the lap runs FULLY HOOKED: PreToolUse enforcement, stage_inject
+        // procedure/rubric delivery, and the PostToolUse FSM write-through (v2_supply → upsertTaskStage) ALL fire
+        // in-lap. It sets the recursion-only OPENSQUID_LOOP_LAP marker (NOT markSubagent → NOT OPENSQUID_SUBAGENT),
+        // which the six hook bins IGNORE (they run for the lap) and which only blocks a NESTED loop (the entrypoint
+        // guard) + the stop-responder / session-end-handoff actions. OPENSQUID_ITEM_ID is still published so the
+        // MCP tools the lap calls (set_loop_phase/log_phase/workgraph_*, in the MCP server process) have item context.
+        env: { OPENSQUID_ITEM_ID: item.id, [LOOP_LAP_ENV]: '1' },
         timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),
         // LIVE channel — each lap stderr line surfaces immediately in the loop's own output (the subprocess→
         // session message channel; no chat, no daemon, no log-scraping). Watch `opensquid loop` and you see
@@ -273,6 +279,16 @@ export function registerRalph(program: Command): Command {
   loop
     .option('--max-budget-usd <n>', 'API-mode dollar budget for this run (overrides config)')
     .action(async (opts: { maxBudgetUsd?: string }) => {
+      // scope-1 (T-in-lap-gating) — RECURSION GUARD: a lap already owns this process tree (it publishes
+      // OPENSQUID_LOOP_LAP=1). Refuse to start a NESTED loop — the genuine recursion protection the retired
+      // markSubagent silencing used to provide (a lap must not spawn its own child laps).
+      if (isLoopLap()) {
+        process.stderr.write(
+          '🦑 loop OFF: refusing to start a nested loop inside a lap (OPENSQUID_LOOP_LAP set).\n',
+        );
+        process.exitCode = 1;
+        return;
+      }
       const file = await readRalphConfig();
       if (file === null) {
         process.stderr.write(
@@ -329,8 +345,14 @@ export function registerRalph(program: Command): Command {
               stagePrompt: (_item: Issue, stage: string): Promise<string> =>
                 Promise.resolve(perStageDirective(stage)),
               readStage: readLoopStage,
-              // No writeStage — the FSM transition (v2_supply write-through) is the SINGLE writer of the
-              // durable task checkpoint; the orchestrator only READS it (+ scopeGate's corrective reset).
+              // scope-3 (T-in-lap-gating) — the in-lap FSM write-through (v2_supply → upsertTaskStage) is the
+              // authoritative SINGLE writer of the durable checkpoint DURING the lap (hooks live). The orchestrator
+              // READS it and, on detected divergence (the write-through did not land), reconciles THROUGH that SAME
+              // single seam — a defensive fallback writer, never a divergent second writer. The `null` artifact is
+              // deliberate: upsertTaskStage touches artifacts ONLY when non-null (loop_stage.ts:124), so the
+              // reconcile corrects only the `stage` column and NEVER erases a recorded scope proof.
+              reconcileStage: (id: string, stage: string): Promise<void> =>
+                upsertTaskStage(id, stage, Date.now(), null),
               clearStage: clearLoopStage,
               // D — the scope gate: verify real scope proof before an item is driven past scope.
               scopeGate: (item: Issue): Promise<'drive' | 'hold'> => scopeGate(item.id),

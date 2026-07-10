@@ -70,10 +70,12 @@ export async function handleLogPhase(args: LogPhaseArgs): Promise<LogPhaseOutput
         'OPENSQUID_SESSION_ID env, and .current-session absent.',
     );
   }
-  // scope-4 (§4): a headless ralph lap runs hooks-off (OPENSQUID_SUBAGENT), so the AP.1 mirror never writes
-  // active-task.json — resolve the driven item from OPENSQUID_ITEM_ID so a lap can log its 7 CODE phases (the
-  // ledger the commit gate requires). id === taskId === the wg id, so these phases key identically to the gate's
+  // scope-4 (§4; premise corrected by T-in-lap-gating scope-4): a ralph lap now runs FULLY hooked
+  // (OPENSQUID_LOOP_LAP, NOT OPENSQUID_SUBAGENT), so the AP.1 PreToolUse mirror DOES write active-task.json in-lap —
+  // the OPENSQUID_ITEM_ID resolution below is now REDUNDANT-BUT-HARMLESS (it fires only when the on-disk signal is
+  // absent). id === taskId === the wg id, so these phases still key identically to the gate's
   // isComplete(phases, active.id) check. Interactively OPENSQUID_ITEM_ID is unset → pure active-task.json read.
+  // (Retiring the now-redundant fallback is a tracked follow-up, T-in-lap-gating §4 OUT — NOT done here.)
   const active = await readActiveTask(sessionId, process.env.OPENSQUID_ITEM_ID);
   if (active === null) {
     throw new Error(

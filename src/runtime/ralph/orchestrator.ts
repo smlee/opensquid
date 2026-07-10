@@ -137,6 +137,14 @@ export interface RalphDeps {
      * (never re-picked → no spin) and awaits interactive human scope, which re-admits it via the FSM write-through.
      */
     scopeGate: (item: Issue) => Promise<'drive' | 'hold'>;
+    /**
+     * scope-3 (T-in-lap-gating) — CONDITIONAL durable-stage fallback. Persist the gate-accepted `stage` THROUGH
+     * the single `upsertTaskStage` seam (one write + one stage_advance emit). The orchestrator calls this ONLY when
+     * a post-lap re-read shows the in-lap FSM write-through did not land — so it is a defensive fallback writer,
+     * never a concurrent second writer, and never a double emit. Optional-additive: absent ⇒ no reconcile
+     * (byte-unchanged; every existing `stageLoop` fixture that omits it drives exactly as before).
+     */
+    reconcileStage?: (itemId: string, stage: string) => Promise<void>;
   };
   /**
    * AGF.3 (T-opensquid-automated-gitflow, wg-4ae1004c931b) — the bounded concurrency pool + worktree-per-item.
@@ -271,8 +279,18 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
     await flushStage(stage); // the stage COMPLETED (advanced) → write its per-stage row, then reset for `next`
     deps.narrate?.(`  ✓ ${item.id} · ${stage} → ${next}`);
     sameStage = 0;
-    stage = next; // in-run priming only; the DURABLE projection is written THROUGH by the FSM (v2_supply),
-    // the single writer — a loop restart resumes from that FSM-written stage via `readStage`.
+    stage = next; // in-run priming; the durable projection is written THROUGH by the FSM (v2_supply → upsertTaskStage)
+    // DURING the lap (hooks live — T-in-lap-gating), the single writer, and scope-3's conditional fallback below
+    // reconciles through that SAME seam if it ever did not land — a loop restart resumes from `readStage`.
+    // scope-3 — belt-and-suspenders: the in-lap FSM write-through is authoritative and USUALLY already persisted
+    // `next` DURING the lap. But if it did NOT land (a silenced hook path, a crash before PostToolUse), re-read the
+    // durable stage and reconcile THROUGH the SAME single seam — conditional (only on divergence), same accepted
+    // value → exactly one write + one stage_advance emit per transition (the shipped single-writer/single-emit
+    // invariant, loop_stage.ts:126-140/:139, holds). `next` is the FSM-accepted transition, never a blind stamp.
+    if (sl.reconcileStage !== undefined) {
+      const durable = await sl.readStage(item.id);
+      if (durable !== next) await sl.reconcileStage(item.id, next);
+    }
     stageStartMs = Date.now();
     stageCost = 0;
     stageIn = 0;
