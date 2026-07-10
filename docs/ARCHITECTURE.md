@@ -857,10 +857,18 @@ requirements:
     assert: { kind: reachable, symbol: resolveLapHarness, from: [orchestrator] }
     proof: 'src/runtime/ralph/lap_harness.test.ts'
   - id: R-LAP-OUTCOME-FOLD
-    intent: 'MHL.3 outcomeFromEnvelope: the NEUTRAL envelope→outcome fold (the vendor-free half of the former parseLapOutcome) — isError ⇒ CRASH; else the RALPH-EXIT scan (clean no-tag ⇒ SHIPPED); cost/tokens pass through. Vendor-free by construction; the harness adapter owns turning raw stdout into a LapEnvelope'
+    intent: 'MHL.3 outcomeFromEnvelope: the NEUTRAL envelope→outcome fold (the vendor-free half of the former parseLapOutcome), FAIL-CLOSED (FCE.1, Codex P1 #4) — isError ⇒ CRASH; else a valid RALPH-EXIT tag ⇒ its outcome; a present-but-invalid tag ⇒ WEDGE; an absent tag ⇒ CRASH; NEVER a default SHIPPED; cost/tokens pass through. Vendor-free by construction; the harness adapter owns turning raw stdout into a LapEnvelope'
     spec: 'docs/tasks/T-multi-harness-lap.md'
     wg: wg-348c691ae27e
     assert: { kind: reachable, symbol: outcomeFromEnvelope, from: [orchestrator] }
+    proof: 'src/runtime/ralph/lap_outcome.test.ts'
+  # T-fail-closed-typed-exit (wg-2bba2e5f17bc, FCE.1) — the fail-closed fold's tag-presence signal. ONE new
+  # behavioral gated export (tagIsPresent), MET via its unit in lap_outcome.test.ts; no data-shape/allowlist add.
+  - id: R-LAP-TAG-PRESENT
+    intent: 'FCE.1 tagIsPresent: the locked "present" signal for the fail-closed fold — true iff the literal RALPH-EXIT: tag occurs in the result text (lastIndexOf !== -1), regardless of whether valid JSON follows; the fold consults it when extractTypedExit returns null to split WEDGE (present-but-invalid, deterministic → human) from CRASH (truly absent, retryable). Pure + total, never throws'
+    spec: 'docs/tasks/T-fail-closed-typed-exit.md'
+    wg: wg-e7e10c0ca0ed
+    assert: { kind: reachable, symbol: tagIsPresent, from: [orchestrator] }
     proof: 'src/runtime/ralph/lap_outcome.test.ts'
   - id: R-LAP-CLAUDE-ADAPTER
     intent: "MHL.4 claudeLapHarness: today's Claude lap behavior extracted VERBATIM (the regression floor) — the byte-identical ralph.ts:137-144 flag array, the stdin prompt, the single-JSON-envelope reads (total_cost_usd/usage/is_error/result) incl. the unparseable/non-object → isError path"

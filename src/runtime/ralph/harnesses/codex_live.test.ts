@@ -35,7 +35,8 @@ describe.skipIf(!LIVE)('codex live smoke (opt-in, real binary)', () => {
     expect(res.error).toBeUndefined();
     const env = codexLapHarness.parseEnvelope(res.stdout ?? '', res.stderr ?? '');
     const { outcome } = outcomeFromEnvelope(env);
-    // A well-formed outcome (the model usually echoes the tag → SHIPPED; a clean no-tag reply is also SHIPPED).
+    // A well-formed outcome (the model usually echoes the tag → SHIPPED; fail-closed, a clean no-tag reply is
+    // now CRASH, not SHIPPED — FCE.1). All four kinds are well-formed for this liveness bar.
     expect(['SHIPPED', 'WEDGE', 'CRASH', 'HUMAN_REQUIRED']).toContain(outcome.kind);
   }, 130_000);
 });

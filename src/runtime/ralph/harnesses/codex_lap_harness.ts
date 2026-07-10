@@ -17,6 +17,16 @@
  *     counts recorded, so loop_metrics stays populated (token columns real; the dollar column a documented 0
  *     for Codex subscription-style auth, consistent with the loop's subscription mode where wall-clock, not
  *     dollars, is the bound).
+ *   - `--output-schema` (Codex P1 #4, FCE.3): SUPPORTED by codex-cli 0.144.0 (`codex exec --output-schema
+ *     <FILE>` — a JSON Schema file for the model's FINAL response shape) but DELIBERATELY DEFERRED. It
+ *     constrains the ENTIRE final response to schema-JSON, which is incompatible with the embedded-`RALPH-EXIT:`
+ *     -line free-text exit contract (RALPH.md; the authoritative text-parse fold in lap_outcome.ts) — a
+ *     pure-JSON final message has no `RALPH-EXIT:` line, so the fail-closed fold would read every Codex lap as
+ *     absent-tag → CRASH. Adopting it would require reshaping the exit contract across RALPH.md + both adapters
+ *     + the fold, making an OPTIONAL element load-bearing/coupled — out of scope (§5-Q2: additive, version-
+ *     gated, NEVER a hard dependency). The text-parse path (the fail-closed fold + the turn.completed predicate)
+ *     remains the SOLE enforcement. Revisit only if a future Codex constrains a SUB-field (not the whole
+ *     response) or the exit contract is redesigned to a pure-JSON envelope; re-fact-check the binary then.
  */
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -56,7 +66,6 @@ export const codexLapHarness: LapHarness = {
     let outputTokens = 0;
     let sawError = false;
     let sawCompletion = false;
-    let sawMessage = false;
     for (const line of stdout.split('\n')) {
       const t = line.trim();
       if (t.length === 0) continue;
@@ -71,7 +80,6 @@ export const codexLapHarness: LapHarness = {
         const item = ev.item as Record<string, unknown> | undefined;
         if (item?.type === 'agent_message' && typeof item.text === 'string') {
           resultText += (resultText ? '\n' : '') + item.text;
-          sawMessage = true;
         }
       } else if (type === 'turn.completed') {
         sawCompletion = true;
@@ -84,7 +92,10 @@ export const codexLapHarness: LapHarness = {
         sawError = true; // CODE re-confirmed against the live binary — see the module header
       }
     }
-    const isError = sawError || (!sawMessage && !sawCompletion); // stream error OR empty/aborted stream
+    // Tightened (Codex P1 #4): require a GENUINE completion signal. A stream error OR the absence of
+    // turn.completed (a refusal message, an aborted/empty stream) ⇒ errored ⇒ CRASH via outcomeFromEnvelope.
+    // A refusal MESSAGE alone is NO LONGER success — it never completed a turn.
+    const isError = sawError || !sawCompletion;
     // open-Q2: the JSONL carries NO total_cost_usd → notional 0 cost + REAL token counts (loop_metrics stays populated).
     return { resultText, costUsd: 0, inputTokens, outputTokens, isError };
   },

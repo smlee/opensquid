@@ -5,7 +5,12 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { extractTypedExit, outcomeFromEnvelope } from './lap_outcome.js';
+import {
+  extractTypedExit,
+  outcomeFromEnvelope,
+  tagIsPresent,
+  type LapOutcome,
+} from './lap_outcome.js';
 import type { LapEnvelope } from './lap_harness.js';
 
 const env = (over: Partial<LapEnvelope> = {}): LapEnvelope => ({
@@ -72,13 +77,44 @@ describe('extractTypedExit', () => {
 });
 
 describe('outcomeFromEnvelope (MHL.3 — the neutral envelope→outcome fold)', () => {
-  it('a clean envelope with no tag → SHIPPED (cost/tokens pass through)', () => {
+  it('a clean envelope with NO tag → CRASH (fail-closed, never SHIPPED; cost/tokens pass through)', () => {
     expect(outcomeFromEnvelope(env({ resultText: 'did the work, tests pass' }))).toEqual({
-      outcome: { kind: 'SHIPPED' },
+      outcome: { kind: 'CRASH' },
       costUsd: 0.04,
       inputTokens: 0,
       outputTokens: 0,
     });
+  });
+
+  it.each([
+    'RALPH-EXIT: {oops', // no closing brace / no balanced object
+    'RALPH-EXIT: not-json', // no leading {
+    'RALPH-EXIT: {"kind":"BOGUS"}', // unknown kind → switch default
+    'RALPH-EXIT: {"kind":"HUMAN_REQUIRED"}', // missing/invalid reason (:90 null)
+    'RALPH-EXIT: {"kind":', // unparseable JSON
+  ])('a clean envelope with a present-but-invalid tag → WEDGE (%s)', (text) => {
+    expect(outcomeFromEnvelope(env({ resultText: `work\n${text}` })).outcome).toEqual({
+      kind: 'WEDGE',
+    });
+  });
+
+  it('a valid SHIPPED tag → SHIPPED (unchanged); other valid kinds unchanged (regression :79-96)', () => {
+    const out = (text: string): LapOutcome =>
+      outcomeFromEnvelope(env({ resultText: text })).outcome;
+    expect(out('RALPH-EXIT: {"kind":"SHIPPED"}')).toEqual({ kind: 'SHIPPED' });
+    expect(out('RALPH-EXIT: {"kind":"WEDGE"}')).toEqual({ kind: 'WEDGE' });
+    expect(out('RALPH-EXIT: {"kind":"TIMEOUT"}')).toEqual({ kind: 'TIMEOUT' });
+    expect(out('RALPH-EXIT: {"kind":"CRASH"}')).toEqual({ kind: 'CRASH' });
+    expect(out('RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"SCOPE_FORK"}')).toEqual({
+      kind: 'HUMAN_REQUIRED',
+      reason: 'SCOPE_FORK',
+    });
+  });
+
+  it('isError:true wins over a stray malformed tag → CRASH (isError checked FIRST)', () => {
+    expect(
+      outcomeFromEnvelope(env({ resultText: 'RALPH-EXIT: {bad', isError: true })).outcome,
+    ).toEqual({ kind: 'CRASH' });
   });
 
   it('extracts a HUMAN_REQUIRED exit from the result text', () => {
@@ -107,7 +143,9 @@ describe('outcomeFromEnvelope (MHL.3 — the neutral envelope→outcome fold)', 
 
   it('passes token usage through for the loop_metrics history (LSF.5)', () => {
     expect(
-      outcomeFromEnvelope(env({ resultText: 'done', inputTokens: 1200, outputTokens: 340 })),
+      outcomeFromEnvelope(
+        env({ resultText: 'RALPH-EXIT: {"kind":"SHIPPED"}', inputTokens: 1200, outputTokens: 340 }),
+      ),
     ).toEqual({
       outcome: { kind: 'SHIPPED' },
       costUsd: 0.04,
@@ -122,5 +160,14 @@ describe('outcomeFromEnvelope (MHL.3 — the neutral envelope→outcome fold)', 
         env({ resultText: 'boom', isError: true, inputTokens: 50, outputTokens: 10 }),
       ),
     ).toMatchObject({ outcome: { kind: 'CRASH' }, inputTokens: 50, outputTokens: 10 });
+  });
+});
+
+describe('tagIsPresent (FCE.1 — the locked "present" signal; covers R-LAP-TAG-PRESENT)', () => {
+  it('true iff the RALPH-EXIT tag occurs (mid-text / trailing garbage / no valid JSON), false otherwise', () => {
+    expect(tagIsPresent('x RALPH-EXIT: {"kind":"SHIPPED"} y')).toBe(true);
+    expect(tagIsPresent('RALPH-EXIT: {oops')).toBe(true); // present even with no valid JSON
+    expect(tagIsPresent('no tag here at all')).toBe(false);
+    expect(tagIsPresent('')).toBe(false);
   });
 });

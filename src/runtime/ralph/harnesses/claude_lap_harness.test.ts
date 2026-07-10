@@ -64,6 +64,17 @@ describe('claudeLapHarness (MHL.4)', () => {
     expect(claudeLapHarness.parseEnvelope('not json at all', '').isError).toBe(true);
   });
 
+  it('FCE.1: a clean-refusal envelope (is_error:false, no tag) → CRASH via the shared fail-closed fold', () => {
+    // Proves the shared FCE.1 fix reaches the Claude path with NO Claude-adapter code change (§4): a refusing
+    // Claude lap that returns a clean envelope with no RALPH-EXIT tag no longer defaults to SHIPPED.
+    const env = claudeLapHarness.parseEnvelope(
+      JSON.stringify({ is_error: false, result: "I can't access the workgraph" }),
+      '',
+    );
+    expect(env.isError).toBe(false);
+    expect(outcomeFromEnvelope(env).outcome).toEqual({ kind: 'CRASH' });
+  });
+
   it('a non-object JSON envelope → isError', () => {
     expect(claudeLapHarness.parseEnvelope('42', '').isError).toBe(true);
   });

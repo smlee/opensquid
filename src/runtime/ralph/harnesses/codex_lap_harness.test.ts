@@ -137,9 +137,26 @@ describe('codexLapHarness.parseEnvelope — the JSONL fold (MHL.5)', () => {
     );
   });
 
-  it('an empty stream → isError (no message and no completion)', () => {
+  it('an empty/whitespace stream → isError (no turn.completed)', () => {
     expect(codexLapHarness.parseEnvelope('', '').isError).toBe(true);
     expect(codexLapHarness.parseEnvelope('\n  \n', '').isError).toBe(true);
+  });
+
+  it('FCE.2: a refusal message with NO turn.completed → isError → CRASH (not SHIPPED)', () => {
+    const stdout = JSON.stringify({
+      type: 'item.completed',
+      item: { type: 'agent_message', text: "I can't access the workgraph" },
+    });
+    const env = codexLapHarness.parseEnvelope(stdout, '');
+    expect(env.isError).toBe(true);
+    expect(env.resultText).toContain("I can't access");
+    expect(outcomeFromEnvelope(env).outcome).toEqual({ kind: 'CRASH' });
+  });
+
+  it('FCE.1: a completed turn with NO tag → not-errored, but CRASH via the fail-closed fold', () => {
+    const env = codexLapHarness.parseEnvelope(jsonl('all done, everything looks good'), '');
+    expect(env.isError).toBe(false);
+    expect(outcomeFromEnvelope(env).outcome).toEqual({ kind: 'CRASH' });
   });
 
   it('a malformed line interleaved with valid events is skipped, not fatal', () => {
