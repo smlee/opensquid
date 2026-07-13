@@ -12,19 +12,47 @@ import {
 
 const priorRoot = process.env.OPENSQUID_PROJECT_ROOT;
 
+async function waitForFile(path: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(path, 'utf8');
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new Error(`timed out waiting for ${path}: ${String(lastError)}`);
+}
+
 describe.skipIf(process.platform !== 'win32')('Windows Job Object process control', () => {
   let project: string;
+  let cleanupControl: (() => void) | undefined;
+  let executorRegistered = false;
 
   beforeEach(async () => {
     project = await mkdtemp(join(tmpdir(), 'opensquid-winjob-'));
     await mkdir(join(project, '.opensquid'));
     process.env.OPENSQUID_PROJECT_ROOT = project;
+    cleanupControl = undefined;
+    executorRegistered = false;
   });
 
   afterEach(async () => {
+    // A failed assertion must not strand the broker/Job Object and make the temp tree permanently EBUSY.
+    if (executorRegistered) {
+      await requestExecutorControl({
+        executorId: 'windows-job-e2e',
+        action: 'force_kill',
+        requestedBy: 'tui',
+        authorizedBy: 'tui:windows-e2e-cleanup',
+      }).catch(() => undefined);
+    }
+    cleanupControl?.();
     if (priorRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
     else process.env.OPENSQUID_PROJECT_ROOT = priorRoot;
-    await rm(project, { recursive: true, force: true });
+    await rm(project, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('survives automatic EOF, terminates only the root, then force-kills the owned descendant job', async () => {
@@ -47,6 +75,8 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
       base: realProcControl,
       pollMs: 20,
     });
+    cleanupControl = () => control.dispose();
+    executorRegistered = true;
     await runOneShotCli({
       cli: process.execPath,
       args: [child],
@@ -58,8 +88,11 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
       procControl: control.procControl,
     }).catch(() => undefined);
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const grandPid = Number(await readFile(grandPidFile, 'utf8'));
+    // PowerShell's first Add-Type compilation is cold on a fresh Windows runner. Wait for the target's
+    // observable readiness instead of assuming the broker, C# compile, child, and grandchild all finish in
+    // 500 ms. The transport has already reached its automatic EOF/timeout path; no OS signal was sent.
+    const grandPid = Number(await waitForFile(grandPidFile, 10_000));
+    expect(Number.isSafeInteger(grandPid) && grandPid > 0).toBe(true);
     expect(() => process.kill(grandPid, 0)).not.toThrow();
 
     const receipt = await requestExecutorControl({
@@ -79,7 +112,6 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
         alive = false;
       }
     }
-    control.dispose();
     // Windows has no portable POSIX TERM analogue: the human terminate action closes the exact owned Job
     // Object with a distinct exit code, and must still remove every descendant.
     expect(alive).toBe(false);
