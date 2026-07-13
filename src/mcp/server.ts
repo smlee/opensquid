@@ -63,6 +63,7 @@ import {
 import { readSessionCwd } from '../runtime/session_state.js';
 import { resolveActorId } from '../runtime/actor_id.js';
 import { workGraphStore } from '../workgraph/store.js';
+import { emitMonitorEvent } from '../runtime/loop/monitor_emit.js';
 
 import type { RagBackend } from '../rag/types.js';
 
@@ -88,6 +89,7 @@ import {
   StoreLessonSchema,
   type StoreLessonArgs,
 } from './tools/store-lesson.js';
+import { handleWebFetch, WebFetchSchema, type WebFetchResult } from './tools/web_fetch.js';
 import {
   WgAddEdgeSchema,
   WgArchiveSchema,
@@ -180,6 +182,11 @@ async function getWorkGraph(): Promise<WorkGraphFacade> {
         dbUrl: `file:${join(dir, 'workgraph.db')}`,
         sourceDir: join(dir, 'store', 'issues'),
         actorId: await resolveActorId(), // WGD.1 — stamp the per-replica id on ops
+        // The MCP mutation is the close boundary when an executor or parent updates status directly.
+        // Push through the existing generic monitor stream here; do not reconstruct closure from reports or
+        // wait for the loop's next boot sweep.
+        onIssueTerminal: (id) =>
+          emitMonitorEvent({ wgId: id, kind: 'item_closed', atMs: Date.now() }),
       });
       await s.init();
       return s;
@@ -344,6 +351,13 @@ const ToolHandlers = {
     handle: (a: z.infer<typeof DecisionClassifySchema>) =>
       Promise.resolve(handleDecisionClassify(a)),
   },
+  web_fetch: {
+    schema: WebFetchSchema,
+    handle: (a: z.infer<typeof WebFetchSchema>) =>
+      handleWebFetch(a).then((r: WebFetchResult | string) =>
+        typeof r === 'string' ? r : JSON.stringify(r),
+      ),
+  },
   kanban_create_board: {
     schema: KanbanCreateBoardSchema,
     handle: async (a: z.infer<typeof KanbanCreateBoardSchema>) =>
@@ -417,6 +431,7 @@ const toolAnnotations: Record<ToolName, ToolAnnotations> = {
   workgraph_unarchive: LOCAL_WRITE,
   workgraph_claim: LOCAL_WRITE,
   decision_classify: READ_ONLY,
+  web_fetch: READ_ONLY,
   // Kanban overlay (KANBAN.2): sync MAPS the work-graph onto a board (a write); board is a pure read.
   kanban_create_board: LOCAL_WRITE,
   kanban_place: LOCAL_WRITE,
@@ -474,6 +489,8 @@ const descriptions: Record<ToolName, string> = {
     'Atomically claim a work-graph issue {id, ttlSec?} for exclusive work (exactly-once). Stamps the calling harness as audience. Returns {won, expiresAt}; won:false means another runner holds it. An expired claim is reclaimable.',
   decision_classify:
     'Classify an in-lap decision {decision} as DECIDE / ESCALATE / DEFER (gated-ralph, deterministic-first). DECIDE = settle by principles and proceed; ESCALATE = irreversible/outward boundary or genuine fork (emit HUMAN_REQUIRED, stamping this verdict in the payload); DEFER = no signal, the agent decides (Inv 3 → DECIDE). Returns {verdict, confidence, source, matched}.',
+  web_fetch:
+    'Fetch a public http(s) document with SSRF-safe DNS pinning, redirect re-validation, content-type allowlisting, and encoded/decoded size caps. Returns {url,statusCode,contentType,text,redirects}.',
   kanban_create_board:
     'Create a kanban board {name, goal} that MAPS work-graph issues into lanes (re-create updates the goal). The board is an overlay — the work-graph is never modified.',
   kanban_place:

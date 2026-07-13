@@ -21,8 +21,8 @@
  *     the artifact, so a changed artifact OR a changed instruction → cache miss
  *     → fresh audit. No stale verdict can be reused.
  *
- * NOT `memoizable` (the evaluator memo is per-run; THIS cache is the explicit
- * cross-turn one) and NOT `durable` (the state write IS its durability).
+ * NOT evaluator-`memoizable` or rule-checkpoint `durable`: this primitive owns explicit atomic session caching
+ * plus project/task-durable persistence so a fresh per-stage process can recover the same content-hash verdict.
  *
  * Imports from: zod, ../models/load_config.js, ../models/dispatcher.js,
  *   ../runtime/paths.js, ../runtime/durable/run_id.js, ../runtime/result.js.
@@ -40,6 +40,7 @@ import { CliTimeoutError } from '../models/strategies/subscription_cli.js';
 import { sha256Hex } from '../runtime/durable/run_id.js';
 import { sessionLogFile, sessionStateFile } from '../runtime/paths.js';
 import { err, ok } from '../runtime/result.js';
+import { readTaskAuditCache, writeTaskAuditCache } from '../runtime/loop/task_audit_cache.js';
 
 import type { FunctionRegistry } from './registry.js';
 
@@ -82,10 +83,16 @@ async function readCachedVerdict(
   try {
     const parsed = JSON.parse(await readFile(sessionStateFile(sessionId, key), 'utf8')) as unknown;
     if (isCacheEntry(parsed) && parsed.hash === hash) return parsed.verdict;
-    return null;
   } catch {
-    return null; // ENOENT / malformed → treat as a miss
+    // A fresh per-stage lap has no session-local cache; fall through to durable task state.
   }
+  try {
+    const durable = await readTaskAuditCache(sessionId, key);
+    if (durable !== null && durable.hash === hash) return durable.verdict;
+  } catch {
+    // Cache reads are fail-soft. The caller performs a fresh audit on any storage failure.
+  }
+  return null;
 }
 
 /**
@@ -124,7 +131,12 @@ async function writeCache(sessionId: string, key: string, entry: CacheEntry): Pr
     await writeFile(tmp, JSON.stringify(entry, null, 2), 'utf8');
     await rename(tmp, path);
   } catch {
-    /* best-effort: a cache-write failure must NEVER break the audit gate */
+    /* best-effort: a session-cache write failure must NEVER break the audit gate */
+  }
+  try {
+    await writeTaskAuditCache(sessionId, key, entry);
+  } catch {
+    /* best-effort: a durable cache write failure forces a later re-audit, never a false pass */
   }
 }
 

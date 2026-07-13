@@ -24,6 +24,12 @@ export default tseslint.config(
     },
   },
   {
+    files: ['src/integrations/pi/projector.ts', 'src/integrations/pi/spawn_subagent.ts'],
+    rules: {
+      'import/no-default-export': 'off',
+    },
+  },
+  {
     // FU.8 audit gate — MCP-side session reads MUST go through resolveMcpSessionId()
     // (src/runtime/hooks/session_id.ts). Raw `process.env.CLAUDE_SESSION_ID` resolves
     // to sessions/unknown (CC never sets it); the global `readCurrentSession()` races

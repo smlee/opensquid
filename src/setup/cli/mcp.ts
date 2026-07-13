@@ -48,6 +48,13 @@ import {
   writeCodexMcp,
   type CodexConfig,
 } from '../wizard/codex-mcp-writer.js';
+import { writePiMcp } from '../wizard/pi-mcp-writer.js';
+import {
+  defaultPiExpectedConfig,
+  projectPiMcpConfig,
+  readPiMcpConfig,
+  type PiMcpConfigFile,
+} from '../../integrations/pi/mcp_config.js';
 import {
   ALL_HOSTS,
   parseHosts,
@@ -74,6 +81,10 @@ export interface McpCliDeps {
   /** Codex TOML reader for the dry-run projection (default `readCodexConfig` —
    *  the JSON reader would throw on an existing `config.toml`). */
   codexReader?: (path: string) => Promise<CodexConfig>;
+  /** Pi JSON writer (default `writePiMcp`). */
+  piWriter?: (path: string, root?: string) => Promise<McpWriteResult>;
+  /** Pi JSON reader for dry-run projection (default `readPiMcpConfig`). */
+  piReader?: (path: string) => Promise<PiMcpConfigFile>;
   cwd?: () => string;
   home?: () => string;
   stdout?: (s: string) => void;
@@ -90,6 +101,8 @@ interface ResolvedDeps {
   reader: (path: string) => Promise<unknown>;
   codexWriter: (path: string, root?: string) => Promise<McpWriteResult>;
   codexReader: (path: string) => Promise<CodexConfig>;
+  piWriter: (path: string, root?: string) => Promise<McpWriteResult>;
+  piReader: (path: string) => Promise<PiMcpConfigFile>;
   cwd: () => string;
   home: () => string;
   out: (s: string) => void;
@@ -105,6 +118,16 @@ function buildDeps(deps: McpCliDeps): ResolvedDeps {
     reader: deps.reader ?? readClaudeUserConfig,
     codexWriter: deps.codexWriter ?? writeCodexMcp,
     codexReader: deps.codexReader ?? readCodexConfig,
+    piWriter:
+      deps.piWriter ??
+      ((path, root) =>
+        writePiMcp({
+          cli: 'pi',
+          cwd: process.cwd(),
+          env: { ...process.env, PI_CODING_AGENT_DIR: dirname(path) },
+          ...(root === undefined ? {} : { opensquidRoot: root }),
+        })),
+    piReader: deps.piReader ?? readPiMcpConfig,
     cwd: deps.cwd ?? ((): string => process.cwd()),
     home: deps.home ?? homedir,
     out: deps.stdout ?? ((s): void => void process.stdout.write(s)),
@@ -181,10 +204,10 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
   }
   const env: HostResolveEnv = { platform: r.platform(), home: r.home(), env: process.env };
 
-  // D2: skip a non-Code host whose app dir is absent (don't fabricate its tree).
+  // D2: skip a host whose app dir is absent (don't fabricate its tree).
   // Claude Code's dir is the home dir — always present.
   const hostPresent = async (id: HostId, configPath: string): Promise<boolean> =>
-    id === 'claude-code' || (await r.dirExists(dirname(configPath)));
+    id === 'claude-code' || id === 'pi' || (await r.dirExists(dirname(configPath)));
 
   if (flags.dryRun === true) {
     r.out('opensquid setup wizard mcp — DRY RUN (no files written)\n');
@@ -194,14 +217,23 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
         r.out(`  ${t.label}: not detected (${dirname(t.configPath)}) — would skip\n`);
         continue;
       }
-      // Per-host projection: codex reads/parses TOML + projects TOML tables; every other host is JSON.
+      // Per-host projection: codex reads/parses TOML; Pi projects its dedicated JSON; every other host is JSON.
       const { added, replaced, preserved } =
         t.id === 'codex'
           ? projectCodexMcp(await r.codexReader(t.configPath), root)
-          : projectOpensquidMcp(
-              (await r.reader(t.configPath)) as Parameters<typeof projectOpensquidMcp>[0],
-              root,
-            );
+          : t.id === 'pi'
+            ? projectPiMcpConfig(
+                await r.piReader(t.configPath),
+                defaultPiExpectedConfig({
+                  cwd: r.cwd(),
+                  env: { ...process.env, PI_CODING_AGENT_DIR: dirname(t.configPath) },
+                  ...(root === undefined ? {} : { opensquidRoot: root }),
+                }),
+              )
+            : projectOpensquidMcp(
+                (await r.reader(t.configPath)) as Parameters<typeof projectOpensquidMcp>[0],
+                root,
+              );
       r.out(
         `  ${t.label} (${t.configPath}): would add [${added.join(', ')}], replace [${replaced.join(
           ', ',
@@ -221,8 +253,8 @@ export async function runMcpWizard(flags: McpCliFlags, deps: McpCliDeps = {}): P
         r.out(`  ${t.label}: not detected (${dirname(t.configPath)}) — skipped\n`);
         continue;
       }
-      // Per-host writer: codex → TOML config.toml; every other host → JSON.
-      const writer = t.id === 'codex' ? r.codexWriter : r.writer;
+      // Per-host writer: codex → TOML config.toml; Pi → dedicated JSON; every other host → JSON.
+      const writer = t.id === 'codex' ? r.codexWriter : t.id === 'pi' ? r.piWriter : r.writer;
       const result = await writer(t.configPath, root);
       r.out(
         `  ${t.label} (${t.configPath}): added [${result.added.join(
@@ -263,14 +295,14 @@ export function registerSetupWizardMcp(wizard: Command, deps: McpCliDeps = {}): 
   wizard
     .command('mcp')
     .description(
-      'Register opensquid MCP servers into supported hosts — Claude Code/Desktop, Cursor, Codex (default: Claude Code)',
+      'Register opensquid MCP servers into supported hosts — Claude Code/Desktop, Cursor, Codex, Pi (default: Claude Code)',
     )
     .option('--dry-run', 'preview the projected changes without writing any file', false)
     .option('--opensquid-root <path>', 'override the auto-detected opensquid repo root')
     .option('--no-detect-project-cleanup', 'skip the project-level .mcp.json cleanup advisory')
     .option(
       '--hosts <list>',
-      'comma-list of hosts (claude-code, claude-desktop, cursor, codex) or "all"; default: claude-code',
+      'comma-list of hosts (claude-code, claude-desktop, cursor, codex, pi) or "all"; default: claude-code',
     )
     .action(async (flags: McpCliFlags) => {
       await runMcpWizard(flags, deps);

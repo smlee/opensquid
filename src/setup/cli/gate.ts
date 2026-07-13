@@ -48,6 +48,7 @@ import {
 } from '../../runtime/release/release_core.js';
 import { validateConventionalMessage } from '../../runtime/release/release_semver.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
+import { readTaskAuditCache } from '../../runtime/loop/task_audit_cache.js';
 import { readSuite } from '../../runtime/loop/verification.js';
 import { readActiveTask } from '../../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../../runtime/workflow_phases.js';
@@ -150,15 +151,33 @@ function block(msg: string): number {
  *  (scope-4 §4a — core carries no pack-specific cache-key literal; the key comes from the active pack's evidence),
  *  or null when absent/unreadable. The text carries the findings (the UNRESOLVED bullets) the block surfaces so
  *  the agent redoes EXACTLY those (force a guided redo, not a bare refusal). */
-async function readCodeAuditVerdict(sid: string, auditCacheKey: string): Promise<string | null> {
+async function readCodeAuditEntry(
+  sid: string,
+  auditCacheKey: string,
+): Promise<{ verdict: string; subjectHash?: string } | null> {
   try {
     const parsed = JSON.parse(await readFile(sessionStateFile(sid, auditCacheKey), 'utf8')) as {
       verdict?: unknown;
+      subjectHash?: unknown;
     };
-    return typeof parsed.verdict === 'string' ? parsed.verdict : null;
+    if (typeof parsed.verdict === 'string') {
+      return {
+        verdict: parsed.verdict,
+        ...(typeof parsed.subjectHash === 'string' ? { subjectHash: parsed.subjectHash } : {}),
+      };
+    }
+  } catch {
+    // A fresh recovery/commit process falls through to the task-durable audit cache.
+  }
+  try {
+    return await readTaskAuditCache(sid, auditCacheKey);
   } catch {
     return null;
   }
+}
+
+async function readCodeAuditVerdict(sid: string, auditCacheKey: string): Promise<string | null> {
+  return (await readCodeAuditEntry(sid, auditCacheKey))?.verdict ?? null;
 }
 
 /** GUESS_FREE iff the verdict exists AND says so. FAIL-CLOSED: absent/UNRESOLVED → false (cannot commit). */
@@ -172,14 +191,7 @@ async function readCodeAuditSubjectHash(
   sid: string,
   auditCacheKey: string,
 ): Promise<string | null> {
-  try {
-    const parsed = JSON.parse(await readFile(sessionStateFile(sid, auditCacheKey), 'utf8')) as {
-      subjectHash?: unknown;
-    };
-    return typeof parsed.subjectHash === 'string' ? parsed.subjectHash : null;
-  } catch {
-    return null;
-  }
+  return (await readCodeAuditEntry(sid, auditCacheKey))?.subjectHash ?? null;
 }
 
 /** Closes the STALENESS WINDOW: a GUESS_FREE verdict only authorizes a commit if it certifies the diff being

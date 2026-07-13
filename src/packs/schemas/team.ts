@@ -13,19 +13,17 @@
  *                        `profession/code-reviewer`). The subagent's universal
  *                        pinned skills come from its OWN pack set, NOT the
  *                        parent's — see context inheritance (Task 6.3).
- *   - `model_alias`    — model-neutral task-purpose label (e.g. `reasoning`,
- *                        `fast_classifier`). Resolved against the user's
- *                        `models.yaml` at spawn time, never hardcoded to a
- *                        vendor model name.
+ *   - `model_alias`    — optional model-neutral task-purpose override (e.g. `reasoning`).
+ *                        When absent, the executor inherits its parent model.
+ *                        When present, it resolves against the user's `models.yaml`.
  *   - `handoff_signal` — optional sentinel string the subagent emits to
  *                        signal completion (e.g. `'REVIEW_COMPLETE'`). Parent
  *                        scans subagent stdout for this signal.
  *   - `instructions`   — optional role-specific system prompt addendum.
  *
  * Model neutrality (per `project_opensquid_model_neutral_subagent_primitive`):
- * `model_alias` is a USER-SUPPLIED alias name, never a concrete vendor model
- * id. The schema validates only that it's a non-empty string — the alias
- * resolution happens at spawn time against the active models config.
+ * `model_alias`, when present, is a USER-SUPPLIED alias name rather than a concrete vendor model id.
+ * Alias resolution happens at spawn time against the active models config.
  *
  * `.min(1)` on `roles` enforces "a team has at least one role". An empty
  * team pack is a configuration error (no subagents to spawn means the
@@ -40,16 +38,15 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 // SubagentRole — one declarative role inside a team pack.
 //
-// `pack` + `model_alias` are required strings (min 1) because spawn-time
-// resolution against the pack registry + models config has no sensible
-// fallback. `handoff_signal` + `instructions` stay optional — most roles
-// terminate on natural completion and inherit the profession pack's prompt.
+// `pack` is required. `model_alias` is an explicit optional user-configured override; when absent, a harness
+// executor inherits the parent session's resolved provider/model. `handoff_signal` + `instructions` stay optional.
 // ---------------------------------------------------------------------------
 
 export const SubagentRole = z.object({
   name: z.string().min(1),
   pack: z.string().min(1),
-  model_alias: z.string().min(1),
+  model_alias: z.string().min(1).optional(),
+  tools: z.array(z.string().min(1)).min(1).optional(),
   handoff_signal: z.string().optional(),
   instructions: z.string().optional(),
 });

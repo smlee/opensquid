@@ -33,6 +33,10 @@ export type HumanRequiredReason =
   | 'NO_DURABLE_COMMIT'
   | 'BUDGET'
   | 'RATE_BUDGET'
+  | 'PROCESS_PAUSED'
+  // Core-generated from the trusted process-control channel. Deliberately absent from
+  // HUMAN_REQUIRED_REASONS so model-authored RALPH tags cannot spoof a human cancellation.
+  | 'CANCELLED_BY_HUMAN'
   | 'BOARD_EMPTY';
 
 export type LapOutcome =
@@ -61,14 +65,13 @@ const isReason = (v: unknown): v is HumanRequiredReason =>
 const TAG = 'RALPH-EXIT:';
 
 /**
- * Scan the lap's free-text result for the LAST `RALPH-EXIT: {json}` line and validate it into a
- * `LapOutcome`. Returns null when there is no well-formed tag — the caller (`outcomeFromEnvelope`)
- * classifies a null as WEDGE when a tag is present (via `tagIsPresent`) else CRASH, NEVER SHIPPED.
- * Defensive by construction — a malformed tag is treated as "no valid tag".
+ * Validate the lap's ONE `RALPH-EXIT: {json}` line into a `LapOutcome`. Zero tags or multiple tags return
+ * null — the caller (`outcomeFromEnvelope`) classifies a present-but-invalid contract as WEDGE, never SHIPPED.
+ * This enforces Inv 5 rather than silently accepting a later contradictory exit.
  */
 export function extractTypedExit(resultText: string): LapOutcome | null {
-  const idx = resultText.lastIndexOf(TAG);
-  if (idx === -1) return null;
+  const idx = resultText.indexOf(TAG);
+  if (idx === -1 || idx !== resultText.lastIndexOf(TAG)) return null;
   const after = resultText.slice(idx + TAG.length).trimStart();
   const json = sliceFirstJsonObject(after);
   if (json === null) return null;
@@ -129,6 +132,18 @@ export interface LapUsage {
  */
 export function outcomeFromEnvelope(env: LapEnvelope): { outcome: LapOutcome } & LapUsage {
   const { costUsd, inputTokens, outputTokens } = env;
+  if (env.controlOutcome !== undefined) {
+    return {
+      outcome: {
+        kind: 'HUMAN_REQUIRED',
+        reason: env.controlOutcome.kind,
+        payload: env.controlOutcome,
+      },
+      costUsd,
+      inputTokens,
+      outputTokens,
+    };
+  }
   if (env.isError) return { outcome: { kind: 'CRASH' }, costUsd, inputTokens, outputTokens };
   const tagged = extractTypedExit(env.resultText);
   // FAIL-CLOSED (never default SHIPPED): a valid tag ⇒ its outcome; a present-but-invalid tag ⇒ WEDGE

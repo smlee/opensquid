@@ -12,16 +12,12 @@
  *
  * Spec: docs/tasks/T-v2-guess-free.md GFR.4.
  */
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
+import { readGitWorkingTreeDiff } from '../../functions/staged_diff.js';
 import { readSessionCwd } from '../session_state.js';
 
 import { touchesExternalDependency } from './external_dependency.js';
 
-const execFileP = promisify(execFile);
-
-/** Injectable readers (tests pass pure stubs); defaults read the session cwd + run `git diff HEAD`. */
+/** Injectable readers (tests pass pure stubs); defaults read the complete uncommitted working tree. */
 export interface ExternalNeededDeps {
   cwd: (sessionId: string) => Promise<string | null>;
   diff: (cwd: string) => Promise<string>;
@@ -29,11 +25,7 @@ export interface ExternalNeededDeps {
 
 const defaultDeps: ExternalNeededDeps = {
   cwd: readSessionCwd,
-  diff: async (cwd) => {
-    // `git diff HEAD` = working + staged vs HEAD — the full uncommitted change (same read as staged_diff.ts).
-    const { stdout } = await execFileP('git', ['diff', 'HEAD'], { cwd, maxBuffer: 20_000_000 });
-    return stdout;
-  },
+  diff: readGitWorkingTreeDiff,
 };
 
 /**

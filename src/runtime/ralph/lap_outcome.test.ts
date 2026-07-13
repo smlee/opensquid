@@ -55,16 +55,20 @@ describe('extractTypedExit', () => {
     expect(extractTypedExit('just some normal output, all done')).toBeNull();
   });
 
-  it('HUMAN_REQUIRED without a valid reason is malformed → null', () => {
+  it('HUMAN_REQUIRED without a model-authorized reason is malformed → null', () => {
     expect(
       extractTypedExit('RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"NONSENSE"}'),
+    ).toBeNull();
+    expect(
+      extractTypedExit('RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"CANCELLED_BY_HUMAN"}'),
     ).toBeNull();
     expect(extractTypedExit('RALPH-EXIT: {"kind":"HUMAN_REQUIRED"}')).toBeNull();
   });
 
-  it('the LAST tag wins when several appear', () => {
+  it('rejects multiple tags so a lap has exactly one typed exit', () => {
     const text = 'RALPH-EXIT: {"kind":"WEDGE"}\n...changed mind...\nRALPH-EXIT: {"kind":"SHIPPED"}';
-    expect(extractTypedExit(text)).toEqual({ kind: 'SHIPPED' });
+    expect(extractTypedExit(text)).toBeNull();
+    expect(outcomeFromEnvelope(env({ resultText: text })).outcome).toEqual({ kind: 'WEDGE' });
   });
 
   it('a malformed JSON tag → null (treated as no tag)', () => {
@@ -108,6 +112,28 @@ describe('outcomeFromEnvelope (MHL.3 — the neutral envelope→outcome fold)', 
     expect(out('RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"SCOPE_FORK"}')).toEqual({
       kind: 'HUMAN_REQUIRED',
       reason: 'SCOPE_FORK',
+    });
+  });
+
+  it('a trusted human-control outcome wins over model SHIPPED and ordinary process errors', () => {
+    const controlOutcome = {
+      kind: 'CANCELLED_BY_HUMAN' as const,
+      executorId: 'pi-child-1',
+      action: 'force_kill' as const,
+      actionId: 'action-1',
+    };
+    expect(
+      outcomeFromEnvelope(
+        env({
+          resultText: 'RALPH-EXIT: {"kind":"SHIPPED"}',
+          isError: true,
+          controlOutcome,
+        }),
+      ).outcome,
+    ).toEqual({
+      kind: 'HUMAN_REQUIRED',
+      reason: 'CANCELLED_BY_HUMAN',
+      payload: controlOutcome,
     });
   });
 

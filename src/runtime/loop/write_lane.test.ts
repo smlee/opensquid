@@ -47,6 +47,7 @@ describe('extractWritePath', () => {
   it('reads file_path from Write/Edit and notebook_path from NotebookEdit', () => {
     expect(extractWritePath('Write', { file_path: 'src/a.ts' })).toBe('src/a.ts');
     expect(extractWritePath('Edit', { file_path: 'src/b.ts' })).toBe('src/b.ts');
+    expect(extractWritePath('MultiEdit', { file_path: 'src/c.ts' })).toBe('src/c.ts');
     expect(extractWritePath('NotebookEdit', { notebook_path: 'nb.ipynb' })).toBe('nb.ipynb');
   });
 

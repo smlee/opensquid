@@ -44,6 +44,16 @@ describe('matchesEvent — tool_match', () => {
     expect(matchesEvent([{ kind: 'tool_match', tool: 'Bash' }], read('x.ts'))).toBe(false);
   });
 
+  it('treats MultiEdit as Edit for legacy tool_match entries', () => {
+    expect(
+      matchesEvent([{ kind: 'tool_match', tool: 'Edit' }], {
+        kind: 'tool_call',
+        tool: 'MultiEdit',
+        args: { file_path: 'x.ts' },
+      }),
+    ).toBe(true);
+  });
+
   it('does not match on non-tool_call events', () => {
     const evt: Event = { kind: 'prompt_submit', prompt: 'hi' };
     expect(matchesEvent([{ kind: 'tool_match', tool: 'Bash' }], evt)).toBe(false);

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { readGitWorkingTreeDiff } from '../../functions/staged_diff.js';
 import { loadPack } from '../../packs/loader.js';
 import { advanceFsmState } from '../../runtime/fsm_state.js';
 import { sha256Hex } from '../../runtime/durable/run_id.js';
@@ -37,11 +38,9 @@ async function writeCodeAudit(verdict: string, subjectHash?: string): Promise<vo
   await writeFile(p, JSON.stringify(entry), 'utf8');
 }
 
-/** The sha256 of the repo's current `git diff HEAD` — what the CODE audit's `subjectHash` must equal for the
- *  commit-gate to treat its verdict as certifying the CURRENT diff (needs a HEAD + recorded session cwd). */
+/** The sha256 of the complete tracked/staged/untracked working-tree artifact the CODE audit certifies. */
 async function currentDiffHash(): Promise<string> {
-  const { stdout } = await execFileP('git', ['diff', 'HEAD'], { cwd: repo });
-  return sha256Hex(stdout);
+  return sha256Hex(await readGitWorkingTreeDiff(repo));
 }
 
 /** Give the repo a HEAD (so `git diff HEAD` resolves) + point the session cwd at it (so the gate's stagedDiff

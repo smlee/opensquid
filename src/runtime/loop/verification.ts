@@ -11,8 +11,8 @@
  * a CONFIGURED-but-unrecorded verification as NOT clean (the bug-fix loop / "run the verify first"), never as a
  * silent pass. (An UNCONFIGURED project — no verifyCommand — skips this entirely; see deploy_evidence.)
  *
- * Persistence reuses the runtime session-state primitives (`atomicWriteFile` + `sessionStateFile`), per-task —
- * the same substrate readiness.ts writes. Latest-verify-wins (a re-run after a fix overwrites). NOTE: a
+ * Persistence writes atomic session state for the active lap and project/task-durable state for assigned
+ * automation processes, so fresh per-stage sessions recover it. Latest-verify-wins. NOTE: a
  * diff-hash freshness anchor (so a since-changed diff invalidates a stale pass, mirroring the CODE staleness
  * anchor) is the DBL.1c hardening — deferred here because `deployClean` is read in the hot `buildGuardCtx` path
  * (a per-event `git diff` would be costly); at the DEPLOY stage the code only changes via the bug-fix loop, which
@@ -25,8 +25,36 @@ import { readFile } from 'node:fs/promises';
 
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { sessionStateFile } from '../paths.js';
+import { readTaskRuntimeState, writeTaskRuntimeState } from './task_runtime_state.js';
 
 const verificationKey = (taskId: string): string => `fullstack-flow-verify-${taskId}`;
+
+async function recordTaskEvidence(
+  sid: string,
+  taskId: string,
+  key: string,
+  value: unknown,
+): Promise<void> {
+  await atomicWriteFile(sessionStateFile(sid, key), JSON.stringify(value));
+  // Only an authenticated per-item automation process may publish project/task evidence. Unit/interactive
+  // callers without the assignment env retain the established session-local behavior.
+  if (process.env.OPENSQUID_ITEM_ID === taskId) {
+    await writeTaskRuntimeState(sid, key, value, taskId);
+  }
+}
+
+async function readTaskEvidence(sid: string, taskId: string, key: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(sessionStateFile(sid, key), 'utf8')) as unknown;
+  } catch {
+    if (process.env.OPENSQUID_ITEM_ID !== taskId) return null;
+    try {
+      return await readTaskRuntimeState(sid, key, taskId);
+    } catch {
+      return null;
+    }
+  }
+}
 
 /** Record the deterministic result of the agent's `verifyCommand` run (its real exit code) for the task. */
 export async function recordVerification(
@@ -34,21 +62,15 @@ export async function recordVerification(
   taskId: string,
   passed: boolean,
 ): Promise<void> {
-  await atomicWriteFile(sessionStateFile(sid, verificationKey(taskId)), JSON.stringify({ passed }));
+  await recordTaskEvidence(sid, taskId, verificationKey(taskId), { passed });
 }
 
 /** The recorded verification result, or `null` when none/unreadable (the caller decides skip-vs-fail-closed). */
 export async function readVerification(sid: string, taskId: string): Promise<boolean | null> {
-  try {
-    const p = JSON.parse(
-      await readFile(sessionStateFile(sid, verificationKey(taskId)), 'utf8'),
-    ) as {
-      passed?: unknown;
-    };
-    return typeof p.passed === 'boolean' ? p.passed : null;
-  } catch {
-    return null; // never-run / unreadable / malformed
-  }
+  const p = (await readTaskEvidence(sid, taskId, verificationKey(taskId))) as {
+    passed?: unknown;
+  } | null;
+  return typeof p?.passed === 'boolean' ? p.passed : null;
 }
 
 // scope-1 (T-deploy-commit-gate §2.1) — the DETERMINISTIC project-SUITE record, mirroring the verifyCommand
@@ -60,19 +82,15 @@ const suiteKey = (taskId: string): string => `fullstack-flow-suite-${taskId}`;
 
 /** Record the deterministic result of the agent's project-suite run (its real exit code) for the task. */
 export async function recordSuite(sid: string, taskId: string, passed: boolean): Promise<void> {
-  await atomicWriteFile(sessionStateFile(sid, suiteKey(taskId)), JSON.stringify({ passed }));
+  await recordTaskEvidence(sid, taskId, suiteKey(taskId), { passed });
 }
 
 /** The recorded suite result, or `null` when none/unreadable (the caller decides skip-vs-fail-closed). */
 export async function readSuite(sid: string, taskId: string): Promise<boolean | null> {
-  try {
-    const p = JSON.parse(await readFile(sessionStateFile(sid, suiteKey(taskId)), 'utf8')) as {
-      passed?: unknown;
-    };
-    return typeof p.passed === 'boolean' ? p.passed : null;
-  } catch {
-    return null; // never-run / unreadable / malformed
-  }
+  const p = (await readTaskEvidence(sid, taskId, suiteKey(taskId))) as {
+    passed?: unknown;
+  } | null;
+  return typeof p?.passed === 'boolean' ? p.passed : null;
 }
 
 // AQG.4 (T-arch-quality-gate) — the DETERMINISTIC project ARCHITECTURE-DETECTOR record, a byte-for-byte sibling
@@ -84,19 +102,15 @@ const archKey = (taskId: string): string => `fullstack-flow-arch-${taskId}`;
 
 /** Record the deterministic result of the agent's arch-detector run (its real exit code) for the task. */
 export async function recordArch(sid: string, taskId: string, passed: boolean): Promise<void> {
-  await atomicWriteFile(sessionStateFile(sid, archKey(taskId)), JSON.stringify({ passed }));
+  await recordTaskEvidence(sid, taskId, archKey(taskId), { passed });
 }
 
 /** The recorded arch-detector result, or `null` when none/unreadable (the caller decides skip-vs-fail-closed). */
 export async function readArch(sid: string, taskId: string): Promise<boolean | null> {
-  try {
-    const p = JSON.parse(await readFile(sessionStateFile(sid, archKey(taskId)), 'utf8')) as {
-      passed?: unknown;
-    };
-    return typeof p.passed === 'boolean' ? p.passed : null;
-  } catch {
-    return null; // never-run / unreadable / malformed
-  }
+  const p = (await readTaskEvidence(sid, taskId, archKey(taskId))) as {
+    passed?: unknown;
+  } | null;
+  return typeof p?.passed === 'boolean' ? p.passed : null;
 }
 
 // DBL.2 — bound the bug-fix loop. The `verify` decision routes bugs→AUTHOR; an UNFIXABLE bug would cycle
@@ -106,36 +120,24 @@ const bugfixRoundsKey = (taskId: string): string => `fullstack-flow-bugfix-round
 
 /** The recorded bug-fix round count for the task (0 when none/unreadable). */
 export async function readBugfixRounds(sid: string, taskId: string): Promise<number> {
-  try {
-    const p = JSON.parse(
-      await readFile(sessionStateFile(sid, bugfixRoundsKey(taskId)), 'utf8'),
-    ) as {
-      rounds?: unknown;
-    };
-    return typeof p.rounds === 'number' && Number.isFinite(p.rounds) ? p.rounds : 0;
-  } catch {
-    return 0;
-  }
+  const p = (await readTaskEvidence(sid, taskId, bugfixRoundsKey(taskId))) as {
+    rounds?: unknown;
+  } | null;
+  return typeof p?.rounds === 'number' && Number.isFinite(p.rounds) ? p.rounds : 0;
 }
 
 /** Increment the bug-fix round count (scope-2: bumped on each RED suite re-run — the uniform DEPLOY-local /
  *  redesign round driver); returns the new count. Bounds the fix loop → the cap flips deploy.bugfix_exhausted. */
 export async function bumpBugfixRounds(sid: string, taskId: string): Promise<number> {
   const next = (await readBugfixRounds(sid, taskId)) + 1;
-  await atomicWriteFile(
-    sessionStateFile(sid, bugfixRoundsKey(taskId)),
-    JSON.stringify({ rounds: next }),
-  );
+  await recordTaskEvidence(sid, taskId, bugfixRoundsKey(taskId), { rounds: next });
   return next;
 }
 
 /** Reset the bug-fix round count (on a clean verification or when the item leaves the flow). Best-effort. */
 export async function resetBugfixRounds(sid: string, taskId: string): Promise<void> {
   try {
-    await atomicWriteFile(
-      sessionStateFile(sid, bugfixRoundsKey(taskId)),
-      JSON.stringify({ rounds: 0 }),
-    );
+    await recordTaskEvidence(sid, taskId, bugfixRoundsKey(taskId), { rounds: 0 });
   } catch {
     /* best-effort: a stale count at worst escalates one round early — never a correctness hole */
   }
@@ -154,16 +156,10 @@ const needsRedesignKey = (taskId: string): string => `fullstack-flow-needs-redes
 
 /** The recorded "needs design rework" flag for the task (false when unset/unreadable → DEPLOY-local). */
 export async function readNeedsRedesign(sid: string, taskId: string): Promise<boolean> {
-  try {
-    const p = JSON.parse(
-      await readFile(sessionStateFile(sid, needsRedesignKey(taskId)), 'utf8'),
-    ) as {
-      needed?: unknown;
-    };
-    return p.needed === true;
-  } catch {
-    return false; // unset / unreadable → not redesign → DEPLOY-local (the safe narrowing)
-  }
+  const p = (await readTaskEvidence(sid, taskId, needsRedesignKey(taskId))) as {
+    needed?: unknown;
+  } | null;
+  return p?.needed === true;
 }
 
 /** Set/clear the "needs design rework" flag for the task (the escape hatch to AUTHOR). Best-effort on clear. */
@@ -172,8 +168,5 @@ export async function recordNeedsRedesign(
   taskId: string,
   needed: boolean,
 ): Promise<void> {
-  await atomicWriteFile(
-    sessionStateFile(sid, needsRedesignKey(taskId)),
-    JSON.stringify({ needed }),
-  );
+  await recordTaskEvidence(sid, taskId, needsRedesignKey(taskId), { needed });
 }

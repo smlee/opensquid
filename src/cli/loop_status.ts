@@ -240,6 +240,30 @@ function renderEvent(e: MonitorEvent, now: number = Date.now()): string {
       return `${e.wgId} · ✓ closed · ${age}`;
     case 'item_wedged':
       return `${e.wgId} · ⚠ wedged · ${age}`;
+    case 'executor_started':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · running · ${age}`;
+    case 'executor_shutdown_pending':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · graceful shutdown pending · ${age}`;
+    case 'executor_shutdown_requested':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · human graceful stop · ${age}`;
+    case 'executor_terminate_requested':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · human terminate · ${age}`;
+    case 'executor_force_kill_requested':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · human force-kill · ${age}`;
+    case 'executor_paused':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · paused · ${age}`;
+    case 'executor_resumed':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · resumed · ${age}`;
+    case 'executor_exited':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · exited · ${age}`;
+    case 'executor_spawn_failed':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · spawn failed · ${age}`;
+    case 'executor_control_requested':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · ${e.controlAction ?? 'control'} requested · ${age}`;
+    case 'executor_control_applied':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · ${e.controlAction ?? 'control'} applied · ${age}`;
+    case 'executor_control_failed':
+      return `${e.wgId} · ${e.executorId ?? 'executor'} · ${e.controlAction ?? 'control'} failed · ${age}`;
   }
 }
 
@@ -277,7 +301,8 @@ async function runWatch(opts: LoopStatusOpts): Promise<void> {
     (e) => {
       process.stdout.write(renderEvent(e) + '\n');
       if (e.kind === 'item_shipped' || e.kind === 'item_closed') live.delete(e.wgId);
-      else live.add(e.wgId); // a stage/phase advance (or a re-open) makes the item live again
+      else if (!e.kind.startsWith('executor_')) live.add(e.wgId);
+      // Executor events share the durable stream for CLI/TUI/web observability but do not change board membership.
       if (live.size === 0 && !drained) {
         process.stdout.write(DRAIN_LINE + '\n');
         drained = true;

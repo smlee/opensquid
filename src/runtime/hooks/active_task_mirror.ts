@@ -129,6 +129,21 @@ export async function mirrorActiveTask(
   base?: string,
   transcriptPath?: string,
 ): Promise<void> {
+  // Autonomous laps have an explicit durable item identity. It is authoritative
+  // across harnesses and must not be erased by an absent Claude task store.
+  const lapItemId = process.env.OPENSQUID_ITEM_ID?.trim();
+  if (process.env.OPENSQUID_LOOP_LAP === '1' && lapItemId !== undefined && lapItemId !== '') {
+    const prior = await readActiveTask(sessionId);
+    if (prior?.id === lapItemId && prior.taskId === lapItemId) return;
+    await writeActiveTask(sessionId, {
+      id: lapItemId,
+      taskId: lapItemId,
+      subject: prior?.subject ?? lapItemId,
+      started_at: prior?.started_at ?? new Date().toISOString(),
+    });
+    return;
+  }
+
   // T-ATM ATM.1: this Claude Code version keeps the task list in the SESSION
   // TRANSCRIPT, not at ~/.claude/tasks/<session>/. When the hook supplies
   // `transcriptPath`, derive the active task from there (the real source) — with

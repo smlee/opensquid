@@ -9,6 +9,16 @@ roles:
   - name: pack-architect
     pack: pack-architect
     model_alias: reasoning
+    tools:
+      - Read
+      - Write
+      - MultiEdit
+      - Bash
+      - Grep
+      - mcp__opensquid__workgraph_get
+      - mcp__opensquid__recall
+      - mcp__opensquid__read_state
+      - mcp__opensquid__web_fetch
     handoff_signal: PACK_AUTHORING_COMPLETE
     instructions: |
       You are the pack-architect subagent. The parent spawned you to help

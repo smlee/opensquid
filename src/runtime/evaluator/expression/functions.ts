@@ -48,12 +48,21 @@
  */
 
 import { RE2JS } from 're2js';
+import {
+  toolValueContains,
+  toolValueEndsWith,
+  toolValueMatchesPattern,
+  toolValueStartsWith,
+  toolValueString,
+} from '../../../integrations/pi/tool_aliases.js';
 
 /** Handler signature: positional args are passed evaluated and unmodified. */
 export type FnHandler = (...args: unknown[]) => unknown;
 
 /** `len(x)` — string char count, array length, object key count, else `0`. */
 const len: FnHandler = (x) => {
+  const toolString = toolValueString(x);
+  if (toolString !== null) return toolString.length;
   if (typeof x === 'string') return x.length;
   if (Array.isArray(x)) return x.length;
   if (x !== null && typeof x === 'object') return Object.keys(x).length;
@@ -61,16 +70,31 @@ const len: FnHandler = (x) => {
 };
 
 /** `contains(s, sub)` — substring test; false unless both args are strings. */
-const contains: FnHandler = (s, sub) =>
-  typeof s === 'string' && typeof sub === 'string' && s.includes(sub);
+const contains: FnHandler = (s, sub) => {
+  if (typeof sub !== 'string') return false;
+  const toolContains = toolValueContains(s, sub);
+  if (toolContains !== null) return toolContains;
+  const text = toolValueString(s);
+  return typeof text === 'string' && text.includes(sub);
+};
 
 /** `startsWith(s, p)` — prefix test; false unless both args are strings. */
-const startsWith: FnHandler = (s, p) =>
-  typeof s === 'string' && typeof p === 'string' && s.startsWith(p);
+const startsWith: FnHandler = (s, p) => {
+  if (typeof p !== 'string') return false;
+  const toolStartsWith = toolValueStartsWith(s, p);
+  if (toolStartsWith !== null) return toolStartsWith;
+  const text = toolValueString(s);
+  return typeof text === 'string' && text.startsWith(p);
+};
 
 /** `endsWith(s, p)` — suffix test; false unless both args are strings. */
-const endsWith: FnHandler = (s, p) =>
-  typeof s === 'string' && typeof p === 'string' && s.endsWith(p);
+const endsWith: FnHandler = (s, p) => {
+  if (typeof p !== 'string') return false;
+  const toolEndsWith = toolValueEndsWith(s, p);
+  if (toolEndsWith !== null) return toolEndsWith;
+  const text = toolValueString(s);
+  return typeof text === 'string' && text.endsWith(p);
+};
 
 /**
  * `match(s, pattern)` — RE2 test; false on type-mismatch or invalid pattern.
@@ -118,9 +142,13 @@ const endsWith: FnHandler = (s, p) =>
  * Both made the same trade for the same threat-model reason.
  */
 const match: FnHandler = (s, pattern) => {
-  if (typeof s !== 'string' || typeof pattern !== 'string') return false;
+  const text = toolValueString(s);
+  if (typeof text !== 'string' || typeof pattern !== 'string') return false;
   try {
-    return RE2JS.compile(pattern).test(s);
+    const compiled = RE2JS.compile(pattern);
+    const toolMatch = toolValueMatchesPattern(s, compiled);
+    if (toolMatch !== null) return toolMatch;
+    return compiled.test(text);
   } catch (err) {
     // RE2JSSyntaxException covers PCRE-rejected features + malformed
     // patterns (e.g. `(`, `[`, trailing `\`). Catching the base class

@@ -56,7 +56,12 @@ export interface RalphConfig {
  * RUNS TO EXHAUSTION: only an empty board or a RESOURCE pause (budget) ends the run — never a per-item stop.
  * (There is deliberately no single-item mode: that would reintroduce the per-item pause the loop exists to
  * eliminate — the run-to-exhaustion architecture.) */
-export type RalphStop = 'BOARD_EMPTY' | 'BUDGET' | 'RATE_BUDGET';
+export type RalphStop =
+  | 'BOARD_EMPTY'
+  | 'BUDGET'
+  | 'RATE_BUDGET'
+  | 'PROCESS_PAUSED'
+  | 'CANCELLED_BY_HUMAN';
 
 export interface RalphResult {
   stopped: RalphStop;
@@ -75,7 +80,7 @@ export interface RalphDeps {
    * lap's prompt so the lap completes ONLY that stage and reports its resulting `stage` in RALPH-EXIT. Absent →
    * the open-ended per-item lap (unchanged).
    */
-  runLap: (item: Issue, stagePrompt?: string) => Promise<LapResult>;
+  runLap: (item: Issue, stagePrompt?: string, checkpointStage?: string) => Promise<LapResult>;
   /** The undroppable escalation transport (GR.3) — the CLI wires `escalateSeverity`. */
   escalate: LapEscalator;
   /** Optional per-step progress narration for a live play-by-play (the CLI wires stdout; omit → silent, as in tests). */
@@ -196,7 +201,13 @@ export interface RalphDeps {
 const MAX_STAGE_RETRIES = 10;
 
 /** Resource pauses END the run; everything else is per-item decision-residual that parks + continues. */
-const RESOURCE_PAUSES: readonly HumanRequiredReason[] = ['BUDGET', 'RATE_BUDGET', 'BOARD_EMPTY'];
+const RESOURCE_PAUSES: readonly HumanRequiredReason[] = [
+  'BUDGET',
+  'RATE_BUDGET',
+  'PROCESS_PAUSED',
+  'CANCELLED_BY_HUMAN',
+  'BOARD_EMPTY',
+];
 const isResourcePause = (r: HumanRequiredReason): r is RalphStop & HumanRequiredReason =>
   (RESOURCE_PAUSES as readonly string[]).includes(r);
 
@@ -252,7 +263,7 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
     const isAuto = sl.isAutomated(stage);
     const sp = isAuto ? await sl.stagePrompt(item, stage) : undefined;
     deps.narrate?.(`  ▷ ${item.id} · ${stage} lap…`);
-    const res = await superviseLap(() => deps.runLap(item, sp), cfg.supervise);
+    const res = await superviseLap(() => deps.runLap(item, sp, stage), cfg.supervise);
     cost += res.costUsd;
     stageCost += res.costUsd;
     stageIn += res.inputTokens ?? 0;

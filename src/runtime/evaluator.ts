@@ -82,6 +82,7 @@
 
 import type { FunctionRegistry, EvalCtx } from '../functions/registry.js';
 
+import { toolValueString } from '../integrations/pi/tool_aliases.js';
 import { canonicalJsonStringify } from './durable/canonical_json.js';
 import type { CheckpointRow, CheckpointStore } from './durable/checkpoint_store.js';
 import type { MemoCache } from './durable/memo_cache.js';
@@ -569,6 +570,8 @@ function interpolateArgs(
  * structured payload should pass it as a real arg, not a template.
  */
 function stringifyBinding(v: unknown): string {
+  const toolString = toolValueString(v);
+  if (toolString !== null) return toolString;
   if (v === null || v === undefined) return '';
   switch (typeof v) {
     case 'string':

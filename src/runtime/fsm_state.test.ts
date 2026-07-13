@@ -54,6 +54,14 @@ describe('fsm_state', () => {
     expect(file?.history.map((h) => h.state)).toEqual(['g0', 'shipped']); // append-only
   });
 
+  it('rejects a stale actor write after another process advanced the shared pack state', async () => {
+    const s = sid();
+    await persistActorState(s, 'v2pack', 'plan', NOW);
+    await expect(persistActorState(s, 'v2pack', 'author', NOW, null, 'plan')).resolves.toBe(true);
+    await expect(persistActorState(s, 'v2pack', 'code', NOW, null, 'plan')).resolves.toBe(false);
+    expect(await readFsmStateRaw(s, 'v2pack')).toBe('author');
+  });
+
   it('advances on a matching event and persists the new state', async () => {
     const s = sid();
     const r = await advanceFsmState(s, 'p', FSM, 'start', NOW);

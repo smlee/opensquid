@@ -65,40 +65,34 @@ describe('Team schema', () => {
     }
   });
 
-  it('rejects a role missing `model_alias`', () => {
-    const result = Team.safeParse({
-      name: 'broken-team',
-      roles: [
-        {
-          name: 'no_alias_role',
-          pack: 'profession/code-reviewer',
-        },
-      ],
+  it('allows an absent model_alias so the executor inherits the parent model', () => {
+    const result = Team.parse({
+      name: 'inherited-model-team',
+      roles: [{ name: 'inherited-model-role', pack: 'profession/code-reviewer' }],
     });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((i) => i.path.includes('model_alias'))).toBe(true);
-    }
+    expect(result.roles[0]?.model_alias).toBeUndefined();
   });
 
   it('parses a SubagentRole without optional fields', () => {
     const result = SubagentRole.parse({
       name: 'minimal',
       pack: 'profession/x',
-      model_alias: 'reasoning',
     });
+    expect(result.model_alias).toBeUndefined();
     expect(result.handoff_signal).toBeUndefined();
     expect(result.instructions).toBeUndefined();
   });
 
-  it('parses a SubagentRole with both optional fields populated', () => {
+  it('parses a SubagentRole with explicit tool authority and optional handoff fields', () => {
     const result = SubagentRole.parse({
       name: 'full',
       pack: 'profession/x',
       model_alias: 'reasoning',
+      tools: ['Read', 'Write'],
       handoff_signal: 'DONE',
       instructions: 'Be terse.',
     });
+    expect(result.tools).toEqual(['Read', 'Write']);
     expect(result.handoff_signal).toBe('DONE');
     expect(result.instructions).toBe('Be terse.');
   });

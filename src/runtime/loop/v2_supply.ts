@@ -21,7 +21,7 @@ import { loadActiveV2Cartridges } from '../bootstrap.js';
 import { atomicWriteFile } from '../../storage/atomic_file.js';
 import { appendAsk, freezeAsk, resetAsk } from '../coverage/captured_ask.js';
 import { persistActorState, readFsmState } from '../fsm_state.js';
-import { taskCheckpointExists, upsertTaskStage } from '../ralph/loop_stage.js';
+import { readCheckpointBySession, upsertTaskStage } from '../ralph/loop_stage.js';
 import { resolveCheckpointKey } from './checkpoint_key.js';
 import { appendTransition } from '../observe/transition_log.js';
 import { resolveProjectScopeRoot, sessionStateFile } from '../paths.js';
@@ -117,10 +117,12 @@ import { V2ObservedActor } from './v2_observed_actor.js';
 import { applyAction } from '../gate/kernel.js';
 import type { Action } from '../gate/kernel.js';
 import type { Bus } from '../bus/bus.js';
-import type { Envelope, MessageKind } from '../bus/types.js';
+import type { Envelope } from '../bus/types.js';
 import type { Event } from '../event.js';
 import { isMutatingCall } from '../guard/orchestrator_guard.js';
+import { toolMatches } from '../../integrations/pi/tool_aliases.js';
 import { evaluateLane, laneBlockMessage, matchesLane } from './write_lane.js';
+import { readTaskAuditCache } from './task_audit_cache.js';
 
 export interface V2Decision {
   exitCode: 0 | 2;
@@ -170,7 +172,12 @@ async function readVerdict(sessionId: string, key: string): Promise<string | und
     const parsed = JSON.parse(await readFile(sessionStateFile(sessionId, key), 'utf8')) as {
       verdict?: unknown;
     };
-    return typeof parsed.verdict === 'string' ? parsed.verdict : undefined;
+    if (typeof parsed.verdict === 'string') return parsed.verdict;
+  } catch {
+    // Fresh per-stage sessions fall through to task-durable audit state.
+  }
+  try {
+    return (await readTaskAuditCache(sessionId, key))?.verdict;
   } catch {
     return undefined;
   }
@@ -228,7 +235,7 @@ export async function buildGuardCtx(
   // The artifact path comes from the LIVE event (no read-after-write).
   const filePath = 'args' in event ? event.args?.file_path : undefined;
   const fp =
-    'tool' in event && /(?:Write|Edit)/.test(event.tool) && typeof filePath === 'string'
+    'tool' in event && toolMatches(event.tool, /^(Write|Edit)$/) && typeof filePath === 'string'
       ? filePath
       : '';
   const isAdvance = fp !== '' && matchesLane(fp, scopeWrites ?? []); // lane-membership, not a hard-coded regex
@@ -466,7 +473,12 @@ async function readPreResearchPath(sessionId: string): Promise<string | null> {
     const v = JSON.parse(
       await readFile(sessionStateFile(sessionId, PRE_RESEARCH_PATH_KEY), 'utf8'),
     ) as unknown;
-    return typeof v === 'string' && v !== '' ? v : null;
+    if (typeof v === 'string' && v !== '') return v;
+  } catch {
+    // Fresh per-stage sessions restore this pointer from the durable task checkpoint below.
+  }
+  try {
+    return (await readCheckpointBySession(sessionId))?.scopeArtifacts.at(-1) ?? null;
   } catch {
     return null;
   }
@@ -496,25 +508,49 @@ async function claimCodeReport(sessionId: string, taskId: string, now: string): 
   return true;
 }
 
+async function resolveSeededActorState(
+  sessionId: string,
+  actor: V2ObservedActor,
+  packName: string,
+  taskId: string | null,
+): Promise<string> {
+  let seededState = await readFsmState(sessionId, packName, actor.fsm, taskId);
+  if (process.env.OPENSQUID_AUTOMATION === '1' && seededState === actor.fsm.initial) {
+    try {
+      const checkpoint = await readCheckpointBySession(sessionId);
+      if (checkpoint !== null && actor.fsm.states.includes(checkpoint.stage)) {
+        seededState = checkpoint.stage;
+      }
+    } catch (error) {
+      process.stderr.write(`[v2-supply] task-checkpoint seed failed (ignored): ${String(error)}\n`);
+    }
+  }
+  return seededState;
+}
+
+/** Resolve and persist active pack-owned FSM starting states before lifecycle dispatch. */
+export async function initializeV2Cartridges(sessionId: string, now: string): Promise<void> {
+  for (const loaded of await loadActiveV2Cartridges(sessionId)) {
+    if (loaded.compiled.fsm === undefined) continue;
+    const actor = new V2ObservedActor(`pack:${loaded.pack.name}`, loaded);
+    const taskId = await readActiveTaskId(sessionId);
+    const state = await resolveSeededActorState(sessionId, actor, loaded.pack.name, taskId);
+    await persistActorState(sessionId, loaded.pack.name, state, now, taskId);
+  }
+}
+
 export async function runV2Cartridges(
   sessionId: string,
   event: Event,
   now: string,
   options?: {
     /**
-     * F2: when true, evaluate gates WITHOUT advancing state or logging transitions — enforcement-only mode.
-     * Use from PreToolUse to block BEFORE the tool runs; PostToolUse still advances + records observability.
-     * Bypasses the `post_tool_call` trigger filter (v2_observed_actor.ts:67) by overriding env.kind to the
-     * gate's declared trigger, so guards evaluate on a PreToolUse `tool_call` event. SKIP `write_state` and
-     * `transition`/`appendTransition` effects. block/halt → exitCode 2 + messages; warn → no-op (PostToolUse owns it).
+     * When true, enforce the current state's write lane and any gate that the pack explicitly binds to this
+     * event, without advancing state or logging transitions. Core never rewrites the event kind to manufacture
+     * an earlier gate trigger: a `post_tool_call` gate remains post-tool policy, while a pack-declared
+     * `tool_call` gate may block before execution. This keeps trigger timing pack-owned.
      */
     enforceOnly?: boolean;
-    /**
-     * Hole 1 — executor exemption: when a `agent_id` is present in the PreToolUse payload, the caller is a
-     * Task/Agent executor subagent (never the main orchestrator loop). Executor subagents must never be blocked
-     * by the gate — they implement what the orchestrator planned. Pass `agentId` extracted from the hook stdin.
-     */
-    agentId?: string;
   },
 ): Promise<V2Decision> {
   const enforceOnly = options?.enforceOnly ?? false;
@@ -617,7 +653,7 @@ export async function runV2Cartridges(
   const boundSkills: string[] = [];
   // GS1 — the CANONICAL task-checkpoint key (the wg issue id) for THIS event, resolved once + memoized. In a
   // lap it is `OPENSQUID_ITEM_ID` (no I/O); interactively it forward-maps the active harness task → its wg id
-  // (null → skip the checkpoint write). Shared by the FSM scope_write seed (below) + the single-writer trigger.
+  // (null → skip the checkpoint write). Shared by checkpoint-resumed FSM seeding + the single-writer trigger.
   let cachedKey: string | null | undefined;
   const checkpointKey = async (): Promise<string | null> => {
     if (cachedKey === undefined) cachedKey = await resolveCheckpointKey(sessionId);
@@ -669,29 +705,7 @@ export async function runV2Cartridges(
       // key `fsm-<pack>-<taskId>` that STARTS at the FSM initial state — activating task B never rewinds
       // task A's FSM ([[coding-flow-task-start-reset-trap]]). The persist below uses the SAME taskId.
       const taskId = await readActiveTaskId(sessionId);
-      let seededState = await readFsmState(sessionId, name, actor.fsm, taskId);
-      // GS1 FSM #2 — in a LAP (OPENSQUID_AUTOMATION=1) the interactive `scope` stage was already completed
-      // before the loop, so boot the pack FSM at `scope_write` (the first AUTOMATED stage) instead of the pack
-      // initial. ONLY when a task checkpoint EXISTS (real scope proof) — with NO checkpoint the lap must NOT
-      // fabricate a scoped state, so it stays at the pack initial and genuinely scopes (its first transition
-      // then CREATES the checkpoint; the next lap boots at scope_write). Guarded to a pack that declares a
-      // `scope_write` state + only when the resolved state is still the pack initial (a resumed lap keeps its
-      // persisted, already-advanced state). Interactive sessions (no automation) always start at the initial.
-      // FAIL-OPEN: a checkpoint-read error never breaks the hook (the seed stays at the pack initial).
-      if (
-        process.env.OPENSQUID_AUTOMATION === '1' &&
-        seededState === actor.fsm.initial &&
-        actor.fsm.states.includes('scope_write')
-      ) {
-        try {
-          const key = await checkpointKey();
-          if (key !== null && (await taskCheckpointExists(key))) seededState = 'scope_write';
-        } catch (err) {
-          process.stderr.write(
-            `[v2-supply] scope_write seed check failed (ignored): ${String(err)}\n`,
-          );
-        }
-      }
+      const seededState = await resolveSeededActorState(sessionId, actor, name, taskId);
       actor.state.current = seededState;
       // LANE MODEL — the SCOPE stage's write-lane feeds `scope.is_advance` (data-driven, replacing the
       // hard-coded PRE_RESEARCH_REGEX). `scope_write` shares the same artifact lane; either state's `writes`
@@ -708,19 +722,17 @@ export async function runV2Cartridges(
         undefined,
         scopeWrites,
       );
-      // F2 enforceOnly: bypass the trigger filter (v2_observed_actor.ts:67) by overriding env.kind to match
-      // the gate's declared trigger, so the gate evaluates on a PreToolUse `tool_call` event. The guard ctx
-      // already carries the real event's `tool` and `event` keys (set above by buildGuardCtx), so the guard
-      // decision is accurate. In normal mode, env.kind == event.kind (unchanged behavior).
+      // `enforceOnly` never changes trigger timing. The pack's declared trigger is authoritative: lanes are
+      // checked below for every pre-tool mutation, but a post-tool completeness gate must not be promoted into
+      // a pre-tool prohibition that prevents the stage's work from producing its own evidence.
       const curMeta = loaded.compiled.meta[actor.state.current];
       // LANE MODEL enforcement (the #33 successor to advance-action detection). Under enforceOnly (PreToolUse
       // + automation), a MUTATING file-write whose target falls OUTSIDE the CURRENT stage's declared `writes:`
       // lane is BLOCKED — "stay in your stage's lane." This is SEPARATE from the completeness gate below (the
-      // gate decides WHEN the FSM advances; the lane decides WHERE a stage may write, per tool call). The three
-      // #33 holes hold: reads never block (evaluateLane → checked:false), a laneless stage is INERT, and an
-      // executor subagent (agentId — Hole 1) is exempt. A blocked lane write short-circuits the gate eval below
-      // (the tool never runs, so there is nothing to advance on).
-      if (enforceOnly && options?.agentId === undefined && exitCode !== 2) {
+      // gate decides WHEN the FSM advances; the lane decides WHERE a stage may write, per tool call). Reads
+      // never block (evaluateLane → checked:false), and a laneless stage is inert. Actor identity does not
+      // exempt an executor from the selected pack's lane. A blocked lane write short-circuits gate evaluation.
+      if (enforceOnly && exitCode !== 2) {
         const evTool = 'tool' in event && typeof event.tool === 'string' ? event.tool : '';
         const evArgs: Record<string, unknown> = 'args' in event ? event.args : {};
         const lane = evaluateLane(curMeta?.writes, evTool, evArgs);
@@ -730,15 +742,11 @@ export async function runV2Cartridges(
           continue; // out-of-lane write denied — skip this cartridge's gate eval (the tool won't run)
         }
       }
-      const envKind: MessageKind =
-        enforceOnly && curMeta?.kind === 'gate' && (curMeta.trigger?.length ?? 0) > 0
-          ? (curMeta.trigger![0] as MessageKind)
-          : event.kind;
       const env: Envelope = {
         seq: 0,
         from: `pack:${name}`,
         to: `pack:${name}`,
-        kind: envKind,
+        kind: event.kind,
         // R-AUDIT-CTX: phase = the cartridge's current FSM state (pre-receive); verdicts read fail-open.
         payload: { ctx },
         ts: Date.parse(now),
@@ -746,11 +754,26 @@ export async function runV2Cartridges(
       // SKILL.1 (R-SKILLS-PER-STATE): one runtime per cartridge; `onStateLeave` on each transition, then bind
       // the CURRENT (post-receive) state on EVERY event — the state IS the router (not only on transitions).
       const skillRuntime = new InMemorySkillRuntime();
+      let expectedPersistedState = seededState;
+      let transitionAccepted = true;
       for (const e of await actor.receive(env)) {
+        if (!transitionAccepted) continue;
         if (e.kind === 'write_state') {
           // enforceOnly: NO state persistence (gate-check-only — PreToolUse; PostToolUse owns the advance).
           if (!enforceOnly) {
-            await persistActorState(sessionId, name, e.state, now, taskId); // T2.2 — same per-task key as the read
+            transitionAccepted = await persistActorState(
+              sessionId,
+              name,
+              e.state,
+              now,
+              taskId,
+              expectedPersistedState,
+            );
+            if (!transitionAccepted) {
+              actor.state.current = await readFsmState(sessionId, name, actor.fsm, taskId);
+              continue;
+            }
+            expectedPersistedState = e.state;
             // GS1 — the deterministic stage fn is the SINGLE WRITER of the durable TASK CHECKPOINT, keyed by
             // the CANONICAL wg issue id (resolveCheckpointKey: a lap's OPENSQUID_ITEM_ID, else the active
             // harness task forward-mapped to its wg id). The orchestrator (a different process) reads it back
@@ -1000,17 +1023,12 @@ export async function runV2Cartridges(
             { bus: NOOP_BUS, from: `pack:${name}` },
           );
           if (effect.exitCode === 2) {
-            // Blanket-block-with-exemptions for enforceOnly (PreToolUse) mode:
-            // block a MUTATING call at a failing gate EXCEPT when (a) it's read-only
-            // (isMutatingCall → false, so reads always pass — #22 read-only bypass) or
-            // (b) it's an executor subagent (agentId present — Hole 1, the lane model).
-            // Non-enforceOnly (PostToolUse) is UNCHANGED — block always applies there.
+            // In enforceOnly (PreToolUse) mode, a failing gate blocks mutating calls while reads remain
+            // available to gather the evidence needed to satisfy the gate. Actor identity is not an exemption.
+            // Non-enforceOnly (PostToolUse) enforcement is unchanged.
             const evTool = 'tool' in event && typeof event.tool === 'string' ? event.tool : '';
             const evArgs = 'args' in event ? event.args : {};
-            if (
-              !enforceOnly ||
-              (isMutatingCall(evTool, evArgs) && options?.agentId === undefined)
-            ) {
+            if (!enforceOnly || isMutatingCall(evTool, evArgs)) {
               exitCode = 2; // block | halt → ENFORCE; the deny IS the observation (gate/kernel.ts:37-43)
               if (effect.message !== undefined) messages.push(effect.message);
               // V2-ENF.2/6 (§5.4b) — a gate that HOLDS is a FAILURE, and a silent hold is undiagnosable (the

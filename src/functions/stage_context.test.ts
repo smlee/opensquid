@@ -7,6 +7,7 @@ import type { FsmStateFile } from '../runtime/fsm_state.js';
 
 import {
   buildStageBundle,
+  interpolateDocsRoot,
   renderCheckpoint,
   stageWorkContext,
   type WorkContextDeps,
@@ -67,6 +68,39 @@ describe('stageWorkContext — the per-stage input pointer', () => {
   });
   it('a terminal/decision/unknown stage → empty', async () => {
     expect(await stageWorkContext('done', 's', deps())).toBe('');
+  });
+});
+
+describe('interpolateDocsRoot — the {docsRoot} procedure-token substitution', () => {
+  it('substitutes every {docsRoot} with the configured value', () => {
+    const src = 'Write to `{docsRoot}/research/x.md` then `{docsRoot}/plan/y.md`.';
+    expect(interpolateDocsRoot(src, '../docs')).toBe(
+      'Write to `../docs/research/x.md` then `../docs/plan/y.md`.',
+    );
+  });
+
+  it('the default "docs" reproduces the legacy literal (docs/research/…)', () => {
+    expect(interpolateDocsRoot('to `{docsRoot}/research/x.md`', 'docs')).toBe(
+      'to `docs/research/x.md`',
+    );
+  });
+
+  it('content with no token is returned unchanged', () => {
+    expect(interpolateDocsRoot('no token here', '../docs')).toBe('no token here');
+  });
+});
+
+// buildStageBundle FAILS OPEN to the default docs-root: `si-bundle` has no session cwd → resolveDocsRoot returns
+// `docs` → the scope procedure renders the legacy `docs/research/…` write path (config absent/broken is safe).
+describe('buildStageBundle — {docsRoot} fails open to the legacy "docs" when no config resolves', () => {
+  it('scope procedure renders docs/research/… (no {docsRoot} token leaks through)', async () => {
+    const text = await buildStageBundle('si-bundle', 'fullstack-flow', {
+      state: 'scope',
+      started_at: '2026-06-29T00:00:00.000Z',
+      history: [{ state: 'scope', at: 't1' }],
+    });
+    expect(text).toContain('docs/research/');
+    expect(text).not.toContain('{docsRoot}');
   });
 });
 

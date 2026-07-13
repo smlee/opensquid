@@ -36,7 +36,7 @@ import type { Facets } from '../classify.js';
 // Mock the cartridge loader so each test controls the active v2 set.
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
 import { loadActiveV2Cartridges } from '../bootstrap.js';
-import { buildGuardCtx, runV2Cartridges } from './v2_supply.js';
+import { buildGuardCtx, initializeV2Cartridges, runV2Cartridges } from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
 import type { AuthorInputs } from './author_evidence.js';
 import type { CodeEvidenceDeps } from './code_evidence.js';
@@ -101,6 +101,28 @@ const codingGatePack = () =>
           trigger: ['tool_call'],
           on_pass_emits: 'done',
           on_fail: { action: 'block', message: 'coding gate' },
+        },
+        shipped: { kind: 'terminal', outcome: 'shipped' },
+      },
+      transitions: [{ from: 'g0', on: 'done', to: 'shipped' }],
+    },
+  });
+
+const postToolGatePack = () =>
+  load({
+    name: 'post-tool-gate',
+    version: '1.0.0',
+    scope: 'workflow',
+    guards: { ok: 'false' },
+    fsm: {
+      initial: 'g0',
+      states: {
+        g0: {
+          kind: 'gate',
+          guard: 'ok',
+          trigger: ['post_tool_call'],
+          on_pass_emits: 'done',
+          on_fail: { action: 'block', message: 'post-tool only' },
         },
         shipped: { kind: 'terminal', outcome: 'shipped' },
       },
@@ -242,24 +264,43 @@ describe('runV2Cartridges — LAYER-1 #37 serves-gated FSM selection', () => {
 
 // ── PART A — enforceOnly mode: gate-check-only, no state advance ─────────────────────────────────────────────
 // Tests for the `enforceOnly: true` flag added to `runV2Cartridges`.
-// A gate with `trigger: ['post_tool_call']` whose guard fails on a `Bash` tool_call is used throughout.
-// enforceOnly bypasses the trigger filter (v2_observed_actor.ts:67) so the gate evaluates on the `tool_call`
-// event from PreToolUse. Blanket-block-with-exemptions: MUTATING + no agentId → exitCode 2; read-only or
-// executor (agentId) → exitCode 0. block/halt + NO state advance.
+// A gate that explicitly declares `trigger: ['tool_call']` is used throughout. A failing pre-tool gate blocks
+// mutating calls while preserving read-only evidence gathering. Actor identity does not exempt executors.
+// Pack trigger timing remains authoritative; enforceOnly never promotes a post-tool gate to pre-tool.
 //
 // NOTE: advance-only tests from a prior pass (task #33) are superseded here. That design blocked only the
-// "advance-triggering action" per stage; the lane-model redesign (task #35) will handle that. The current
-// design is blanket-block-mutating-with-exemptions (read-only bypass + executor exemption), which is simpler
-// and correct for the automation-enforcement use case.
+// "advance-triggering action" per stage; the lane-model redesign (task #35) handles that. The current design
+// blocks mutating calls with a read-only bypass and applies identically to every actor.
 
 describe('runV2Cartridges — enforceOnly mode (PART A)', () => {
-  it('enforceOnly + guard FAIL + block + MUTATING + no agentId → exitCode 2 (blanket-block)', async () => {
+  it('does not promote a pack-declared post_tool_call gate into pre-tool enforcement', async () => {
+    mockLoad.mockResolvedValue([postToolGatePack()]);
+    const sid = 'sess-enforce-pack-trigger';
+    const pre = await runV2Cartridges(sid, mutatingBashCall(), NOW, { enforceOnly: true });
+    expect(pre.exitCode).toBe(0);
+    expect(pre.messages).toEqual([]);
+
+    const post = await runV2Cartridges(
+      sid,
+      {
+        kind: 'post_tool_call',
+        tool: 'Bash',
+        args: { command: 'echo x > /tmp/out.txt' },
+        exit_code: 0,
+      } as unknown as Event,
+      NOW,
+    );
+    expect(post.exitCode).toBe(2);
+    expect(post.messages).toContain('post-tool only');
+  });
+
+  it('enforceOnly + guard FAIL + block + MUTATING → exitCode 2', async () => {
     // mutatingBashCall() has command: 'echo x > /tmp/out.txt' — isMutatingCall → true.
-    // No agentId → no executor exemption. Failing gate + enforceOnly → exitCode 2.
+    // Failing gate + enforceOnly → exitCode 2.
     mockLoad.mockResolvedValue([gatePack('block')]);
     const sid = 'sess-enforce-block';
     const d = await runV2Cartridges(sid, mutatingBashCall(), NOW, { enforceOnly: true });
-    expect(d.exitCode).toBe(2); // mutating + no agentId + failing gate → blocked
+    expect(d.exitCode).toBe(2); // mutating + failing gate → blocked
     expect(d.messages).toContain('resolve it');
     expect(d.injections).toEqual([]); // enforceOnly: warn injections discarded (PostToolUse owns them)
     // No state advance: enforceOnly skips write_state.
@@ -327,18 +368,16 @@ describe('runV2Cartridges — enforceOnly mode (PART A)', () => {
   });
 });
 
-// ── #22 — read-only bypass + executor exemption (blanket-block-with-exemptions) ──────────────────────────────
-// enforceOnly mode blocks MUTATING calls at a failing gate EXCEPT: (a) read-only (isMutatingCall → false),
-// (b) executor subagent (agentId present — Hole 1). Non-enforceOnly (PostToolUse) always enforces.
+// ── #22 — read-only evidence-gathering bypass ───────────────────────────────────────────────────────────────
+// enforceOnly mode blocks mutating calls at a failing gate and permits read-only evidence gathering.
+// Actor identity does not alter enforcement. Non-enforceOnly (PostToolUse) always enforces.
 //
-// NOTE: the advance-only design from task #33 (which blocked ONLY the stage's advance-triggering action)
-// is superseded here. That design is being replaced by the lane model (task #35). The current design is
-// blanket-block-mutating-with-exemptions: simpler, correct for automation enforcement, and free of the
-// per-stage detection logic that couldn't handle plan/author/deploy cleanly.
+// NOTE: the advance-only design from task #33 (which blocked only the stage's advance-triggering action)
+// is superseded by the lane model. The current design applies without actor-specific exemptions.
 
-describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + Hole 1)', () => {
-  it('enforceOnly + failing gate + MUTATING Edit + no agentId → exitCode 2 (blocked — Hole 1 NOT exempt)', async () => {
-    // Edit is always mutating; no agentId present → the executor exemption does not apply.
+describe('runV2Cartridges — enforceOnly mutating-call enforcement', () => {
+  it('enforceOnly + failing gate + MUTATING Edit → exitCode 2', async () => {
+    // Edit is always mutating.
     mockLoad.mockResolvedValue([gatePack('block')]);
     const sid = 'sess-bb-edit-noagent';
     const editCall = {
@@ -351,21 +390,17 @@ describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + H
     expect(d.messages).toContain('resolve it');
   });
 
-  it('enforceOnly + failing gate + MUTATING Edit + agentId present → exitCode 0 (executor exempt — Hole 1)', async () => {
-    // Same Edit but with agentId → executor exemption fires → NOT blocked.
+  it('enforceOnly + failing gate + MUTATING Edit remains blocked regardless of actor identity', async () => {
     mockLoad.mockResolvedValue([gatePack('block')]);
-    const sid = 'sess-bb-edit-agent';
+    const sid = 'sess-bb-edit-executor';
     const editCall = {
       kind: 'tool_call',
       tool: 'Edit',
       args: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' },
     } as unknown as Event;
-    const d = await runV2Cartridges(sid, editCall, NOW, {
-      enforceOnly: true,
-      agentId: 'executor-1',
-    });
-    expect(d.exitCode).toBe(0); // executor exempt (agentId present) → not blocked
-    expect(d.messages).toEqual([]);
+    const d = await runV2Cartridges(sid, editCall, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(2);
+    expect(d.messages).toContain('resolve it');
   });
 
   it('enforceOnly + failing gate + Bash "git status" → exitCode 0 (read-only bypass — #22)', async () => {
@@ -395,8 +430,8 @@ describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + H
     expect(d.messages).toEqual([]);
   });
 
-  it('enforceOnly + failing gate + MUTATING Bash "sed -i" + no agentId → exitCode 2 (blocked)', async () => {
-    // sed -i is mutating (matches the file-writing deny-list); no agentId → blocked.
+  it('enforceOnly + failing gate + MUTATING Bash "sed -i" → exitCode 2', async () => {
+    // sed -i is mutating (matches the file-writing deny-list).
     mockLoad.mockResolvedValue([gatePack('block')]);
     const sid = 'sess-bb-sed-noagent';
     const sedCall = {
@@ -409,21 +444,17 @@ describe('runV2Cartridges — enforceOnly blanket-block-with-exemptions (#22 + H
     expect(d.messages).toContain('resolve it');
   });
 
-  it('enforceOnly + failing gate + MUTATING Bash + agentId → exitCode 0 (executor exempt)', async () => {
-    // Same sed -i but with agentId → executor exempt → not blocked.
+  it('enforceOnly + failing gate + MUTATING Bash remains blocked regardless of actor identity', async () => {
     mockLoad.mockResolvedValue([gatePack('block')]);
-    const sid = 'sess-bb-sed-agent';
+    const sid = 'sess-bb-sed-executor';
     const sedCall = {
       kind: 'tool_call',
       tool: 'Bash',
       args: { command: "sed -i 's/a/b/' f.ts" },
     } as unknown as Event;
-    const d = await runV2Cartridges(sid, sedCall, NOW, {
-      enforceOnly: true,
-      agentId: 'executor-2',
-    });
-    expect(d.exitCode).toBe(0); // executor exempt → not blocked
-    expect(d.messages).toEqual([]);
+    const d = await runV2Cartridges(sid, sedCall, NOW, { enforceOnly: true });
+    expect(d.exitCode).toBe(2);
+    expect(d.messages).toContain('resolve it');
   });
 });
 
@@ -458,7 +489,7 @@ const writeCallTo = (file_path: string): Event =>
   ({ kind: 'tool_call', tool: 'Write', args: { file_path } }) as unknown as Event;
 
 describe('runV2Cartridges — LANE MODEL write-lane enforcement', () => {
-  it('enforceOnly + OUT-of-lane Write + no agentId → exitCode 2 (blocked with a lane message)', async () => {
+  it('enforceOnly + OUT-of-lane Write → exitCode 2 with a lane message', async () => {
     mockLoad.mockResolvedValue([lanePack(['docs/research/*pre-research*'])]);
     const d = await runV2Cartridges('sess-lane-oob', writeCallTo('src/foo.ts'), NOW, {
       enforceOnly: true,
@@ -480,14 +511,13 @@ describe('runV2Cartridges — LANE MODEL write-lane enforcement', () => {
     expect(d.messages).toEqual([]);
   });
 
-  it('enforceOnly + OUT-of-lane Write + agentId → exitCode 0 (executor exempt — Hole 1)', async () => {
+  it('enforceOnly + OUT-of-lane Write remains blocked regardless of actor identity', async () => {
     mockLoad.mockResolvedValue([lanePack(['docs/research/*pre-research*'])]);
     const d = await runV2Cartridges('sess-lane-exec', writeCallTo('src/foo.ts'), NOW, {
       enforceOnly: true,
-      agentId: 'executor-9',
     });
-    expect(d.exitCode).toBe(0);
-    expect(d.messages).toEqual([]);
+    expect(d.exitCode).toBe(2);
+    expect(d.messages.join('\n')).toContain('write-lane');
   });
 
   it('enforceOnly + OUT-of-lane READ → exitCode 0 (reads never block)', async () => {
@@ -663,6 +693,34 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
       else process.env.OPENSQUID_HOME = prevHome;
       if (prevRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
       else process.env.OPENSQUID_PROJECT_ROOT = prevRoot;
+    }
+  });
+
+  it('resumes a fresh lap session from the task checkpoint stage instead of resetting to scope_write', async () => {
+    const previous = {
+      item: process.env.OPENSQUID_ITEM_ID,
+      automation: process.env.OPENSQUID_AUTOMATION,
+      root: process.env.OPENSQUID_PROJECT_ROOT,
+    };
+    const root = await mkdtemp(join(tmpdir(), 'osq-cp-resume-'));
+    await mkdir(join(root, '.opensquid'), { recursive: true });
+    process.env.OPENSQUID_ITEM_ID = 'wg-resume-plan';
+    process.env.OPENSQUID_AUTOMATION = '1';
+    process.env.OPENSQUID_PROJECT_ROOT = root;
+    try {
+      await withTaskCheckpointStore((store) =>
+        store.createTaskCheckpoint('wg-resume-plan', 'plan', Date.parse(NOW)),
+      );
+      mockLoad.mockResolvedValue([scopeWriteGatePack()]);
+      await initializeV2Cartridges('sess-resume-plan', NOW);
+      expect(await readFsmStateRaw('sess-resume-plan', 'fsf-scope-write')).toBe('plan');
+    } finally {
+      if (previous.item === undefined) delete process.env.OPENSQUID_ITEM_ID;
+      else process.env.OPENSQUID_ITEM_ID = previous.item;
+      if (previous.automation === undefined) delete process.env.OPENSQUID_AUTOMATION;
+      else process.env.OPENSQUID_AUTOMATION = previous.automation;
+      if (previous.root === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = previous.root;
     }
   });
 

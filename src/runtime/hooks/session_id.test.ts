@@ -163,10 +163,11 @@ describe('FU.3 — project-scoped session pointer', () => {
     expect(await resolveMcpSessionId()).toBe('mine');
   });
 
-  it('resolveMcpSessionId: OPENSQUID_SESSION_ID env wins over everything', async () => {
+  it('resolveMcpSessionId: OPENSQUID_SESSION_ID env wins over every other path, including inherited CLAUDE_SESSION_ID', async () => {
     const proj = await makeProject(UUID);
     await recordCurrentSession('mine', proj);
     process.env.CLAUDE_PROJECT_DIR = proj;
+    process.env.CLAUDE_SESSION_ID = 'claude-inherited';
     process.env.OPENSQUID_SESSION_ID = 'env-wins';
     expect(await resolveMcpSessionId()).toBe('env-wins');
   });

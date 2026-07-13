@@ -14,8 +14,10 @@ import { readFile } from 'node:fs/promises';
 import { type FsmStateFile } from '../runtime/fsm_state.js';
 import { readGoalMap } from '../runtime/goal_map/goal_map.js';
 import { readAcceptance } from '../runtime/loop/acceptance.js';
-import { sessionStateFile } from '../runtime/paths.js';
+import { resolveProjectScopeRoot, sessionStateFile } from '../runtime/paths.js';
 import { readActiveTask, readSessionCwd } from '../runtime/session_state.js';
+import { readActiveDocsRoot } from '../packs/discovery.js';
+import { readCheckpointBySession } from '../runtime/ralph/loop_stage.js';
 
 import { readProcedureContent } from './read_procedure.js';
 import { readRubricContent } from './read_rubric.js';
@@ -53,7 +55,12 @@ async function defaultScopePath(sessionId: string): Promise<string | null> {
     const v: unknown = JSON.parse(
       await readFile(sessionStateFile(sessionId, PRE_RESEARCH_PATH_KEY), 'utf8'),
     );
-    return typeof v === 'string' && v.length > 0 ? v : null;
+    if (typeof v === 'string' && v.length > 0) return v;
+  } catch {
+    // Fresh per-stage sessions restore the scope pointer from the task checkpoint below.
+  }
+  try {
+    return (await readCheckpointBySession(sessionId))?.scopeArtifacts.at(-1) ?? null;
   } catch {
     return null;
   }
@@ -152,6 +159,32 @@ const THE_4X_100 = [
 ].join('\n');
 
 /**
+ * Substitute the `{docsRoot}` procedure token with the configured docs-root. PURE + cheap (a plain string
+ * replace, no I/O). Every `{docsRoot}` in `content` becomes `docsRoot`; content with no token is returned
+ * unchanged. The default `docsRoot` is `'docs'`, so a project that never configures it renders exactly the
+ * legacy literal (`{docsRoot}/research/…` → `docs/research/…`).
+ */
+export function interpolateDocsRoot(content: string, docsRoot: string): string {
+  return content.replaceAll('{docsRoot}', docsRoot);
+}
+
+/**
+ * Resolve the configured docs-root for the session's project. FAILS OPEN to `'docs'` on ANY fault (no session
+ * cwd, no project scope, unreadable/malformed active.json) — the injection hot path never throws and never
+ * blocks on a config read. Sources the value from the project's `.opensquid/active.json` (`readActiveDocsRoot`),
+ * the per-project config surface, NOT the home-scoped ralph.config.json.
+ */
+async function resolveDocsRoot(sessionId: string): Promise<string> {
+  try {
+    const cwd = await readSessionCwd(sessionId);
+    if (cwd === null) return 'docs';
+    return await readActiveDocsRoot(await resolveProjectScopeRoot(cwd));
+  } catch {
+    return 'docs';
+  }
+}
+
+/**
  * The standardized stage bundle [PROCEDURE-INTEGRITY, 3×100%, CHECKPOINT, PROCEDURE, RUBRIC, WORK-CONTEXT] as plain text.
  * The hook path (`stage_inject`, the only direct caller) assembles it — and that is ALSO how it reaches the
  * per-stage subprocess loop (T-v2-per-stage-loop PSL.3): the loop does NOT assemble this bundle itself (it primes
@@ -173,8 +206,15 @@ export async function buildStageBundle(
   const rubric = RUBRIC_STAGES.has(stage) ? await readRubricContent(stage, packId) : null;
   const checkpoint = renderCheckpoint(fsm);
   const work = await stageWorkContext(stage, sessionId);
+  // Substitute the `{docsRoot}` procedure token with the configured docs-root (fail-open `docs`). Applied to
+  // the assembled bundle so BOTH the hook path and the loop path (the only callers, via stage_inject) resolve
+  // the same write location — the single shared spot. Cheap: one string replace over the final text.
+  const docsRoot = await resolveDocsRoot(sessionId);
   // PROCEDURE_INTEGRITY (don't fake done-ness) + THE_4X_100 (what done means) lead every bundle — read first.
-  return [PROCEDURE_INTEGRITY, THE_4X_100, checkpoint, procedure, rubric, work]
-    .filter((s): s is string => typeof s === 'string' && s.length > 0)
-    .join('\n\n');
+  return interpolateDocsRoot(
+    [PROCEDURE_INTEGRITY, THE_4X_100, checkpoint, procedure, rubric, work]
+      .filter((s): s is string => typeof s === 'string' && s.length > 0)
+      .join('\n\n'),
+    docsRoot,
+  );
 }

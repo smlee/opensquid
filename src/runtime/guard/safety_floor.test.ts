@@ -25,6 +25,18 @@ describe('checkSafety (T2) — default policy seed', () => {
       checkSafety({ tool: 'Edit', args: { file_path: '/Users/x/.opensquid/active.json' } }, P)
         .action,
     ).toBe('block');
+    expect(
+      checkSafety(
+        {
+          tool: 'MultiEdit',
+          args: {
+            file_path: '/Users/x/.opensquid/active.json',
+            edits: [{ old_string: 'a', new_string: 'b' }],
+          },
+        },
+        P,
+      ).action,
+    ).toBe('block');
   });
 
   it('delete_verb refinement: `rm ~/.opensquid/...` → halt, but a plain `ls ~/.opensquid/` → pass', () => {

@@ -4,9 +4,9 @@ You are in the AUTHOR (tasking) stage. Turn the plan into self-contained task sp
 
 ## Research (AUTHOR-specific)
 
-- FAN OUT parallel subagents with the appropriate skills: existing-solution scouts (one per capability —
-  local-codebase + external/primary-docs library experts) searching for reuse, plus one re-auditing the PLAN.
-  They burn their context searching; you keep the cited reuse-or-reinvent verdict.
+- AUTHOR is parent-owned orchestration/specification work. Perform the existing-solution search and PLAN
+  re-audit directly; do not send read-only authoring assignments to implementation executors. Preserve the
+  executor handoff for bounded repository implementation at CODE.
 - EXISTING-SOLUTION SEARCH (reuse belongs HERE — reuse shortens coding): for any NEW capability, search the
   local codebase + the external/primary docs (record the consultation) and either reuse what exists or cite
   why none fits. Speccing a reinvention with no recorded search is a guess about novelty.

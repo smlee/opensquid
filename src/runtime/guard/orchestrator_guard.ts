@@ -49,8 +49,11 @@
  * Imported by:  src/runtime/hooks/pre-tool-use.ts.
  */
 
-/** Tools that are ALWAYS mutating regardless of their arguments. */
-const ALWAYS_MUTATING_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
+import { toolMatches } from '../../integrations/pi/tool_aliases.js';
+
+function isAlwaysMutatingTool(tool: string): boolean {
+  return toolMatches(tool, /^(Write|Edit|NotebookEdit)$/);
+}
 
 /**
  * DENY-LIST for Bash commands: true only when the command matches a file-writing pattern.
@@ -91,7 +94,7 @@ function isMutatingBash(command: string): boolean {
  * - Everything else (Read, Grep, Agent, Task, mcp__* tools, git, pnpm, node, …) → NOT mutating.
  */
 export function isMutatingCall(tool: string, args: Record<string, unknown>): boolean {
-  if (ALWAYS_MUTATING_TOOLS.has(tool)) return true;
+  if (isAlwaysMutatingTool(tool)) return true;
   if (tool === 'Bash') {
     const cmd = args.command;
     if (typeof cmd !== 'string') return false; // no command string → fail-open (not mutating)
@@ -120,7 +123,7 @@ export function isDocumentPath(path: string): boolean {
  */
 export function isCodeFileMutation(tool: string, args: Record<string, unknown>): boolean {
   if (!isMutatingCall(tool, args)) return false; // reads / non-mutating → never a coding-file write
-  if (ALWAYS_MUTATING_TOOLS.has(tool)) {
+  if (isAlwaysMutatingTool(tool)) {
     const a = args as { file_path?: unknown; notebook_path?: unknown };
     const fp = typeof a.file_path === 'string' ? a.file_path : a.notebook_path;
     if (typeof fp === 'string' && isDocumentPath(fp)) return false; // a document write — always allowed
@@ -212,7 +215,7 @@ export async function checkDesignDocRewrite(
   opts: DesignDocGuardOptions,
 ): Promise<OrchestratorGuardResult> {
   if (hookInput?.agent_id !== undefined) return { deny: false }; // executor exempt (as checkOrchestratorGuard)
-  if (tool !== 'Write' && tool !== 'Edit') return { deny: false }; // only file writes are gated
+  if (!toolMatches(tool, /^(Write|Edit)$/)) return { deny: false }; // only file writes are gated
   const fp = typeof args.file_path === 'string' ? args.file_path : undefined;
   if (fp === undefined || !isDesignDoc(fp)) return { deny: false }; // only design-doc writes are gated
   let verdict: string | undefined;

@@ -784,6 +784,7 @@ export const SubagentRole = z.object({
   name: z.string().min(1),
   pack: z.string().min(1),
   model_alias: z.string().min(1),
+  tools: z.array(z.string().min(1)).min(1).optional(),
   handoff_signal: z.string().optional(),
   instructions: z.string().optional(),
 });
@@ -801,10 +802,12 @@ export const Team = z.object({
 | `roles[].name`           | `SubagentRole` (`team.ts:50`) | yes, min 1     | Role identifier the parent references when spawning, and what `next_action.args.role` matches against (`profession_resolver.ts:72-76`).                                                                                                                                                   |
 | `roles[].pack`           | `team.ts:51`                  | yes, min 1     | The profession pack the spawned subagent loads (e.g. `scope-architect` or `profession/task-spec-author`). The subagent's universal pinned skills come from its OWN pack set, not the parent's (`team.ts:13-15`).                                                                          |
 | `roles[].model_alias`    | `team.ts:52`                  | yes, min 1     | **Model-neutral** task-purpose label (e.g. `reasoning`). Resolved against the user's `models.yaml` at spawn time — NEVER a vendor model id (`team.ts:25-28`; the primitive in `src/functions/subagent.ts:12-16, 52-56` stays vendor-name-free). Schema validates only "non-empty string". |
-| `roles[].handoff_signal` | `team.ts:53`                  | optional       | Sentinel string the subagent emits on completion (e.g. `SCOPE_COMPLETE`); the parent scans stdout for it (`team.ts:20-22`).                                                                                                                                                               |
-| `roles[].instructions`   | `team.ts:54`                  | optional       | Role-specific system-prompt addendum applied to the spawned subagent.                                                                                                                                                                                                                     |
+| `roles[].tools`          | `team.ts:53`                  | host-dependent | Explicit canonical tool authority for generated host roles. Pi role generation requires it and maps names such as `Read`, `Write`, `MultiEdit`, and `mcp__opensquid__workgraph_get` to Pi invocation names. Authority is never inferred from prose.                                       |
+| `roles[].handoff_signal` | `team.ts:54`                  | optional       | Sentinel string the subagent emits on completion (e.g. `SCOPE_COMPLETE`); the parent scans stdout for it (`team.ts:20-22`).                                                                                                                                                               |
+| `roles[].instructions`   | `team.ts:55`                  | optional       | Role-specific system-prompt addendum applied to the spawned subagent.                                                                                                                                                                                                                     |
 
-There are no other fields — `SubagentRole`/`Team` are plain `z.object` (no `.strict()`, `team.ts:49,65`), so extra keys parse fine, but nothing reads them.
+`SubagentRole` and `Team` are plain `z.object` values rather than strict objects.
+Unknown fields therefore parse, but only declared fields have runtime meaning.
 
 ### What it does at runtime
 
@@ -824,6 +827,15 @@ roles:
   - name: scope-architect
     pack: scope-architect
     model_alias: reasoning
+    tools:
+      - Read
+      - Write
+      - Bash
+      - Grep
+      - mcp__opensquid__workgraph_get
+      - mcp__opensquid__recall
+      - mcp__opensquid__read_state
+      - mcp__opensquid__web_fetch
     handoff_signal: SCOPE_COMPLETE
     instructions: |
       You are the scope-architect subagent. The parent agent spawned you
@@ -842,8 +854,9 @@ All three builtin profession packs are single-role and **self-reference** their 
 
 1. Set `usage: profession` (or `both`) in `manifest.yaml`. Per the schema comment (`manifest.ts:309-311`, "Per L8") profession packs SHOULD also be `kind: focused` (composites have no `team.yaml`). NOTE: this is a documented convention only — the comment claims "the loader enforces this," but the loader's only profession/both check is the `team.yaml` existence+parse at `loader.ts:182-200`; there is no `kind`-vs-`usage` cross-field refine in the loader or the schema. Do not rely on a runtime block here.
 2. Create `team.yaml` at the pack root with `name` and a non-empty `roles` list.
-3. Each role: pick a `name`, point `pack` at the profession pack to load, set a model-neutral `model_alias` (use `reasoning` unless you ship a custom alias in `models.yaml`), and add a `handoff_signal` + `instructions` charter so the subagent knows its job and how to signal completion.
-4. Multi-role professions are reachable today only via `next_action.args.role` matching; with no `role` arg the dispatcher always picks `roles[0]` (`profession_resolver.ts:84-85`).
+3. Each role: pick a `name`, point `pack` at the profession pack to load, set a model-neutral `model_alias`, and declare the canonical `tools` that role may use.
+4. Add a `handoff_signal` and `instructions` charter so the subagent knows its job and how to signal completion.
+5. Multi-role professions are reachable today only via `next_action.args.role` matching; with no `role` arg the dispatcher always picks `roles[0]` (`profession_resolver.ts:84-85`).
 
 ---
 
