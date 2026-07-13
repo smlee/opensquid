@@ -183,8 +183,8 @@ async function sessionDirExists(id: string): Promise<boolean> {
  * most-recently-active-task tiebreak is a follow-up.
  *
  * Precedence:
- *   1. `process.env.CLAUDE_SESSION_ID` (kept — harmless if CC ever sets it)
- *   2. `process.env.OPENSQUID_SESSION_ID` (override / test seam)
+ *   1. `process.env.OPENSQUID_SESSION_ID` (explicit override / lap attempt seam)
+ *   2. `process.env.CLAUDE_SESSION_ID` (kept — harmless if CC ever sets it)
  *   3. `process.env.CLAUDE_CODE_SESSION_ID` GUARDED by `sessions/<id>/` existence
  *      (FU.7) — CC's per-process id. When its session dir exists it is a real
  *      persisted session, which disambiguates two concurrent sessions in the
@@ -196,10 +196,10 @@ async function sessionDirExists(id: string): Promise<boolean> {
  */
 export async function resolveMcpSessionId(): Promise<string | null> {
   const env = process.env;
-  const fromClaudeEnv = env.CLAUDE_SESSION_ID;
-  if (fromClaudeEnv !== undefined && fromClaudeEnv.length > 0) return fromClaudeEnv;
   const fromOpensquidEnv = env.OPENSQUID_SESSION_ID;
   if (fromOpensquidEnv !== undefined && fromOpensquidEnv.length > 0) return fromOpensquidEnv;
+  const fromClaudeEnv = env.CLAUDE_SESSION_ID;
+  if (fromClaudeEnv !== undefined && fromClaudeEnv.length > 0) return fromClaudeEnv;
   // FU.7 — CC's per-process id, but ONLY when its session dir exists on disk
   // (proves it's the id state actually lives under). Dir-less → --resume's new
   // id → ignore, fall through to the project pointer.

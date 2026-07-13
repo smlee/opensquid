@@ -370,7 +370,7 @@ Works today:
 - Chat bridge MCP server with send and inbox polling.
 - Local workgraph with ready queries and event history.
 - Pack runtime with YAML schemas, skills, state-machine support, and chat-agent bindings.
-- Optional hooks for workflow and drift enforcement in Claude Code and codex CLI.
+- Optional hooks/projectors for workflow and drift enforcement in Claude Code, codex CLI, and Pi.
 - Deterministic session handoffs with automatic backup and recovery triggers.
 - Git gates that bind to the agent and pass humans through, with commit provenance.
 - Per-project context + rules (`<project>/.opensquid/context.md`): free-form context + `forbid`/`rules`/`package_manager`, read live, with a resilient (degrade-and-warn) loader.
@@ -385,6 +385,37 @@ Still evolving:
 - More polished first-run setup for every host and chat path.
 - The final default pack set.
 - Public docs beyond this front-door README.
+
+## Pi harness live acceptance (local only)
+
+After building, configure the loop through the shared setup operation and then run the normal production loop through the thin local wrapper:
+
+```bash
+pnpm build
+opensquid setup loop --harness pi
+pnpm exec tsx scripts/acceptance/pi-harness-live.ts
+```
+
+Ralph configuration does not select a provider or model.
+With no explicit setup override, Pi uses its existing user settings.
+An explicit human can update Pi's own defaults with `opensquid setup loop --harness pi --provider <provider> --model <model>`; the selection is validated before its settings are changed.
+
+The wrapper only executes the compiled `opensquid loop` entrypoint.
+It does not create fixtures, seed pack state, or add an acceptance-specific runtime contract.
+A real Pi installation, provider access, and project configuration are required, so this command is intentionally not run in CI.
+
+A Pi `spawn_subagent` task is a logical executor loop, not a one-shot subprocess.
+OpenSquid keeps one executor identity while launching fresh-context Pi RPC laps until the selected packs allow one strict `SHIPPED` exit, or the executor returns a typed residual outcome.
+Fresh child laps also omit provider/model flags and inherit Pi's native selection; only an explicit complete pack-role alias may override both values.
+Core safety remains bounded: at most 10 laps, the parent lap's total wall-clock deadline, graceful automatic cancellation, bounded concurrency/output, and strict typed exits.
+Executor laps load the MCP adapter and lifecycle projector explicitly but omit `spawn_subagent`, so convergence does not permit recursive fan-out.
+Automatic shutdown is protocol-only (RPC abort/stdin EOF); it never sends an OS signal.
+Behavioral readiness is verified once per loop target after a successful probe and then reused by fresh stage laps; failed probes remain retryable. Probe processes are registered in the same control plane, and the full-composition probe suppresses lap lifecycle side effects while it inspects the loaded tool surface.
+Every executor RPC process receives a fresh OpenSquid session identity while retaining its stable logical executor identity. Scope pointers, audit verdicts, and verification evidence recover from project/task-durable checkpoint state, and CODE diff evidence includes untracked source files without mutating the Git index.
+Human CLI, TUI, and web surfaces share one exported process-control SDK contract for graceful stop, targeted process-group termination, explicitly confirmed force-kill, and WorkGraph/checkpoint resume. Actions carry human authorization identity, action/process-incarnation IDs, and requested/applied/failed receipts. A parent action cascades under the same authorization to active processes in that run. Graceful stop yields `PROCESS_PAUSED`; terminate/force-kill yields the core-generated `CANCELLED_BY_HUMAN` residual.
+POSIX uses exact supervisor-owned process groups; Windows uses named Job Objects with a suspended-start broker so descendants cannot escape assignment.
+The CLI adapter is `opensquid loop process list [--json]`, `stop <executor-id>`, `terminate <executor-id>`, `kill <executor-id> --force`, and `resume <executor-id>`.
+Mutating CLI actions require an interactive human terminal; TUI/web adapters call the same public SDK functions from their authenticated control plane rather than shelling out or reimplementing process policy.
 
 ## Docs
 

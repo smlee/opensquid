@@ -33,6 +33,7 @@ import {
   hasActiveProjectPacks,
   readActiveArchDetector,
   readActiveDeployReversible,
+  readActiveDocsRoot,
   readActiveVerifyCommand,
   resolveEnvironments,
   resolvePackStateDir,
@@ -114,6 +115,32 @@ describe('readActiveArchDetector — the per-project ARCHITECTURE-DETECTOR comma
   it('is lenient on malformed JSON → null (unreadable → undeclared → fail-open)', async () => {
     await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
     await expect(readActiveArchDetector(scopeRoot)).resolves.toBeNull();
+  });
+});
+
+describe('readActiveDocsRoot — the per-project docs-root (configurable research/plan write location)', () => {
+  it('null scopeRoot / absent active.json / unconfigured → default "docs" (fail-open)', async () => {
+    await expect(readActiveDocsRoot(null)).resolves.toBe('docs');
+    await expect(readActiveDocsRoot(scopeRoot)).resolves.toBe('docs'); // ENOENT
+    await writeActive({ packs: ['fullstack-flow'] });
+    await expect(readActiveDocsRoot(scopeRoot)).resolves.toBe('docs'); // key absent
+  });
+
+  it('returns the configured docs-root (e.g. a workspace umbrella dir)', async () => {
+    await writeActive({ packs: ['fullstack-flow'], docsRoot: '../docs' });
+    await expect(readActiveDocsRoot(scopeRoot)).resolves.toBe('../docs');
+  });
+
+  it('trims surrounding whitespace; a blank value → default "docs"', async () => {
+    await writeActive({ packs: ['fullstack-flow'], docsRoot: '  ../docs  ' });
+    await expect(readActiveDocsRoot(scopeRoot)).resolves.toBe('../docs');
+    await writeActive({ packs: ['fullstack-flow'], docsRoot: '   ' });
+    await expect(readActiveDocsRoot(scopeRoot)).resolves.toBe('docs');
+  });
+
+  it('is lenient on malformed JSON → default "docs" (fail-open, never throws on the hot path)', async () => {
+    await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
+    await expect(readActiveDocsRoot(scopeRoot)).resolves.toBe('docs');
   });
 });
 

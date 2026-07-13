@@ -112,6 +112,33 @@ describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
     expect(parsed.harness.kind).toBe('claude');
   });
 
+  it('rejects model/provider/pricing fields because Ralph configuration is model-neutral', () => {
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: {
+          cli: 'claude',
+          ralphMdPath: '/x/RALPH.md',
+          kind: 'claude',
+          model: 'claude-legacy',
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('also rejects legacy model fields when the Claude kind is implicit', () => {
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: {
+          cli: 'claude',
+          ralphMdPath: '/x/RALPH.md',
+          model: 'claude-legacy',
+        },
+      }),
+    ).toThrow();
+  });
+
   it('a kind:codex config with sandbox + askForApproval round-trips through the schema', () => {
     const parsed = RalphConfigFileSchema.parse({
       ...defaultRalphConfig(home),
@@ -144,27 +171,57 @@ describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
     expect('args' in parsed.harness).toBe(false);
   });
 
-  it('CFS.1: harness.model + harness.pricing round-trip through the schema', () => {
+  it('rejects Codex model/pricing fields from Ralph configuration', () => {
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: {
+          cli: 'codex',
+          ralphMdPath: '/x/RALPH.md',
+          kind: 'codex',
+          model: 'gpt-5-codex',
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('Pi configuration carries only harness identity and inherits Pi model settings', () => {
     const parsed = RalphConfigFileSchema.parse({
       ...defaultRalphConfig(home),
       harness: {
-        cli: 'codex',
+        cli: 'pi',
         ralphMdPath: '/x/RALPH.md',
-        kind: 'codex',
-        model: 'gpt-5-codex',
-        pricing: {
-          models: { 'gpt-5-codex': { inputPerMTok: 1.25, outputPerMTok: 10 } },
-          default: 'gpt-5-codex',
+        kind: 'pi',
+      },
+    });
+    expect(parsed.harness).toEqual({ kind: 'pi', cli: 'pi', ralphMdPath: '/x/RALPH.md' });
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: { cli: 'pi', ralphMdPath: '/x/RALPH.md', kind: 'pi', provider: 'openai' },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects illegal mixed per-vendor settings instead of stripping them', () => {
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: {
+          cli: 'pi',
+          ralphMdPath: '/x/RALPH.md',
+          kind: 'pi',
+          provider: 'x',
+          sandbox: 'read-only',
         },
-      },
-    });
-    expect(parsed.harness).toMatchObject({
-      model: 'gpt-5-codex',
-      pricing: {
-        models: { 'gpt-5-codex': { inputPerMTok: 1.25, outputPerMTok: 10 } },
-        default: 'gpt-5-codex',
-      },
-    });
+      }),
+    ).toThrow();
+    expect(() =>
+      RalphConfigFileSchema.parse({
+        ...defaultRalphConfig(home),
+        harness: { cli: 'claude', ralphMdPath: '/x/RALPH.md', kind: 'claude', provider: 'x' },
+      }),
+    ).toThrow();
   });
 
   it('CFS.1: a config OMITTING harness.model/pricing parses byte-unchanged (default-preservation)', () => {
@@ -173,7 +230,7 @@ describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
     expect('pricing' in parsed.harness).toBe(false);
   });
 
-  it('CFS.1: the schema rejects a negative per-model rate (fail-loud on a bad rate)', () => {
+  it('rejects every pricing field regardless of value', () => {
     expect(() =>
       RalphConfigFileSchema.parse({
         ...defaultRalphConfig(home),
@@ -181,7 +238,7 @@ describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
           cli: 'codex',
           ralphMdPath: '/x/RALPH.md',
           kind: 'codex',
-          pricing: { models: { m: { inputPerMTok: -1, outputPerMTok: 1 } } },
+          pricing: { models: { m: { inputPerMTok: 1, outputPerMTok: 1 } } },
         },
       }),
     ).toThrow();
@@ -266,6 +323,8 @@ describe('CH.1 — cross-field kind/cli reject + askForApproval enum + SSOT type
     // Type-level proof: the schema's harness.askForApproval / .sandbox ARE the shared SSOT types (not `string`).
     // A drift back to `string` on the schema side would fail these assignments at compile time; the wire
     // (ralph.ts:150-153) spreads them conditionally into LapHarnessCfg (whose fields read the SAME types).
+    expect(parsed.harness.kind).toBe('codex');
+    if (parsed.harness.kind !== 'codex') throw new Error('expected codex fixture');
     const approval: CodexApprovalPolicy | undefined = parsed.harness.askForApproval;
     const sandbox: CodexSandboxMode | undefined = parsed.harness.sandbox;
     // …and each assigns into a LapHarnessCfg the way the wire does (only when defined — exactOptionalPropertyTypes).

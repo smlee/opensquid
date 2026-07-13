@@ -24,7 +24,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { sessionLogFile } from '../runtime/paths.js';
 
@@ -41,13 +41,14 @@ import type { Event } from '../runtime/types.js';
 // Helpers.
 // ---------------------------------------------------------------------------
 
-function createCtx(sessionId = 'parent-session'): EvalCtx {
+function createCtx(sessionId = 'parent-session', packModels?: EvalCtx['packModels']): EvalCtx {
   const event: Event = { kind: 'stop', assistantText: '' };
   return {
     event,
     bindings: new Map(),
     sessionId,
     packId: 'team-pack',
+    ...(packModels === undefined ? {} : { packModels }),
   };
 }
 
@@ -86,6 +87,7 @@ interface SpawnCapture {
   model: string;
   prompt: string;
   context: Record<string, unknown>;
+  packModels?: EvalCtx['packModels'];
 }
 
 function makeStubSdk(
@@ -93,8 +95,8 @@ function makeStubSdk(
   outcome: { kind: 'ok'; result: SubagentSdkRunResult } | { kind: 'throw'; error: unknown },
 ): SubagentSdk {
   return {
-    runAgent: ({ model, prompt, context }) => {
-      capture.push({ model, prompt, context });
+    runAgent: ({ model, prompt, context, packModels }) => {
+      capture.push({ model, prompt, context, packModels });
       if (outcome.kind === 'throw') {
         const e = outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
         return Promise.reject(e);
@@ -192,15 +194,29 @@ describe('registerSubagentFunction', () => {
     expect(String(result.error.message)).toContain('network down');
   });
 
-  it('passes context: {} to SDK when caller omits context', async () => {
+  it('passes context: {} to SDK when caller omits context and threads ctx.packModels', async () => {
     const reg = new FunctionRegistry();
     const capture: SpawnCapture[] = [];
     const sdk = makeStubSdk(capture, { kind: 'ok', result: { text: 'ok' } });
     registerSubagentFunction(reg, { sdk });
 
-    await reg.call('spawn_subagent', { model: 'reasoning', prompt: 'p' }, createCtx());
+    await reg.call(
+      'spawn_subagent',
+      { model: 'reasoning', prompt: 'p' },
+      createCtx('parent-session', {
+        reasoning: {
+          mode: 'subscription',
+          model: 'claude-sonnet',
+          description: '',
+          args: [],
+        },
+      }),
+    );
 
     expect(capture[0]?.context).toEqual({});
+    expect(capture[0]?.packModels).toEqual({
+      reasoning: { mode: 'subscription', model: 'claude-sonnet', description: '', args: [] },
+    });
   });
 
   it('rejects context with unknown fields via Zod strict (arg_invalid)', async () => {
@@ -397,5 +413,75 @@ describe('registerSubagentFunction', () => {
       subagentId: 'subagent-noprof',
       professionPack: '<unspecified>',
     });
+  });
+
+  it('the real SDK query adapter omits options.model for a subscription alias without a concrete model', async () => {
+    vi.resetModules();
+    const seen: { prompt: string; options?: { cwd?: string; model?: string } }[] = [];
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
+      query: (input: { prompt: string; options?: { cwd?: string; model?: string } }) => {
+        seen.push(input);
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield await Promise.resolve({ type: 'result', result: 'done' });
+          },
+          close: () => undefined,
+        };
+      },
+    }));
+
+    const reg = new FunctionRegistry();
+    const { registerSubagentFunction: registerFresh } = await import('./subagent.js');
+    registerFresh(reg);
+    const result = await reg.call(
+      'spawn_subagent',
+      { model: 'reasoning', prompt: 'p', context: { project: '/repo' } },
+      createCtx('parent-real-sdk', {
+        reasoning: { mode: 'subscription', description: '', args: [] },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(seen[0]?.options?.cwd).toBe('/repo');
+    expect(Object.prototype.hasOwnProperty.call(seen[0]?.options ?? {}, 'model')).toBe(false);
+    vi.doUnmock('@anthropic-ai/claude-agent-sdk');
+  });
+
+  it('the real SDK query adapter aggregates result errors and returns a runtime failure', async () => {
+    vi.resetModules();
+    const seen: { prompt: string; options?: { cwd?: string; model?: string } }[] = [];
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
+      query: (input: { prompt: string; options?: { cwd?: string; model?: string } }) => {
+        seen.push(input);
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield await Promise.resolve({
+              type: 'result',
+              is_error: true,
+              errors: ['first failure', 'second failure'],
+            });
+          },
+          close: () => undefined,
+        };
+      },
+    }));
+
+    const reg = new FunctionRegistry();
+    const { registerSubagentFunction: registerFresh } = await import('./subagent.js');
+    registerFresh(reg);
+    const result = await reg.call(
+      'spawn_subagent',
+      { model: 'reasoning', prompt: 'p', context: { project: '/repo' } },
+      createCtx('parent-real-sdk-errors', {
+        reasoning: { mode: 'subscription', model: 'claude-sonnet', description: '', args: [] },
+      }),
+    );
+
+    expect(seen[0]?.options?.model).toBe('claude-sonnet');
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.error.kind).toBe('runtime');
+    expect(result.error.message).toContain('first failure; second failure');
+    vi.doUnmock('@anthropic-ai/claude-agent-sdk');
   });
 });

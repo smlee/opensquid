@@ -11,6 +11,7 @@
  * refinement keeps a path/command substring from over-matching its benign form.
  */
 import type { Action } from '../gate/kernel.js';
+import { toolMatches } from '../../integrations/pi/tool_aliases.js';
 import type { SafetyPolicy } from './safety_policy.js';
 
 export type SafetyAction = Extract<Action, 'pass' | 'warn' | 'block' | 'halt'>;
@@ -49,17 +50,16 @@ export interface SafetyOptions {
 function actionText(call: SafetyCall): string {
   const a = (call.args ?? {}) as Record<string, unknown>;
   const str = (v: unknown): string => (typeof v === 'string' ? v : '');
-  switch (call.tool) {
-    case 'Bash':
-      return `${call.tool} ${str(a.command) || JSON.stringify(call.args ?? '')}`;
-    case 'Write':
-    case 'Edit':
-      return `${call.tool} ${str(a.file_path)}`;
-    case 'Read':
-      return `${call.tool} ${str(a.file_path) || JSON.stringify(call.args ?? '')}`;
-    default:
-      return `${call.tool} ${JSON.stringify(call.args ?? '')}`;
+  if (call.tool === 'Bash') {
+    return `${call.tool} ${str(a.command) || JSON.stringify(call.args ?? '')}`;
   }
+  if (toolMatches(call.tool, /^(Write|Edit|NotebookEdit)$/)) {
+    return `${call.tool} ${str(a.file_path)}`;
+  }
+  if (call.tool === 'Read') {
+    return `${call.tool} ${str(a.file_path) || JSON.stringify(call.args ?? '')}`;
+  }
+  return `${call.tool} ${JSON.stringify(call.args ?? '')}`;
 }
 
 /**
@@ -80,11 +80,11 @@ export function checkSafety(
   const hay = actionText(call); // the ACTION, not incidental content
   // ALLOW wins: an action on an explicitly-permitted path is never denied (checked before forbid).
   for (const a of policy.allow ?? []) {
-    if (a.tool !== undefined && a.tool !== call.tool) continue;
+    if (a.tool !== undefined && !toolMatches(call.tool, a.tool)) continue;
     if (hay.includes(a.argPattern)) return { action: 'pass' };
   }
   for (const r of policy.forbid) {
-    if (r.tool !== undefined && r.tool !== call.tool) continue;
+    if (r.tool !== undefined && !toolMatches(call.tool, r.tool)) continue;
     if (!hay.includes(r.argPattern)) continue; // exact/substring/path rule — never a heuristic
     // optional refinement so a substring only fires in its dangerous form (avoids false-denies):
     if (r.match === 'pipe_to_shell' && !/\|\s*(sh|bash)\b/.test(hay)) continue; // needs `| sh`/`| bash`

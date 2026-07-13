@@ -1,39 +1,11 @@
 #!/usr/bin/env node
-/**
- * Claude Code `PostToolUse` hook binary (T-POSTPUSH POSTPUSH.1, 2026-05-29).
- *
- * Fires AFTER a tool call completes. Mirrors the pre-tool-use bin shape but
- * carries the tool's exit code so gate skills can react to success/failure
- * (canonical case = `verify-ci-after-push` fires only on
- * `^git\s+(?:-[cC]\s+\S+\s+)*push\b` with exit_code === 0).
- *
- * Wired in `~/.claude/settings.json`:
- *
- *   { "hooks": { "PostToolUse": [{ "matcher": "Bash",
- *     "hooks": [{ "type": "command",
- *       "command": "opensquid-hook-posttooluse" }] }] } }
- *
- * stdin = Claude Code's post-tool-use JSON (includes `tool_result` with
- * `exit_code`, `stdout`, `stderr`). exit code 0 = no surface; 2 reserved
- * for future block-style verdicts (not used today — PostToolUse is too
- * late to block).
- *
- * Payload normalization: Claude Code uses snake_case nested under
- * `tool_result`; we flatten to the Event schema's top-level
- * `exit_code` / `stdout` / `stderr`.
- *
- * Active-task mirror NOT re-fired from this hook — PreToolUse already
- * handles that surface; double-firing would duplicate writes.
- *
- * Fail-open: any internal crash exits 0 with a stderr message.
- */
-import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
+/** Claude Code `PostToolUse` hook binary. */
 import { exitIfSubagent } from './subagent_guard.js';
+import type { PostToolCallEvent } from '../event.js';
 import { Event } from '../types.js';
 
-import { dispatchEvent } from './dispatch.js';
-import { runV2Cartridges } from '../loop/v2_supply.js';
-import { floorMessage, observeCall } from '../guard/floor_hook.js';
+import { defaultLifecyclePipeline } from './lifecycle/pipeline.js';
+import { projectExistingHostLifecycleContext } from './lifecycle/projector.js';
 import { extractSessionId } from './session_id.js';
 
 interface PostToolUsePayload {
@@ -52,14 +24,11 @@ interface PostToolUsePayload {
     stdout?: string;
     stderr?: string;
   };
+  agent_id?: string;
 }
 
 function parsePayload(raw: string): unknown {
   const obj = JSON.parse(raw) as PostToolUsePayload;
-  // Claude Code nests result fields under `tool_result`; the runtime Event
-  // schema flattens them. Accept either form; prefer `tool_result.*` because
-  // that's the canonical Claude Code shape per the documented PostToolUse
-  // payload (claude-code-guide 2026-05-29 confirmation).
   const result = obj.tool_result ?? {};
   return {
     kind: 'post_tool_call',
@@ -86,7 +55,7 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  exitIfSubagent('post-tool-use'); // SUB.1: before stdin read / any state write
+  exitIfSubagent('post-tool-use');
   const raw = await readStdin();
   if (!raw.trim()) {
     process.stderr.write('opensquid: empty PostToolUse payload — proceeding\n');
@@ -108,35 +77,17 @@ async function main(): Promise<void> {
   }
 
   const sessionId = extractSessionId(raw);
-  const packs = await loadActivePacksForDispatch(sessionId);
-  const registry = await buildRegistry();
-  const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
-  // FAC-CUT.5b.2: run the v2 cartridges so an observed actor advances on `post_tool_call` (state-write +
-  // transition log) + surfaces warn/block as informational stderr. PostToolUse can't block (exits 0 below),
-  // so v2 messages/injections are surfaced, not enforced. ADDITIVE — ZERO (no-op) until an active v2 pack exists.
-  const v2 = await runV2Cartridges(sessionId, parsed.data, new Date().toISOString());
-  // P0.3 — the live Progress-floor failure-loop detector. Observe the call against the persisted
-  // floor; a non-`pass` action surfaces on the same drift-stderr channel. Fail-open: a floor error
-  // never breaks the hook.
-  let floorMsg = '';
-  try {
-    const ev = parsed.data;
-    if (ev.kind === 'post_tool_call') {
-      const action = await observeCall(sessionId, {
-        tool: ev.tool,
-        args: ev.args,
-        exitCode: ev.exit_code,
-      });
-      if (action !== 'pass') floorMsg = floorMessage(action, ev.tool);
-    }
-  } catch {
-    /* the Progress floor never breaks the hook */
-  }
-  const combined = [stderr, floorMsg, ...v2.messages, ...v2.injections].filter(Boolean).join('\n');
-  if (combined) process.stderr.write(combined + '\n');
-  // PostToolUse is too late to block the tool call (already ran). Treat any
-  // non-zero exit as informational stderr only.
-  process.exit(exitCode === 2 ? 0 : exitCode);
+  const event = parsed.data as PostToolCallEvent;
+  const result = await defaultLifecyclePipeline.runPostToolCall(
+    { event },
+    projectExistingHostLifecycleContext({
+      sessionId,
+      cwd: typeof event.cwd === 'string' ? event.cwd : process.cwd(),
+      raw,
+    }),
+  );
+  if (result.stderr) process.stderr.write(result.stderr + '\n');
+  process.exit(result.exitCode);
 }
 
 main().catch((e: unknown) => {

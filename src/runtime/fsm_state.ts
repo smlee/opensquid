@@ -17,7 +17,9 @@
  * Imported by: slice A3b primitives (`read_fsm_state` / `advance_fsm`) + the
  * SessionEnd cleanup; tests.
  */
-import { readFile, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, unlink } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import lockfile from 'proper-lockfile';
 
 import { atomicWriteFile } from './atomic_write.js';
 import { type Fsm, type FlatStepResult, stepFlat } from './fsm.js';
@@ -200,18 +202,33 @@ export async function persistActorState(
   current: string,
   now: string,
   taskId: string | null = null,
-): Promise<void> {
-  const prior = await readFsmStateFile(sessionId, packName, taskId);
-  const history: FsmHistoryEntry[] = prior ? prior.history : [];
-  const next: FsmStateFile = {
-    state: current,
-    started_at: now,
-    history: [...history, { state: current, at: now }],
-  };
-  await atomicWriteFile(
-    sessionStateFile(sessionId, fsmStateKey(packName, taskId)),
-    JSON.stringify(next, null, 2),
-  );
+  expectedCurrent?: string,
+): Promise<boolean> {
+  const path = sessionStateFile(sessionId, fsmStateKey(packName, taskId));
+  await mkdir(dirname(path), { recursive: true });
+  const handle = await open(path, 'a');
+  await handle.close();
+  const release = await lockfile.lock(path, {
+    realpath: false,
+    retries: { retries: 10, factor: 1.5, minTimeout: 10, maxTimeout: 100 },
+  });
+  try {
+    const prior = await readFsmStateFile(sessionId, packName, taskId);
+    if (expectedCurrent !== undefined && prior !== null && prior.state !== expectedCurrent) {
+      return false;
+    }
+    if (prior?.state === current) return true;
+    const history: FsmHistoryEntry[] = prior ? prior.history : [];
+    const next: FsmStateFile = {
+      state: current,
+      started_at: now,
+      history: [...history, { state: current, at: now }],
+    };
+    await atomicWriteFile(path, JSON.stringify(next, null, 2));
+    return true;
+  } finally {
+    await release();
+  }
 }
 
 /** Remove a pack's FSM-state file (SessionEnd cleanup). ENOENT swallowed. */

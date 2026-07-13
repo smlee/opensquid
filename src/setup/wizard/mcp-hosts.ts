@@ -16,11 +16,17 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
-export type HostId = 'claude-code' | 'claude-desktop' | 'cursor' | 'codex';
+export type HostId = 'claude-code' | 'claude-desktop' | 'cursor' | 'codex' | 'pi';
 
-export const ALL_HOSTS: readonly HostId[] = ['claude-code', 'claude-desktop', 'cursor', 'codex'];
+export const ALL_HOSTS: readonly HostId[] = [
+  'claude-code',
+  'claude-desktop',
+  'cursor',
+  'codex',
+  'pi',
+];
 
 export interface HostTarget {
   id: HostId;
@@ -52,6 +58,14 @@ export function liveResolveEnv(): HostResolveEnv {
  */
 export function resolveCodexHome(e: HostResolveEnv): string {
   return e.env.CODEX_HOME ?? join(e.home, '.codex');
+}
+
+export function resolvePiAgentHome(e: HostResolveEnv): string {
+  const configured = e.env.PI_CODING_AGENT_DIR?.trim();
+  if (!configured) return join(e.home, '.pi', 'agent');
+  if (configured === '~') return e.home;
+  if (configured.startsWith('~/')) return resolve(e.home, configured.slice(2));
+  return resolve(configured);
 }
 
 /** Resolve a host id to its per-platform config path. Pure. */
@@ -92,6 +106,13 @@ export function resolveHost(id: HostId, e: HostResolveEnv): HostTarget {
         id,
         configPath: join(resolveCodexHome(e), 'config.toml'),
         label: 'Codex',
+        needsRestart: true,
+      };
+    case 'pi':
+      return {
+        id,
+        configPath: join(resolvePiAgentHome(e), 'mcp.json'),
+        label: 'Pi',
         needsRestart: true,
       };
   }

@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { err, ok } from '../runtime/result.js';
 
 import { commandInvokes } from './shell_parse.js';
+import { toPolicyToolValue } from '../integrations/pi/tool_aliases.js';
 import type { FunctionRegistry } from './registry.js';
 
 // ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ export function registerEventFunctions(registry: FunctionRegistry): void {
       // Both tool_call (PreToolUse) and post_tool_call (PostToolUse) carry the
       // tool name; a rule on either event can read it. Any other event → null.
       if (ctx.event.kind === 'tool_call' || ctx.event.kind === 'post_tool_call') {
-        return ok(ctx.event.tool);
+        return ok(toPolicyToolValue(ctx.event.tool));
       }
       return ok(null);
     },

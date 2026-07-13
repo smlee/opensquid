@@ -33,7 +33,19 @@ export type MonitorEventKind =
   | 'phase_leave'
   | 'item_closed'
   | 'item_shipped'
-  | 'item_wedged';
+  | 'item_wedged'
+  | 'executor_started'
+  | 'executor_shutdown_pending'
+  | 'executor_shutdown_requested'
+  | 'executor_terminate_requested'
+  | 'executor_force_kill_requested'
+  | 'executor_paused'
+  | 'executor_resumed'
+  | 'executor_exited'
+  | 'executor_spawn_failed'
+  | 'executor_control_requested'
+  | 'executor_control_applied'
+  | 'executor_control_failed';
 
 /** The phase lifecycle marker — `running` on enter (⟳), `done` on leave (✓). Level-2; NO stage vocabulary. */
 export type PhaseLifecycle = 'running' | 'done';
@@ -51,6 +63,29 @@ export interface MonitorEvent {
   total?: number | undefined;
   /** `running` on `phase_enter`, `done` on `phase_leave`. */
   lifecycle?: PhaseLifecycle | undefined;
+  /** Executor-process control fields; absent on item stage/phase events. */
+  executorId?: string | undefined;
+  /** One immutable OS-process incarnation under a stable logical executor id. */
+  processInstanceId?: string | undefined;
+  runId?: string | undefined;
+  checkpointStage?: string | undefined;
+  lap?: number | undefined;
+  role?: string | undefined;
+  pid?: number | undefined;
+  processGroupId?: number | undefined;
+  processStartIdentity?: string | undefined;
+  windowsJobName?: string | undefined;
+  windowsJobMetadata?: string | undefined;
+  exitCode?: number | null | undefined;
+  requestedBy?: 'cli' | 'tui' | 'web' | undefined;
+  /** Human authorization and action audit fields; absent from automatic lifecycle events. */
+  authorizedBy?: string | undefined;
+  actionId?: string | undefined;
+  controlAction?: 'graceful_stop' | 'terminate' | 'force_kill' | 'resume' | undefined;
+  requestedAtMs?: number | undefined;
+  appliedAtMs?: number | undefined;
+  failedAtMs?: number | undefined;
+  failure?: string | undefined;
   atMs: number;
 }
 
@@ -67,6 +102,26 @@ const CREATE_TABLE_SQL = `
     phase_index INTEGER,
     phase_total INTEGER,
     lifecycle TEXT,
+    executor_id TEXT,
+    process_instance_id TEXT,
+    run_id TEXT,
+    checkpoint_stage TEXT,
+    lap INTEGER,
+    role TEXT,
+    pid INTEGER,
+    process_group_id INTEGER,
+    process_start_identity TEXT,
+    windows_job_name TEXT,
+    windows_job_metadata TEXT,
+    exit_code INTEGER,
+    requested_by TEXT,
+    authorized_by TEXT,
+    action_id TEXT,
+    control_action TEXT,
+    requested_at_ms INTEGER,
+    applied_at_ms INTEGER,
+    failed_at_ms INTEGER,
+    failure TEXT,
     at_ms INTEGER NOT NULL
   );
 `;
@@ -86,6 +141,42 @@ function ensureTable(db: Client, url: string): Promise<void> {
   if (guard === undefined) {
     guard = (async () => {
       await db.execute(CREATE_TABLE_SQL);
+      const info = await db.execute('PRAGMA table_info(loop_events)');
+      const existing = new Set(
+        info.rows.map((row) => (typeof row.name === 'string' ? row.name : '')),
+      );
+      const additions = [
+        ['executor_id', 'TEXT'],
+        ['process_instance_id', 'TEXT'],
+        ['run_id', 'TEXT'],
+        ['checkpoint_stage', 'TEXT'],
+        ['lap', 'INTEGER'],
+        ['role', 'TEXT'],
+        ['pid', 'INTEGER'],
+        ['process_group_id', 'INTEGER'],
+        ['process_start_identity', 'TEXT'],
+        ['windows_job_name', 'TEXT'],
+        ['windows_job_metadata', 'TEXT'],
+        ['exit_code', 'INTEGER'],
+        ['requested_by', 'TEXT'],
+        ['authorized_by', 'TEXT'],
+        ['action_id', 'TEXT'],
+        ['control_action', 'TEXT'],
+        ['requested_at_ms', 'INTEGER'],
+        ['applied_at_ms', 'INTEGER'],
+        ['failed_at_ms', 'INTEGER'],
+        ['failure', 'TEXT'],
+      ] as const;
+      for (const [name, type] of additions) {
+        if (existing.has(name)) continue;
+        try {
+          await db.execute(`ALTER TABLE loop_events ADD COLUMN ${name} ${type}`);
+        } catch (error) {
+          // A second process may have added the same column after our PRAGMA read.
+          if (!(error instanceof Error) || !error.message.includes('duplicate column name'))
+            throw error;
+        }
+      }
       await db.execute(CREATE_INDEX_SQL);
     })().catch((e: unknown) => {
       ddlByUrl.delete(url); // a transient DDL failure must not pin a rejected guard — the next op retries
@@ -116,8 +207,13 @@ export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
   await withLoopDb(async (db, url) => {
     await ensureTable(db, url);
     await db.execute({
-      sql: `INSERT INTO loop_events (wg_id, kind, stage, phase, phase_index, phase_total, lifecycle, at_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO loop_events
+              (wg_id, kind, stage, phase, phase_index, phase_total, lifecycle,
+               executor_id, process_instance_id, run_id, checkpoint_stage, lap, role, pid,
+               process_group_id, process_start_identity, windows_job_name, windows_job_metadata, exit_code,
+               requested_by, authorized_by, action_id, control_action, requested_at_ms, applied_at_ms,
+               failed_at_ms, failure, at_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ev.wgId,
         ev.kind,
@@ -126,6 +222,26 @@ export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
         ev.index ?? null,
         ev.total ?? null,
         ev.lifecycle ?? null,
+        ev.executorId ?? null,
+        ev.processInstanceId ?? null,
+        ev.runId ?? null,
+        ev.checkpointStage ?? null,
+        ev.lap ?? null,
+        ev.role ?? null,
+        ev.pid ?? null,
+        ev.processGroupId ?? null,
+        ev.processStartIdentity ?? null,
+        ev.windowsJobName ?? null,
+        ev.windowsJobMetadata ?? null,
+        ev.exitCode ?? null,
+        ev.requestedBy ?? null,
+        ev.authorizedBy ?? null,
+        ev.actionId ?? null,
+        ev.controlAction ?? null,
+        ev.requestedAtMs ?? null,
+        ev.appliedAtMs ?? null,
+        ev.failedAtMs ?? null,
+        ev.failure ?? null,
         ev.atMs,
       ],
     });
@@ -140,7 +256,11 @@ export async function tailEventsSince(sinceSeq: number): Promise<MonitorEvent[]>
   return withLoopDb(async (db, url) => {
     await ensureTable(db, url);
     const rs = await db.execute({
-      sql: `SELECT seq, wg_id, kind, stage, phase, phase_index, phase_total, lifecycle, at_ms
+      sql: `SELECT seq, wg_id, kind, stage, phase, phase_index, phase_total, lifecycle,
+                   executor_id, process_instance_id, run_id, checkpoint_stage, lap, role, pid,
+                   process_group_id, process_start_identity, windows_job_name, windows_job_metadata, exit_code,
+                   requested_by, authorized_by, action_id, control_action, requested_at_ms, applied_at_ms,
+                   failed_at_ms, failure, at_ms
             FROM loop_events WHERE seq > ? ORDER BY seq ASC`,
       args: [sinceSeq],
     });
@@ -153,6 +273,35 @@ export async function tailEventsSince(sinceSeq: number): Promise<MonitorEvent[]>
       index: r.phase_index === null ? undefined : Number(r.phase_index),
       total: r.phase_total === null ? undefined : Number(r.phase_total),
       lifecycle: coerceLifecycle(r.lifecycle),
+      executorId: asOptStr(r.executor_id),
+      processInstanceId: asOptStr(r.process_instance_id),
+      runId: asOptStr(r.run_id),
+      checkpointStage: asOptStr(r.checkpoint_stage),
+      lap: r.lap === null ? undefined : Number(r.lap),
+      role: asOptStr(r.role),
+      pid: r.pid === null ? undefined : Number(r.pid),
+      processGroupId: r.process_group_id === null ? undefined : Number(r.process_group_id),
+      processStartIdentity: asOptStr(r.process_start_identity),
+      windowsJobName: asOptStr(r.windows_job_name),
+      windowsJobMetadata: asOptStr(r.windows_job_metadata),
+      exitCode: r.exit_code === null ? undefined : Number(r.exit_code),
+      requestedBy:
+        r.requested_by === 'cli' || r.requested_by === 'tui' || r.requested_by === 'web'
+          ? r.requested_by
+          : undefined,
+      authorizedBy: asOptStr(r.authorized_by),
+      actionId: asOptStr(r.action_id),
+      controlAction:
+        r.control_action === 'graceful_stop' ||
+        r.control_action === 'terminate' ||
+        r.control_action === 'force_kill' ||
+        r.control_action === 'resume'
+          ? r.control_action
+          : undefined,
+      requestedAtMs: r.requested_at_ms === null ? undefined : Number(r.requested_at_ms),
+      appliedAtMs: r.applied_at_ms === null ? undefined : Number(r.applied_at_ms),
+      failedAtMs: r.failed_at_ms === null ? undefined : Number(r.failed_at_ms),
+      failure: asOptStr(r.failure),
       atMs: Number(r.at_ms),
     }));
   });
@@ -195,6 +344,7 @@ export function foldEvents(events: MonitorEvent[]): LoopFoldState[] {
  * (mutates only the passed map). Kept module-private: the two fold entry points are the API.
  */
 function applyMonitorEvent(byWg: Map<string, LoopFoldState>, e: MonitorEvent): void {
+  if (e.kind.startsWith('executor_')) return; // executor state has its own fold over this SAME event stream
   const s = byWg.get(e.wgId) ?? { wgId: e.wgId, lastEventAtMs: e.atMs, terminal: false };
   s.lastEventAtMs = e.atMs;
   switch (e.kind) {
@@ -227,6 +377,19 @@ function applyMonitorEvent(byWg: Map<string, LoopFoldState>, e: MonitorEvent): v
       break;
     case 'item_wedged':
       break; // parked, still shown (the feed does not re-derive the reason — §5 OUT)
+    case 'executor_started':
+    case 'executor_shutdown_pending':
+    case 'executor_shutdown_requested':
+    case 'executor_terminate_requested':
+    case 'executor_force_kill_requested':
+    case 'executor_paused':
+    case 'executor_resumed':
+    case 'executor_exited':
+    case 'executor_spawn_failed':
+    case 'executor_control_requested':
+    case 'executor_control_applied':
+    case 'executor_control_failed':
+      return; // narrowed above; retained for exhaustive checking
   }
   byWg.set(e.wgId, s);
 }

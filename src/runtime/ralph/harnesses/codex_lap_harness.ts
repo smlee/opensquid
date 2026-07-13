@@ -36,7 +36,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { LapEnvelope, LapHarness, LapHarnessCfg } from '../lap_harness.js';
+import type { CodexHarnessConfig, LapEnvelope, LapHarness, LapHarnessCfg } from '../lap_harness.js';
 
 const execFileP = promisify(execFile);
 
@@ -54,7 +54,14 @@ export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-ac
 const DEFAULT_SANDBOX: CodexSandboxMode = 'workspace-write'; // explicit autonomous-lap policy — NOT --dangerously-*
 const DEFAULT_APPROVAL: CodexApprovalPolicy = 'never'; // explicit approval policy via -c approval_policy
 
-export const codexLapHarness: LapHarness = {
+export const codexLapHarness: LapHarness<CodexHarnessConfig> & {
+  spawnArgs(cfg: LapHarnessCfg): string[];
+  deliverPrompt(prompt: string): { stdin: string };
+  parseEnvelope(stdout: string, stderr: string): LapEnvelope;
+  priceUsd(env: LapEnvelope, cfg: LapHarnessCfg): number;
+  preflight(cfg: LapHarnessCfg): Promise<void>;
+} = {
+  kind: 'codex',
   // LIVE-confirmed (0.144.0): `codex exec --json --sandbox <mode> -c approval_policy=<v> -` (stdin prompt).
   // `exec` is the subcommand (the binary `codex` is file.harness.cli); `-` reads the prompt from stdin.
   spawnArgs: (cfg: LapHarnessCfg): string[] => [
@@ -142,9 +149,26 @@ export const codexLapHarness: LapHarness = {
     // byte-identical (the FCE.2 isError predicate + the token fold are the regression floor).
     return { resultText, costUsd: 0, inputTokens, outputTokens, isError };
   },
-  // CFS.1 — the post-parse dollar pricing seam: costUsd = tokens × the configured per-model rate (Claude omits
-  // this; its total_cost_usd is already real). Applied at the wire between parseEnvelope and outcomeFromEnvelope.
+  // CFS.1 — the post-parse dollar pricing seam: costUsd = tokens × the configured per-model rate.
   priceUsd: codexLapCostUsd,
+  async run(request, config, deps): Promise<LapEnvelope> {
+    let stderr = '';
+    const stdout = await deps.runOneShot({
+      cli: config.cli,
+      args: codexLapHarness.spawnArgs(config),
+      prompt: request.prompt,
+      timeoutMs: request.timeoutMs,
+      env: request.env,
+      timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),
+      ...(request.onStderrLine === undefined ? {} : { onStderrLine: request.onStderrLine }),
+      onStreams: (streams) => {
+        stderr = streams.stderr;
+        request.onStreams?.(streams);
+      },
+    });
+    const envelope = codexLapHarness.parseEnvelope(stdout, stderr);
+    return { ...envelope, costUsd: codexLapCostUsd(envelope, config) };
+  },
 };
 
 /**

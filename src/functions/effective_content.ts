@@ -28,6 +28,7 @@ import { readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
 
+import { applyOriginalRelativeMultiEdit } from '../integrations/pi/multiedit.js';
 import { ok } from '../runtime/result.js';
 
 import type { FunctionDef } from './registry.js';
@@ -61,11 +62,26 @@ export const EffectiveContent: FunctionDef<z.input<typeof EmptyArgs>, string> = 
         return ok(applyReplace(current, oldS, newS));
       }
       if (tool === 'MultiEdit' && Array.isArray(a.edits)) {
+        const edits = (a.edits as Record<string, unknown>[]).map((e) => ({
+          oldText:
+            typeof e.old_string === 'string'
+              ? e.old_string
+              : typeof e.oldText === 'string'
+                ? e.oldText
+                : '',
+          newText:
+            typeof e.new_string === 'string'
+              ? e.new_string
+              : typeof e.newText === 'string'
+                ? e.newText
+                : '',
+        }));
+        if (a.replacement_semantics === 'original_unique_nonoverlap') {
+          return ok(applyOriginalRelativeMultiEdit(current, edits).content);
+        }
         let content = current;
-        for (const e of a.edits as Record<string, unknown>[]) {
-          const oldS = typeof e.old_string === 'string' ? e.old_string : '';
-          const newS = typeof e.new_string === 'string' ? e.new_string : '';
-          content = applyReplace(content, oldS, newS);
+        for (const edit of edits) {
+          content = applyReplace(content, edit.oldText, edit.newText);
         }
         return ok(content);
       }

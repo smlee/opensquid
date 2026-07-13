@@ -46,6 +46,7 @@
 
 import { z } from 'zod';
 import { minimatch } from 'minimatch';
+import { toolMatches } from '../integrations/pi/tool_aliases.js';
 import { EventKind, type Event } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -175,7 +176,7 @@ export function matchesEvent(matchers: readonly Matcher[], event: Event): boolea
     }
     if (event.kind !== 'tool_call') continue;
     if (m.kind === 'tool_match') {
-      if (event.tool === m.tool) return true;
+      if (toolMatches(event.tool, m.tool)) return true;
       continue;
     }
     if (m.kind === 'command_pattern') {

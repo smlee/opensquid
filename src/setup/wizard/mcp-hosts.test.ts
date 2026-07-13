@@ -79,6 +79,15 @@ describe('resolveHost', () => {
     const custom = resolveHost('codex', env({ env: { CODEX_HOME: '/custom' } }));
     expect(custom.configPath).toBe('/custom/config.toml');
   });
+
+  it('resolves Pi to $PI_CODING_AGENT_DIR/mcp.json, defaulting to ~/.pi/agent/mcp.json', () => {
+    const dflt = resolveHost('pi', env());
+    expect(dflt.configPath).toBe('/home/u/.pi/agent/mcp.json');
+    expect(dflt.label).toBe('Pi');
+    expect(dflt.needsRestart).toBe(true);
+    const custom = resolveHost('pi', env({ env: { PI_CODING_AGENT_DIR: '/pi-agent' } }));
+    expect(custom.configPath).toBe('/pi-agent/mcp.json');
+  });
 });
 
 describe('resolveCodexHome (CE.1 — the CODEX_HOME reader)', () => {
@@ -99,14 +108,16 @@ describe('parseHosts', () => {
     expect(parseHosts('   ', noWarn)).toEqual(['claude-code']);
   });
 
-  it('expands "all" to every host (incl. codex)', () => {
+  it('expands "all" to every host (incl. codex and pi)', () => {
     expect(parseHosts('all', noWarn)).toEqual([...ALL_HOSTS]);
     expect(ALL_HOSTS).toContain('codex');
+    expect(ALL_HOSTS).toContain('pi');
   });
 
-  it('parses codex as a valid id', () => {
+  it('parses codex and pi as valid ids', () => {
     expect(parseHosts('codex', noWarn)).toEqual(['codex']);
     expect(parseHosts('codex,claude-code', noWarn)).toEqual(['codex', 'claude-code']);
+    expect(parseHosts('pi', noWarn)).toEqual(['pi']);
   });
 
   it('parses a comma list', () => {

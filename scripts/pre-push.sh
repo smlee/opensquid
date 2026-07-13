@@ -18,6 +18,7 @@ run "typecheck" pnpm typecheck
 # asserts they exist — its header documents "CI always runs pnpm build before pnpm test".
 # Running test first made it rely on a stale-dist rebuild in beforeAll, which flaked under
 # full-suite load ("compiled bin missing"). Build-first guarantees fresh bins. (wg-b7ebe4bd74ce)
+run "clean" pnpm clean
 run "build" pnpm build
 run "test" pnpm test
 run "format:check" pnpm format:check

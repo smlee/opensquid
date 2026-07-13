@@ -26,6 +26,12 @@ describe('isMutatingCall — deny-list, default-allow', () => {
     expect(isMutatingCall('Edit', { file_path: '/tmp/x', old_string: 'a', new_string: 'b' })).toBe(
       true,
     );
+    expect(
+      isMutatingCall('MultiEdit', {
+        file_path: '/tmp/x',
+        edits: [{ old_string: 'a', new_string: 'b' }],
+      }),
+    ).toBe(true);
   });
   it('NotebookEdit is always mutating', () => {
     expect(isMutatingCall('NotebookEdit', {})).toBe(true);
@@ -104,6 +110,7 @@ describe('checkOrchestratorGuard — main loop denies, executor exempt', () => {
   });
   it('main + Edit → deny', () => {
     expect(checkOrchestratorGuard('Edit', { file_path: '/tmp/x' }).deny).toBe(true);
+    expect(checkOrchestratorGuard('MultiEdit', { file_path: '/tmp/x' }).deny).toBe(true);
   });
   it('main + NotebookEdit → deny', () => {
     expect(checkOrchestratorGuard('NotebookEdit', {}).deny).toBe(true);
@@ -175,10 +182,12 @@ describe('isCodeFileMutation — document writes are not coding-file mutations',
   it('a document Write/Edit is NOT a coding-file mutation', () => {
     expect(isCodeFileMutation('Write', { file_path: 'docs/plan.md', content: 'x' })).toBe(false);
     expect(isCodeFileMutation('Edit', { file_path: '/repo/README.md' })).toBe(false);
+    expect(isCodeFileMutation('MultiEdit', { file_path: '/repo/README.md' })).toBe(false);
   });
   it('a non-document Write/Edit IS a coding-file mutation', () => {
     expect(isCodeFileMutation('Write', { file_path: 'src/x.ts', content: 'x' })).toBe(true);
     expect(isCodeFileMutation('Edit', { file_path: 'packs/x/pack.yaml' })).toBe(true);
+    expect(isCodeFileMutation('MultiEdit', { file_path: 'packs/x/pack.yaml' })).toBe(true);
   });
   it('a file-writing Bash is a coding-file mutation; a read is not', () => {
     expect(isCodeFileMutation('Bash', { command: 'echo x > f' })).toBe(true);
@@ -275,5 +284,8 @@ describe('checkDesignDocRewrite — the interactive design-doc REWRITE gate (AQG
 
   it('a non-Write/Edit tool on a design path → allow (only file writes are gated)', async () => {
     expect((await gate('VERDICT: UNRESOLVED', {}, 'docs/design/x.md', 'Read')).deny).toBe(false);
+    expect((await gate('VERDICT: UNRESOLVED', {}, 'docs/design/x.md', 'MultiEdit')).deny).toBe(
+      true,
+    );
   });
 });

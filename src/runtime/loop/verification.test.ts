@@ -1,7 +1,7 @@
 /**
  * DBL.1b — the deploy-verification record (mirrors readiness's record/read). Sandboxes OPENSQUID_HOME per test.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,16 +23,27 @@ import {
 
 let home: string;
 let prior: string | undefined;
+let priorRoot: string | undefined;
+let priorItem: string | undefined;
 const SID = 'sess-verify';
 
 beforeEach(async () => {
   prior = process.env.OPENSQUID_HOME;
+  priorRoot = process.env.OPENSQUID_PROJECT_ROOT;
+  priorItem = process.env.OPENSQUID_ITEM_ID;
   home = await mkdtemp(join(tmpdir(), 'opensquid-verify-'));
+  await mkdir(join(home, '.opensquid'));
   process.env.OPENSQUID_HOME = home;
+  process.env.OPENSQUID_PROJECT_ROOT = home;
+  process.env.OPENSQUID_ITEM_ID = 't1';
 });
 afterEach(async () => {
   if (prior === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = prior;
+  if (priorRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+  else process.env.OPENSQUID_PROJECT_ROOT = priorRoot;
+  if (priorItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
+  else process.env.OPENSQUID_ITEM_ID = priorItem;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -65,6 +76,12 @@ describe('suite record (scope-1: the DEPLOY floor)', () => {
     expect(await readSuite(SID, 't1')).toBe(true);
     await recordSuite(SID, 't1', false); // a re-run after a regression overwrites
     expect(await readSuite(SID, 't1')).toBe(false);
+  });
+
+  it('restores the suite result from task-durable state in a fresh stage session', async () => {
+    await recordSuite(SID, 't1', true);
+    await rm(join(home, 'sessions', SID), { recursive: true, force: true });
+    expect(await readSuite('fresh-deploy-session', 't1')).toBe(true);
   });
 
   it('is per-task + independent of the verifyCommand record (distinct keys)', async () => {

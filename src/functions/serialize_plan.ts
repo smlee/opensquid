@@ -24,6 +24,7 @@ import { sessionStateFile } from '../runtime/paths.js';
 import { ok } from '../runtime/result.js';
 import { extractScope } from '../runtime/loop/scope_extract.js';
 import { scopeToDecomposition } from '../runtime/loop/plan_audit.js';
+import { readCheckpointBySession } from '../runtime/ralph/loop_stage.js';
 
 import type { FunctionRegistry } from './registry.js';
 
@@ -37,7 +38,12 @@ async function readPreResearchPath(sessionId: string): Promise<string | null> {
     const v: unknown = JSON.parse(
       await readFile(sessionStateFile(sessionId, PRE_RESEARCH_PATH_KEY), 'utf8'),
     );
-    return typeof v === 'string' && v.length > 0 ? v : null;
+    if (typeof v === 'string' && v.length > 0) return v;
+  } catch {
+    // Fresh per-stage sessions restore the scope pointer from the task checkpoint below.
+  }
+  try {
+    return (await readCheckpointBySession(sessionId))?.scopeArtifacts.at(-1) ?? null;
   } catch {
     return null;
   }

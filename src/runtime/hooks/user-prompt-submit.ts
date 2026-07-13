@@ -16,22 +16,16 @@
  *
  * Fail-open on any internal error.
  */
-import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
-import { listInstalledV2Packs } from '../../packs/installed.js';
-import { orchestrate } from '../loop/orchestrate.js';
 import { exitIfSubagent } from './subagent_guard.js';
-import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
-import { drainUmbrellaInbox } from '../chat/inbox_drain.js';
-import { resetTurnLedger, writeClassifiedFacets, writeRequestType } from '../session_state.js';
-import { classify } from '../classify.js';
-import { readSettings } from '../orchestrator_settings.js';
-import { classifyRequestType } from '../request_type.js';
-import { sha256Hex } from '../durable/run_id.js';
+import type { PromptSubmitEvent } from '../event.js';
 import { Event } from '../types.js';
 
-import { dispatchEvent } from './dispatch.js';
-import { detectNewProject } from './new_project_detect.js';
-import { extractSessionId, recordCurrentSession } from './session_id.js';
+import { defaultLifecyclePipeline } from './lifecycle/pipeline.js';
+import {
+  formatDirectiveBlock,
+  projectExistingHostLifecycleContext,
+} from './lifecycle/projector.js';
+import { extractSessionId } from './session_id.js';
 import { emitDriftStderrAndExit } from './hook_output.js';
 import { readLastAssistantText, readLastNTurns } from './transcript.js';
 import { readOpenTasksFromTranscript } from './transcript_tasks.js';
@@ -45,6 +39,7 @@ interface PromptSubmitPayload {
   user_prompt?: string;
   transcript_path?: string;
   transcriptPath?: string;
+  agent_id?: string;
 }
 
 function parsePayload(raw: string): unknown {
@@ -116,140 +111,20 @@ async function main(): Promise<void> {
   }
 
   const sessionId = extractSessionId(raw);
-  // Record the live session id so out-of-band processes (the `opensquid
-  // automation on|off` CLI, run from a terminal that never sees this stdin)
-  // can target the session the hooks actually key on. Best-effort.
-  await recordCurrentSession(sessionId, process.cwd());
-  // Interactive responder (chat mirrors the live session): claim/refresh this
-  // umbrella's chat lease with the session id so the Stop-hook drive owns the
-  // turn + the headless stands down. acquire-if-free; no-op in headless mode.
-  await claimUmbrellaLeaseForSession(sessionId, process.cwd());
-  // G.5 — a new turn starts on every UserPromptSubmit. Reset the per-turn
-  // slice of the tool-call ledger so the freshness rule (read on the next
-  // Stop event) sees only tools called during THIS turn. Session-wide list
-  // is untouched. Best-effort: never crash the hook over ledger plumbing.
-  try {
-    await resetTurnLedger(sessionId);
-  } catch (e) {
-    process.stderr.write(`opensquid: tool-ledger turn-reset failed — ${String(e)}\n`);
-  }
-  // wg-3d175ec06767: classify the prompt ONCE here (the harness-neutral pre-dispatch
-  // chokepoint — fires under Claude Code AND codex) and persist the request-type record, so
-  // enter-scoping + the stop guards read ONE classification instead of re-deriving intent.
-  // Deterministic + research-default-on-low-confidence; the llm refinement is a pack rule
-  // (RTC.5, needs pack model config). Best-effort: never crash the hook over classification.
-  if (parsed.data.kind === 'prompt_submit') {
-    try {
-      const cls = classifyRequestType(parsed.data.prompt);
-      await writeRequestType(sessionId, {
-        ...cls,
-        source: 'deterministic',
-        prompt_hash: sha256Hex(parsed.data.prompt).slice(0, 16),
-        at: new Date().toISOString(),
-      });
-    } catch (e) {
-      process.stderr.write(`opensquid: request-type classification failed — ${String(e)}\n`);
-    }
-  }
-  // The idle → scoping transition is no longer hardcoded here — the opt-in
-  // `coding-flow` pack's `enter-scoping` rule (entry-and-handoffs) matches
-  // scope-authoring intent
-  // through the dispatcher and advances its lifecycle FSM (the FSM's totality
-  // makes scope_start a no-op once the workflow has already started). See
-  // T-FSM-UNIFY.
-  const packs = await loadActivePacksForDispatch(sessionId);
-  const registry = await buildRegistry();
-  const { exitCode, stderr, contextInjections, directives } = await dispatchEvent(
-    parsed.data,
-    packs,
-    registry,
-    sessionId,
-  );
-
-  // G.4 — emit Claude Code's UserPromptSubmit JSON envelope on stdout when
-  // any rule contributed an inject_context payload OR (T-ASC ASC.3) a
-  // directive-level verdict. Per VERIFIED 2026-05-24 behavior, raw stdout
-  // text is silently DISCARDED by Claude Code 2.x; only the
-  // `hookSpecificOutput.additionalContext` JSON shape actually injects
-  // additional prompt context. (The older `dist/anti-drift/evaluator.js`
-  // legacy code that wrote raw stdout was relying on a deprecated path.)
-  //
-  // T-ASC L8: ONE envelope key (`additionalContext`) carries BOTH surfaces —
-  // inject_context paragraphs first, then directives as a fenced JSON block
-  // under a `⛔ DIRECTIVE` marker. No new envelope keys: Claude Code 2.x
-  // doesn't reliably honor unknown ones. The fenced JSON gives the agent
-  // human-readable context AND a future enforcer a machine-parseable
-  // structured handoff (parse the JSON between the marker and the closing
-  // fence). Per project_opensquid_no_agent_loop the AGENT dispatches — the
-  // directive names skill/tool/args/rationale; opensquid never invokes it.
-  //
-  // Block-verdict coexistence (Phase-2 lock #7 + L8 extension): if the
-  // block verdict fired AFTER an inject_context or directive payload, all
-  // ride through — block wins on exitCode (2), but the additionalContext
-  // still lands on stdout so the agent sees the recall context + directive
-  // alongside the block message on the next prompt.
-  // T-CTX-LOOP CTX.4 — surface a "new project detected" prompt at most
-  // once per session. Routes through additionalContext alongside the
-  // existing inject_context + directive surfaces.
-  const newProjectLine = await detectNewProject(sessionId);
-  // LL.4 — drain the inbound-message backlog into the same additionalContext
-  // envelope as inject_context + directives + new-project. The drain block
-  // runs under its own fail-open wrapper (drainInboxEnvelope returns '' on
-  // any error). Inbox envelope appears FIRST in contextParts so it's the
-  // most prominent surface in the agent's next-turn context.
-  const inboxEnvelope = await drainUmbrellaInbox(sessionId);
-
-  // ORCH.5 — the hard-coded general orchestrator. Classify the prompt, match a `serves`-bearing pack against the
-  // active v2 catalog, and ACTIVATE it (write active.json → the existing runV2Cartridges runs its FSM next event);
-  // a tie surfaces an ask. ADDITIVE + inert today (zero serves-packs → ZERO result). orchestrate() is fail-open.
-  let orchInjections: string[] = [];
-  if (parsed.data.kind === 'prompt_submit') {
-    const v2packs = (await listInstalledV2Packs(process.cwd())).map((c) => c.pack);
-    const orch = await orchestrate(
-      process.cwd(),
-      parsed.data.prompt,
-      true,
-      v2packs,
-      new Date().toISOString(),
+  const event = parsed.data as PromptSubmitEvent;
+  const { exitCode, stderr, contextInjections, directives } =
+    await defaultLifecyclePipeline.runPromptSubmit(
+      { event },
+      projectExistingHostLifecycleContext({
+        sessionId,
+        cwd: process.cwd(),
+        raw,
+      }),
     );
-    orchInjections = orch.injections;
-    // PA-a — SURFACE the activated pack (previously discarded). When the orchestrator routes this turn to a
-    // discipline pack, make that observable in the agent's context instead of silently activating — so the
-    // activation decision is visible (debuggable + auditable), not a hidden side-effect of writing active.json.
-    if (orch.activatedPack !== undefined) {
-      orchInjections = [
-        ...orchInjections,
-        `🦑 orchestrator → activated discipline pack \`${orch.activatedPack}\` for this turn (on-demand, task-classified).`,
-      ];
-    }
-    // ORCH/fractal — persist the classified facets so the tool_call dispatcher can gate intra-pack lens skills
-    // by `serves` (only the task-relevant lenses fire, not all 18). Independent of pack activation + fail-open:
-    // a classify/settings error simply leaves no facets → the dispatcher gates nothing (back-compat).
-    try {
-      const settings = await readSettings(process.cwd());
-      const facets = classify(parsed.data.prompt, {
-        project: true,
-        ...(settings.domain ? { domain: settings.domain } : {}),
-      });
-      await writeClassifiedFacets(sessionId, facets);
-    } catch {
-      /* fail-open — no facets persisted → dispatcher fires every lens (today's behavior) */
-    }
-  }
 
-  const contextParts: string[] = [];
-  if (inboxEnvelope.length > 0) contextParts.push(inboxEnvelope);
-  contextParts.push(...contextInjections);
-  contextParts.push(...orchInjections);
-  if (newProjectLine !== null) contextParts.push(newProjectLine);
-  if (directives.length > 0) {
-    const block =
-      '⛔ DIRECTIVE — next action required:\n' +
-      '```json\n' +
-      JSON.stringify(directives, null, 2) +
-      '\n```';
-    contextParts.push(block);
-  }
+  const contextParts: string[] = [...contextInjections];
+  const directiveBlock = formatDirectiveBlock(directives);
+  if (directiveBlock !== null) contextParts.push(directiveBlock);
   if (contextParts.length > 0) {
     const envelope = {
       hookSpecificOutput: {

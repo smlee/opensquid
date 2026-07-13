@@ -22,6 +22,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { toPolicyToolValue } from '../../../integrations/pi/tool_aliases.js';
 import { clear, stats } from './cache.js';
 
 import { evalCondition, parseExpression } from './index.js';
@@ -182,6 +183,16 @@ describe('evalCondition — new grammar forms (pre-research §7.5)', () => {
   it('function call: `contains(s, "foo")`', () => {
     const b = new Map<string, unknown>([['s', 'hello foobar']]);
     expect(evalCondition('contains(s, "foo")', b)).toBe(true);
+  });
+
+  it('treats a MultiEdit tool binding as Edit across alias-aware string functions', () => {
+    const b = new Map<string, unknown>([['tool', toPolicyToolValue('MultiEdit')]]);
+    expect(evalCondition('tool == "Edit"', b)).toBe(true);
+    expect(evalCondition('tool == "MultiEdit"', b)).toBe(true);
+    expect(evalCondition('contains(tool, "Edit")', b)).toBe(true);
+    expect(evalCondition('startsWith(tool, "Multi")', b)).toBe(true);
+    expect(evalCondition('endsWith(tool, "Edit")', b)).toBe(true);
+    expect(evalCondition('match(tool, "^(Write|Edit|NotebookEdit)$")', b)).toBe(true);
   });
 
   it('compound: `committing && phases != "complete"` (the §12.4 production rule)', () => {

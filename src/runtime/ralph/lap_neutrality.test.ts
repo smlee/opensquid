@@ -1,7 +1,7 @@
 /**
  * MHL.8 — the audit-grep-empty acceptance: the machine-checkable "nothing hardcoded" contract (mirrors
  * subscription_cli.ts:8-9). The NEUTRAL core carries NO vendor INVOCATION/ENVELOPE literal — every such literal
- * lives ONLY under src/runtime/ralph/harnesses/** (the adapters) + the config schema.
+ * lives ONLY in harness vendor adapters/integration modules + the config schema.
  *
  * NOTE (CODE decision, citing MHL.3's neutrality note): the deny-list is the vendor INVOCATION/ENVELOPE literal
  * set (flags + envelope field names), NOT the bare `kind` discriminators 'claude'/'codex'. The resolver
@@ -34,6 +34,22 @@ const VENDOR_LITERALS = [
   'item.completed',
   'workspace-write',
   'approval_policy',
+  '--mode',
+  '--no-approve',
+  '--no-session',
+  '--no-extensions',
+  '--no-skills',
+  '--no-prompt-templates',
+  '--no-themes',
+  '--system-prompt',
+  '--append-system-prompt',
+  'agent_settled',
+  'get_session_stats',
+  'extension_error',
+  'message_end',
+  'tool_execution_end',
+  'queue_update',
+  'stopReason',
 ];
 
 /** The makeSpawnLap function body (the neutral region of ralph.ts — the rest of the file wires unrelated CLI). */
@@ -50,6 +66,7 @@ describe('audit-grep-empty over the neutral lap core (MHL.8)', () => {
   const neutralSurfaces: Record<string, () => string> = {
     'lap_harness.ts (the resolver/seam)': () => read('src/runtime/ralph/lap_harness.ts'),
     'lap_outcome.ts (the neutral fold)': () => read('src/runtime/ralph/lap_outcome.ts'),
+    'streaming_cli.ts (the neutral transport)': () => read('src/runtime/streaming_cli.ts'),
     'ralph.ts makeSpawnLap (the wire)': makeSpawnLapRegion,
   };
 
@@ -64,6 +81,9 @@ describe('audit-grep-empty over the neutral lap core (MHL.8)', () => {
   it('the vendor literals DO live in the adapters (positive control — the neutrality is a real move, not vacuous)', () => {
     const claude = read('src/runtime/ralph/harnesses/claude_lap_harness.ts');
     const codex = read('src/runtime/ralph/harnesses/codex_lap_harness.ts');
+    const pi =
+      read('src/runtime/ralph/harnesses/pi_lap_harness.ts') +
+      read('src/integrations/pi/rpc_agent_session.ts');
     // Claude invocation/envelope literals home in its adapter.
     expect(claude).toContain('--dangerously-skip-permissions');
     expect(claude).toContain('total_cost_usd');
@@ -73,5 +93,10 @@ describe('audit-grep-empty over the neutral lap core (MHL.8)', () => {
     expect(codex).toContain('agent_message');
     expect(codex).toContain('approval_policy');
     expect(codex).toContain('workspace-write');
+    // Pi RPC invocation/envelope literals home in its adapter.
+    expect(pi).toContain('--mode');
+    expect(pi).toContain('agent_settled');
+    expect(pi).toContain('get_session_stats');
+    expect(pi).toContain('tool_execution_end');
   });
 });

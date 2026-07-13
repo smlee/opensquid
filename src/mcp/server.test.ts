@@ -16,7 +16,7 @@
  * protocol.
  *
  * Cases:
- *   1. tools/list returns the 11 tools (7 read-only + G.3's `memorize`,
+ *   1. tools/list returns the 12 tools (8 read-only + G.3's `memorize`,
  *      `store_lesson`, `forget` + AP.3's `log_phase`), each with an object JSON Schema.
  *   2. list_packs returns "no packs loaded" (Phase 1 stub).
  *   3. list_skills (no args) returns "no skills loaded".
@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -180,9 +181,11 @@ describe('opensquid-mcp subprocess', () => {
     home = join(tmpdir(), `opensquid-mcp-test-${randomUUID()}`);
     sessionId = `sess-${randomUUID()}`;
     await mkdir(join(home, 'sessions', sessionId, 'state'), { recursive: true });
+    await mkdir(join(home, '.opensquid'), { recursive: true });
     client = new MCPClient({
       ...process.env,
       OPENSQUID_HOME: home,
+      OPENSQUID_PROJECT_ROOT: home,
       CLAUDE_SESSION_ID: sessionId,
       // Pin recall's backend to the lexical (Ollama-free) variant so the
       // tool's RAG path is testable without an Ollama or engine binary on
@@ -198,7 +201,36 @@ describe('opensquid-mcp subprocess', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('tools/list returns the 29 tools (+ kanban overlay + story, KANBAN.2/.5) with JSON Schema', async () => {
+  it('a direct MCP issue close pushes item_closed to the project monitor stream', async () => {
+    const created = await client.request('tools/call', {
+      name: 'workgraph_create_issue',
+      arguments: { title: 'monitor close fixture' },
+    });
+    expect(created.error).toBeUndefined();
+    const createdResult = created.result as ToolCallResult;
+    const issue = JSON.parse(createdResult.content[0]!.text) as { id: string };
+
+    const updated = await client.request('tools/call', {
+      name: 'workgraph_update_issue',
+      arguments: { id: issue.id, status: 'closed' },
+    });
+    expect(updated.error).toBeUndefined();
+
+    const db = createClient({ url: `file:${join(home, '.opensquid', 'opensquid.db')}` });
+    try {
+      const rows = await db.execute({
+        sql: 'SELECT wg_id, kind FROM loop_events WHERE wg_id = ?',
+        args: [issue.id],
+      });
+      expect(rows.rows).toEqual([
+        expect.objectContaining({ wg_id: issue.id, kind: 'item_closed' }),
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('tools/list returns the 31 tools (+ kanban overlay + story, KANBAN.2/.5) with JSON Schema', async () => {
     const r = await client.request('tools/list', {});
     expect(r.error).toBeUndefined();
     const result = r.result as ToolsListResult;
@@ -224,6 +256,7 @@ describe('opensquid-mcp subprocess', () => {
       'set_goal',
       'set_loop_phase',
       'store_lesson',
+      'web_fetch',
       'workgraph_add_edge',
       'workgraph_archive',
       'workgraph_claim',

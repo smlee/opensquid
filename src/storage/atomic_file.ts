@@ -13,6 +13,8 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+let writeCounter = 0;
+
 export function safeRecordId(id: string): string {
   if (id.length === 0 || id.includes('/') || id.includes('\\') || id.includes('..')) {
     throw new Error(`atomic_file: unsafe record id: ${JSON.stringify(id)}`);
@@ -22,7 +24,9 @@ export function safeRecordId(id: string): string {
 
 export async function atomicWriteFile(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
+  // Unique across overlapping calls and processes. A fixed `${path}.tmp` races when
+  // parallel actors publish the same report/state target and one rename consumes the other's temp file.
+  const tmp = `${path}.tmp.${String(process.pid)}.${String(++writeCounter)}`;
   await writeFile(tmp, content, 'utf8');
   await rename(tmp, path); // atomic on POSIX → readers never see a partial file
 }

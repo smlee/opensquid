@@ -222,127 +222,36 @@ describe('runOneShotCli — markers', () => {
   });
 });
 
-describe('runOneShotCli — SIGTERM → grace → group SIGKILL', () => {
-  it('SIGTERM at timeout, then group SIGKILL after grace (the observed orphan class)', async () => {
+describe('runOneShotCli — automatic shutdown is graceful-only', () => {
+  it('closes stdin, records the request, and never sends an OS signal on timeout', async () => {
     vi.useFakeTimers();
-    const { pc, spawns, groupKills } = recordingProcControl();
+    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
+    const shutdown = vi.fn();
     const p = runOneShotCli({
       cli: process.execPath,
-      args: ['ignore-term'],
+      args: ['ignore-eof'],
       prompt: '',
       timeoutMs: 400,
       markSubagent: true,
       timeoutError,
-      graceMs: 300,
+      onShutdownRequested: shutdown,
       procControl: pc,
     }).catch((e: unknown) => e as Error);
 
-    await vi.advanceTimersByTimeAsync(400); // fire the timeout → SIGTERM + arm grace + register the exit handler
-    const err = await p;
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe('timeout after 400ms'); // rejects AT the timeout, not after grace
-    expect(spawns[0]!.child.signals).toContain('SIGTERM'); // the child got SIGTERM at the timeout
-    expect(groupKills).toHaveLength(0); // not yet — grace has not elapsed
-
-    await vi.advanceTimersByTimeAsync(300); // grace expiry → the group SIGKILL sweep
-    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // process.kill(-pid,'SIGKILL') ISSUED (detached)
-  });
-
-  it('group sweep issues the detached process.kill(-pid) after grace (real-grandchild reaping → e2e)', async () => {
-    // The unit assertion proves the control flow ISSUES the group sweep. The real-grandchild-reaping VALUE
-    // (the OS honoring process.kill(-pid,'SIGKILL')) moves to test/e2e/spawn-lifecycle.e2e.test.ts — a fake
-    // proves the signal was issued, not OS-honored.
-    vi.useFakeTimers();
-    const { pc, spawns, groupKills } = recordingProcControl();
-    runOneShotCli({
-      cli: process.execPath,
-      args: ['child-spawner'],
-      prompt: '',
-      timeoutMs: 400,
-      markSubagent: true,
-      timeoutError,
-      graceMs: 300,
-      procControl: pc,
-    }).catch(() => undefined);
-
     await vi.advanceTimersByTimeAsync(400);
-    expect(spawns[0]!.child.signals).toContain('SIGTERM');
-    await vi.advanceTimersByTimeAsync(300);
-    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // the detached group sweep was issued
-  });
-
-  it('FXK.1: a supervisor exiting BEFORE grace kills the child via the exit handler (the 0.5.398 hole)', async () => {
-    // The hook-bin shape: the supervisor calls process.exit() milliseconds after the rejection, which destroys
-    // ANY timer, ref'd or not. The sync 'exit' handler — captured here as exitHandlers[0] — must issue the kill
-    // the (60s) grace timer never gets to fire.
-    vi.useFakeTimers();
-    const { pc, groupKills, exitHandlers } = recordingProcControl();
-    runOneShotCli({
-      cli: process.execPath,
-      args: ['fxk-child'],
-      prompt: '',
-      timeoutMs: 300,
-      markSubagent: true,
-      timeoutError,
-      graceMs: 60_000, // 60s away — if the child dies now, it was the EXIT HANDLER, not the timer
-      procControl: pc,
-    }).catch(() => undefined);
-
-    await vi.advanceTimersByTimeAsync(300); // term_sent; the sync 'exit' escalation is registered
-    expect(exitHandlers).toHaveLength(1);
-    exitHandlers[0]!(); // simulate process.exit() BEFORE grace — the hook-bin shape
-    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // the EXIT HANDLER issued the kill the timer didn't
-  });
-
-  it('FXK.1: exit-listener registrations return to baseline across sequential calls (bridge-daemon hygiene)', async () => {
-    vi.useFakeTimers();
-    const { pc, spawns, exitHandlers } = recordingProcControl();
-    for (let i = 0; i < 5; i++) {
-      const p = runOneShotCli({
-        cli: process.execPath,
-        args: ['obey2'],
-        prompt: '',
-        timeoutMs: 200,
-        markSubagent: false,
-        timeoutError,
-        graceMs: 500,
-        procControl: pc,
-      }).catch(() => undefined);
-      await vi.advanceTimersByTimeAsync(200); // timeout → term_sent, onExit registered
-      expect(exitHandlers).toHaveLength(1);
-      spawns[i]!.child.emit('close', 0); // child obeys SIGTERM within grace → closed_late → offExit
-      await p;
-      expect(exitHandlers).toHaveLength(0); // every onExit registration is matched by an offExit removal
-    }
-    expect(exitHandlers).toHaveLength(0); // count returns to baseline
-  });
-
-  it('SIGTERM-obeying child clears the grace timer (closed_late path — no leaked timer, no group kill)', async () => {
-    vi.useFakeTimers();
-    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
-    const p = runOneShotCli({
-      cli: process.execPath,
-      args: ['obey-term'],
-      prompt: '',
-      timeoutMs: 300,
-      markSubagent: false,
-      timeoutError,
-      graceMs: 60_000, // a LEAKED ref'd timer at this size would linger — the pass proves clearance
-      procControl: pc,
-    }).catch(() => undefined);
-
-    await vi.advanceTimersByTimeAsync(300); // timeout → term_sent, grace armed
-    spawns[0]!.child.emit('close', 0); // child obeys SIGTERM within grace → closed_late clears grace + offExit
-    await p;
-    expect(exitHandlers).toHaveLength(0); // offExit was called
-
-    await vi.advanceTimersByTimeAsync(60_000); // advance PAST grace — the grace timer was cleared
-    expect(groupKills).toHaveLength(0); // no group kill fired (grace timer cleared in closed_late)
+    expect(await p).toMatchObject({ message: 'timeout after 400ms' });
+    expect(spawns[0]!.child.stdin.end).toHaveBeenCalled();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(spawns[0]!.child.signals).toEqual([]);
+    expect(groupKills).toEqual([]);
+    expect(exitHandlers).toEqual([]);
+    spawns[0]!.child.emit('close', 0);
   });
 });
 
 describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, both streams)', () => {
-  it('rejects fail-loud when stdout exceeds maxCaptureBytes and group-kills the child', async () => {
+  it('rejects fail-loud when stdout exceeds maxCaptureBytes without sending an OS signal', async () => {
     const { pc, spawns, groupKills } = recordingProcControl();
     const p = runOneShotCli({
       cli: process.execPath,
@@ -356,7 +265,8 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
     });
     spawns[0]!.child.stdout.emit('data', Buffer.from('X'.repeat(64))); // 64 > 16 bytes
     await expect(p).rejects.toThrow(/capture cap exceeded: stdout exceeded 16 bytes/);
-    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]); // the runaway child was killed (detached)
+    expect(spawns[0]!.child.stdin.end).toHaveBeenCalled();
+    expect(groupKills).toEqual([]);
   });
 
   it('rejects fail-loud when stderr exceeds maxCaptureBytes — independently of stdout', async () => {
@@ -373,7 +283,8 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
     });
     spawns[0]!.child.stderr.emit('data', Buffer.from('E'.repeat(64)));
     await expect(p).rejects.toThrow(/capture cap exceeded: stderr exceeded 16 bytes/);
-    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGKILL' }]);
+    expect(spawns[0]!.child.stdin.end).toHaveBeenCalled();
+    expect(groupKills).toEqual([]);
   });
 
   it('measures BYTES not UTF-16 code units (a multibyte stream trips at the true byte cap)', async () => {
@@ -460,7 +371,7 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
     await expect(p).resolves.toBe('ok');
   });
 
-  it('onStreams fires at most once on an over-cap (via the close after groupKill, not in failCapExceeded)', async () => {
+  it('onStreams fires at most once when an over-cap process later closes', async () => {
     const onStreams = vi.fn();
     const { pc, spawns } = recordingProcControl();
     const p = runOneShotCli({

@@ -4,11 +4,12 @@ You are in the PLAN stage. The scope is guess-free; turn it into an executable, 
 
 ## Research (PLAN-specific)
 
-- FAN OUT parallel subagents with the appropriate skills: one re-auditing the SCOPE artifact (does it still
-  hold guess-free at plan time?), others mapping the dependency structure of the scoped elements. They return
-  cited findings; you keep the synthesis.
+- PLAN is parent-owned orchestration work. Inspect the SCOPE artifact and map dependencies directly; do not send
+  read-only planning assignments to implementation executors, because the synchronous executor handoff is
+  reserved for bounded repository implementation at CODE.
 - RE-AUDIT the SCOPE: confirm the pre-research artifact still holds guess-free at plan time (catch drift at
-  this boundary, not at the end). If it drifted, fix the scope first.
+  this boundary, not at the end). If the scope artifact itself drifted, fix that artifact first. If the PLAN
+  audit identifies drift in a generated issue, fix the issue rather than widening the already-approved scope.
 - DERIVE each dependency: an edge exists only when the depended-on task genuinely produces what the dependent
   needs — no guessed/assumed edges.
 

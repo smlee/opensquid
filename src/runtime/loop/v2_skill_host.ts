@@ -18,6 +18,7 @@ import type { LoadedPackV2 } from '../../packs/loader_v2.js';
 import type { SkillOutput } from '../../packs/loader.js';
 import type { FunctionRegistry } from '../../functions/registry.js';
 import { dispatchEvent } from '../hooks/dispatch.js';
+import { toolMatches } from '../../integrations/pi/tool_aliases.js';
 import type { Event } from '../types.js';
 import { type Pack } from '../types.js';
 
@@ -64,9 +65,7 @@ export function relevantSkills(skills: SkillOutput[], event: Event): SkillOutput
   const args = 'args' in event ? event.args : undefined;
   const filePath = typeof args?.file_path === 'string' ? args.file_path : '';
   const isSourceEdit =
-    'tool' in event &&
-    (event.tool === 'Write' || event.tool === 'Edit') &&
-    SOURCE_EXT.test(filePath);
+    'tool' in event && toolMatches(event.tool, /^(Write|Edit)$/) && SOURCE_EXT.test(filePath);
   return skills.filter((s) => s.load === 'preload' || isSourceEdit);
 }
 

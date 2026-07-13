@@ -1,53 +1,10 @@
 /**
- * T-handoff-nested-session-spam SUB.2 (wg-627effbb2c38) — the ONE spawn
- * lifecycle for one-shot CLI children, shared by both spawn sites
- * (models/strategies/subscription_cli.ts — the audit reviewer — and
- * runtime/agent_bridge/agent_loop_subscription.ts — the chat working
- * agent), replacing their deliberately-mirrored copies.
+ * Harness-neutral one-shot subprocess transport.
  *
- * Lifecycle FSM (lexicon: explicit total transitions; the promise settles
- * exactly once, on the FIRST transition out of `running`):
- *
- *   running ──close──────────────► closed        (resolve/reject by exit code)
- *   running ──spawn 'error'──────► spawn_failed  (reject)
- *   running ──timeout────────────► term_sent     (reject NOW; grace timer armed, REF'D;
- *                                                 sync 'exit' kill handler registered)
- *   term_sent ──close────────────► closed_late   (clear grace + remove the exit handler;
- *                                                 child obeyed SIGTERM)
- *   term_sent ──grace expiry─────► group_killed  (kill(-pid) sweep; ESRCH = already gone)
- *   term_sent ──supervisor exit──► group_killed  (FXK.1, 0.5.402: the sync 'exit' handler
- *                                                 — hook bins call process.exit() ms after
- *                                                 the rejection, which destroys ANY timer,
- *                                                 ref'd or not; reproduced in isolation
- *                                                 before this fix. 'exit' listeners run
- *                                                 synchronously under explicit exit and
- *                                                 process.kill is sync — spiked, not
- *                                                 assumed.)
- *
- * Only a forced external SIGKILL of the supervisor leaks the child now —
- * outside any in-process guarantee, enumerated residual.
- *
- * Two ORTHOGONAL env markers — never merge them:
- *   - OPENSQUID_SUBAGENT  (hook policy, SUB.1): set only when
- *     `markSubagent: true` (REVIEWER spawns — subscription_cli.ts). Hook bins
- *     short-circuit. A ralph LAP does NOT set this — it sets the recursion-only
- *     OPENSQUID_LOOP_LAP marker (subagent_guard.ts, T-in-lap-gating scope-1) via
- *     its per-spawn `env` override, so the lap runs FULLY hooked; that marker
- *     only blocks a nested loop + the stop-responder/session-end-handoff actions.
- *   - OPENSQUID_SUPERVISED (kill-tree, THIS module): set on EVERY helper
- *     spawn. The OUTERMOST helper spawn in a tree detaches as group leader;
- *     every deeper helper spawn joins the ancestor's group — a reviewer
- *     spawned from a bridge child's hooks must NOT escape the bridge
- *     group's sweep (spec-audit finding 1).
- *
- * Phase-1 limitation carried over verbatim from subscription_cli.ts: pipe
- * stdio can mutually deadlock on prompts >64KB (kernel pipe buffer); the
- * temp-file fallback is Phase-2 scope — do NOT bolt on a partial drain
- * handler here.
- *
- * Imports from: node:child_process.
- * Imported by: models/strategies/subscription_cli.ts,
- *   runtime/agent_bridge/agent_loop_subscription.ts.
+ * Automatic timeout and capture-bound handling reject the invocation and request graceful stdin shutdown only.
+ * This module never sends SIGTERM/SIGKILL; supervisor-owned process identity and explicit human OS actions live
+ * in `runtime/subagents/process_control.ts`. `OPENSQUID_SUPERVISED` still prevents nested helpers from creating
+ * accidental process groups, while an outer harness owner may create an exact group for human control.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
@@ -59,20 +16,18 @@ import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'n
  * (release/stage_integration.ts:20): a single bundled seam object with a
  * `real*` default binding. An omitted `procControl` ⇒ `realProcControl` ⇒
  * production is byte-for-byte unchanged; a test injects a recording fake to
- * exercise the SIGTERM → grace → group-SIGKILL FSM hermetically (no real
- * subprocess, no temp files, fake timers for the grace/timeout windows).
+ * exercise timeout/shutdown behavior hermetically without a real subprocess.
  */
 export interface ProcControl {
   /** Returns a piped-stdio child (runOneShotCli always spawns with `stdio: ['pipe','pipe','pipe']`, so the three
    *  streams are non-null — the `WithoutNullStreams` variant, matching the concrete real-`spawn` overload). */
   spawn: (cli: string, args: string[], options: SpawnOptions) => ChildProcessWithoutNullStreams;
-  /** The detached group sweep uses the GLOBAL process.kill(-pid, sig) (groupKill :123) — NOT a child
-   *  method — so it is seamed here for a test to RECORD it without firing a real signal on a pid collision. */
+  /** Explicit human process control uses this seam; automatic transports do not call it. */
   kill: (pid: number, signal: NodeJS.Signals | number) => void;
   setTimeout: (fn: () => void, ms: number) => NodeJS.Timeout;
   clearTimeout: (t: NodeJS.Timeout | undefined) => void;
-  onExit: (fn: () => void) => void; // process.once('exit', fn) — the supervisor-exit escalation registration
-  offExit: (fn: () => void) => void; // process.removeListener('exit', fn)
+  onExit: (fn: () => void) => void;
+  offExit: (fn: () => void) => void;
 }
 
 /**
@@ -99,6 +54,8 @@ export const realProcControl: ProcControl = {
 export interface OneShotOpts {
   cli: string;
   args: string[];
+  /** Child working directory. Omitted ⇒ inherit the current process cwd. */
+  cwd?: string;
   /** Prompt body written to the child's stdin then EOF. */
   prompt: string;
   timeoutMs: number;
@@ -110,11 +67,11 @@ export interface OneShotOpts {
   timeoutError: (timeoutMs: number) => Error;
   /** Prefix for spawn/exit/stdin error messages (bridge: 'subscription cli '). */
   errorPrefix?: string;
-  /** Grace before the group SIGKILL. Default 5_000. */
-  graceMs?: number;
+  /** Observe an automatic protocol-level shutdown request. Automatic supervision never sends an OS signal. */
+  onShutdownRequested?: () => void | Promise<void>;
   /** Max BYTES retained per captured stream (stdout AND stderr, independently). A runaway lap that exceeds this
-   *  is FAILED-LOUD — the promise rejects with a typed cap error and the child group is killed — NOT silently
-   *  truncated (a truncated JSONL stream would corrupt the fold, codex_lap_harness.ts:99). Default 10 MiB.
+   *  is FAILED-LOUD — the promise rejects and requests graceful shutdown — NOT silently truncated
+   *  (a truncated JSONL stream would corrupt the fold, codex_lap_harness.ts:99). Default 10 MiB.
    *  Sibling to graceMs; omitted ⇒ the default ⇒ every existing caller is byte-unchanged. Harness-neutral. */
   maxCaptureBytes?: number;
   /** Extra env vars merged OVER the inherited process env for the child (e.g. OPENSQUID_ITEM_ID for a ralph lap). */
@@ -143,8 +100,7 @@ type LifecyclePhase =
   | { phase: 'spawn_failed' }
   | { phase: 'term_sent' }
   | { phase: 'closed' }
-  | { phase: 'closed_late' }
-  | { phase: 'group_killed' };
+  | { phase: 'closed_late' };
 
 /** Kill-tree marker: true when THIS process already runs under a helper-supervised tree. */
 export const insideSupervisedTree = (env: NodeJS.ProcessEnv = process.env): boolean =>
@@ -152,12 +108,12 @@ export const insideSupervisedTree = (env: NodeJS.ProcessEnv = process.env): bool
 
 /** Default per-stream capture cap (10 MiB) — generous for any normal lap, operator-overridable via
  *  OneShotOpts.maxCaptureBytes. A runaway lap that spews past it is failed-loud (§5-Q2), not truncated. */
-const DEFAULT_MAX_CAPTURE_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_CLI_CAPTURE_BYTES = 10 * 1024 * 1024;
 
 export function runOneShotCli(opts: OneShotOpts): Promise<string> {
   const prefix = opts.errorPrefix ?? '';
   const pc = opts.procControl ?? realProcControl; // omitted ⇒ real impls ⇒ prod byte-unchanged
-  const cap = opts.maxCaptureBytes ?? DEFAULT_MAX_CAPTURE_BYTES;
+  const cap = opts.maxCaptureBytes ?? DEFAULT_CLI_CAPTURE_BYTES;
   return new Promise<string>((resolve, reject) => {
     // Detach predicate = the SUPERVISED marker, NOT the hook-policy marker
     // (spec-audit finding 1): a reviewer spawned from an UNMARKED bridge
@@ -171,6 +127,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       ...(opts.env ?? {}), // per-spawn overrides (e.g. OPENSQUID_ITEM_ID) — last so they win
     };
     const proc = pc.spawn(opts.cli, opts.args, {
+      cwd: opts.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached,
       env,
@@ -182,54 +139,26 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
     let stderrLineBuf = ''; // carries a partial (un-newlined) tail between data chunks for onStderrLine
     let stdoutBytes = 0; // TRUE byte counters (incoming Buffer.length), not UTF-16 string length
     let stderrBytes = 0;
-    let graceTimer: NodeJS.Timeout | undefined;
-
-    const groupKill = (): void => {
-      state = { phase: 'group_killed' };
-      try {
-        if (detached && typeof proc.pid === 'number') {
-          pc.kill(-proc.pid, 'SIGKILL');
-        } else {
-          proc.kill('SIGKILL'); // nested: the ancestor's group sweep covers the rest
-        }
-      } catch {
-        /* ESRCH — already reaped */
-      }
-    };
-
-    // FXK.1 (0.5.402): the supervisor-exit escalation path. Sync-only body
-    // — the process is dying; state check + sync kill, nothing else.
-    const exitKill = (): void => {
-      if (state.phase === 'term_sent') groupKill();
-    };
-
-    const timer = pc.setTimeout(() => {
+    const requestShutdown = (error: Error): void => {
       if (state.phase !== 'running') return;
       state = { phase: 'term_sent' };
-      proc.kill('SIGTERM');
-      // BOTH escalation paths are required (FXK.1, spiked): the REF'D timer
-      // covers long-lived supervisors (bridge daemon — prompt 5s kill); the
-      // sync 'exit' handler covers supervisors that exit before grace (hook
-      // bins call process.exit() milliseconds after this rejection, which
-      // destroys ANY timer, ref'd or not — the 0.5.398 hole). 'closed_late'
-      // clears both for well-behaved children.
-      pc.onExit(exitKill);
-      graceTimer = pc.setTimeout(() => {
-        pc.offExit(exitKill);
-        groupKill();
-      }, opts.graceMs ?? 5_000);
-      reject(opts.timeoutError(opts.timeoutMs));
-    }, opts.timeoutMs);
+      void Promise.resolve(opts.onShutdownRequested?.()).catch(() => undefined);
+      try {
+        proc.stdin.end();
+      } catch {
+        // The process remains visible to the human control plane.
+      }
+      reject(error);
+    };
 
-    // Fail-loud on a runaway stream: reject with a typed cap error + kill the child. Guarded to the live phase
-    // (mirrors proc.on('error') :229) so a cap trip after a timeout/close/error no-ops. Does NOT call onStreams —
-    // the pending 'close' after groupKill calls it exactly once (the at-most-once contract, :120).
+    const timer = pc.setTimeout(
+      () => requestShutdown(opts.timeoutError(opts.timeoutMs)),
+      opts.timeoutMs,
+    );
+
+    // Fail-loud on a runaway stream without turning a resource bound into automatic OS authority.
     const failCapExceeded = (stream: 'stdout' | 'stderr'): void => {
-      if (state.phase !== 'running') return;
-      state = { phase: 'spawn_failed' }; // terminal — close/error/timeout handlers no-op on non-running
-      pc.clearTimeout(timer);
-      groupKill(); // stop the runaway (re-marks state 'group_killed'; still terminal)
-      reject(
+      requestShutdown(
         new Error(
           `${prefix}capture cap exceeded: ${stream} exceeded ${cap} bytes ` +
             `(runaway lap — fail-loud, not truncated; raise OneShotOpts.maxCaptureBytes to override)`,
@@ -273,11 +202,9 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
         if (code === 0) resolve(stdout);
         else reject(new Error(`${prefix}exit ${code}: ${stderr.trim()}`));
       } else if (state.phase === 'term_sent') {
-        state = { phase: 'closed_late' }; // child obeyed SIGTERM inside grace
-        if (graceTimer !== undefined) pc.clearTimeout(graceTimer);
-        pc.offExit(exitKill); // hygiene: long-lived callers
+        state = { phase: 'closed_late' };
       }
-      // closed / spawn_failed / group_killed: terminal — nothing to do.
+      // closed / spawn_failed / closed_late: terminal — nothing to do.
     });
 
     try {

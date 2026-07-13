@@ -36,8 +36,24 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
-      - run: pnpm test
+      # Package/layout and compiled-hook tests require a fresh, non-stale dist tree.
+      - run: pnpm clean
       - run: pnpm build
+      - run: pnpm test
+
+  windows-process-control:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm vitest run test/e2e/windows-job-object.test.ts
 
   # T-npm-launch-eresolve NPM.2 — the 0.5.395 launch defect class: pnpm
   # tolerates peer-graph inconsistencies the npm resolver refuses, and

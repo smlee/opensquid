@@ -22,7 +22,19 @@ describe('atomic_file', () => {
     const p = join(dir, 'sub', 'x.json');
     await atomicWriteFile(p, '{"a":1}');
     expect(await readFile(p, 'utf8')).toBe('{"a":1}');
-    expect((await readdir(join(dir, 'sub'))).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
+    expect((await readdir(join(dir, 'sub'))).filter((f) => f.includes('.tmp'))).toHaveLength(0);
+  });
+
+  it('supports overlapping publishers to one target without temp-file rename races', async () => {
+    const path = join(dir, 'reports', 'same.md');
+    const values = Array.from({ length: 20 }, (_, index) => `report-${String(index)}`);
+    await expect(
+      Promise.all(values.map((value) => atomicWriteFile(path, value))),
+    ).resolves.toHaveLength(values.length);
+    expect(values).toContain(await readFile(path, 'utf8'));
+    expect((await readdir(join(dir, 'reports'))).filter((file) => file.includes('.tmp'))).toEqual(
+      [],
+    );
   });
 
   it('safeRecordId rejects path-escaping or empty ids', () => {

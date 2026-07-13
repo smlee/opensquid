@@ -20,10 +20,12 @@
  */
 import { minimatch } from 'minimatch';
 
+import { toolMatches } from '../../integrations/pi/tool_aliases.js';
 import { isMutatingCall } from '../guard/orchestrator_guard.js';
 
-/** The file-editor tools that carry a single, unambiguous target path a lane can be matched against. */
-const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
+function isFileWriteTool(tool: string): boolean {
+  return toolMatches(tool, /^(Write|Edit|NotebookEdit)$/);
+}
 
 /**
  * The single file path a file-editor tool targets, or `null` when the call has no such path. `apply_patch` is
@@ -32,7 +34,7 @@ const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit']);
  * guard, not the lane).
  */
 export function extractWritePath(tool: string, args: Record<string, unknown>): string | null {
-  if (!FILE_WRITE_TOOLS.has(tool)) return null;
+  if (!isFileWriteTool(tool)) return null;
   const a = args as { file_path?: unknown; notebook_path?: unknown };
   const fp = typeof a.file_path === 'string' ? a.file_path : a.notebook_path;
   return typeof fp === 'string' && fp.length > 0 ? fp : null;
@@ -63,8 +65,8 @@ const INERT: LaneVerdict = { checked: false, path: null, outOfLane: false };
 
 /**
  * Evaluate a tool call against a stage's declared write-lane. Pure + total — see the module header for the five
- * cases. The caller decides whether to block (enforcement is agents-only + executor-exempt; both live in the
- * host, not here) — this function only classifies the write against the lane.
+ * cases. The caller decides whether to block (automation enforcement lives in the host, not here); actor
+ * identity does not exempt a selected pack's lane. This function only classifies the write against that lane.
  */
 export function evaluateLane(
   writes: readonly string[] | undefined,

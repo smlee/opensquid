@@ -4,10 +4,13 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { Command } from 'commander';
-import { buildRalphConfig, makeSpawnLap, registerRalph } from './ralph.js';
+import { RALPH_MD } from '../../runtime/ralph/ralph_template.js';
+import { buildRalphConfig, makeSpawnLap, perStageDirective, registerRalph } from './ralph.js';
 import type { RalphConfigFile } from '../wizard/ralph_writer.js';
 import type { Issue } from '../../workgraph/types.js';
 import type { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
+import type { runStreamingCli, StreamingRecordContext } from '../../runtime/streaming_cli.js';
+import type { HarnessRuntimeAssets } from '../../runtime/ralph/lap_harness.js';
 
 const FILE: RalphConfigFile = {
   authMode: 'subscription',
@@ -20,12 +23,26 @@ const FILE: RalphConfigFile = {
 };
 const ITEM: Issue = {
   id: 'a',
-  title: 't',
-  body: '',
+  title: 'test work-item title',
+  body: 'exact captured work-item ask',
   status: 'open',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
+
+describe('RALPH prompt consistency', () => {
+  it('requires an explicit typed exit and never says no tag = SHIPPED', () => {
+    expect(RALPH_MD).toContain('Exactly ONE valid `RALPH-EXIT:` line is');
+    expect(RALPH_MD).not.toContain('NO tag = `SHIPPED`');
+  });
+
+  it('uses a single valid HUMAN_REQUIRED reason in the per-stage directive examples', () => {
+    const prompt = perStageDirective('author');
+    expect(prompt).toContain('{"kind":"HUMAN_REQUIRED","reason":"IRREVERSIBLE_BOUNDARY"}');
+    expect(prompt).toContain('{"kind":"HUMAN_REQUIRED","reason":"SCOPE_FORK"}');
+    expect(prompt).not.toContain('IRREVERSIBLE_BOUNDARY|SCOPE_FORK');
+  });
+});
 
 describe('buildRalphConfig', () => {
   it('hydrates scalars + closures; --max-budget-usd override', () => {
@@ -86,6 +103,8 @@ describe('makeSpawnLap', () => {
     // the directive + work item are actually delivered (via stdin):
     expect(seen?.prompt).toContain(RALPH_BODY);
     expect(seen?.prompt).toContain('a'); // the item id
+    expect(seen?.prompt).toContain('test work-item title');
+    expect(seen?.prompt).toContain('exact captured work-item ask');
   });
 
   it('scope-1: the lap spawn sets OPENSQUID_LOOP_LAP=1 (hooks run) and does NOT markSubagent (T-in-lap-gating)', async () => {
@@ -98,6 +117,8 @@ describe('makeSpawnLap', () => {
     // The recursion-only marker is published so the six hook bins RUN for the lap (enforcement/injection/FSM).
     expect(seen?.env?.OPENSQUID_LOOP_LAP).toBe('1');
     expect(seen?.env?.OPENSQUID_ITEM_ID).toBe('a'); // still published for the MCP tools' item context
+    expect(seen?.env?.OPENSQUID_SESSION_ID).toBeDefined(); // one explicit lap-attempt session id
+    expect(seen?.env?.OPENSQUID_AUTOMATION).toBe('1'); // autonomous policy and child authority stay active
     // The whole fix: a lap must NOT be silenced — markSubagent stays off (so OPENSQUID_SUBAGENT is never set).
     expect(seen?.markSubagent).toBeUndefined();
   });
@@ -115,6 +136,105 @@ describe('makeSpawnLap', () => {
   it('a genuine spawn failure rethrows (→ superviseLap maps to CRASH)', async () => {
     const runCli = vi.fn(() => Promise.reject(new Error('ENOENT: claude not found')));
     await expect(makeSpawnLap(cfg, localFile, runCli)(ITEM)).rejects.toThrow(/ENOENT/);
+  });
+
+  it('wires the selected Pi adapter through readiness, RPC execution, and the neutral outcome fold', async () => {
+    const piFile: RalphConfigFile = {
+      ...localFile,
+      harness: {
+        kind: 'pi',
+        cli: 'pi-fixture',
+        ralphMdPath: localFile.harness.ralphMdPath,
+      },
+    };
+    const piCfg = buildRalphConfig(piFile, {});
+    const oneShot = vi.fn() as unknown as typeof runOneShotCli;
+    const sent: Record<string, unknown>[] = [];
+    const runStreaming = vi.fn(async (options: Parameters<typeof runStreamingCli>[0]) => {
+      let completed = false;
+      const context: StreamingRecordContext = {
+        send: (line) => {
+          const parsed: unknown = JSON.parse(line);
+          if (parsed === null || typeof parsed !== 'object') throw new Error('expected record');
+          sent.push(parsed as Record<string, unknown>);
+          return Promise.resolve();
+        },
+        complete: () => {
+          completed = true;
+        },
+        fail: (error) => {
+          throw error;
+        },
+      };
+      await options.onStart?.(context);
+      const emit = async (record: Record<string, unknown>): Promise<void> => {
+        const decision = await options.onRecord(JSON.stringify(record), context);
+        if (typeof decision === 'object') throw decision.fail;
+        if (decision === 'complete') completed = true;
+      };
+      await emit({
+        type: 'response',
+        id: 'opensquid-prompt-fixed-attempt',
+        command: 'prompt',
+        success: true,
+      });
+      await emit({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'done\\nRALPH-EXIT: {"kind":"SHIPPED"}' }],
+          stopReason: 'stop',
+          usage: { input: 1, output: 2, cost: { total: 0.1 } },
+        },
+      });
+      await emit({ type: 'agent_settled' });
+      await emit({
+        type: 'response',
+        id: 'opensquid-stats-fixed-attempt',
+        command: 'get_session_stats',
+        success: true,
+        data: { tokens: { input: 10, output: 20 }, cost: 0.2 },
+      });
+      return { stdout: '', stderr: '', code: 0, completed };
+    }) as unknown as typeof runStreamingCli;
+    const readiness = vi.fn(() =>
+      Promise.resolve({
+        piVersion: '9.7.3',
+        mcpAdapterVersion: '4.6.2',
+        providers: new Map([['openai-codex', new Set(['gpt-5.6-sol'])]]),
+        resolvedModel: { provider: 'openai-codex', id: 'gpt-5.6-sol' },
+        registeredTools: new Set(['read', 'spawn_subagent']),
+        activeTools: new Set(['read', 'spawn_subagent']),
+        genericProxyAbsent: true,
+        effectiveShell: {},
+        roleManifestPath: '/manifest.json',
+        roleManifestHash: 'a'.repeat(64),
+      }),
+    );
+    const assets: HarnessRuntimeAssets = {
+      pi: {
+        systemPromptPath: '/pkg/context/pi-system-prompt.md',
+        mcpAdapterExtensionPath: '/verified/adapter.js',
+        projectorExtensionPath: '/pkg/projector.js',
+        spawnSubagentExtensionPath: '/pkg/spawn_subagent.js',
+        parentTools: ['read', 'spawn_subagent'],
+        readiness,
+      },
+    };
+
+    const result = await makeSpawnLap(piCfg, piFile, oneShot, {
+      runStreaming,
+      assets,
+      attemptId: () => 'fixed-attempt',
+    })(ITEM);
+
+    expect(readiness.mock.invocationCallOrder[0]).toBeLessThan(
+      (runStreaming as unknown as { mock: { invocationCallOrder: number[] } }).mock
+        .invocationCallOrder[0]!,
+    );
+    expect(oneShot).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'SHIPPED', costUsd: 0.2, inputTokens: 10, outputTokens: 20 });
+    expect(sent[0]).toMatchObject({ type: 'prompt', id: 'opensquid-prompt-fixed-attempt' });
   });
 
   it('a missing RALPH.md fails loud BEFORE spawn (wg-5729c7afafad)', async () => {

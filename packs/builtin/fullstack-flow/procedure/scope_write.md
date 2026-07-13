@@ -6,7 +6,7 @@ The user already confirmed the scope — do not re-confirm or re-research; just 
 
 ## Do
 
-- Write the pre-research artifact to `docs/research/<track>-pre-research-<date>.md`.
+- Write the pre-research artifact to `{docsRoot}/research/<track>-pre-research-<date>.md`.
 - Every claim must be cited (`file:line` / memory / the user's words) — no bare assertions.
 - Flag any residual uncertainty as `- [ ] OPEN QUESTION: …` then resolve it before exiting.
 - Capture the FULL scope against the design you cite — no MVP / convenient-slice reduction.

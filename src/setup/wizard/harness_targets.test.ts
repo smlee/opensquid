@@ -56,6 +56,13 @@ describe('harness registry (GAC.3)', () => {
     expect(byName(res, 'zed')).toBeUndefined(); // no ~/.config/zed, no binary probe
   });
 
+  it('detects Pi via ~/.pi and targets ~/.pi/agent/AGENTS.md', async () => {
+    await mkdir(join(home, '.pi'), { recursive: true });
+    const r = byName(await detectHarnessTargets(home, noBins), 'pi');
+    expect(r?.kind).toBe('block');
+    expect(r?.path).toBe(join(home, '.pi', 'agent', 'AGENTS.md'));
+  });
+
   it('a file-kind row resolves to a dedicated opensquid.md (Cline)', async () => {
     await mkdir(join(home, 'Documents', 'Cline'), { recursive: true });
     const r = byName(await detectHarnessTargets(home, noBins), 'cline');

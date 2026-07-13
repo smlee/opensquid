@@ -211,6 +211,15 @@ export interface ActiveJson {
    */
   verifySuite?: string;
   /**
+   * The docs-root the pack's research/plan artifacts are written under (the `{docsRoot}` procedure token). DATA
+   * in active.json, READ by core, NEVER hardcoded — mirrors {@link verifySuite}. Default project-relative `docs`
+   * (a single-repo project is unchanged); a WORKSPACE checkout can point it at an umbrella docs dir (e.g. `../docs`)
+   * so research artifacts land outside the sub-repo. ABSENT/blank/unreadable ⇒ `readActiveDocsRoot` fails OPEN to
+   * `docs` (never blocks the hot path). Enforcement is unaffected: the lane matcher already accepts `docs/research/`
+   * at any depth, so this only changes the WRITE LOCATION the SCOPE procedure instructs.
+   */
+  docsRoot?: string;
+  /**
    * AQG.4 (T-arch-quality-gate) — the per-project ARCHITECTURE-DETECTOR command: a project-declared check that
    * deterministically fails a mechanical architecture defect (e.g. a redundant-store / duplicate-schema linter).
    * The `code.arch_clean` facet routes on whether THIS command passed: the CODE procedure runs exactly this
@@ -529,6 +538,23 @@ export async function readActiveVerifySuite(scopeRoot: string | null): Promise<s
     return typeof v === 'string' && v.trim().length > 0 ? v : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read the per-project DOCS-ROOT from a scope's `active.json` (see {@link ActiveJson.docsRoot}), or the literal
+ * `'docs'` when absent/blank/unreadable. Sibling of {@link readActiveVerifySuite}, EXCEPT it FAILS OPEN to the
+ * project-relative default `'docs'` (never `null`) so the `{docsRoot}` procedure-token substitution is always a
+ * safe string on the injection hot path — an absent scope / ENOENT / malformed JSON never blocks or throws.
+ */
+export async function readActiveDocsRoot(scopeRoot: string | null): Promise<string> {
+  if (scopeRoot === null) return 'docs';
+  try {
+    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
+    const v = (JSON.parse(raw) as ActiveJson).docsRoot;
+    return typeof v === 'string' && v.trim().length > 0 ? v.trim() : 'docs';
+  } catch {
+    return 'docs';
   }
 }
 

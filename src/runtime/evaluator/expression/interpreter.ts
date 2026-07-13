@@ -37,6 +37,7 @@
  */
 
 import { assertNever, type ASTNode, type BinaryOp, type PathSegment } from './ast.js';
+import { toolValueEquals } from '../../../integrations/pi/tool_aliases.js';
 import { FUNCTIONS, type FnHandler } from './functions.js';
 
 /** AST-nesting depth cap. See pre-research §3.2. */
@@ -156,10 +157,14 @@ export function evaluate(node: ASTNode, ctx: EvalCtx, depth = 0): unknown {
  */
 function applyCompare(op: Exclude<BinaryOp, '&&' | '||'>, lhs: unknown, rhs: unknown): boolean {
   switch (op) {
-    case '==':
-      return lhs === rhs;
-    case '!=':
-      return lhs !== rhs;
+    case '==': {
+      const toolEqual = toolValueEquals(lhs, rhs);
+      return toolEqual ?? lhs === rhs;
+    }
+    case '!=': {
+      const toolEqual = toolValueEquals(lhs, rhs);
+      return toolEqual === null ? lhs !== rhs : !toolEqual;
+    }
     case '<':
       return typeof lhs === 'number' && typeof rhs === 'number' && lhs < rhs;
     case '<=':

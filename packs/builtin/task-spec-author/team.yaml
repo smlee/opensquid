@@ -12,6 +12,15 @@ roles:
   - name: spec-author
     pack: profession/task-spec-author
     model_alias: reasoning
+    tools:
+      - Read
+      - Write
+      - Bash
+      - Grep
+      - mcp__opensquid__workgraph_get
+      - mcp__opensquid__recall
+      - mcp__opensquid__read_state
+      - mcp__opensquid__web_fetch
     handoff_signal: SPEC_AUTHORED
     instructions: |
       You are acting as the task-spec-author profession. Your input is a

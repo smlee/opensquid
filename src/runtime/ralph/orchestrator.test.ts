@@ -248,6 +248,17 @@ describe('runRalphLoop', () => {
     expect((await wg.getIssue('a'))?.wedgeReason).toBeUndefined(); // NOT wedged → re-surfaces once the claim expires
   });
 
+  it('PROCESS_PAUSED stops without wedging so WorkGraph/checkpoint truth can resume', async () => {
+    const esc = vi.fn(() => P({ escalated: true }));
+    const wg = mockStore(['a']);
+    const runLap = lap({ kind: 'HUMAN_REQUIRED', reason: 'PROCESS_PAUSED', costUsd: 0 });
+    const result = await runRalphLoop(cfg(), deps(wg, runLap, esc));
+    expect(result.stopped).toBe('PROCESS_PAUSED');
+    expect(result.parked).toEqual([]);
+    expect((await wg.getIssue('a'))?.wedgeReason).toBeUndefined();
+    expect(esc).toHaveBeenCalledTimes(1);
+  });
+
   it('undroppable escalation: a RESIDUAL delivery failure throws (no silent drop — Inv 6)', async () => {
     // A per-item wedge (SCOPE_FORK) with a failing transport MUST crash the loop — the human can never
     // silently lose a wedged item. (Resource pauses are the exception; see the next test.)

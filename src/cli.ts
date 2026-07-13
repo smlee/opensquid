@@ -57,6 +57,7 @@ import { registerPortability } from './setup/cli/portability.js';
 import { registerCost } from './setup/cli/cost.js';
 import { registerLimits } from './setup/cli/limits.js';
 import { registerSetupWizardMcp } from './setup/cli/mcp.js';
+import { registerLoopSetup } from './setup/cli/loop.js';
 import { registerMemory } from './setup/cli/memory.js';
 import { registerPermissions } from './setup/cli/permissions.js';
 import { registerRalph } from './setup/cli/ralph.js';
@@ -355,6 +356,7 @@ function runCli(): void {
   // prints help — the wizard never auto-runs. Flags: --dry-run, --replace,
   // --skip-test. See `src/setup/cli/chat.ts` for the registration shape.
   const setupGroup = registerSetup(program);
+  registerLoopSetup(setupGroup);
 
   // G.1 — `opensquid setup wizard hooks`. Writes opensquid's 4 anti-drift
   // hook entries into `~/.claude/settings.json` (+ project-scope when a

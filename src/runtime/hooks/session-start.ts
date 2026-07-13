@@ -30,20 +30,22 @@
  * connection-check pack rule (HH6.2). Until a pack rule emits an
  * inject_context on `session_start`, this bin produces no stdout.
  */
-import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
 import { exitIfSubagent } from './subagent_guard.js';
-import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
+import type { SessionStartEvent } from '../event.js';
 import { Event } from '../types.js';
-import { clearFsmState } from '../fsm_state.js';
-import { isStrandedScoping } from '../handoff/stranded_scoping.js';
 
-import { dispatchEvent } from './dispatch.js';
-import { extractSessionId, recordCurrentSession } from './session_id.js';
+import { defaultLifecyclePipeline } from './lifecycle/pipeline.js';
+import {
+  formatDirectiveBlock,
+  projectExistingHostLifecycleContext,
+} from './lifecycle/projector.js';
+import { extractSessionId } from './session_id.js';
 
 interface SessionStartPayload {
   session_id?: string;
   cwd?: string;
   source?: string;
+  agent_id?: string;
 }
 
 function parsePayload(raw: string): unknown {
@@ -97,52 +99,29 @@ async function main(): Promise<void> {
   }
 
   const sessionId = extractSessionId(raw);
-  // Interactive responder (chat mirrors the live session): the moment a session
-  // opens for an umbrella it claims that umbrella's chat lease (acquire-if-free)
-  // so a chat message drives THIS session + the headless stands down — even
-  // before the first keystroke. No-op in `responder: headless` mode / no umbrella.
-  const startCwd = parsed.data.kind === 'session_start' ? parsed.data.cwd : process.cwd();
-  // wg-16803ed82901: record the live-session pointer from session START (not only the
-  // first UPS), so the MCP server resolves THIS session immediately — closing the
-  // window where it would otherwise read a stale/foreign project pointer.
-  await recordCurrentSession(sessionId, startCwd);
-  // T-CHAT-REALTIME: a session START is the user's deliberate "route chat HERE" signal —
-  // the session changes even when the project doesn't, so TAKE OVER the umbrella lease
-  // (newest-session-wins) rather than defer to a possibly-dead prior holder. The
-  // mid-session UPS/Stop heartbeat keeps the default acquire-if-free.
-  await claimUmbrellaLeaseForSession(sessionId, startCwd, { forceTakeover: true });
-  // RTC.4 (wg-3d175ec06767): on a RESUME, clear an ORPHANED coding-flow scoping — a thread that
-  // entered scoping/researching long ago and was never advanced (the codex-pause-wedge cause-1).
-  // The triple-gate (stale started_at + no turn activity + no work artifacts) never resets a live
-  // scoping. Best-effort: a SessionStart hook must never block.
-  if (parsed.data.kind === 'session_start' && parsed.data.source === 'resume') {
-    try {
-      if (await isStrandedScoping(sessionId, new Date().toISOString())) {
-        await clearFsmState(sessionId, 'coding-flow');
-        process.stderr.write('opensquid: cleared an orphaned coding-flow scoping on resume\n');
-      }
-    } catch (e) {
-      process.stderr.write(`opensquid: stranded-scoping check failed — ${String(e)}\n`);
-    }
-  }
-  const packs = await loadActivePacksForDispatch(sessionId);
-  const registry = await buildRegistry();
-  const { exitCode, stderr, contextInjections } = await dispatchEvent(
-    parsed.data,
-    packs,
-    registry,
-    sessionId,
-  );
+  const event = parsed.data as SessionStartEvent;
+  const { exitCode, stderr, contextInjections, directives } =
+    await defaultLifecyclePipeline.runSessionStart(
+      { event },
+      projectExistingHostLifecycleContext({
+        sessionId,
+        cwd: event.cwd ?? process.cwd(),
+        raw,
+      }),
+    );
 
   // HH6.1 L2: emit the additionalContext envelope when any rule contributed
   // an inject_context payload (the dispatcher aggregates inject_context for
   // session_start per the HH6.1 widening). Raw stdout is silently discarded
   // by Claude Code 2.x — the JSON envelope is the ONLY channel that injects.
-  if (contextInjections.length > 0) {
+  const contextParts = [...contextInjections];
+  const directiveBlock = formatDirectiveBlock(directives);
+  if (directiveBlock !== null) contextParts.push(directiveBlock);
+  if (contextParts.length > 0) {
     const envelope = {
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: contextInjections.join('\n\n'),
+        additionalContext: contextParts.join('\n\n'),
       },
     };
     process.stdout.write(JSON.stringify(envelope));

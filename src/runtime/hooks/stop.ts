@@ -1,33 +1,13 @@
 #!/usr/bin/env node
-/**
- * Claude Code `Stop` hook binary.
- *
- * Fires when the assistant emits a stop turn (end of an assistant message).
- * Payload carries the assistant's final text — used by destination-check
- * rules to evaluate "did the agent stay on the goal."
- *
- * Wired in `~/.claude/settings.json`:
- *
- *   { "hooks": { "Stop": [{ "hooks": [{ "type": "command",
- *     "command": "opensquid-hook-stop" }] }] } }
- *
- * stdin = stop event JSON. exit 0 = allow (continue session normally),
- * exit 2 = block (in practice this surfaces a warning to the agent; the
- * stop itself can't be "blocked"). Stderr messages are shown.
- *
- * Fail-open on any internal error — see `main().catch()` below.
- */
-import { buildRegistry, loadActivePacksForDispatch } from '../bootstrap.js';
-import { exitIfSubagent, isLoopLap } from './subagent_guard.js';
+/** Claude Code `Stop` hook binary. */
+import { exitIfSubagent } from './subagent_guard.js';
+import type { StopEvent } from '../event.js';
 import { Event } from '../types.js';
 
-import { dispatchEvent } from './dispatch.js';
+import { defaultLifecyclePipeline } from './lifecycle/pipeline.js';
+import { projectExistingHostLifecycleContext } from './lifecycle/projector.js';
 import { extractSessionId } from './session_id.js';
 import { emitDriftStderrAndExit, squidPrefix } from './hook_output.js';
-import { claimUmbrellaLeaseForSession } from '../chat/claim_lease.js';
-import { maybeDriveInbound, maybePeekInbound, extractCwd } from './stop_drive.js';
-import { maybeStreamOutput } from './stop_stream.js';
-import { maybeIngestTurn } from './stop_ingest.js';
 import { readLastAssistantText } from './transcript.js';
 
 interface StopPayload {
@@ -36,19 +16,17 @@ interface StopPayload {
   message?: string;
   transcript_path?: string;
   transcriptPath?: string;
+  agent_id?: string;
 }
 
 function parsePayload(raw: string): unknown {
   const obj = JSON.parse(raw) as StopPayload;
   return {
     kind: 'stop',
-    // Claude Code's Stop payload field name isn't 100% pinned across versions;
-    // accept camelCase, snake_case, or a generic `message` field.
     assistantText: obj.assistantText ?? obj.assistant_text ?? obj.message ?? '',
   };
 }
 
-/** Extract the transcript `.jsonl` path from a Stop payload (snake/camel). */
 function extractTranscriptPath(raw: string): string | null {
   try {
     const obj = JSON.parse(raw) as StopPayload;
@@ -66,7 +44,7 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  exitIfSubagent('stop'); // SUB.1: before stdin read / any state write
+  exitIfSubagent('stop');
   const raw = await readStdin();
   if (!raw.trim()) {
     process.stderr.write('opensquid: empty Stop payload — proceeding\n');
@@ -87,15 +65,6 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // HH7.1: Claude Code omits the assistant response text from Stop stdin, so
-  // `assistantText` is empty here. Recover the last assistant message from the
-  // transcript `.jsonl` (CC always provides `transcript_path`) so Stop-event
-  // gates that read assistantText (honesty-ledger, phase-logging) see what was
-  // written instead of an empty string. Fail-open: a transcript-read failure
-  // leaves assistantText '' (pre-fix behavior), never crashes the hook.
-  // ⚠️ SG.3 caveat: this is off-by-one (returns the PRIOR response if the
-  // triggering one isn't flushed yet) — see transcript.ts. recall-consumed was
-  // removed for relying on this to judge its own triggering response.
   if (parsed.data.kind === 'stop' && parsed.data.assistantText === '') {
     const transcriptPath = extractTranscriptPath(raw);
     if (transcriptPath !== null) {
@@ -103,57 +72,27 @@ async function main(): Promise<void> {
     }
   }
 
-  // Always-on raw-turn capture into RAG (T-memory-lifecycle) — writes to the CONFIGURED backend
-  // (resolveBackendConfig → fastembed/rag.sqlite, where recall reads), embeds only new rows (storeLesson
-  // short-circuit), user prose immune; session-end gists + retires the agent/tool raws (bounded). Before
-  // dispatch so even a drift-BLOCK turn is captured; fail-open (never blocks the turn).
-  await maybeIngestTurn(raw);
-
   const sessionId = extractSessionId(raw);
-  const packs = await loadActivePacksForDispatch(sessionId);
-  const registry = await buildRegistry();
-  const { exitCode, stderr } = await dispatchEvent(parsed.data, packs, registry, sessionId);
+  const event = parsed.data as StopEvent;
+  const lifecycle = projectExistingHostLifecycleContext({
+    sessionId,
+    cwd: process.cwd(),
+    raw,
+  });
+  const result = await defaultLifecyclePipeline.runStop(
+    { event, raw, isLoopLap: lifecycle.role !== 'interactive' },
+    lifecycle,
+  );
 
-  const cwd = extractCwd(raw);
-
-  // A drift BLOCK (exit≠0) still takes precedence — the run is NOT driven mid-run, so the
-  // no-pause discipline holds. But SURFACE any pending inbound in the drift stderr so a
-  // mid-run user message is never invisible (T-CHAT-INBOUND-SURFACE-MIDRUN). The peek is
-  // READ-ONLY (unacked), so the same message still DRIVES a proper response turn at the next
-  // clean stop (maybeDriveInbound below) — surfacing loses nothing.
-  if (exitCode !== 0) {
-    const peek = await maybePeekInbound(sessionId, cwd);
-    emitDriftStderrAndExit(exitCode, peek === null ? stderr : `${stderr}\n\n${peek}`);
+  if (result.continuationReason !== undefined) {
+    if (result.stderr.length > 0) process.stderr.write(squidPrefix(result.stderr) + '\n');
+    process.stdout.write(
+      JSON.stringify({ decision: 'block', reason: result.continuationReason }) + '\n',
+    );
+    process.exit(0);
   }
 
-  // scope-1 (T-in-lap-gating) — the interactive-responder branch is lap-guarded: a headless ralph lap is NOT the
-  // chat responder, so it does not claim the umbrella lease, stream output, or drive inbound. The lap still ENTERS
-  // the bin above (drift dispatch, phase-logging, honesty-ledger, maybeIngestTurn RAG all ran) — guard the branch,
-  // not the bin. A non-lap session runs the responder path unchanged.
-  if (!isLoopLap()) {
-    // Interactive responder: this live session claims its umbrella's chat lease
-    // (acquire-if-free) so the drive below owns the turn + the headless stands
-    // down. No-op in `responder: headless` mode or when another session holds it.
-    await claimUmbrellaLeaseForSession(sessionId, cwd);
-
-    // CAT.3 — "see": if THIS just-completed turn was chat-driven (CAT.2 left the
-    // marker), stream the agent's answer back to the source topic automatically
-    // (reply-to-source; the agent never picks the channel). No-op otherwise.
-    const assistantText = parsed.data.kind === 'stop' ? parsed.data.assistantText : '';
-    await maybeStreamOutput(sessionId, cwd, assistantText);
-
-    // CAT.2 — "drive": if this session holds the umbrella's chat lease and has
-    // unacked inbound, block the stop and feed the inbound as the next turn so a
-    // chat message DRIVES a turn without a keystroke (the remote-terminal "drive").
-    const driveReason = await maybeDriveInbound(sessionId, cwd);
-    if (driveReason !== null) {
-      if (stderr.length > 0) process.stderr.write(squidPrefix(stderr) + '\n');
-      process.stdout.write(JSON.stringify({ decision: 'block', reason: driveReason }) + '\n');
-      process.exit(0);
-    }
-  }
-
-  emitDriftStderrAndExit(0, stderr);
+  emitDriftStderrAndExit(result.exitCode, result.stderr);
 }
 
 main().catch((e: unknown) => {

@@ -1,6 +1,23 @@
-/**
- * opensquid public entry. opensquid ships via its `bin` entrypoints (CLI + hooks) and the MCP
- * servers — it exposes no library root API. (The former `./engine/*` re-export was removed when the
- * loop-engine subsystem was retired; opensquid is fully engine-free.)
- */
-export {};
+/** Public SDK surface shared by trusted OpenSquid CLI, TUI, and web adapters. */
+export { setupLoop, type LoopSetupResult } from './setup/wizard/loop_setup.js';
+export {
+  getExecutorControlReceipt,
+  listExecutorProcesses,
+  requestExecutorControl,
+  type ExecutorActionAudit,
+  type ExecutorControlReceipt,
+  type ExecutorControlRequest,
+  type ExecutorProcessState,
+  type HumanControlSurface,
+  type HumanExecutorAction,
+  type HumanProcessSignalAction,
+} from './runtime/subagents/process_control.js';
+export {
+  resumeExecutorProcess,
+  type ResumeExecutorResult,
+} from './runtime/subagents/process_resume.js';
+export {
+  updatePiModelSelection,
+  type PiModelSelection,
+  type UpdatePiModelSelectionResult,
+} from './integrations/pi/user_settings.js';

@@ -4,9 +4,10 @@ You are in the CODE stage. Drive the active task to a shipped, gated unit. CODE 
 
 ## Research BEFORE coding (pre_research / learn)
 
-- FAN OUT parallel subagents with the appropriate skills: a task-verifier (re-confirm the spec vs current
-  `file:line`/live API), an external-docs reader per library/version touched (primary docs), a local-expander
-  (affected files + reusable defs + non-deprecated syntax). They burn their context; you keep the synthesis.
+- The parent remains orchestration-only. Delegate repository implementation to the pack's implementation
+  executors in one bounded parallel batch when tasks are independent. Include each executor's necessary
+  task-verification, primary-doc reading, local expansion, implementation, tests, audit, and fix loop in that
+  assignment; do not create separate read-only fan-out batches around the implementation batch.
 - VERIFY the task against current reality (`file:line` / the live API) — a task claim the code contradicts is
   surfaced, not coded around.
 - EXPAND to concrete implementation detail (affected files, existing defs to reuse, current non-deprecated
@@ -44,9 +45,9 @@ feed. `wg_id` defaults to this lap's item — do not pass it. Example:
 
 ## Research AFTER coding (audit) — another layer
 
-- FAN OUT adversarial audit subagents with the appropriate skills, one per lens, each trying to REFUTE that
-  the code is done: alignment, proper doc-use, existing-solution double-check, full-fix, re-audit-the-spec.
-  Synthesize the survivors; a finding that survives refutation is a real gap to fix.
+- Require the implementation executors in the existing batch to adversarially audit their bounded changes and
+  report evidence for alignment, proper doc-use, existing-solution double-check, full-fix, and spec re-audit.
+  The parent synthesizes those results and must not launch an additional audit batch.
 - ALIGNMENT: the written code matches the goal/scoped element. PROPER DOC USE: APIs used per their primary
   docs (no deprecated/misused calls). EXISTING-SOLUTION DOUBLE-CHECK: nothing reinvented. FULL-FIX, not a
   band-aid. RE-AUDIT the AUTHOR spec (still guess-free at code time?).

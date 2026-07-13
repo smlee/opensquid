@@ -88,6 +88,9 @@ describe('v2 skill host — deterministic lens relevance gate (VS.3, §4.3)', ()
   it('a source-code Write lets the lenses through (all skills relevant)', () => {
     const r = relevantSkills(cart.skills, ev('Write', '/x/Button.tsx'));
     expect(r.length).toBe(cart.skills.length);
+    expect(relevantSkills(cart.skills, ev('MultiEdit', '/x/Button.tsx')).length).toBe(
+      cart.skills.length,
+    );
   });
 
   it('a Bash/non-edit gets NO lens — only preload skills (pause-guard)', () => {

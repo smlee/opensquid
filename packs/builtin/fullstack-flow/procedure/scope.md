@@ -20,7 +20,7 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
   procedures require — subagents/fan-out, hooks/enforcement, MCP — do not assume a barebones tool has one).
   A publicly-findable fact MUST be grounded here — it may NOT be parked as an OPEN QUESTION or deferred to
   PLAN / a live-acceptance. Leaning on downstream review to surface web-findable facts is a scope failure.
-- Write the pre-research artifact to `docs/research/<track>-pre-research-<date>.md`. Every claim is cited
+- Write the pre-research artifact to `{docsRoot}/research/<track>-pre-research-<date>.md`. Every claim is cited
   (`file:line` / memory / the user's words) OR flagged as an unchecked `- [ ] OPEN QUESTION: …`.
 - Capture the FULL scope against the design you cite — no MVP / convenient-slice reduction (see the rubric).
 - CITE THE AUTHORITATIVE design-of-record. Before scoping, confirm the design you cite is the CURRENT one, NOT a

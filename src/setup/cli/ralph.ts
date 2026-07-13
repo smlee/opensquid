@@ -13,6 +13,7 @@
  */
 import { rmSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { Command } from 'commander';
 import { OPENSQUID_HOME, loopPidPath, resolveLocalStoreDir } from '../../runtime/paths.js';
@@ -23,7 +24,8 @@ import {
   resolveUmbrellaForCwd,
 } from '../../channels/routing.js';
 import type { LapEscalator } from '../../runtime/ralph/escalate_lap.js';
-import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
+import { realProcControl, runOneShotCli } from '../../runtime/spawn_lifecycle.js';
+import { runStreamingCli } from '../../runtime/streaming_cli.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
 import { workGraphStore } from '../../workgraph/store.js';
 import { harnessMapStore } from '../../workgraph/harness_map.js';
@@ -53,10 +55,22 @@ import { displayReport } from '../../runtime/loop/report_display.js'; // RD.2/RD
 import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
 import { outcomeFromEnvelope } from '../../runtime/ralph/lap_outcome.js';
-import { resolveLapHarness, type LapHarnessCfg } from '../../runtime/ralph/lap_harness.js';
+import {
+  resolveLapHarness,
+  type HarnessConfig,
+  type HarnessRuntimeAssets,
+} from '../../runtime/ralph/lap_harness.js';
+import { defaultHarnessRuntimeAssets } from '../../integrations/pi/runtime.js';
+import { PI_EXECUTOR_WALL_CLOCK_MS_ENV } from '../../integrations/pi/env.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
 import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
+import { registerLoopProcess } from '../../cli/loop_process.js';
+import { completeInteractiveScope } from '../../runtime/ralph/scope_done.js';
+import {
+  controlledExecutorProcess,
+  isProcessPausedError,
+} from '../../runtime/subagents/process_control.js';
 
 /**
  * T-project-local-state PLS.2: the ralph loop drains THIS project's ready queue from the PROJECT-LOCAL
@@ -102,14 +116,23 @@ export function buildRalphConfig(
 }
 
 /** Build the per-lap runner: resolve the harness adapter from the config `kind`, spawn the RALPH.md lap
- * through it, fold its envelope → the typed exit. A deadline overrun (group-SIGKILL) becomes the typed
- * TIMEOUT, NOT a CRASH; a genuine spawn failure rethrows → CRASH. */
+ * through it, fold its envelope → the typed exit. A deadline requests graceful shutdown and pauses logical
+ * work for human control; a genuine spawn failure remains eligible for bounded recovery. */
 export function makeSpawnLap(
   cfg: RalphConfig,
   file: RalphConfigFile,
   runCli: typeof runOneShotCli = runOneShotCli,
-): (item: Issue, stagePrompt?: string) => Promise<LapResult> {
-  return async (item: Issue, stagePrompt?: string) => {
+  runtime: {
+    runStreaming?: typeof runStreamingCli;
+    assets?: HarnessRuntimeAssets;
+    attemptId?: () => string;
+    cwd?: string;
+  } = {},
+): (item: Issue, stagePrompt?: string, checkpointStage?: string) => Promise<LapResult> {
+  // One composed runtime per loop process. Behavioral readiness is memoized only after success, so fresh laps
+  // share verified evidence while a failed preflight remains retryable without re-probing on every stage.
+  const harnessAssets = runtime.assets ?? defaultHarnessRuntimeAssets();
+  return async (item: Issue, stagePrompt?: string, checkpointStage?: string) => {
     // wg-5729c7afafad: deliver the RALPH.md CONTENT (not its path) as the stdin prompt, with the item id
     // appended — `claude -p` reads the prompt from stdin (empirically verified). Fail loud if the directive
     // is missing (a setup problem, not a retryable lap CRASH).
@@ -124,6 +147,7 @@ export function makeSpawnLap(
     const prompt =
       ralphMd +
       `\n\n---\nYour assigned work-item id: ${item.id}\n(Read it with workgraph_get("${item.id}").)\n` +
+      `Captured work-item ask (verbatim):\n${item.title}\n${item.body}\n` +
       // PSL.3 — the per-stage directive (when the orchestrator drives this item per-stage). Appended LAST so it
       // is the most-specific instruction (it narrows RALPH.md's "do the whole item" to "do ONLY this stage").
       // The lap's OWN stage_inject hook supplies the stage's checkpoint/procedure/rubric/work-context (its own
@@ -145,62 +169,104 @@ export function makeSpawnLap(
     // the load-time fail-loud). ALL harness-specifics (flags, prompt delivery, envelope parse, auth preflight)
     // come from the adapter; this core stays neutral (audit-grep-empty, MHL.8).
     const adapter = resolveLapHarness(file.harness.kind);
-    const lapCfg: LapHarnessCfg = {
-      maxBudgetUsd: cfg.maxBudgetUsd,
-      ...(file.harness.sandbox === undefined ? {} : { sandbox: file.harness.sandbox }),
-      ...(file.harness.askForApproval === undefined
-        ? {}
-        : { askForApproval: file.harness.askForApproval }),
-      ...(file.harness.model === undefined ? {} : { model: file.harness.model }),
-      ...(file.harness.pricing === undefined ? {} : { pricing: file.harness.pricing }),
+    const lapConfig: HarnessConfig = { ...file.harness, maxBudgetUsd: cfg.maxBudgetUsd };
+    const attemptId = (runtime.attemptId ?? randomUUID)();
+    const lapCwd = runtime.cwd ?? process.cwd();
+    const request = {
+      prompt,
+      cwd: lapCwd,
+      timeoutMs: file.wallClockMs,
+      env: {
+        OPENSQUID_ITEM_ID: item.id,
+        OPENSQUID_SESSION_ID: attemptId,
+        OPENSQUID_AUTOMATION: '1',
+        OPENSQUID_RUN_ID: cfg.runId,
+        ...(checkpointStage === undefined ? {} : { OPENSQUID_CHECKPOINT_STAGE: checkpointStage }),
+        [LOOP_LAP_ENV]: '1',
+        ...(file.harness.kind === 'pi'
+          ? {
+              OPENSQUID_PI_CLI: file.harness.cli,
+              [PI_EXECUTOR_WALL_CLOCK_MS_ENV]: String(file.wallClockMs),
+            }
+          : {}),
+      },
+      attemptId,
+      onStderrLine: (line: string) =>
+        process.stdout.write(`    │ ${item.id.slice(3, 11)} ${line}\n`),
+      onStreams: ({
+        stdout: out,
+        stderr,
+        code,
+      }: {
+        stdout: string;
+        stderr: string;
+        code: number | null;
+      }) => {
+        appendLog(
+          `# lap ${item.id} · attempt=${attemptId} · exit=${code} · ${new Date().toISOString()}\n` +
+            `=== STDERR ===\n${stderr.trim() || '(empty)'}\n\n=== STDOUT (tail) ===\n${out.slice(-6000)}\n`,
+        );
+      },
     };
-    // Fail-loud setup check BEFORE the spawn (Codex: auth diagnostics; Claude: no-op) — a setup problem, not a
-    // retryable CRASH, alongside the RALPH.md read above.
-    await adapter.preflight?.(lapCfg);
-    // onStreams fires at process close (BEFORE runCli resolves), so capturedStderr is set by the time the
-    // post-await parse runs — the adapter's parseEnvelope may read a stderr signal (e.g. Codex).
-    let capturedStderr = '';
-    let stdout: string;
-    try {
-      stdout = await runCli({
-        cli: file.harness.cli, // Inv 10 — harness is a parameter
-        args: adapter.spawnArgs(lapCfg), // the harness-specific flags (was the hardcoded Claude array)
-        prompt: adapter.deliverPrompt(prompt).stdin, // the harness-specific prompt delivery (was the bare prompt)
-        timeoutMs: file.wallClockMs,
-        // scope-4 (T-in-lap-gating) — the lap runs FULLY HOOKED: PreToolUse enforcement, stage_inject
-        // procedure/rubric delivery, and the PostToolUse FSM write-through (v2_supply → upsertTaskStage) ALL fire
-        // in-lap. It sets the recursion-only OPENSQUID_LOOP_LAP marker (NOT markSubagent → NOT OPENSQUID_SUBAGENT),
-        // which the six hook bins IGNORE (they run for the lap) and which only blocks a NESTED loop (the entrypoint
-        // guard) + the stop-responder / session-end-handoff actions. OPENSQUID_ITEM_ID is still published so the
-        // MCP tools the lap calls (set_loop_phase/log_phase/workgraph_*, in the MCP server process) have item context.
-        env: { OPENSQUID_ITEM_ID: item.id, [LOOP_LAP_ENV]: '1' },
-        timeoutError: () => Object.assign(new Error('lap timeout'), { __timeout: true }),
-        // LIVE channel — each lap stderr line surfaces immediately in the loop's own output (the subprocess→
-        // session message channel; no chat, no daemon, no log-scraping). Watch `opensquid loop` and you see
-        // the lap talking in real time.
-        onStderrLine: (line: string) =>
-          process.stdout.write(`    │ ${item.id.slice(3, 11)} ${line}\n`),
-        // Log BOTH streams at close (any exit code) — stderr is where a wedged lap's hook/gate errors land.
-        onStreams: ({ stdout: out, stderr, code }) => {
-          capturedStderr = stderr; // capture for the adapter parse (a harness may signal on stderr)
-          appendLog(
-            `# lap ${item.id} · exit=${code} · ${new Date().toISOString()}\n` +
-              `=== STDERR ===\n${stderr.trim() || '(empty)'}\n\n=== STDOUT (tail) ===\n${out.slice(-6000)}\n`,
-          );
-        },
+    const oneShotControl =
+      file.harness.kind === 'pi'
+        ? null
+        : controlledExecutorProcess({
+            executorId: `${file.harness.kind}-parent-${attemptId}`,
+            wgId: item.id,
+            runId: cfg.runId,
+            ...(checkpointStage === undefined ? {} : { checkpointStage }),
+            lap: 1,
+            role: 'orchestrator',
+            base: realProcControl,
+          });
+    const controlledRunCli: typeof runOneShotCli = (options) =>
+      runCli({
+        ...options,
+        ...(oneShotControl === null
+          ? {}
+          : {
+              procControl: oneShotControl.procControl,
+              onShutdownRequested: () => oneShotControl.markAutomaticShutdown(),
+            }),
       });
+    const deps = {
+      runOneShot: controlledRunCli,
+      runStreaming: runtime.runStreaming ?? runStreamingCli,
+      assets: harnessAssets,
+    };
+    let env;
+    try {
+      await adapter.preflight?.(lapConfig, deps, request);
+      env = await adapter.run(request, lapConfig, deps);
     } catch (e) {
       appendLog(`\n=== LAP ERROR ===\n${e instanceof Error ? e.message : String(e)}\n`);
-      if ((e as { __timeout?: boolean }).__timeout === true) return { kind: 'TIMEOUT', costUsd: 0 };
-      throw e; // genuine spawn/IO failure → superviseLap maps it to CRASH
+      if (isProcessPausedError(e)) {
+        return {
+          kind: 'HUMAN_REQUIRED',
+          reason: e.cause.action === 'graceful_stop' ? 'PROCESS_PAUSED' : 'CANCELLED_BY_HUMAN',
+          payload: {
+            executorId: e.executorId,
+            action: e.cause.action,
+            actionId: e.cause.actionId,
+          },
+          costUsd: 0,
+        };
+      }
+      const oneShotCause = oneShotControl?.shutdownCause() ?? null;
+      if (oneShotCause?.kind === 'human') {
+        return {
+          kind: 'HUMAN_REQUIRED',
+          reason: oneShotCause.action === 'graceful_stop' ? 'PROCESS_PAUSED' : 'CANCELLED_BY_HUMAN',
+          payload: { action: oneShotCause.action, actionId: oneShotCause.actionId },
+          costUsd: 0,
+        };
+      }
+      if ((e as { __timeout?: boolean }).__timeout === true) {
+        return { kind: 'TIMEOUT', costUsd: 0 };
+      }
+      throw e;
     }
-    // CFS.1 — price the parsed envelope via the optional adapter seam BEFORE the fold: an adapter whose raw
-    // stream carries no cost (Codex) supplies costUsd here from the token counts × the configured rate; an
-    // adapter without `priceUsd` (Claude — its cost is already real) is a no-op. Generic call → neutrality holds.
-    const rawEnv = adapter.parseEnvelope(stdout, capturedStderr);
-    const env = adapter.priceUsd
-      ? { ...rawEnv, costUsd: adapter.priceUsd(rawEnv, lapCfg) }
-      : rawEnv;
     const { outcome, costUsd, inputTokens, outputTokens } = outcomeFromEnvelope(env);
     appendLog(
       `\n=== PARSED OUTCOME === ${JSON.stringify(outcome)} · cost=$${costUsd} · ` +
@@ -263,7 +329,7 @@ const AUTOMATED_STAGES = new Set<string>(['scope_write', 'plan', 'author', 'code
 
 /** The per-stage directive appended to a lap's prompt: do ONLY this stage + report the resulting stage. The lap's
  *  own stage_inject hook supplies the stage's procedure/rubric/checkpoint/work-context (its own session). */
-function perStageDirective(stage: string): string {
+export function perStageDirective(stage: string): string {
   return [
     `## Per-stage assignment (the orchestrator runs ONE stage per lap, for fresh context per stage)`,
     `You are assigned ONLY the **${stage}** stage of this item — NOT the whole flow.`,
@@ -272,7 +338,9 @@ function perStageDirective(stage: string): string {
     `Exit by reporting the stage the flow is AT after you finish, so the orchestrator can prime the next lap:`,
     `  RALPH-EXIT: {"kind":"SHIPPED","stage":"<your current FSM stage after completing ${stage} — verify with read_state>"}`,
     `If you genuinely cannot complete ${stage} (an irreversible boundary or a product fork the principles cannot`,
-    `settle), escalate as usual: RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"IRREVERSIBLE_BOUNDARY|SCOPE_FORK"}.`,
+    `settle), escalate as usual with EXACTLY ONE valid reason, for example:`,
+    `  RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"IRREVERSIBLE_BOUNDARY"}`,
+    `  RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"SCOPE_FORK"}`,
   ].join('\n');
 }
 
@@ -469,6 +537,18 @@ export function registerRalph(program: Command): Command {
         // re-triggers a fresh loop (the ask's "the next scope-exit re-triggers"), never a false already-running.
         removeLoopPid();
       }
+    });
+
+  registerLoopProcess(loop);
+
+  loop
+    .command('scope-done <itemId> <artifact>')
+    .description('human scope-exit: persist scope proof and start/resume the loop')
+    .action(async (itemId: string, artifact: string) => {
+      const result = await completeInteractiveScope({ wgId: itemId, artifact });
+      process.stdout.write(
+        `scope complete ${result.wgId} → ${result.stage} (${result.artifact})\n`,
+      );
     });
 
   loop

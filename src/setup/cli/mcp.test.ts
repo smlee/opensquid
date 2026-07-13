@@ -360,10 +360,19 @@ describe('runMcpWizard — multi-host (--hosts)', () => {
             backupPath: `${path}.bak`,
           });
         },
+        piWriter: (path) => {
+          seen.push(path);
+          return Promise.resolve({
+            added: ['opensquid', 'opensquid-chat'],
+            replaced: [],
+            preserved: 0,
+            backupPath: `${path}.bak`,
+          });
+        },
         cwd: () => fakeCwd,
         home: () => fakeHome,
         platform: () => 'darwin',
-        // Desktop dir present; Cursor dir (~/.cursor) absent.
+        // Desktop dir present; Cursor dir (~/.cursor) absent. Pi is always selectable and creates through install.
         dirExists: (p) => Promise.resolve(p === desktopDir),
         stdout: recordStdout,
         stderr: recordStderr,
@@ -373,13 +382,14 @@ describe('runMcpWizard — multi-host (--hosts)', () => {
 
     expect(seen).toContain(join(fakeHome, '.claude.json'));
     expect(seen).toContain(join(desktopDir, 'claude_desktop_config.json'));
+    expect(seen).toContain(join(fakeHome, '.pi', 'agent', 'mcp.json'));
     expect(seen).not.toContain(join(fakeHome, '.cursor', 'mcp.json'));
     expect(stdoutBuf).toContain('Claude Desktop');
     expect(stdoutBuf).toContain('restart Claude Desktop');
     expect(stdoutBuf).toContain('Cursor: not detected');
   });
 
-  it('dispatches codex → codexWriter (TOML), claude-code → writer (JSON) (CE.1)', async () => {
+  it('dispatches codex → codexWriter (TOML), pi → piWriter, claude-code → writer (JSON)', async () => {
     const fakeHome = join(root, 'home');
     const fakeCwd = join(root, 'cwd');
     await mkdir(fakeCwd, { recursive: true });
@@ -387,8 +397,13 @@ describe('runMcpWizard — multi-host (--hosts)', () => {
 
     const jsonPaths: string[] = [];
     const tomlPaths: string[] = [];
+    const piPaths: string[] = [];
     await runMcpWizard(
-      { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false, hosts: 'codex,claude-code' },
+      {
+        opensquidRoot: '/fake/opensquid',
+        detectProjectCleanup: false,
+        hosts: 'codex,pi,claude-code',
+      },
       {
         writer: (path) => {
           jsonPaths.push(path);
@@ -408,10 +423,19 @@ describe('runMcpWizard — multi-host (--hosts)', () => {
             backupPath: `${path}.bak`,
           });
         },
+        piWriter: (path) => {
+          piPaths.push(path);
+          return Promise.resolve({
+            added: ['opensquid', 'opensquid-chat'],
+            replaced: [],
+            preserved: 0,
+            backupPath: `${path}.bak`,
+          });
+        },
         cwd: () => fakeCwd,
         home: () => fakeHome,
         platform: () => 'darwin',
-        dirExists: (p) => Promise.resolve(p === codexDir), // ~/.codex present
+        dirExists: (p) => Promise.resolve(p === codexDir || p === join(fakeHome, '.pi', 'agent')),
         stdout: recordStdout,
         stderr: recordStderr,
         isTty: () => true,
@@ -420,7 +444,9 @@ describe('runMcpWizard — multi-host (--hosts)', () => {
 
     expect(jsonPaths).toEqual([join(fakeHome, '.claude.json')]); // JSON writer for claude-code only
     expect(tomlPaths).toEqual([join(codexDir, 'config.toml')]); // TOML writer for codex only
+    expect(piPaths).toEqual([join(fakeHome, '.pi', 'agent', 'mcp.json')]);
     expect(stdoutBuf).toContain('Codex');
+    expect(stdoutBuf).toContain('Pi');
     expect(stdoutBuf).toContain('restart Codex');
   });
 
@@ -515,5 +541,65 @@ describe('runMcpWizard — multi-host (--hosts)', () => {
     expect(process.exitCode).toBe(1);
     expect(stderrBuf).toContain('no valid hosts');
     process.exitCode = prevExit;
+  });
+
+  it('pi dry-run uses the Pi reader/projection instead of the generic JSON projection', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+    let piReaderCalls = 0;
+    let jsonReaderCalls = 0;
+    await runMcpWizard(
+      { dryRun: true, opensquidRoot: '/fake/opensquid', detectProjectCleanup: false, hosts: 'pi' },
+      {
+        reader: () => {
+          jsonReaderCalls += 1;
+          return Promise.resolve({});
+        },
+        piReader: () => {
+          piReaderCalls += 1;
+          return Promise.resolve({ mcpServers: { other: { command: 'x' } } });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        dirExists: () => Promise.resolve(false),
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+    expect(piReaderCalls).toBe(1);
+    expect(jsonReaderCalls).toBe(0);
+    expect(stdoutBuf).toContain('DRY RUN');
+  });
+
+  it('does not skip Pi write mode when ~/.pi/agent is absent; the writer creates through Pi install', async () => {
+    const fakeHome = join(root, 'home');
+    const fakeCwd = join(root, 'cwd');
+    await mkdir(fakeCwd, { recursive: true });
+    const piPaths: string[] = [];
+    await runMcpWizard(
+      { opensquidRoot: '/fake/opensquid', detectProjectCleanup: false, hosts: 'pi' },
+      {
+        piWriter: (path) => {
+          piPaths.push(path);
+          return Promise.resolve({
+            added: ['opensquid', 'opensquid-chat'],
+            replaced: [],
+            preserved: 0,
+            backupPath: `${path}.bak`,
+          });
+        },
+        cwd: () => fakeCwd,
+        home: () => fakeHome,
+        dirExists: () => Promise.resolve(false),
+        stdout: recordStdout,
+        stderr: recordStderr,
+        isTty: () => true,
+      },
+    );
+    expect(piPaths).toEqual([join(fakeHome, '.pi', 'agent', 'mcp.json')]);
+    expect(stdoutBuf).toContain('Pi');
+    expect(stdoutBuf).not.toContain('Pi: not detected');
   });
 });
