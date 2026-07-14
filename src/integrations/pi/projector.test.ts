@@ -4,8 +4,11 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import projector from './projector.js';
+import opensquidPiProjector from './projector.js';
+import type { PiLifecycleResourceOwner } from './lifecycle_resources.js';
+import { FunctionRegistry } from '../../functions/registry.js';
 import { defaultLifecyclePipeline } from '../../runtime/hooks/lifecycle/pipeline.js';
+import type { RagBackend } from '../../rag/types.js';
 import type { Directive } from '../../runtime/types.js';
 
 interface FakeCtx {
@@ -47,6 +50,32 @@ function makePi(): FakePi & Parameters<typeof projector>[0] {
     },
   };
   return pi as unknown as FakePi & Parameters<typeof projector>[0];
+}
+
+interface FakeLifecycleResourceOwner extends PiLifecycleResourceOwner {
+  getSpy: ReturnType<typeof vi.fn>;
+  closeSpy: ReturnType<typeof vi.fn>;
+}
+
+function makeLifecycleResources(): FakeLifecycleResourceOwner {
+  const registry = new FunctionRegistry();
+  const ragBackend: RagBackend = {
+    init: vi.fn(() => Promise.resolve()),
+    close: vi.fn(() => Promise.resolve()),
+    embed: vi.fn(() => Promise.resolve(null)),
+    recall: vi.fn(() => Promise.resolve([])),
+    storeLesson: vi.fn(() => Promise.resolve()),
+    deleteLesson: vi.fn(() => Promise.resolve({ deleted: false, forced: false })),
+  };
+  const getSpy = vi.fn(() => Promise.resolve({ registry, ragBackend }));
+  const closeSpy = vi.fn(() => Promise.resolve());
+  return { get: getSpy, close: closeSpy, getSpy, closeSpy };
+}
+
+function projector(pi: Parameters<typeof opensquidPiProjector>[0]): FakeLifecycleResourceOwner {
+  const lifecycleResources = makeLifecycleResources();
+  opensquidPiProjector(pi, { lifecycleResources });
+  return lifecycleResources;
 }
 
 function makeCtx(cwd: string, overrides: Partial<FakeCtx> = {}): FakeCtx {
@@ -111,6 +140,46 @@ describe('Pi lifecycle projector', () => {
     expect(runSessionStart).not.toHaveBeenCalled();
     expect(runSessionEnd).not.toHaveBeenCalled();
   });
+
+  it('treats reload as runtime replacement: initialize fresh resources without ending or restarting the logical session', async () => {
+    const pi = makePi();
+    const lifecycleResources = projector(pi);
+    const ctx = makeCtx(cwd);
+    const runSessionStart = vi.spyOn(defaultLifecyclePipeline, 'runSessionStart');
+    const runSessionEnd = vi.spyOn(defaultLifecyclePipeline, 'runSessionEnd');
+
+    await fire(pi, 'session_start', { reason: 'reload' }, ctx);
+    await fire(pi, 'session_shutdown', { reason: 'reload' }, ctx);
+
+    expect(lifecycleResources.getSpy).toHaveBeenCalledTimes(1);
+    expect(runSessionStart).not.toHaveBeenCalled();
+    expect(runSessionEnd).not.toHaveBeenCalled();
+    expect(lifecycleResources.closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['quit', 'new', 'resume', 'fork'] as const)(
+    'finalizes the logical session before closing runtime resources on %s',
+    async (reason) => {
+      const pi = makePi();
+      const lifecycleResources = projector(pi);
+      const ctx = makeCtx(cwd);
+      const runSessionEnd = vi.spyOn(defaultLifecyclePipeline, 'runSessionEnd').mockResolvedValue({
+        exitCode: 0,
+        stderr: '',
+        contextInjections: [],
+        directives: [],
+        diagnostics: [],
+      });
+
+      await fire(pi, 'session_shutdown', { reason }, ctx);
+
+      expect(runSessionEnd).toHaveBeenCalledTimes(1);
+      expect(lifecycleResources.closeSpy).toHaveBeenCalledTimes(1);
+      expect(runSessionEnd.mock.invocationCallOrder[0]).toBeLessThan(
+        lifecycleResources.closeSpy.mock.invocationCallOrder[0]!,
+      );
+    },
+  );
 
   it('runs prompt submit exactly once, preserves the chained system prompt, and forwards prior turn context + directives', async () => {
     const pi = makePi();

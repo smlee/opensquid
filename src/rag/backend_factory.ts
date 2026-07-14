@@ -174,6 +174,10 @@ export function libsqlQwen3WithLexicalFallback(opts: QwenWithFallbackOpts): RagB
     async repromoteRetiredUserMemories() {
       return (await active.repromoteRetiredUserMemories?.()) ?? [];
     },
+    async close() {
+      // The fallback may have been initialized after the primary; close both idempotently.
+      await Promise.all([primary.close?.(), fallback.close?.()]);
+    },
   };
 }
 

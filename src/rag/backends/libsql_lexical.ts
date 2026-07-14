@@ -82,6 +82,14 @@ export function libsqlLexicalBackend(opts: LibsqlLexicalOpts): RagBackend {
       );
     },
 
+    // Deterministic ownership: never leave the native libSQL handle to the N-API finalizer.
+    close() {
+      const owned = client;
+      client = null;
+      owned?.close();
+      return Promise.resolve();
+    },
+
     // eslint-disable-next-line @typescript-eslint/require-await
     async embed() {
       return null;

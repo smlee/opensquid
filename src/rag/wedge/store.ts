@@ -70,6 +70,7 @@ export interface WedgeRecallHit {
 
 export interface WedgeLessonStore {
   init(): Promise<void>;
+  close?(): Promise<void>;
   createLesson(
     input: CreateLessonInput,
   ): Promise<{ id: string; status: 'pending'; createdAt: string }>;
@@ -213,6 +214,13 @@ export function wedgeLessonStore(opts: {
       );`);
       await client.execute(`CREATE VIRTUAL TABLE IF NOT EXISTS wg_lessons_fts
         USING fts5(id UNINDEXED, description, body);`);
+    },
+
+    close() {
+      const owned = client;
+      client = null;
+      owned?.close();
+      return Promise.resolve();
     },
 
     async createLesson(input) {

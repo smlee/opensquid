@@ -93,6 +93,15 @@ export function libsqlStoreBackend(opts: LibsqlStoreOpts): RagBackend {
       );
     },
 
+    // Deterministic ownership: never leave the native libSQL handle to the N-API finalizer.
+    // Null before close so concurrent/late calls fail as "not initialized" instead of reusing a closing client.
+    close() {
+      const owned = client;
+      client = null;
+      owned?.close();
+      return Promise.resolve();
+    },
+
     embed: (text) => embedder.embed(text),
 
     async recall(query, k, scope) {

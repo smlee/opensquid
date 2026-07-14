@@ -8,7 +8,10 @@ import { floorMessage, observeCall } from '../../guard/floor_hook.js';
 import type { PostToolCallInput, LifecycleContext, LifecycleOutput } from './types.js';
 
 export interface PostToolCallHandlerDeps {
-  loadDispatch(sessionId: string): Promise<{
+  loadDispatch(
+    sessionId: string,
+    registry?: FunctionRegistry,
+  ): Promise<{
     packs: Pack[];
     registry: FunctionRegistry;
   }>;
@@ -18,9 +21,9 @@ export interface PostToolCallHandlerDeps {
 }
 
 const DEFAULT_DEPS: PostToolCallHandlerDeps = {
-  loadDispatch: async (sessionId) => ({
+  loadDispatch: async (sessionId, registry) => ({
     packs: await loadActivePacksForDispatch(sessionId),
-    registry: await buildRegistry(),
+    registry: registry ?? (await buildRegistry()),
   }),
   dispatchEvent,
   runV2Cartridges,
@@ -34,7 +37,7 @@ export async function runPostToolCall(
 ): Promise<LifecycleOutput> {
   const event = input.event;
   const diagnostics: string[] = [];
-  const { packs, registry } = await deps.loadDispatch(ctx.sessionId);
+  const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(event, packs, registry, ctx.sessionId);
   const v2 = await deps.runV2Cartridges(ctx.sessionId, event, ctx.now);
   const stderrParts = [dispatched.stderr, ...v2.messages, ...v2.injections].filter(Boolean);

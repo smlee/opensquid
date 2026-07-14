@@ -23,7 +23,10 @@ import { join } from 'node:path';
 import type { SessionEndInput, LifecycleContext, LifecycleOutput } from './types.js';
 
 export interface SessionEndHandlerDeps {
-  loadDispatch(sessionId: string): Promise<{
+  loadDispatch(
+    sessionId: string,
+    registry?: FunctionRegistry,
+  ): Promise<{
     packs: Pack[];
     registry: FunctionRegistry;
   }>;
@@ -47,9 +50,9 @@ export interface SessionEndHandlerDeps {
 }
 
 const DEFAULT_DEPS: SessionEndHandlerDeps = {
-  loadDispatch: async (sessionId) => ({
+  loadDispatch: async (sessionId, registry) => ({
     packs: await loadActivePacksForDispatch(sessionId),
-    registry: await buildRegistry(),
+    registry: registry ?? (await buildRegistry()),
   }),
   dispatchEvent,
   readActiveTask,
@@ -76,7 +79,7 @@ export async function runSessionEnd(
   deps: SessionEndHandlerDeps = DEFAULT_DEPS,
 ): Promise<LifecycleOutput> {
   const diagnostics: string[] = [];
-  const { packs, registry } = await deps.loadDispatch(ctx.sessionId);
+  const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(input.event, packs, registry, ctx.sessionId);
   if (dispatched.stderr) diagnostics.push(dispatched.stderr);
   if (ctx.role === 'lap-child') {
@@ -144,14 +147,16 @@ export async function runSessionEnd(
     diagnostics.push(`opensquid: turn-gist skipped — ${String(error)}`);
   }
 
+  let retentionBackend: ReturnType<SessionEndHandlerDeps['createBackend']> | undefined;
+  const ownsRetentionBackend = ctx.ragBackend === undefined;
   try {
-    const backend = deps.createBackend(await deps.resolveBackendConfig());
-    await backend.init();
-    const restored = (await backend.repromoteRetiredUserMemories?.()) ?? [];
+    retentionBackend = ctx.ragBackend ?? deps.createBackend(await deps.resolveBackendConfig());
+    if (ownsRetentionBackend) await retentionBackend.init();
+    const restored = (await retentionBackend.repromoteRetiredUserMemories?.()) ?? [];
     if (restored.length > 0) {
       diagnostics.push(`opensquid: retention — ${String(restored.length)} user mem(s) restored`);
     }
-    const swept = await deps.sweepRetiredIfAllowed(backend, ctx.cwd);
+    const swept = await deps.sweepRetiredIfAllowed(retentionBackend, ctx.cwd);
     if (swept.length > 0) {
       diagnostics.push(`opensquid: retention sweep — ${String(swept.length)} reclaimed`);
       try {
@@ -162,6 +167,8 @@ export async function runSessionEnd(
     }
   } catch (error) {
     diagnostics.push(`opensquid: retention sweep skipped — ${String(error)}`);
+  } finally {
+    if (ownsRetentionBackend) await retentionBackend?.close?.().catch(() => undefined);
   }
 
   try {

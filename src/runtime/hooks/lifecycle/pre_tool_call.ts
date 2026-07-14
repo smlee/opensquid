@@ -63,7 +63,10 @@ export interface PreToolCallHandlerDeps {
   resolveProjectScopeRoot(cwd: string): Promise<string | null>;
   checkDesignDocRewrite: typeof checkDesignDocRewrite;
   readScopeAuditVerdict(sessionId: string, key: string): Promise<string | undefined>;
-  loadDispatch(sessionId: string): Promise<{
+  loadDispatch(
+    sessionId: string,
+    registry?: FunctionRegistry,
+  ): Promise<{
     packs: Pack[];
     registry: FunctionRegistry;
   }>;
@@ -86,9 +89,9 @@ const DEFAULT_DEPS: PreToolCallHandlerDeps = {
   resolveProjectScopeRoot,
   checkDesignDocRewrite,
   readScopeAuditVerdict,
-  loadDispatch: async (sessionId) => ({
+  loadDispatch: async (sessionId, registry) => ({
     packs: await loadActivePacksForDispatch(sessionId),
-    registry: await buildRegistry(),
+    registry: registry ?? (await buildRegistry()),
   }),
   dispatchEvent,
   loadActiveV2Cartridges,
@@ -223,7 +226,7 @@ export async function runPreToolCall(
     // fail-open
   }
 
-  const { packs, registry } = await deps.loadDispatch(ctx.sessionId);
+  const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   if (event.tool === 'apply_patch') {
     const cmd = (event.args as { command?: unknown }).command;
     const patched = typeof cmd === 'string' ? parseApplyPatch(cmd) : [];

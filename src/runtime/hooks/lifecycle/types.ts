@@ -1,3 +1,5 @@
+import type { FunctionRegistry } from '../../../functions/registry.js';
+import type { RagBackend } from '../../../rag/types.js';
 import type { Directive } from '../../types.js';
 import type {
   PostToolCallEvent,
@@ -19,6 +21,9 @@ export interface LifecycleContext {
   actor: Actor;
   role: LifecycleRole;
   now: string;
+  /** Runtime-owned resources. Long-lived harness adapters provide these once and reuse them. */
+  registry?: FunctionRegistry;
+  ragBackend?: RagBackend;
 }
 
 export interface LifecycleOutput {

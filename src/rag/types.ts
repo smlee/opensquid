@@ -101,6 +101,8 @@ export class UserAuthoredImmunityError extends Error {
 
 export interface RagBackend {
   init(): Promise<void>;
+  /** Release backend-owned resources. Runtime owners call this exactly once at teardown. */
+  close?(): Promise<void>;
   embed(text: string): Promise<number[] | null>; // null = embedder unavailable
   // `scope` is REQUIRED (no default): the structural firewall. A future rewrite that forgets to thread
   // scope is a COMPILE error, not a silent cross-project leak (the exact regression this fixes).

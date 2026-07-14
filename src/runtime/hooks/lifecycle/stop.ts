@@ -11,7 +11,10 @@ import type { StopInput, LifecycleContext, StopOutput } from './types.js';
 
 export interface StopHandlerDeps {
   maybeIngestTurn(raw?: string): Promise<unknown>;
-  loadDispatch(sessionId: string): Promise<{
+  loadDispatch(
+    sessionId: string,
+    registry?: FunctionRegistry,
+  ): Promise<{
     packs: Pack[];
     registry: FunctionRegistry;
   }>;
@@ -24,9 +27,9 @@ export interface StopHandlerDeps {
 
 const DEFAULT_DEPS: StopHandlerDeps = {
   maybeIngestTurn,
-  loadDispatch: async (sessionId) => ({
+  loadDispatch: async (sessionId, registry) => ({
     packs: await loadActivePacksForDispatch(sessionId),
-    registry: await buildRegistry(),
+    registry: registry ?? (await buildRegistry()),
   }),
   dispatchEvent,
   claimUmbrellaLeaseForSession,
@@ -41,7 +44,7 @@ export async function runStop(
   deps: StopHandlerDeps = DEFAULT_DEPS,
 ): Promise<StopOutput> {
   if (ctx.role !== 'lap-child') await deps.maybeIngestTurn(input.raw);
-  const { packs, registry } = await deps.loadDispatch(ctx.sessionId);
+  const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(input.event, packs, registry, ctx.sessionId);
 
   if (dispatched.exitCode !== 0) {

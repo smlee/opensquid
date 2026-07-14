@@ -3,6 +3,7 @@ import type {
   BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionContext,
+  SessionShutdownEvent,
   SessionStartEvent,
   ToolCallEvent,
   ToolResultEvent,
@@ -20,6 +21,10 @@ import type {
 import { LOOP_LAP_ENV } from '../../runtime/hooks/subagent_guard.js';
 import { PI_READINESS_PROBE_ENV, PI_SHELL_COMMAND_PREFIX_ENV, PI_SHELL_PATH_ENV } from './env.js';
 import { completeInteractiveScope } from '../../runtime/ralph/scope_done.js';
+import {
+  createPiLifecycleResourceOwner,
+  type PiLifecycleResourceOwner,
+} from './lifecycle_resources.js';
 
 const EXECUTOR_ENV = 'OPENSQUID_EXECUTOR';
 const EXECUTOR_ID_ENV = 'OPENSQUID_EXECUTOR_ID';
@@ -263,7 +268,14 @@ function queueStopContinuation(
   void pi.sendUserMessage(content.join('\n\n'), { deliverAs: 'followUp' });
 }
 
-export default function opensquidPiProjector(pi: ExtensionAPI) {
+export interface OpensquidPiProjectorDeps {
+  lifecycleResources?: PiLifecycleResourceOwner;
+}
+
+export default function opensquidPiProjector(
+  pi: ExtensionAPI,
+  deps: OpensquidPiProjectorDeps = {},
+) {
   pi.registerCommand?.('scope-done', {
     description: 'Persist human-approved scope proof: /scope-done <wg-id> <artifact-path>',
     handler: async (args, ctx) => {
@@ -296,13 +308,20 @@ export default function opensquidPiProjector(pi: ExtensionAPI) {
     toolReservations: new Map(),
     recentTurns: [],
   };
+  const lifecycleResources = deps.lifecycleResources ?? createPiLifecycleResourceOwner();
+  const lifecycleWithResources = async (ctx: ExtensionContext): Promise<LifecycleContext> => ({
+    ...lifecycleContext(ctx),
+    ...(await lifecycleResources.get()),
+  });
 
   pi.on('session_start', async (event: SessionStartEvent, ctx: ExtensionContext) => {
     // The full-runtime readiness process loads this extension to prove composition and tool registration, but it
     // is not a lap and must not execute pack lifecycle procedures before its probe handler can inspect the tools.
     if (process.env[PI_READINESS_PROBE_ENV] === '1') return;
-    const lifecycle = lifecycleContext(ctx);
     try {
+      const lifecycle = await lifecycleWithResources(ctx);
+      // Pi reload replaces only the extension runtime; it does not begin a new logical conversation.
+      if (event.reason === 'reload') return;
       const output = await defaultLifecyclePipeline.runSessionStart(
         { event: { kind: 'session_start', source: sessionStartSource(event), cwd: ctx.cwd } },
         lifecycle,
@@ -317,7 +336,7 @@ export default function opensquidPiProjector(pi: ExtensionAPI) {
   });
 
   pi.on('before_agent_start', async (event: BeforeAgentStartEvent, ctx: ExtensionContext) => {
-    const lifecycle = lifecycleContext(ctx);
+    const lifecycle = await lifecycleWithResources(ctx);
     try {
       const promptEvent = {
         kind: 'prompt_submit' as const,
@@ -344,7 +363,7 @@ export default function opensquidPiProjector(pi: ExtensionAPI) {
   });
 
   pi.on('tool_call', async (event: ToolCallEvent, ctx: ExtensionContext) => {
-    const lifecycle = lifecycleContext(ctx);
+    const lifecycle = await lifecycleWithResources(ctx);
     let canonical;
     try {
       canonical = await canonicalizePiToolCall(event, ctx.cwd, {
@@ -400,7 +419,7 @@ export default function opensquidPiProjector(pi: ExtensionAPI) {
     if (state.blockedToolCalls.delete(event.toolCallId)) return;
     const canonical = state.executedToolCalls.get(event.toolCallId);
     if (canonical === undefined) return;
-    const lifecycle = lifecycleContext(ctx);
+    const lifecycle = await lifecycleWithResources(ctx);
     try {
       const output = await defaultLifecyclePipeline.runPostToolCall(
         {
@@ -426,7 +445,7 @@ export default function opensquidPiProjector(pi: ExtensionAPI) {
   });
 
   pi.on('agent_end', async (event: AgentEndEvent, ctx: ExtensionContext) => {
-    const lifecycle = lifecycleContext(ctx);
+    const lifecycle = await lifecycleWithResources(ctx);
     try {
       if (stopSucceeded(event)) {
         const lastAssistant = findLastAssistantMessage(event.messages);
@@ -449,21 +468,30 @@ export default function opensquidPiProjector(pi: ExtensionAPI) {
     }
   });
 
-  pi.on('session_shutdown', async (_event, ctx: ExtensionContext) => {
+  pi.on('session_shutdown', async (event: SessionShutdownEvent, ctx: ExtensionContext) => {
     if (process.env[PI_READINESS_PROBE_ENV] === '1') return;
-    const lifecycle = lifecycleContext(ctx);
     try {
-      const output = await defaultLifecyclePipeline.runSessionEnd(
-        {
-          event: { kind: 'session_end', sessionId: lifecycle.sessionId },
-          isLoopLap: lifecycle.role !== 'interactive',
-        },
-        lifecycle,
-      );
-      if (output.stderr.length > 0) reportDiagnostic(ctx, output.stderr);
+      // A reload ends this extension runtime, not the logical conversation. Real session replacement/quit
+      // reasons still finalize durable OpenSquid state before the runtime-owned backend is closed.
+      if (event.reason !== 'reload') {
+        const lifecycle = await lifecycleWithResources(ctx);
+        const output = await defaultLifecyclePipeline.runSessionEnd(
+          {
+            event: { kind: 'session_end', sessionId: lifecycle.sessionId },
+            isLoopLap: lifecycle.role !== 'interactive',
+          },
+          lifecycle,
+        );
+        if (output.stderr.length > 0) reportDiagnostic(ctx, output.stderr);
+      }
     } catch (error) {
       reportDiagnostic(ctx, `opensquid Pi session_shutdown fail-open: ${String(error)}`);
     } finally {
+      try {
+        await lifecycleResources.close();
+      } catch (error) {
+        reportDiagnostic(ctx, `opensquid Pi runtime resource close failed: ${String(error)}`);
+      }
       clearRunState(state);
       state.pendingSessionStart = [];
       delete state.priorAssistantText;

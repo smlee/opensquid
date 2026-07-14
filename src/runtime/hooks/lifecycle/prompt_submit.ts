@@ -29,7 +29,10 @@ export interface PromptSubmitHandlerDeps {
   orchestrate: typeof orchestrate;
   readSettings(cwd: string): Promise<Record<string, unknown>>;
   writeClassifiedFacets(sessionId: string, facets: ReturnType<typeof classify>): Promise<unknown>;
-  loadDispatch(sessionId: string): Promise<{
+  loadDispatch(
+    sessionId: string,
+    registry?: FunctionRegistry,
+  ): Promise<{
     packs: Pack[];
     registry: FunctionRegistry;
   }>;
@@ -48,9 +51,9 @@ const DEFAULT_DEPS: PromptSubmitHandlerDeps = {
   orchestrate,
   readSettings,
   writeClassifiedFacets,
-  loadDispatch: async (sessionId) => ({
+  loadDispatch: async (sessionId, registry) => ({
     packs: await loadActivePacksForDispatch(sessionId),
-    registry: await buildRegistry(),
+    registry: registry ?? (await buildRegistry()),
   }),
   dispatchEvent,
   runV2Cartridges,
@@ -83,7 +86,7 @@ export async function runPromptSubmit(
       diagnostics.push(`opensquid: request-type classification failed — ${String(error)}`);
     }
   }
-  const { packs, registry } = await deps.loadDispatch(ctx.sessionId);
+  const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(event, packs, registry, ctx.sessionId);
   // The v2 host is separate from the legacy/skill dispatcher. Prompt submission must reach both: v2 captures
   // the immutable ask anchor here and routes prompt-triggered state skills. Omitting this call leaves

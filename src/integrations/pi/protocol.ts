@@ -15,7 +15,12 @@ export interface ExtensionContext {
 }
 
 export interface SessionStartEvent {
-  readonly reason?: string;
+  readonly reason?: 'startup' | 'reload' | 'new' | 'resume' | 'fork';
+}
+
+export interface SessionShutdownEvent {
+  readonly reason: 'quit' | 'reload' | 'new' | 'resume' | 'fork';
+  readonly targetSessionFile?: string;
 }
 
 export interface BeforeAgentStartEvent {
@@ -85,7 +90,7 @@ export interface ExtensionAPI {
   ): void;
   on(
     event: 'session_shutdown',
-    handler: (event: unknown, ctx: ExtensionContext) => MaybePromise<unknown>,
+    handler: (event: SessionShutdownEvent, ctx: ExtensionContext) => MaybePromise<unknown>,
   ): void;
   sendMessage(
     message: { customType: string; content: string; display: boolean },

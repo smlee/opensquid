@@ -18,7 +18,10 @@ export interface SessionStartHandlerDeps {
   ): Promise<unknown>;
   ensureLapActiveTask(sessionId: string, itemId: string, now: string): Promise<void>;
   initializeV2(sessionId: string, now: string): Promise<void>;
-  loadDispatch(sessionId: string): Promise<{
+  loadDispatch(
+    sessionId: string,
+    registry?: FunctionRegistry,
+  ): Promise<{
     packs: Pack[];
     registry: FunctionRegistry;
   }>;
@@ -37,9 +40,9 @@ const DEFAULT_DEPS: SessionStartHandlerDeps = {
     });
   },
   initializeV2: initializeV2Cartridges,
-  loadDispatch: async (sessionId) => ({
+  loadDispatch: async (sessionId, registry) => ({
     packs: await loadActivePacksForDispatch(sessionId),
-    registry: await buildRegistry(),
+    registry: registry ?? (await buildRegistry()),
   }),
   dispatchEvent,
 };
@@ -77,7 +80,7 @@ export async function runSessionStart(
   } catch (error) {
     diagnostics.push(`opensquid: v2 session initialization failed — ${String(error)}`);
   }
-  const { packs, registry } = await deps.loadDispatch(ctx.sessionId);
+  const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const result = await deps.dispatchEvent(event, packs, registry, ctx.sessionId);
   return {
     exitCode: result.exitCode,
