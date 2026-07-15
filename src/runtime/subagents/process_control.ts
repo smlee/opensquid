@@ -988,9 +988,9 @@ const DEFAULT_STORE_DEPS: ProcessControlStoreDeps = {
 };
 
 /**
- * Attach one subprocess incarnation to the shared human control plane.
- * Automatic cancellation only closes stdin. TERM/KILL are executed exclusively from a request carrying a
- * human authorization identity and targeting this exact registered process incarnation.
+ * Attach one subprocess incarnation to the shared control plane.
+ * The shared transport owns bounded automatic TERM→KILL cleanup; explicit human actions still require an
+ * authorization identity and target this exact registered process incarnation.
  */
 export function controlledExecutorProcess(input: {
   executorId: string;
@@ -1137,6 +1137,33 @@ export function controlledExecutorProcess(input: {
     dispose,
     procControl: {
       ...input.base,
+      signalTree: (proc, treeDetached, signal) => {
+        if (windowsJob !== undefined) {
+          return controlWindowsJob(
+            input.base,
+            windowsJob,
+            signal === 'SIGKILL' ? 'force_kill' : 'terminate',
+          );
+        }
+        if (input.base.signalTree !== undefined) {
+          return input.base.signalTree(proc, treeDetached, signal);
+        }
+        if (treeDetached && typeof proc.pid === 'number') input.base.kill(-proc.pid, signal);
+        else proc.kill(signal);
+      },
+      isTreeAlive: (proc, treeDetached) => {
+        // The broker closes only after its Job Object is empty. Its close event therefore proves Windows-tree
+        // drain; before close the owner must remain pending.
+        if (windowsJob !== undefined) return !closed;
+        if (input.base.isTreeAlive !== undefined) return input.base.isTreeAlive(proc, treeDetached);
+        if (typeof proc.pid !== 'number') return false;
+        try {
+          input.base.kill(treeDetached ? -proc.pid : proc.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      },
       spawn: (cli, args, options) => {
         const proc =
           windowsJob === undefined

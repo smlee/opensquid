@@ -24,7 +24,11 @@ import {
   resolveUmbrellaForCwd,
 } from '../../channels/routing.js';
 import type { LapEscalator } from '../../runtime/ralph/escalate_lap.js';
-import { realProcControl, runOneShotCli } from '../../runtime/spawn_lifecycle.js';
+import {
+  isOwnedProcessCleanupError,
+  realProcControl,
+  runOneShotCli,
+} from '../../runtime/spawn_lifecycle.js';
 import { runStreamingCli } from '../../runtime/streaming_cli.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
 import { workGraphStore } from '../../workgraph/store.js';
@@ -259,6 +263,14 @@ export function makeSpawnLap(
           kind: 'HUMAN_REQUIRED',
           reason: oneShotCause.action === 'graceful_stop' ? 'PROCESS_PAUSED' : 'CANCELLED_BY_HUMAN',
           payload: { action: oneShotCause.action, actionId: oneShotCause.actionId },
+          costUsd: 0,
+        };
+      }
+      if (isOwnedProcessCleanupError(e)) {
+        return {
+          kind: 'HUMAN_REQUIRED',
+          reason: 'UNRECOVERABLE_WEDGE',
+          payload: { error: e.message, cause: e.cause.message },
           costUsd: 0,
         };
       }

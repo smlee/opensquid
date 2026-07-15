@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { runOneShotCli } from '../../src/runtime/spawn_lifecycle.js';
+import { runStreamingCli } from '../../src/runtime/streaming_cli.js';
 
 const SKIP_E2E = process.env.E2E !== '1' || process.platform === 'win32';
 const priorProjectRoot = process.env.OPENSQUID_PROJECT_ROOT;
@@ -57,7 +58,7 @@ describe.skipIf(SKIP_E2E)('spawn lifecycle e2e — automatic owned-tree reconcil
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('SIGTERM grace then exact group SIGKILL reaps a timeout child and its SIGTERM-ignoring grandchild', async () => {
+  it('one-shot SIGTERM grace then exact group SIGKILL reaps a timeout child and its SIGTERM-ignoring grandchild', async () => {
     const cpidFile = join(dir, 'cpid');
     const gpidFile = join(dir, 'gpid');
     const grand = join(dir, 'grand.cjs');
@@ -97,6 +98,57 @@ describe.skipIf(SKIP_E2E)('spawn lifecycle e2e — automatic owned-tree reconcil
     while ((alive(cpid) || alive(gpid)) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    expect(alive(cpid)).toBe(false);
+    expect(alive(gpid)).toBe(false);
+  }, 20_000);
+
+  it('duplex timeout does not settle until its signal-ignoring child and grandchild tree is reclaimed', async () => {
+    const cpidFile = join(dir, 'stream-cpid');
+    const gpidFile = join(dir, 'stream-gpid');
+    const grand = join(dir, 'stream-grand.cjs');
+    await writeFile(
+      grand,
+      "process.on('SIGTERM',()=>{});" +
+        "require('fs').writeFileSync(process.env.GPIDFILE,String(process.pid));" +
+        'setInterval(()=>{},1000);',
+      'utf8',
+    );
+    const childScript = join(dir, 'stream-child.cjs');
+    await writeFile(
+      childScript,
+      "process.stdin.resume();process.on('SIGTERM',()=>{});" +
+        "require('fs').writeFileSync(process.env.CPIDFILE,String(process.pid));" +
+        "const{spawn}=require('node:child_process');" +
+        `spawn(process.execPath,[${JSON.stringify(grand)}],{stdio:'ignore',env:{...process.env}});` +
+        'setInterval(()=>{},1000);',
+      'utf8',
+    );
+
+    const invocation = runStreamingCli({
+      cli: process.execPath,
+      args: [childScript],
+      cwd: dir,
+      timeoutMs: 400,
+      graceMs: 200,
+      processGroup: 'own',
+      env: { CPIDFILE: cpidFile, GPIDFILE: gpidFile },
+      onRecord: () => 'continue',
+    });
+    const [cpid, gpid] = await Promise.all([readPid(cpidFile), readPid(gpidFile)]);
+    emergencyPids.push(cpid, gpid);
+    let settled = false;
+    void invocation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(settled).toBe(false);
+    await expect(invocation).rejects.toThrow('streaming cli timeout');
+
     expect(alive(cpid)).toBe(false);
     expect(alive(gpid)).toBe(false);
   }, 20_000);

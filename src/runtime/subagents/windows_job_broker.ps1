@@ -14,6 +14,8 @@ public static class OpenSquidJobBroker {
     const uint STARTF_USESTDHANDLES = 0x00000100;
     const uint DUPLICATE_SAME_ACCESS = 0x00000002;
     const int JobObjectBasicAccountingInformation = 1;
+    const int JobObjectExtendedLimitInformation = 9;
+    const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct STARTUPINFO {
@@ -46,6 +48,39 @@ public static class OpenSquidJobBroker {
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct IO_COUNTERS {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
         public long TotalUserTime;
         public long TotalKernelTime;
@@ -62,6 +97,13 @@ public static class OpenSquidJobBroker {
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetInformationJobObject(
+        IntPtr job,
+        int informationClass,
+        ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION info,
+        int length);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     static extern bool CreateProcess(
@@ -126,6 +168,10 @@ public static class OpenSquidJobBroker {
     public static int Run(string application, string commandLine, string cwd, string jobName, string metadataPath) {
         IntPtr job = CreateJobObject(IntPtr.Zero, jobName);
         if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject");
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        Check(SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref limits,
+            Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))), "SetInformationJobObject");
 
         STARTUPINFO startup = new STARTUPINFO();
         startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));

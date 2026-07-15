@@ -9,6 +9,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   DEFAULT_CLI_CAPTURE_BYTES,
   insideSupervisedTree,
+  OwnedProcess,
   realProcControl,
   type ProcControl,
 } from './spawn_lifecycle.js';
@@ -28,7 +29,9 @@ export interface StreamingCliOptions {
   env?: NodeJS.ProcessEnv;
   timeoutMs: number;
   processGroup?: 'auto' | 'own';
-  /** Observe an automatic EOF shutdown request (for the shared process-control read model). */
+  /** Bounded TERM grace before exact-tree KILL. Default 5_000 ms. */
+  graceMs?: number;
+  /** Observe an automatic owned-tree shutdown request (for the shared process-control read model). */
   onShutdownRequested?: () => void | Promise<void>;
   maxRecordBytes?: number;
   maxCaptureBytes?: number;
@@ -152,7 +155,7 @@ export function runStreamingCli(opts: StreamingCliOptions): Promise<StreamingCli
       env: { ...process.env, OPENSQUID_SUPERVISED: '1', ...(opts.env ?? {}) },
     });
 
-    let phase: 'running' | 'shutdown_pending' | 'terminal' = 'running';
+    let phase: 'running' | 'terminal' = 'running';
     let stdout = '';
     let stderr = '';
     let stdoutBytes = 0;
@@ -172,18 +175,6 @@ export function runStreamingCli(opts: StreamingCliOptions): Promise<StreamingCli
       streamsReported = true;
       opts.onStreams?.({ stdout, stderr, code });
     };
-    const beginShutdown = (error: Error): void => {
-      if (phase !== 'running') return;
-      phase = 'shutdown_pending';
-      callbackError = error;
-      pc.clearTimeout(timeoutTimer);
-      // Automatic supervision is protocol-only. The owned process remains visible to the human control plane if
-      // EOF does not stop it; this transport never sends an OS signal on timeout, cancellation, or capture caps.
-      session.closeInput();
-      void Promise.resolve(opts.onShutdownRequested?.()).catch(() => undefined);
-      reject(error);
-    };
-
     const session = new StreamingCliSession(
       proc,
       () => {
@@ -191,8 +182,22 @@ export function runStreamingCli(opts: StreamingCliOptions): Promise<StreamingCli
       },
       (error) => {
         callbackError ??= error;
+        beginShutdown(error);
       },
     );
+    const owner = new OwnedProcess(proc, detached, pc, {
+      ...(opts.graceMs === undefined ? {} : { graceMs: opts.graceMs }),
+      closeInput: () => session.closeInput(),
+      ...(opts.onShutdownRequested === undefined
+        ? {}
+        : { onShutdownRequested: opts.onShutdownRequested }),
+    });
+    const beginShutdown = (error: Error): void => {
+      if (phase !== 'running') return;
+      callbackError ??= error;
+      if (owner.requestShutdown(error)) pc.clearTimeout(timeoutTimer);
+      // Promise settlement is intentionally deferred to child close + exact-tree drain.
+    };
     const context: StreamingRecordContext = session;
 
     const timeoutTimer = pc.setTimeout(
@@ -216,7 +221,7 @@ export function runStreamingCli(opts: StreamingCliOptions): Promise<StreamingCli
     // record delivery. This is useful for verbose RPC streams whose individual records are bounded but whose
     // complete wire transcript is not a useful result artifact.
     proc.stdout.on('data', (chunk: Buffer | string) => {
-      if (phase !== 'running') return;
+      if (phase !== 'running' || owner.shutdownPending) return;
       const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
       if (retainStdout) {
         stdoutBytes += bytes.length;
@@ -246,7 +251,7 @@ export function runStreamingCli(opts: StreamingCliOptions): Promise<StreamingCli
     });
 
     proc.stderr.on('data', (chunk: Buffer | string) => {
-      if (phase !== 'running') return;
+      if (phase !== 'running' || owner.shutdownPending) return;
       const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
       stderrBytes += bytes.length;
       if (stderrBytes > captureCap) {
@@ -269,32 +274,35 @@ export function runStreamingCli(opts: StreamingCliOptions): Promise<StreamingCli
       phase = 'terminal';
       pc.clearTimeout(timeoutTimer);
       reportStreams(null);
-      reject(new Error(`streaming cli spawn failed: ${error.message}`));
+      void owner
+        .handleSpawnError(new Error(`streaming cli spawn failed: ${error.message}`))
+        .then(reject, reject);
     });
 
     proc.on('close', (code) => {
+      if (phase !== 'running') return;
+      phase = 'terminal';
+      pc.clearTimeout(timeoutTimer);
       const stdoutTail = decoder.end();
       const stderrTail = stderrDecoder.end();
       if (retainStdout) stdout += stdoutTail;
       stderr += stderrTail;
       reportStreams(code);
-      if (phase === 'shutdown_pending') {
-        session.markClosed();
-        return;
-      }
-      if (phase !== 'running') return;
-      phase = 'terminal';
-      pc.clearTimeout(timeoutTimer);
       session.markClosed();
-      void callbackChain.then(async () => {
+      void (async () => {
+        const shutdownError = await owner.handleClose();
+        await callbackChain.catch((error: unknown) => {
+          callbackError ??= error instanceof Error ? error : new Error(String(error));
+        });
         await session.writesSettled().catch((error: unknown) => {
           callbackError ??= error instanceof Error ? error : new Error(String(error));
         });
-        if (callbackError !== undefined) reject(callbackError);
+        if (shutdownError !== undefined) reject(shutdownError);
+        else if (callbackError !== undefined) reject(callbackError);
         else if (code !== 0)
           reject(new Error(`streaming cli exit ${String(code)}: ${stderr.trim()}`));
         else resolve({ stdout, stderr, code, completed });
-      });
+      })().catch(reject);
     });
 
     Promise.resolve(opts.onStart?.(context)).catch((error: unknown) => {
