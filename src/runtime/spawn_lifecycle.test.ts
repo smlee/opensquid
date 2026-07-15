@@ -142,6 +142,35 @@ describe('runOneShotCli — basic contracts', () => {
     spawns[0]!.child.emit('error', new Error('ENOENT'));
     await expect(p).rejects.toThrow(/spawn failed/);
   });
+
+  it('stdin write failure rejects and reclaims the already-spawned child', async () => {
+    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
+    const child = new FakeChild();
+    child.stdin.write.mockImplementation(() => {
+      throw new Error('EPIPE');
+    });
+    pc.spawn = () => {
+      spawns.push({ cli: process.execPath, args: [], options: {}, child });
+      return child as unknown as ReturnType<ProcControl['spawn']>;
+    };
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: [],
+      prompt: 'x',
+      timeoutMs: 1_000,
+      markSubagent: false,
+      timeoutError,
+      procControl: pc,
+    });
+    child.emit('close', null);
+    await expect(p).rejects.toThrow(/stdin write failed: Error: EPIPE/);
+    expect(child.signals).toEqual([]);
+    expect(groupKills).toEqual([
+      { pid: -4242, signal: 'SIGTERM' },
+      { pid: -4242, signal: 'SIGKILL' },
+    ]);
+    expect(exitHandlers).toEqual([]);
+  });
 });
 
 describe('runOneShotCli — markers', () => {
@@ -222,8 +251,8 @@ describe('runOneShotCli — markers', () => {
   });
 });
 
-describe('runOneShotCli — automatic shutdown is graceful-only', () => {
-  it('closes stdin, records the request, and never sends an OS signal on timeout', async () => {
+describe('runOneShotCli — automatic shutdown owns the subprocess tree', () => {
+  it('closes stdin, reports shutdown, sends SIGTERM, then SIGKILLs the exact detached group after grace', async () => {
     vi.useFakeTimers();
     const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
     const shutdown = vi.fn();
@@ -232,6 +261,7 @@ describe('runOneShotCli — automatic shutdown is graceful-only', () => {
       args: ['ignore-eof'],
       prompt: '',
       timeoutMs: 400,
+      graceMs: 250,
       markSubagent: true,
       timeoutError,
       onShutdownRequested: shutdown,
@@ -239,20 +269,77 @@ describe('runOneShotCli — automatic shutdown is graceful-only', () => {
     }).catch((e: unknown) => e as Error);
 
     await vi.advanceTimersByTimeAsync(400);
-    expect(await p).toMatchObject({ message: 'timeout after 400ms' });
     expect(spawns[0]!.child.stdin.end).toHaveBeenCalled();
-    expect(shutdown).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(60_000);
     expect(spawns[0]!.child.signals).toEqual([]);
-    expect(groupKills).toEqual([]);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(exitHandlers).toHaveLength(1);
+    expect(groupKills).toEqual([{ pid: -4242, signal: 'SIGTERM' }]);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(groupKills).toEqual([
+      { pid: -4242, signal: 'SIGTERM' },
+      { pid: -4242, signal: 'SIGKILL' },
+    ]);
     expect(exitHandlers).toEqual([]);
-    spawns[0]!.child.emit('close', 0);
+    spawns[0]!.child.emit('close', null);
+    expect(await p).toMatchObject({ message: 'timeout after 400ms' });
+  });
+
+  it('sweeps the owned group when the root exits during grace', async () => {
+    vi.useFakeTimers();
+    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: ['obey-term'],
+      prompt: '',
+      timeoutMs: 100,
+      graceMs: 250,
+      markSubagent: false,
+      timeoutError,
+      procControl: pc,
+    }).catch((e: unknown) => e as Error);
+
+    await vi.advanceTimersByTimeAsync(100);
+    spawns[0]!.child.emit('close', null);
+    expect(await p).toMatchObject({ message: 'timeout after 100ms' });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(groupKills).toEqual([
+      { pid: -4242, signal: 'SIGTERM' },
+      { pid: -4242, signal: 'SIGKILL' },
+    ]);
+    expect(exitHandlers).toEqual([]);
+  });
+
+  it('uses the synchronous supervisor-exit handler when the process exits before grace', async () => {
+    vi.useFakeTimers();
+    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
+    const p = runOneShotCli({
+      cli: process.execPath,
+      args: ['ignore-term'],
+      prompt: '',
+      timeoutMs: 100,
+      graceMs: 5_000,
+      markSubagent: false,
+      timeoutError,
+      procControl: pc,
+    }).catch((e: unknown) => e as Error);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exitHandlers).toHaveLength(1);
+    exitHandlers[0]!();
+    expect(groupKills).toEqual([
+      { pid: -4242, signal: 'SIGTERM' },
+      { pid: -4242, signal: 'SIGKILL' },
+    ]);
+    expect(exitHandlers).toEqual([]);
+    spawns[0]!.child.emit('close', null);
+    await expect(p).resolves.toMatchObject({ message: 'timeout after 100ms' });
   });
 });
 
 describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, both streams)', () => {
-  it('rejects fail-loud when stdout exceeds maxCaptureBytes without sending an OS signal', async () => {
-    const { pc, spawns, groupKills } = recordingProcControl();
+  it('rejects fail-loud when stdout exceeds maxCaptureBytes and starts owned-tree cleanup', async () => {
+    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
     const p = runOneShotCli({
       cli: process.execPath,
       args: [],
@@ -264,13 +351,19 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
       procControl: pc,
     });
     spawns[0]!.child.stdout.emit('data', Buffer.from('X'.repeat(64))); // 64 > 16 bytes
+    spawns[0]!.child.emit('close', null);
     await expect(p).rejects.toThrow(/capture cap exceeded: stdout exceeded 16 bytes/);
     expect(spawns[0]!.child.stdin.end).toHaveBeenCalled();
-    expect(groupKills).toEqual([]);
+    expect(spawns[0]!.child.signals).toEqual([]);
+    expect(groupKills).toEqual([
+      { pid: -4242, signal: 'SIGTERM' },
+      { pid: -4242, signal: 'SIGKILL' },
+    ]);
+    expect(exitHandlers).toEqual([]);
   });
 
   it('rejects fail-loud when stderr exceeds maxCaptureBytes — independently of stdout', async () => {
-    const { pc, spawns, groupKills } = recordingProcControl();
+    const { pc, spawns, groupKills, exitHandlers } = recordingProcControl();
     const p = runOneShotCli({
       cli: process.execPath,
       args: [],
@@ -282,9 +375,15 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
       procControl: pc,
     });
     spawns[0]!.child.stderr.emit('data', Buffer.from('E'.repeat(64)));
+    spawns[0]!.child.emit('close', null);
     await expect(p).rejects.toThrow(/capture cap exceeded: stderr exceeded 16 bytes/);
     expect(spawns[0]!.child.stdin.end).toHaveBeenCalled();
-    expect(groupKills).toEqual([]);
+    expect(spawns[0]!.child.signals).toEqual([]);
+    expect(groupKills).toEqual([
+      { pid: -4242, signal: 'SIGTERM' },
+      { pid: -4242, signal: 'SIGKILL' },
+    ]);
+    expect(exitHandlers).toEqual([]);
   });
 
   it('measures BYTES not UTF-16 code units (a multibyte stream trips at the true byte cap)', async () => {
@@ -303,6 +402,7 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
     const multibyte = Buffer.from('€€', 'utf8');
     expect(multibyte.length).toBe(6);
     spawns[0]!.child.stdout.emit('data', multibyte);
+    spawns[0]!.child.emit('close', null);
     await expect(p).rejects.toThrow(/capture cap exceeded: stdout/); // bytes (6) > cap (4), not chars (2)
   });
 
@@ -352,6 +452,7 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
       procControl: overCap.pc,
     });
     overCap.spawns[0]!.child.stdout.emit('data', Buffer.from('123456789')); // 9 → fails
+    overCap.spawns[0]!.child.emit('close', null);
     await expect(pOver).rejects.toThrow(/capture cap exceeded: stdout/);
   });
 
@@ -385,10 +486,10 @@ describe('runOneShotCli — capture cap (CH.3: fail-loud on a runaway stream, bo
       onStreams,
       procControl: pc,
     }).catch(() => undefined);
-    spawns[0]!.child.stdout.emit('data', Buffer.from('X'.repeat(64))); // over-cap → reject (onStreams NOT called here)
+    spawns[0]!.child.stdout.emit('data', Buffer.from('X'.repeat(64))); // over-cap → shutdown pending
+    expect(onStreams).not.toHaveBeenCalled();
+    spawns[0]!.child.emit('close', 0); // close settles and reports exactly once
     await p;
-    expect(onStreams).not.toHaveBeenCalled(); // failCapExceeded does not call onStreams
-    spawns[0]!.child.emit('close', 0); // the child's close after groupKill calls onStreams exactly once
     expect(onStreams).toHaveBeenCalledTimes(1);
   });
 });

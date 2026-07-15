@@ -1,10 +1,10 @@
 /**
  * Harness-neutral one-shot subprocess transport.
  *
- * Automatic timeout and capture-bound handling reject the invocation and request graceful stdin shutdown only.
- * This module never sends SIGTERM/SIGKILL; supervisor-owned process identity and explicit human OS actions live
- * in `runtime/subagents/process_control.ts`. `OPENSQUID_SUPERVISED` still prevents nested helpers from creating
- * accidental process groups, while an outer harness owner may create an exact group for human control.
+ * This helper OWNS each one-shot child tree until it exits. Timeout/capture failure closes stdin, sends SIGTERM,
+ * and arms a bounded grace period followed by an exact process-group SIGKILL. A synchronous supervisor-exit
+ * handler closes the timer gap when a short-lived hook calls `process.exit()` after the promise rejects.
+ * `OPENSQUID_SUPERVISED` keeps nested helpers in the outermost owned group so descendants cannot escape cleanup.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
@@ -22,7 +22,7 @@ export interface ProcControl {
   /** Returns a piped-stdio child (runOneShotCli always spawns with `stdio: ['pipe','pipe','pipe']`, so the three
    *  streams are non-null — the `WithoutNullStreams` variant, matching the concrete real-`spawn` overload). */
   spawn: (cli: string, args: string[], options: SpawnOptions) => ChildProcessWithoutNullStreams;
-  /** Explicit human process control uses this seam; automatic transports do not call it. */
+  /** Signal an exact owned process or process group; detached groups use a negative pid. */
   kill: (pid: number, signal: NodeJS.Signals | number) => void;
   setTimeout: (fn: () => void, ms: number) => NodeJS.Timeout;
   clearTimeout: (t: NodeJS.Timeout | undefined) => void;
@@ -67,12 +67,13 @@ export interface OneShotOpts {
   timeoutError: (timeoutMs: number) => Error;
   /** Prefix for spawn/exit/stdin error messages (bridge: 'subscription cli '). */
   errorPrefix?: string;
-  /** Observe an automatic protocol-level shutdown request. Automatic supervision never sends an OS signal. */
+  /** Grace after SIGTERM before the exact owned process group is SIGKILLed. Default 5_000 ms. */
+  graceMs?: number;
+  /** Observe the automatic shutdown request before signals are sent (e.g. durable executor status). */
   onShutdownRequested?: () => void | Promise<void>;
   /** Max BYTES retained per captured stream (stdout AND stderr, independently). A runaway lap that exceeds this
-   *  is FAILED-LOUD — the promise rejects and requests graceful shutdown — NOT silently truncated
-   *  (a truncated JSONL stream would corrupt the fold, codex_lap_harness.ts:99). Default 10 MiB.
-   *  Sibling to graceMs; omitted ⇒ the default ⇒ every existing caller is byte-unchanged. Harness-neutral. */
+   *  is FAILED-LOUD and the owned child tree is reclaimed — NOT silently truncated
+   *  (a truncated JSONL stream would corrupt the fold, codex_lap_harness.ts:99). Default 10 MiB. */
   maxCaptureBytes?: number;
   /** Extra env vars merged OVER the inherited process env for the child (e.g. OPENSQUID_ITEM_ID for a ralph lap). */
   env?: NodeJS.ProcessEnv;
@@ -100,7 +101,7 @@ type LifecyclePhase =
   | { phase: 'spawn_failed' }
   | { phase: 'term_sent' }
   | { phase: 'closed' }
-  | { phase: 'closed_late' };
+  | { phase: 'group_killed' };
 
 /** Kill-tree marker: true when THIS process already runs under a helper-supervised tree. */
 export const insideSupervisedTree = (env: NodeJS.ProcessEnv = process.env): boolean =>
@@ -139,16 +140,58 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
     let stderrLineBuf = ''; // carries a partial (un-newlined) tail between data chunks for onStderrLine
     let stdoutBytes = 0; // TRUE byte counters (incoming Buffer.length), not UTF-16 string length
     let stderrBytes = 0;
+    let graceTimer: NodeJS.Timeout | undefined;
+    let shutdownError: Error | undefined;
+    let streamsReported = false;
+    const reportStreams = (code: number | null): void => {
+      if (streamsReported) return;
+      streamsReported = true;
+      opts.onStreams?.({ stdout, stderr, code });
+    };
+
+    const groupKill = (): void => {
+      if (state.phase !== 'term_sent') return;
+      state = { phase: 'group_killed' };
+      pc.offExit(exitKill);
+      if (graceTimer !== undefined) pc.clearTimeout(graceTimer);
+      try {
+        if (detached && typeof proc.pid === 'number' && process.platform !== 'win32') {
+          pc.kill(-proc.pid, 'SIGKILL');
+        } else {
+          proc.kill('SIGKILL');
+        }
+      } catch {
+        /* ESRCH / already reaped */
+      }
+    };
+
+    // A hook process can call process.exit() before the grace timer runs. Exit handlers are synchronous, so
+    // reclaim the owned group here rather than orphaning it when the supervisor disappears.
+    const exitKill = (): void => groupKill();
+
     const requestShutdown = (error: Error): void => {
       if (state.phase !== 'running') return;
       state = { phase: 'term_sent' };
+      shutdownError = error;
+      pc.clearTimeout(timer);
       void Promise.resolve(opts.onShutdownRequested?.()).catch(() => undefined);
       try {
         proc.stdin.end();
       } catch {
-        // The process remains visible to the human control plane.
+        /* stdin may already be closed */
       }
-      reject(error);
+      try {
+        if (detached && typeof proc.pid === 'number' && process.platform !== 'win32') {
+          pc.kill(-proc.pid, 'SIGTERM');
+        } else {
+          proc.kill('SIGTERM');
+        }
+      } catch {
+        /* close/group cleanup remains authoritative */
+      }
+      pc.onExit(exitKill);
+      graceTimer = pc.setTimeout(groupKill, opts.graceMs ?? 5_000);
+      // Settle from process close only, so the caller cannot retry while the prior owned tree is still alive.
     };
 
     const timer = pc.setTimeout(
@@ -156,7 +199,7 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
       opts.timeoutMs,
     );
 
-    // Fail-loud on a runaway stream without turning a resource bound into automatic OS authority.
+    // Fail-loud on a runaway stream and reclaim the same owned tree through the one shutdown seam.
     const failCapExceeded = (stream: 'stdout' | 'stderr'): void => {
       requestShutdown(
         new Error(
@@ -187,35 +230,40 @@ export function runOneShotCli(opts: OneShotOpts): Promise<string> {
     });
 
     proc.on('error', (e) => {
-      if (state.phase !== 'running') return;
+      if (state.phase === 'closed' || state.phase === 'spawn_failed') return;
       state = { phase: 'spawn_failed' };
       pc.clearTimeout(timer);
-      opts.onStreams?.({ stdout, stderr, code: null });
-      reject(new Error(`${prefix}spawn failed: ${e.message}`));
+      if (graceTimer !== undefined) pc.clearTimeout(graceTimer);
+      pc.offExit(exitKill);
+      reportStreams(null);
+      reject(shutdownError ?? new Error(`${prefix}spawn failed: ${e.message}`));
     });
 
     proc.on('close', (code) => {
-      opts.onStreams?.({ stdout, stderr, code }); // best-effort stream capture for logging (any exit code)
+      if (state.phase === 'closed' || state.phase === 'spawn_failed') return;
+      reportStreams(code); // best-effort stream capture for logging (any exit code), exactly once
       if (state.phase === 'running') {
         state = { phase: 'closed' };
         pc.clearTimeout(timer);
         if (code === 0) resolve(stdout);
         else reject(new Error(`${prefix}exit ${code}: ${stderr.trim()}`));
       } else if (state.phase === 'term_sent') {
-        state = { phase: 'closed_late' };
+        // The root closing does not prove its detached descendants exited. Sweep the exact group before settling;
+        // ESRCH is harmless when SIGTERM already emptied the group.
+        groupKill();
+        state = { phase: 'closed' };
+        reject(shutdownError ?? new Error(`${prefix}subprocess shutdown`));
+      } else if (state.phase === 'group_killed') {
+        state = { phase: 'closed' };
+        reject(shutdownError ?? new Error(`${prefix}subprocess shutdown`));
       }
-      // closed / spawn_failed / closed_late: terminal — nothing to do.
     });
 
     try {
       proc.stdin.write(opts.prompt);
       proc.stdin.end();
     } catch (e) {
-      if (state.phase === 'running') {
-        state = { phase: 'spawn_failed' };
-        pc.clearTimeout(timer);
-        reject(new Error(`${prefix}stdin write failed: ${String(e)}`));
-      }
+      requestShutdown(new Error(`${prefix}stdin write failed: ${String(e)}`));
     }
   });
 }

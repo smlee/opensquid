@@ -76,6 +76,7 @@ class MCPClient {
   private pending = new Map<number, (r: JsonRpcResponse) => void>();
   private stderr = '';
   private exited = false;
+  private exitCode: number | null = null;
 
   constructor(env: NodeJS.ProcessEnv) {
     this.proc = spawn(TSX_BIN, [SERVER_FILE], {
@@ -93,8 +94,9 @@ class MCPClient {
     this.proc.stderr.on('data', (chunk: string) => {
       this.stderr += chunk;
     });
-    this.proc.on('close', () => {
+    this.proc.on('close', (code) => {
       this.exited = true;
+      this.exitCode = code;
     });
   }
 
@@ -156,19 +158,28 @@ class MCPClient {
     return this.stderr;
   }
 
-  async shutdown(): Promise<void> {
-    if (this.exited) return;
+  async closeParentPipeAndWait(timeoutMs = 2_000): Promise<number | null> {
+    if (this.exited) return this.exitCode;
     this.proc.stdin.end();
-    await new Promise<void>((resolveDone) => {
-      const t = setTimeout(() => {
-        this.proc.kill('SIGTERM');
-        resolveDone();
-      }, 2000);
-      this.proc.on('close', () => {
-        clearTimeout(t);
-        resolveDone();
+    return new Promise<number | null>((resolveDone, reject) => {
+      const timer = setTimeout(() => {
+        this.proc.kill('SIGKILL');
+        reject(new Error(`MCP server survived parent-pipe EOF for ${String(timeoutMs)}ms`));
+      }, timeoutMs);
+      this.proc.once('close', (code) => {
+        clearTimeout(timer);
+        resolveDone(code);
       });
     });
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.exited) return;
+    try {
+      await this.closeParentPipeAndWait();
+    } catch {
+      // closeParentPipeAndWait already force-reclaimed the test child.
+    }
   }
 }
 
@@ -199,6 +210,10 @@ describe('opensquid-mcp subprocess', () => {
   afterEach(async () => {
     await client.shutdown();
     await rm(home, { recursive: true, force: true });
+  });
+
+  it('exits cleanly when its parent pipe reaches EOF', async () => {
+    await expect(client.closeParentPipeAndWait()).resolves.toBe(0);
   });
 
   it('a direct MCP issue close pushes item_closed to the project monitor stream', async () => {
