@@ -16,9 +16,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createClient } from '@libsql/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { readActiveTask, writeActiveTask } from '../session_state.js';
+import { CheckpointStore } from '../durable/checkpoint_store.js';
+import { readActiveTask, recordSessionCwd, writeActiveTask } from '../session_state.js';
 
 import { mirrorActiveTask, readHarnessTasks } from './active_task_mirror.js';
 
@@ -165,6 +167,24 @@ describe('mirrorActiveTask', () => {
     await expect(
       mirrorActiveTask('no-such-session', 'TaskUpdate', {}, tasksBase),
     ).resolves.toBeUndefined();
+  });
+
+  it('retains a harness-neutral WorkGraph selection backed by a project-local checkpoint', async () => {
+    const project = join(tempHome, 'project');
+    const storeDir = join(project, '.opensquid');
+    await mkdir(storeDir, { recursive: true });
+    await recordSessionCwd(SID, project);
+    await writeActiveTask(SID, {
+      id: 'wg-123456789abc',
+      subject: 'wg-123456789abc',
+      started_at: 'z',
+    });
+    const client = createClient({ url: `file:${join(storeDir, 'opensquid.db')}` });
+    await new CheckpointStore(client).createTaskCheckpoint('wg-123456789abc', 'scope', Date.now());
+    client.close();
+
+    await mirrorActiveTask(SID, 'Write', { file_path: 'docs/research/x.md' }, tasksBase);
+    expect(await readActiveTask(SID)).toMatchObject({ id: 'wg-123456789abc' });
   });
 });
 

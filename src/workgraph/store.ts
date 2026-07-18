@@ -408,6 +408,22 @@ export function workGraphStore(opts: {
       return rs.rows.map(rowToIssue);
     },
 
+    async renewClaim(id, expectedToken, ttlSec) {
+      if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
+      if (expectedToken.length === 0)
+        throw new Error('workgraph: expected claim token is required');
+      if (!Number.isSafeInteger(ttlSec) || ttlSec < 1) {
+        throw new Error('workgraph: claim ttlSec must be a positive safe integer');
+      }
+      const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
+      await appendOp(id, 'claim_renewed', { expectedToken, expiresAt });
+      const current = await getIssue(id);
+      return {
+        renewed: current?.claimToken === expectedToken && current.claimExpiresAt === expiresAt,
+        expiresAt,
+      };
+    },
+
     async wedgeMark(id, reason: string) {
       if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
       await appendOp(id, 'wedge_marked', { reason });
@@ -430,14 +446,20 @@ export function workGraphStore(opts: {
       await appendOp(id, 'issue_unarchived', {});
     },
 
-    async releaseClaim(id) {
+    async releaseClaim(id, expectedToken) {
       if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
-      await appendOp(id, 'claim_released', {});
+      await appendOp(id, 'claim_released', expectedToken === undefined ? {} : { expectedToken });
     },
 
-    async claimIssue(id, audience: ClaimAudience, ttlSec) {
+    async claimIssue(
+      id,
+      audience: ClaimAudience,
+      ttlSec,
+      isAuthorized: () => boolean = () => true,
+    ) {
       if ((await getIssue(id)) === null) throw new Error(`workgraph: no issue ${id}`);
       const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
+      if (!isAuthorized()) return { won: false, expiresAt };
       // Unique per attempt → robust read-back (no two claims collide even at the same ms/expiry).
       const claimToken =
         'clm-' +
@@ -448,6 +470,12 @@ export function workGraphStore(opts: {
       await appendOp(id, 'claim_acquired', { claimToken, audience, expiresAt });
       // applyOp ran the conditional CAS; we won iff OUR token is the one that landed.
       const cur = await getIssue(id);
+      // Re-check after the durable CAS. If authority was lost while I/O yielded, release only OUR token so the
+      // item is immediately recoverable without risking a successor's newer claim.
+      if (cur?.claimToken === claimToken && !isAuthorized()) {
+        await appendOp(id, 'claim_released', { expectedToken: claimToken });
+        return { won: false, expiresAt };
+      }
       return { won: cur?.claimToken === claimToken, expiresAt };
     },
 

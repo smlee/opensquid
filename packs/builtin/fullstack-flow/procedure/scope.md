@@ -8,19 +8,17 @@ You are in the SCOPE stage. SCOPE is the ONE interactive stage; everything after
   AND when the task's subject or a load-bearing dependency is an EXTERNAL tool/service, at least one external
   primary-source call (`WebSearch` / `WebFetch` / repo read) is PART OF that mandatory minimum, not optional.
   A scope of an external tool with zero external-source calls has not met the research bar.
-- FAN OUT parallel research subagents, each with the skills appropriate to its angle (e.g. a codebase-explorer
-  over the affected subsystems, an external/primary-docs researcher, an existing-solution scout). They burn
-  THEIR context; you keep only the cited synthesis — that is how the main context stays clean.
-- Climb the source ladder: the user's words → memory → prior research → local code → and the EXTERNAL primary
-  source (the tool's own docs/repo, via WebSearch/WebFetch) — record it.
-- **EXTERNAL-SUBJECT ⇒ mandatory exhaustive web grounding (rubric §6).** When the task's subject or a
-  load-bearing dependency IS an external tool/service (e.g. adding a harness), the local `recall`+Read+Grep bar
-  is NOT enough: also sweep the tool's FULL capability surface against its primary docs/repo/examples
-  (invocation + I/O framing, output/cost format, config, auth, extension API, and EVERY sub-capability the
-  procedures require — subagents/fan-out, hooks/enforcement, MCP — do not assume a barebones tool has one).
-  A publicly-findable fact MUST be grounded here — it may NOT be parked as an OPEN QUESTION or deferred to
-  PLAN / a live-acceptance. Leaning on downstream review to surface web-findable facts is a scope failure.
-- Write the pre-research artifact to `{docsRoot}/research/<track>-pre-research-<date>.md`. Every claim is cited
+- Perform the required research directly. A pack-declared bounded read-only reviewer may cover an independent
+  lens when useful, but reviewer fan-out is optional and never delegates SCOPE ownership or stage progression.
+- Climb the source ladder once: the user's words → memory → prior research → local code → and the EXTERNAL
+  primary source (the tool's own docs/repo, via WebSearch/WebFetch) — record the reusable citation in the
+  artifact. Reuse still-current cited research; do not fetch the same source again just because the session changed.
+- For an external subject, satisfy the single exhaustive contract in SCOPE rubric criterion 6. Do not create a
+  second checklist here; the rubric owns what the capability sweep covers.
+- Create the configured destination with `mkdir -p -- "{docsRoot}/research"`, then write the pre-research artifact
+  to `{docsRoot}/research/<track>-pre-research-<date>.md`. The shared strict policy has already validated the
+  configured value; this creation supports a fresh project whose default `docs` or configured sibling root does
+  not exist yet. Every claim is cited
   (`file:line` / memory / the user's words) OR flagged as an unchecked `- [ ] OPEN QUESTION: …`.
 - Capture the FULL scope against the design you cite — no MVP / convenient-slice reduction (see the rubric).
 - CITE THE AUTHORITATIVE design-of-record. Before scoping, confirm the design you cite is the CURRENT one, NOT a
@@ -59,6 +57,16 @@ When your research is complete and the artifact quality checks above hold:
 
 1. Present a summary of the gathered scope to the user: "Here is the scope I gathered — does this look correct?"
 2. Wait for the user's explicit confirmation.
-3. On confirmation, emit: `RALPH-EXIT: {"kind":"SHIPPED","stage":"scope_write"}`
-   The user's confirmation IS the human permission.
-   The next automated lap (SCOPE_WRITE) will write the formal pre-research artifact.
+3. On confirmation, invoke exactly:
+   `opensquid loop scope-done <active-wg-id> <approved-absolute-artifact>`
+4. Parse exactly one complete LF-terminated result. For `scope_handoff`, stop immediately: report pid-bearing
+   success, or report `loop.status:"error"` because the coordinator already exhausted its three liveness attempts.
+   For `scope_handoff_error`, stop on `validation`, `conflict`, or `stale`; retry only `persistence`, because that
+   typed result states no receipt committed. Also retry an uncertain response (signal, timeout, EOF, malformed or
+   unterminated JSON, or nonzero exit with no structured result). Use the identical command at most twice more,
+   waiting 250 ms then 1 second. Stop after command attempt 3. A committed receipt makes uncertain-response retry
+   idempotent; deterministic caller/data errors are never multiplied.
+
+The user's confirmation is the human permission. Do **not** emit `RALPH-EXIT` here: that tag is an autonomous-lap
+result protocol and cannot persist interactive approval. `scope_write` may formalize the approved artifact at the
+same canonical path after the durable handoff starts the loop.

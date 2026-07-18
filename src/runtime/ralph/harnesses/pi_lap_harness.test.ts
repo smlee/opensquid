@@ -7,10 +7,6 @@ import type {
   PiHarnessRuntimeAssets,
   VerifiedPiRuntime,
 } from '../lap_harness.js';
-import {
-  PI_ROLE_MANIFEST_HASH_ENV,
-  PI_ROLE_MANIFEST_PATH_ENV,
-} from '../../../integrations/pi/env.js';
 import type {
   StreamingCliOptions,
   StreamingCliResult,
@@ -37,19 +33,16 @@ const EVIDENCE: VerifiedPiRuntime = {
   mcpAdapterVersion: '4.6.2',
   providers: new Map([['anthropic', new Set(['model-a'])]]),
   resolvedModel: { provider: 'anthropic', id: 'model-a' },
-  registeredTools: new Set(['read', 'workgraph_get', 'spawn_subagent']),
-  activeTools: new Set(['read', 'workgraph_get', 'spawn_subagent']),
+  registeredTools: new Set(['read', 'workgraph_get']),
+  activeTools: new Set(['read', 'workgraph_get']),
   genericProxyAbsent: true,
   effectiveShell: { commandPrefix: 'source env.sh', shellPath: '/bin/zsh' },
-  roleManifestPath: '/manifest.json',
-  roleManifestHash: 'a'.repeat(64),
 };
 const assets = (evidence: VerifiedPiRuntime = EVIDENCE): PiHarnessRuntimeAssets => ({
   systemPromptPath: '/pkg/context/pi-system-prompt.md',
   mcpAdapterExtensionPath: '/verified/pi-mcp-adapter/index.js',
   projectorExtensionPath: '/pkg/dist/integrations/pi/projector.js',
-  spawnSubagentExtensionPath: '/pkg/dist/integrations/pi/spawn_subagent.js',
-  parentTools: ['read', 'workgraph_get', 'spawn_subagent'],
+  stageTools: ['read', 'workgraph_get'],
   statsTimeoutMs: 5,
   readiness: vi.fn(() => Promise.resolve(evidence)),
 });
@@ -128,7 +121,7 @@ const stats = (cost: unknown = 0) => ({
 });
 
 describe('Pi preflight and invocation', () => {
-  it('requires behavioral readiness and hands manifest plus effective shell metadata through request.env', async () => {
+  it('requires behavioral readiness and hands effective shell metadata through request.env', async () => {
     const driver: Driver = { records: [], sent: [] };
     const runtimeAssets = assets();
     const request: LapRequest = { ...REQUEST, env: { ...REQUEST.env } };
@@ -142,18 +135,14 @@ describe('Pi preflight and invocation', () => {
       attemptId: 'attempt-1',
     });
     expect(request.env).toMatchObject({
-      [PI_ROLE_MANIFEST_PATH_ENV]: '/manifest.json',
-      [PI_ROLE_MANIFEST_HASH_ENV]: 'a'.repeat(64),
       OPENSQUID_PI_SHELL_COMMAND_PREFIX: 'source env.sh',
       OPENSQUID_PI_SHELL_PATH: '/bin/zsh',
     });
 
     for (const bad of [
       { ...EVIDENCE, genericProxyAbsent: false },
-      { ...EVIDENCE, registeredTools: new Set(['read', 'workgraph_get']) },
-      { ...EVIDENCE, activeTools: new Set(['read', 'workgraph_get']) },
-      { ...EVIDENCE, roleManifestPath: '' },
-      { ...EVIDENCE, roleManifestHash: 'bad' },
+      { ...EVIDENCE, registeredTools: new Set(['read']) },
+      { ...EVIDENCE, activeTools: new Set(['read']) },
     ]) {
       await expect(
         piLapHarness.preflight?.(CONFIG, deps(driver, assets(bad)), REQUEST),
@@ -161,7 +150,7 @@ describe('Pi preflight and invocation', () => {
     }
   });
 
-  it('uses the isolated parent flags, exact extensions/tools, and keeps context files enabled', () => {
+  it('uses isolated StageProcess flags, exact extensions/tools, and keeps context files enabled', () => {
     const args = piLapHarness.spawnArgs(CONFIG, assets());
     expect(args).toEqual([
       '--mode',
@@ -180,10 +169,8 @@ describe('Pi preflight and invocation', () => {
       '/verified/pi-mcp-adapter/index.js',
       '-e',
       '/pkg/dist/integrations/pi/projector.js',
-      '-e',
-      '/pkg/dist/integrations/pi/spawn_subagent.js',
       '--tools',
-      'read,workgraph_get,spawn_subagent',
+      'read,workgraph_get',
     ]);
     expect(args).not.toContain('--no-context-files');
   });
@@ -224,118 +211,6 @@ describe('Pi RPC fold and settlement', () => {
     const env = await piLapHarness.run(REQUEST, CONFIG, deps(driver));
     expect(env.isError).toBe(false);
     expect(driver.sent.filter((r) => r.type === 'get_session_stats')).toHaveLength(1);
-  });
-
-  it('adds versioned child usage exactly once per toolCallId without double-counting assistant usage', async () => {
-    const driver: Driver = {
-      records: [
-        accepted,
-        {
-          type: 'tool_execution_end',
-          toolCallId: 'tc-1',
-          toolName: 'spawn_subagent',
-          result: {
-            content: [{ type: 'text', text: 'child' }],
-            details: {
-              results: [{ role: 'scope-architect', text: 'child', isError: false }],
-              opensquidSubagentUsage: {
-                version: 1,
-                inputTokens: 7,
-                outputTokens: 11,
-                cacheReadTokens: 13,
-                cacheWriteTokens: 17,
-                costUsd: 0.4,
-              },
-            },
-          },
-          isError: false,
-        },
-        {
-          type: 'tool_execution_end',
-          toolCallId: 'tc-1',
-          toolName: 'spawn_subagent',
-          result: {
-            content: [],
-            details: {
-              results: [],
-              opensquidSubagentUsage: {
-                version: 1,
-                inputTokens: 100,
-                outputTokens: 100,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                costUsd: 99,
-              },
-            },
-          },
-          isError: false,
-        },
-        assistant(),
-        { type: 'agent_settled' },
-        stats(0),
-      ],
-      sent: [],
-    };
-    await expect(piLapHarness.run(REQUEST, CONFIG, deps(driver))).resolves.toEqual({
-      resultText: 'AB',
-      costUsd: 0.4,
-      inputTokens: 17,
-      outputTokens: 31,
-      cacheReadTokens: 15,
-      cacheWriteTokens: 20,
-      isError: false,
-    });
-  });
-
-  it('propagates a child human cancellation through the trusted envelope even if parent text claims success', async () => {
-    const controlOutcome = {
-      kind: 'CANCELLED_BY_HUMAN' as const,
-      executorId: 'pi-child-1',
-      action: 'force_kill' as const,
-      actionId: 'action-1',
-    };
-    const driver: Driver = {
-      records: [
-        accepted,
-        {
-          type: 'tool_execution_end',
-          toolCallId: 'tc-cancel',
-          toolName: 'spawn_subagent',
-          result: {
-            content: [{ type: 'text', text: 'cancelled' }],
-            details: {
-              results: [
-                {
-                  role: 'fullstack-executor',
-                  text: 'cancelled',
-                  isError: true,
-                  controlOutcome,
-                },
-              ],
-              opensquidSubagentUsage: {
-                version: 1,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                costUsd: 0,
-              },
-              controlOutcome,
-            },
-          },
-          isError: true,
-        },
-        assistant({ content: [{ type: 'text', text: 'RALPH-EXIT: {"kind":"SHIPPED"}' }] }),
-        { type: 'agent_settled' },
-        stats(0),
-      ],
-      sent: [],
-    };
-
-    await expect(piLapHarness.run(REQUEST, CONFIG, deps(driver))).resolves.toMatchObject({
-      resultText: 'RALPH-EXIT: {"kind":"SHIPPED"}',
-      controlOutcome,
-    });
   });
 
   it('falls back from failed or malformed statistics to summed message usage', async () => {

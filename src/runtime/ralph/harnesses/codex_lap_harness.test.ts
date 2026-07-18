@@ -253,13 +253,10 @@ describe('codexLapHarness.preflight — $CODEX_HOME auth resolution + single-spa
 
 describe('codexLapHarness.parseEnvelope — the JSONL fold (MHL.5)', () => {
   it('folds the live shape → SHIPPED via extractTypedExit + real tokens + notional-0 cost', () => {
-    const env = codexLapHarness.parseEnvelope(
-      jsonl('done\nRALPH-EXIT: {"kind":"SHIPPED","stage":"code"}'),
-      '',
-    );
+    const env = codexLapHarness.parseEnvelope(jsonl('done\nRALPH-EXIT: {"kind":"SHIPPED"}'), '');
     expect(env).toMatchObject({ costUsd: 0, inputTokens: 12315, outputTokens: 19, isError: false });
     expect(env.resultText).toContain('RALPH-EXIT');
-    expect(outcomeFromEnvelope(env).outcome).toEqual({ kind: 'SHIPPED', stage: 'code' });
+    expect(outcomeFromEnvelope(env).outcome).toEqual({ kind: 'SHIPPED' });
   });
 
   it('concatenates multiple agent_message texts in stream order', () => {

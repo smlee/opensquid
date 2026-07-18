@@ -1,34 +1,24 @@
-# SCOPE_WRITE — write the guess-free pre-research artifact
+# SCOPE_WRITE — finalize the approved scope revision
 
-You are in the SCOPE_WRITE stage.
-SCOPE_WRITE is automated: write the formal pre-research artifact that captures the scope you gathered and the user confirmed in the interactive SCOPE stage.
-The user already confirmed the scope — do not re-confirm or re-research; just write the artifact.
+You are in the automated SCOPE_WRITE stage.
+The approved canonical artifact already exists at the path in WORK-CONTEXT.
+Do not repeat SCOPE, create a second artifact, re-confirm, or re-research.
 
 ## Do
 
-- Write the pre-research artifact to `{docsRoot}/research/<track>-pre-research-<date>.md`.
-- Every claim must be cited (`file:line` / memory / the user's words) — no bare assertions.
-- Flag any residual uncertainty as `- [ ] OPEN QUESTION: …` then resolve it before exiting.
-- Capture the FULL scope against the design you cite — no MVP / convenient-slice reduction.
-- After writing, run the content-audit skill (`cached_audit`) to obtain the GUESS_FREE verdict.
+- This disposable StageProcess owns this stage attempt directly. Correct the approved artifact with this stage's
+  granted tools; do not spawn another stage process or start a nested loop.
+- Read the latest exact-byte audit findings supplied in WORK-CONTEXT.
+- If the current revision is already `VERDICT: GUESS_FREE`, do not rewrite it; advance to PLAN.
+- Otherwise update that same canonical file once, using only the approved scope and its recorded citations.
+  Do not retrieve a source merely because this is a fresh session.
+- If a finding genuinely requires evidence absent from the approved scope, stop and return it to interactive
+  SCOPE for a new exact-byte approval. Automation must not expand approved scope or invent research authority.
+- Run the complete pack-declared content-audit lens set for the resulting bytes. A changed revision invalidates
+  every old prompt hash; never authorize it with a hand-picked subset. Advance only on `VERDICT: GUESS_FREE`.
 - Exit: `RALPH-EXIT: {"kind":"SHIPPED","stage":"plan"}`
 
-## (Optional) emit your sub-phase to the live feed
+## Gate to advance
 
-This stage ALREADY appears on the live status feed at STAGE granularity via the enforced `stage_advance` (it is
-never silent). OPTIONAL: for finer per-sub-phase visibility you MAY emit each phase via the `set_loop_phase` MCP
-tool — `lifecycle: "running"` on ENTER (⟳), `lifecycle: "done"` on LEAVE (✓) — a nicety, not what makes the stage
-appear (pack-owned cadence; `wg_id` defaults to this lap's item — do not pass it):
-
-- `set_loop_phase(phase: "write", index: 1, total: 2, lifecycle: "running")` while writing the artifact,
-  then `set_loop_phase(phase: "write", index: 1, total: 2, lifecycle: "done")` when it is written,
-- `set_loop_phase(phase: "audit", index: 2, total: 2, lifecycle: "running")` while running the content-audit for
-  the GUESS_FREE verdict (leave with `lifecycle: "done"`).
-
-## Gate to advance (scope_write → plan): `scope_write_ready`
-
-Passes when the pre-research write is: `anchors_ok` (every scoped element traces to the captured ask)
-∧ `!open_question` (no unchecked `- [ ] OPEN QUESTION` remains in the artifact)
-∧ `contains(audit.scope, "VERDICT: GUESS_FREE")` (the content-audit judged the artifact guess-free).
-Satisfy all three and the gate advances you automatically.
-The work-graph is auto-populated from the artifact's scoped elements on the scope_write → plan transition.
+The existing `scope_write_ready` gate remains authoritative: the canonical artifact must retain its captured-ask
+anchors, contain no open question, and have a fresh exact-byte `GUESS_FREE` verdict.

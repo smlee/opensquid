@@ -96,7 +96,8 @@ export interface ExtensionAPI {
     message: { customType: string; content: string; display: boolean },
     options: { deliverAs: 'followUp' },
   ): Promise<unknown>;
-  sendUserMessage(message: string, options: { deliverAs: 'followUp' }): Promise<unknown>;
+  /** Pi's ExtensionAPI dispatches this fire-and-forget; async failures surface as extension_error events. */
+  sendUserMessage(message: string, options: { deliverAs: 'followUp' }): void;
   registerTool(definition: PiToolDefinition): void;
   registerCommand?(
     name: string,

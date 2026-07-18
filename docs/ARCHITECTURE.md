@@ -377,25 +377,40 @@ requirements:
     proof: 'src/runtime/paths.test.ts'
   # wg-fecabb8ff29f (auto-trigger loop on scope-exit) — the loop auto-starts on the human scope→scope_write
   # advance. One reachable requirement per new BEHAVIORAL export; the proof-test is the authority (the static
-  # `from` hint is advisory — these surface through the scope-exit checkpoint-writer path, not a hook builder,
-  # so a negative static pre-filter does not veto a passing proof). Data-shape exports (loopPidPath/loopLockPath
-  # path builders + LoopStatus/LoopAutoSpawnResult/EnsureLoopRunningDeps types + the resolveLoopEntrypoint seam)
-  # are baselined in the allowlist, per the chatDaemon*Path / resolveCliEntrypoint / *Deps precedent.
+  # `from` hint is advisory — these surface through the scope-exit coordinator, not a hook builder, so a negative
+  # static pre-filter does not veto a passing proof). Data-shape exports (loopPidPath +
+  # LoopStatus/LoopAutoSpawnResult/EnsureLoopRunningDeps types + the resolveLoopEntrypoint seam) are baselined in
+  # the allowlist, per the chatDaemon*Path / resolveCliEntrypoint / *Deps precedent.
   - id: R-LOOP-AUTOSPAWN
     intent: 'the loop auto-starts on scope-exit — idempotent, single-flight, fail-open (ask BUILD §2/§3/§4)'
     wg: wg-fecabb8ff29f
     assert: { kind: reachable, symbol: ensureLoopRunning, from: [post-tool-use] }
     proof: 'src/runtime/ralph/loop_autospawn.test.ts'
   - id: R-LOOP-STATUS
-    intent: 'project-local loop liveness (pidfile + kill -0) — the idempotency probe (ask BUILD §2)'
-    wg: wg-fecabb8ff29f
-    assert: { kind: reachable, symbol: loopStatus, from: [post-tool-use] }
+    intent: 'project-local loop liveness comes from a validated kernel-owner handshake; pidfile is projection only'
+    wg: wg-aea7911b797d
+    assert: { kind: reachable, symbol: loopStatus, from: [scope-done] }
     proof: 'src/runtime/ralph/loop_autospawn.test.ts'
   - id: R-LOOP-START
-    intent: 'detached background spawn of `dist/cli.js loop`, waiting for the worker pidfile (ask BUILD §2)'
-    wg: wg-fecabb8ff29f
-    assert: { kind: reachable, symbol: startLoop, from: [post-tool-use] }
+    intent: 'detached background spawn uses the explicit target repository and waits for lifetime admission'
+    wg: wg-aea7911b797d
+    assert: { kind: reachable, symbol: startLoop, from: [scope-done] }
     proof: 'src/runtime/ralph/loop_autospawn.test.ts'
+  - id: R-LOOP-OWNER-ACQUIRE
+    intent: 'one project-keyed Unix socket or named-pipe owner is held for the worker claim-capable lifetime'
+    wg: wg-aea7911b797d
+    assert: { kind: reachable, symbol: acquireLoopOwner, from: [loop] }
+    proof: 'src/runtime/ralph/loop_owner.test.ts'
+  - id: R-LOOP-OWNER-PROBE
+    intent: 'liveness validates the owner handshake and process-start identity; invalid endpoints fail closed'
+    wg: wg-aea7911b797d
+    assert: { kind: reachable, symbol: probeLoopOwner, from: [scope-done] }
+    proof: 'src/runtime/ralph/loop_owner.test.ts'
+  - id: R-MCP-STDIO-LIFETIME
+    intent: 'an MCP child is owned by its parent stdio pipe: EOF or termination closes long-lived subscribers, reconnect timers, and the SDK server exactly once so Pi restarts cannot accumulate orphan bridge processes'
+    wg: wg-cbe7adbbe688
+    assert: { kind: reachable, symbol: bindStdioLifetime, from: [mcp-server] }
+    proof: 'src/mcp/stdio_lifecycle.test.ts'
 
   # T-opensquid-release-flow (REL.1..REL.4) — the release flow's new BEHAVIORAL exports: one reachable
   # requirement per export, its element test the proof (the authority). The `from` hints are advisory — these
@@ -953,4 +968,48 @@ requirements:
     wg: wg-f166de25d186
     assert: { kind: reachable, symbol: hasCodexAuth, from: [orchestrator] }
     proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  # T-fullstack-slash-scope (wg-ad368ef9ef98) — one pack-owned command operation projected through all hosts,
+  # with canonical WorkGraph/checkpoint authority and existing stage lanes. No command registry or second flow.
+  - id: R-FSCOPE-COMMAND
+    intent: 'FSCOPE.1/2 fullstackScopeCommand: the sole descriptor/parser/operation for /scope create-or-select; resolves only invocation-local stores, creates/verifies the canonical initial checkpoint, publishes ActiveTask.id, rebuilds the task FSM projection, and returns existing SCOPE context with id-bearing recovery'
+    spec: 'docs/tasks/T-fullstack-slash-scope.md'
+    wg: wg-ad368ef9ef98
+    assert: { kind: reachable, symbol: fullstackScopeCommand, from: [user-prompt-submit] }
+    proof: 'src/packs/runtime/fullstack_scope.test.ts'
+  - id: R-FSCOPE-ENTRY-PRIMITIVE
+    intent: 'FSCOPE.2 registerFullstackScopeEntry: the active-pack prompt projection for Claude/Codex — current raw prompt in, ignored→no-op, failure→blocking verdict, engaged→existing SCOPE context; no harness parser or state writer'
+    spec: 'docs/tasks/T-fullstack-slash-scope.md'
+    wg: wg-ad368ef9ef98
+    assert: { kind: reachable, symbol: registerFullstackScopeEntry, from: [user-prompt-submit] }
+    proof: 'src/packs/runtime/fullstack_scope.test.ts'
+  - id: R-FSCOPE-ENGAGEMENT
+    intent: 'FSCOPE.1/3 resolveFullstackScopeEngagement: the one strict derived engagement seam over ActiveTask.id + local open issue + TaskCheckpoint.stage + task FSM projection + active fullstack policy; I/O/divergence is indeterminate, never a grant-enabled absence'
+    spec: 'docs/tasks/T-fullstack-slash-scope.md'
+    wg: wg-ad368ef9ef98
+    assert: { kind: reachable, symbol: resolveFullstackScopeEngagement, from: [pre-tool-use] }
+    proof: 'src/packs/runtime/fullstack_scope.test.ts'
+  - id: R-FSCOPE-LANE
+    intent: 'FSCOPE.3 decideFullstackScopeWrite: pure engaged/unengaged/indeterminate adapter over the existing mutation classifier and pack-declared write lane; engaged out-of-lane and indeterminate mutations deny while reads remain available'
+    spec: 'docs/tasks/T-fullstack-slash-scope.md'
+    wg: wg-ad368ef9ef98
+    assert: { kind: reachable, symbol: decideFullstackScopeWrite, from: [pre-tool-use] }
+    proof: 'src/runtime/hooks/lifecycle/pre_tool_call.test.ts'
+  - id: R-FSCOPE-STRICT-ACTIVE
+    intent: 'FSCOPE.1 readActiveTaskStrict: one-parser tri-state active-task read preserving ENOENT as absent and malformed/permission/I/O as indeterminate; the legacy tolerant API remains its null projection'
+    spec: 'docs/tasks/T-fullstack-slash-scope.md'
+    wg: wg-ad368ef9ef98
+    assert: { kind: reachable, symbol: readActiveTaskStrict, from: [pre-tool-use] }
+    proof: 'src/runtime/session_state.test.ts'
+  - id: R-FSCOPE-MIRROR-CONTINUITY
+    intent: 'FSCOPE.1 checkpointBackedActiveTaskContinuity: harness-neutral mirror retention for a canonical WorkGraph selection with an existing local checkpoint; definite no-checkpoint clears as before and read failure retains fail-closed'
+    spec: 'docs/tasks/T-fullstack-slash-scope.md'
+    wg: wg-ad368ef9ef98
+    assert: { kind: reachable, symbol: checkpointBackedActiveTaskContinuity, from: [pre-tool-use] }
+    proof: 'src/runtime/hooks/active_task_mirror.test.ts'
+  - id: R-FSCOPE-PI-CONTINUATION
+    intent: 'FSCOPE.2 stepPiScopeContinuation: the pure total idle→queued→sent|failed reducer behind serialized native Pi /scope continuation, bounded exact-follow-up context correlation, synchronous dispatch rollback, and non-command follow-up delivery; Pi async delivery failures surface separately as extension_error and cannot leak SCOPE context into an unrelated prompt'
+    spec: 'docs/tasks/T-fullstack-slash-scope.md'
+    wg: wg-ad368ef9ef98
+    assert: { kind: reachable, symbol: stepPiScopeContinuation, from: [pi-projector] }
+    proof: 'src/integrations/pi/projector.test.ts'
 ```

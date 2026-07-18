@@ -66,25 +66,26 @@ export async function runPromptSubmit(
 ): Promise<LifecycleOutput> {
   const event = input.event;
   const diagnostics: string[] = [];
-  if (ctx.role !== 'lap-child') {
-    await deps.recordCurrentSession(ctx.sessionId, ctx.cwd);
-    await deps.claimUmbrellaLeaseForSession(ctx.sessionId, ctx.cwd);
-    try {
-      await deps.resetTurnLedger(ctx.sessionId);
-    } catch (error) {
-      diagnostics.push(`opensquid: tool-ledger turn-reset failed — ${String(error)}`);
-    }
-    try {
-      const cls = classifyRequestType(event.prompt);
-      await deps.writeRequestType(ctx.sessionId, {
-        ...cls,
-        source: 'deterministic',
-        prompt_hash: sha256Hex(event.prompt).slice(0, 16),
-        at: ctx.now,
-      });
-    } catch (error) {
-      diagnostics.push(`opensquid: request-type classification failed — ${String(error)}`);
-    }
+  if (ctx.role === 'reviewer') {
+    return { exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics };
+  }
+  await deps.recordCurrentSession(ctx.sessionId, ctx.cwd);
+  await deps.claimUmbrellaLeaseForSession(ctx.sessionId, ctx.cwd);
+  try {
+    await deps.resetTurnLedger(ctx.sessionId);
+  } catch (error) {
+    diagnostics.push(`opensquid: tool-ledger turn-reset failed — ${String(error)}`);
+  }
+  try {
+    const cls = classifyRequestType(event.prompt);
+    await deps.writeRequestType(ctx.sessionId, {
+      ...cls,
+      source: 'deterministic',
+      prompt_hash: sha256Hex(event.prompt).slice(0, 16),
+      at: ctx.now,
+    });
+  } catch (error) {
+    diagnostics.push(`opensquid: request-type classification failed — ${String(error)}`);
   }
   const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(event, packs, registry, ctx.sessionId);
@@ -95,15 +96,6 @@ export async function runPromptSubmit(
   const exitCode = dispatched.exitCode === 2 || v2.exitCode === 2 ? 2 : dispatched.exitCode;
   const stderr = [dispatched.stderr, ...v2.messages].filter(Boolean).join('\n');
   const dispatchInjections = [...dispatched.contextInjections, ...v2.injections];
-  if (ctx.role === 'lap-child') {
-    return {
-      exitCode,
-      stderr,
-      contextInjections: dispatchInjections,
-      directives: dispatched.directives,
-      diagnostics,
-    };
-  }
   const newProjectLine = await deps.detectNewProject(ctx.sessionId);
   const inboxEnvelope = await deps.drainUmbrellaInbox(ctx.sessionId);
 

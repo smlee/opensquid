@@ -38,19 +38,11 @@ scope: workflow
 # PACK-TAXONOMY (pack-taxonomy.md:105) — fullstack-flow is THE coding discipline, activated ON-DEMAND by the
 # classified request (produce × coding), not pinned always-on.
 activation: on-demand
-# DISCIPLINE-DECLARATION (project-only-operation, opensquid-project-only-operation.md:86-93) — fullstack-flow is a
-# coding flow whose main loop PLANS and dispatches executors; it imposes orchestrator-only discipline. opensquid
-# owns the guard MECHANISM (runtime/guard/orchestrator_guard.ts); this DECLARES the POLICY that turns it on, so a
-# project running fullstack-flow gets the orchestrator guard while a content/SEO project (no such declaration) does not.
-#
-# WHAT THE GUARD ENFORCES (user spec 2026-07-05) — ALWAYS-ON in this project's cwd + subdirectories, in BOTH
-# interactive and automation sessions (NOT stage- or automation-gated): the main orchestrator loop may write
-# DOCUMENTS only (Markdown / anything under `docs/`); a CODING-FILE write (src/packs/tests/config) is HARD-BLOCKED
-# at PreToolUse — the freehand-proof boundary. The "unless": a STANDING human grant, the project-local
-# `allow_code_write` value in `.opensquid/orchestrator.json` (flip via `/code-write`). Executor subagents (agent_id) are
-# exempt — they implement what the orchestrator planned. This is PROJECT-SCOPED, never global (pre-tool-use.ts
-# gates on `projectDeclaresOrchestratorOnly(cwd)`, which rejects the home/global scope).
-discipline: { orchestrator_only: true }
+# DISCIPLINE-DECLARATION — the interactive coordinator remains document-only unless a standing human grant is
+# present. Each disposable StageProcess is the direct worker for its pack stage and receives that stage's tools;
+# it is not a child exemption and does not delegate implementation through another model hierarchy. Pack lanes,
+# gates, and the safety floor govern StageProcess writes. This policy is project-scoped, never global.
+discipline: { coordinator_docs_only: true }
 
 # No detected_by gate — opt-in via active.json IS the pin (mirrors coding-flow; the user_pinned
 # DetectionContext signal is never populated, so a detected_by clause would silently DISABLE the pack).
@@ -58,6 +50,28 @@ detected_by: []
 
 # ORCH.1 serves contract — the orchestrator routes build work (produce × coding) to this pack.
 serves: { intent: produce, domain: coding }
+
+# Guard-audit channels. The ids become `audit.<id>` context keys; cache identities, producer rules, rubrics, and
+# exact-byte freshness are all pack data. Core loops this map and has no built-in audit-stage vocabulary.
+audits:
+  scope:
+    cache_key: fullstack-flow-scope-audit-cache
+    rule: scope-guess-free-audit
+    rubric: scope
+    subject: approved_artifact
+    writes: ['docs/research/*pre-research*']
+  plan:
+    cache_key: fullstack-flow-plan-audit-cache
+    rule: plan-guess-free-audit
+    rubric: plan
+  author:
+    cache_key: fullstack-flow-author-audit-cache
+    rule: author-guess-free-audit
+    rubric: author
+  code:
+    cache_key: fullstack-flow-code-audit-cache
+    rule: code-guess-free-audit
+    rubric: code
 
 # COMMIT-GATE EVIDENCE (T-deploy-commit-gate scope-4, design §4a) — the POLICY of WHICH evidence the generic
 # core commit-gate (src/setup/cli/gate.ts) reads to authorize a code commit, declared HERE in the pack (core
@@ -84,6 +98,23 @@ versioning:
   prefix: '0.5'
   bump: patch-per-release
 
+# OUTER-COORDINATOR POLICY — opaque state ids owned by this pack. OpenSquid core reads this declaration to
+# decide which checkpoints receive one fresh, disposable peer StageProcess attempt. The interactive initial
+# state and later human boundary are intentionally absent; their names and meanings never appear in core.
+automation:
+  entry: scope_write
+  stages: [scope_write, plan, author, code]
+
+# Transition side effects bound by opaque state id. Core executes these generic reaction names and never compares
+# a transition to this pack's state vocabulary.
+reactions:
+  on_enter:
+    scope: [reset_captured_ask]
+    deploy: [ensure_acceptance]
+    accept: [reset_verification_loop]
+  on_leave:
+    scope_write: [freeze_captured_ask, reconcile_decomposition]
+
 # Guard registry (ref → if:-expression, evaluated by RegistryGuardEvaluator over buildGuardCtx).
 guards:
   # T2.4 / GS1 — the SCOPE gate: a deterministic, zero-LLM predicate. The `!scope.is_advance` short-circuit passes
@@ -92,11 +123,11 @@ guards:
   #   anchors_ok     — every scoped element traces to the captured ask (anti-drift verdict, zero drift)
   #   !open_question — no unchecked `- [ ] OPEN QUESTION` remains in the artifact
   # GFR.2 — + the guess-free verdict: the SCOPE content-audit (content-audit skill) must have judged the
-  # artifact GUESS_FREE. `contains` (not `==`) because cached_audit stores the full verdict text; `audit.scope`
-  # path-resolves the nested `audit` object (buildGuardCtx). Undefined verdict → contains→false → block
+  # artifact GUESS_FREE. `startsWith` accepts the full verdict text but rejects a pass token quoted inside an
+  # UNRESOLVED finding; `audit.scope` path-resolves the nested object. Undefined verdict → false → block
   # (FAIL-CLOSED, loop-back until the producer's verdict lands) — a stage never advances on a guessed artifact.
   # GS1: `depth >= 3` removed — research depth is human-paced guidance (procedure), not a machine-enforced gate.
-  scope_ready: '!scope.is_advance || (scope.anchors_ok && !scope.open_question && contains(audit.scope, "VERDICT: GUESS_FREE"))'
+  scope_ready: '!scope.is_advance || (scope.anchors_ok && !scope.open_question && startsWith(audit.scope, "VERDICT: GUESS_FREE"))'
   # T2.5 — the PLAN gate: a deterministic, zero-LLM predicate over the work-graph. `plan.acyclic` (no cycle in
   # the `blocks`+`parent-child` edges, Kahn) ∧ `plan.complete` (every design element of the INDEPENDENT
   # `extractScope` universe has ≥1 covering issue). Bound by buildGuardCtx; FAIL-CLOSED with no captured scope.
@@ -106,7 +137,7 @@ guards:
   # sha256(prompt)-keyed, prompt embeds the artifact → a changed artifact re-evaluates, never a stale pass), so
   # audit.scope flips to UNRESOLVED here and PLAN blocks — drift caught at the NEXT boundary, not only at the end.
   # Only the immediately-prior stage is re-asserted (NOT the full chain): the cascade is transitive across gates.
-  plan_ready: 'plan.acyclic && plan.complete && contains(audit.plan, "VERDICT: GUESS_FREE") && contains(audit.scope, "VERDICT: GUESS_FREE")'
+  plan_ready: 'plan.acyclic && plan.complete && startsWith(audit.plan, "VERDICT: GUESS_FREE") && startsWith(audit.scope, "VERDICT: GUESS_FREE")'
   # T2.6 — the AUTHOR gate: a deterministic, zero-LLM predicate over the SHIPPED coverage checker.
   # `author.manifest_complete` (no gated export lacks a covering requirement — `report.orphans.length === 0`) ∧
   # `author.real_code` (every requirement MET — where met for reachable/binding REQUIRES its proof-test to pass,
@@ -119,7 +150,7 @@ guards:
   # have a recorded pre-code existing-solution consultation (`author.searched_existing` = the `before` bucket,
   # external_consult.ts). Docs-only / no-new-dependency change → `external_needed` false → the clause passes with
   # NO consult (the user's "only when necessary" — never force it on a trivial edit). REQUIRED, not urged.
-  author_ready: 'author.manifest_complete && author.real_code && contains(audit.author, "VERDICT: GUESS_FREE") && contains(audit.plan, "VERDICT: GUESS_FREE") && (!author.external_needed || author.searched_existing)'
+  author_ready: 'author.manifest_complete && author.real_code && startsWith(audit.author, "VERDICT: GUESS_FREE") && startsWith(audit.plan, "VERDICT: GUESS_FREE") && (!author.external_needed || author.searched_existing)'
   # T2.7 — the CODE gate (inner gate of the `code_cycle` sub_flow): a deterministic, zero-LLM predicate.
   # `code.phases_complete` (the shipped 7-phase ledger `isComplete` for the active task) ∧ `code.readiness_ran`
   # (the three readiness surfacers ran + were recorded) ∧ `code.deprecated_clean` (the recorded readiness found
@@ -149,7 +180,7 @@ guards:
   # (procedure/code.md), not a self-selected subset — a slice that passes while the full suite is red no longer
   # advances CODE. FAIL-CLOSED (no record / red → false), mirroring DEPLOY's `deploy.clean` suite floor
   # (deploy_evidence.ts). Grouped with the deterministic `code.*` facets, before `report.resolved`.
-  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green && report.resolved && contains(audit.code, "VERDICT: GUESS_FREE") && contains(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
+  code_ready: 'code.phases_complete && code.readiness_ran && code.deprecated_clean && code.suite_green && report.resolved && startsWith(audit.code, "VERDICT: GUESS_FREE") && startsWith(audit.author, "VERDICT: GUESS_FREE") && (!code.external_needed || code.consulted_before) && (!code.external_needed || code.audited)'
   # T2.8 — the DEPLOY gate: a deterministic, zero-LLM predicate. `deploy.capability_ok` = the shipped
   # CapabilityGate ALLOWS the deploy capability (SKIPPED→true when no deploy env, so a flow with nothing to
   # deploy is not blocked by the gate). The human-accept is the `accept` decision below, not this gate.
@@ -198,7 +229,7 @@ guards:
   # GS1 — the SCOPE_WRITE gate: fires on a pre-research artifact Write/Edit that is anchors_ok ∧ !open_question ∧
   # GUESS_FREE. No short-circuit (unlike scope_ready): scope_write is an AUTOMATED stage with one job — write the
   # artifact — so every non-advance post_tool_call blocks until the artifact lands correctly.
-  scope_write_ready: 'scope.is_advance && scope.anchors_ok && !scope.open_question && contains(audit.scope, "VERDICT: GUESS_FREE")'
+  scope_write_ready: 'scope.is_advance && scope.anchors_ok && !scope.open_question && startsWith(audit.scope, "VERDICT: GUESS_FREE")'
 
 fsm:
   initial: scope
@@ -223,6 +254,7 @@ fsm:
       # the `scope → scope_write` transition stays structurally defined for the compiler / validateFsm.
       on_fail: { action: block, message: 'SCOPE: anchors∧!open_question' }
       report: SCOPE
+      goal_alignment: true
       reads:
         - scope.anchors_ok
         - { key: scope.open_question, label: 'no open question', expect: false }
@@ -290,11 +322,8 @@ fsm:
       # source-file write during AUTHOR is out of lane → blocked (the code belongs to the CODE stage).
       writes: ['docs/**']
     # ── CODE (T2.7 — ENFORCING gate on the live OBSERVED path) ──────────────
-    # A `sub_flow` is INERT in observed mode (V2ObservedActor advances only at gate/decision,
-    # v2_observed_actor.ts:74) → it would PARK the live flow at CODE and never reach DEPLOY. So the live observed
-    # path uses a GATE here (traverses code→deploy). The `flows.code_cycle` sub_flow is RETAINED below (it
-    # exercises the sub_flow KIND + compiles/validates) as the §5-DEFERRED driven per-task region — same
-    # reconciliation as the executor kind + loopback flow: defined for the driven model, NOT on the live path.
+    # The observed path uses the pack gate directly. CODE is executed by its own disposable peer StageProcess;
+    # no nested executor or second workflow loop exists beneath it.
     code:
       kind: gate
       guard: code_ready
@@ -302,10 +331,11 @@ fsm:
       on_pass_emits: coded
       on_fail: { action: block, message: 'CODE: log all 7 phases + readiness clean' }
       # CADENCE — after-stage report on LEAVE (code → deploy) + before-stage summary on ENTRY (author → code). The
-      # CODE after-report is the long, stand-out one (7-phase chart); under automation loop_driver owns it, so
-      # v2_supply suppresses the CODE report (not the summary) under OPENSQUID_AUTOMATION=1 (unchanged double-emit guard).
+      # CODE after-report is the long, stand-out one (7-phase chart). It may also fire when an interactive
+      # log_phase call completes the declared ledger before a coordinator drives the transition.
       report: CODE
       summary: true
+      report_phases: true
       # EVIDENCE-DECLARATION — the CODE gate facets the report proves (was core stageEvidence['code']).
       reads:
         - code.phases_complete
@@ -313,6 +343,7 @@ fsm:
         - code.deprecated_clean
       # STAGE-WORK — was NEXT_STAGE_WORK['code'] in core, now pack data.
       does: 'run the 7-phase coding cycle: pre_research → learn → code → test → audit → post_research → fix'
+      phases: [pre_research, learn, code, test, audit, post_research, fix]
       # LANE MODEL — CODE is the implementation stage: it writes source, tests, and configs. Its lane is
       # intentionally UNRESTRICTED (`**` matches every path) — declared explicitly (not omitted) so the pack
       # documents that CODE's freedom is a decision, not an oversight. Enforcement here is the completeness
@@ -414,23 +445,3 @@ fsm:
     - { from: accept, on: accepted, to: done }
     - { from: accept, on: auto_accepted, to: done } # REVERSIBLE-DEPLOY: distinct event, same target as accepted
     - { from: accept, on: rejected, to: plan }
-
-# HAR.1 registry of isolated nested machines (compile_v2.ts:160 — a `sub_flow.flow` is a key into this).
-flows:
-  # T2.7 — the per-task CODE region: the agent logs all 7 phases + runs the readiness surfacers, then the
-  # ENFORCING `code_ready` gate passes (→ committed/terminal `coded`) or BLOCKS on the RESULT (incomplete phases,
-  # never-run readiness, or a deprecated-syntax hit). One isolated machine per task (principle 9).
-  code_cycle:
-    initial: coding
-    states:
-      coding:
-        kind: gate
-        guard: code_ready
-        trigger: [post_tool_call]
-        on_pass_emits: committed
-        on_fail: { action: block, message: 'CODE: log all 7 phases + readiness clean' }
-      committed:
-        kind: terminal
-        outcome: shipped
-    transitions:
-      - { from: coding, on: committed, to: committed }

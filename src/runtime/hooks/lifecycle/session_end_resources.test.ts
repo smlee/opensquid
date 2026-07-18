@@ -61,7 +61,7 @@ function context(overrides: Partial<LifecycleContext> = {}): LifecycleContext {
   return {
     sessionId: 'session-resource-test',
     cwd: '/repo',
-    actor: { kind: 'orchestrator' },
+    actor: { kind: 'coordinator' },
     role: 'interactive',
     now: '2026-07-14T00:00:00.000Z',
     ...overrides,

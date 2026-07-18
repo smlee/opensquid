@@ -2,7 +2,7 @@ import {
   buildRegistry,
   loadActivePacksForDispatch,
   loadActiveV2Cartridges,
-  projectDeclaresOrchestratorOnly,
+  projectDeclaresCoordinatorDocsOnly,
 } from '../../bootstrap.js';
 import type { FunctionRegistry } from '../../../functions/registry.js';
 import type { LoadedPackV2 } from '../../../packs/loader_v2.js';
@@ -17,7 +17,11 @@ import { dispatchEvent } from '../dispatch.js';
 import { checkSafety } from '../../guard/safety_floor.js';
 import { loadSafetyPolicy } from '../../guard/safety_policy.js';
 import { isYoloMode } from '../../guard/yolo.js';
-import { checkDesignDocRewrite, checkOrchestratorGuard } from '../../guard/orchestrator_guard.js';
+import {
+  checkDesignDocRewrite,
+  checkOrchestratorGuard,
+  checkReviewerReadOnly,
+} from '../../guard/orchestrator_guard.js';
 import { scopeAuditCacheKey } from '../../scope_audit_cache_key.js';
 import { appendProjectDriftEvent } from '../../drift_catalog.js';
 import { existsSync } from 'node:fs';
@@ -25,6 +29,11 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { resolveProjectScopeRoot, sessionStateFile } from '../../paths.js';
 import { readSettings } from '../../orchestrator_settings.js';
+import {
+  decideFullstackScopeWrite,
+  resolveFullstackScopeEngagement,
+  type ScopeEngagement,
+} from '../../../packs/runtime/fullstack_scope.js';
 
 import type { PreToolDecision, ToolCallInput, LifecycleContext } from './types.js';
 
@@ -58,11 +67,15 @@ export interface PreToolCallHandlerDeps {
   loadSafetyPolicy: typeof loadSafetyPolicy;
   isYoloMode(cwd: string): Promise<boolean>;
   appendProjectDriftEvent: typeof appendProjectDriftEvent;
-  projectDeclaresOrchestratorOnly(cwd: string): Promise<boolean>;
+  projectDeclaresCoordinatorDocsOnly(cwd: string): Promise<boolean>;
   readSettings(cwd: string): Promise<{ allow_code_write?: boolean }>;
   resolveProjectScopeRoot(cwd: string): Promise<string | null>;
   checkDesignDocRewrite: typeof checkDesignDocRewrite;
   readScopeAuditVerdict(sessionId: string, key: string): Promise<string | undefined>;
+  resolveFullstackScopeEngagement(input: {
+    sessionId: string;
+    cwd: string;
+  }): Promise<ScopeEngagement>;
   loadDispatch(
     sessionId: string,
     registry?: FunctionRegistry,
@@ -84,11 +97,12 @@ const DEFAULT_DEPS: PreToolCallHandlerDeps = {
   loadSafetyPolicy,
   isYoloMode,
   appendProjectDriftEvent,
-  projectDeclaresOrchestratorOnly,
+  projectDeclaresCoordinatorDocsOnly,
   readSettings,
   resolveProjectScopeRoot,
   checkDesignDocRewrite,
   readScopeAuditVerdict,
+  resolveFullstackScopeEngagement,
   loadDispatch: async (sessionId, registry) => ({
     packs: await loadActivePacksForDispatch(sessionId),
     registry: registry ?? (await buildRegistry()),
@@ -99,9 +113,6 @@ const DEFAULT_DEPS: PreToolCallHandlerDeps = {
   runV2Cartridges,
 };
 
-const actorAgentId = (ctx: LifecycleContext): string | undefined =>
-  ctx.actor.kind === 'executor' ? ctx.actor.id : undefined;
-
 export async function runPreToolCall(
   input: ToolCallInput,
   ctx: LifecycleContext,
@@ -109,6 +120,12 @@ export async function runPreToolCall(
 ): Promise<PreToolDecision> {
   const event = input.event;
   const diagnostics: string[] = [];
+  if (ctx.role === 'reviewer') {
+    const verdict = checkReviewerReadOnly(event.tool, event.args ?? {});
+    return verdict.deny
+      ? { block: true, reason: verdict.message ?? '', contextInjections: [], diagnostics }
+      : { block: false, contextInjections: [], diagnostics };
+  }
   let harnessSyncInstruction: string | null = null;
   try {
     const cmd = (event.args as { command?: unknown }).command;
@@ -147,8 +164,13 @@ export async function runPreToolCall(
   }
 
   const cwd = event.cwd ?? ctx.cwd;
-  const hookAgentId = actorAgentId(ctx);
-  const hookInput = hookAgentId === undefined ? undefined : { agent_id: hookAgentId };
+  const guardActor = ctx.actor.kind;
+  const patchCommand =
+    event.tool === 'apply_patch' &&
+    typeof (event.args as { command?: unknown }).command === 'string'
+      ? ((event.args as { command: string }).command ?? '')
+      : null;
+  const parsedPatch = patchCommand === null ? null : parseApplyPatch(patchCommand);
   try {
     const verdict = checkSafety(
       { tool: event.tool, args: event.args },
@@ -183,15 +205,66 @@ export async function runPreToolCall(
     // fail-open
   }
 
+  let scopeEngagement: ScopeEngagement;
   try {
-    if (await deps.projectDeclaresOrchestratorOnly(cwd)) {
+    scopeEngagement = await deps.resolveFullstackScopeEngagement({
+      sessionId: ctx.sessionId,
+      cwd,
+    });
+  } catch (error) {
+    scopeEngagement = { kind: 'indeterminate', reason: String(error) };
+  }
+  if (scopeEngagement.kind !== 'unengaged') {
+    if (event.tool === 'apply_patch' && (parsedPatch === null || parsedPatch.length === 0)) {
+      return {
+        block: true,
+        reason: 'scope engagement cannot verify an apply_patch with no extractable target',
+        contextInjections: [],
+        diagnostics,
+      };
+    }
+    const normalizedWrites =
+      parsedPatch === null
+        ? [{ tool: event.tool, args: event.args ?? {} }]
+        : parsedPatch.map((file) => ({
+            tool: 'Write',
+            args: { file_path: file.path, content: file.content },
+          }));
+    for (const call of normalizedWrites) {
+      const decision = decideFullstackScopeWrite(scopeEngagement, call.tool, call.args);
+      if (decision.kind === 'deny') {
+        return {
+          block: true,
+          reason: decision.message,
+          contextInjections: [],
+          diagnostics,
+        };
+      }
+    }
+    const coordinator = checkOrchestratorGuard(event.tool, event.args ?? {}, {
+      actor: guardActor,
+      codeWritePermitted: false,
+    });
+    if (coordinator.deny) {
+      return {
+        block: true,
+        reason: coordinator.message ?? '',
+        contextInjections: [],
+        diagnostics,
+      };
+    }
+  }
+
+  try {
+    if (await deps.projectDeclaresCoordinatorDocsOnly(cwd)) {
       const scopeRoot = await deps.resolveProjectScopeRoot(cwd);
       const allowByConfig =
         scopeRoot !== null &&
         (await deps.readSettings(dirname(scopeRoot))).allow_code_write === true;
       const allowByLegacyFlag =
         scopeRoot !== null && existsSync(join(scopeRoot, 'allow-code-write'));
-      const verdict = checkOrchestratorGuard(event.tool, event.args, hookInput, {
+      const verdict = checkOrchestratorGuard(event.tool, event.args, {
+        actor: guardActor,
         codeWritePermitted: allowByConfig || allowByLegacyFlag,
       });
       if (verdict.deny) {
@@ -203,12 +276,23 @@ export async function runPreToolCall(
         };
       }
       const design = await deps
-        .checkDesignDocRewrite(event.tool, event.args, hookInput, {
-          readScopeVerdict: () => {
-            const dfp = event.args?.file_path;
+        .checkDesignDocRewrite(event.tool, event.args, {
+          actor: guardActor,
+          readScopeVerdict: async () => {
+            const bindings = (await deps.loadActiveV2Cartridges(ctx.sessionId)).flatMap(
+              (cartridge) =>
+                Object.values(cartridge.pack.audits ?? {}).filter(
+                  (binding) => binding.subject === 'approved_artifact',
+                ),
+            );
+            if (bindings.length !== 1) return undefined;
+            const filePath = event.args?.file_path;
             return deps.readScopeAuditVerdict(
               ctx.sessionId,
-              scopeAuditCacheKey(typeof dfp === 'string' ? dfp : ''),
+              scopeAuditCacheKey(
+                typeof filePath === 'string' ? filePath : '',
+                bindings[0]!.cache_key,
+              ),
             );
           },
         })
@@ -227,29 +311,25 @@ export async function runPreToolCall(
   }
 
   const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
-  if (event.tool === 'apply_patch') {
-    const cmd = (event.args as { command?: unknown }).command;
-    const patched = typeof cmd === 'string' ? parseApplyPatch(cmd) : [];
-    if (patched.length > 0) {
-      for (const file of patched) {
-        const synth = {
-          ...event,
-          tool: 'Write',
-          args: { file_path: file.path, content: file.content, apply_patch_command: cmd },
+  if (parsedPatch !== null && parsedPatch.length > 0) {
+    for (const file of parsedPatch) {
+      const synth = {
+        ...event,
+        tool: 'Write',
+        args: { file_path: file.path, content: file.content, apply_patch_command: patchCommand },
+      };
+      const result = await deps.dispatchEvent(synth, packs, registry, ctx.sessionId);
+      if (result.exitCode === 2) {
+        return {
+          block: true,
+          reason: result.stderr,
+          contextInjections: [],
+          diagnostics,
         };
-        const result = await deps.dispatchEvent(synth, packs, registry, ctx.sessionId);
-        if (result.exitCode === 2) {
-          return {
-            block: true,
-            reason: result.stderr,
-            contextInjections: [],
-            diagnostics,
-          };
-        }
-        if (result.stderr) diagnostics.push(result.stderr);
       }
-      return { block: false, contextInjections: [], diagnostics };
+      if (result.stderr) diagnostics.push(result.stderr);
     }
+    return { block: false, contextInjections: [], diagnostics };
   }
 
   const v1 = await deps.dispatchEvent(event, packs, registry, ctx.sessionId);

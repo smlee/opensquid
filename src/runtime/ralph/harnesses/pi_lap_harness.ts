@@ -1,6 +1,4 @@
 /** Pi RPC lap adapter. All Pi flags and model-driven wire semantics remain in the Pi vendor layer. */
-import { isAbsolute } from 'node:path';
-
 import type {
   LapEnvelope,
   LapHarness,
@@ -10,29 +8,17 @@ import type {
 } from '../lap_harness.js';
 import {
   PI_READINESS_PROBE_ENV,
-  PI_ROLE_MANIFEST_HASH_ENV,
-  PI_ROLE_MANIFEST_PATH_ENV,
   PI_SHELL_COMMAND_PREFIX_ENV,
   PI_SHELL_PATH_ENV,
-  isSha256Hex,
 } from '../../../integrations/pi/env.js';
 import { runPiRpcAgentSession } from '../../../integrations/pi/rpc_agent_session.js';
 import {
-  controlledExecutorProcess,
-  listExecutorProcesses,
+  controlledOwnedProcess,
+  listOwnedProcesses,
   ProcessPausedError,
   type ProcessShutdownCause,
-} from '../../subagents/process_control.js';
+} from '../../processes/process_control.js';
 import { realProcControl } from '../../spawn_lifecycle.js';
-import {
-  decodeSubagentControlOutcome,
-  decodeSubagentUsage,
-} from '../../../integrations/pi/subagent_usage.js';
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
-}
-
 function assertAssets(assets: PiHarnessRuntimeAssets | null): PiHarnessRuntimeAssets {
   if (assets === null) {
     throw new Error('Pi runtime assets are not composed; run Pi setup/readiness before the lap');
@@ -41,15 +27,14 @@ function assertAssets(assets: PiHarnessRuntimeAssets | null): PiHarnessRuntimeAs
     systemPromptPath: assets.systemPromptPath,
     mcpAdapterExtensionPath: assets.mcpAdapterExtensionPath,
     projectorExtensionPath: assets.projectorExtensionPath,
-    spawnSubagentExtensionPath: assets.spawnSubagentExtensionPath,
   })) {
     if (value.trim() === '') throw new Error(`Pi runtime asset ${name} is empty`);
   }
   if (
-    assets.parentTools.length === 0 ||
-    new Set(assets.parentTools).size !== assets.parentTools.length
+    assets.stageTools.length === 0 ||
+    new Set(assets.stageTools).size !== assets.stageTools.length
   ) {
-    throw new Error('Pi parent tool allowlist must be non-empty and duplicate-free');
+    throw new Error('Pi StageProcess tool allowlist must be non-empty and duplicate-free');
   }
   return assets;
 }
@@ -71,32 +56,24 @@ function assertReadiness(
   if (!evidence.genericProxyAbsent) {
     throw new Error('Pi generic MCP proxy must be absent before model execution');
   }
-  const missingRegistered = assets.parentTools.filter(
-    (tool) => !evidence.registeredTools.has(tool),
-  );
+  const missingRegistered = assets.stageTools.filter((tool) => !evidence.registeredTools.has(tool));
   if (missingRegistered.length > 0) {
-    throw new Error(`Pi parent tools are not registered: ${missingRegistered.join(', ')}`);
+    throw new Error(`Pi StageProcess tools are not registered: ${missingRegistered.join(', ')}`);
   }
-  const missingActive = assets.parentTools.filter((tool) => !evidence.activeTools.has(tool));
+  const missingActive = assets.stageTools.filter((tool) => !evidence.activeTools.has(tool));
   if (missingActive.length > 0) {
-    throw new Error(`Pi parent tools are not active: ${missingActive.join(', ')}`);
-  }
-  if (!isAbsolute(evidence.roleManifestPath)) {
-    throw new Error('Pi role manifest path must be absolute');
-  }
-  if (!isSha256Hex(evidence.roleManifestHash)) {
-    throw new Error('Pi role manifest hash must be a 64-char sha256 hex');
+    throw new Error(`Pi StageProcess tools are not active: ${missingActive.join(', ')}`);
   }
   return evidence;
 }
 
-async function durableParentHumanCause(
-  executorId: string,
+async function durableStageHumanCause(
+  processId: string,
   processInstanceId: string,
 ): Promise<Extract<ProcessShutdownCause, { kind: 'human' }> | undefined> {
-  const state = (await listExecutorProcesses()).find(
+  const state = (await listOwnedProcesses()).find(
     (candidate) =>
-      candidate.executorId === executorId && candidate.processInstanceId === processInstanceId,
+      candidate.processId === processId && candidate.processInstanceId === processInstanceId,
   );
   const action = state?.latestAction;
   if (
@@ -137,10 +114,8 @@ function spawnArgs(_config: PiHarnessConfig, assets: PiHarnessRuntimeAssets): st
     assets.mcpAdapterExtensionPath,
     '-e',
     assets.projectorExtensionPath,
-    '-e',
-    assets.spawnSubagentExtensionPath,
     '--tools',
-    assets.parentTools.join(','),
+    assets.stageTools.join(','),
   ];
 }
 
@@ -161,8 +136,6 @@ export const piLapHarness: LapHarness<PiHarnessConfig> & {
       config,
       assets,
     );
-    request.env[PI_ROLE_MANIFEST_PATH_ENV] = evidence.roleManifestPath;
-    request.env[PI_ROLE_MANIFEST_HASH_ENV] = evidence.roleManifestHash;
     if (evidence.effectiveShell.commandPrefix === undefined) {
       delete request.env[PI_SHELL_COMMAND_PREFIX_ENV];
     } else {
@@ -176,18 +149,9 @@ export const piLapHarness: LapHarness<PiHarnessConfig> & {
   },
   async run(request, config, deps): Promise<LapEnvelope> {
     const assets = assertAssets(deps.assets.pi);
-    const childUsage = {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      costUsd: 0,
-    };
-    const childSeen = new Set<string>();
-    let childControlOutcome: ReturnType<typeof decodeSubagentControlOutcome> = null;
-    const parentExecutorId = `pi-parent-${request.attemptId}`;
-    const parentControl = controlledExecutorProcess({
-      executorId: parentExecutorId,
+    const stageProcessId = `pi-stage-${request.attemptId}`;
+    const stageControl = controlledOwnedProcess({
+      processId: stageProcessId,
       wgId: request.env.OPENSQUID_ITEM_ID ?? 'unknown',
       ...(request.env.OPENSQUID_RUN_ID === undefined
         ? {}
@@ -196,12 +160,13 @@ export const piLapHarness: LapHarness<PiHarnessConfig> & {
         ? {}
         : { checkpointStage: request.env.OPENSQUID_CHECKPOINT_STAGE }),
       lap: 1,
-      role: 'orchestrator',
+      role: 'stage-process',
+      ownership: 'control_root',
       base: realProcControl,
     });
-    let parent;
+    let stageSession;
     try {
-      parent = await runPiRpcAgentSession({
+      stageSession = await runPiRpcAgentSession({
         runStreaming: deps.runStreaming,
         transport: {
           cli: config.cli,
@@ -210,8 +175,8 @@ export const piLapHarness: LapHarness<PiHarnessConfig> & {
           env: { ...request.env, [PI_READINESS_PROBE_ENV]: '0' },
           timeoutMs: request.timeoutMs,
           processGroup: 'own',
-          onShutdownRequested: () => parentControl.markAutomaticShutdown(),
-          procControl: parentControl.procControl,
+          onShutdownRequested: () => stageControl.markAutomaticShutdown(),
+          procControl: stageControl.procControl,
           ...(request.onStderrLine === undefined ? {} : { onStderrLine: request.onStderrLine }),
           ...(request.onStreams === undefined ? {} : { onStreams: request.onStreams }),
         },
@@ -219,57 +184,40 @@ export const piLapHarness: LapHarness<PiHarnessConfig> & {
         promptId: `opensquid-prompt-${request.attemptId}`,
         statsId: `opensquid-stats-${request.attemptId}`,
         ...(assets.statsTimeoutMs === undefined ? {} : { statsTimeoutMs: assets.statsTimeoutMs }),
-        onEvent: (event) => {
-          if (event.type !== 'tool_execution_end') return;
-          const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : undefined;
-          if (toolCallId === undefined || childSeen.has(toolCallId)) return;
-          const details = asRecord(event.result)?.details;
-          const usage = decodeSubagentUsage(details);
-          const control = decodeSubagentControlOutcome(details);
-          if (control !== null) childControlOutcome ??= control;
-          if (usage === null) return;
-          childSeen.add(toolCallId);
-          childUsage.inputTokens += usage.inputTokens;
-          childUsage.outputTokens += usage.outputTokens;
-          childUsage.cacheReadTokens += usage.cacheReadTokens;
-          childUsage.cacheWriteTokens += usage.cacheWriteTokens;
-          childUsage.costUsd += usage.costUsd;
-        },
       });
     } catch (error) {
-      const localCause = parentControl.shutdownCause();
+      const localCause = stageControl.shutdownCause();
       const cause =
         localCause?.kind === 'human'
           ? localCause
-          : await durableParentHumanCause(parentExecutorId, parentControl.processInstanceId).catch(
+          : await durableStageHumanCause(stageProcessId, stageControl.processInstanceId).catch(
               () => undefined,
             );
-      if (cause !== undefined) throw new ProcessPausedError(parentExecutorId, cause);
+      if (cause !== undefined) throw new ProcessPausedError(stageProcessId, cause);
       throw error;
     } finally {
-      parentControl.dispose();
+      stageControl.dispose();
     }
-    const localSettledCause = parentControl.shutdownCause();
+    const localSettledCause = stageControl.shutdownCause();
     const settledCause =
       localSettledCause?.kind === 'human'
         ? localSettledCause
-        : await durableParentHumanCause(parentExecutorId, parentControl.processInstanceId).catch(
+        : await durableStageHumanCause(stageProcessId, stageControl.processInstanceId).catch(
             () => undefined,
           );
     if (settledCause !== undefined) {
-      throw new ProcessPausedError(parentExecutorId, settledCause);
+      throw new ProcessPausedError(stageProcessId, settledCause);
     }
 
-    const parentCost = parent.hasNativeCost ? parent.usage.costUsd : 0;
+    const stageCost = stageSession.hasNativeCost ? stageSession.usage.costUsd : 0;
     return {
-      resultText: parent.text,
-      costUsd: parentCost + childUsage.costUsd,
-      inputTokens: parent.usage.inputTokens + childUsage.inputTokens,
-      outputTokens: parent.usage.outputTokens + childUsage.outputTokens,
-      cacheReadTokens: parent.usage.cacheReadTokens + childUsage.cacheReadTokens,
-      cacheWriteTokens: parent.usage.cacheWriteTokens + childUsage.cacheWriteTokens,
-      ...(childControlOutcome === null ? {} : { controlOutcome: childControlOutcome }),
-      isError: parent.isError,
+      resultText: stageSession.text,
+      costUsd: stageCost,
+      inputTokens: stageSession.usage.inputTokens,
+      outputTokens: stageSession.usage.outputTokens,
+      cacheReadTokens: stageSession.usage.cacheReadTokens,
+      cacheWriteTokens: stageSession.usage.cacheWriteTokens,
+      isError: stageSession.isError,
     };
   },
 };

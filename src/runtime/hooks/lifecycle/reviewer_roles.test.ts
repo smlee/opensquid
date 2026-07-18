@@ -12,37 +12,37 @@ import { runSessionStart, type SessionStartHandlerDeps } from './session_start.j
 import { runStop, type StopHandlerDeps } from './stop.js';
 import type { LifecycleContext } from './types.js';
 
-const CHILD_CTX: LifecycleContext = {
-  sessionId: 'sess-child',
+const REVIEWER_CTX: LifecycleContext = {
+  sessionId: 'sess-reviewer',
   cwd: '/repo',
-  actor: { kind: 'executor', id: 'child-1' },
-  role: 'lap-child',
+  actor: { kind: 'reviewer', id: 'reviewer-1' },
+  role: 'reviewer',
   now: '2026-07-11T00:00:00.000Z',
 };
 
 const resolved = <T>(value: T) => vi.fn(() => Promise.resolve(value));
 
 describe('existing-host lifecycle projector', () => {
-  it('promotes agent_id to executor actor and lap-child role across hosts', () => {
-    expect(extractExistingHostLifecycleCarrier('{"agent_id":" exec-1 "}')).toEqual({
-      agent_id: 'exec-1',
+  it('projects native helper identity as a bounded reviewer across hosts', () => {
+    expect(extractExistingHostLifecycleCarrier('{"agent_id":" reviewer-1 "}')).toEqual({
+      agent_id: 'reviewer-1',
     });
-    expect(projectExistingHostActorAndRole({ agent_id: 'exec-1' })).toEqual({
-      actor: { kind: 'executor', id: 'exec-1' },
-      role: 'lap-child',
+    expect(projectExistingHostActorAndRole({ agent_id: 'reviewer-1' })).toEqual({
+      actor: { kind: 'reviewer', id: 'reviewer-1' },
+      role: 'reviewer',
     });
     expect(
       projectExistingHostLifecycleContext({
         sessionId: 'sess-1',
         cwd: '/repo',
-        raw: '{"agent_id":"exec-2"}',
+        raw: '{"agent_id":"reviewer-2"}',
         now: 'now',
       }),
     ).toEqual({
       sessionId: 'sess-1',
       cwd: '/repo',
-      actor: { kind: 'executor', id: 'exec-2' },
-      role: 'lap-child',
+      actor: { kind: 'reviewer', id: 'reviewer-2' },
+      role: 'reviewer',
       now: 'now',
     });
   });
@@ -64,9 +64,10 @@ describe('existing-host lifecycle projector', () => {
   });
 });
 
-describe('lap-child lifecycle handlers', () => {
-  it('runs session-start pack initialization and dispatch while skipping host ownership side effects', async () => {
+describe('bounded reviewer lifecycle handlers', () => {
+  it('keeps session start outside workflow ownership and state', async () => {
     const recordCurrentSession = resolved(undefined);
+    const recordSessionCwd = resolved(undefined);
     const claimUmbrellaLeaseForSession = resolved(undefined);
     const ensureLapActiveTask = resolved(undefined);
     const initializeV2 = resolved(undefined);
@@ -79,6 +80,7 @@ describe('lap-child lifecycle handlers', () => {
     });
     const mocked: SessionStartHandlerDeps = {
       recordCurrentSession,
+      recordSessionCwd,
       claimUmbrellaLeaseForSession,
       ensureLapActiveTask,
       initializeV2,
@@ -88,19 +90,20 @@ describe('lap-child lifecycle handlers', () => {
     expect(
       await runSessionStart(
         { event: { kind: 'session_start', source: 'startup', cwd: '/repo' } },
-        CHILD_CTX,
+        REVIEWER_CTX,
         mocked,
       ),
     ).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics: [] });
     expect(recordCurrentSession).not.toHaveBeenCalled();
+    expect(recordSessionCwd).not.toHaveBeenCalled();
     expect(claimUmbrellaLeaseForSession).not.toHaveBeenCalled();
     expect(ensureLapActiveTask).not.toHaveBeenCalled();
-    expect(initializeV2).toHaveBeenCalledOnce();
-    expect(loadDispatch).toHaveBeenCalledOnce();
-    expect(dispatchEvent).toHaveBeenCalledOnce();
+    expect(initializeV2).not.toHaveBeenCalled();
+    expect(loadDispatch).not.toHaveBeenCalled();
+    expect(dispatchEvent).not.toHaveBeenCalled();
   });
 
-  it('runs prompt pack dispatch while skipping parent classification and chat side effects', async () => {
+  it('keeps prompt submission outside workflow dispatch and classification', async () => {
     const recordCurrentSession = resolved(undefined);
     const claimUmbrellaLeaseForSession = resolved(undefined);
     const resetTurnLedger = resolved(undefined);
@@ -140,17 +143,21 @@ describe('lap-child lifecycle handlers', () => {
       runV2Cartridges,
     };
     expect(
-      await runPromptSubmit({ event: { kind: 'prompt_submit', prompt: 'hi' } }, CHILD_CTX, mocked),
+      await runPromptSubmit(
+        { event: { kind: 'prompt_submit', prompt: 'hi' } },
+        REVIEWER_CTX,
+        mocked,
+      ),
     ).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics: [] });
     expect(recordCurrentSession).not.toHaveBeenCalled();
     expect(claimUmbrellaLeaseForSession).not.toHaveBeenCalled();
     expect(resetTurnLedger).not.toHaveBeenCalled();
-    expect(loadDispatch).toHaveBeenCalledOnce();
-    expect(dispatchEvent).toHaveBeenCalledOnce();
-    expect(runV2Cartridges).toHaveBeenCalledOnce();
+    expect(loadDispatch).not.toHaveBeenCalled();
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(runV2Cartridges).not.toHaveBeenCalled();
   });
 
-  it('runs stop/session-end pack dispatch while skipping parent cleanup', async () => {
+  it('keeps stop and session end outside workflow dispatch and cleanup', async () => {
     const maybeIngestTurn = resolved(undefined);
     const stopLoadDispatch = resolved({ packs: [], registry: {} as never });
     const stopDispatchEvent = resolved({
@@ -229,24 +236,24 @@ describe('lap-child lifecycle handlers', () => {
     expect(
       await runStop(
         { event: { kind: 'stop', assistantText: 'done' }, isLoopLap: true },
-        CHILD_CTX,
+        REVIEWER_CTX,
         stopDeps,
       ),
     ).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics: [] });
     expect(maybeIngestTurn).not.toHaveBeenCalled();
     expect(claimUmbrellaLeaseForSession).not.toHaveBeenCalled();
-    expect(stopLoadDispatch).toHaveBeenCalledOnce();
-    expect(stopDispatchEvent).toHaveBeenCalledOnce();
+    expect(stopLoadDispatch).not.toHaveBeenCalled();
+    expect(stopDispatchEvent).not.toHaveBeenCalled();
 
     expect(
       await runSessionEnd(
-        { event: { kind: 'session_end', sessionId: 'sess-child' }, isLoopLap: true },
-        CHILD_CTX,
+        { event: { kind: 'session_end', sessionId: 'sess-reviewer' }, isLoopLap: true },
+        REVIEWER_CTX,
         endDeps,
       ),
     ).toEqual({ exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics: [] });
-    expect(endLoadDispatch).toHaveBeenCalledOnce();
-    expect(endDispatchEvent).toHaveBeenCalledOnce();
+    expect(endLoadDispatch).not.toHaveBeenCalled();
+    expect(endDispatchEvent).not.toHaveBeenCalled();
     expect(reconcileMemoryOnSessionEnd).not.toHaveBeenCalled();
     expect(archiveActiveTask).not.toHaveBeenCalled();
   });

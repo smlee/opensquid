@@ -2,17 +2,13 @@
  * GS1 — the ralph loop's DURABLE per-item stage view, backed by the shared `task_checkpoints` table
  * (CheckpointStore) instead of the retired per-item sidecar files (`item_stage.ts`).
  *
- * The orchestrator drives a work-graph item by its CANONICAL id (the `wg-…` issue id). The v2 FSM's
- * deterministic stage fn is the SINGLE WRITER of the task checkpoint (keyed by that same canonical id via
- * `resolveCheckpointKey`); this module is the loop's READ side plus the ONE corrective write the gate is
- * allowed (resetting a bogus checkpoint to `scope`).
+ * The coordinator drives a work-graph item by canonical id and is the sole durable writer for automated stage
+ * progression. Interactive human transitions use this same seam to establish the initial handoff. State ids are
+ * opaque.
  *
- *   - `readLoopStage(wgId)`   → the item's recorded FSM stage (resume-correct), or null (fresh).
- *   - `clearLoopStage(wgId)`  → no-op: canonical wg ids are unique and a closed item leaves `listReady`, so a
- *                               lingering checkpoint row is harmless (the table is append-mostly, like
- *                               `run_manifests`); nothing to delete.
- *   - `scopeGate(wgId)`       → THE scope proof gate: never drive an item PAST scope without a real, on-disk
- *                               scope artifact.
+ *   - `readLoopStage(wgId)`      → recorded state id, or null.
+ *   - `clearLoopStage(wgId)`     → no-op for the append-mostly checkpoint table.
+ *   - `automationAdmission(...)` → drive only a pack-declared process state with its durable handoff proof.
  *
  * Every read/write opens a short-lived CheckpointStore client to the PROJECT-LOCAL `<root>/.opensquid/opensquid.db`
  * (resolved by walking up from cwd for the nearest `.opensquid/`, git-`.git` style; T-project-local-state PLS.3)
@@ -23,30 +19,20 @@
  *
  * Imports from: node:fs/promises, @libsql/client, ../paths.js, ../../storage/sqlite_concurrency.js,
  *   ../durable/checkpoint_store.js.
- * Imported by: src/setup/cli/ralph.ts (readStage/clearStage/scopeGate wiring), src/runtime/loop/v2_supply.ts
- *   (withTaskCheckpointStore — the single-writer trigger + the FSM scope_write seed).
+ * Imported by the outer coordinator and the interactive handoff projection.
  */
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { createClient } from '@libsql/client';
+import { createClient, type Client } from '@libsql/client';
 
 import { resolveLocalStoreDir } from '../paths.js';
 import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 import { resolveCheckpointKey } from '../loop/checkpoint_key.js';
-import { ensureLoopRunning } from './loop_autospawn.js';
+import { ensureLoopEventSchema, readScopeHandoffByItem } from '../loop/loop_events.js';
+import { installScopeHandoffStoreInvariants } from '../loop/scope_handoff_store.js';
 import { emitMonitorEvent } from '../loop/monitor_emit.js';
-
-/** The AUTOMATED stage an item advances INTO on the human scope-exit (SCOPE→scope_write). Reaching this stage
- *  makes the item automation-eligible (`scopeGate` → 'drive'), so the scope-3 trigger auto-starts a loop to
- *  drive it — the ONE stage literal the policy adds to this writer (consistent with `SCOPE_STAGE`). */
-const SCOPE_WRITE_STAGE = 'scope_write';
-
-/** The interactive/human-only stage. A checkpoint parked here is BY DEFINITION out of automation — the scope
- *  gate never drives it; it awaits interactive human scope, which advances the checkpoint past `scope` and
- *  records the on-disk artifact (v2_supply's universal write-through), re-admitting it to automation. */
-const SCOPE_STAGE = 'scope';
 
 /** The PROJECT-LOCAL opensquid.db url the task checkpoint lives in: `<root>/.opensquid/opensquid.db`, resolved
  *  by walking up from cwd for the nearest `.opensquid/` (honors the `OPENSQUID_PROJECT_ROOT` test override).
@@ -62,12 +48,13 @@ async function checkpointDbUrl(): Promise<string> {
  * force before the first read/write. Shared by this module and the v2-supply single-writer trigger.
  */
 export async function withTaskCheckpointStore<T>(
-  fn: (store: CheckpointStore) => Promise<T>,
+  fn: (store: CheckpointStore, client: Client, url: string) => Promise<T>,
 ): Promise<T> {
-  const client = createClient({ url: await checkpointDbUrl() });
+  const url = await checkpointDbUrl();
+  const client = createClient({ url });
   await applyConcurrencyPragmas(client);
   try {
-    return await fn(new CheckpointStore(client));
+    return await fn(new CheckpointStore(client), client, url);
   } finally {
     try {
       client.close();
@@ -106,7 +93,7 @@ export async function readCheckpointBySession(
 }
 
 /**
- * The SINGLE task-checkpoint WRITE, as one owned method (was inlined in v2_supply's stage fn). Create the
+ * The single task-checkpoint write seam. Create the
  * checkpoint if absent, else update its stage; and when a scope artifact is stamped, record it as the on-disk
  * scope proof (set AFTER create so the row exists). Keyed by the canonical wg issue id. Callers pass the
  * artifact (or null) so this module owns the write orchestration, not the FSM supply layer.
@@ -125,34 +112,9 @@ export async function upsertTaskStage(
   });
   // LMP.2 — PUSH the stage advance to the live monitor stream, AFTER the durable checkpoint write. Fail-open:
   // `emitMonitorEvent` swallows a store fault so a monitor-feed hiccup never breaks the load-bearing advance.
-  // scope-2 (T-deterministic-phase-monitor) — THIS unconditional emit is the ENFORCED, stage-granular feed for
-  // EVERY stage (scope/plan/author/scope_write/deploy AND code): `upsertTaskStage` is the SINGLE stage writer
-  // (both scope-exit paths funnel here — the automated v2_supply lap AND the interactive /scope-done handoff,
-  // :129-135), so NO stage's APPEARANCE on the feed depends on the agent-discretionary `set_loop_phase` (which
-  // only ever ADDS optional sub-phase detail). `foldEvents` renders a stage_advance by setting `stage` and
-  // CLEARING `phase` (loop_events.ts:201-211), so each stage shows as `stage · (no phase)` with no emit needed.
-  // CODE's 7 SUB-phases additionally ride the ENFORCED `log_phase` derivation (log_phase.ts, scope-1). NAMED
-  // DEFERRAL (pre-research §4): per-SUB-phase determinism for the 5 NON-code stages is OUT of scope — `log_phase`
-  // is CODE-only and rejects pre-code (log_phase.ts:39,96-101), so no enforced per-sub-phase ledger exists for
-  // them, and building one into each gate is disproportionate for a visibility-only fix; `set_loop_phase` stays
-  // an OPTIONAL supplement there.
+  // The generic stage-granular feed stamps the pack's opaque id verbatim. Optional sub-phase events are a
+  // separate layer and never determine whether a state appears in the monitor.
   await emitMonitorEvent({ wgId, kind: 'stage_advance', stage, atMs: nowMs });
-  // POLICY (ATL.3): the human-granted scope-exit reaches scope_write HERE — the SOLE writer both scope-exit
-  // paths funnel through (the automated `v2_supply` lap AND the interactive `/scope-done` handoff, which
-  // imports this fn directly and bypasses v2_supply). Auto-start a loop to drive the now-eligible item, AFTER
-  // the durable write above (so the item is at scope_write on disk before the loop it starts claims it).
-  // FAIL-OPEN: `ensureLoopRunning` never throws (loop_autospawn.ts) AND this try/catch is belt-and-suspenders
-  // so a synchronous import/resolve fault also cannot break the scope-exit / the checkpoint just written — the
-  // ask's hard invariant ("a trigger failure never blocks scope-exit").
-  if (stage === SCOPE_WRITE_STAGE) {
-    try {
-      await ensureLoopRunning(process.cwd());
-    } catch (err) {
-      process.stderr.write(
-        `[loop-autospawn] scope_write trigger failed (ignored): ${String(err)}\n`,
-      );
-    }
-  }
 }
 
 /** No-op (see module header): a closed item leaves `listReady`; a lingering checkpoint row is harmless. */
@@ -171,37 +133,46 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /**
- * THE SCOPE GATE (GS1). Automation MUST NEVER scope: an unscoped item is non-blocking — it is FIXED TO SCOPE
- * and pushed out of automation, and the loop advances to the next item. Reads the durable task checkpoint keyed
- * by the CANONICAL wg issue id and returns the item's automation-eligibility:
- *   - SCOPED (a checkpoint exists AND its stage is an automated stage — NOT `scope` — AND its recorded artifact
- *     paths are non-empty and ALL exist on disk) → 'drive'.
- *   - NOT scoped (no checkpoint, OR stage is the human-only `scope`, OR no/missing artifact) → FIX TO SCOPE:
- *     reset the checkpoint stage to `scope` (a no-op when no checkpoint exists) → 'hold'. The picker skips a
- *     held item (never re-picked → no spin); the item awaits interactive human scope, which advances its
- *     checkpoint past `scope` and records the artifact (v2_supply's universal write-through), re-admitting it.
- *   NB: this is NOT the old self-correcting reset — automation never re-scopes a held item; a reset to `scope`
- *   keeps it held every pass until a HUMAN scopes it interactively.
- * `exists` + `store` are injectable so the decision is unit-testable without the filesystem or a real db.
+ * Pack-neutral automation admission. A checkpoint is driveable only when its opaque state id belongs to the
+ * active pack's declared process set and its one durable handoff artifact still exists with a matching semantic
+ * receipt. Failure holds the item without rewriting its checkpoint; core cannot infer a corrective state.
  */
-export async function scopeGate(
+export async function automationAdmission(
   wgId: string,
+  isAutomated: (stageId: string) => boolean,
   exists: (path: string) => Promise<boolean> = fileExists,
   store?: CheckpointStore,
+  hasReceipt?: (artifactPath: string) => Promise<boolean>,
 ): Promise<'drive' | 'hold'> {
-  const decide = async (s: CheckpointStore): Promise<'drive' | 'hold'> => {
-    const cp = await s.getTaskCheckpoint(wgId);
-    // Automation-eligible ONLY when really scoped: a checkpoint past the human `scope` stage WITH on-disk proof.
-    if (cp !== null && cp.stage !== SCOPE_STAGE) {
-      const hasProof =
-        cp.scopeArtifacts.length > 0 &&
-        (await Promise.all(cp.scopeArtifacts.map((p) => exists(p)))).every(Boolean);
-      if (hasProof) return 'drive';
+  const decide = async (
+    s: CheckpointStore,
+    receiptFor: (artifactPath: string) => Promise<boolean>,
+  ): Promise<'drive' | 'hold'> => {
+    const checkpoint = await s.getTaskCheckpoint(wgId);
+    if (
+      checkpoint !== null &&
+      isAutomated(checkpoint.stage) &&
+      checkpoint.scopeArtifacts.length === 1
+    ) {
+      const artifact = checkpoint.scopeArtifacts[0]!;
+      if ((await exists(artifact)) && (await receiptFor(artifact))) return 'drive';
     }
-    // Not scoped → fix the checkpoint data to `scope` (UPDATE-only: a no-op when no checkpoint) and hold it out
-    // of automation. updateTaskStage never CREATES — automation must not fabricate scope state for a fresh item.
-    await s.updateTaskStage(wgId, SCOPE_STAGE, Date.now());
     return 'hold';
   };
-  return store !== undefined ? decide(store) : withTaskCheckpointStore(decide);
+  if (store !== undefined) {
+    return decide(store, hasReceipt ?? (() => Promise.resolve(false)));
+  }
+  return withTaskCheckpointStore(async (s, client, url) => {
+    await s.init();
+    await ensureLoopEventSchema(client, url);
+    await installScopeHandoffStoreInvariants(client);
+    return decide(s, async (artifactPath) => {
+      try {
+        const receipt = await readScopeHandoffByItem(client, wgId);
+        return receipt !== null && receipt.artifactPath === artifactPath;
+      } catch {
+        return false;
+      }
+    });
+  });
 }

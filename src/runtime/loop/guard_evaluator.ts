@@ -2,17 +2,16 @@
  * FAC-CUT.2 — the production `GuardEvaluator` for the behavior-FSM (flowchart) path.
  *
  * A v2 gate is a guard (a boolean CONDITION) + an action AUTHORED ON THE STATE
- * (`GateState.on_fail: block|halt` — the 4-action model; applied by `driver.ts:128-131` /
- * `exe/transitions.ts:84`). So the runtime guard evaluator is a PURE PREDICATE: it resolves a
+ * (`GateState.on_fail: block|halt` — the 4-action model; applied by the event-driven gate dispatch).
+ * So the runtime guard evaluator is a PURE PREDICATE: it resolves a
  * guard ref to its `if:`-expression in the pack `guards` registry and returns the boolean via the
  * existing `evalCondition` engine. No verdict levels, no drift_response policy, no `applyDriftResponse`
  * — that v1 machinery is migration-time (wg-8b195b49b60a), not the runtime's.
  *
- * Dormant until FAC-CUT.4 wires one instance into `LoopDriver` (`LoopDeps.guards`) +
- * `evaluateTransition`/`arbitrate`. Built + unit-proven here.
+ * Used by the event-driven `V2ObservedActor` gate path.
  */
 import { evalCondition } from '../evaluator/expression/index.js';
-import type { GuardCtx, GuardEvaluator } from './driver.js';
+import type { GuardCtx, GuardEvaluator } from './gate_dispatch.js';
 
 export class RegistryGuardEvaluator implements GuardEvaluator {
   /** `exprs` = the compiled pack's `guardExprs` (guard ref → `if:`-expression). */

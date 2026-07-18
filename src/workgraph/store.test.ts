@@ -195,12 +195,64 @@ describe('workGraphStore claim + audience (GR.1)', () => {
     ]);
   });
 
+  it('does not enter or report a claim after its caller loses authority', async () => {
+    const wg = await fresh();
+    const a = await wg.createIssue({ title: 'fenced' });
+    expect((await wg.claimIssue(a.id, claude, 1800, () => false)).won).toBe(false);
+    expect((await wg.getIssue(a.id))?.claimToken).toBeUndefined();
+
+    let checks = 0;
+    const raced = await wg.claimIssue(a.id, claude, 1800, () => ++checks === 1);
+    expect(raced.won).toBe(false);
+    expect((await wg.getIssue(a.id))?.claimToken).toBeUndefined();
+    expect((await wg.listReady()).map((item) => item.id)).toContain(a.id);
+    expect((await wg.listEvents(a.id)).map((event) => event.type)).toEqual([
+      'issue_created',
+      'claim_acquired',
+      'claim_released',
+    ]);
+  });
+
+  it('renews only the exact live claim token so productive work cannot outlast ownership', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-06-13T00:00:00.000Z'));
+      const wg = await fresh();
+      const a = await wg.createIssue({ title: 'long productive lap' });
+      await wg.claimIssue(a.id, claude, 60);
+      const token = (await wg.getIssue(a.id))?.claimToken;
+      expect(token).toBeTruthy();
+      if (token === undefined) throw new Error('claim token missing');
+
+      vi.setSystemTime(new Date('2026-06-13T00:00:40.000Z'));
+      const wrong = await wg.renewClaim(a.id, 'successor-token', 60);
+      expect(wrong.renewed).toBe(false);
+      const renewed = await wg.renewClaim(a.id, token, 60);
+      expect(renewed).toEqual({ renewed: true, expiresAt: '2026-06-13T00:01:40.000Z' });
+
+      vi.setSystemTime(new Date('2026-06-13T00:01:01.000Z'));
+      expect((await wg.listReady()).map((item) => item.id)).not.toContain(a.id);
+      expect((await wg.listEvents(a.id)).map((event) => event.type)).toEqual([
+        'issue_created',
+        'claim_acquired',
+        'claim_renewed',
+        'claim_renewed',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('releaseClaim drops the claim → item re-surfaces in ready without a TTL wait (wg-8e1104f1934b)', async () => {
     const wg = await fresh();
     const a = await wg.createIssue({ title: 'release me' });
     await wg.claimIssue(a.id, claude, 86400); // live claim, 1-day TTL → excluded from ready
     expect((await wg.listReady()).map((i) => i.id)).not.toContain(a.id);
-    await wg.releaseClaim(a.id);
+    const token = (await wg.getIssue(a.id))?.claimToken;
+    if (token === undefined) throw new Error('claim token missing');
+    await wg.releaseClaim(a.id, 'stale-predecessor-token');
+    expect((await wg.getIssue(a.id))?.claimToken).toBe(token);
+    await wg.releaseClaim(a.id, token);
     // all claim fields nulled — no time advance needed
     expect((await wg.getIssue(a.id))?.claimToken).toBeUndefined();
     expect((await wg.getIssue(a.id))?.claimAudience).toBeUndefined();
@@ -208,6 +260,7 @@ describe('workGraphStore claim + audience (GR.1)', () => {
     expect((await wg.listEvents(a.id)).map((o) => o.type)).toEqual([
       'issue_created',
       'claim_acquired',
+      'claim_released',
       'claim_released',
     ]);
   });

@@ -349,6 +349,49 @@ export interface ActiveTask {
   spec?: string;
 }
 
+/** Strict read used by enforcement boundaries, where unreadable state must not collapse to "absent". */
+export type ActiveTaskRead =
+  | { readonly kind: 'present'; readonly task: ActiveTask }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'indeterminate'; readonly reason: string };
+
+function parseActiveTask(value: unknown): ActiveTask | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.id !== 'string' ||
+    typeof record.subject !== 'string' ||
+    typeof record.started_at !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    id: record.id,
+    subject: record.subject,
+    started_at: record.started_at,
+    ...(typeof record.taskId === 'string' ? { taskId: record.taskId } : {}),
+    ...(typeof record.spec === 'string' ? { spec: record.spec } : {}),
+  };
+}
+
+/** Preserve ENOENT as definite absence while surfacing malformed/permission/I/O state as indeterminate. */
+export async function readActiveTaskStrict(sessionId: string): Promise<ActiveTaskRead> {
+  try {
+    const task = parseActiveTask(
+      JSON.parse(await readFile(activeTaskFile(sessionId), 'utf8')) as unknown,
+    );
+    return task === null
+      ? { kind: 'indeterminate', reason: 'active-task state is malformed' }
+      : { kind: 'present', task };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    return {
+      kind: 'indeterminate',
+      reason: `active-task state is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 /** Write the active-task signal (called by the AP.1 PreToolUse mirror). */
 export async function writeActiveTask(sessionId: string, task: ActiveTask): Promise<void> {
   const path = activeTaskFile(sessionId);
@@ -382,28 +425,8 @@ export async function readActiveTask(
   sessionId: string,
   lapItemId?: string,
 ): Promise<ActiveTask | null> {
-  try {
-    const parsed = JSON.parse(await readFile(activeTaskFile(sessionId), 'utf8')) as unknown;
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof (parsed as { id: unknown }).id === 'string' &&
-      typeof (parsed as { subject: unknown }).subject === 'string' &&
-      typeof (parsed as { started_at: unknown }).started_at === 'string'
-    ) {
-      const o = parsed as Record<string, unknown>;
-      return {
-        id: o.id as string,
-        subject: o.subject as string,
-        started_at: o.started_at as string,
-        ...(typeof o.taskId === 'string' ? { taskId: o.taskId } : {}),
-        ...(typeof o.spec === 'string' ? { spec: o.spec } : {}),
-      };
-    }
-    return lapItemActiveTask(lapItemId);
-  } catch {
-    return lapItemActiveTask(lapItemId);
-  }
+  const strict = await readActiveTaskStrict(sessionId);
+  return strict.kind === 'present' ? strict.task : lapItemActiveTask(lapItemId);
 }
 
 /**

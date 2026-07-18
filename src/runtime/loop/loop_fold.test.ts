@@ -79,6 +79,34 @@ describe('foldEvents (LMP.4 reducer)', () => {
     expect(state?.lastEventAtMs).toBe(3);
   });
 
+  it('executor lifecycle refreshes staged-item activity without inventing a stage or readiness item', () => {
+    seq = 0;
+    const states = foldEvents([
+      ev({ wgId: 'wg-a', kind: 'stage_advance', stage: 'scope_write', atMs: 1 }),
+      ev({
+        wgId: 'wg-a',
+        kind: 'process_started',
+        processId: 'pi-parent-1',
+        pid: 42,
+        processGroupId: 42,
+        role: 'orchestrator',
+        atMs: 5,
+      }),
+      ev({
+        wgId: 'pi-readiness',
+        kind: 'process_started',
+        processId: 'probe-1',
+        pid: 43,
+        processGroupId: 43,
+        role: 'orchestrator',
+        atMs: 6,
+      }),
+    ]);
+    expect(states).toEqual([
+      expect.objectContaining({ wgId: 'wg-a', stage: 'scope_write', lastEventAtMs: 5 }),
+    ]);
+  });
+
   it('a stage_advance AFTER a phase CLEARS the phase (a new stage has no phase yet)', () => {
     seq = 0;
     const [state] = foldEvents([

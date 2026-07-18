@@ -208,10 +208,22 @@ export interface TaskCheckpointRow extends TaskCheckpoint {
   updatedAtMs: number;
 }
 
-export class CheckpointStore {
-  private initialized = false;
+export type CheckpointExecutor = Pick<Client, 'execute'>;
 
-  constructor(private readonly db: Client) {}
+export class CheckpointStore {
+  private initialized: boolean;
+
+  /**
+   * `initialized=true` is reserved for a transaction opened after this store's schema was initialized through
+   * the owning client. A libSQL Transaction implements the same `execute` surface, letting one coordinator keep
+   * checkpoint and related event writes inside one BEGIN IMMEDIATE transaction without duplicating checkpoint SQL.
+   */
+  constructor(
+    private readonly db: CheckpointExecutor,
+    initialized = false,
+  ) {
+    this.initialized = initialized;
+  }
 
   /**
    * Idempotent DDL — `CREATE TABLE IF NOT EXISTS` + indexes. Same posture
@@ -240,13 +252,18 @@ export class CheckpointStore {
    * is only ever moved by {@link updateTaskStage}. Mirrors the `INSERT OR REPLACE` idempotency posture of
    * `append`/`recordRunStart`, but non-destructive (a re-create never clobbers an in-flight checkpoint).
    */
-  async createTaskCheckpoint(taskId: string, stage: string, nowMs: number): Promise<void> {
+  async createTaskCheckpoint(
+    taskId: string,
+    stage: string,
+    nowMs: number,
+    scopeArtifacts: string[] = [],
+  ): Promise<void> {
     await this.init();
     await this.db.execute({
       sql: `INSERT INTO task_checkpoints (task_id, stage, scope_artifacts_json, created_at_ms, updated_at_ms)
-            VALUES (?, ?, '[]', ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO NOTHING`,
-      args: [taskId, stage, nowMs, nowMs],
+      args: [taskId, stage, JSON.stringify(scopeArtifacts), nowMs, nowMs],
     });
   }
 
@@ -256,12 +273,25 @@ export class CheckpointStore {
    * {@link createTaskCheckpoint} first). This is what lets the loop's scope gate RESET a bogus checkpoint to
    * `scope` without resurrecting a checkpoint that was never created.
    */
-  async updateTaskStage(taskId: string, stage: string, nowMs: number): Promise<void> {
+  async updateTaskStage(
+    taskId: string,
+    stage: string,
+    nowMs: number,
+    scopeArtifacts?: string[],
+  ): Promise<void> {
     await this.init();
-    await this.db.execute({
-      sql: `UPDATE task_checkpoints SET stage = ?, updated_at_ms = ? WHERE task_id = ?`,
-      args: [stage, nowMs, taskId],
-    });
+    await this.db.execute(
+      scopeArtifacts === undefined
+        ? {
+            sql: `UPDATE task_checkpoints SET stage = ?, updated_at_ms = ? WHERE task_id = ?`,
+            args: [stage, nowMs, taskId],
+          }
+        : {
+            sql: `UPDATE task_checkpoints
+                  SET stage = ?, scope_artifacts_json = ?, updated_at_ms = ? WHERE task_id = ?`,
+            args: [stage, JSON.stringify(scopeArtifacts), nowMs, taskId],
+          },
+    );
   }
 
   /**

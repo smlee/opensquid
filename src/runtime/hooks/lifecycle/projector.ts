@@ -28,14 +28,21 @@ export function projectExistingHostActorAndRole(
   const agentId = nonEmpty(carrier.agent_id);
   if (agentId !== undefined) {
     return {
-      actor: { kind: 'executor', id: agentId },
-      role: 'lap-child',
+      actor: { kind: 'reviewer', id: agentId },
+      role: 'reviewer',
     };
   }
-  return {
-    actor: { kind: 'orchestrator' },
-    role: isLoopLap(env) ? 'lap-parent' : 'interactive',
-  };
+  if (isLoopLap(env)) {
+    return {
+      actor: {
+        kind: 'stage_process',
+        id:
+          nonEmpty(env.OPENSQUID_SESSION_ID) ?? nonEmpty(env.OPENSQUID_ITEM_ID) ?? 'stage-process',
+      },
+      role: 'stage_process',
+    };
+  }
+  return { actor: { kind: 'coordinator' }, role: 'interactive' };
 }
 
 export function projectExistingHostLifecycleContext(input: {

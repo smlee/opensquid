@@ -38,17 +38,10 @@ describe('extractTypedExit', () => {
     expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED"}')).toEqual({ kind: 'SHIPPED' });
   });
 
-  it('PSL.3: a SHIPPED tag carries the optional resulting `stage` when a per-stage lap reports it', () => {
-    expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED","stage":"plan"}')).toEqual({
-      kind: 'SHIPPED',
-      stage: 'plan',
-    });
-    // backward compat: a bare SHIPPED (per-item lap) has no stage key
+  it('rejects model-authored stage authority in a SHIPPED tag', () => {
+    expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED","stage":"plan"}')).toBeNull();
+    expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED","stage":42}')).toBeNull();
     expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED"}')).toEqual({ kind: 'SHIPPED' });
-    // a non-string stage is ignored (defensive) → bare SHIPPED
-    expect(extractTypedExit('RALPH-EXIT: {"kind":"SHIPPED","stage":42}')).toEqual({
-      kind: 'SHIPPED',
-    });
   });
 
   it('returns null when there is no tag', () => {
@@ -61,6 +54,9 @@ describe('extractTypedExit', () => {
     ).toBeNull();
     expect(
       extractTypedExit('RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"CANCELLED_BY_HUMAN"}'),
+    ).toBeNull();
+    expect(
+      extractTypedExit('RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"BOARD_WAITING"}'),
     ).toBeNull();
     expect(extractTypedExit('RALPH-EXIT: {"kind":"HUMAN_REQUIRED"}')).toBeNull();
   });
@@ -118,7 +114,7 @@ describe('outcomeFromEnvelope (MHL.3 — the neutral envelope→outcome fold)', 
   it('a trusted human-control outcome wins over model SHIPPED and ordinary process errors', () => {
     const controlOutcome = {
       kind: 'CANCELLED_BY_HUMAN' as const,
-      executorId: 'pi-child-1',
+      processId: 'pi-child-1',
       action: 'force_kill' as const,
       actionId: 'action-1',
     };
@@ -151,11 +147,11 @@ describe('outcomeFromEnvelope (MHL.3 — the neutral envelope→outcome fold)', 
     expect(r.costUsd).toBe(0.04);
   });
 
-  it('a SHIPPED tag carries the resulting stage through the fold', () => {
+  it('a SHIPPED tag with model-authored stage state fails closed', () => {
     expect(
       outcomeFromEnvelope(env({ resultText: 'RALPH-EXIT: {"kind":"SHIPPED","stage":"code"}' }))
         .outcome,
-    ).toEqual({ kind: 'SHIPPED', stage: 'code' });
+    ).toEqual({ kind: 'WEDGE' });
   });
 
   it('isError → CRASH (never SHIPPED), still reporting cost/tokens', () => {

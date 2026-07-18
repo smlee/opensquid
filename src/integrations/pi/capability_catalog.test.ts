@@ -5,8 +5,7 @@ import {
   enabledPiOptionalTools,
   findPiCapability,
   mcpDirectTools,
-  parentPiTools,
-  piToolsForCanonical,
+  stagePiTools,
 } from './capability_catalog.js';
 
 describe('PI capability catalog', () => {
@@ -29,7 +28,6 @@ describe('PI capability catalog', () => {
       'workgraph_add_edge',
       'workgraph_update_issue',
       'store_lesson',
-      'spawn_subagent',
       'set_loop_phase',
     ]);
     for (const tool of PI_TOOL_CATALOG) {
@@ -40,7 +38,7 @@ describe('PI capability catalog', () => {
     expect(canonicalPiPolicyName('unknown_tool')).toBe('unknown_tool');
   });
 
-  it('derives the technical parent and MCP surfaces without assigning child authority', () => {
+  it('derives the technical StageProcess and MCP surfaces without nested execution authority', () => {
     expect(mcpDirectTools()).toEqual([
       'workgraph_get',
       'recall',
@@ -53,25 +51,16 @@ describe('PI capability catalog', () => {
       'workgraph_update_issue',
       'store_lesson',
     ]);
-    expect(parentPiTools()).toEqual(
+    expect(stagePiTools()).toEqual(
       PI_TOOL_CATALOG.filter((tool) => tool.required).map((tool) => tool.name),
     );
-    expect(parentPiTools()).not.toContain('set_loop_phase');
-    expect(mcpDirectTools()).not.toContain('spawn_subagent');
-  });
-
-  it('maps explicit pack-role authority and rejects unknown or recursive tools', () => {
-    expect(
-      piToolsForCanonical(['Read', 'Write', 'MultiEdit', 'mcp__opensquid__workgraph_get']),
-    ).toEqual(['read', 'write', 'edit', 'workgraph_get']);
-    expect(() => piToolsForCanonical(['unknown'])).toThrow('no mapped capability');
-    expect(() => piToolsForCanonical(['spawn_subagent'])).toThrow('cannot declare recursive');
+    expect(stagePiTools()).not.toContain('set_loop_phase');
   });
 
   it('enables only the optional set_loop_phase capability when requested', () => {
     const optional = enabledPiOptionalTools({ enableLoopPhase: true });
     expect(optional).toEqual(new Set(['set_loop_phase']));
     expect(mcpDirectTools(optional)).toContain('set_loop_phase');
-    expect(parentPiTools(optional)).toContain('set_loop_phase');
+    expect(stagePiTools(optional)).toContain('set_loop_phase');
   });
 });

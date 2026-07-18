@@ -4,16 +4,18 @@ You are in the AUTHOR (tasking) stage. Turn the plan into self-contained task sp
 
 ## Research (AUTHOR-specific)
 
-- AUTHOR is parent-owned orchestration/specification work. Perform the existing-solution search and PLAN
-  re-audit directly; do not send read-only authoring assignments to implementation executors. Preserve the
-  executor handoff for bounded repository implementation at CODE.
-- EXISTING-SOLUTION SEARCH (reuse belongs HERE — reuse shortens coding): for any NEW capability, search the
-  local codebase + the external/primary docs (record the consultation) and either reuse what exists or cite
-  why none fits. Speccing a reinvention with no recorded search is a guess about novelty.
+- This disposable AUTHOR StageProcess owns the specification attempt directly. Perform the existing-solution
+  search and PLAN re-audit with this stage's granted tools; do not spawn another stage process or nested loop.
+- EXISTING-SOLUTION SEARCH (reuse shortens coding): search the local codebase and reuse the approved SCOPE's
+  cited primary evidence. Fetch externally only for a load-bearing API fact the approved artifact does not
+  establish; never repeat its completed capability sweep merely because AUTHOR is a fresh session.
 - RE-AUDIT the PLAN: confirm it still holds guess-free at author time; if it drifted, fix it first.
 
 ## Do
 
+- Create the configured destination with `mkdir -p -- "{docsRoot}/tasks"`, then write task specs under
+  `{docsRoot}/tasks/T-<slug>.md`; `{docsRoot}` is the active project's configured
+  planning/research root supplied by stage context, not an assumed repository-local `docs` directory.
 - Every `### Task` block carries all 11 fields; every Key-code-shapes block is REAL code (no pseudocode);
   every 7-phase step names concrete files/decisions.
 - Cover 100% of the scope (or a named, tracked deferral). Each Deliverable's acceptance proves the artifact

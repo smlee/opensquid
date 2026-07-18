@@ -50,8 +50,11 @@ fails):
    in silently. Citing a `file:line` does NOT make an unasked element on-topic.
 6. **SOURCE-LADDER / EXTERNAL EVIDENCE** — research climbs local-first (user's words → memory → prior
    research → local code) and REACHES the external rung: the tool's OWN primary docs/repo/source (not blogs),
-   recorded as a `WebSearch`/`WebFetch`/source consultation. "Best-solution" (§2) and "no existing solution"
-   claims are NOT guess-free without it — 100% confidence/coverage is unreachable from local alone.
+   recorded in the artifact through a primary-source citation or a citation to prior research that preserves the
+   primary source. Evidence is revision-owned, not session-owned: a fresh lap MUST reuse still-current cited
+   research and MUST NOT require another fetch merely because the session changed. "Best-solution" (§2) and "no
+   existing solution" claims are NOT guess-free without external evidence — but repeated retrieval of evidence
+   already present in the audited bytes is waste, not additional confidence.
    - **EXTERNAL-SUBJECT ⇒ MANDATORY + EXHAUSTIVE.** When the task's subject OR a load-bearing dependency IS an
      external tool / service / library (e.g. integrating a harness, adapter, or SDK), the external rung is NOT
      optional and NOT satisfied by a few fetches. Sweep the tool's ENTIRE relevant CAPABILITY SURFACE against
@@ -60,8 +63,8 @@ fails):
      output/result + usage/cost format; config file location(s) + schema; auth; the extension/plugin API; AND
      EACH sub-capability the workflow actually requires (subagent / fan-out, hook / enforcement interception,
      MCP client, …) — do not assume a barebones tool has a capability the procedures depend on; version-specific
-     behavior; and any first-party bridge / adapter / example. Prefer a fanned-out primary-docs research
-     subagent that reads docs + repo + examples, not serial skims by the main agent.
+     behavior; and any first-party bridge / adapter / example. The stage owner may research directly or use
+     pack-declared bounded read-only reviewers; completeness does not depend on a model hierarchy.
    - **PUBLIC ⇒ GROUND-NOW (a findable fact may NOT be deferred).** A fact that is publicly documented or
      discoverable MUST be grounded in SCOPE — it may NOT be parked as an `- [ ] OPEN QUESTION`, deferred to
      PLAN, or offloaded to a later live-acceptance. Deferral is reserved for the genuinely non-public (behavior

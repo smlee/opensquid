@@ -18,10 +18,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   appendMonitorEvent,
+  ensureLoopEventSchema,
+  insertScopeHandoffReceipt,
+  readScopeHandoffByItem,
   tailEventsSince,
   foldLatestState,
   foldLatestStateIncremental,
   resetLoopStateProjectionForTest,
+  scopeHandoffActionId,
 } from './loop_events.js';
 import { withLoopDb } from './loop_db.js';
 
@@ -97,6 +101,82 @@ describe('appendMonitorEvent / tailEventsSince (LMP.1)', () => {
     ]);
     const all = await tailEventsSince(0);
     expect(all.map((e) => e.wgId).sort()).toEqual(['wg-a', 'wg-b']);
+  });
+
+  it('reserves scope-handoff action ids for one immutable dedicated receipt writer', async () => {
+    await expect(
+      appendMonitorEvent({
+        wgId: 'wg-a',
+        kind: 'stage_advance',
+        stage: 'scope_write',
+        actionId: `scope-handoff:v1:${'a'.repeat(64)}`,
+        atMs: 1,
+      }),
+    ).rejects.toThrow('dedicated receipt writer');
+    await expect(
+      appendMonitorEvent({
+        wgId: 'wg-free',
+        kind: 'stage_advance',
+        stage: 'opaque-pack-state',
+        atMs: 1,
+      }),
+    ).resolves.toBeUndefined();
+
+    await withLoopDb(async (db, url) => {
+      await ensureLoopEventSchema(db, url);
+      await expect(
+        db.execute({
+          sql: `INSERT INTO loop_events (wg_id,kind,stage,action_id,at_ms)
+                VALUES (?,'stage_advance','plan',?,?)`,
+          args: ['wg-a', 'scope-handoff:future:anything', 1],
+        }),
+      ).rejects.toThrow('invalid scope-handoff receipt');
+      await expect(
+        db.execute({
+          sql: `INSERT INTO loop_events (wg_id,kind,stage,at_ms)
+                VALUES (?,'stage_advance','opaque-entry',?)`,
+          args: ['wg-unkeyed', 1],
+        }),
+      ).resolves.toBeDefined();
+      await db.execute({
+        sql: `INSERT INTO loop_events
+                (wg_id,kind,stage,action_id,scope_artifact_path,scope_artifact_sha256,scope_evidence_kind,at_ms)
+              VALUES (?,'stage_advance','opaque-approved',?,?,?,'approval',?)`,
+        args: ['wg-c', scopeHandoffActionId('wg-c', '/tmp/c.md'), '/tmp/c.md', 'c'.repeat(64), 1],
+      });
+      await expect(readScopeHandoffByItem(db, 'wg-c')).resolves.toMatchObject({
+        stage: 'opaque-approved',
+        evidenceKind: 'approval',
+      });
+
+      // SQL has no built-in SHA-256. A syntactically shaped direct row is never authoritative unless the shared
+      // semantic decoder recomputes its exact [wgId, artifactPath] identity.
+      await db.execute({
+        sql: `INSERT INTO loop_events
+                (wg_id,kind,stage,action_id,scope_artifact_path,scope_artifact_sha256,scope_evidence_kind,at_ms)
+              VALUES (?,'stage_advance','scope_write',?,?,?,'approval',?)`,
+        args: ['wg-b', `scope-handoff:v1:${'d'.repeat(64)}`, '/tmp/b.md', 'e'.repeat(64), 1],
+      });
+      await expect(readScopeHandoffByItem(db, 'wg-b')).rejects.toThrow(
+        'malformed scope handoff receipt',
+      );
+
+      await insertScopeHandoffReceipt(db, {
+        wgId: 'wg-a',
+        stage: 'scope_write',
+        actionId: scopeHandoffActionId('wg-a', '/tmp/scope.md'),
+        artifactPath: '/tmp/scope.md',
+        artifactSha256: 'c'.repeat(64),
+        evidenceKind: 'approval',
+        atMs: 2,
+      });
+      await expect(
+        db.execute("UPDATE loop_events SET stage='plan' WHERE wg_id='wg-a'"),
+      ).rejects.toThrow('scope-handoff receipts are immutable');
+      await expect(db.execute("DELETE FROM loop_events WHERE wg_id='wg-a'")).rejects.toThrow(
+        'scope-handoff receipts are immutable',
+      );
+    });
   });
 });
 

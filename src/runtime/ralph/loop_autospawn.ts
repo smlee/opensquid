@@ -4,38 +4,170 @@
  * The loop analog of the chat-daemon autospawn (`src/channels/daemon/{autospawn,lifecycle}.ts`): a config-free
  * liveness gate → atomic single-flight spawn-lock → re-check → detached+`unref` spawn of `dist/cli.js loop` →
  * a loser waits for the winner's pidfile → NEVER throws. `ensureLoopRunning` is fired FAIL-OPEN from the shared
- * checkpoint writer on the human SCOPE→scope_write advance (ATL.3, `loop_stage.ts`) so an interactive scope-exit
- * seamlessly hands off to the auto-driving loop with no manual `opensquid loop` launch.
+ * approved-handoff writer so a pack-declared interactive boundary can hand off to process-driven states without
+ * a manual `opensquid loop` launch.
  *
  * ONE deliberate divergence from the chat-daemon precedent: the loop's pid + spawn-lock are PROJECT-LOCAL
- * (`<root>/.opensquid/`, resolved from `cwd` via `resolveLocalStoreDir`), NOT machine-global (`OPENSQUID_HOME`).
- * A loop drives ONE project's project-local board (commit `a023159` — "project-local state"), so liveness and the
- * single-flight lock must be per-project: two projects can each run their own loop without colliding. The
- * chat-daemon's `anyChatConfigured` gate has NO loop analog — a loop is drivable whenever the board has a ready
- * item, so dropping the config gate is the correct simplification (the liveness gate + the caller's `scope_write`
- * guard are the only gates).
+ * (`<target-repo>/.opensquid/`), NOT machine-global (`OPENSQUID_HOME`). The target repository is explicit; it is
+ * never inferred from the interactive harness's invocation cwd. A loop drives ONE project's project-local board
+ * (commit `a023159` — "project-local state"), so liveness and the single-flight lock must be per-project: two
+ * projects can each run their own loop without colliding. The chat-daemon's `anyChatConfigured` gate has NO loop
+ * analog — a loop is drivable whenever the board has a ready item, so dropping the config gate is the correct
+ * simplification (the liveness gate plus the caller's pack-aware admission check are sufficient).
  *
  * STAGE-BLIND by contract (ask Boundary: "core = the generic loop-trigger … no stage vocabulary"): this module
- * knows nothing about scope/plan/author/code/deploy — WHICH transition triggers is the policy caller's concern.
+ * knows no pack state ids; the policy caller decides which durable transition triggers it.
  *
  * Imports from: node:child_process, node:fs, node:path, node:url, ../paths.
- * Imported by: src/runtime/ralph/loop_stage.ts (the scope-3 fail-open trigger) + tests.
+ * Imported by the approved-handoff boundary and tests.
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, openSync, closeSync, promises as fs } from 'node:fs';
+import { closeSync, openSync, promises as fs, writeSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
-import { resolveLocalStoreDir, loopPidPath, loopLockPath } from '../paths.js';
+import { resolveLocalStoreDir } from '../paths.js';
+import { probeLoopOwner } from './loop_owner.js';
 
-const STALE_LOCK_AGE_MS = 15_000;
-const PIDFILE_WAIT_MS = 8_000;
-const POLL_INTERVAL_MS = 100;
+const OWNER_WAIT_MS = 8_000;
+const READY_KIND = 'opensquid_loop_ready';
+const READY_VERSION = 1;
+const READY_LIMIT = 4_096;
+const READY_FD_ENV = 'OPENSQUID_LOOP_READY_FD';
+const CANDIDATE_TERM_GRACE_MS = 250;
+const CANDIDATE_KILL_WAIT_MS = 2_000;
+const CANDIDATE_REAP_POLL_MS = 25;
+
+export type LoopReadyAnnouncement =
+  | { readonly status: 'acquired' | 'occupied'; readonly pid: number }
+  | { readonly status: 'error'; readonly error: string };
+
+/** Push one startup result over the inherited one-shot descriptor. Manual loop launches have no descriptor. */
+export function publishLoopReadiness(result: LoopReadyAnnouncement): void {
+  const rawFd = process.env[READY_FD_ENV];
+  if (rawFd === undefined) return;
+  const fd = Number(rawFd);
+  if (!Number.isSafeInteger(fd) || fd < 3) return;
+  const line = `${JSON.stringify({
+    kind: READY_KIND,
+    version: READY_VERSION,
+    status: result.status,
+    ...(result.status === 'error' ? { error: result.error } : { pid: result.pid }),
+  })}\n`;
+  try {
+    writeSync(fd, line, undefined, 'utf8');
+  } catch {
+    // The requester may have exited. Endpoint ownership remains authoritative and a retry probes it directly.
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
+function decodeLoopReadiness(line: string): LoopReadyAnnouncement | null {
+  try {
+    const value = JSON.parse(line) as Record<string, unknown>;
+    if (value.kind !== READY_KIND || value.version !== READY_VERSION) return null;
+    const keys = Object.keys(value);
+    if (
+      (value.status === 'acquired' || value.status === 'occupied') &&
+      keys.join(',') === 'kind,version,status,pid' &&
+      Number.isSafeInteger(value.pid) &&
+      Number(value.pid) > 0
+    ) {
+      return { status: value.status, pid: Number(value.pid) };
+    }
+    if (
+      value.status === 'error' &&
+      keys.join(',') === 'kind,version,status,error' &&
+      typeof value.error === 'string' &&
+      value.error !== ''
+    ) {
+      return { status: 'error', error: value.error };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Await exactly one bounded readiness record; EOF, malformed data, and timeout fail closed. */
+export function waitForLoopReadiness(
+  stream: Readable,
+  timeoutMs = OWNER_WAIT_MS,
+): Promise<LoopReadyAnnouncement> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      stream.removeListener('data', onData);
+      stream.removeListener('end', onEnd);
+      stream.removeListener('close', onClose);
+      stream.removeListener('error', onError);
+    };
+    const finish = (error: Error | null, value?: LoopReadyAnnouncement): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      stream.destroy();
+      if (error !== null || value === undefined) reject(error ?? new Error('missing readiness'));
+      else resolve(value);
+    };
+    const parseCompleteBody = (): void => {
+      const newline = body.indexOf('\n');
+      if (newline < 0) {
+        finish(new Error('loop-autospawn: readiness descriptor ended early'));
+        return;
+      }
+      if (body.slice(newline + 1) !== '') {
+        finish(new Error('loop-autospawn: readiness descriptor carried trailing bytes'));
+        return;
+      }
+      const value = decodeLoopReadiness(body.slice(0, newline));
+      if (value === null) finish(new Error('loop-autospawn: malformed readiness record'));
+      else finish(null, value);
+    };
+    const onData = (chunk: Buffer): void => {
+      body += chunk.toString('utf8');
+      if (Buffer.byteLength(body, 'utf8') > READY_LIMIT) {
+        finish(new Error('loop-autospawn: readiness record exceeded limit'));
+        return;
+      }
+    };
+    const onEnd = (): void => parseCompleteBody();
+    const onClose = (): void => {
+      if (!settled) finish(new Error('loop-autospawn: readiness descriptor closed before EOF'));
+    };
+    const onError = (error: Error): void => finish(error);
+    const timer = setTimeout(
+      () =>
+        finish(
+          new Error(`loop-autospawn: worker readiness timed out after ${String(timeoutMs)}ms`),
+        ),
+      timeoutMs,
+    );
+    stream.on('data', onData);
+    stream.once('end', onEnd);
+    stream.once('close', onClose);
+    stream.once('error', onError);
+  });
+}
+
+/** Same-process launch coalescing only. Cross-process correctness belongs to the worker-held kernel endpoint. */
+const startsByStore = new Map<
+  string,
+  Promise<{ pid: number; status: 'spawned' | 'waited_for_peer' }>
+>();
 
 export type LoopStatus =
   | { running: true; pid: number; uptime_ms: number | null }
-  | { running: false; stale_pid?: number };
+  | { running: false; error?: string };
 
 export interface LoopAutoSpawnResult {
   status: 'spawned' | 'already_running' | 'waited_for_peer' | 'error';
@@ -43,40 +175,38 @@ export interface LoopAutoSpawnResult {
   error?: string;
 }
 
-/** `kill -0 <pid>` liveness — ESRCH (dead) → false, EPERM (foreign live) → true. Mirrors lifecycle.ts:39-46. */
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
+/** Explicit target repository plus its project-local OpenSquid state directory. */
+export interface ResolvedLoopProject {
+  readonly targetRepoRoot: string;
+  readonly storeRoot: string;
 }
 
 /**
- * Read the PROJECT-LOCAL loop pidfile and report liveness. Mirrors lifecycle.ts:status() but per-project: the
- * pidfile lives under `<root>/.opensquid/`, so `root` is the store dir (as returned by `resolveLocalStoreDir`).
- * A pidfile pointing at a dead pid reports `{ running: false, stale_pid }` — read-only; the caller reclaims it.
+ * Resolve an explicitly selected repository. `targetRepoRoot` is not an invocation/session cwd: callers must
+ * supply the repository the work item updates. Requiring an exact project root prevents a workspace parent or
+ * nested directory from silently selecting a different `.opensquid` store.
+ */
+export async function resolveLoopProject(targetRepoRoot: string): Promise<ResolvedLoopProject> {
+  const canonicalTarget = await fs.realpath(targetRepoRoot);
+  const storeRoot = await fs.realpath(await resolveLocalStoreDir(canonicalTarget));
+  if (dirname(storeRoot) !== canonicalTarget) {
+    throw new Error(
+      `loop-autospawn: target repository does not own the resolved store: ${canonicalTarget}`,
+    );
+  }
+  return { targetRepoRoot: canonicalTarget, storeRoot };
+}
+
+/**
+ * Probe the project-keyed kernel endpoint. The pidfile is only a repaired projection; it never establishes
+ * liveness or admission. A connected but invalid endpoint is reported as an error and is never stale-reclaimed.
  */
 export async function loopStatus(root: string): Promise<LoopStatus> {
-  const pidFile = loopPidPath(root);
-  if (!existsSync(pidFile)) return { running: false };
-  let raw: string;
-  try {
-    raw = await fs.readFile(pidFile, 'utf8');
-  } catch {
-    return { running: false };
-  }
-  const pid = parseInt(raw.trim(), 10);
-  if (!Number.isFinite(pid) || pid <= 0) return { running: false };
-  if (!isProcessAlive(pid)) return { running: false, stale_pid: pid };
-  let uptime_ms: number | null = null;
-  try {
-    uptime_ms = Date.now() - (await fs.stat(pidFile)).mtimeMs;
-  } catch {
-    /* keep null */
-  }
-  return { running: true, pid, uptime_ms };
+  const project = { targetRepoRoot: dirname(root), storeRoot: root };
+  const probe = await probeLoopOwner(project);
+  if (probe.kind === 'live') return { running: true, pid: probe.owner.pid, uptime_ms: null };
+  if (probe.kind === 'compromised') return { running: false, error: probe.error };
+  return { running: false };
 }
 
 /** Resolve `dist/cli.js` from this module (dist/runtime/ralph/loop_autospawn.js → dist/cli.js). Test seam. */
@@ -87,41 +217,56 @@ export function resolveLoopEntrypoint(): string {
   return resolve(dirname(here), '..', '..', 'cli.js'); // dist/runtime/ralph → dist → dist/cli.js
 }
 
-/**
- * Spawn `<node> dist/cli.js loop` DETACHED + unref, waiting for the worker's PROJECT-LOCAL pidfile so the
- * single-flight lock is only released once liveness is observable. Mirrors lifecycle.ts:startDaemon (90-144),
- * dropping the machine-global log header + `OPENSQUID_HOME` env thread (the loop's paths are cwd-derived).
- * The worker (ATL.2, `ralph.ts` loop action) writes its OWN pid on boot as its first action, so this wait is
- * short; a worker that never writes it makes `waitForPidfile` throw → caught by `ensureLoopRunning` (fail-open).
- */
+/** Spawn the worker in the explicit target repository, then wait for its lifetime owner endpoint. */
 export async function startLoop(
-  root: string,
-  opts: { entrypoint?: string; nodeBin?: string } = {},
-): Promise<{ pid: number }> {
-  const cur = await loopStatus(root);
-  if (cur.running) return { pid: cur.pid };
-  const pidFile = loopPidPath(root);
-  if (cur.stale_pid !== undefined)
-    await fs.unlink(pidFile).catch(() => {
-      /* race-tolerant — a stale pidfile the reclaim may have already removed */
-    });
-  const logFile = resolve(root, 'loop.log'); // `root` is already the resolved <root>/.opensquid store dir
+  project: ResolvedLoopProject,
+  opts: {
+    entrypoint?: string;
+    nodeBin?: string;
+    readyFn?: (project: ResolvedLoopProject, spawnedPid: number) => Promise<number>;
+  } = {},
+): Promise<{ pid: number; status: 'spawned' | 'waited_for_peer' }> {
+  const { targetRepoRoot, storeRoot } = project;
+  const cur = await loopStatus(storeRoot);
+  if (cur.running) return { pid: cur.pid, status: 'waited_for_peer' };
+  if (cur.error !== undefined) throw new Error(`loop-autospawn: ${cur.error}`);
+  const logFile = resolve(storeRoot, 'loop.log');
   await fs.mkdir(dirname(logFile), { recursive: true });
   const childLogFd = openSync(logFile, 'a');
-  const child = spawn(
-    opts.nodeBin ?? process.execPath,
-    [opts.entrypoint ?? resolveLoopEntrypoint(), 'loop'],
-    {
-      detached: true,
-      stdio: ['ignore', childLogFd, childLogFd],
-      env: process.env,
-    },
-  );
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(
+      opts.nodeBin ?? process.execPath,
+      [opts.entrypoint ?? resolveLoopEntrypoint(), 'loop'],
+      {
+        cwd: targetRepoRoot,
+        detached: true,
+        stdio: ['ignore', childLogFd, childLogFd, 'pipe'],
+        env: { ...process.env, [READY_FD_ENV]: '3' },
+      },
+    );
+  } finally {
+    closeSync(childLogFd);
+  }
   child.unref();
-  closeSync(childLogFd);
   if (child.pid === undefined) throw new Error('loop-autospawn: spawn returned no pid');
-  const workerPid = await waitForPidfile(pidFile, PIDFILE_WAIT_MS); // worker writes its OWN pid on boot (ATL.2)
-  return { pid: workerPid };
+  const readiness = child.stdio[3];
+  if (!(readiness instanceof Readable)) {
+    throw new Error('loop-autospawn: spawn returned no readiness descriptor');
+  }
+  try {
+    const workerPid =
+      opts.readyFn === undefined
+        ? await waitForLoopOwner(project, child.pid, readiness)
+        : await opts.readyFn(project, child.pid).finally(() => readiness.destroy());
+    return {
+      pid: workerPid,
+      status: workerPid === child.pid ? 'spawned' : 'waited_for_peer',
+    };
+  } catch (error) {
+    await reclaimCandidate(child.pid, child);
+    throw error;
+  }
 }
 
 export interface EnsureLoopRunningDeps {
@@ -130,107 +275,110 @@ export interface EnsureLoopRunningDeps {
   /** Override the liveness probe (defaults to `loopStatus`). */
   statusFn?: (root: string) => Promise<LoopStatus>;
   /** Override the spawn (defaults to `startLoop`). */
-  startFn?: (root: string, opts: { entrypoint?: string }) => Promise<{ pid: number }>;
+  startFn?: (
+    project: ResolvedLoopProject,
+    opts: { entrypoint?: string },
+  ) => Promise<{ pid: number; status?: 'spawned' | 'waited_for_peer' }>;
 }
 
 /**
- * Best-effort: ensure a loop is running for `cwd`'s project. Idempotent (already-running → no spawn),
- * single-flight (concurrent callers spawn at most one), NEVER throws (the whole body is wrapped — a fault on
- * ANY path, including `resolveLocalStoreDir` throwing outside a project store, returns `{status:'error'}`). This
- * is the safety floor for the scope-3 caller: a trigger fault must never break the scope-exit that fired it.
+ * Best-effort: ensure a loop is running for the explicitly selected target repository. Idempotent
+ * (already-running → no spawn), single-flight (concurrent callers spawn at most one), and NEVER throws.
  */
 export async function ensureLoopRunning(
-  cwd: string,
+  targetRepoRoot: string,
   deps: EnsureLoopRunningDeps = {},
 ): Promise<LoopAutoSpawnResult> {
   const statusFn = deps.statusFn ?? loopStatus;
   const startFn = deps.startFn ?? startLoop;
   try {
-    const root = await resolveLocalStoreDir(cwd); // the <root>/.opensquid dir; pid/lock live here (per-project)
-    const cur = await statusFn(root);
+    const project = await resolveLoopProject(targetRepoRoot);
+    const { storeRoot } = project;
+    const cur = await statusFn(storeRoot);
     if (cur.running) return { status: 'already_running', pid: cur.pid };
-    const lockPath = loopLockPath(root);
-    if (await tryAcquireLock(lockPath)) {
-      try {
-        // Re-check after the lock — a peer may have finished spawning between our status() and the lock.
-        const re = await statusFn(root);
-        if (re.running) return { status: 'already_running', pid: re.pid };
-        const res = await startFn(
-          root,
-          deps.entrypoint === undefined ? {} : { entrypoint: deps.entrypoint },
-        );
-        return { status: 'spawned', pid: res.pid };
-      } finally {
-        await fs.unlink(lockPath).catch(() => {
-          /* race-tolerant */
-        });
-      }
+    if (cur.error !== undefined) return { status: 'error', error: cur.error };
+    const inFlight = startsByStore.get(storeRoot);
+    if (inFlight !== undefined) {
+      const peer = await inFlight;
+      return { status: 'waited_for_peer', pid: peer.pid };
     }
-    // Another process holds the lock — wait for its pidfile.
-    const pid = await waitForPeer(root, statusFn);
-    return pid !== null
-      ? { status: 'waited_for_peer', pid }
-      : { status: 'error', error: 'peer spawn timed out' };
+    const start = (async (): Promise<{
+      pid: number;
+      status: 'spawned' | 'waited_for_peer';
+    }> => {
+      const re = await statusFn(storeRoot);
+      if (re.running) return { status: 'waited_for_peer', pid: re.pid };
+      if (re.error !== undefined) throw new Error(re.error);
+      const result = await startFn(
+        project,
+        deps.entrypoint === undefined ? {} : { entrypoint: deps.entrypoint },
+      );
+      return { pid: result.pid, status: result.status ?? 'spawned' };
+    })();
+    startsByStore.set(storeRoot, start);
+    try {
+      const result = await start;
+      return { status: result.status, pid: result.pid };
+    } finally {
+      if (startsByStore.get(storeRoot) === start) startsByStore.delete(storeRoot);
+    }
   } catch (err) {
     return { status: 'error', error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-/** Atomic single-flight spawn-lock: `fs.open(lock,'wx')`, reclaiming a lock older than STALE_LOCK_AGE_MS.
- *  Copied 1:1 in shape from autospawn.ts:138-162 (the lockPath is now project-local). */
-async function tryAcquireLock(lockPath: string): Promise<boolean> {
-  await fs.mkdir(dirname(lockPath), { recursive: true });
-  try {
-    const fd = await fs.open(lockPath, 'wx');
-    await fd.write(`${process.pid}\n`);
-    await fd.close();
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    // Lock exists — reclaim it if stale, else yield.
+/** Reclaim only the candidate group this caller spawned after an invalid/missing readiness result. */
+async function reclaimCandidate(pid: number, child: ReturnType<typeof spawn>): Promise<void> {
+  const target = process.platform === 'win32' ? pid : -pid;
+  const alive = (): boolean => {
     try {
-      const st = await fs.stat(lockPath);
-      if (Date.now() - st.mtimeMs > STALE_LOCK_AGE_MS) {
-        await fs.unlink(lockPath).catch(() => {
-          /* race */
-        });
-        return tryAcquireLock(lockPath);
-      }
+      process.kill(target, 0);
+      return true;
     } catch {
-      // Lock vanished between EEXIST and stat — retry.
-      return tryAcquireLock(lockPath);
+      return false;
     }
-    return false;
+  };
+  const signal = (kind: NodeJS.Signals): void => {
+    try {
+      if (process.platform === 'win32') child.kill(kind);
+      else process.kill(target, kind);
+    } catch {
+      /* already exited */
+    }
+  };
+  signal('SIGTERM');
+  await new Promise((resolve) => setTimeout(resolve, CANDIDATE_TERM_GRACE_MS));
+  if (!alive()) return;
+  signal('SIGKILL');
+  const deadline = Date.now() + CANDIDATE_KILL_WAIT_MS;
+  while (alive() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, CANDIDATE_REAP_POLL_MS));
+  }
+  if (alive()) {
+    throw new Error(
+      `loop-autospawn: candidate tree remained live ${String(CANDIDATE_KILL_WAIT_MS)}ms after SIGKILL`,
+    );
   }
 }
 
-/** A lock-loser waits for the winner's pidfile to appear (its liveness becomes observable). Mirrors
- *  autospawn.ts:164-172 with the project-local `statusFn`. */
-async function waitForPeer(
-  root: string,
-  statusFn: (root: string) => Promise<LoopStatus>,
-): Promise<number | null> {
-  const deadline = Date.now() + PIDFILE_WAIT_MS;
-  while (Date.now() < deadline) {
-    const s = await statusFn(root);
-    if (s.running) return s.pid;
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+/** Read the pushed startup result, then validate it once against the authoritative lifetime endpoint. */
+async function waitForLoopOwner(
+  project: ResolvedLoopProject,
+  spawnedPid: number,
+  readiness: Readable,
+): Promise<number> {
+  const announced = await waitForLoopReadiness(readiness);
+  if (announced.status === 'error') throw new Error(`loop-autospawn: ${announced.error}`);
+  if (announced.status === 'acquired' && announced.pid !== spawnedPid) {
+    throw new Error('loop-autospawn: acquired readiness pid did not match the spawned candidate');
   }
-  return null;
-}
-
-/** Wait for the spawned worker to write its pidfile (with a live pid). Mirrors lifecycle.ts:190-203. */
-async function waitForPidfile(pidFile: string, timeoutMs: number): Promise<number> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const raw = await fs.readFile(pidFile, 'utf8');
-      const pid = parseInt(raw.trim(), 10);
-      if (Number.isFinite(pid) && pid > 0 && isProcessAlive(pid)) return pid;
-    } catch {
-      /* not yet written */
-    }
-    await new Promise((r) => setTimeout(r, 50));
+  const probe = await probeLoopOwner(project);
+  if (probe.kind === 'compromised') throw new Error(`loop-autospawn: ${probe.error}`);
+  if (probe.kind !== 'live') {
+    throw new Error('loop-autospawn: readiness arrived without a live owner endpoint');
   }
-  throw new Error(`loop-autospawn: worker did not write pidfile within ${timeoutMs}ms`);
+  if (probe.owner.pid !== announced.pid) {
+    throw new Error('loop-autospawn: readiness pid did not match the owner handshake');
+  }
+  return probe.owner.pid;
 }

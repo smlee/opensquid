@@ -34,6 +34,7 @@ import {
   readActiveArchDetector,
   readActiveDeployReversible,
   readActiveDocsRoot,
+  readActiveDocsRootStrict,
   readActiveVerifyCommand,
   resolveEnvironments,
   resolvePackStateDir,
@@ -141,6 +142,25 @@ describe('readActiveDocsRoot — the per-project docs-root (configurable researc
   it('is lenient on malformed JSON → default "docs" (fail-open, never throws on the hot path)', async () => {
     await writeFile(join(scopeRoot, 'active.json'), '{ not json', 'utf8');
     await expect(readActiveDocsRoot(scopeRoot)).resolves.toBe('docs');
+  });
+});
+
+describe('readActiveDocsRootStrict — one fail-closed planning-artifact policy', () => {
+  it('defaults only absent/unconfigured/null/blank policy', async () => {
+    await expect(readActiveDocsRootStrict(scopeRoot)).resolves.toBe('docs');
+    await writeActive({ docsRoot: null });
+    await expect(readActiveDocsRootStrict(scopeRoot)).resolves.toBe('docs');
+    await writeActive({ docsRoot: '   ' });
+    await expect(readActiveDocsRootStrict(scopeRoot)).resolves.toBe('docs');
+  });
+
+  it('returns a trimmed configured root and rejects malformed or mistyped policy', async () => {
+    await writeActive({ docsRoot: ' ../docs ' });
+    await expect(readActiveDocsRootStrict(scopeRoot)).resolves.toBe('../docs');
+    await writeFile(join(scopeRoot, 'active.json'), '{', 'utf8');
+    await expect(readActiveDocsRootStrict(scopeRoot)).rejects.toThrow();
+    await writeActive({ docsRoot: 42 });
+    await expect(readActiveDocsRootStrict(scopeRoot)).rejects.toThrow('string or null');
   });
 });
 

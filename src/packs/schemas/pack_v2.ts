@@ -88,6 +88,9 @@ const GateState = z
     //               its label, so a `summary:true` with no `report` is inert.
     report: z.string().min(1).optional(),
     summary: z.boolean().optional(),
+    // Optional generic report enrichments for this state.
+    report_phases: z.boolean().optional(),
+    goal_alignment: z.boolean().optional(),
     // EVIDENCE-DECLARATION (generic runtime): the ctx keys this gate reads, rendered as the after-stage
     // report's `Evidence:` proof line. Absent ⇒ no evidence line. Replaces the deleted hardcoded per-stage
     // `stageEvidence` switch in core — the pack, not core, owns which keys prove a stage.
@@ -96,6 +99,9 @@ const GateState = z
     // `Next → <stage>: <does>` line and the before-stage summary's `Will: <does>`. Replaces the hardcoded
     // `NEXT_STAGE_WORK` core map — the pack owns the per-stage work text, not a closed coding-state map.
     does: z.string().min(1).optional(),
+    // Optional ordered sub-phase ledger for this opaque state. The MCP writer validates against this pack data;
+    // core has no distinguished implementation state or universal phase vocabulary.
+    phases: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict();
 
@@ -164,19 +170,39 @@ export type PackScope = z.infer<typeof PackScope>;
 export const Activation = z.enum(['always-on', 'on-demand', 'project-scoped']);
 export type Activation = z.infer<typeof Activation>;
 
-// DISCIPLINE-DECLARATION (project-only-operation §"substrate = plumbing", opensquid-project-only-operation.md:86-93):
-// opensquid provides the guard MECHANISM (the pure `checkOrchestratorGuard` in runtime/guard/orchestrator_guard.ts);
-// a PACK declares the POLICY that turns it on. `orchestrator_only: true` = "this pack imposes orchestrator-only
-// discipline: the main loop PLANS and dispatches executors; it must not directly implement." The pre-tool-use
-// orchestrator-guard gate fires ONLY when an activated PROJECT pack declares this (so a content/SEO project with
-// no such declaration never misfires — the RaumPilates fix). This is DISCIPLINE (machine-behaviour policy), NOT
-// the catastrophic SAFETY FLOOR — the safety floor stays universal substrate and is never declared here.
+// Optional project-scoped policy for the interactive coordinator. StageProcess authority remains pack-owned.
 const Discipline = z
   .object({
-    orchestrator_only: z.boolean().default(false),
+    coordinator_docs_only: z.boolean().default(false),
   })
   .strict();
 export type Discipline = z.infer<typeof Discipline>;
+
+// AUTOMATION DECLARATION — stage identifiers are opaque pack data. Core owns only the generic mechanics:
+// which state is the first process-driven state and which states receive disposable StageProcess attempts.
+// Meanings, names, order, human boundaries, and completion remain entirely in the pack FSM.
+const TransitionReaction = z.enum([
+  'freeze_captured_ask',
+  'reset_captured_ask',
+  'reconcile_decomposition',
+  'ensure_acceptance',
+  'reset_verification_loop',
+]);
+const Reactions = z
+  .object({
+    on_enter: z.record(z.string(), z.array(TransitionReaction).min(1)).optional(),
+    on_leave: z.record(z.string(), z.array(TransitionReaction).min(1)).optional(),
+  })
+  .strict();
+export type Reactions = z.infer<typeof Reactions>;
+
+const Automation = z
+  .object({
+    entry: z.string().min(1),
+    stages: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+export type Automation = z.infer<typeof Automation>;
 
 // CONFORMANCE-RECONCILE: the fsm-less `gates` form is GONE. Gates belong IN the execution FSM as
 // `GateState` nodes (a gate on a transition — the `trigger`=conformance / no-trigger=execution contract
@@ -263,6 +289,19 @@ const VersioningStrategy = z.object({
   bump: z.literal('patch-per-release').default('patch-per-release'),
 });
 
+// Audit channels exposed to guard expressions. Channel ids are opaque pack data; each binding names its cache,
+// producer rule, rubric file, and optional exact-byte approved-artifact freshness policy.
+const AuditBinding = z
+  .object({
+    cache_key: z.string().min(1),
+    rule: z.string().min(1),
+    rubric: z.string().min(1),
+    subject: z.enum(['cache', 'approved_artifact']).default('cache'),
+    writes: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+export type AuditBinding = z.infer<typeof AuditBinding>;
+
 export const PackV2 = z
   .object({
     name: z.string().min(1),
@@ -279,10 +318,15 @@ export const PackV2 = z
     serves: Serves.optional(),
     // ← NOW OPTIONAL: a behavior pack has `fsm`; a conformance/foundation pack does not (M.1).
     fsm: FsmV2.optional(),
+    // Pack-owned process-driving policy. The strings are references into `fsm.states`; core never assigns
+    // semantics to them. Omit for packs that are not driven by the deterministic outer coordinator.
+    automation: Automation.optional(),
+    reactions: Reactions.optional(),
     // HAR.1: a FLAT registry of named ISOLATED nested machines; a `sub_flow.flow` is a key into this.
     flows: z.record(z.string(), FsmV2).optional(),
     guards: z.record(z.string(), z.string()).default({}), // FAC-CUT.2: guard ref → an `if:`-expression (boolean predicate); the gate's block/halt action is on the state's on_fail
     messages: z.record(z.string(), z.string()).default({}), // self-continue store: failure_type → instruction
+    audits: z.record(z.string(), AuditBinding).optional(),
     // COMMIT-GATE EVIDENCE (T-deploy-commit-gate scope-4, design §4a) — a discipline pack DECLARES which
     // session-state keys the generic CORE commit-gate reads to authorize a code commit, so core carries no
     // `fullstack-flow-*` key literal. Optional/additive: a pack that omits it (v1 `coding-flow`) keeps the
@@ -311,6 +355,67 @@ export const PackV2 = z
         message:
           "ORCH.8: a serves-bearing pack's fsm must start at a `gate` state (the entry fit-guard)",
       });
+    }
+    if (p.reactions !== undefined) {
+      if (p.fsm === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['reactions'],
+          message: 'transition reactions require an fsm',
+        });
+      } else {
+        for (const [edge, bindings] of Object.entries(p.reactions)) {
+          for (const stageId of Object.keys(bindings ?? {})) {
+            if (p.fsm.states[stageId] === undefined) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['reactions', edge, stageId],
+                message: `reaction state '${stageId}' is not an fsm state`,
+              });
+            }
+          }
+        }
+      }
+    }
+    if (p.automation === undefined) return;
+    if (p.fsm === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['automation'],
+        message: 'automation requires an fsm',
+      });
+      return;
+    }
+    const declared = new Set(p.automation.stages);
+    if (declared.size !== p.automation.stages.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['automation', 'stages'],
+        message: 'automation stages must be unique',
+      });
+    }
+    if (!declared.has(p.automation.entry)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['automation', 'entry'],
+        message: 'automation entry must be included in automation stages',
+      });
+    }
+    for (const [index, stageId] of p.automation.stages.entries()) {
+      const state = p.fsm.states[stageId];
+      if (state === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['automation', 'stages', index],
+          message: `automation stage '${stageId}' is not an fsm state`,
+        });
+      } else if (state.kind === 'terminal') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['automation', 'stages', index],
+          message: `automation stage '${stageId}' cannot be terminal`,
+        });
+      }
     }
   });
 export type PackV2 = z.infer<typeof PackV2>;

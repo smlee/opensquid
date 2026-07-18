@@ -31,8 +31,6 @@ describe('setupLoop', () => {
         activeTools: new Set(['read']),
         genericProxyAbsent: true,
         effectiveShell: {},
-        roleManifestPath: '/pi/roles.json',
-        roleManifestHash: 'a'.repeat(64),
       }),
     );
 
@@ -113,8 +111,6 @@ describe('setupLoop', () => {
         activeTools: new Set(['read']),
         genericProxyAbsent: true,
         effectiveShell: {},
-        roleManifestPath: '/pi/roles.json',
-        roleManifestHash: 'a'.repeat(64),
       }),
     );
     await setupLoop(

@@ -74,12 +74,6 @@ export const PI_TOOL_CATALOG = [
     canonicalPolicyName: 'mcp__opensquid__store_lesson',
   },
   {
-    name: 'spawn_subagent',
-    owner: 'extension',
-    required: true,
-    canonicalPolicyName: 'spawn_subagent',
-  },
-  {
     name: 'set_loop_phase',
     owner: 'mcp:opensquid',
     required: false,
@@ -105,27 +99,11 @@ export function mcpDirectTools(enabledOptional: ReadonlySet<string> = EMPTY_SET)
     .map((tool) => tool.name);
 }
 
-/** Technical parent surface; active packs and runtime guards retain policy authority. */
-export function parentPiTools(enabledOptional: ReadonlySet<string> = EMPTY_SET): string[] {
+/** Technical StageProcess surface; active packs and runtime guards retain policy authority. */
+export function stagePiTools(enabledOptional: ReadonlySet<string> = EMPTY_SET): string[] {
   return PI_TOOL_CATALOG.filter((tool) => tool.required || enabledOptional.has(tool.name)).map(
     (tool) => tool.name,
   );
-}
-
-/** Translate explicit canonical role authority into this host's invocation names. */
-export function piToolsForCanonical(canonicalTools: readonly string[]): string[] {
-  return canonicalTools.map((canonical) => {
-    const capability = PI_TOOL_CATALOG.find(
-      (candidate) => candidate.canonicalPolicyName === canonical || candidate.name === canonical,
-    );
-    if (capability === undefined) {
-      throw new Error(`Pi has no mapped capability for role tool ${canonical}`);
-    }
-    if (capability.name === 'spawn_subagent') {
-      throw new Error('Pi executor roles cannot declare recursive spawn_subagent authority');
-    }
-    return capability.name;
-  });
 }
 
 export function canonicalPiPolicyName(name: string): string {

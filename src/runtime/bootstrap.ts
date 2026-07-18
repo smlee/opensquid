@@ -106,6 +106,7 @@ import { registerCheckChatConnectionFunction } from '../functions/check_chat_con
 import { registerEnsureUmbrellaTopicFunction } from '../functions/ensure_umbrella_topic.js';
 import { TextPatternMatch } from '../functions/text_pattern_match.js';
 import { registerVerdictFunctions } from '../functions/verdict.js';
+import { registerFullstackScopeEntry } from '../packs/runtime/fullstack_scope.js';
 import { discoverActivePacks, partitionActivePacks } from '../packs/discovery.js';
 import { loadProjectContextPack } from '../packs/project_context.js';
 import type { LoadedPackV2 } from '../packs/loader_v2.js';
@@ -157,6 +158,7 @@ export async function buildRegistry(opts: BuildRegistryOpts = {}): Promise<Funct
   registerProjectContextInject(r); // T-project-context: echoes context.md prose (baked in args) as inject_context
   registerReadProcedure(r); // v2: per-stage on-demand procedure reader (need-to-know; stage_inject reuses it)
   registerStageInject(r); // v2: inject the CURRENT stage's procedure + rubric before the action (generic-cartridge form)
+  registerFullstackScopeEntry(r); // fullstack-flow: pack-owned /scope prompt entry (inactive packs never dispatch it)
   registerSerializePlan(r); // GFR.1b: render the work-graph + scope as the PLAN audit artifact
   registerStagedDiff(r); // GFR.1c: read the uncommitted diff as the CODE audit artifact
   registerClaimEvidenceGate(r); // evidence-prerequisite block: tool_call side of verify-before-claiming
@@ -515,7 +517,7 @@ export async function loadActivePacks(_sessionId: string): Promise<Pack[]> {
  */
 export async function loadActiveV2Cartridges(
   _sessionId: string,
-  cwd: string = process.cwd(), // SEAM: the discovery root (resolveProjectScopeRoot walks up from here). Prod default = process.cwd() → ZERO behavior change. Mirrors projectDeclaresOrchestratorOnly(cwd)'s injected-cwd shape.
+  cwd: string = process.cwd(), // Discovery root; resolveProjectScopeRoot walks up from here.
 ): Promise<LoadedPackV2[]> {
   const ctx = await buildDetectionContext(cwd);
   const builtinRoot = resolveBuiltinScopeRoot();
@@ -534,7 +536,7 @@ export async function loadActiveV2Cartridges(
  *
  * The orchestrator guard's MECHANISM stays in opensquid (the pure `checkOrchestratorGuard` in
  * `runtime/guard/orchestrator_guard.ts`); its ACTIVATION is a POLICY a project pack declares via
- * `discipline: { orchestrator_only: true }` (pack_v2.ts). The pre-tool-use orchestrator-guard gate consults THIS
+ * `discipline: { coordinator_docs_only: true }` (pack_v2.ts). The pre-tool-use coordinator guard consults this
  * instead of the coarse `hasActiveProjectPacks`: a content/SEO project (packs without the declaration) never
  * misfires; only a project running a pack that declares the discipline (e.g. fullstack-flow) gets the guard.
  *
@@ -544,13 +546,13 @@ export async function loadActiveV2Cartridges(
  * false when the cwd has no project scope. The caller wraps this in try/catch, so a resolution error simply
  * leaves the guard un-fired (fail-open — never blocks a legitimate call because of a config fault).
  */
-export async function projectDeclaresOrchestratorOnly(cwd: string): Promise<boolean> {
+export async function projectDeclaresCoordinatorDocsOnly(cwd: string): Promise<boolean> {
   const projectRoot = await resolveProjectScopeRoot(cwd);
   if (projectRoot === null) return false;
   const ctx = await buildDetectionContext(cwd);
   const builtinRoot = resolveBuiltinScopeRoot();
   const { v2 } = await partitionActivePacks(projectRoot, ctx, builtinRoot, resolveUserScopeRoot());
-  return v2.some((loaded) => loaded.pack.discipline?.orchestrator_only === true);
+  return v2.some((loaded) => loaded.pack.discipline?.coordinator_docs_only === true);
 }
 
 /**

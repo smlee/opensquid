@@ -22,8 +22,11 @@
  * Imported by: ./monitor_emit.ts (the fail-open emit at the mutation), ./loop_state.ts (the fold consumer),
  *   src/cli/loop_status.ts (the --watch tail).
  */
+import { createHash } from 'node:crypto';
+
 import type { Client } from '@libsql/client';
 
+import { dropLegacyFullstackLoopEventObjects } from '../../packs/migrations/fullstack_flow.js';
 import { withLoopDb } from './loop_db.js';
 
 /** The closed set of state-change kinds the feed pushes (core; a pack never adds one). */
@@ -34,18 +37,18 @@ export type MonitorEventKind =
   | 'item_closed'
   | 'item_shipped'
   | 'item_wedged'
-  | 'executor_started'
-  | 'executor_shutdown_pending'
-  | 'executor_shutdown_requested'
-  | 'executor_terminate_requested'
-  | 'executor_force_kill_requested'
-  | 'executor_paused'
-  | 'executor_resumed'
-  | 'executor_exited'
-  | 'executor_spawn_failed'
-  | 'executor_control_requested'
-  | 'executor_control_applied'
-  | 'executor_control_failed';
+  | 'process_started'
+  | 'process_shutdown_pending'
+  | 'process_shutdown_requested'
+  | 'process_terminate_requested'
+  | 'process_force_kill_requested'
+  | 'process_paused'
+  | 'process_resumed'
+  | 'process_exited'
+  | 'process_spawn_failed'
+  | 'process_control_requested'
+  | 'process_control_applied'
+  | 'process_control_failed';
 
 /** The phase lifecycle marker — `running` on enter (⟳), `done` on leave (✓). Level-2; NO stage vocabulary. */
 export type PhaseLifecycle = 'running' | 'done';
@@ -63,9 +66,11 @@ export interface MonitorEvent {
   total?: number | undefined;
   /** `running` on `phase_enter`, `done` on `phase_leave`. */
   lifecycle?: PhaseLifecycle | undefined;
-  /** Executor-process control fields; absent on item stage/phase events. */
-  executorId?: string | undefined;
-  /** One immutable OS-process incarnation under a stable logical executor id. */
+  /** Owned-process control fields; absent on item stage/phase events. */
+  processId?: string | undefined;
+  /** Infrastructure cleanup topology only; never model authority. */
+  ownership?: 'control_root' | 'owned' | undefined;
+  /** One immutable OS-process incarnation under an attempt-local process id. */
   processInstanceId?: string | undefined;
   runId?: string | undefined;
   checkpointStage?: string | undefined;
@@ -81,6 +86,10 @@ export interface MonitorEvent {
   /** Human authorization and action audit fields; absent from automatic lifecycle events. */
   authorizedBy?: string | undefined;
   actionId?: string | undefined;
+  /** Immutable interactive-scope approval evidence; absent from every non-handoff event. */
+  scopeArtifactPath?: string | undefined;
+  scopeArtifactSha256?: string | undefined;
+  scopeEvidenceKind?: 'approval' | 'legacy_repair' | undefined;
   controlAction?: 'graceful_stop' | 'terminate' | 'force_kill' | 'resume' | undefined;
   requestedAtMs?: number | undefined;
   appliedAtMs?: number | undefined;
@@ -102,7 +111,8 @@ const CREATE_TABLE_SQL = `
     phase_index INTEGER,
     phase_total INTEGER,
     lifecycle TEXT,
-    executor_id TEXT,
+    process_id TEXT,
+    ownership TEXT,
     process_instance_id TEXT,
     run_id TEXT,
     checkpoint_stage TEXT,
@@ -117,6 +127,9 @@ const CREATE_TABLE_SQL = `
     requested_by TEXT,
     authorized_by TEXT,
     action_id TEXT,
+    scope_artifact_path TEXT,
+    scope_artifact_sha256 TEXT,
+    scope_evidence_kind TEXT,
     control_action TEXT,
     requested_at_ms INTEGER,
     applied_at_ms INTEGER,
@@ -127,6 +140,46 @@ const CREATE_TABLE_SQL = `
 `;
 const CREATE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_loop_events_wg ON loop_events(wg_id);`;
 
+/** Exact v1 receipt predicate. Keep byte-identical in DDL and bounded receipt queries. */
+export const SCOPE_HANDOFF_RECEIPT_PREDICATE =
+  "kind='stage_advance' AND action_id IS NOT NULL AND length(action_id)=81 " +
+  "AND substr(action_id,1,17)='scope-handoff:v1:' " +
+  "AND substr(action_id,18) NOT GLOB '*[^0-9a-f]*'";
+
+const CREATE_SCOPE_ACTION_INDEX_SQL =
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_events_scope_handoff_action ON loop_events(action_id) ` +
+  `WHERE ${SCOPE_HANDOFF_RECEIPT_PREDICATE}`;
+const CREATE_SCOPE_ITEM_INDEX_SQL =
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_events_scope_handoff_item ON loop_events(wg_id) ` +
+  `WHERE ${SCOPE_HANDOFF_RECEIPT_PREDICATE}`;
+const CREATE_SCOPE_LEGACY_INDEX_SQL =
+  `CREATE INDEX IF NOT EXISTS idx_loop_events_automation_entry_legacy ` +
+  `ON loop_events(wg_id, stage, seq DESC) WHERE kind='stage_advance' AND action_id IS NULL`;
+
+const VALID_NEW_SCOPE_RECEIPT_SQL =
+  "NEW.kind='stage_advance' AND NEW.stage IS NOT NULL AND length(NEW.stage)>0 " +
+  'AND NEW.action_id IS NOT NULL AND length(NEW.action_id)=81 ' +
+  "AND substr(NEW.action_id,1,17)='scope-handoff:v1:' " +
+  "AND substr(NEW.action_id,18) NOT GLOB '*[^0-9a-f]*' " +
+  'AND NEW.scope_artifact_path IS NOT NULL AND length(NEW.scope_artifact_path)>0 ' +
+  'AND NEW.scope_artifact_sha256 IS NOT NULL AND length(NEW.scope_artifact_sha256)=64 ' +
+  "AND NEW.scope_artifact_sha256 NOT GLOB '*[^0-9a-f]*' " +
+  "AND NEW.scope_evidence_kind IN ('approval','legacy_repair')";
+const CREATE_SCOPE_INSERT_GUARD_SQL =
+  `CREATE TRIGGER IF NOT EXISTS trg_loop_events_scope_handoff_insert ` +
+  `BEFORE INSERT ON loop_events WHEN NEW.action_id LIKE 'scope-handoff:%' ` +
+  `AND NOT (${VALID_NEW_SCOPE_RECEIPT_SQL}) BEGIN ` +
+  `SELECT RAISE(ABORT, 'invalid scope-handoff receipt'); END`;
+const CREATE_SCOPE_UPDATE_GUARD_SQL =
+  `CREATE TRIGGER IF NOT EXISTS trg_loop_events_scope_handoff_update ` +
+  `BEFORE UPDATE ON loop_events WHEN OLD.action_id LIKE 'scope-handoff:%' ` +
+  `OR NEW.action_id LIKE 'scope-handoff:%' BEGIN ` +
+  `SELECT RAISE(ABORT, 'scope-handoff receipts are immutable'); END`;
+const CREATE_SCOPE_DELETE_GUARD_SQL =
+  `CREATE TRIGGER IF NOT EXISTS trg_loop_events_scope_handoff_delete ` +
+  `BEFORE DELETE ON loop_events WHEN OLD.action_id LIKE 'scope-handoff:%' BEGIN ` +
+  `SELECT RAISE(ABORT, 'scope-handoff receipts are immutable'); END`;
+
 /**
  * §C.13 DDL HOIST — the `CREATE TABLE/INDEX IF NOT EXISTS` ran on EVERY append + EVERY tail (two round-trips per
  * op). It is idempotent, so re-running it is pure waste. Memoize it as a once-per-store promise keyed by the
@@ -136,7 +189,7 @@ const CREATE_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_loop_events_wg ON loop_
  */
 const ddlByUrl = new Map<string, Promise<void>>();
 
-function ensureTable(db: Client, url: string): Promise<void> {
+export function ensureLoopEventSchema(db: Client, url: string): Promise<void> {
   let guard = ddlByUrl.get(url);
   if (guard === undefined) {
     guard = (async () => {
@@ -146,7 +199,8 @@ function ensureTable(db: Client, url: string): Promise<void> {
         info.rows.map((row) => (typeof row.name === 'string' ? row.name : '')),
       );
       const additions = [
-        ['executor_id', 'TEXT'],
+        ['process_id', 'TEXT'],
+        ['ownership', 'TEXT'],
         ['process_instance_id', 'TEXT'],
         ['run_id', 'TEXT'],
         ['checkpoint_stage', 'TEXT'],
@@ -161,6 +215,9 @@ function ensureTable(db: Client, url: string): Promise<void> {
         ['requested_by', 'TEXT'],
         ['authorized_by', 'TEXT'],
         ['action_id', 'TEXT'],
+        ['scope_artifact_path', 'TEXT'],
+        ['scope_artifact_sha256', 'TEXT'],
+        ['scope_evidence_kind', 'TEXT'],
         ['control_action', 'TEXT'],
         ['requested_at_ms', 'INTEGER'],
         ['applied_at_ms', 'INTEGER'],
@@ -177,7 +234,53 @@ function ensureTable(db: Client, url: string): Promise<void> {
             throw error;
         }
       }
+      // Existing namespaced rows must be valid before uniqueness becomes authoritative. Additive nullable columns
+      // are harmless on a failed migration; history is never deleted or rewritten.
+      const receipts = await db.execute(
+        `SELECT wg_id, kind, stage, action_id, scope_artifact_path, scope_artifact_sha256, scope_evidence_kind
+         FROM loop_events WHERE action_id LIKE 'scope-handoff:%'`,
+      );
+      const actionIds = new Set<string>();
+      const itemIds = new Set<string>();
+      for (const row of receipts.rows) {
+        const actionId = asOptStr(row.action_id);
+        const wgId = asOptStr(row.wg_id);
+        const artifact = asOptStr(row.scope_artifact_path);
+        const digest = asOptStr(row.scope_artifact_sha256);
+        const evidence = asOptStr(row.scope_evidence_kind);
+        const valid =
+          row.kind === 'stage_advance' &&
+          typeof row.stage === 'string' &&
+          actionId !== undefined &&
+          wgId !== undefined &&
+          artifact !== undefined &&
+          digest !== undefined &&
+          evidence !== undefined &&
+          isSemanticScopeReceipt({
+            wgId,
+            actionId,
+            stage: row.stage,
+            artifactPath: artifact,
+            artifactSha256: digest,
+            evidenceKind: evidence,
+          });
+        if (!valid) throw new Error('loop_events: malformed existing scope-handoff:v1 receipt');
+        if (actionIds.has(actionId) || itemIds.has(wgId)) {
+          throw new Error('loop_events: duplicate existing scope-handoff:v1 receipt');
+        }
+        actionIds.add(actionId);
+        itemIds.add(wgId);
+      }
       await db.execute(CREATE_INDEX_SQL);
+      // Replace earlier stage-vocabulary DDL with the opaque-stage receipt invariant.
+      await db.execute('DROP TRIGGER IF EXISTS trg_loop_events_scope_handoff_insert');
+      await dropLegacyFullstackLoopEventObjects(db);
+      await db.execute(CREATE_SCOPE_ACTION_INDEX_SQL);
+      await db.execute(CREATE_SCOPE_ITEM_INDEX_SQL);
+      await db.execute(CREATE_SCOPE_LEGACY_INDEX_SQL);
+      await db.execute(CREATE_SCOPE_INSERT_GUARD_SQL);
+      await db.execute(CREATE_SCOPE_UPDATE_GUARD_SQL);
+      await db.execute(CREATE_SCOPE_DELETE_GUARD_SQL);
     })().catch((e: unknown) => {
       ddlByUrl.delete(url); // a transient DDL failure must not pin a rejected guard — the next op retries
       throw e;
@@ -198,22 +301,180 @@ function asOptStr(cell: unknown): string | undefined {
   return typeof cell === 'string' ? cell : undefined;
 }
 
+export type LoopEventExecutor = Pick<Client, 'execute'>;
+
+/** One canonical receipt identity implementation, reused by entry, migration, insertion, and decode. */
+export function scopeHandoffActionId(wgId: string, artifactPath: string): string {
+  const hash = createHash('sha256')
+    .update(JSON.stringify([wgId, artifactPath]), 'utf8')
+    .digest('hex');
+  return `scope-handoff:v1:${hash}`;
+}
+
+function isSemanticScopeReceipt(value: {
+  wgId: string;
+  actionId: string;
+  stage: string;
+  artifactPath: string;
+  artifactSha256: string;
+  evidenceKind: string;
+}): boolean {
+  return (
+    value.actionId === scopeHandoffActionId(value.wgId, value.artifactPath) &&
+    value.stage.length > 0 &&
+    /^[0-9a-f]{64}$/u.test(value.artifactSha256) &&
+    (value.evidenceKind === 'approval' || value.evidenceKind === 'legacy_repair')
+  );
+}
+
+export interface ScopeHandoffReceipt {
+  readonly seq: number;
+  readonly wgId: string;
+  readonly actionId: string;
+  readonly stage: string;
+  readonly artifactPath: string;
+  readonly artifactSha256: string;
+  readonly evidenceKind: 'approval' | 'legacy_repair';
+}
+
+function decodeScopeHandoffReceipt(row: Record<string, unknown>): ScopeHandoffReceipt {
+  const actionId = asOptStr(row.action_id);
+  const wgId = asOptStr(row.wg_id);
+  const stage = asOptStr(row.stage);
+  const artifactPath = asOptStr(row.scope_artifact_path);
+  const artifactSha256 = asOptStr(row.scope_artifact_sha256);
+  const evidenceKind = asOptStr(row.scope_evidence_kind);
+  if (
+    actionId === undefined ||
+    wgId === undefined ||
+    stage === undefined ||
+    artifactPath === undefined ||
+    artifactSha256 === undefined ||
+    (evidenceKind !== 'approval' && evidenceKind !== 'legacy_repair') ||
+    !isSemanticScopeReceipt({
+      wgId,
+      actionId,
+      stage,
+      artifactPath,
+      artifactSha256,
+      evidenceKind,
+    })
+  ) {
+    throw new Error('loop_events: malformed scope handoff receipt');
+  }
+  return {
+    seq: Number(row.seq),
+    wgId,
+    actionId,
+    stage,
+    artifactPath,
+    artifactSha256,
+    evidenceKind,
+  };
+}
+
+const SCOPE_RECEIPT_COLUMNS =
+  'seq,wg_id,action_id,stage,scope_artifact_path,scope_artifact_sha256,scope_evidence_kind';
+
+/** Bounded, index-forced lookup of the one keyed receipt owned by an item. */
+export async function readScopeHandoffByItem(
+  db: LoopEventExecutor,
+  wgId: string,
+): Promise<ScopeHandoffReceipt | null> {
+  const rs = await db.execute({
+    sql:
+      `SELECT ${SCOPE_RECEIPT_COLUMNS} FROM loop_events INDEXED BY idx_loop_events_scope_handoff_item ` +
+      `WHERE wg_id=? AND ${SCOPE_HANDOFF_RECEIPT_PREDICATE} ORDER BY seq DESC LIMIT 2`,
+    args: [wgId],
+  });
+  if (rs.rows.length > 1)
+    throw new Error(`loop_events: duplicate scope handoff receipts for ${wgId}`);
+  return rs.rows[0] === undefined ? null : decodeScopeHandoffReceipt(rs.rows[0]);
+}
+
+/** Bounded collision lookup for the deterministic action identity. */
+export async function readScopeHandoffByAction(
+  db: LoopEventExecutor,
+  actionId: string,
+): Promise<ScopeHandoffReceipt | null> {
+  const rs = await db.execute({
+    sql:
+      `SELECT ${SCOPE_RECEIPT_COLUMNS} FROM loop_events INDEXED BY idx_loop_events_scope_handoff_action ` +
+      `WHERE action_id=? AND ${SCOPE_HANDOFF_RECEIPT_PREDICATE} LIMIT 2`,
+    args: [actionId],
+  });
+  if (rs.rows.length > 1)
+    throw new Error(`loop_events: duplicate scope handoff action ${actionId}`);
+  return rs.rows[0] === undefined ? null : decodeScopeHandoffReceipt(rs.rows[0]);
+}
+
+/** Read at most two unkeyed pre-fix transitions for the pack-declared automation entry. */
+export async function readLegacyAutomationEntrySeqs(
+  db: LoopEventExecutor,
+  wgId: string,
+  entryStage: string,
+): Promise<number[]> {
+  const rs = await db.execute({
+    sql:
+      `SELECT seq FROM loop_events INDEXED BY idx_loop_events_automation_entry_legacy ` +
+      `WHERE wg_id=? AND kind='stage_advance' AND stage=? AND action_id IS NULL ` +
+      `ORDER BY seq DESC LIMIT 2`,
+    args: [wgId, entryStage],
+  });
+  return rs.rows.map((row) => Number(row.seq));
+}
+
+export async function insertScopeHandoffReceipt(
+  db: LoopEventExecutor,
+  receipt: Omit<ScopeHandoffReceipt, 'seq'> & { atMs: number },
+): Promise<void> {
+  if (
+    !isSemanticScopeReceipt({
+      wgId: receipt.wgId,
+      actionId: receipt.actionId,
+      stage: receipt.stage,
+      artifactPath: receipt.artifactPath,
+      artifactSha256: receipt.artifactSha256,
+      evidenceKind: receipt.evidenceKind,
+    })
+  ) {
+    throw new Error('loop_events: invalid scope handoff receipt');
+  }
+  await db.execute({
+    sql: `INSERT INTO loop_events
+            (wg_id,kind,stage,action_id,scope_artifact_path,scope_artifact_sha256,scope_evidence_kind,at_ms)
+          VALUES (?,'stage_advance',?,?,?,?,?,?)`,
+    args: [
+      receipt.wgId,
+      receipt.stage,
+      receipt.actionId,
+      receipt.artifactPath,
+      receipt.artifactSha256,
+      receipt.evidenceKind,
+      receipt.atMs,
+    ],
+  });
+}
+
 /**
  * Append one event (fail-CLOSED at this layer — it may throw). The FAIL-OPEN wrapping at the mutation is LMP.2's
  * `emitMonitorEvent`; keeping the store fail-closed and the mutation wrapper fail-open keeps the store testable
  * and the mutation safe. The store assigns `seq` (the input omits it), mirroring `AuditLog.append`.
  */
 export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
+  if (ev.actionId?.startsWith('scope-handoff:') === true) {
+    throw new Error('loop_events: scope-handoff action ids require the dedicated receipt writer');
+  }
   await withLoopDb(async (db, url) => {
-    await ensureTable(db, url);
+    await ensureLoopEventSchema(db, url);
     await db.execute({
       sql: `INSERT INTO loop_events
               (wg_id, kind, stage, phase, phase_index, phase_total, lifecycle,
-               executor_id, process_instance_id, run_id, checkpoint_stage, lap, role, pid,
+               process_id, ownership, process_instance_id, run_id, checkpoint_stage, lap, role, pid,
                process_group_id, process_start_identity, windows_job_name, windows_job_metadata, exit_code,
-               requested_by, authorized_by, action_id, control_action, requested_at_ms, applied_at_ms,
-               failed_at_ms, failure, at_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               requested_by, authorized_by, action_id, scope_artifact_path, scope_artifact_sha256,
+               scope_evidence_kind, control_action, requested_at_ms, applied_at_ms, failed_at_ms, failure, at_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         ev.wgId,
         ev.kind,
@@ -222,7 +483,8 @@ export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
         ev.index ?? null,
         ev.total ?? null,
         ev.lifecycle ?? null,
-        ev.executorId ?? null,
+        ev.processId ?? null,
+        ev.ownership ?? null,
         ev.processInstanceId ?? null,
         ev.runId ?? null,
         ev.checkpointStage ?? null,
@@ -237,6 +499,9 @@ export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
         ev.requestedBy ?? null,
         ev.authorizedBy ?? null,
         ev.actionId ?? null,
+        ev.scopeArtifactPath ?? null,
+        ev.scopeArtifactSha256 ?? null,
+        ev.scopeEvidenceKind ?? null,
         ev.controlAction ?? null,
         ev.requestedAtMs ?? null,
         ev.appliedAtMs ?? null,
@@ -254,13 +519,13 @@ export async function appendMonitorEvent(ev: NewMonitorEvent): Promise<void> {
  */
 export async function tailEventsSince(sinceSeq: number): Promise<MonitorEvent[]> {
   return withLoopDb(async (db, url) => {
-    await ensureTable(db, url);
+    await ensureLoopEventSchema(db, url);
     const rs = await db.execute({
       sql: `SELECT seq, wg_id, kind, stage, phase, phase_index, phase_total, lifecycle,
-                   executor_id, process_instance_id, run_id, checkpoint_stage, lap, role, pid,
+                   process_id, ownership, process_instance_id, run_id, checkpoint_stage, lap, role, pid,
                    process_group_id, process_start_identity, windows_job_name, windows_job_metadata, exit_code,
-                   requested_by, authorized_by, action_id, control_action, requested_at_ms, applied_at_ms,
-                   failed_at_ms, failure, at_ms
+                   requested_by, authorized_by, action_id, scope_artifact_path, scope_artifact_sha256,
+                   scope_evidence_kind, control_action, requested_at_ms, applied_at_ms, failed_at_ms, failure, at_ms
             FROM loop_events WHERE seq > ? ORDER BY seq ASC`,
       args: [sinceSeq],
     });
@@ -273,7 +538,9 @@ export async function tailEventsSince(sinceSeq: number): Promise<MonitorEvent[]>
       index: r.phase_index === null ? undefined : Number(r.phase_index),
       total: r.phase_total === null ? undefined : Number(r.phase_total),
       lifecycle: coerceLifecycle(r.lifecycle),
-      executorId: asOptStr(r.executor_id),
+      processId: asOptStr(r.process_id),
+      ownership:
+        r.ownership === 'control_root' || r.ownership === 'owned' ? r.ownership : undefined,
       processInstanceId: asOptStr(r.process_instance_id),
       runId: asOptStr(r.run_id),
       checkpointStage: asOptStr(r.checkpoint_stage),
@@ -291,6 +558,12 @@ export async function tailEventsSince(sinceSeq: number): Promise<MonitorEvent[]>
           : undefined,
       authorizedBy: asOptStr(r.authorized_by),
       actionId: asOptStr(r.action_id),
+      scopeArtifactPath: asOptStr(r.scope_artifact_path),
+      scopeArtifactSha256: asOptStr(r.scope_artifact_sha256),
+      scopeEvidenceKind:
+        r.scope_evidence_kind === 'approval' || r.scope_evidence_kind === 'legacy_repair'
+          ? r.scope_evidence_kind
+          : undefined,
       controlAction:
         r.control_action === 'graceful_stop' ||
         r.control_action === 'terminate' ||
@@ -344,7 +617,13 @@ export function foldEvents(events: MonitorEvent[]): LoopFoldState[] {
  * (mutates only the passed map). Kept module-private: the two fold entry points are the API.
  */
 function applyMonitorEvent(byWg: Map<string, LoopFoldState>, e: MonitorEvent): void {
-  if (e.kind.startsWith('executor_')) return; // executor state has its own fold over this SAME event stream
+  if (e.kind.startsWith('process_')) {
+    // Owned-process details have their own fold, but their lifecycle is still real item activity. Refresh an already
+    // staged item's age without inventing a stage/phase or creating readiness-probe-only items in the item view.
+    const activeItem = byWg.get(e.wgId);
+    if (activeItem !== undefined) activeItem.lastEventAtMs = e.atMs;
+    return;
+  }
   const s = byWg.get(e.wgId) ?? { wgId: e.wgId, lastEventAtMs: e.atMs, terminal: false };
   s.lastEventAtMs = e.atMs;
   switch (e.kind) {
@@ -377,18 +656,18 @@ function applyMonitorEvent(byWg: Map<string, LoopFoldState>, e: MonitorEvent): v
       break;
     case 'item_wedged':
       break; // parked, still shown (the feed does not re-derive the reason — §5 OUT)
-    case 'executor_started':
-    case 'executor_shutdown_pending':
-    case 'executor_shutdown_requested':
-    case 'executor_terminate_requested':
-    case 'executor_force_kill_requested':
-    case 'executor_paused':
-    case 'executor_resumed':
-    case 'executor_exited':
-    case 'executor_spawn_failed':
-    case 'executor_control_requested':
-    case 'executor_control_applied':
-    case 'executor_control_failed':
+    case 'process_started':
+    case 'process_shutdown_pending':
+    case 'process_shutdown_requested':
+    case 'process_terminate_requested':
+    case 'process_force_kill_requested':
+    case 'process_paused':
+    case 'process_resumed':
+    case 'process_exited':
+    case 'process_spawn_failed':
+    case 'process_control_requested':
+    case 'process_control_applied':
+    case 'process_control_failed':
       return; // narrowed above; retained for exhaustive checking
   }
   byWg.set(e.wgId, s);

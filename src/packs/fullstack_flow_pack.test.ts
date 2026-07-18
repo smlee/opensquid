@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 
+import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
 import { validateFsm } from '../runtime/fsm.js';
@@ -35,7 +36,7 @@ function env(kind: MessageKind, extra: Record<string, unknown> = {}): Envelope {
   return { seq: 1, from: 'agent', to: 'pack:fullstack-flow', kind, payload: { ctx }, ts: 0 };
 }
 
-/** The guess-free verdict text the content-audit producer caches (GFR.2 `contains(audit.<stage>, …)`). */
+/** The guess-free verdict text the content-audit producer caches (GFR.2 prefix check). */
 const GF = 'VERDICT: GUESS_FREE';
 
 /** A READY SCOPE advance (T2.4): the deterministic `scope` facets + the GFR.2 guess-free verdict. */
@@ -53,12 +54,11 @@ const authorReady = {
   audit: { plan: GF, author: GF },
 };
 
-/** A V2ObservedActor over the compiled inner `code_cycle` flow (T2.7) — the per-task CODE machine, driven in
- *  isolation. The flow shares the parent's `guardExprs` (compile_v2.ts:181), so `code_ready` resolves. */
-function childActor(loaded: LoadedPackV2): V2ObservedActor {
-  const cc = loaded.compiled.flows?.code_cycle;
-  if (cc === undefined) throw new Error('test setup: no compiled code_cycle flow');
-  return new V2ObservedActor('pack:fullstack-flow/code_cycle', { ...loaded, compiled: cc });
+/** One peer StageProcess evaluates the pack's CODE gate directly. */
+function codeStageActor(loaded: LoadedPackV2): V2ObservedActor {
+  const actor = new V2ObservedActor('pack:fullstack-flow', loaded);
+  actor.state.current = 'code';
+  return actor;
 }
 
 /** True iff the effects contain a `block` gate_action (the ENFORCE observation). */
@@ -95,8 +95,14 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(a.state.current).toBe('scope');
 
     // Automation begins at scope_write (the lap boots there on the user's confirmation, v2_supply.ts:616-623).
-    // Seed there and drive the automated chain.
+    // Seed there and drive the automated chain. A quoted pass token inside an unresolved finding must not pass.
     a.state.current = 'scope_write';
+    const deceptive = {
+      ...scopeReady,
+      audit: { scope: 'VERDICT: UNRESOLVED\nreview mentions VERDICT: GUESS_FREE' },
+    };
+    await a.receive(env('post_tool_call', deceptive));
+    expect(a.state.current).toBe('scope_write');
     await a.receive(env('post_tool_call', scopeReady)); // SCOPE_WRITE gate fires → PLAN
     expect(a.state.current).toBe('plan');
 
@@ -108,24 +114,20 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     await a.receive(env('post_tool_call', authorReady)); // AUTHOR → CODE
     expect(a.state.current).toBe('code');
 
-    // T2.7 — CODE is now a `sub_flow` (its per-task ENFORCING `code_cycle` gate). An `executor`/`sub_flow` state
-    // is inert in OBSERVED mode (v2_observed_actor.ts:74 — only gate/decision states advance), so the observed
-    // actor parks AT `code` (the await-point). The inner `code_cycle` gate's results-gating (pass/BLOCK on
-    // phases_complete ∧ readiness_ran ∧ deprecated_clean) is proven directly below over the compiled flow.
+    // CODE is a direct pack gate owned by its peer StageProcess. Without its evidence it blocks and remains at
+    // the same opaque state; there is no nested executor or second workflow loop.
     await a.receive(env('post_tool_call'));
     expect(a.state.current).toBe('code');
   });
 
-  it('T2.7: the compiled `code_cycle` flow exists with a `code_ready` gate (results-gated, on_fail block)', async () => {
+  it('T2.7: CODE is one direct results-gated state with no nested flow', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const cc = loaded.compiled.flows?.code_cycle;
-    expect(cc).toBeDefined();
-    expect(validateFsm(cc!.fsm!)).toEqual([]);
-    const coding = cc!.meta.coding;
-    expect(coding).toBeDefined();
-    expect(coding?.kind).toBe('gate');
-    expect(coding?.guard).toBe('code_ready');
-    expect(coding?.onFail?.action).toBe('block'); // a not-ready CODE BLOCKS (never a warn pass-through)
+    expect(loaded.compiled.flows?.code_cycle).toBeUndefined();
+    const code = loaded.compiled.meta.code;
+    expect(code).toBeDefined();
+    expect(code?.kind).toBe('gate');
+    expect(code?.guard).toBe('code_ready');
+    expect(code?.onFail?.action).toBe('block'); // a not-ready CODE BLOCKS (never a warn pass-through)
     // the guard predicates on ALL THREE results (proves results-gating, not just "ran") + the GFR.2 CODE verdict
     // + the GFR.3 rolling re-assert of the prior AUTHOR verdict.
     const codeExpr = loaded.compiled.guardExprs?.get('code_ready') ?? '';
@@ -134,8 +136,111 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     expect(codeExpr).toContain('code.deprecated_clean');
     expect(codeExpr).toContain('code.suite_green'); // SGG.3 — the appended FULL-verifySuite-green term
     expect(codeExpr).toContain('report.resolved'); // V2-ENF.2/3 — block-on-unresolved report-resolution facet
-    expect(codeExpr).toContain('contains(audit.code, "VERDICT: GUESS_FREE")'); // GFR.2
-    expect(codeExpr).toContain('contains(audit.author, "VERDICT: GUESS_FREE")'); // GFR.3 rolling
+    expect(codeExpr).toContain('startsWith(audit.code, "VERDICT: GUESS_FREE")'); // GFR.2
+    expect(codeExpr).toContain('startsWith(audit.author, "VERDICT: GUESS_FREE")'); // GFR.3 rolling
+  });
+
+  it('grants scope_write directly to one peer StageProcess with no nested executor loop', () => {
+    const scopeWriteMd = readFileSync(join(BUILTIN_DIR, 'procedure', 'scope_write.md'), 'utf8');
+    expect(scopeWriteMd).toContain('StageProcess owns this stage attempt directly');
+    expect(scopeWriteMd).toContain('do not spawn another stage process or start a nested loop');
+    expect(scopeWriteMd).not.toContain('parent remains orchestration-only');
+  });
+
+  it('declares bounded parallel audit lenses with complete rubric coverage at every audited stage', () => {
+    const parsed = parse(
+      readFileSync(join(BUILTIN_DIR, 'skills', 'content-audit', 'skill.yaml'), 'utf8'),
+    ) as {
+      rules: {
+        id: string;
+        process: {
+          call: string;
+          args?: {
+            timeout_ms?: number;
+            prompt?: string;
+            message?: string;
+            lenses?: { id: string; prompt: string; criteria?: string[] }[];
+          };
+        }[];
+      }[];
+    };
+    const expected = new Map([
+      [
+        'scope-guess-free-audit',
+        ['evidence', 'solution', 'modularity-authority', 'scalability-flow'],
+      ],
+      [
+        'author-guess-free-audit',
+        ['contract-coverage', 'correctness-reuse', 'simplicity-architecture', 'rolling-plan'],
+      ],
+      ['plan-guess-free-audit', ['coverage-topic', 'graph-correctness', 'rolling-scope']],
+      ['code-guess-free-audit', ['before-code', 'after-code', 'architecture', 'rolling-author']],
+    ]);
+    const coverage = new Map([
+      [
+        'scope-guess-free-audit',
+        ['criteria 1, 5, and 6', 'criteria 2, 3, and 4', 'criteria 7 and 9', 'criteria 8 and 10'],
+      ],
+      [
+        'author-guess-free-audit',
+        ['criteria 1, 2, and 3', 'criteria 4 and 6', 'criteria 5, 7, and 8', 'criterion 9'],
+      ],
+      ['plan-guess-free-audit', ['criteria 1 and 4', 'criteria 2 and 3', 'criterion 5']],
+      ['code-guess-free-audit', ['criteria 1-4', 'criteria 5-9', 'criteria 11-14', 'criterion 10']],
+    ]);
+    const criterionUniverse = new Map([
+      ['scope-guess-free-audit', ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']],
+      ['author-guess-free-audit', ['1', '2', '3', '4', '5', '6', '7', '8', '9']],
+      ['plan-guess-free-audit', ['1', '2', '3', '4', '5']],
+      [
+        'code-guess-free-audit',
+        ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'],
+      ],
+    ]);
+    for (const [ruleId, lensIds] of expected) {
+      const rule = parsed.rules.find((candidate) => candidate.id === ruleId);
+      const audit = rule?.process.find((step) => step.call === 'cached_audit');
+      expect(audit?.args?.timeout_ms, ruleId).toBe(600_000);
+      expect(audit?.args?.prompt, ruleId).toBeUndefined();
+      expect(
+        audit?.args?.lenses?.map((lens) => lens.id),
+        ruleId,
+      ).toEqual(lensIds);
+      for (const lens of audit?.args?.lenses ?? []) {
+        expect(lens.prompt, `${ruleId}/${lens.id}`).toContain('VERDICT: GUESS_FREE');
+        expect(lens.prompt, `${ruleId}/${lens.id}`).toContain('VERDICT: UNRESOLVED');
+      }
+      const prompts = audit?.args?.lenses?.map((lens) => lens.prompt).join('\n') ?? '';
+      for (const token of coverage.get(ruleId) ?? []) expect(prompts, ruleId).toContain(token);
+      const criteria = (audit?.args?.lenses ?? [])
+        .flatMap((lens) => lens.criteria ?? [])
+        .sort((a, b) => Number(a) - Number(b));
+      expect(criteria, `${ruleId} criteria must cover the rubric exactly once`).toEqual(
+        criterionUniverse.get(ruleId),
+      );
+      const findingsSurface = rule?.process.find(
+        (step) => step.call === 'verdict' && step.args?.message?.includes('{{audit}}'),
+      );
+      expect(
+        findingsSurface,
+        `${ruleId} must return merged findings to the active executor`,
+      ).toBeDefined();
+    }
+  });
+
+  it('keeps completed SCOPE research revision-owned instead of session-repeating it', () => {
+    const rubric = readFileSync(join(BUILTIN_DIR, 'rubric', 'scope.md'), 'utf8');
+    const scope = readFileSync(join(BUILTIN_DIR, 'procedure', 'scope.md'), 'utf8');
+    const scopeWrite = readFileSync(join(BUILTIN_DIR, 'procedure', 'scope_write.md'), 'utf8');
+    const author = readFileSync(join(BUILTIN_DIR, 'procedure', 'author.md'), 'utf8');
+    const audit = readFileSync(join(BUILTIN_DIR, 'skills', 'content-audit', 'skill.yaml'), 'utf8');
+    expect(rubric).toContain('Evidence is revision-owned, not session-owned');
+    expect(scope).toContain('Reuse still-current cited research');
+    expect(scopeWrite).toContain('Do not repeat SCOPE');
+    expect(scopeWrite).toContain('do not rewrite it');
+    expect(scopeWrite).toContain('never authorize it with a hand-picked subset');
+    expect(author).toContain('never repeat its completed capability sweep');
+    expect(audit).toContain('never demand a duplicate fetch');
   });
 
   it('SGG.1: procedure/code.md `test`-phase mandate names the declared verifySuite + EXIT 0 (not vague)', () => {
@@ -153,6 +258,9 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     const procs = stages.map((s) => ({
       stage: s,
       text: readFileSync(join(BUILTIN_DIR, 'procedure', `${s}.md`), 'utf8'),
+      ...(s === 'code'
+        ? { phases: ['pre_research', 'learn', 'code', 'test', 'audit', 'post_research', 'fix'] }
+        : {}),
     }));
     const results = lintPhaseEmits(procs);
     // The enforced-feed invariant holds for all six real procedures: CODE drives log_phase, none carries the
@@ -160,10 +268,12 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     const bad = results.filter((r) => !r.ok);
     expect(bad, `offending stages: ${JSON.stringify(bad)}`).toEqual([]);
     // and a synthetic CODE procedure that dropped the log_phase mandate is caught, missing NAMED.
-    const neg = lintPhaseEmits([{ stage: 'code', text: 'run the 7 phases; set_loop_phase only.' }]);
+    const neg = lintPhaseEmits([
+      { stage: 'code', phases: ['audit'], text: 'run the declared phases; set_loop_phase only.' },
+    ]);
     expect(neg[0]?.ok).toBe(false);
     expect(neg[0]?.missing).toContain(
-      'CODE must drive the enforced log_phase feed (no log_phase( mandate)',
+      "state 'code' declares phases but its procedure has no log_phase( mandate",
     );
     // a procedure carrying the retired "Without this … silent" false promise is also caught.
     const falsePromise = lintPhaseEmits([
@@ -175,32 +285,27 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
     );
   });
 
-  it('T2.7: the inner CODE gate PASSES on phases_complete ∧ readiness_ran ∧ deprecated_clean ∧ suite_green', async () => {
+  it('T2.7: the peer CODE StageProcess advances on complete direct evidence', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const child = childActor(loaded);
-    expect(child.state.current).toBe('coding');
-    // the four `code.*` facets (incl. SGG.2 suite_green) + the CODE verdict (GFR.2) + the prior AUTHOR verdict
-    // (GFR.3 rolling) + the resolved report-checklist facet (V2-ENF.2/3 — resolved here so it doesn't hold).
+    const stage = codeStageActor(loaded);
     const ready = {
       code: {
         phases_complete: true,
         readiness_ran: true,
         deprecated_clean: true,
         suite_green: true,
-        arch_clean: true, // AQG.4 — undeclared detector fails OPEN; the gate now includes && code.arch_clean
+        arch_clean: true,
       },
       report: { resolved: true },
       audit: { author: GF, code: GF },
     };
-    await child.receive(env('post_tool_call', ready));
-    expect(child.state.current).toBe('committed'); // gate passed → nested terminal (emits `coded`)
+    await stage.receive(env('post_tool_call', ready));
+    expect(stage.state.current).toBe('deploy');
   });
 
-  it('SGG.2/3: a red/absent full suite (suite_green:false) BLOCKS — kills the false-green slice', async () => {
+  it('SGG.2/3: a red/absent full suite blocks the peer CODE StageProcess', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const child = childActor(loaded);
-    // every other CODE facet green, but the FULL declared verifySuite was not recorded green (a slice run) →
-    // suite_green:false → code_ready BLOCKS. This is the exact false-green a 116-test slice hid before SGG.
+    const stage = codeStageActor(loaded);
     const sliceRun = {
       code: {
         phases_complete: true,
@@ -211,41 +316,39 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
       report: { resolved: true },
       audit: { author: GF, code: GF },
     };
-    const effects = await child.receive(env('post_tool_call', sliceRun));
-    expect(child.state.current).toBe('coding'); // blocked → stayed
+    const effects = await stage.receive(env('post_tool_call', sliceRun));
+    expect(stage.state.current).toBe('code');
     expect(blockedIn(effects)).toBe(true);
   });
 
-  it('T2.7: a deprecated hit (deprecated_clean:false) BLOCKS — proves results-gating, not just "ran"', async () => {
+  it('T2.7: a deprecated hit blocks', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const child = childActor(loaded);
-    // phases complete + readiness RAN, but a deprecated-syntax hit → deprecated_clean:false → BLOCK.
+    const stage = codeStageActor(loaded);
     const ran = { code: { phases_complete: true, readiness_ran: true, deprecated_clean: false } };
-    const effects = await child.receive(env('post_tool_call', ran));
-    expect(child.state.current).toBe('coding'); // blocked → stayed
+    const effects = await stage.receive(env('post_tool_call', ran));
+    expect(stage.state.current).toBe('code');
     expect(blockedIn(effects)).toBe(true);
   });
 
-  it('T2.7: an incomplete phase ledger (phases_complete:false) BLOCKS', async () => {
+  it('T2.7: an incomplete phase ledger blocks', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const child = childActor(loaded);
+    const stage = codeStageActor(loaded);
     const incomplete = {
       code: { phases_complete: false, readiness_ran: true, deprecated_clean: true },
     };
-    const effects = await child.receive(env('post_tool_call', incomplete));
-    expect(child.state.current).toBe('coding');
+    const effects = await stage.receive(env('post_tool_call', incomplete));
+    expect(stage.state.current).toBe('code');
     expect(blockedIn(effects)).toBe(true);
   });
 
-  it('T2.7: a never-run readiness (readiness_ran:false, fail-closed) BLOCKS', async () => {
+  it('T2.7: never-run readiness blocks fail-closed', async () => {
     const loaded = await loadPackV2(BUILTIN_DIR);
-    const child = childActor(loaded);
-    // the fail-closed shape buildGuardCtx binds when readinessResult never ran (all three false).
+    const stage = codeStageActor(loaded);
     const failClosed = {
       code: { phases_complete: false, readiness_ran: false, deprecated_clean: false },
     };
-    const effects = await child.receive(env('post_tool_call', failClosed));
-    expect(child.state.current).toBe('coding');
+    const effects = await stage.receive(env('post_tool_call', failClosed));
+    expect(stage.state.current).toBe('code');
     expect(blockedIn(effects)).toBe(true);
   });
 

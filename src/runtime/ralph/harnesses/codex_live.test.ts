@@ -29,7 +29,7 @@ const RECORDED_STREAM = [
     item: {
       id: 'item_0',
       type: 'agent_message',
-      text: 'RALPH-EXIT: {"kind":"SHIPPED","stage":"code"}',
+      text: 'RALPH-EXIT: {"kind":"SHIPPED"}',
     },
   }),
   JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 48213, output_tokens: 1902 } }),
@@ -41,8 +41,7 @@ const LIVE_PRICING: CodexPricing = {
 
 describe.skipIf(!LIVE)('codex live e2e (opt-in, real binary — CRASH fails)', () => {
   it('a real codex exec lap completes a turn, reports usage, and folds to the exact SHIPPED outcome', () => {
-    const prompt =
-      'Reply with EXACTLY this line and nothing else:\nRALPH-EXIT: {"kind":"SHIPPED","stage":"code"}';
+    const prompt = 'Reply with EXACTLY this line and nothing else:\nRALPH-EXIT: {"kind":"SHIPPED"}';
     const args = codexLapHarness.spawnArgs({
       maxBudgetUsd: 1,
       sandbox: 'read-only', // read-only for a harmless smoke
@@ -82,7 +81,7 @@ describe.skipIf(!LIVE)('codex live e2e (opt-in, real binary — CRASH fails)', (
     // (3) the EXACT outcome — a real completed lap. CRASH (fail-closed no-tag, FCE.1), WEDGE, and
     // HUMAN_REQUIRED all FAIL here — the old `toContain` membership that let CRASH pass is GONE.
     const { outcome } = outcomeFromEnvelope(env);
-    expect(outcome).toEqual({ kind: 'SHIPPED', stage: 'code' });
+    expect(outcome).toEqual({ kind: 'SHIPPED' });
   }, 130_000);
 });
 
@@ -98,6 +97,6 @@ describe('CFS.4 LIVE acceptance — a recorded real Codex usage stream, folded +
     expect(costUsd).toBeGreaterThan(0);
     expect(costUsd).toBeCloseTo(0.07928625, 8);
     // The tag still folds through to a well-formed outcome (the fold path is unchanged by pricing).
-    expect(outcomeFromEnvelope(raw).outcome).toEqual({ kind: 'SHIPPED', stage: 'code' });
+    expect(outcomeFromEnvelope(raw).outcome).toEqual({ kind: 'SHIPPED' });
   });
 });

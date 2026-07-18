@@ -23,8 +23,6 @@ function fixture() {
         activeTools: new Set(['read']),
         genericProxyAbsent: true,
         effectiveShell: {},
-        roleManifestPath: '/roles.json',
-        roleManifestHash: 'a'.repeat(64),
       },
     }),
   );

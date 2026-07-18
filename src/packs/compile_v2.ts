@@ -20,10 +20,18 @@
  * Spec: loop/docs/tasks/T-fsm-actor-rescope.md §T1.
  */
 import { validateFsm, type Fsm } from '../runtime/fsm.js';
-import type { PackV2, StateKind, DecisionBranch, EvidenceRef } from './schemas/pack_v2.js';
+import type {
+  PackV2,
+  StateKind,
+  DecisionBranch,
+  EvidenceRef,
+  Reactions,
+} from './schemas/pack_v2.js';
 
 export interface StateMeta {
   kind: StateKind;
+  /** True only when the pack declares this opaque state id as process-driven. */
+  automated?: true;
   // executor
   executor?: string;
   skills: string[];
@@ -39,8 +47,11 @@ export interface StateMeta {
   // STAGE-REPORTING CADENCE (behavior-as-data — the pack owns the cadence, core owns the emit functions):
   report?: string; // after-stage report label (a Stage) emitted on LEAVE; absent = this state emits no report
   summary?: boolean; // when true, a before-stage summary is emitted on ENTRY-edge (reuses `report` as its label)
+  reportPhases?: boolean;
+  goalAlignment?: boolean;
   reads?: EvidenceRef[]; // EVIDENCE-DECLARATION (generic runtime): ctx keys rendered as the report's proof line
   does?: string; // STAGE-WORK: "what this stage works on" — the report's Next-line + summary Will-line text
+  phases?: string[]; // pack-declared ordered sub-phase ledger for this opaque state
   // decision
   branches?: DecisionBranch[];
   // sub_flow
@@ -52,6 +63,9 @@ export interface StateMeta {
 export interface CompiledPack {
   fsm?: Fsm; // states + transitions in the reused engine's format (present only for the behavior form)
   meta: Record<string, StateMeta>; // per-state behavior for the loop driver (empty for non-fsm forms)
+  /** Pack-owned process-driving declaration; state ids remain opaque to core. */
+  automation?: { entry: string; stages: ReadonlySet<string> };
+  reactions?: Reactions;
   flows?: Record<string, CompiledPack>; // HAR.1: compiled ISOLATED nested machines (sub_flow targets)
   guardExprs?: Map<string, string>; // FAC-CUT.2: guard ref → `if:`-expression (behavior form); the RegistryGuardEvaluator's source
 }
@@ -80,11 +94,14 @@ function compileMachine(pack: PackV2): CompiledPack {
 
     // BEHAVIOR: per-state metadata + the NAMED event each state emits.
     const emitted = new Set<string>(); // every driver-emitted event (must be routed)
+    const automated = new Set(pack.automation?.stages ?? []);
     for (const [name, s] of Object.entries(fsmDef.states)) {
+      const automation = automated.has(name) ? { automated: true as const } : {};
       switch (s.kind) {
         case 'executor':
           meta[name] = {
             kind: s.kind,
+            ...automation,
             // conditional spread: under exactOptionalPropertyTypes, an absent executor must be omitted, not `undefined`
             ...(s.executor !== undefined ? { executor: s.executor } : {}),
             skills: s.skills,
@@ -98,6 +115,7 @@ function compileMachine(pack: PackV2): CompiledPack {
           // on_pass_emits advances; on_fail is an ACTION (block/halt + self-continue), NOT a transition.
           meta[name] = {
             kind: s.kind,
+            ...automation,
             skills: [],
             guard: s.guard,
             onFail: s.on_fail,
@@ -108,8 +126,11 @@ function compileMachine(pack: PackV2): CompiledPack {
             // before-stage summary flag (on entry-edge). Read by v2_supply's transition-precise emit.
             ...(s.report !== undefined ? { report: s.report } : {}),
             ...(s.summary !== undefined ? { summary: s.summary } : {}),
+            ...(s.report_phases !== undefined ? { reportPhases: s.report_phases } : {}),
+            ...(s.goal_alignment !== undefined ? { goalAlignment: s.goal_alignment } : {}),
             ...(s.reads !== undefined ? { reads: s.reads } : {}), // EVIDENCE-DECLARATION: the report's proof keys
             ...(s.does !== undefined ? { does: s.does } : {}), // STAGE-WORK: the Next-line / summary Will-line text
+            ...(s.phases !== undefined ? { phases: s.phases } : {}),
           };
           emitted.add(s.on_pass_emits);
           break;
@@ -117,16 +138,16 @@ function compileMachine(pack: PackV2): CompiledPack {
           // a decision's branch emits must be pairwise-distinct: step() routes by (from,on), so two
           // branches emitting the same event would collide on one target (an unreachable branch — silent).
           assertDistinctBranchEmits(pack.name, name, s.branches);
-          meta[name] = { kind: s.kind, skills: [], branches: s.branches };
+          meta[name] = { kind: s.kind, ...automation, skills: [], branches: s.branches };
           for (const b of s.branches) emitted.add(b.emits);
           break;
         case 'sub_flow':
-          meta[name] = { kind: s.kind, skills: [], flow: s.flow, emits: s.emits };
+          meta[name] = { kind: s.kind, ...automation, skills: [], flow: s.flow, emits: s.emits };
           emitted.add(s.emits);
           break;
         case 'terminal':
           // terminal emits nothing.
-          meta[name] = { kind: s.kind, skills: [], outcome: s.outcome };
+          meta[name] = { kind: s.kind, ...automation, skills: [], outcome: s.outcome };
           break;
       }
     }
@@ -160,6 +181,15 @@ function compileMachine(pack: PackV2): CompiledPack {
   return {
     ...(fsm !== undefined ? { fsm } : {}),
     meta,
+    ...(pack.automation === undefined
+      ? {}
+      : {
+          automation: {
+            entry: pack.automation.entry,
+            stages: new Set(pack.automation.stages),
+          },
+        }),
+    ...(pack.reactions === undefined ? {} : { reactions: pack.reactions }),
     ...(guardExprs !== undefined ? { guardExprs } : {}),
   };
 }
@@ -174,8 +204,11 @@ export function compilePackV2(pack: PackV2): CompiledPack {
   const compiled = compileMachine(pack);
   if (pack.flows !== undefined) {
     const flows: Record<string, CompiledPack> = {};
+    const { automation: _parentAutomation, reactions: _parentReactions, ...flowPack } = pack;
+    void _parentAutomation;
+    void _parentReactions;
     for (const [name, f] of Object.entries(pack.flows))
-      flows[name] = compileMachine({ ...pack, fsm: f });
+      flows[name] = compileMachine({ ...flowPack, fsm: f });
     // fail-loud (FLAT, non-recursive sweep): when a registry is declared, every sub_flow.flow across the
     // parent + each flow must resolve to a registered flow. (A sub_flow with NO registry at all is caught
     // at RUNTIME by the driver's fail-loud — `runSubFlow` throws on an unresolved child — so a registry-

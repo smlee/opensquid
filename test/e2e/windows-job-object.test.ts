@@ -6,9 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { realProcControl, runOneShotCli } from '../../src/runtime/spawn_lifecycle.js';
 import {
-  controlledExecutorProcess,
-  requestExecutorControl,
-} from '../../src/runtime/subagents/process_control.js';
+  controlledOwnedProcess,
+  requestProcessControl,
+} from '../../src/runtime/processes/process_control.js';
 
 const priorRoot = process.env.OPENSQUID_PROJECT_ROOT;
 
@@ -29,21 +29,21 @@ async function waitForFile(path: string, timeoutMs: number): Promise<string> {
 describe.skipIf(process.platform !== 'win32')('Windows Job Object process control', () => {
   let project: string;
   let cleanupControl: (() => void) | undefined;
-  let executorRegistered = false;
+  let processRegistered = false;
 
   beforeEach(async () => {
     project = await mkdtemp(join(tmpdir(), 'opensquid-winjob-'));
     await mkdir(join(project, '.opensquid'));
     process.env.OPENSQUID_PROJECT_ROOT = project;
     cleanupControl = undefined;
-    executorRegistered = false;
+    processRegistered = false;
   });
 
   afterEach(async () => {
     // A failed assertion must not strand the broker/Job Object and make the temp tree permanently EBUSY.
-    if (executorRegistered) {
-      await requestExecutorControl({
-        executorId: 'windows-job-e2e',
+    if (processRegistered) {
+      await requestProcessControl({
+        processId: 'windows-job-e2e',
         action: 'force_kill',
         requestedBy: 'tui',
         authorizedBy: 'tui:windows-e2e-cleanup',
@@ -68,15 +68,16 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
       `process.stdin.resume();require('node:child_process').spawn(process.execPath,[${JSON.stringify(grand)}],{stdio:'ignore'});setInterval(()=>{},1000);`,
     );
 
-    const control = controlledExecutorProcess({
-      executorId: 'windows-job-e2e',
+    const control = controlledOwnedProcess({
+      processId: 'windows-job-e2e',
       wgId: 'wg-windows-job',
-      role: 'fullstack-executor',
+      role: 'stage-process',
+      ownership: 'owned',
       base: realProcControl,
       pollMs: 20,
     });
     cleanupControl = () => control.dispose();
-    executorRegistered = true;
+    processRegistered = true;
     await runOneShotCli({
       cli: process.execPath,
       args: [child],
@@ -95,8 +96,8 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
     expect(Number.isSafeInteger(grandPid) && grandPid > 0).toBe(true);
     expect(() => process.kill(grandPid, 0)).not.toThrow();
 
-    const receipt = await requestExecutorControl({
-      executorId: 'windows-job-e2e',
+    const receipt = await requestProcessControl({
+      processId: 'windows-job-e2e',
       action: 'terminate',
       requestedBy: 'tui',
       authorizedBy: 'tui:windows-e2e',

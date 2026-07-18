@@ -46,7 +46,7 @@ export interface LapHarnessCfg {
 export interface CoreControlOutcome {
   /** Core-generated only; model-authored RALPH tags cannot produce either value. */
   readonly kind: 'PROCESS_PAUSED' | 'CANCELLED_BY_HUMAN';
-  readonly executorId: string;
+  readonly processId: string;
   readonly action: 'graceful_stop' | 'terminate' | 'force_kill';
   readonly actionId: string;
 }
@@ -78,8 +78,8 @@ export interface LapRequest {
 /**
  * Evidence produced by setup/readiness (Slice 2) and consumed fail-closed here.
  * The interface is intentionally data-only so setup, probes and later full-runtime
- * composition can implement it without importing the lap adapter. `registeredTools`
- * proves the runtime registered the parent tool surface; `activeTools` proves those
+ * stage-runtime composition can implement it without importing the lap adapter. `registeredTools`
+ * proves the runtime registered the StageProcess tool surface; `activeTools` proves those
  * tools are actually live.
  */
 export interface VerifiedPiRuntime {
@@ -95,16 +95,13 @@ export interface VerifiedPiRuntime {
     commandPrefix?: string;
     shellPath?: string;
   }>;
-  readonly roleManifestPath: string;
-  readonly roleManifestHash: string;
 }
 
 export interface PiHarnessRuntimeAssets {
   readonly systemPromptPath: string;
   readonly mcpAdapterExtensionPath: string;
   readonly projectorExtensionPath: string;
-  readonly spawnSubagentExtensionPath: string;
-  readonly parentTools: readonly string[];
+  readonly stageTools: readonly string[];
   readonly statsTimeoutMs?: number;
   /** Must validate merged config/bootstrap/probe before returning evidence. */
   readonly readiness: (input: {

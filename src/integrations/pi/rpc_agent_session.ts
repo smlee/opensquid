@@ -1,4 +1,4 @@
-/** Shared Pi RPC conversation used by parent laps and executor processes. */
+/** One bounded Pi RPC conversation used by disposable StageProcesses and readiness probes. */
 import type {
   StreamingCliOptions,
   StreamingRecordContext,
@@ -36,7 +36,7 @@ export interface PiRpcAgentSessionOptions {
   statsId: string;
   statsTimeoutMs?: number;
   timers?: PiRpcTimers;
-  /** Observe already-decoded Pi events for adapter-owned accounting such as nested executor usage. */
+  /** Observe already-decoded Pi events for adapter-owned telemetry. */
   onEvent?: (event: Readonly<Record<string, unknown>>) => void | Promise<void>;
 }
 
