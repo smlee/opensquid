@@ -705,33 +705,37 @@ requirements:
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: latestPrefixTag, from: [release] }
     proof: 'src/runtime/release/latest_prefix_tag.test.ts'
+  # GF.9 named deferral wg-7e48d5fa5d70: current execution is serial. Parallelism may be enabled only by a
+  # separately scoped coordinator that carries one unique semantic branch + worktree cwd through every stage and
+  # integration boundary; proof-only helpers below are not live wiring.
+  - id: R-DEPLOY-LOCAL-BRANCH
+    intent: 'DEPLOY configuredLocalBranch: resolve version-control.environments.local through the existing config SSOT and fail closed unless it equals the checked-out semantic branch'
+    wg: wg-95f8fd49c17d
+    assert: { kind: reachable, symbol: configuredLocalBranch, from: [gate] }
+    proof: 'src/setup/cli/gate.test.ts'
   - id: R-GF-FEAT-BRANCH
-    intent: 'GF.5 featBranchFor: the SEMANTIC per-item branch name feat/<slug-of-item.title> (retires the mechanical auto/wg-<id> branchNameFor); DORMANT parallel-only (serial commits to env.local) — proof-backed, static reachability advisory'
+    intent: 'GF.5 featBranchFor: proof-backed DORMANT helper for a future semantic per-item branch base feat/<slug-of-item.title>; serial commits to env.local and WorkGraph ids remain internal context'
     wg: wg-e20fb6b080e0
-    assert: { kind: reachable, symbol: featBranchFor, from: [orchestrator] }
-    proof: 'src/runtime/ralph/auto_pull.test.ts'
+    assert: { kind: proof, test: 'src/runtime/ralph/auto_pull.test.ts' }
   - id: R-GF-RECONCILE-BASE
     intent: 'GF.6 reconcileBase: the preserve-whoever-is-ahead base-refresh (replaces autoPullMain --ff-only); four-state FSM over (behind, ahead) — ff / kept-local / MERGE-both / conflict-surfaced; NO reset/rebase (hot patch never lost); base branch = environments.production'
     wg: wg-e20fb6b080e0
     assert: { kind: reachable, symbol: reconcileBase, from: [orchestrator] }
     proof: 'src/runtime/ralph/auto_pull.test.ts'
   - id: R-AGF-ADD-WORKTREE
-    intent: 'AGF.3 addItemWorktree: cut auto/wg-<id> from fresh main into its own checkout at <poolRoot>/<id> (git worktree add)'
+    intent: 'AGF.3 DORMANT addItemWorktree primitive: use a future coordinator-supplied semantic branch and configured base in <poolRoot>/<id>; the WorkGraph id names only the internal checkout path'
     wg: wg-732b2b68a168
-    assert: { kind: reachable, symbol: addItemWorktree, from: [orchestrator] }
-    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+    assert: { kind: proof, test: 'src/runtime/ralph/worktree_pool.test.ts' }
   - id: R-AGF-REMOVE-WORKTREE
-    intent: 'AGF.3 removeItemWorktree: git worktree remove --force teardown of the item checkout (fail-open)'
+    intent: 'AGF.3 DORMANT removeItemWorktree primitive: git worktree remove --force teardown of an item checkout'
     wg: wg-732b2b68a168
-    assert: { kind: reachable, symbol: removeItemWorktree, from: [orchestrator] }
-    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+    assert: { kind: proof, test: 'src/runtime/ralph/worktree_pool.test.ts' }
   - id: R-AGF-DRAIN-POOL
-    intent: 'AGF.3 drainPool: drive ≤bound items concurrently, each in its own worktree, fold outcomes; a driven-item fault is isolated + its worktree torn down (never breaks the drain)'
+    intent: 'AGF.3 DORMANT drainPool primitive: drive ≤bound caller-specified semantic item worktrees; faults are isolated and checkouts torn down'
     wg: wg-732b2b68a168
-    assert: { kind: reachable, symbol: drainPool, from: [orchestrator] }
-    proof: 'src/runtime/ralph/worktree_pool.test.ts'
+    assert: { kind: proof, test: 'src/runtime/ralph/worktree_pool.test.ts' }
   - id: R-AGF-MERGE-STAGE
-    intent: 'AGF.5 mergeToStage: --no-ff merge auto/wg-<id> → persistent stage, re-run the suite, rc-tag on green; a conflict (abort) or red suite (reset HEAD~1) → no integration, stage stays green'
+    intent: 'AGF.5 mergeToStage: --no-ff merge the configured semantic local branch → persistent staging branch, re-run the suite, rc-tag on green; a conflict (abort) or red suite (reset HEAD~1) → no integration, staging stays green'
     wg: wg-732b2b68a168
     assert: { kind: reachable, symbol: mergeToStage, from: [release] }
     proof: 'src/runtime/release/stage_integration.test.ts'

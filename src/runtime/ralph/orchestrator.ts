@@ -25,7 +25,6 @@ import { emitMonitorEvent } from '../loop/monitor_emit.js'; // LMP.2 — push it
 import { sweepTerminalBacklog } from '../loop/loop_boot_sweep.js'; // F1c — one-time boot drain of the terminal backlog
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
-import { addItemWorktree, removeItemWorktree, type WorktreeIo } from './worktree_pool.js'; // AGF.3 — worktree-per-item
 import { renderScopeBefore, renderScopeAfter } from '../loop/scope_report.js'; // RD.3 — task/session before/after bodies
 import {
   durableItemCommitExists,
@@ -151,25 +150,12 @@ export interface RalphDeps {
     reconcileStage: (itemId: string, stage: string) => Promise<void>;
   };
   /**
-   * AGF.3 (T-opensquid-automated-gitflow, wg-4ae1004c931b) — the bounded concurrency pool + worktree-per-item.
-   * When PRESENT, the claim-and-drive runs each item in its OWN git worktree (cut from fresh `main`, `auto/wg-<id>`)
-   * so concurrent laps never clobber each other's edits, up to `bound` in flight (`drainPool`). Every git effect is
-   * behind the injected `WorktreeIo` (tests pass a stub — no real git). ABSENT (default) ⇒ the serial in-place
-   * drive (the `bound:1` degenerate case) — unchanged. Opt-in + additive, the framework pattern (like `stageLoop`).
-   */
-  pool?: {
-    bound: number;
-    poolRoot: string;
-    mainRoot: string;
-    io: WorktreeIo;
-  };
-  /**
    * CG.1 (T-consistency-gate, wg-1c620a56b733) — the injected git seam the CONSISTENCY GATE reads through.
    * PRESENT ⇒ before an item's drive the orchestrator records the target tip (`baseSha`), and at the SHIPPED
    * close it VERIFIES a durable item-owned commit landed (`durableItemCommitExists`); if not, it re-drives up to
    * MAX_COMMIT_REDRIVES then PARKS `NO_DURABLE_COMMIT` (never a silent close). ABSENT (default; every existing
    * test, v1 coding-flow) ⇒ the gate is a NO-OP and the SHIPPED-close is byte-unchanged (backward compatible).
-   * Optional + additive, exactly like `stageLoop?`/`pool?`/`recordMetric?`. The CLI wires `makeRalphGitSeam(root)`.
+   * Optional + additive, exactly like `stageLoop?`/`recordMetric?`. The CLI wires `makeRalphGitSeam(root)`.
    */
   git?: RalphGitSeam;
   /**
@@ -508,10 +494,9 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     deps.narrate?.(`▶ claim ${item.id} — ${item.title.slice(0, 60)}`);
     // RD.3 — before-task: DISPLAY "Before-task · <id> · Will: <title>" live at the claim boundary (§5.2 before-task).
     deps.display?.(renderScopeBefore('task', item.id, [item.title], new Date().toISOString()).body);
-    // AGF.3 — when the pool is enabled, drive the item in its OWN worktree (cut from fresh `main`, `auto/wg-<id>`)
-    // so concurrent laps never clobber each other's edits; the worktree is always torn down (fail-open) even on a
-    // driven-item throw. ABSENT (default) ⇒ the serial in-place drive, unchanged. The claim/fold semantics below
-    // (SHIPPED close, roll-up, onShipped, parked escalate) are PRESERVED — the pool changes WHERE the drive runs.
+    // The live coordinator is serial: one claimed item is driven in the existing configured local checkout.
+    // Parallel worktree primitives remain dormant until a future scoped coordinator can pass the exact branch +
+    // cwd through every stage and integration boundary.
     // CG.1 — the CONSISTENCY GATE: record the integration target's tip BEFORE the drive (per-item by
     // construction — one binding per for-loop iteration, which drives exactly one claimed item; generalizes to
     // a per-item-keyed record in the future pool drainer with NO logic change). Absent seam ⇒ undefined ⇒ no gate.
@@ -521,7 +506,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       ? (deps.environments.staging ?? deps.environments.local)
       : undefined;
     const baseSha = deps.git ? await deps.git.tip(target) : undefined;
-    let outcome = await driveMaybePooled(item, deps, cfg); // GR.3 → LapResult (PSL.3 per-stage when stageLoop present)
+    let outcome = await driveClaimedItem(item, deps, cfg); // GR.3 → LapResult (PSL.3 per-stage when stageLoop present)
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
     // CG.1 — a SHIPPED lap that produced NO durable item commit is re-driven up to MAX_COMMIT_REDRIVES, then
@@ -547,7 +532,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
         deps.narrate?.(
           `  ↻ ${item.id} re-drive ${redrives}/${MAX_COMMIT_REDRIVES} to land the commit`,
         );
-        const re = await driveMaybePooled(item, deps, cfg);
+        const re = await driveClaimedItem(item, deps, cfg);
         spent += re.costUsd;
         if (re.kind !== 'SHIPPED') {
           outcome = re; // a re-drive that itself escalates → fall into the uniform park path below (parked once there)
@@ -628,11 +613,8 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   }
 }
 
-/** AGF.3 — drive one item, in its own worktree when the pool is enabled (else the serial in-place drive). The
- *  worktree is cut BEFORE the drive (`addItemWorktree`) and torn down AFTER in a `finally` (`removeItemWorktree`,
- *  fail-open) — the lifecycle is attached to the claim/drive so a concurrent lap gets an isolated checkout, and the
- *  fold at the call site is unchanged. ABSENT pool ⇒ `runItemLaps` directly (the `bound:1` degenerate case). */
-async function driveMaybePooled(
+/** Drive one claimed item in the serial configured checkout while renewing its WorkGraph claim. */
+async function driveClaimedItem(
   item: Issue,
   deps: RalphDeps,
   cfg: RalphConfig,
@@ -646,17 +628,7 @@ async function driveMaybePooled(
     deps.narrate,
   );
   try {
-    const pool = deps.pool;
-    if (pool === undefined) return await runItemLaps(item, deps, cfg);
-    let path: string | undefined;
-    try {
-      path = await addItemWorktree(item.id, pool.mainRoot, pool.poolRoot, pool.io);
-      deps.narrate?.(`⑃ worktree ${path} (auto/${item.id})`);
-      return await runItemLaps(item, deps, cfg);
-    } finally {
-      if (path !== undefined)
-        await removeItemWorktree(path, pool.mainRoot, pool.io).catch(() => undefined);
-    }
+    return await runItemLaps(item, deps, cfg);
   } finally {
     await stopRenewal();
   }

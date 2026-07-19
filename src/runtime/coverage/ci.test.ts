@@ -185,6 +185,6 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(112); // 105 prior requirements + 7 fullstack /scope requirements
+    expect(a.results.length).toBe(113); // 105 prior + 7 fullstack /scope + DEPLOY local-branch verification
   }, 30_000);
 });

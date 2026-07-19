@@ -40,6 +40,33 @@ describe('routeOnShipped (GF.3)', () => {
     expect(ensureProductionPr).not.toHaveBeenCalled();
   });
 
+  it('carries the configured semantic local branch through both environment routes', async () => {
+    const seen: string[] = [];
+    const integrateToStaging = vi.fn((env: ResolvedEnvironments) => {
+      seen.push(env.local);
+      return Promise.resolve({ integrated: true });
+    });
+    const ensureProductionPr = vi.fn((env: ResolvedEnvironments) => {
+      seen.push(env.local);
+      return Promise.resolve({ url: 'pr' });
+    });
+
+    await routeOnShipped(hasStageEnv, {
+      taskId: 'staged',
+      root: '/repo',
+      integrateToStaging,
+      ensureProductionPr,
+    });
+    await routeOnShipped(noStageEnv, {
+      taskId: 'direct',
+      root: '/repo',
+      integrateToStaging,
+      ensureProductionPr,
+    });
+
+    expect(seen).toEqual(['feat/x', 'feat/x']);
+  });
+
   it('no-stage → routed:direct auto-PR; integrateToStaging NOT called', async () => {
     const integrateToStaging = vi.fn(() => Promise.resolve({ integrated: true, prUrl: 'nope' }));
     const ensureProductionPr = vi.fn(() => Promise.resolve({ url: 'pr' }));

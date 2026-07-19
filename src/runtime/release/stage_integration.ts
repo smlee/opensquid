@@ -1,6 +1,7 @@
-// src/runtime/release/stage_integration.ts — merge `auto/wg-<id>` → the persistent `stage` branch, re-run the
-// suite on the merge, `rc`-tag ONLY on green. A conflict or a red suite → NO integration (roll back); the item
-// re-drives from fresh `main`. SINGLE-WRITER on the one `stage` branch — items DROVE concurrently in worktrees
+// src/runtime/release/stage_integration.ts — merge the configured semantic local branch → the persistent staging
+// branch, re-run the suite on the merge, `rc`-tag ONLY on green. A conflict or a red suite → NO integration
+// (roll back); the item re-drives from a fresh base. SINGLE-WRITER on the one staging branch — items may drive
+// concurrently in worktrees
 // (AGF.3) but integrate SERIALLY into `stage`, so the `rc` counter never races. Mirrors release_core.ts:17-42.
 //
 // AGF.5 (T-opensquid-automated-gitflow, wg-72134554548f). Consumed by AGF.6 (opens the PR from `stage`) + the
@@ -18,7 +19,7 @@ const execFileP = promisify(execFile);
  *  `environments.staging` (GF.1), so no core literal `'stage'` is the flow's source of truth (GF.4). */
 export const STAGE_BRANCH = 'stage';
 
-/** The base `stage` is cut from on first use (a fresh repo / the first item after a release has no `stage` yet). */
+/** Legacy base for manual release when no config-driven production branch is supplied. */
 export const STAGE_BASE_BRANCH = 'main';
 
 /** GF.4 — the DEDICATED worktree path for a staging integration (a sibling of the main checkout, keyed by the
@@ -93,18 +94,20 @@ export const realStageIo: StageIo = {
 /** Merge `branch` into the persistent `stage` branch (`--no-ff`, a real integration commit), gate on the suite,
  *  and `rc`-tag on green. Returns whether it integrated. A conflict (→ `abortMerge`) or a red suite
  *  (→ `resetHard HEAD~1`, rolling the merge back so `stage` stays green for the NEXT item) → `{ integrated:false }`,
- *  no tag; the item re-drives from fresh `main` (the loop's existing re-drive). */
+ *  no tag; the item re-drives from the configured production base (the loop's existing re-drive). */
 export async function mergeToStage(
   branch: string,
   stageBranch: string,
   rcTag: string,
   mainRoot: string,
   io: StageIo,
+  baseBranch: string = STAGE_BASE_BRANCH,
 ): Promise<{ integrated: boolean }> {
-  // CREATE-IF-ABSENT — a fresh repo (or the first item after a release) has no staging branch yet. Cut it from
-  // `main` on first use so integration always runs. (Runs in `mainRoot` — a non-destructive `git branch`.)
+  // CREATE-IF-ABSENT — a fresh repo (or the first item after a release) has no staging branch yet. The
+  // config-driven caller supplies environments.production; only the legacy manual path defaults to `main`.
+  // Runs in `mainRoot` as a non-destructive `git branch`.
   if (!(await io.branchExists(stageBranch, mainRoot))) {
-    await io.createBranch(stageBranch, STAGE_BASE_BRANCH, mainRoot);
+    await io.createBranch(stageBranch, baseBranch, mainRoot);
   }
   // GF.4 — THE DESTRUCTIVE-CONTEXT FIX: the checkout/merge/reset run in the STAGING branch's OWN worktree, NEVER
   // the main working tree. The original bug ran `checkout stage` + `merge` + `reset --hard HEAD~1` in `mainRoot`,
@@ -120,7 +123,7 @@ export async function mergeToStage(
     .then(() => true)
     .catch(() => false);
   if (!merged) {
-    await io.abortMerge(wt).catch(() => undefined); // conflict → no integration; the item re-drives from fresh main
+    await io.abortMerge(wt).catch(() => undefined); // conflict → no integration; the item re-drives from the configured base
     return { integrated: false };
   }
   if (!(await io.runSuite(wt))) {

@@ -842,57 +842,6 @@ describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
   });
 });
 
-describe('runRalphLoop — AGF.3 worktree pool attachment (wg-4ae1004c931b)', () => {
-  it('drives the claimed item in its own worktree (add before drive, remove after) + still closes SHIPPED', async () => {
-    const added: string[] = [];
-    const removed: string[] = [];
-    const io = {
-      worktreeAdd: (_b: string, path: string) => {
-        added.push(path);
-        return P(undefined);
-      },
-      worktreeRemove: (path: string) => {
-        removed.push(path);
-        return P(undefined);
-      },
-    };
-    const wg = mockStore(['a']);
-    const r = await runRalphLoop(cfg(), {
-      ...deps(wg, lap({ kind: 'SHIPPED', costUsd: 0 })),
-      pool: { bound: 2, poolRoot: '/pool', mainRoot: '/main', io },
-    });
-    expect(added).toEqual(['/pool/a']); // worktree cut for the item
-    expect(removed).toEqual(['/pool/a']); // torn down after the drive
-    expect(r.closed).toContain('a'); // fold semantics preserved — SHIPPED still closes
-  });
-
-  it('tears down the worktree even when the drive throws (fail-open finally)', async () => {
-    const removed: string[] = [];
-    const io = {
-      worktreeAdd: () => P(undefined),
-      worktreeRemove: (path: string) => {
-        removed.push(path);
-        return P(undefined);
-      },
-    };
-    const wg = mockStore(['a']);
-    await runRalphLoop(cfg(), {
-      ...deps(
-        wg,
-        vi.fn(() => Promise.reject(new Error('lap boom'))),
-      ),
-      supervise: {
-        maxRetries: 0,
-        backoffMs: () => 0,
-        heartbeat: () => undefined,
-        sleep: () => P(undefined),
-      },
-      pool: { bound: 1, poolRoot: '/pool', mainRoot: '/main', io },
-    } as never);
-    expect(removed).toEqual(['/pool/a']); // torn down despite the throw
-  });
-});
-
 // ---- CG.2 — the CONSISTENCY GATE wiring: an item closes SHIPPED only if a durable item-owned commit exists ----
 // A scripted RalphGitSeam over per-read queues (last value repeats when the queue is exhausted). `tip` MUST be
 // modelled as a queue because the gate reads baseSha := git.tip() BEFORE the drive, then re-reads tip() at each

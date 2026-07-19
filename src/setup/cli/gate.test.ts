@@ -16,7 +16,14 @@ import { recordSessionCwd, writeActiveTask } from '../../runtime/session_state.j
 import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
 
 import { readAttestedShas } from './attestations.js';
-import { commitAllowedNow, isGatedRepo, runAttest, runCommitMsgGate, runGate } from './gate.js';
+import {
+  commitAllowedNow,
+  configuredLocalBranch,
+  isGatedRepo,
+  runAttest,
+  runCommitMsgGate,
+  runGate,
+} from './gate.js';
 
 // GDC.1 — every gate call injects the env explicitly (ambient env must never
 // decide: CI runners carry no agent marker, the authoring session carries
@@ -572,6 +579,38 @@ describe('project-only operation — the user/home scope (~/.opensquid) no longe
     await stage('src/x.ts');
     expect(await isGatedRepo(repo)).toBe(true);
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+});
+
+describe('DEPLOY branch resolution — environment SSOT and checkout must agree', () => {
+  async function writeEnvironments(environments: Record<string, string>): Promise<void> {
+    await mkdir(join(repo, '.opensquid'), { recursive: true });
+    await writeFile(
+      join(repo, '.opensquid', 'active.json'),
+      JSON.stringify({ packs: ['fullstack-flow'], 'version-control': { environments } }),
+      'utf8',
+    );
+  }
+
+  it('uses the current semantic branch when environments.local is omitted', async () => {
+    await git(['checkout', '-q', '-b', 'fix/semantic-deploy-policy'], repo);
+    await git(['commit', '--allow-empty', '-q', '-m', 'test: establish branch'], repo);
+    await writeEnvironments({ production: 'main' });
+
+    expect(await configuredLocalBranch(repo)).toBe('fix/semantic-deploy-policy');
+  });
+
+  it('returns the configured local branch only when the checkout matches', async () => {
+    await git(['checkout', '-q', '-b', 'fix/semantic-deploy-policy'], repo);
+    await git(['commit', '--allow-empty', '-q', '-m', 'test: establish branch'], repo);
+    await writeEnvironments({
+      production: 'main',
+      local: 'fix/semantic-deploy-policy',
+    });
+    expect(await configuredLocalBranch(repo)).toBe('fix/semantic-deploy-policy');
+
+    await writeEnvironments({ production: 'main', local: 'feat/different-work' });
+    expect(await configuredLocalBranch(repo)).toBeNull();
   });
 });
 
