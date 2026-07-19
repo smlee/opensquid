@@ -21,6 +21,8 @@ export type LapResult = LapOutcome & {
   costUsd: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** Harness-generated attempt identity; never parsed from model output. */
+  attemptId?: string;
 };
 
 export interface SuperviseOpts {

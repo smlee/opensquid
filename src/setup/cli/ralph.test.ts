@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { Command } from 'commander';
 import { RALPH_MD } from '../../runtime/ralph/ralph_template.js';
-import { buildRalphConfig, makeSpawnLap, perStageDirective, registerRalph } from './ralph.js';
+import {
+  buildRalphConfig,
+  previousOwnedProcessDrainError,
+  makeSpawnLap,
+  perStageDirective,
+  reconcilePreviousOwnedProcesses,
+  registerRalph,
+} from './ralph.js';
 import type { RalphConfigFile } from '../wizard/ralph_writer.js';
 import type { Issue } from '../../workgraph/types.js';
 import type { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
@@ -16,7 +23,7 @@ const FILE: RalphConfigFile = {
   authMode: 'subscription',
   maxBudgetUsd: 10,
   claimTtlSec: 1800,
-  wallClockMs: 60_000,
+  idleTimeoutMs: 60_000,
   maxRetries: 2,
   backoffBaseMs: 2000,
   harness: { cli: 'claude', ralphMdPath: '/home/.opensquid/RALPH.md', kind: 'claude' },
@@ -30,9 +37,30 @@ const ITEM: Issue = {
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
 
+describe('loop successor owned-process drain', () => {
+  it('admits only an empty reconciled active-process set', () => {
+    expect(previousOwnedProcessDrainError([])).toBeNull();
+    expect(previousOwnedProcessDrainError([{} as never, {} as never])).toBe(
+      'previous loop still owns 2 active process(es)',
+    );
+  });
+
+  it('fails closed on the exact reconciliation deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = reconcilePreviousOwnedProcesses(() => new Promise(() => undefined), 25);
+      const rejected = expect(pending).rejects.toThrow('timed out after 25ms');
+      await vi.advanceTimersByTimeAsync(25);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('RALPH prompt consistency', () => {
   it('requires an explicit typed exit and never says no tag = SHIPPED', () => {
-    expect(RALPH_MD).toContain('Exactly ONE valid `RALPH-EXIT:` line is');
+    expect(RALPH_MD).toContain('emit exactly one typed exit');
     expect(RALPH_MD).not.toContain('NO tag = `SHIPPED`');
   });
 
@@ -41,6 +69,19 @@ describe('RALPH prompt consistency', () => {
     expect(prompt).toContain('{"kind":"HUMAN_REQUIRED","reason":"IRREVERSIBLE_BOUNDARY"}');
     expect(prompt).toContain('{"kind":"HUMAN_REQUIRED","reason":"SCOPE_FORK"}');
     expect(prompt).not.toContain('IRREVERSIBLE_BOUNDARY|SCOPE_FORK');
+  });
+
+  it('passes an opaque stage id through without inventing pack authority', () => {
+    const prompt = perStageDirective('pack-state-17');
+    expect(prompt).toContain('opaque pack stage **pack-state-17**');
+    expect(prompt).toContain('pack-provided procedure, rubric, tools, and authority');
+    expect(prompt).toContain('the coordinator runs one fresh process per pack stage');
+  });
+
+  it('forbids nested loops and leaves progression with the coordinator', () => {
+    const prompt = perStageDirective('anything');
+    expect(prompt).toContain('Do not start another workflow loop or another stage process');
+    expect(prompt).toContain('coordinator alone owns progression and retry');
   });
 });
 
@@ -92,7 +133,13 @@ describe('makeSpawnLap', () => {
     }) as unknown as typeof runOneShotCli;
     const out = await makeSpawnLap(cfg, localFile, runCli)(ITEM);
     // LSF.5 — the lap result now also carries the folded token usage (0/0 when the envelope omits `usage`).
-    expect(out).toEqual({ kind: 'SHIPPED', costUsd: 0.07, inputTokens: 0, outputTokens: 0 });
+    expect(out).toMatchObject({
+      kind: 'SHIPPED',
+      costUsd: 0.07,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(typeof out.attemptId).toBe('string');
     expect(seen?.cli).toBe('claude');
     expect(seen?.args).toContain('-p');
     expect(seen?.args).toContain('--output-format');
@@ -118,7 +165,7 @@ describe('makeSpawnLap', () => {
     expect(seen?.env?.OPENSQUID_LOOP_LAP).toBe('1');
     expect(seen?.env?.OPENSQUID_ITEM_ID).toBe('a'); // still published for the MCP tools' item context
     expect(seen?.env?.OPENSQUID_SESSION_ID).toBeDefined(); // one explicit lap-attempt session id
-    expect(seen?.env?.OPENSQUID_AUTOMATION).toBe('1'); // autonomous policy and child authority stay active
+    expect(seen?.env?.OPENSQUID_AUTOMATION).toBe('1'); // autonomous stage policy stays active
     // The whole fix: a lap must NOT be silenced — markSubagent stays off (so OPENSQUID_SUBAGENT is never set).
     expect(seen?.markSubagent).toBeUndefined();
   });
@@ -150,7 +197,9 @@ describe('makeSpawnLap', () => {
     const piCfg = buildRalphConfig(piFile, {});
     const oneShot = vi.fn() as unknown as typeof runOneShotCli;
     const sent: Record<string, unknown>[] = [];
+    let streamOptions: Parameters<typeof runStreamingCli>[0] | undefined;
     const runStreaming = vi.fn(async (options: Parameters<typeof runStreamingCli>[0]) => {
+      streamOptions = options;
       let completed = false;
       const context: StreamingRecordContext = {
         send: (line) => {
@@ -203,12 +252,10 @@ describe('makeSpawnLap', () => {
         mcpAdapterVersion: '4.6.2',
         providers: new Map([['openai-codex', new Set(['gpt-5.6-sol'])]]),
         resolvedModel: { provider: 'openai-codex', id: 'gpt-5.6-sol' },
-        registeredTools: new Set(['read', 'spawn_subagent']),
-        activeTools: new Set(['read', 'spawn_subagent']),
+        registeredTools: new Set(['read']),
+        activeTools: new Set(['read']),
         genericProxyAbsent: true,
         effectiveShell: {},
-        roleManifestPath: '/manifest.json',
-        roleManifestHash: 'a'.repeat(64),
       }),
     );
     const assets: HarnessRuntimeAssets = {
@@ -216,8 +263,7 @@ describe('makeSpawnLap', () => {
         systemPromptPath: '/pkg/context/pi-system-prompt.md',
         mcpAdapterExtensionPath: '/verified/adapter.js',
         projectorExtensionPath: '/pkg/projector.js',
-        spawnSubagentExtensionPath: '/pkg/spawn_subagent.js',
-        parentTools: ['read', 'spawn_subagent'],
+        stageTools: ['read'],
         readiness,
       },
     };
@@ -226,14 +272,21 @@ describe('makeSpawnLap', () => {
       runStreaming,
       assets,
       attemptId: () => 'fixed-attempt',
-    })(ITEM);
+    })(ITEM, perStageDirective('scope_write'), 'scope_write');
 
     expect(readiness.mock.invocationCallOrder[0]).toBeLessThan(
       (runStreaming as unknown as { mock: { invocationCallOrder: number[] } }).mock
         .invocationCallOrder[0]!,
     );
     expect(oneShot).not.toHaveBeenCalled();
-    expect(result).toEqual({ kind: 'SHIPPED', costUsd: 0.2, inputTokens: 10, outputTokens: 20 });
+    expect(streamOptions?.timeoutMs).toBe(piFile.idleTimeoutMs);
+    expect(result).toEqual({
+      kind: 'SHIPPED',
+      costUsd: 0.2,
+      inputTokens: 10,
+      outputTokens: 20,
+      attemptId: 'fixed-attempt',
+    });
     expect(sent[0]).toMatchObject({ type: 'prompt', id: 'opensquid-prompt-fixed-attempt' });
   });
 

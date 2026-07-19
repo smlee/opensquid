@@ -36,7 +36,12 @@ import type { Facets } from '../classify.js';
 // Mock the cartridge loader so each test controls the active v2 set.
 vi.mock('../bootstrap.js', () => ({ loadActiveV2Cartridges: vi.fn() }));
 import { loadActiveV2Cartridges } from '../bootstrap.js';
-import { buildGuardCtx, initializeV2Cartridges, runV2Cartridges } from './v2_supply.js';
+import {
+  auditEntryCertifiesSubject,
+  buildGuardCtx,
+  initializeV2Cartridges,
+  runV2Cartridges,
+} from './v2_supply.js';
 import { RegistryGuardEvaluator } from './guard_evaluator.js';
 import type { AuthorInputs } from './author_evidence.js';
 import type { CodeEvidenceDeps } from './code_evidence.js';
@@ -45,6 +50,66 @@ import type { CodeIndex } from '../coverage/check.js';
 import { Requirement } from '../coverage/schema.js';
 
 const mockLoad = vi.mocked(loadActiveV2Cartridges);
+
+describe('scope audit freshness', () => {
+  it('fails closed for legacy or stale verdicts and accepts only the current artifact hash', () => {
+    expect(auditEntryCertifiesSubject({ verdict: 'VERDICT: GUESS_FREE' }, 'current')).toBe(false);
+    expect(
+      auditEntryCertifiesSubject({ verdict: 'VERDICT: GUESS_FREE', subjectHash: 'old' }, 'current'),
+    ).toBe(false);
+    expect(
+      auditEntryCertifiesSubject(
+        { verdict: 'VERDICT: GUESS_FREE', subjectHash: 'current' },
+        'current',
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a current-byte verdict unless every pack-declared lens used its exact prompt', () => {
+    const expected = [
+      { id: 'evidence', promptHash: 'evidence-prompt' },
+      { id: 'solution', promptHash: 'solution-prompt' },
+    ];
+    const base = {
+      verdict: 'VERDICT: GUESS_FREE',
+      subjectHash: 'current',
+      complete: true,
+    } as const;
+    expect(
+      auditEntryCertifiesSubject(
+        { ...base, lenses: [{ id: 'evidence', promptHash: 'evidence-prompt' }] },
+        'current',
+        expected,
+      ),
+    ).toBe(false);
+    expect(
+      auditEntryCertifiesSubject(
+        {
+          ...base,
+          lenses: [
+            { id: 'evidence', promptHash: 'tampered' },
+            { id: 'solution', promptHash: 'solution-prompt' },
+          ],
+        },
+        'current',
+        expected,
+      ),
+    ).toBe(false);
+    expect(
+      auditEntryCertifiesSubject(
+        {
+          ...base,
+          lenses: [
+            { id: 'solution', promptHash: 'solution-prompt' },
+            { id: 'evidence', promptHash: 'evidence-prompt' },
+          ],
+        },
+        'current',
+        expected,
+      ),
+    ).toBe(true);
+  });
+});
 
 /** Build a LoadedPackV2 from an inline PackV2 (mirrors v2_observed_actor.test.ts). */
 function load(spec: unknown): LoadedPackV2 {
@@ -557,6 +622,15 @@ const scopeGatePack = (): LoadedPackV2 =>
     name: 'fsf-scope',
     version: '1.0.0',
     scope: 'workflow',
+    audits: {
+      artifact: {
+        cache_key: 'fixture-artifact-audit',
+        rule: 'fixture-audit',
+        rubric: 'fixture',
+        subject: 'approved_artifact',
+        writes: ['docs/research/*pre-research*'],
+      },
+    },
     guards: {
       scope_ready:
         '!scope.is_advance || (scope.anchors_ok && scope.depth >= 3 && !scope.open_question)',
@@ -590,6 +664,16 @@ const scopeWriteGatePack = (): LoadedPackV2 =>
     name: 'fsf-scope-write',
     version: '1.0.0',
     scope: 'workflow',
+    audits: {
+      artifact: {
+        cache_key: 'fixture-artifact-audit',
+        rule: 'fixture-audit',
+        rubric: 'fixture',
+        subject: 'approved_artifact',
+        writes: ['docs/research/*pre-research*'],
+      },
+    },
+    reactions: { on_leave: { scope_write: ['reconcile_decomposition'] } },
     guards: {
       scope_write_ready: 'scope.is_advance && scope.anchors_ok && !scope.open_question',
     },
@@ -617,6 +701,19 @@ const advanceWrite = (filePath: string): Event =>
     kind: 'post_tool_call',
     tool: 'Write',
     args: { file_path: filePath },
+    exit_code: 0,
+  }) as unknown as Event;
+
+/** Pi's exact edit projection aliases MultiEdit to Edit while preserving original-relative semantics. */
+const advanceMultiEdit = (filePath: string): Event =>
+  ({
+    kind: 'post_tool_call',
+    tool: 'MultiEdit',
+    args: {
+      file_path: filePath,
+      edits: [{ old_string: 'before', new_string: 'after' }],
+      replacement_semantics: 'original_unique_nonoverlap',
+    },
     exit_code: 0,
   }) as unknown as Event;
 
@@ -662,6 +759,39 @@ describe('runV2Cartridges — T2.4 SCOPE gate', () => {
     expect(d.exitCode).toBe(0);
     expect(d.messages).toEqual([]);
     expect(await readFsmStateRaw(sid, 'fsf-scope')).toBe('scoped'); // ready → advanced
+  });
+
+  it('Pi MultiEdit is an advancing scope_write mutation and moves the durable stage to plan', async () => {
+    const previous = {
+      item: process.env.OPENSQUID_ITEM_ID,
+      root: process.env.OPENSQUID_PROJECT_ROOT,
+    };
+    const root = await mkdtemp(join(tmpdir(), 'osq-pi-multiedit-'));
+    await mkdir(join(root, '.opensquid'), { recursive: true });
+    process.env.OPENSQUID_ITEM_ID = 'wg-pi-multiedit';
+    process.env.OPENSQUID_PROJECT_ROOT = root;
+    try {
+      const sid = 'sess-pi-multiedit';
+      mockLoad.mockResolvedValue([scopeWriteGatePack()]);
+      await appendAsk(sid, 'approved scope');
+      const p = await writePreResearch('before [ask: "approved scope"]');
+      await withTaskCheckpointStore(async (store) => {
+        await store.createTaskCheckpoint('wg-pi-multiedit', 'scope_write', Date.parse(NOW));
+        await store.setTaskArtifacts('wg-pi-multiedit', [p], Date.parse(NOW));
+      });
+
+      const d = await runV2Cartridges(sid, advanceMultiEdit(p), NOW);
+      expect(d.exitCode).toBe(0);
+      expect(await readFsmStateRaw(sid, 'fsf-scope-write')).toBe('plan');
+      await expect(
+        withTaskCheckpointStore((store) => store.getTaskCheckpoint('wg-pi-multiedit')),
+      ).resolves.toEqual({ stage: 'plan', scopeArtifacts: [p] });
+    } finally {
+      if (previous.item === undefined) delete process.env.OPENSQUID_ITEM_ID;
+      else process.env.OPENSQUID_ITEM_ID = previous.item;
+      if (previous.root === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+      else process.env.OPENSQUID_PROJECT_ROOT = previous.root;
+    }
   });
 
   it('GS1: the FSM write-through creates the task checkpoint keyed by the wg issue id (stage + scope proof)', async () => {
@@ -853,8 +983,8 @@ async function stampPreResearch(sessionId: string, p: string): Promise<void> {
  *  production's `openWg` does; the caller sets OPENSQUID_PROJECT_ROOT so this points at a temp root). */
 async function populateWg(
   issues: { title: string; body: string }[],
-  edges: [number, number][] = [],
-): Promise<void> {
+  edges: [number, number, ('blocks' | 'parent-child')?][] = [],
+): Promise<string[]> {
   const dir = await resolveLocalStoreDir(process.cwd());
   const store = workGraphStore({
     dbUrl: `file:${join(dir, 'workgraph.db')}`,
@@ -864,11 +994,12 @@ async function populateWg(
   const wg = store;
   const ids: string[] = [];
   for (const i of issues) ids.push((await wg.createIssue(i)).id);
-  for (const [f, t] of edges) {
+  for (const [f, t, type] of edges) {
     const from = ids[f];
     const to = ids[t];
-    if (from !== undefined && to !== undefined) await wg.addEdge(from, to, 'blocks');
+    if (from !== undefined && to !== undefined) await wg.addEdge(from, to, type ?? 'blocks');
   }
+  return ids;
 }
 
 describe('buildGuardCtx — T2.5 PLAN binding', () => {
@@ -907,13 +1038,21 @@ describe('buildGuardCtx — T2.5 PLAN binding', () => {
     process.env.OPENSQUID_PROJECT_ROOT = dir;
     await mkdir(join(dir, '.opensquid'), { recursive: true });
     try {
-      await populateWg(
+      const ids = await populateWg(
         [
+          { title: 'root', body: '' },
           { title: 'scope-1', body: 'sourceElementId:scope-1' },
           { title: 'scope-2', body: 'sourceElementId:scope-2' },
         ],
-        [[0, 1]],
+        [
+          [0, 1, 'parent-child'],
+          [0, 2, 'parent-child'],
+          [1, 2, 'blocks'],
+        ],
       );
+      const taskId = ids[0];
+      if (taskId === undefined) throw new Error('root issue missing');
+      await writeActiveTask(sid, { id: '1', subject: 'plan', started_at: NOW, taskId });
       const ctx = await buildGuardCtx(ev, sid, 'plan');
       expect(ctx.get('plan.acyclic')).toBe(true);
       expect(ctx.get('plan.complete')).toBe(true);
@@ -1471,6 +1610,13 @@ const stageGatePack = (stage: string): LoadedPackV2 =>
           on_pass_emits: 'next',
           on_fail: { action: 'warn', message: 'n/a' },
           report: stage.toUpperCase(),
+          ...(stage === 'code'
+            ? {
+                report_phases: true,
+                phases: ['pre_research', 'learn', 'code', 'test', 'audit', 'post_research', 'fix'],
+              }
+            : {}),
+          ...(stage === 'scope' ? { goal_alignment: true } : {}),
           reads: ['scope.is_advance'], // EVIDENCE-DECLARATION: the report's proof-line keys (pack data)
         },
         done: { kind: 'terminal', outcome: 'shipped' },
@@ -1581,7 +1727,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-fb' });
     for (const p of REQUIRED_PHASES) await appendPhase(sid, '1', p); // complete (keyed on active.id='1')
-    mockLoad.mockResolvedValue([gatePack('warn')]); // a cartridge so the loop runs; inert on a log_phase event
+    mockLoad.mockResolvedValue([stageGatePack('code')]); // pack declares the completion-report policy
     const logDone = {
       kind: 'post_tool_call',
       tool: 'mcp__opensquid__log_phase',
@@ -1605,7 +1751,7 @@ describe('runV2Cartridges — T2.12 per-stage report trigger', () => {
     await newProjectRoot(sid);
     await writeActiveTask(sid, { id: '1', subject: 's', started_at: NOW, taskId: 'T-inc' });
     await appendPhase(sid, '1', 'pre_research'); // only 1 of 7 → incomplete
-    mockLoad.mockResolvedValue([gatePack('warn')]);
+    mockLoad.mockResolvedValue([stageGatePack('code')]);
     const logEv = {
       kind: 'post_tool_call',
       tool: 'mcp__opensquid__log_phase',
@@ -1830,6 +1976,7 @@ describe('runV2Cartridges — T2.8 acceptance live wiring', () => {
       name: 'fsf-todeploy',
       version: '1.0.0',
       scope: 'workflow',
+      reactions: { on_enter: { deploy: ['ensure_acceptance'] } },
       guards: { always: 'tool == "Write"' },
       fsm: {
         initial: 'code',

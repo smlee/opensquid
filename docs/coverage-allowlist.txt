@@ -2177,15 +2177,15 @@ DesignDocGuardOptions
 isDesignDoc
 
 # --- baseline maintenance (T-opensquid-automated-gitflow, wg-732b2b68a168, CODE, 2026-07-08): the DATA-shape /
-# seam / trivial siblings of the fully-automated git-flow (AGF.1/AGF.3/AGF.5/AGF.6). The BEHAVIORAL exports
-# (readActiveVersioning, patchOfTag, nextLockedTag, nextRcTag, latestPrefixTag, branchNameFor, autoPullMain,
-# addItemWorktree, removeItemWorktree, drainPool, mergeToStage, openStagePr, tagMainRelease) carry reachable
-# requirements in ARCHITECTURE.md §10; these are the injected IO-seam interfaces (WorktreeIo/StageIo/GhIo), the
+# seam / trivial siblings of the fully-automated git-flow (AGF.1/AGF.3/AGF.5/AGF.6). Live BEHAVIORAL exports
+# carry reachable requirements in ARCHITECTURE.md §10; dormant parallel helpers (featBranchFor,
+# addItemWorktree/removeItemWorktree/drainPool) carry proof requirements instead. These are the injected IO-seam
+# interfaces (WorktreeIo/StageIo/GhIo), the
 # config-shape interfaces (VersioningConfig/PoolConfig), the `real*Io` default-binding consts (thin git/gh
 # wrappers, no branching — the concrete side of the injected seam, exercised via the release/orchestrator live
-# path with stubbed IO under test), the trivial STAGE_BRANCH/STAGE_BASE_BRANCH constants (the `stage` branch name
-# and its `main` cut-from base, used by mergeToStage's create-if-absent — STAGE_BASE_BRANCH drifted in after AGF's
-# AUTHOR gate via commit 4175dc1, same trivial-constant class as STAGE_BRANCH), and the GhAuthError marker class — pure
+# path with stubbed IO under test), the trivial STAGE_BRANCH/STAGE_BASE_BRANCH legacy defaults (used only when the
+# manual release caller supplies no configured staging/production environment; the automated path supplies both),
+# and the GhAuthError marker class — pure
 # data-shape / seam / trivial, no covering requirement. Same class the release-flow ParsedCommit/ReleaseDeps +
 # harness-sync *Deps precedent allowlists. ---
 VersioningConfig

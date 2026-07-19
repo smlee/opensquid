@@ -4,17 +4,19 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import opensquidPiProjector from './projector.js';
+import opensquidPiProjector, { stepPiScopeContinuation } from './projector.js';
 import type { PiLifecycleResourceOwner } from './lifecycle_resources.js';
 import { FunctionRegistry } from '../../functions/registry.js';
 import { defaultLifecyclePipeline } from '../../runtime/hooks/lifecycle/pipeline.js';
 import type { RagBackend } from '../../rag/types.js';
 import type { Directive } from '../../runtime/types.js';
+import type { FullstackScopeCommand } from '../../packs/runtime/fullstack_scope.js';
 
 interface FakeCtx {
   cwd: string;
   hasUI: boolean;
   abort: ReturnType<typeof vi.fn>;
+  ui: { notify: ReturnType<typeof vi.fn> };
   sessionManager: {
     getSessionId: ReturnType<typeof vi.fn>;
     getSessionFile: ReturnType<typeof vi.fn>;
@@ -22,17 +24,21 @@ interface FakeCtx {
 }
 
 type Handler = (event: unknown, ctx: FakeCtx) => unknown;
+type CommandHandler = (args: string, ctx: FakeCtx) => unknown;
 
 interface FakePi {
   handlers: Map<string, Handler[]>;
+  commands: Map<string, CommandHandler>;
   sentMessages: { message: unknown; options: unknown }[];
   sentUserMessages: { content: unknown; options: unknown }[];
 }
 
 function makePi(): FakePi & Parameters<typeof projector>[0] {
   const handlers = new Map<string, Handler[]>();
+  const commands = new Map<string, CommandHandler>();
   const pi = {
     handlers,
+    commands,
     sentMessages: [] as { message: unknown; options: unknown }[],
     sentUserMessages: [] as { content: unknown; options: unknown }[],
     on(event: string, handler: Handler) {
@@ -40,13 +46,15 @@ function makePi(): FakePi & Parameters<typeof projector>[0] {
       list.push(handler);
       handlers.set(event, list);
     },
+    registerCommand(name: string, options: { handler: CommandHandler }) {
+      commands.set(name, options.handler);
+    },
     sendMessage(message: unknown, options?: unknown) {
       pi.sentMessages.push({ message, options });
       return Promise.resolve();
     },
     sendUserMessage(content: unknown, options?: unknown) {
       pi.sentUserMessages.push({ content, options });
-      return Promise.resolve();
     },
   };
   return pi as unknown as FakePi & Parameters<typeof projector>[0];
@@ -72,9 +80,12 @@ function makeLifecycleResources(): FakeLifecycleResourceOwner {
   return { get: getSpy, close: closeSpy, getSpy, closeSpy };
 }
 
-function projector(pi: Parameters<typeof opensquidPiProjector>[0]): FakeLifecycleResourceOwner {
+function projector(
+  pi: Parameters<typeof opensquidPiProjector>[0],
+  overrides: Partial<Parameters<typeof opensquidPiProjector>[1]> = {},
+): FakeLifecycleResourceOwner {
   const lifecycleResources = makeLifecycleResources();
-  opensquidPiProjector(pi, { lifecycleResources });
+  opensquidPiProjector(pi, { lifecycleResources, ...overrides });
   return lifecycleResources;
 }
 
@@ -83,6 +94,7 @@ function makeCtx(cwd: string, overrides: Partial<FakeCtx> = {}): FakeCtx {
     cwd,
     hasUI: false as const,
     abort: vi.fn(),
+    ui: { notify: vi.fn() },
     sessionManager: {
       getSessionId: vi.fn(() => 'pi-session-id'),
       getSessionFile: vi.fn(() => 'pi-session-file'),
@@ -107,8 +119,6 @@ let cwd = '';
 beforeEach(async () => {
   vi.restoreAllMocks();
   delete process.env.OPENSQUID_SESSION_ID;
-  delete process.env.OPENSQUID_EXECUTOR;
-  delete process.env.OPENSQUID_EXECUTOR_ID;
   delete process.env.OPENSQUID_ITEM_ID;
   delete process.env.OPENSQUID_LOOP_LAP;
   delete process.env.OPENSQUID_PI_READINESS_PROBE;
@@ -117,8 +127,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env.OPENSQUID_SESSION_ID;
-  delete process.env.OPENSQUID_EXECUTOR;
-  delete process.env.OPENSQUID_EXECUTOR_ID;
   delete process.env.OPENSQUID_ITEM_ID;
   delete process.env.OPENSQUID_LOOP_LAP;
   delete process.env.OPENSQUID_PI_READINESS_PROBE;
@@ -126,7 +134,7 @@ afterEach(async () => {
 });
 
 describe('Pi lifecycle projector', () => {
-  it('loads without executing lap lifecycle during the full-runtime readiness probe', async () => {
+  it('loads without executing lap lifecycle during the stage-runtime readiness probe', async () => {
     const pi = makePi();
     projector(pi);
     const runSessionStart = vi.spyOn(defaultLifecyclePipeline, 'runSessionStart');
@@ -181,7 +189,7 @@ describe('Pi lifecycle projector', () => {
     },
   );
 
-  it('runs prompt submit exactly once, preserves the chained system prompt, and forwards prior turn context + directives', async () => {
+  it('runs prompt submit once and injects exact-deduped context through only the per-turn system prompt', async () => {
     const pi = makePi();
     projector(pi);
     const ctx = makeCtx(cwd);
@@ -246,13 +254,185 @@ describe('Pi lifecycle projector', () => {
       '⛔ DIRECTIVE — next action required:\n```json\n' +
       JSON.stringify([directive()], null, 2) +
       '\n```';
-    expect(result).toMatchObject({
-      systemPrompt: `BASE ROLE\n\nsession-start\n\n${directiveBlock}\n\nprompt-submit\n\n${directiveBlock}`,
-      message: {
-        content: `session-start\n\n${directiveBlock}\n\nprompt-submit\n\n${directiveBlock}`,
-        display: false,
+    expect(result).toEqual({
+      systemPrompt: `BASE ROLE\n\nsession-start\n\n${directiveBlock}\n\nprompt-submit`,
+    });
+    expect(result).not.toHaveProperty('message');
+  });
+
+  it('keeps repeated per-turn context bounded and never persists a duplicate custom message', async () => {
+    const pi = makePi();
+    projector(pi);
+    const ctx = makeCtx(cwd);
+    vi.spyOn(defaultLifecyclePipeline, 'runPromptSubmit').mockResolvedValue({
+      exitCode: 0,
+      stderr: '',
+      contextInjections: ['same-context', 'same-context'],
+      directives: [],
+      diagnostics: [],
+    });
+
+    for (let turn = 0; turn < 25; turn += 1) {
+      const [result] = await fire(
+        pi,
+        'before_agent_start',
+        { prompt: `turn-${String(turn)}`, systemPrompt: 'BASE', systemPromptOptions: {} },
+        ctx,
+      );
+      expect(result).toEqual({ systemPrompt: 'BASE\n\nsame-context' });
+    }
+    expect(pi.sentMessages).toEqual([]);
+  });
+
+  it('adapts /scope-done to the shared coordinator with explicit Pi cwd and truthful loop error retry', async () => {
+    const pi = makePi();
+    const completeScope = vi.fn(() =>
+      Promise.resolve({
+        kind: 'scope_handoff' as const,
+        wgId: 'wg-1',
+        artifact: '/workspace/docs/research/scope.md',
+        artifactSha256: 'a'.repeat(64),
+        evidenceKind: 'approval' as const,
+        actionId: `scope-handoff:v1:${'b'.repeat(64)}`,
+        transition: 'entered' as const,
+        checkpointStage: 'scope_write',
+        loop: { status: 'error' as const, error: 'spawn failed' },
+      }),
+    );
+    projector(pi, { completeScope });
+    const ctx = makeCtx('/workspace/opensquid');
+
+    await pi.commands.get('scope-done')?.('wg-1 /workspace/docs/research/scope.md', ctx);
+
+    expect(completeScope).toHaveBeenCalledWith({
+      wgId: 'wg-1',
+      artifact: '/workspace/docs/research/scope.md',
+      cwd: '/workspace/opensquid',
+    });
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining('three bounded loop start attempts failed'),
+      'error',
+    );
+  });
+
+  it('projects native /scope through the shared descriptor and queues existing SCOPE context before follow-up', async () => {
+    const pi = makePi();
+    const execute = vi.fn(() =>
+      Promise.resolve({
+        kind: 'engaged' as const,
+        itemId: 'wg-123456789abc',
+        context: 'EXISTING SCOPE CONTEXT',
+        continuationPrompt:
+          'Begin interactive SCOPE for WorkGraph item wg-123456789abc: exact title',
+      }),
+    );
+    const scopeCommand: FullstackScopeCommand = {
+      name: 'scope',
+      description: 'shared descriptor',
+      execute,
+    };
+    projector(pi, { scopeCommand });
+    const ctx = makeCtx('/workspace/opensquid');
+    vi.spyOn(defaultLifecyclePipeline, 'runPromptSubmit').mockResolvedValue({
+      exitCode: 0,
+      stderr: '',
+      contextInjections: [],
+      directives: [],
+      diagnostics: [],
+    });
+
+    await pi.commands.get('scope')?.('ship  exact bytes', ctx);
+    expect(execute).toHaveBeenCalledWith({
+      raw: '/scope ship  exact bytes',
+      sessionId: 'pi-session-id',
+      cwd: '/workspace/opensquid',
+    });
+    expect(pi.sentUserMessages).toEqual([
+      {
+        content: 'Begin interactive SCOPE for WorkGraph item wg-123456789abc: exact title',
+        options: { deliverAs: 'followUp' },
+      },
+    ]);
+    const [unrelated] = await fire(
+      pi,
+      'before_agent_start',
+      { prompt: 'unrelated prompt', systemPrompt: 'BASE', systemPromptOptions: {} },
+      ctx,
+    );
+    expect(unrelated).toEqual({ systemPrompt: 'BASE' });
+
+    const [result] = await fire(
+      pi,
+      'before_agent_start',
+      {
+        prompt: 'Begin interactive SCOPE for WorkGraph item wg-123456789abc: exact title',
+        systemPrompt: 'BASE',
+        systemPromptOptions: {},
+      },
+      ctx,
+    );
+    expect(result).toEqual({ systemPrompt: 'BASE\n\nEXISTING SCOPE CONTEXT' });
+  });
+
+  it('does not continue Pi after a rejected scope entry and restores correlated context on synchronous dispatch failure', async () => {
+    const rejectedPi = makePi();
+    projector(rejectedPi, {
+      scopeCommand: {
+        name: 'scope',
+        description: 'shared descriptor',
+        execute: () => Promise.resolve({ kind: 'rejected', message: 'bad item' }),
       },
     });
+    const rejectedCtx = makeCtx(cwd);
+    await rejectedPi.commands.get('scope')?.('--item bad', rejectedCtx);
+    expect(rejectedPi.sentUserMessages).toEqual([]);
+    expect(rejectedCtx.ui.notify).toHaveBeenCalledWith('bad item', 'error');
+
+    const failedPi = makePi();
+    failedPi.sendUserMessage = vi.fn(() => {
+      throw new Error('send failed');
+    });
+    projector(failedPi, {
+      scopeCommand: {
+        name: 'scope',
+        description: 'shared descriptor',
+        execute: () =>
+          Promise.resolve({
+            kind: 'engaged',
+            itemId: 'wg-123456789abc',
+            context: 'MUST NOT LEAK',
+            continuationPrompt: 'continue',
+          }),
+      },
+    });
+    const failedCtx = makeCtx(cwd);
+    await failedPi.commands.get('scope')?.('ship', failedCtx);
+    expect(failedCtx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining('Retry /scope --item wg-123456789abc'),
+      'error',
+    );
+    vi.spyOn(defaultLifecyclePipeline, 'runPromptSubmit').mockResolvedValue({
+      exitCode: 0,
+      stderr: '',
+      contextInjections: [],
+      directives: [],
+      diagnostics: [],
+    });
+    const [result] = await fire(
+      failedPi,
+      'before_agent_start',
+      { prompt: 'next', systemPrompt: 'BASE', systemPromptOptions: {} },
+      failedCtx,
+    );
+    expect(result).toEqual({ systemPrompt: 'BASE' });
+  });
+
+  it('keeps the Pi continuation reducer total', () => {
+    for (const state of ['idle', 'queued', 'sent', 'failed'] as const) {
+      for (const event of ['queue', 'send_ok', 'send_failed'] as const) {
+        expect(() => stepPiScopeContinuation(state, event)).not.toThrow();
+      }
+    }
   });
 
   it('uses OPENSQUID_SESSION_ID first and then sessionManager.getSessionId without falling back to session files', async () => {
@@ -309,24 +489,6 @@ describe('Pi lifecycle projector', () => {
         JSON.stringify([directive()], null, 2) +
         '\n```',
     });
-  });
-
-  it('validates executor env strictly with no fallback identity', async () => {
-    const pi = makePi();
-    projector(pi);
-    const ctx = makeCtx(cwd);
-    process.env.OPENSQUID_EXECUTOR = '1';
-    process.env.OPENSQUID_SESSION_ID = 'child-session';
-    process.env.OPENSQUID_ITEM_ID = 'wg-1';
-
-    await expect(
-      fire(
-        pi,
-        'tool_call',
-        { type: 'tool_call', toolCallId: 'x1', toolName: 'bash', input: { command: 'echo hi' } },
-        ctx,
-      ),
-    ).rejects.toThrow(/OPENSQUID_EXECUTOR_ID/);
   });
 
   it('keeps correlated execution and same-file reservations on evaluator fail-open', async () => {

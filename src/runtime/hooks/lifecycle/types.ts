@@ -10,8 +10,11 @@ import type {
   ToolCallEvent,
 } from '../../event.js';
 
-export type Actor = { kind: 'orchestrator' } | { kind: 'executor'; id: string };
-export type LifecycleRole = 'interactive' | 'lap-parent' | 'lap-child';
+export type Actor =
+  | { kind: 'coordinator' }
+  | { kind: 'stage_process'; id: string }
+  | { kind: 'reviewer'; id: string };
+export type LifecycleRole = 'interactive' | 'stage_process' | 'reviewer';
 
 export interface LifecycleContext {
   sessionId: string;

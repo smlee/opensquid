@@ -254,13 +254,13 @@ describe('projectOpensquidHooks — pure-function projection', () => {
   // T-AUDIT-SPAWN-FIX: PreToolUse hosts the blocking audits (claude -p calls
   // measured to 268s) — without an explicit cap the host's default hook
   // timeout kills audits on fresh installs. ONLY PreToolUse carries it.
-  it('writes timeout: 360 on the PreToolUse entry and on NO other event', () => {
+  it('writes timeout: 620 on the PreToolUse entry and on NO other event', () => {
     const { output } = projectOpensquidHooks({});
     for (const event of Object.keys(OPENSQUID_BIN_FOR_EVENT)) {
       const inner = output.hooks?.[event]?.[0]?.hooks?.[0] as Record<string, unknown> | undefined;
       if (event === 'PreToolUse') {
         expect(inner?.timeout).toBe(PRETOOLUSE_HOOK_TIMEOUT_S);
-        expect(inner?.timeout).toBe(360);
+        expect(inner?.timeout).toBe(620);
       } else {
         expect(inner?.timeout).toBeUndefined();
       }

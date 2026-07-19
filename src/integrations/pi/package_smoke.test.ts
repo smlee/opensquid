@@ -12,16 +12,13 @@ const REPO_ROOT = process.cwd();
 const REQUIRED_BUILD_FILES = [
   'dist/integrations/pi/runtime.js',
   'dist/integrations/pi/bootstrap.js',
-  'dist/integrations/pi/pi_subagent_launcher.js',
   'dist/integrations/pi/projector.js',
-  'dist/integrations/pi/spawn_subagent.js',
   'dist/runtime/ralph/harnesses/pi_lap_harness.js',
   'context/pi-system-prompt.md',
 ] as const;
 const CLOSURE_ENTRYPOINTS = [
   'dist/integrations/pi/runtime.js',
   'dist/integrations/pi/projector.js',
-  'dist/integrations/pi/spawn_subagent.js',
 ] as const;
 const FORBIDDEN_SCRIPT_PATTERNS = [
   /PI_LIVE_ACCEPTANCE/u,

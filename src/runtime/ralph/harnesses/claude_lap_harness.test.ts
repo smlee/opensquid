@@ -28,7 +28,7 @@ describe('claudeLapHarness (MHL.4)', () => {
   it('parseEnvelope reads a Claude JSON envelope: cost/tokens/result, is_error:false', () => {
     const env = claudeLapHarness.parseEnvelope(
       JSON.stringify({
-        result: 'work…\nRALPH-EXIT: {"kind":"SHIPPED","stage":"code"}',
+        result: 'work…\nRALPH-EXIT: {"kind":"SHIPPED"}',
         total_cost_usd: 0.5,
         usage: { input_tokens: 100, output_tokens: 20 },
         is_error: false,
@@ -36,14 +36,14 @@ describe('claudeLapHarness (MHL.4)', () => {
       '',
     );
     expect(env).toEqual({
-      resultText: 'work…\nRALPH-EXIT: {"kind":"SHIPPED","stage":"code"}',
+      resultText: 'work…\nRALPH-EXIT: {"kind":"SHIPPED"}',
       costUsd: 0.5,
       inputTokens: 100,
       outputTokens: 20,
       isError: false,
     });
-    // through the neutral fold → the SHIPPED/stage outcome (proves the extract reaches the same protocol).
-    expect(outcomeFromEnvelope(env).outcome).toEqual({ kind: 'SHIPPED', stage: 'code' });
+    // through the neutral fold → SHIPPED (stage progression remains coordinator-owned).
+    expect(outcomeFromEnvelope(env).outcome).toEqual({ kind: 'SHIPPED' });
   });
 
   it('is_error:true → isError (still carrying cost/tokens)', () => {

@@ -29,13 +29,19 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createClient } from '@libsql/client';
 
 import {
   type ActiveTask,
   clearActiveTask,
   readActiveTask,
+  readActiveTaskStrict,
+  readSessionCwd,
   writeActiveTask,
 } from '../session_state.js';
+import { resolveLocalStoreDir } from '../paths.js';
+import { CheckpointStore } from '../durable/checkpoint_store.js';
+import { applyConcurrencyPragmas } from '../../storage/sqlite_concurrency.js';
 import {
   isClosedStatus,
   readActiveTaskFromTranscript,
@@ -76,6 +82,32 @@ export const harnessTasksDir = (sessionId: string, base?: string): string =>
     base ?? process.env.OPENSQUID_HARNESS_TASKS_DIR ?? join(homedir(), '.claude', 'tasks'),
     sessionId,
   );
+
+/**
+ * Harness-neutral continuity for a pack-selected WorkGraph task. A present task checkpoint is positive durable
+ * evidence to retain the session selection; a read failure also retains so storage trouble cannot silently clear
+ * enforcement. Definite absence preserves the legacy clear behavior. Non-WorkGraph harness ids are unchanged.
+ */
+export async function checkpointBackedActiveTaskContinuity(
+  sessionId: string,
+  task: ActiveTask,
+): Promise<'retain' | 'clear'> {
+  if (!/^wg-[a-f0-9]{12}$/u.test(task.id)) return 'clear';
+  const cwd = await readSessionCwd(sessionId);
+  if (cwd === null) return 'retain';
+  let client: ReturnType<typeof createClient> | undefined;
+  try {
+    const dir = await resolveLocalStoreDir(cwd);
+    client = createClient({ url: `file:${join(dir, 'opensquid.db')}` });
+    await applyConcurrencyPragmas(client);
+    const checkpoint = await new CheckpointStore(client).getTaskCheckpoint(task.id);
+    return checkpoint === null ? 'clear' : 'retain';
+  } catch {
+    return 'retain';
+  } finally {
+    client?.close();
+  }
+}
 
 /**
  * Read + parse the harness task store for a session. Returns `[]` on an absent
@@ -225,6 +257,14 @@ export async function mirrorActiveTask(
   active ??= tasks.find((t) => t.status === 'in_progress' && t.id !== completingId) ?? null;
 
   if (!active) {
+    const strictPrior = await readActiveTaskStrict(sessionId);
+    if (strictPrior.kind === 'indeterminate') return;
+    if (
+      strictPrior.kind === 'present' &&
+      (await checkpointBackedActiveTaskContinuity(sessionId, strictPrior.task)) === 'retain'
+    ) {
+      return;
+    }
     // T-ACTRACE.1 (2026-05-31): defensive clear. Before clearing,
     // verify the previously-active task is GENUINELY absent from the
     // harness store — not just transiently non-in_progress (mid-write

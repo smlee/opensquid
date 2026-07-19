@@ -139,18 +139,18 @@ describe('PackV2 schema — activation class + discipline declaration (project-o
     ).toThrow();
   });
 
-  it('parses `discipline: { orchestrator_only: true }` (the pack-declared policy)', () => {
+  it('parses the pack-declared coordinator document-only policy', () => {
     const p = PackV2.parse({
       name: 'coding',
       version: '1.0.0',
       scope: 'workflow',
-      discipline: { orchestrator_only: true },
+      discipline: { coordinator_docs_only: true },
       fsm: baseFsm,
     });
-    expect(p.discipline?.orchestrator_only).toBe(true);
+    expect(p.discipline?.coordinator_docs_only).toBe(true);
   });
 
-  it('a pack with no `discipline` block declares no orchestrator-only policy (undefined)', () => {
+  it('a pack with no `discipline` block declares no coordinator policy', () => {
     const p = PackV2.parse({ name: 'content', version: '1.0.0', scope: 'domain' });
     expect(p.discipline).toBeUndefined();
   });
@@ -161,7 +161,7 @@ describe('PackV2 schema — activation class + discipline declaration (project-o
         name: 'p',
         version: '1.0.0',
         scope: 'workflow',
-        discipline: { orchestrator_only: true, bogus: true },
+        discipline: { coordinator_docs_only: true, bogus: true },
         fsm: baseFsm,
       }),
     ).toThrow();

@@ -240,30 +240,30 @@ function renderEvent(e: MonitorEvent, now: number = Date.now()): string {
       return `${e.wgId} · ✓ closed · ${age}`;
     case 'item_wedged':
       return `${e.wgId} · ⚠ wedged · ${age}`;
-    case 'executor_started':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · running · ${age}`;
-    case 'executor_shutdown_pending':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · graceful shutdown pending · ${age}`;
-    case 'executor_shutdown_requested':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · human graceful stop · ${age}`;
-    case 'executor_terminate_requested':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · human terminate · ${age}`;
-    case 'executor_force_kill_requested':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · human force-kill · ${age}`;
-    case 'executor_paused':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · paused · ${age}`;
-    case 'executor_resumed':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · resumed · ${age}`;
-    case 'executor_exited':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · exited · ${age}`;
-    case 'executor_spawn_failed':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · spawn failed · ${age}`;
-    case 'executor_control_requested':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · ${e.controlAction ?? 'control'} requested · ${age}`;
-    case 'executor_control_applied':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · ${e.controlAction ?? 'control'} applied · ${age}`;
-    case 'executor_control_failed':
-      return `${e.wgId} · ${e.executorId ?? 'executor'} · ${e.controlAction ?? 'control'} failed · ${age}`;
+    case 'process_started':
+      return `${e.wgId} · ${e.processId ?? 'process'} · running · ${age}`;
+    case 'process_shutdown_pending':
+      return `${e.wgId} · ${e.processId ?? 'process'} · graceful shutdown pending · ${age}`;
+    case 'process_shutdown_requested':
+      return `${e.wgId} · ${e.processId ?? 'process'} · human graceful stop · ${age}`;
+    case 'process_terminate_requested':
+      return `${e.wgId} · ${e.processId ?? 'process'} · human terminate · ${age}`;
+    case 'process_force_kill_requested':
+      return `${e.wgId} · ${e.processId ?? 'process'} · human force-kill · ${age}`;
+    case 'process_paused':
+      return `${e.wgId} · ${e.processId ?? 'process'} · paused · ${age}`;
+    case 'process_resumed':
+      return `${e.wgId} · ${e.processId ?? 'process'} · resumed · ${age}`;
+    case 'process_exited':
+      return `${e.wgId} · ${e.processId ?? 'process'} · exited · ${age}`;
+    case 'process_spawn_failed':
+      return `${e.wgId} · ${e.processId ?? 'process'} · spawn failed · ${age}`;
+    case 'process_control_requested':
+      return `${e.wgId} · ${e.processId ?? 'process'} · ${e.controlAction ?? 'control'} requested · ${age}`;
+    case 'process_control_applied':
+      return `${e.wgId} · ${e.processId ?? 'process'} · ${e.controlAction ?? 'control'} applied · ${age}`;
+    case 'process_control_failed':
+      return `${e.wgId} · ${e.processId ?? 'process'} · ${e.controlAction ?? 'control'} failed · ${age}`;
   }
 }
 
@@ -301,8 +301,8 @@ async function runWatch(opts: LoopStatusOpts): Promise<void> {
     (e) => {
       process.stdout.write(renderEvent(e) + '\n');
       if (e.kind === 'item_shipped' || e.kind === 'item_closed') live.delete(e.wgId);
-      else if (!e.kind.startsWith('executor_')) live.add(e.wgId);
-      // Executor events share the durable stream for CLI/TUI/web observability but do not change board membership.
+      else if (!e.kind.startsWith('process_')) live.add(e.wgId);
+      // Owned-process events share the durable stream for CLI/TUI/web observability but do not change board membership.
       if (live.size === 0 && !drained) {
         process.stdout.write(DRAIN_LINE + '\n');
         drained = true;

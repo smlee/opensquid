@@ -1,11 +1,11 @@
 import type { Command } from 'commander';
 
 import {
-  listExecutorProcesses,
-  requestExecutorControl,
+  listOwnedProcesses,
+  requestProcessControl,
   type HumanProcessSignalAction,
-} from '../runtime/subagents/process_control.js';
-import { resumeExecutorProcess } from '../runtime/subagents/process_resume.js';
+} from '../runtime/processes/process_control.js';
+import { resumeOwnedProcess } from '../runtime/processes/process_resume.js';
 
 function assertInteractiveHuman(): void {
   if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
@@ -21,10 +21,10 @@ function cliAuthorizationIdentity(): string {
   return `cli:${user}`;
 }
 
-async function request(action: HumanProcessSignalAction, executorId: string): Promise<void> {
+async function request(action: HumanProcessSignalAction, processId: string): Promise<void> {
   assertInteractiveHuman();
-  const receipt = await requestExecutorControl({
-    executorId,
+  const receipt = await requestProcessControl({
+    processId,
     action,
     requestedBy: 'cli',
     authorizedBy: cliAuthorizationIdentity(),
@@ -37,14 +37,14 @@ async function request(action: HumanProcessSignalAction, executorId: string): Pr
 export function registerLoopProcess(loop: Command): void {
   const processCommand = loop
     .command('process')
-    .description('Human control plane for OpenSquid-owned loop and executor subprocesses');
+    .description('Human control plane for OpenSquid-owned loop and owned subprocesses');
 
   processCommand
     .command('list')
     .option('--active', 'show only processes that have not exited', false)
     .option('--json', 'emit the shared JSON process-state contract', false)
     .action(async (opts: { active?: boolean; json?: boolean }) => {
-      const states = await listExecutorProcesses(opts.active === true);
+      const states = await listOwnedProcesses(opts.active === true);
       if (opts.json === true) {
         process.stdout.write(`${JSON.stringify(states, null, 2)}\n`);
         return;
@@ -55,40 +55,38 @@ export function registerLoopProcess(loop: Command): void {
       }
       for (const state of states) {
         process.stdout.write(
-          `${state.executorId} · ${state.role} · ${state.status} · pid ${String(state.pid)} · ` +
+          `${state.processId} · ${state.role} · ${state.status} · pid ${String(state.pid)} · ` +
             `actions [${state.availableActions.join(', ')}]\n`,
         );
       }
     });
 
   processCommand
-    .command('stop <executorId>')
+    .command('stop <processId>')
     .description('request graceful RPC/stdin shutdown; sends no OS signal')
-    .action((executorId: string) => request('graceful_stop', executorId));
+    .action((processId: string) => request('graceful_stop', processId));
 
   processCommand
-    .command('terminate <executorId>')
+    .command('terminate <processId>')
     .description('human-authorized SIGTERM of the exact OpenSquid-owned process group')
-    .action((executorId: string) => request('terminate', executorId));
+    .action((processId: string) => request('terminate', processId));
 
   processCommand
-    .command('resume <executorId>')
+    .command('resume <processId>')
     .description('resume paused logical work from its WorkGraph checkpoint')
-    .action(async (executorId: string) => {
+    .action(async (processId: string) => {
       assertInteractiveHuman();
-      const result = await resumeExecutorProcess({
-        executorId,
+      const result = await resumeOwnedProcess({
+        processId,
         requestedBy: 'cli',
         authorizedBy: cliAuthorizationIdentity(),
       });
-      process.stdout.write(
-        `resumed ${result.executorId} (${result.wgId}) — ${result.loopStatus}\n`,
-      );
+      process.stdout.write(`resumed ${result.processId} (${result.wgId}) — ${result.loopStatus}\n`);
     });
 
   processCommand
-    .command('kill <executorId>')
+    .command('kill <processId>')
     .description('human-authorized SIGKILL of the exact OpenSquid-owned process group')
     .requiredOption('--force', 'confirm force-kill; no model or automation may supply this action')
-    .action((executorId: string) => request('force_kill', executorId));
+    .action((processId: string) => request('force_kill', processId));
 }

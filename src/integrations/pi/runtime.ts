@@ -10,19 +10,18 @@ import type { PiHarnessRuntimeAssets, VerifiedPiRuntime } from '../../runtime/ra
 import { PI_READINESS_PROBE_ENV } from './env.js';
 import {
   enabledPiOptionalTools,
-  parentPiTools,
+  stagePiTools,
   type PiToolCapability,
   PI_TOOL_CATALOG,
 } from './capability_catalog.js';
 import { ensurePiMcpReady } from './bootstrap.js';
 import { resolvePiAdapterEntry, resolvePiGlobalSettingsPath } from './paths.js';
-import { writePiRoleManifest } from '../../setup/wizard/pi-role-writer.js';
 import {
-  controlledExecutorProcess,
+  controlledOwnedProcess,
   ProcessPausedError,
-} from '../../runtime/subagents/process_control.js';
+} from '../../runtime/processes/process_control.js';
 
-interface FullRuntimeProbePayload {
+interface StageRuntimeProbePayload {
   all: string[];
   active: string[];
 }
@@ -32,37 +31,34 @@ const CONTEXT_ROOT = fileURLToPath(new URL('../../../context/', import.meta.url)
 const DIST_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const SYSTEM_PROMPT_PATH = join(CONTEXT_ROOT, 'pi-system-prompt.md');
 const PROJECTOR_PATH = join(DIST_ROOT, 'dist', 'integrations', 'pi', 'projector.js');
-const SPAWN_SUBAGENT_PATH = join(DIST_ROOT, 'dist', 'integrations', 'pi', 'spawn_subagent.js');
 
 export interface PiRuntimeDeps {
   ensurePiMcpReady: typeof ensurePiMcpReady;
-  probeFullPiRuntime: typeof probeFullPiRuntime;
+  probePiStageRuntime: typeof probePiStageRuntime;
   getAvailablePiProviders: typeof getAvailablePiProviders;
   getResolvedPiModel: typeof getResolvedPiModel;
   readPiVersion: typeof readPiVersion;
   loadEffectivePiShellSettings: typeof loadEffectivePiShellSettings;
-  writePiRoleManifest: typeof writePiRoleManifest;
 }
 
 const DEFAULT_RUNTIME_DEPS: PiRuntimeDeps = {
   ensurePiMcpReady,
-  probeFullPiRuntime,
+  probePiStageRuntime,
   getAvailablePiProviders,
   getResolvedPiModel,
   readPiVersion,
   loadEffectivePiShellSettings,
-  writePiRoleManifest,
 };
 
-function stableParentTools(): string[] {
-  return parentPiTools(enabledPiOptionalTools());
+function stableStageTools(): string[] {
+  return stagePiTools(enabledPiOptionalTools());
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
-function parseProbePayload(text: string): FullRuntimeProbePayload | null {
+function parseProbePayload(text: string): StageRuntimeProbePayload | null {
   const parsed = JSON.parse(text) as unknown;
   const record = asRecord(parsed);
   if (
@@ -84,13 +80,13 @@ function describeUnknown(value: unknown): string {
   return value instanceof Error ? value.message : JSON.stringify(value ?? 'unknown');
 }
 
-function buildFullProbeExtensionSource(): string {
+function buildStageProbeExtensionSource(): string {
   return [
     "import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';",
     'export default function (pi: ExtensionAPI) {',
     "  pi.on('session_start', async (_event, ctx) => {",
     '    ctx.ui.notify(',
-    "      'OPENSQUID_PI_FULL ' + JSON.stringify({",
+    "      'OPENSQUID_PI_STAGE ' + JSON.stringify({",
     '        all: pi.getAllTools().map((tool) => tool.name),',
     '        active: pi.getActiveTools(),',
     '      }),',
@@ -103,7 +99,7 @@ function buildFullProbeExtensionSource(): string {
   ].join('\n');
 }
 
-function baseParentArgs(input: { adapterEntry: string; parentTools: readonly string[] }): string[] {
+function baseStageArgs(input: { adapterEntry: string; stageTools: readonly string[] }): string[] {
   return [
     '--mode',
     'rpc',
@@ -121,47 +117,45 @@ function baseParentArgs(input: { adapterEntry: string; parentTools: readonly str
     input.adapterEntry,
     '-e',
     PROJECTOR_PATH,
-    '-e',
-    SPAWN_SUBAGENT_PATH,
     '--tools',
-    input.parentTools.join(','),
+    input.stageTools.join(','),
   ];
 }
 
-function fullProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function stageProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENSQUID_AUTOMATION: '1',
     OPENSQUID_LOOP_LAP: '1',
-    OPENSQUID_SESSION_ID: 'opensquid-pi-full-probe-session',
-    OPENSQUID_ITEM_ID: 'opensquid-pi-full-probe-item',
+    OPENSQUID_SESSION_ID: 'opensquid-pi-stage-probe-session',
+    OPENSQUID_ITEM_ID: 'opensquid-pi-stage-probe-item',
     [PI_READINESS_PROBE_ENV]: '1',
   };
 }
 
-export async function probeFullPiRuntime(input: {
+export async function probePiStageRuntime(input: {
   cli: string;
   cwd: string;
   env?: NodeJS.ProcessEnv;
   adapterEntry: string;
   timeoutMs: number;
-  parentTools?: readonly string[];
+  stageTools?: readonly string[];
   runStreaming?: typeof runStreamingCli;
 }): Promise<{ registeredTools: ReadonlySet<string>; activeTools: ReadonlySet<string> }> {
   const runStreaming = input.runStreaming ?? runStreamingCli;
-  const env = fullProbeEnv({ ...process.env, ...(input.env ?? {}) });
-  const parentTools = [...(input.parentTools ?? stableParentTools())];
-  const tempDir = await mkdtemp(join(tmpdir(), 'opensquid-pi-full-'));
+  const env = stageProbeEnv({ ...process.env, ...(input.env ?? {}) });
+  const stageTools = [...(input.stageTools ?? stableStageTools())];
+  const tempDir = await mkdtemp(join(tmpdir(), 'opensquid-pi-stage-'));
   const probePath = join(tempDir, 'probe.ts');
-  let payload: FullRuntimeProbePayload | null = null;
+  let payload: StageRuntimeProbePayload | null = null;
   try {
-    await writeFile(probePath, buildFullProbeExtensionSource(), 'utf8');
+    await writeFile(probePath, buildStageProbeExtensionSource(), 'utf8');
     await runStreaming({
       cli: input.cli,
       args: [
-        ...baseParentArgs({
+        ...baseStageArgs({
           adapterEntry: input.adapterEntry,
-          parentTools,
+          stageTools,
         }),
         '-e',
         probePath,
@@ -173,35 +167,37 @@ export async function probeFullPiRuntime(input: {
         const event = JSON.parse(record) as Record<string, unknown>;
         if (event.type === 'extension_error') {
           return {
-            fail: new Error(`Pi full probe extension error: ${describeUnknown(event.error)}`),
+            fail: new Error(`Pi stage probe extension error: ${describeUnknown(event.error)}`),
           };
         }
         if (event.type !== 'extension_ui_request' || event.method !== 'notify') return 'continue';
-        if (typeof event.message !== 'string' || !event.message.startsWith('OPENSQUID_PI_FULL ')) {
+        if (typeof event.message !== 'string' || !event.message.startsWith('OPENSQUID_PI_STAGE ')) {
           return 'continue';
         }
-        payload = parseProbePayload(event.message.slice('OPENSQUID_PI_FULL '.length));
+        payload = parseProbePayload(event.message.slice('OPENSQUID_PI_STAGE '.length));
         return payload === null ? 'continue' : 'complete';
       },
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
-  if (payload === null) throw new Error('Pi full runtime probe emitted no payload');
-  const probe = payload as FullRuntimeProbePayload;
+  if (payload === null) throw new Error('Pi stage runtime probe emitted no payload');
+  const probe = payload as StageRuntimeProbePayload;
   if (probe.all.includes('mcp') || probe.active.includes('mcp')) {
-    throw new Error('Pi full runtime probe found forbidden generic mcp tool');
+    throw new Error('Pi stage runtime probe found forbidden generic mcp tool');
   }
   const all = new Set<string>(probe.all);
   const active = new Set<string>(probe.active);
-  const expected = new Set<string>(parentTools);
+  const expected = new Set<string>(stageTools);
   const missingRegistered = [...expected].filter((tool) => !all.has(tool));
   if (missingRegistered.length > 0) {
-    throw new Error(`Pi full runtime is missing registered tools: ${missingRegistered.join(', ')}`);
+    throw new Error(
+      `Pi stage runtime is missing registered tools: ${missingRegistered.join(', ')}`,
+    );
   }
   if (active.size !== expected.size || [...expected].some((tool) => !active.has(tool))) {
     throw new Error(
-      `Pi full runtime active tools mismatch: expected ${parentTools.join(', ')}, got ${probe.active.join(', ')}`,
+      `Pi stage runtime active tools mismatch: expected ${stageTools.join(', ')}, got ${probe.active.join(', ')}`,
     );
   }
   return { registeredTools: all, activeTools: active };
@@ -395,15 +391,14 @@ export function createDefaultPiHarnessRuntimeAssets(
   deps: PiRuntimeDeps = DEFAULT_RUNTIME_DEPS,
 ): PiHarnessRuntimeAssets {
   const env = options.env ?? process.env;
-  const parentTools = stableParentTools();
+  const stageTools = stableStageTools();
   const adapterEntry = resolvePiAdapterEntry('pi-mcp-adapter', env);
   const readinessByTarget = new Map<string, Promise<VerifiedPiRuntime>>();
   return {
     systemPromptPath: SYSTEM_PROMPT_PATH,
     mcpAdapterExtensionPath: adapterEntry,
     projectorExtensionPath: PROJECTOR_PATH,
-    spawnSubagentExtensionPath: SPAWN_SUBAGENT_PATH,
-    parentTools,
+    stageTools,
     readiness: (input) => {
       const key = `${input.cli}\u0000${input.cwd}`;
       const cached = readinessByTarget.get(key);
@@ -413,9 +408,9 @@ export function createDefaultPiHarnessRuntimeAssets(
         let probe = 0;
         const readinessEnv = { ...env, ...(input.env ?? {}) };
         const trackedStreaming: typeof runStreamingCli = async (streamInput) => {
-          const executorId = `pi-readiness-${input.attemptId ?? randomUUID()}-${String(++probe)}`;
-          const control = controlledExecutorProcess({
-            executorId,
+          const processId = `pi-readiness-${input.attemptId ?? randomUUID()}-${String(++probe)}`;
+          const control = controlledOwnedProcess({
+            processId,
             wgId: readinessEnv.OPENSQUID_ITEM_ID ?? 'pi-readiness',
             ...(readinessEnv.OPENSQUID_RUN_ID === undefined
               ? {}
@@ -423,7 +418,8 @@ export function createDefaultPiHarnessRuntimeAssets(
             ...(readinessEnv.OPENSQUID_CHECKPOINT_STAGE === undefined
               ? {}
               : { checkpointStage: readinessEnv.OPENSQUID_CHECKPOINT_STAGE }),
-            role: 'orchestrator',
+            role: 'readiness-probe',
+            ownership: 'owned',
             base: realProcControl,
           });
           try {
@@ -437,15 +433,15 @@ export function createDefaultPiHarnessRuntimeAssets(
               },
               onStderrLine: (line) => {
                 streamInput.onStderrLine?.(line);
-                process.stderr.write(`[${executorId}] ${line}\n`);
+                process.stderr.write(`[${processId}] ${line}\n`);
               },
             });
             const cause = control.shutdownCause();
-            if (cause?.kind === 'human') throw new ProcessPausedError(executorId, cause);
+            if (cause?.kind === 'human') throw new ProcessPausedError(processId, cause);
             return result;
           } catch (error) {
             const cause = control.shutdownCause();
-            if (cause?.kind === 'human') throw new ProcessPausedError(executorId, cause);
+            if (cause?.kind === 'human') throw new ProcessPausedError(processId, cause);
             throw error;
           } finally {
             control.dispose();
@@ -460,13 +456,13 @@ export function createDefaultPiHarnessRuntimeAssets(
           opensquidRoot: options.opensquidRoot ?? PACKAGE_ROOT,
           runStreaming: trackedStreaming,
         });
-        const full = await deps.probeFullPiRuntime({
+        const full = await deps.probePiStageRuntime({
           cli: input.cli,
           cwd: input.cwd,
           env: readinessEnv,
           adapterEntry: mcp.adapterEntry,
           timeoutMs: options.timeoutMs ?? 60_000,
-          parentTools,
+          stageTools,
           runStreaming: trackedStreaming,
         });
         const [providers, resolvedModel] = await Promise.all([
@@ -493,10 +489,6 @@ export function createDefaultPiHarnessRuntimeAssets(
           })
           .catch(() => 'unknown');
         const effectiveShell = await deps.loadEffectivePiShellSettings(input.cwd, readinessEnv);
-        const roleManifest = await deps.writePiRoleManifest({
-          env: readinessEnv,
-          cwd: input.cwd,
-        });
         return {
           piVersion,
           mcpAdapterVersion: mcp.adapterVersion,
@@ -506,8 +498,6 @@ export function createDefaultPiHarnessRuntimeAssets(
           activeTools: full.activeTools,
           genericProxyAbsent: !full.registeredTools.has('mcp') && !full.activeTools.has('mcp'),
           effectiveShell,
-          roleManifestPath: roleManifest.manifestPath,
-          roleManifestHash: roleManifest.manifestHash,
         } satisfies VerifiedPiRuntime;
       })();
       readinessByTarget.set(key, readiness);
@@ -523,5 +513,5 @@ export function defaultHarnessRuntimeAssets(): { pi: PiHarnessRuntimeAssets } {
   return { pi: createDefaultPiHarnessRuntimeAssets() };
 }
 
-export const PI_PARENT_TOOL_CATALOG: readonly PiToolCapability[] = PI_TOOL_CATALOG;
+export const PI_STAGE_TOOL_CATALOG: readonly PiToolCapability[] = PI_TOOL_CATALOG;
 export const OPENSQUID_PACKAGE_ROOT = PACKAGE_ROOT;

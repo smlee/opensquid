@@ -1,21 +1,12 @@
-// src/runtime/ralph/worktree_pool.ts — bounded concurrency pool + worktree-per-item. Attaches to runRalphLoop
-// (orchestrator.ts:262-357): the serial claim-one/drive-one becomes a bounded-N claim-and-drive, each item in its
-// OWN git worktree cut from fresh `main` (AGF.2) so concurrent laps never clobber each other's edits. Every git
-// effect is behind the injectable WorktreeIo seam (default = real `execFileP('git', …)`), so tests drive the pool
-// with NO real git and NO `.opensquid` I/O.
-//
-// AGF.3 (T-opensquid-automated-gitflow, wg-4ae1004c931b). Consumed by AGF.7's pool + orchestrator-integration tests.
+// src/runtime/ralph/worktree_pool.ts — DORMANT bounded-concurrency/worktree primitives. Serial runRalphLoop does
+// not call this module. Future parallelism must explicitly supply each unique semantic branch, configured base,
+// and drive cwd before wiring these helpers. Every git effect stays behind WorktreeIo, so tests need no real git
+// or `.opensquid` I/O. Historical AGF.3 mechanics are retained without mechanical WorkGraph-id Git refs.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 
 const execFileP = promisify(execFile);
-
-/** DORMANT (GF.9) — the mechanical per-item branch name for the parallel worktree pool. GF.5 RETIRED the shared
- *  `branchNameFor` export from the LIVE path (the environment branches are the semantic names now); the still-dormant
- *  pool keeps its own local name so it compiles until parallelism is turned on (then it adopts GF.5's `featBranchFor`).
- *  The id already carries the `wg-` prefix → `auto/wg-abc123` (never double-prefixed). */
-const dormantBranchNameFor = (id: string): string => `auto/${id}`;
 
 /** The injectable git effects — default binds real `git worktree add/remove`; tests pass a pure stub. */
 export interface WorktreeIo {
@@ -25,10 +16,11 @@ export interface WorktreeIo {
   worktreeRemove: (path: string, mainRoot: string) => Promise<void>;
 }
 
-/** The pool config: the concurrency `bound` (a FIXED default — adaptive scaling is a later scope, design §5 OUT)
- *  and the `poolRoot` under which each item's worktree checkout lives (`<poolRoot>/<id>`). */
+/** The pool config: a fixed concurrency `bound`, the configured production `baseBranch`, and the internal checkout
+ *  roots. Adaptive scaling remains later scope; WorkGraph ids name only `<poolRoot>/<id>` paths. */
 export interface PoolConfig {
   bound: number;
+  baseBranch: string;
   poolRoot: string;
   mainRoot: string;
 }
@@ -44,16 +36,20 @@ export const realWorktreeIo: WorktreeIo = {
   },
 };
 
-/** Add the item's worktree on `auto/wg-<id>` (AGF.2's `branchNameFor`) cut from `main` (AGF.2's fresh base), at
- *  `<poolRoot>/<id>`. Returns the checkout path — the cwd the item's drive runs in. */
+/** DORMANT parallel primitive: add an item checkout on the caller-selected semantic branch and configured
+ *  production base, at `<poolRoot>/<id>`. WorkGraph ids remain internal path context and never become Git refs.
+ *  Branch allocation/collision policy belongs to the future parallel coordinator; this utility does not guess it.
+ *  Returns the checkout path — the cwd a future parallel drive must explicitly receive. */
 export async function addItemWorktree(
   id: string,
+  branch: string,
+  baseBranch: string,
   mainRoot: string,
   poolRoot: string,
   io: WorktreeIo,
 ): Promise<string> {
   const path = join(poolRoot, id);
-  await io.worktreeAdd(dormantBranchNameFor(id), path, 'main', mainRoot);
+  await io.worktreeAdd(branch, path, baseBranch, mainRoot);
   return path;
 }
 
@@ -72,16 +68,23 @@ export async function removeItemWorktree(
  *  `claimIssue` CAS so two slots never claim the same item. The serial path is the `bound:1` degenerate case. */
 export async function drainPool<O>(
   cfg: PoolConfig,
-  claimNext: () => Promise<{ id: string } | null>,
-  driveInWorktree: (item: { id: string }, worktreePath: string) => Promise<O>,
+  claimNext: () => Promise<{ id: string; branch: string } | null>,
+  driveInWorktree: (item: { id: string; branch: string }, worktreePath: string) => Promise<O>,
   io: WorktreeIo,
 ): Promise<O[]> {
   const out: O[] = [];
   const inFlight = new Set<Promise<void>>();
-  const startOne = async (item: { id: string }): Promise<void> => {
+  const startOne = async (item: { id: string; branch: string }): Promise<void> => {
     let path: string | undefined;
     try {
-      path = await addItemWorktree(item.id, cfg.mainRoot, cfg.poolRoot, io);
+      path = await addItemWorktree(
+        item.id,
+        item.branch,
+        cfg.baseBranch,
+        cfg.mainRoot,
+        cfg.poolRoot,
+        io,
+      );
       out.push(await driveInWorktree(item, path));
     } finally {
       if (path !== undefined)

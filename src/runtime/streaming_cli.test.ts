@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { superviseLap } from './ralph/supervisor.js';
 import { realProcControl, type ProcControl } from './spawn_lifecycle.js';
 import { runStreamingCli } from './streaming_cli.js';
 
@@ -40,14 +41,17 @@ function fixture(): {
   child: FakeChild;
   spawnCalls: SpawnCall[];
   kills: { pid: number; signal: NodeJS.Signals | number }[];
+  exitHandlers: (() => void)[];
 } {
   const child = new FakeChild();
   const spawnCalls: SpawnCall[] = [];
   const kills: { pid: number; signal: NodeJS.Signals | number }[] = [];
+  const exitHandlers: (() => void)[] = [];
   return {
     child,
     spawnCalls,
     kills,
+    exitHandlers,
     pc: {
       spawn: (cli, args, options) => {
         spawnCalls.push({ cli, args, options: options as Record<string, unknown> });
@@ -58,8 +62,13 @@ function fixture(): {
       },
       setTimeout: realProcControl.setTimeout,
       clearTimeout: realProcControl.clearTimeout,
-      onExit: vi.fn(),
-      offExit: vi.fn(),
+      onExit: (handler) => {
+        exitHandlers.push(handler);
+      },
+      offExit: (handler) => {
+        const index = exitHandlers.indexOf(handler);
+        if (index >= 0) exitHandlers.splice(index, 1);
+      },
     },
   };
 }
@@ -121,16 +130,26 @@ describe('runStreamingCli framing and bounds', () => {
     const over = fixture();
     const b = start(over, { maxRecordBytes: 4 });
     over.child.stdout.emit('data', Buffer.from('12345'));
-    await expect(b.promise).rejects.toThrow(/record cap exceeded/);
     expect(over.child.stdin.end).toHaveBeenCalledTimes(1);
-    expect(over.kills).toEqual([]);
+    expect(over.kills).toEqual([{ pid: -777, signal: 'SIGTERM' }]);
+    over.child.emit('close', null);
+    await expect(b.promise).rejects.toThrow(/record cap exceeded/);
+    expect(over.kills).toEqual([
+      { pid: -777, signal: 'SIGTERM' },
+      { pid: -777, signal: 'SIGKILL' },
+    ]);
   });
 
   it('enforces the independent per-stream capture cap', async () => {
     const f = fixture();
     const { promise } = start(f, { maxCaptureBytes: 3 });
     f.child.stderr.emit('data', Buffer.from('four'));
+    f.child.emit('close', null);
     await expect(promise).rejects.toThrow(/capture cap exceeded: stderr/);
+    expect(f.kills).toEqual([
+      { pid: -777, signal: 'SIGTERM' },
+      { pid: -777, signal: 'SIGKILL' },
+    ]);
   });
 
   it('can discard verbose stdout while preserving framing and per-record bounds', async () => {
@@ -212,38 +231,104 @@ describe('runStreamingCli duplex lifecycle', () => {
     expect(streams).toHaveBeenCalledTimes(1);
   });
 
-  it('graceful-only timeout closes stdin and never sends an OS signal', async () => {
+  it('timeout owns TERM→KILL and settles only after child close', async () => {
     vi.useFakeTimers();
     const f = fixture();
     const shutdown = vi.fn();
     const { promise } = start(f, {
       processGroup: 'own',
       timeoutMs: 50,
+      graceMs: 250,
       onShutdownRequested: shutdown,
     });
-    const rejection = promise.catch((error: unknown) => error);
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     await vi.advanceTimersByTimeAsync(50);
-    expect(await rejection).toMatchObject({ __timeout: true });
+    expect(settled).toBe(false);
     expect(f.child.stdin.end).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.kills).toEqual([]);
-    f.child.emit('close', 0);
+    expect(f.kills).toEqual([{ pid: -777, signal: 'SIGTERM' }]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(settled).toBe(false);
+    expect(f.kills).toEqual([
+      { pid: -777, signal: 'SIGTERM' },
+      { pid: -777, signal: 'SIGKILL' },
+    ]);
+    f.child.emit('close', null);
+    await expect(promise).rejects.toMatchObject({ __timeout: true });
   });
 
-  it('never escalates processGroup=own after a graceful shutdown request', async () => {
+  it('synchronously force-kills the owned group if the supervisor exits during grace', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const { promise } = start(f, { processGroup: 'own', timeoutMs: 50, graceMs: 5_000 });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(f.exitHandlers).toHaveLength(1);
+    f.exitHandlers[0]!();
+    expect(f.child.signals).toEqual(['SIGKILL']);
+    expect(f.kills).toEqual([
+      { pid: -777, signal: 'SIGTERM' },
+      { pid: -777, signal: 'SIGKILL' },
+    ]);
+    f.child.emit('close', null);
+    await expect(promise).rejects.toMatchObject({ __timeout: true });
+  });
+
+  it('processGroup=own remains an exact detached owner inside a supervised tree', async () => {
     vi.useFakeTimers();
     const f = fixture();
     process.env.OPENSQUID_SUPERVISED = '1';
-    const { promise } = start(f, { processGroup: 'own', timeoutMs: 50 });
-    const rejection = promise.catch((error: unknown) => error);
+    const { promise } = start(f, { processGroup: 'own', timeoutMs: 50, graceMs: 250 });
     expect(f.spawnCalls[0]?.options.detached).toBe(true);
     await vi.advanceTimersByTimeAsync(50);
     expect(f.child.stdin.end).toHaveBeenCalledTimes(1);
-    expect(await rejection).toMatchObject({ __timeout: true });
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.kills).toEqual([]);
-    f.child.emit('close', 0);
+    expect(f.kills).toEqual([{ pid: -777, signal: 'SIGTERM' }]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(f.kills).toEqual([
+      { pid: -777, signal: 'SIGTERM' },
+      { pid: -777, signal: 'SIGKILL' },
+    ]);
+    f.child.emit('close', null);
+    await expect(promise).rejects.toMatchObject({ __timeout: true });
+  });
+
+  it('prevents the lap supervisor from starting a retry before exact child close', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const first = start(f, { processGroup: 'own', timeoutMs: 50, graceMs: 250 });
+    let attempts = 0;
+    const supervised = superviseLap(
+      async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          await first.promise;
+          return { kind: 'CRASH', costUsd: 0 };
+        }
+        return { kind: 'SHIPPED', costUsd: 0 };
+      },
+      {
+        maxRetries: 1,
+        backoffMs: () => 0,
+        heartbeat: () => undefined,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(attempts).toBe(1);
+    f.child.emit('close', null);
+    await flush();
+    expect(attempts).toBe(2);
+    await expect(supervised).resolves.toMatchObject({ kind: 'SHIPPED' });
   });
 
   it('processGroup=auto preserves the existing supervised-tree behavior', async () => {

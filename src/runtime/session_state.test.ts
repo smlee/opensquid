@@ -26,6 +26,7 @@ import {
   clearSkillTicks,
   isReadOnlyBash,
   readActiveTask,
+  readActiveTaskStrict,
   readSessionCwd,
   readSessionToolLedger,
   readSkillTicks,
@@ -250,6 +251,23 @@ describe('active-task signal (AP.2)', () => {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, '{ not json', 'utf8');
     expect(await readActiveTask('sid-bad')).toBeNull();
+  });
+
+  it('strictly distinguishes absent, present, and malformed active-task state', async () => {
+    await expect(readActiveTaskStrict('sid-strict-absent')).resolves.toEqual({ kind: 'absent' });
+    await writeActiveTask('sid-strict-present', full);
+    await expect(readActiveTaskStrict('sid-strict-present')).resolves.toEqual({
+      kind: 'present',
+      task: full,
+    });
+    const malformed = activeTaskFile('sid-strict-malformed');
+    await mkdir(dirname(malformed), { recursive: true });
+    await writeFile(malformed, '{ not json', 'utf8');
+    await expect(readActiveTaskStrict('sid-strict-malformed')).resolves.toMatchObject({
+      kind: 'indeterminate',
+    });
+    // The tolerant API remains the legacy projection of the same parser.
+    await expect(readActiveTask('sid-strict-malformed')).resolves.toBeNull();
   });
 
   // scope-4 (deploy-commit-gate §4) — the headless-lap item fallback (injected, never ambient env).

@@ -18,7 +18,7 @@ import {
   type WindowsJobIdentity,
 } from './windows_job.js';
 
-export type ExecutorProcessStatus =
+export type OwnedProcessStatus =
   | 'running'
   | 'shutdown_pending'
   | 'shutdown_requested'
@@ -29,8 +29,8 @@ export type ExecutorProcessStatus =
   | 'exited'
   | 'spawn_failed';
 
-export type HumanExecutorAction = 'graceful_stop' | 'terminate' | 'force_kill' | 'resume';
-export type HumanProcessSignalAction = Exclude<HumanExecutorAction, 'resume'>;
+export type HumanProcessAction = 'graceful_stop' | 'terminate' | 'force_kill' | 'resume';
+export type HumanProcessSignalAction = Exclude<HumanProcessAction, 'resume'>;
 export type HumanControlSurface = 'cli' | 'tui' | 'web';
 
 export type ProcessShutdownCause =
@@ -47,9 +47,9 @@ export class ProcessPausedError extends Error {
   readonly code = 'OPENSQUID_PROCESS_PAUSED';
 
   constructor(
-    readonly executorId: string,
+    readonly processId: string,
     readonly cause: Extract<ProcessShutdownCause, { kind: 'human' }>,
-    message = `process ${executorId} is paused pending control-plane resolution`,
+    message = `process ${processId} is paused pending control-plane resolution`,
   ) {
     super(message);
     this.name = 'ProcessPausedError';
@@ -63,9 +63,9 @@ export function isProcessPausedError(value: unknown): value is ProcessPausedErro
   );
 }
 
-export interface ExecutorActionAudit {
+export interface ProcessActionAudit {
   readonly actionId: string;
-  readonly action: HumanExecutorAction;
+  readonly action: HumanProcessAction;
   readonly requestedBy: HumanControlSurface;
   readonly authorizedBy: string;
   readonly requestedAtMs: number;
@@ -74,12 +74,13 @@ export interface ExecutorActionAudit {
   readonly failure?: string;
 }
 
-export interface ExecutorProcessState {
-  /** Stable logical identity across fresh laps. */
-  readonly executorId: string;
+export interface OwnedProcessState {
+  /** Attempt-local identity; replacement StageProcesses always receive a fresh value. */
+  readonly processId: string;
   /** Immutable identity of this current OS-process incarnation. */
   readonly processInstanceId: string;
-  readonly actor: 'parent' | 'executor';
+  /** Infrastructure cleanup topology only; never model authority or workflow hierarchy. */
+  readonly ownership: 'control_root' | 'owned';
   readonly wgId: string;
   readonly runId?: string;
   readonly checkpointStage?: string;
@@ -90,18 +91,18 @@ export interface ExecutorProcessState {
   readonly processStartIdentity: string;
   readonly windowsJobName?: string;
   readonly windowsJobMetadata?: string;
-  readonly status: ExecutorProcessStatus;
+  readonly status: OwnedProcessStatus;
   readonly startedAtMs: number;
   readonly updatedAtMs: number;
   readonly exitCode?: number | null;
-  readonly latestAction?: ExecutorActionAudit;
-  readonly availableActions: readonly HumanExecutorAction[];
+  readonly latestAction?: ProcessActionAudit;
+  readonly availableActions: readonly HumanProcessAction[];
 }
 
-export interface ExecutorControlRequest {
+export interface ProcessControlRequest {
   readonly seq: number;
   readonly actionId: string;
-  readonly executorId: string;
+  readonly processId: string;
   readonly processInstanceId: string;
   readonly wgId: string;
   readonly action: HumanProcessSignalAction;
@@ -113,13 +114,13 @@ export interface ExecutorControlRequest {
   readonly targetProcessStartIdentity: string;
 }
 
-export interface ExecutorControlReceipt extends ExecutorControlRequest {
+export interface ProcessControlReceipt extends ProcessControlRequest {
   readonly result: 'queued' | 'applied' | 'failed';
   readonly appliedAtMs?: number;
   readonly failedAtMs?: number;
   readonly failure?: string;
-  /** Human-authorized cascade receipts when a parent action covers active executors in the same run. */
-  readonly related?: readonly ExecutorControlReceipt[];
+  /** Human-authorized cascade receipts when a stage-process control root covers its run's active processes. */
+  readonly related?: readonly ProcessControlReceipt[];
 }
 
 const execFileAsync = promisify(execFile);
@@ -160,7 +161,7 @@ export async function readProcessIdentity(pid: number): Promise<ProcessIdentity>
   return { processGroupId: Number(match[2]), startIdentity: match[3]! };
 }
 
-const ACTIVE_STATUSES = new Set<ExecutorProcessStatus>([
+const ACTIVE_STATUSES = new Set<OwnedProcessStatus>([
   'running',
   'shutdown_pending',
   'shutdown_requested',
@@ -192,10 +193,10 @@ function ensureTables(db: Client, url: string): Promise<void> {
   let guard = ddlByUrl.get(url);
   if (guard === undefined) {
     guard = (async () => {
-      await db.execute(`CREATE TABLE IF NOT EXISTS executor_control_requests (
+      await db.execute(`CREATE TABLE IF NOT EXISTS owned_process_control_requests (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         action_id TEXT,
-        executor_id TEXT NOT NULL,
+        process_id TEXT NOT NULL,
         process_instance_id TEXT,
         wg_id TEXT,
         action TEXT NOT NULL,
@@ -211,7 +212,7 @@ function ensureTables(db: Client, url: string): Promise<void> {
         result TEXT,
         failure TEXT
       )`);
-      await addMissingColumns(db, 'executor_control_requests', [
+      await addMissingColumns(db, 'owned_process_control_requests', [
         ['action_id', 'TEXT'],
         ['process_instance_id', 'TEXT'],
         ['wg_id', 'TEXT'],
@@ -224,10 +225,10 @@ function ensureTables(db: Client, url: string): Promise<void> {
         ['failure', 'TEXT'],
       ]);
       await db.execute(
-        'CREATE INDEX IF NOT EXISTS idx_executor_control_pending ON executor_control_requests(executor_id, process_instance_id, handled_at_ms, seq)',
+        'CREATE INDEX IF NOT EXISTS idx_owned_process_control_pending ON owned_process_control_requests(process_id, process_instance_id, handled_at_ms, seq)',
       );
       await db.execute(
-        'CREATE UNIQUE INDEX IF NOT EXISTS idx_executor_control_action ON executor_control_requests(action_id)',
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_owned_process_control_action ON owned_process_control_requests(action_id)',
       );
     })().catch((error: unknown) => {
       ddlByUrl.delete(url);
@@ -238,7 +239,7 @@ function ensureTables(db: Client, url: string): Promise<void> {
   return guard;
 }
 
-function actionsFor(status: ExecutorProcessStatus): readonly HumanExecutorAction[] {
+function actionsFor(status: OwnedProcessStatus): readonly HumanProcessAction[] {
   switch (status) {
     case 'running':
       return ['graceful_stop', 'terminate', 'force_kill'];
@@ -258,29 +259,29 @@ function actionsFor(status: ExecutorProcessStatus): readonly HumanExecutorAction
   }
 }
 
-function statusEvent(status: ExecutorProcessStatus): MonitorEventKind {
-  return status === 'running' ? 'executor_started' : `executor_${status}`;
+function statusEvent(status: OwnedProcessStatus): MonitorEventKind {
+  return status === 'running' ? 'process_started' : `process_${status}`;
 }
 
-function eventStatus(kind: MonitorEventKind): ExecutorProcessStatus | null {
+function eventStatus(kind: MonitorEventKind): OwnedProcessStatus | null {
   switch (kind) {
-    case 'executor_started':
+    case 'process_started':
       return 'running';
-    case 'executor_shutdown_pending':
+    case 'process_shutdown_pending':
       return 'shutdown_pending';
-    case 'executor_shutdown_requested':
+    case 'process_shutdown_requested':
       return 'shutdown_requested';
-    case 'executor_terminate_requested':
+    case 'process_terminate_requested':
       return 'terminate_requested';
-    case 'executor_force_kill_requested':
+    case 'process_force_kill_requested':
       return 'force_kill_requested';
-    case 'executor_paused':
+    case 'process_paused':
       return 'paused';
-    case 'executor_resumed':
+    case 'process_resumed':
       return 'resumed';
-    case 'executor_exited':
+    case 'process_exited':
       return 'exited';
-    case 'executor_spawn_failed':
+    case 'process_spawn_failed':
       return 'spawn_failed';
     default:
       return null;
@@ -289,11 +290,11 @@ function eventStatus(kind: MonitorEventKind): ExecutorProcessStatus | null {
 
 function eventInstanceId(event: MonitorEvent): string | undefined {
   if (event.processInstanceId !== undefined) return event.processInstanceId;
-  if (event.executorId === undefined || event.pid === undefined) return undefined;
-  return `${event.executorId}:${String(event.pid)}:${event.processStartIdentity ?? 'legacy'}`;
+  if (event.processId === undefined || event.pid === undefined) return undefined;
+  return `${event.processId}:${String(event.pid)}:${event.processStartIdentity ?? 'legacy'}`;
 }
 
-function actionFromEvent(event: MonitorEvent): ExecutorActionAudit | undefined {
+function actionFromEvent(event: MonitorEvent): ProcessActionAudit | undefined {
   if (
     event.actionId === undefined ||
     event.controlAction === undefined ||
@@ -315,14 +316,11 @@ function actionFromEvent(event: MonitorEvent): ExecutorActionAudit | undefined {
   };
 }
 
-function applyExecutorProcessEvent(
-  byId: Map<string, ExecutorProcessState>,
-  event: MonitorEvent,
-): void {
-  const executorId = event.executorId;
-  if (executorId === undefined) return;
+function applyOwnedProcessEvent(byId: Map<string, OwnedProcessState>, event: MonitorEvent): void {
+  const processId = event.processId;
+  if (processId === undefined) return;
   const status = eventStatus(event.kind);
-  const prior = byId.get(executorId);
+  const prior = byId.get(processId);
   if (status === 'running') {
     const processInstanceId = eventInstanceId(event);
     if (
@@ -333,10 +331,12 @@ function applyExecutorProcessEvent(
     ) {
       return;
     }
-    byId.set(executorId, {
-      executorId,
+    byId.set(processId, {
+      processId,
       processInstanceId,
-      actor: event.role === 'orchestrator' ? 'parent' : 'executor',
+      ownership:
+        event.ownership ??
+        (event.role === 'control-root' || event.role === 'orchestrator' ? 'control_root' : 'owned'),
       wgId: event.wgId,
       ...(event.runId === undefined ? {} : { runId: event.runId }),
       ...(event.checkpointStage === undefined ? {} : { checkpointStage: event.checkpointStage }),
@@ -362,10 +362,10 @@ function applyExecutorProcessEvent(
   const latestAction = actionFromEvent(event);
   if (status === null) {
     if (latestAction === undefined) return;
-    byId.set(executorId, { ...prior, latestAction, updatedAtMs: event.atMs });
+    byId.set(processId, { ...prior, latestAction, updatedAtMs: event.atMs });
     return;
   }
-  byId.set(executorId, {
+  byId.set(processId, {
     ...prior,
     status,
     updatedAtMs: event.atMs,
@@ -375,28 +375,28 @@ function applyExecutorProcessEvent(
   });
 }
 
-export function foldExecutorProcesses(events: readonly MonitorEvent[]): ExecutorProcessState[] {
-  const byId = new Map<string, ExecutorProcessState>();
-  for (const event of events) applyExecutorProcessEvent(byId, event);
+export function foldOwnedProcesses(events: readonly MonitorEvent[]): OwnedProcessState[] {
+  const byId = new Map<string, OwnedProcessState>();
+  for (const event of events) applyOwnedProcessEvent(byId, event);
   return [...byId.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
 }
 
 interface ProcessProjection {
   cursor: number;
-  readonly byId: Map<string, ExecutorProcessState>;
+  readonly byId: Map<string, OwnedProcessState>;
 }
 const processProjections = new Map<string, ProcessProjection>();
 const projectionUpdates = new Map<string, Promise<void>>();
 
 /** Incrementally consume the append-only event stream; repeated reads do not re-fold all history. */
-async function projectedExecutorProcesses(): Promise<ExecutorProcessState[]> {
+async function projectedOwnedProcesses(): Promise<OwnedProcessState[]> {
   const url = await loopDbUrl();
   const priorUpdate = projectionUpdates.get(url) ?? Promise.resolve();
   const update = priorUpdate.then(async () => {
     const projection = processProjections.get(url) ?? { cursor: 0, byId: new Map() };
     const events = await tailEventsSince(projection.cursor);
     for (const event of events) {
-      applyExecutorProcessEvent(projection.byId, event);
+      applyOwnedProcessEvent(projection.byId, event);
       projection.cursor = Math.max(projection.cursor, event.seq);
     }
     processProjections.set(url, projection);
@@ -413,14 +413,15 @@ async function projectedExecutorProcesses(): Promise<ExecutorProcessState[]> {
   );
 }
 
-export async function registerExecutorProcess(input: {
-  executorId: string;
+export async function registerOwnedProcess(input: {
+  processId: string;
   processInstanceId?: string;
   wgId: string;
   runId?: string;
   checkpointStage?: string;
   lap?: number;
   role: string;
+  ownership: 'control_root' | 'owned';
   pid: number;
   processGroupId: number;
   processStartIdentity?: string;
@@ -436,19 +437,26 @@ export async function registerExecutorProcess(input: {
         };
   if (Math.abs(input.processGroupId) !== identity.processGroupId) {
     throw new Error(
-      `owned process group mismatch for ${input.executorId}: expected ${String(Math.abs(input.processGroupId))}, found ${String(identity.processGroupId)}`,
+      `owned process group mismatch for ${input.processId}: expected ${String(Math.abs(input.processGroupId))}, found ${String(identity.processGroupId)}`,
     );
   }
   const processInstanceId = input.processInstanceId ?? randomUUID();
+  const existing = (await projectedOwnedProcesses()).find(
+    (candidate) => candidate.processId === input.processId,
+  );
+  if (existing !== undefined && existing.processInstanceId !== processInstanceId) {
+    throw new Error(`attempt-local process id reused: ${input.processId}`);
+  }
   await appendMonitorEvent({
     wgId: input.wgId,
-    kind: 'executor_started',
-    executorId: input.executorId,
+    kind: 'process_started',
+    processId: input.processId,
     processInstanceId,
     ...(input.runId === undefined ? {} : { runId: input.runId }),
     ...(input.checkpointStage === undefined ? {} : { checkpointStage: input.checkpointStage }),
     ...(input.lap === undefined ? {} : { lap: input.lap }),
     role: input.role,
+    ownership: input.ownership,
     pid: input.pid,
     processGroupId: identity.processGroupId,
     processStartIdentity: identity.startIdentity,
@@ -463,24 +471,24 @@ export async function registerExecutorProcess(input: {
   return processInstanceId;
 }
 
-export async function markExecutorProcess(
-  executorId: string,
-  status: ExecutorProcessStatus,
+export async function markOwnedProcess(
+  processId: string,
+  status: OwnedProcessStatus,
   exitCode?: number | null,
   requestedBy?: HumanControlSurface,
   knownWgId?: string,
   processInstanceId?: string,
-  actionAudit?: ExecutorActionAudit,
+  actionAudit?: ProcessActionAudit,
 ): Promise<void> {
-  const state = (await listExecutorProcesses()).find(
-    (candidate) => candidate.executorId === executorId,
+  const state = (await projectedOwnedProcesses()).find(
+    (candidate) => candidate.processId === processId,
   );
   const wgId = knownWgId ?? state?.wgId;
   if (wgId === undefined) return;
   await appendMonitorEvent({
     wgId,
     kind: statusEvent(status),
-    executorId,
+    processId,
     ...(processInstanceId === undefined ? {} : { processInstanceId }),
     ...(exitCode === undefined ? {} : { exitCode }),
     ...(requestedBy === undefined ? {} : { requestedBy }),
@@ -502,15 +510,75 @@ export async function markExecutorProcess(
   });
 }
 
-export async function listExecutorProcesses(activeOnly = false): Promise<ExecutorProcessState[]> {
-  const states = await projectedExecutorProcesses();
+export interface ListOwnedProcessesDeps {
+  readonly readIdentity: (pid: number) => Promise<ProcessIdentity>;
+}
+
+const DEFAULT_LIST_DEPS: ListOwnedProcessesDeps = { readIdentity: readProcessIdentity };
+const livenessReconciliations = new Map<string, Promise<void>>();
+
+async function reconcileProcessLiveness(
+  state: OwnedProcessState,
+  deps: ListOwnedProcessesDeps,
+): Promise<void> {
+  if (!ACTIVE_STATUSES.has(state.status)) return;
+  const key = `${state.processId}\0${state.processInstanceId}`;
+  const current = livenessReconciliations.get(key);
+  if (current !== undefined) return current;
+  const reconciliation = (async (): Promise<void> => {
+    let exactProcessExists = false;
+    try {
+      const identity = await deps.readIdentity(state.pid);
+      exactProcessExists =
+        identity.processGroupId === state.processGroupId &&
+        identity.startIdentity === state.processStartIdentity;
+    } catch (error) {
+      // A transient inspection/permission error cannot prove that an owned process exited. Only the platform's
+      // explicit missing-process result is authoritative enough to reconcile the durable projection.
+      if (!isMissingOwnedProcess(error)) return;
+    }
+    if (exactProcessExists) return;
+    const latest = (await projectedOwnedProcesses()).find(
+      (candidate) => candidate.processId === state.processId,
+    );
+    if (
+      latest?.processInstanceId !== state.processInstanceId ||
+      !ACTIVE_STATUSES.has(latest.status)
+    ) {
+      return;
+    }
+    await markOwnedProcess(
+      state.processId,
+      'exited',
+      null,
+      undefined,
+      state.wgId,
+      state.processInstanceId,
+    );
+  })();
+  livenessReconciliations.set(key, reconciliation);
+  try {
+    await reconciliation;
+  } finally {
+    if (livenessReconciliations.get(key) === reconciliation) livenessReconciliations.delete(key);
+  }
+}
+
+/** Read process state and reconcile only exact missing/reused OS incarnations; never signal from a read. */
+export async function listOwnedProcesses(
+  activeOnly = false,
+  deps: ListOwnedProcessesDeps = DEFAULT_LIST_DEPS,
+): Promise<OwnedProcessState[]> {
+  const initial = await projectedOwnedProcesses();
+  await Promise.all(initial.map((state) => reconcileProcessLiveness(state, deps)));
+  const states = await projectedOwnedProcesses();
   return activeOnly ? states.filter((state) => ACTIVE_STATUSES.has(state.status)) : states;
 }
 
-export interface RequestExecutorControlDeps {
+export interface RequestProcessControlDeps {
   readonly readIdentity: (pid: number) => Promise<ProcessIdentity>;
   readonly kill: (pid: number, signal: NodeJS.Signals | number) => void;
-  readonly mark: typeof markExecutorProcess;
+  readonly mark: typeof markOwnedProcess;
   readonly controlWindows?: (
     identity: WindowsJobIdentity,
     action: 'terminate' | 'force_kill',
@@ -519,10 +587,10 @@ export interface RequestExecutorControlDeps {
   readonly sleep?: (ms: number) => Promise<void>;
 }
 
-const DEFAULT_REQUEST_DEPS: RequestExecutorControlDeps = {
+const DEFAULT_REQUEST_DEPS: RequestProcessControlDeps = {
   readIdentity: readProcessIdentity,
   kill: (pid, signal) => process.kill(pid, signal),
-  mark: markExecutorProcess,
+  mark: markOwnedProcess,
   controlWindows: (identity, action) => controlWindowsJob(realProcControl, identity, action),
 };
 
@@ -541,11 +609,11 @@ function assertAuthorizationIdentity(value: string): string {
   return identity;
 }
 
-function rowRequest(row: Record<string, unknown>): ExecutorControlRequest {
+function rowRequest(row: Record<string, unknown>): ProcessControlRequest {
   return {
     seq: Number(row.seq),
     actionId: typeof row.action_id === 'string' ? row.action_id : '',
-    executorId: typeof row.executor_id === 'string' ? row.executor_id : '',
+    processId: typeof row.process_id === 'string' ? row.process_id : '',
     processInstanceId: typeof row.process_instance_id === 'string' ? row.process_instance_id : '',
     wgId: typeof row.wg_id === 'string' ? row.wg_id : '',
     action: row.action as HumanProcessSignalAction,
@@ -562,7 +630,7 @@ function rowRequest(row: Record<string, unknown>): ExecutorControlRequest {
 }
 
 async function appendControlAudit(
-  request: ExecutorControlRequest,
+  request: ProcessControlRequest,
   result: 'requested' | 'applied' | 'failed',
   timestamp: number,
   failure?: string,
@@ -571,11 +639,11 @@ async function appendControlAudit(
     wgId: request.wgId,
     kind:
       result === 'requested'
-        ? 'executor_control_requested'
+        ? 'process_control_requested'
         : result === 'applied'
-          ? 'executor_control_applied'
-          : 'executor_control_failed',
-    executorId: request.executorId,
+          ? 'process_control_applied'
+          : 'process_control_failed',
+    processId: request.processId,
     processInstanceId: request.processInstanceId,
     requestedBy: request.requestedBy,
     authorizedBy: request.authorizedBy,
@@ -589,26 +657,26 @@ async function appendControlAudit(
 }
 
 async function insertControlRequest(
-  state: ExecutorProcessState,
+  state: OwnedProcessState,
   input: {
     action: HumanProcessSignalAction;
     requestedBy: HumanControlSurface;
     authorizedBy: string;
   },
-): Promise<ExecutorControlRequest> {
+): Promise<ProcessControlRequest> {
   const request = await withLoopDb(async (db, url) => {
     await ensureTables(db, url);
     const requestedAtMs = Date.now();
     const actionId = randomUUID();
     const inserted = await db.execute({
-      sql: `INSERT INTO executor_control_requests
-              (action_id, executor_id, process_instance_id, wg_id, action, requested_by,
+      sql: `INSERT INTO owned_process_control_requests
+              (action_id, process_id, process_instance_id, wg_id, action, requested_by,
                authorized_by, requested_at_ms, target_pid, target_process_group_id,
                target_process_start_identity, handled_at_ms, applied_at_ms, failed_at_ms, result, failure)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL) RETURNING seq`,
       args: [
         actionId,
-        state.executorId,
+        state.processId,
         state.processInstanceId,
         state.wgId,
         input.action,
@@ -623,7 +691,7 @@ async function insertControlRequest(
     return {
       seq: Number(inserted.rows[0]?.seq),
       actionId,
-      executorId: state.executorId,
+      processId: state.processId,
       processInstanceId: state.processInstanceId,
       wgId: state.wgId,
       action: input.action,
@@ -633,26 +701,26 @@ async function insertControlRequest(
       targetPid: state.pid,
       targetProcessGroupId: state.processGroupId,
       targetProcessStartIdentity: state.processStartIdentity,
-    } satisfies ExecutorControlRequest;
+    } satisfies ProcessControlRequest;
   });
   await appendControlAudit(request, 'requested', request.requestedAtMs);
   return request;
 }
 
 async function pendingRequests(
-  executorId: string,
+  processId: string,
   processInstanceId: string,
-): Promise<ExecutorControlRequest[]> {
+): Promise<ProcessControlRequest[]> {
   return withLoopDb(async (db, url) => {
     await ensureTables(db, url);
     const rs = await db.execute({
-      sql: `SELECT seq, action_id, executor_id, process_instance_id, wg_id, action, requested_by,
+      sql: `SELECT seq, action_id, process_id, process_instance_id, wg_id, action, requested_by,
                    authorized_by, requested_at_ms, target_pid, target_process_group_id,
                    target_process_start_identity
-            FROM executor_control_requests
-            WHERE executor_id=? AND process_instance_id=? AND handled_at_ms IS NULL AND result IS NULL
+            FROM owned_process_control_requests
+            WHERE process_id=? AND process_instance_id=? AND handled_at_ms IS NULL AND result IS NULL
             ORDER BY seq ASC`,
-      args: [executorId, processInstanceId],
+      args: [processId, processInstanceId],
     });
     return rs.rows.map((row) => rowRequest(row as Record<string, unknown>));
   });
@@ -662,19 +730,19 @@ async function claimRequest(seq: number, claimant: 'owner' | 'direct'): Promise<
   return withLoopDb(async (db, url) => {
     await ensureTables(db, url);
     const claimed = await db.execute({
-      sql: 'UPDATE executor_control_requests SET result=? WHERE seq=? AND handled_at_ms IS NULL AND result IS NULL',
+      sql: 'UPDATE owned_process_control_requests SET result=? WHERE seq=? AND handled_at_ms IS NULL AND result IS NULL',
       args: [`authorizing:${claimant}`, seq],
     });
     return claimed.rowsAffected === 1;
   });
 }
 
-async function finishRequest(seq: number, failure?: string): Promise<ExecutorControlReceipt> {
+async function finishRequest(seq: number, failure?: string): Promise<ProcessControlReceipt> {
   const completed = await withLoopDb(async (db, url) => {
     await ensureTables(db, url);
     const now = Date.now();
     await db.execute({
-      sql: `UPDATE executor_control_requests
+      sql: `UPDATE owned_process_control_requests
             SET handled_at_ms=?, applied_at_ms=?, failed_at_ms=?, result=?, failure=?
             WHERE seq=? AND handled_at_ms IS NULL`,
       args: [
@@ -687,10 +755,10 @@ async function finishRequest(seq: number, failure?: string): Promise<ExecutorCon
       ],
     });
     const rs = await db.execute({
-      sql: `SELECT seq, action_id, executor_id, process_instance_id, wg_id, action, requested_by,
+      sql: `SELECT seq, action_id, process_id, process_instance_id, wg_id, action, requested_by,
                    authorized_by, requested_at_ms, target_pid, target_process_group_id,
                    target_process_start_identity, applied_at_ms, failed_at_ms, result, failure
-            FROM executor_control_requests WHERE seq=?`,
+            FROM owned_process_control_requests WHERE seq=?`,
       args: [seq],
     });
     const row = rs.rows[0] as Record<string, unknown> | undefined;
@@ -707,7 +775,7 @@ async function finishRequest(seq: number, failure?: string): Promise<ExecutorCon
         ? {}
         : { failedAtMs: Number(row.failed_at_ms) }),
       ...(typeof row.failure === 'string' ? { failure: row.failure } : {}),
-    } satisfies ExecutorControlReceipt;
+    } satisfies ProcessControlReceipt;
   });
   const timestamp = completed.appliedAtMs ?? completed.failedAtMs ?? Date.now();
   await appendControlAudit(
@@ -719,14 +787,14 @@ async function finishRequest(seq: number, failure?: string): Promise<ExecutorCon
   return completed;
 }
 
-async function readReceipt(seq: number): Promise<ExecutorControlReceipt | null> {
+async function readReceipt(seq: number): Promise<ProcessControlReceipt | null> {
   return withLoopDb(async (db, url) => {
     await ensureTables(db, url);
     const rs = await db.execute({
-      sql: `SELECT seq, action_id, executor_id, process_instance_id, wg_id, action, requested_by,
+      sql: `SELECT seq, action_id, process_id, process_instance_id, wg_id, action, requested_by,
                    authorized_by, requested_at_ms, target_pid, target_process_group_id,
                    target_process_start_identity, handled_at_ms, applied_at_ms, failed_at_ms, result, failure
-            FROM executor_control_requests WHERE seq=?`,
+            FROM owned_process_control_requests WHERE seq=?`,
       args: [seq],
     });
     const row = rs.rows[0] as Record<string, unknown> | undefined;
@@ -749,18 +817,18 @@ async function readReceipt(seq: number): Promise<ExecutorControlReceipt | null> 
   });
 }
 
-export async function getExecutorControlReceipt(
+export async function getProcessControlReceipt(
   actionId: string,
-): Promise<ExecutorControlReceipt | null> {
+): Promise<ProcessControlReceipt | null> {
   const normalized = actionId.trim();
   if (normalized === '') throw new Error('actionId must be non-empty');
   return withLoopDb(async (db, url) => {
     await ensureTables(db, url);
     const rs = await db.execute({
-      sql: `SELECT seq, action_id, executor_id, process_instance_id, wg_id, action, requested_by,
+      sql: `SELECT seq, action_id, process_id, process_instance_id, wg_id, action, requested_by,
                    authorized_by, requested_at_ms, target_pid, target_process_group_id,
                    target_process_start_identity, handled_at_ms, applied_at_ms, failed_at_ms, result, failure
-            FROM executor_control_requests WHERE action_id=?`,
+            FROM owned_process_control_requests WHERE action_id=?`,
       args: [normalized],
     });
     const row = rs.rows[0] as Record<string, unknown> | undefined;
@@ -783,22 +851,22 @@ export async function getExecutorControlReceipt(
   });
 }
 
-async function requestOneExecutorControl(
+async function requestOneProcessControl(
   input: {
-    executorId: string;
+    processId: string;
     action: HumanProcessSignalAction;
     requestedBy: HumanControlSurface;
     authorizedBy: string;
   },
-  deps: RequestExecutorControlDeps = DEFAULT_REQUEST_DEPS,
-): Promise<ExecutorControlReceipt> {
+  deps: RequestProcessControlDeps = DEFAULT_REQUEST_DEPS,
+): Promise<ProcessControlReceipt> {
   const authorizedBy = assertAuthorizationIdentity(input.authorizedBy);
-  const processState = (await listExecutorProcesses()).find(
-    (state) => state.executorId === input.executorId,
+  const processState = (await projectedOwnedProcesses()).find(
+    (state) => state.processId === input.processId,
   );
   if (!processState?.availableActions.includes(input.action)) {
     throw new Error(
-      `executor ${input.executorId} does not allow ${input.action} from status ${processState?.status ?? 'missing'}`,
+      `process ${input.processId} does not allow ${input.action} from status ${processState?.status ?? 'missing'}`,
     );
   }
   const request = await insertControlRequest(processState, { ...input, authorizedBy });
@@ -811,7 +879,7 @@ async function requestOneExecutorControl(
 
   if (input.action === 'graceful_stop') {
     await deps.mark(
-      input.executorId,
+      input.processId,
       'shutdown_requested',
       undefined,
       input.requestedBy,
@@ -854,7 +922,7 @@ async function requestOneExecutorControl(
       // The exact registered PID is already absent, so the requested end-state is satisfied. Reconcile the
       // stale read model instead of reporting a failed action against a process that no longer exists.
       await deps.mark(
-        input.executorId,
+        input.processId,
         'paused',
         undefined,
         input.requestedBy,
@@ -874,13 +942,13 @@ async function requestOneExecutorControl(
       identity.startIdentity !== request.targetProcessStartIdentity ||
       identity.processGroupId !== request.targetProcessGroupId
     ) {
-      throw new Error(`owned process identity changed for ${input.executorId}; refusing OS signal`);
+      throw new Error(`owned process identity changed for ${input.processId}; refusing OS signal`);
     }
     const osAction: 'terminate' | 'force_kill' =
       input.action === 'terminate' ? 'terminate' : 'force_kill';
     const status = osAction === 'terminate' ? 'terminate_requested' : 'force_kill_requested';
     await deps.mark(
-      input.executorId,
+      input.processId,
       status,
       undefined,
       input.requestedBy,
@@ -900,7 +968,7 @@ async function requestOneExecutorControl(
         processState.windowsJobMetadata === undefined ||
         deps.controlWindows === undefined
       ) {
-        throw new Error(`owned Windows Job Object metadata is unavailable for ${input.executorId}`);
+        throw new Error(`owned Windows Job Object metadata is unavailable for ${input.processId}`);
       }
       await deps.controlWindows(
         {
@@ -919,35 +987,35 @@ async function requestOneExecutorControl(
 }
 
 /**
- * Execute one human action through the shared SDK contract. A parent is the control root for its run: the same
- * human authorization is propagated to every active executor process in that run so a parent stop cannot leave
- * detached executor groups launching work after the logical run is paused.
+ * Execute one human action through the shared SDK contract. A registered StageProcess is the infrastructure
+ * control root for its run: the same authorization reaches related active process groups so cleanup is exact.
+ * This OS-process relationship conveys no model authority or workflow ownership.
  */
-export async function requestExecutorControl(
+export async function requestProcessControl(
   input: {
-    executorId: string;
+    processId: string;
     action: HumanProcessSignalAction;
     requestedBy: HumanControlSurface;
     authorizedBy: string;
   },
-  deps: RequestExecutorControlDeps = DEFAULT_REQUEST_DEPS,
-): Promise<ExecutorControlReceipt> {
-  const states = await listExecutorProcesses();
-  const target = states.find((state) => state.executorId === input.executorId);
-  const receipt = await requestOneExecutorControl(input, deps);
-  if (target?.actor !== 'parent' || target.runId === undefined) return receipt;
+  deps: RequestProcessControlDeps = DEFAULT_REQUEST_DEPS,
+): Promise<ProcessControlReceipt> {
+  const states = await projectedOwnedProcesses();
+  const target = states.find((state) => state.processId === input.processId);
+  const receipt = await requestOneProcessControl(input, deps);
+  if (target?.ownership !== 'control_root' || target.runId === undefined) return receipt;
 
-  const children = states.filter(
+  const relatedProcesses = states.filter(
     (state) =>
-      state.executorId !== target.executorId &&
+      state.processId !== target.processId &&
       state.runId === target.runId &&
       state.availableActions.includes(input.action),
   );
   const related = await Promise.all(
-    children.map((child) =>
-      requestOneExecutorControl(
+    relatedProcesses.map((processState) =>
+      requestOneProcessControl(
         {
-          executorId: child.executorId,
+          processId: processState.processId,
           action: input.action,
           requestedBy: input.requestedBy,
           authorizedBy: input.authorizedBy,
@@ -968,8 +1036,8 @@ export interface ControlledProcess {
 }
 
 export interface ProcessControlStoreDeps {
-  register: typeof registerExecutorProcess;
-  mark: typeof markExecutorProcess;
+  register: typeof registerOwnedProcess;
+  mark: typeof markOwnedProcess;
   pending: typeof pendingRequests;
   claim: typeof claimRequest;
   complete: typeof finishRequest;
@@ -978,8 +1046,8 @@ export interface ProcessControlStoreDeps {
 }
 
 const DEFAULT_STORE_DEPS: ProcessControlStoreDeps = {
-  register: registerExecutorProcess,
-  mark: markExecutorProcess,
+  register: registerOwnedProcess,
+  mark: markOwnedProcess,
   pending: pendingRequests,
   claim: claimRequest,
   complete: finishRequest,
@@ -988,14 +1056,15 @@ const DEFAULT_STORE_DEPS: ProcessControlStoreDeps = {
 };
 
 /**
- * Attach one subprocess incarnation to the shared human control plane.
- * Automatic cancellation only closes stdin. TERM/KILL are executed exclusively from a request carrying a
- * human authorization identity and targeting this exact registered process incarnation.
+ * Attach one subprocess incarnation to the shared control plane.
+ * The shared transport owns bounded automatic TERM→KILL cleanup; explicit human actions still require an
+ * authorization identity and target this exact registered process incarnation.
  */
-export function controlledExecutorProcess(input: {
-  executorId: string;
+export function controlledOwnedProcess(input: {
+  processId: string;
   wgId: string;
   role: string;
+  ownership: 'control_root' | 'owned';
   runId?: string;
   checkpointStage?: string;
   lap?: number;
@@ -1024,13 +1093,13 @@ export function controlledExecutorProcess(input: {
     | undefined;
 
   const mark = (
-    status: ExecutorProcessStatus,
+    status: OwnedProcessStatus,
     exitCode?: number | null,
     requestedBy?: HumanControlSurface,
-    actionAudit?: ExecutorActionAudit,
+    actionAudit?: ProcessActionAudit,
   ): Promise<void> =>
     store.mark(
-      input.executorId,
+      input.processId,
       status,
       exitCode,
       requestedBy,
@@ -1062,7 +1131,7 @@ export function controlledExecutorProcess(input: {
       // The status remains visible; the human may choose terminate/force-kill.
     }
   };
-  const applyRequest = async (request: ExecutorControlRequest): Promise<void> => {
+  const applyRequest = async (request: ProcessControlRequest): Promise<void> => {
     if (!(await store.claim(request.seq, 'owner'))) return;
     try {
       shutdownCause = {
@@ -1072,7 +1141,7 @@ export function controlledExecutorProcess(input: {
         authorizedBy: request.authorizedBy,
         actionId: request.actionId,
       };
-      const audit: ExecutorActionAudit = {
+      const audit: ProcessActionAudit = {
         actionId: request.actionId,
         action: request.action,
         requestedBy: request.requestedBy,
@@ -1106,7 +1175,7 @@ export function controlledExecutorProcess(input: {
   const poll = async (): Promise<void> => {
     if (closed) return;
     try {
-      for (const request of await store.pending(input.executorId, processInstanceId)) {
+      for (const request of await store.pending(input.processId, processInstanceId)) {
         await applyRequest(request);
       }
     } finally {
@@ -1137,6 +1206,33 @@ export function controlledExecutorProcess(input: {
     dispose,
     procControl: {
       ...input.base,
+      signalTree: (proc, treeDetached, signal) => {
+        if (windowsJob !== undefined) {
+          return controlWindowsJob(
+            input.base,
+            windowsJob,
+            signal === 'SIGKILL' ? 'force_kill' : 'terminate',
+          );
+        }
+        if (input.base.signalTree !== undefined) {
+          return input.base.signalTree(proc, treeDetached, signal);
+        }
+        if (treeDetached && typeof proc.pid === 'number') input.base.kill(-proc.pid, signal);
+        else proc.kill(signal);
+      },
+      isTreeAlive: (proc, treeDetached) => {
+        // The broker closes only after its Job Object is empty. Its close event therefore proves Windows-tree
+        // drain; before close the owner must remain pending.
+        if (windowsJob !== undefined) return !closed;
+        if (input.base.isTreeAlive !== undefined) return input.base.isTreeAlive(proc, treeDetached);
+        if (typeof proc.pid !== 'number') return false;
+        try {
+          input.base.kill(treeDetached ? -proc.pid : proc.pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      },
       spawn: (cli, args, options) => {
         const proc =
           windowsJob === undefined
@@ -1146,7 +1242,7 @@ export function controlledExecutorProcess(input: {
         detached = windowsJob !== undefined || options.detached === true;
         if (typeof proc.pid === 'number') {
           registration = store.register({
-            executorId: input.executorId,
+            processId: input.processId,
             processInstanceId,
             wgId: input.wgId,
             ...(input.runId === undefined ? {} : { runId: input.runId }),
@@ -1155,6 +1251,7 @@ export function controlledExecutorProcess(input: {
               : { checkpointStage: input.checkpointStage }),
             ...(input.lap === undefined ? {} : { lap: input.lap }),
             role: input.role,
+            ownership: input.ownership,
             pid: proc.pid,
             processGroupId: proc.pid,
             ...(windowsJob === undefined ? {} : { windowsJob }),

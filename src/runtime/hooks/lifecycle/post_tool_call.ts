@@ -37,6 +37,9 @@ export async function runPostToolCall(
 ): Promise<LifecycleOutput> {
   const event = input.event;
   const diagnostics: string[] = [];
+  if (ctx.role === 'reviewer') {
+    return { exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics };
+  }
   const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(event, packs, registry, ctx.sessionId);
   const v2 = await deps.runV2Cartridges(ctx.sessionId, event, ctx.now);

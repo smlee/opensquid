@@ -17,8 +17,9 @@
  * file content, and the committed portion is clean." The one residue the shared serial tree cannot perfectly
  * close without an item-file manifest — an item that committed NOTHING while a wholly-unrelated drive-by COMMIT
  * moved the tip — is closed EXACTLY by the per-item commit identity in the future parallel model (each item
- * drives on its own worktree/branch `auto/wg-<id>`, where `uncommittedPaths()`/`committedSince()` are scoped to
- * the item's worktree and there is no cross-item drive-by). The predicate is IDENTICAL in both models — only
+ * drives on its own worktree and semantic `feat/<slug-of-title>` branch, where `uncommittedPaths()` /
+ * `committedSince()` are scoped to the item's worktree and there is no cross-item drive-by). The predicate is
+ * IDENTICAL in both models — only
  * the seam's binding (shared HEAD vs the item worktree) changes. The observed defect (tip UNMOVED, files dirty)
  * is caught by the `advanced` clause in BOTH models today.
  *

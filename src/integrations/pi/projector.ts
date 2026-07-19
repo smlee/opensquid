@@ -22,24 +22,30 @@ import { LOOP_LAP_ENV } from '../../runtime/hooks/subagent_guard.js';
 import { PI_READINESS_PROBE_ENV, PI_SHELL_COMMAND_PREFIX_ENV, PI_SHELL_PATH_ENV } from './env.js';
 import { completeInteractiveScope } from '../../runtime/ralph/scope_done.js';
 import {
+  fullstackScopeCommand,
+  renderScopeFailure,
+  type FullstackScopeCommand,
+  type FullstackScopeResult,
+} from '../../packs/runtime/fullstack_scope.js';
+import {
   createPiLifecycleResourceOwner,
   type PiLifecycleResourceOwner,
 } from './lifecycle_resources.js';
 
-const EXECUTOR_ENV = 'OPENSQUID_EXECUTOR';
-const EXECUTOR_ID_ENV = 'OPENSQUID_EXECUTOR_ID';
 const SESSION_ENV = 'OPENSQUID_SESSION_ID';
 const ITEM_ENV = 'OPENSQUID_ITEM_ID';
 const RECENT_TURNS_LIMIT = 6;
 
 interface ProjectorState {
   pendingSessionStart: string[];
+  pendingScopeContinuation: { readonly prompt: string; readonly context: string } | undefined;
   blockedToolCalls: Set<string>;
   executedToolCalls: Map<string, Awaited<ReturnType<typeof canonicalizePiToolCall>>>;
   reservedPaths: Map<string, string>;
   toolReservations: Map<string, string>;
   priorAssistantText?: string;
   recentTurns: string[];
+  scopeContinuationChain: Promise<void>;
 }
 
 interface PiActorProjection {
@@ -71,26 +77,15 @@ function resolveLifecycleSessionId(ctx: ExtensionContext): string {
 }
 
 function projectPiActor(ctx: ExtensionContext): PiActorProjection {
-  if (process.env[EXECUTOR_ENV] === '1') {
-    const actorId = nonEmpty(process.env[EXECUTOR_ID_ENV]);
-    const sessionId = nonEmpty(process.env[SESSION_ENV]);
-    const itemId = nonEmpty(process.env[ITEM_ENV]);
-    if (actorId === undefined || sessionId === undefined || itemId === undefined) {
-      throw new Error(
-        'Pi executor projection requires non-empty OPENSQUID_EXECUTOR_ID, OPENSQUID_SESSION_ID, and OPENSQUID_ITEM_ID',
-      );
-    }
+  const sessionId = resolveLifecycleSessionId(ctx);
+  if (process.env[LOOP_LAP_ENV] === '1') {
     return {
-      actor: { kind: 'executor', id: actorId },
-      role: 'lap-child',
+      actor: { kind: 'stage_process', id: sessionId },
+      role: 'stage_process',
       sessionId,
     };
   }
-  return {
-    actor: { kind: 'orchestrator' },
-    role: process.env[LOOP_LAP_ENV] === '1' ? 'lap-parent' : 'interactive',
-    sessionId: resolveLifecycleSessionId(ctx),
-  };
+  return { actor: { kind: 'coordinator' }, role: 'interactive', sessionId };
 }
 
 function lifecycleContext(ctx: ExtensionContext): LifecycleContext {
@@ -114,16 +109,28 @@ function reportDiagnostic(_ctx: ExtensionContext, message: string): void {
   }
 }
 
+function dedupeAdditions(additions: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const addition of additions) {
+    if (addition === '' || seen.has(addition)) continue;
+    seen.add(addition);
+    unique.push(addition);
+  }
+  return unique;
+}
+
 function appendSystemPrompt(base: string, additions: readonly string[]): string {
   return additions.length === 0 ? base : `${base}\n\n${additions.join('\n\n')}`;
 }
 
 function queueContext(pi: ExtensionAPI, additions: readonly string[]): void {
-  if (additions.length === 0) return;
+  const unique = dedupeAdditions(additions);
+  if (unique.length === 0) return;
   void pi.sendMessage(
     {
       customType: 'opensquid-context',
-      content: additions.join('\n\n'),
+      content: unique.join('\n\n'),
       display: false,
     },
     { deliverAs: 'followUp' },
@@ -149,7 +156,7 @@ function promptAdditions(output: LifecycleOutput): string[] {
   const additions = [...output.contextInjections];
   const directiveBlock = formatDirectiveBlock(output.directives);
   if (directiveBlock !== null) additions.push(directiveBlock);
-  return additions;
+  return dedupeAdditions(additions);
 }
 
 function promptResult(
@@ -158,20 +165,13 @@ function promptResult(
   exitCode: 0 | 2,
   stderr: string,
 ) {
-  const promptAdditions = [...additions];
-  if (exitCode === 2 && stderr.length > 0) promptAdditions.unshift(stderr);
-  return {
-    systemPrompt: appendSystemPrompt(event.systemPrompt, promptAdditions),
-    ...(promptAdditions.length === 0
-      ? {}
-      : {
-          message: {
-            customType: 'opensquid-context',
-            content: promptAdditions.join('\n\n'),
-            display: false,
-          },
-        }),
-  };
+  const promptAdditions = dedupeAdditions([
+    ...(exitCode === 2 && stderr.length > 0 ? [stderr] : []),
+    ...additions,
+  ]);
+  // `before_agent_start` additions are refreshed every turn, so one per-turn system-prompt channel is enough.
+  // Returning the same text as `message` would also persist it in the session and send it to the model twice.
+  return { systemPrompt: appendSystemPrompt(event.systemPrompt, promptAdditions) };
 }
 
 function textFromBlocks(content: unknown): string {
@@ -268,14 +268,76 @@ function queueStopContinuation(
   void pi.sendUserMessage(content.join('\n\n'), { deliverAs: 'followUp' });
 }
 
+export type PiScopeContinuation = 'idle' | 'queued' | 'sent' | 'failed';
+export type PiScopeContinuationEvent = 'queue' | 'send_ok' | 'send_failed';
+
+export function stepPiScopeContinuation(
+  state: PiScopeContinuation,
+  event: PiScopeContinuationEvent,
+): PiScopeContinuation {
+  if (state === 'idle' && event === 'queue') return 'queued';
+  if (state === 'queued' && event === 'send_ok') return 'sent';
+  if (state === 'queued' && event === 'send_failed') return 'failed';
+  return 'failed';
+}
+
+async function continuePiScope(
+  result: Extract<FullstackScopeResult, { kind: 'engaged' }>,
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  state: ProjectorState,
+): Promise<void> {
+  const run = state.scopeContinuationChain.then(() => {
+    const before = state.pendingScopeContinuation;
+    let phase = stepPiScopeContinuation('idle', 'queue');
+    // ExtensionAPI.sendUserMessage is deliberately fire-and-forget. Correlate context to the exact generated
+    // follow-up instead of placing it in the generic next-turn queue, so an asynchronous extension_error cannot
+    // leak SCOPE context into an unrelated later prompt. The single slot is bounded and retries overwrite it.
+    state.pendingScopeContinuation = {
+      prompt: result.continuationPrompt,
+      context: result.context,
+    };
+    try {
+      pi.sendUserMessage(result.continuationPrompt, { deliverAs: 'followUp' });
+      phase = stepPiScopeContinuation(phase, 'send_ok');
+    } catch (error) {
+      phase = stepPiScopeContinuation(phase, 'send_failed');
+      state.pendingScopeContinuation = before;
+      ctx.ui.notify(
+        `scope entry engaged ${result.itemId}, but Pi continuation failed: ${String(error)}. ` +
+          `Retry /scope --item ${result.itemId}.`,
+        'error',
+      );
+    }
+    if (phase !== 'sent' && phase !== 'failed') {
+      throw new Error('Pi scope continuation did not terminate');
+    }
+  });
+  state.scopeContinuationChain = run.catch(() => undefined);
+  await run;
+}
+
 export interface OpensquidPiProjectorDeps {
   lifecycleResources?: PiLifecycleResourceOwner;
+  completeScope?: typeof completeInteractiveScope;
+  scopeCommand?: FullstackScopeCommand;
 }
 
 export default function opensquidPiProjector(
   pi: ExtensionAPI,
   deps: OpensquidPiProjectorDeps = {},
 ) {
+  const state: ProjectorState = {
+    pendingSessionStart: [],
+    pendingScopeContinuation: undefined,
+    blockedToolCalls: new Set(),
+    executedToolCalls: new Map(),
+    reservedPaths: new Map(),
+    toolReservations: new Map(),
+    recentTurns: [],
+    scopeContinuationChain: Promise.resolve(),
+  };
+
   pi.registerCommand?.('scope-done', {
     description: 'Persist human-approved scope proof: /scope-done <wg-id> <artifact-path>',
     handler: async (args, ctx) => {
@@ -286,11 +348,25 @@ export default function opensquidPiProjector(
         return;
       }
       try {
-        const result = await completeInteractiveScope({ wgId, artifact, cwd: ctx.cwd });
-        ctx.ui.notify(
-          `scope complete ${result.wgId} → ${result.stage}; loop recovery engaged`,
-          'info',
-        );
+        const result = await (deps.completeScope ?? completeInteractiveScope)({
+          wgId,
+          artifact,
+          cwd: ctx.cwd,
+        });
+        if (result.loop.status === 'error') {
+          ctx.ui.notify(
+            `scope handoff persisted (${result.transition}, ${result.checkpointStage}) but three bounded loop ` +
+              `start attempts failed: ${result.loop.error ?? 'unknown error'}. Resolve that cause, then rerun ` +
+              `/scope-done ${wgId} ${artifact}; the receipt makes it idempotent.`,
+            'error',
+          );
+        } else {
+          ctx.ui.notify(
+            `scope handoff ${result.transition} at ${result.checkpointStage}; ` +
+              `loop ${result.loop.status} pid ${String(result.loop.pid)}`,
+            'info',
+          );
+        }
       } catch (error) {
         ctx.ui.notify(
           `scope-done failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -300,14 +376,34 @@ export default function opensquidPiProjector(
     },
   });
 
-  const state: ProjectorState = {
-    pendingSessionStart: [],
-    blockedToolCalls: new Set(),
-    executedToolCalls: new Map(),
-    reservedPaths: new Map(),
-    toolReservations: new Map(),
-    recentTurns: [],
-  };
+  const scopeCommand = deps.scopeCommand ?? fullstackScopeCommand;
+  pi.registerCommand?.(scopeCommand.name, {
+    description: scopeCommand.description,
+    handler: async (args, ctx) => {
+      const raw = args.length === 0 ? '/scope' : `/scope ${args}`;
+      let result: FullstackScopeResult;
+      try {
+        result = await scopeCommand.execute({
+          raw,
+          sessionId: resolveLifecycleSessionId(ctx),
+          cwd: ctx.cwd,
+        });
+      } catch (error) {
+        ctx.ui.notify(`scope entry failed: ${String(error)}`, 'error');
+        return;
+      }
+      if (result.kind !== 'engaged') {
+        const message =
+          result.kind === 'ignored'
+            ? 'usage: /scope <request> | /scope --item <wg-id>'
+            : renderScopeFailure(result);
+        ctx.ui.notify(message, 'error');
+        return;
+      }
+      await continuePiScope(result, pi, ctx, state);
+    },
+  });
+
   const lifecycleResources = deps.lifecycleResources ?? createPiLifecycleResourceOwner();
   const lifecycleWithResources = async (ctx: ExtensionContext): Promise<LifecycleContext> => ({
     ...lifecycleContext(ctx),
@@ -315,7 +411,7 @@ export default function opensquidPiProjector(
   });
 
   pi.on('session_start', async (event: SessionStartEvent, ctx: ExtensionContext) => {
-    // The full-runtime readiness process loads this extension to prove composition and tool registration, but it
+    // The stage-runtime readiness process loads this extension to prove composition and tool registration, but it
     // is not a lap and must not execute pack lifecycle procedures before its probe handler can inspect the tools.
     if (process.env[PI_READINESS_PROBE_ENV] === '1') return;
     try {
@@ -337,6 +433,11 @@ export default function opensquidPiProjector(
 
   pi.on('before_agent_start', async (event: BeforeAgentStartEvent, ctx: ExtensionContext) => {
     const lifecycle = await lifecycleWithResources(ctx);
+    const scopeContext =
+      state.pendingScopeContinuation?.prompt === event.prompt
+        ? state.pendingScopeContinuation.context
+        : undefined;
+    if (scopeContext !== undefined) state.pendingScopeContinuation = undefined;
     try {
       const promptEvent = {
         kind: 'prompt_submit' as const,
@@ -350,7 +451,11 @@ export default function opensquidPiProjector(
         { event: promptEvent },
         lifecycle,
       );
-      const additions = [...state.pendingSessionStart, ...promptAdditions(output)];
+      const additions = dedupeAdditions([
+        ...state.pendingSessionStart,
+        ...(scopeContext === undefined ? [] : [scopeContext]),
+        ...promptAdditions(output),
+      ]);
       state.pendingSessionStart = [];
       if (output.stderr.length > 0) reportDiagnostic(ctx, output.stderr);
       if (output.exitCode === 2) ctx.abort();
@@ -358,7 +463,7 @@ export default function opensquidPiProjector(
     } catch (error) {
       state.pendingSessionStart = [];
       reportDiagnostic(ctx, `opensquid Pi before_agent_start fail-open: ${String(error)}`);
-      return promptResult(event, [], 0, '');
+      return promptResult(event, scopeContext === undefined ? [] : [scopeContext], 0, '');
     }
   });
 

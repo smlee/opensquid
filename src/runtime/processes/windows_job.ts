@@ -76,9 +76,9 @@ function targetInvocation(
   };
 }
 
-export function createWindowsJobIdentity(executorId: string): WindowsJobIdentity {
+export function createWindowsJobIdentity(processId: string): WindowsJobIdentity {
   const digest = createHash('sha256')
-    .update(`${executorId}\0${randomUUID()}`)
+    .update(`${processId}\0${randomUUID()}`)
     .digest('hex')
     .slice(0, 32);
   return {

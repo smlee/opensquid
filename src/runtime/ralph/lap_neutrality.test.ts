@@ -97,6 +97,6 @@ describe('audit-grep-empty over the neutral lap core (MHL.8)', () => {
     expect(pi).toContain('--mode');
     expect(pi).toContain('agent_settled');
     expect(pi).toContain('get_session_stats');
-    expect(pi).toContain('tool_execution_end');
+    expect(pi).toContain('message_end');
   });
 });

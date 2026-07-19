@@ -15,6 +15,7 @@ import { latestPrefixTag } from '../../runtime/release/release_core.js';
 import { nextRcTag, nextLockedTag } from '../../runtime/release/locked_version.js';
 import {
   mergeToStage,
+  STAGE_BASE_BRANCH,
   STAGE_BRANCH,
   realStageIo,
   type StageIo,
@@ -125,8 +126,9 @@ export interface IntegrationResult {
 }
 
 /**
- * AGF.5+AGF.6 SSOT — integrate a pushed `auto/wg-<id>` branch into the persistent `stage` branch (suite-gated +
- * single-writer `rc`-tagged, AGF.5) then open/refresh the batched `stage → main` PR (AGF.6). NO precondition here
+ * AGF.5+AGF.6 SSOT — integrate the pushed configured semantic local branch into the persistent staging branch
+ * (suite-gated + single-writer `rc`-tagged, AGF.5), then open/refresh the batched staging → production PR
+ * (AGF.6). NO precondition here
  * (the caller owns whether to gate on a green tree): `runRelease` runs the manual command's suite/up-to-date floor
  * BEFORE this; the loop's `onShipped` calls this directly (the item already passed its own suite; the suite reruns
  * ON THE MERGE inside `mergeToStage`). Versions ONLY by the declared locked-prefix config — never intent-from-commit;
@@ -153,7 +155,14 @@ export async function integrateBranchToStage(
   const integrate =
     deps.stageIntegrate ??
     ((b: string, tag: string, c: string) =>
-      mergeToStage(b, stageBranch, tag, c, deps.stageIo ?? realStageIo));
+      mergeToStage(
+        b,
+        stageBranch,
+        tag,
+        c,
+        deps.stageIo ?? realStageIo,
+        deps.environments?.production ?? STAGE_BASE_BRANCH,
+      ));
   const { integrated } = await integrate(branch, rcTag, cwd);
   if (!integrated) return { integrated: false, base, rcTag, reason: 'not-integrated' };
   // PR — open/refresh the batched integration → production PR. The human MERGE is the SOLE gate (never auto-merged
@@ -166,8 +175,9 @@ export async function integrateBranchToStage(
       env !== undefined
         ? ensureProductionPr(env, c, deps.ghIo ?? realGhIo)
         : openStagePr(title, body, c, deps.ghIo ?? realGhIo));
+  const productionBranch = env?.production ?? STAGE_BASE_BRANCH;
   const { url } = await open(
-    `Release: ${stageBranch} → main`,
+    `Release: ${stageBranch} → ${productionBranch}`,
     `Batched integration of ${branch} and prior stage items. ` +
       `Merging opens the release tag (${base}) + publish.`,
     cwd,
@@ -191,14 +201,16 @@ export async function runRelease(cwd: string, deps: ReleaseDeps = {}): Promise<n
     return fail(
       'no `versioning` config declared in .opensquid/active.json (locked-prefix strategy required)',
     );
+  const stageBranch = deps.environments?.staging ?? STAGE_BRANCH;
+  const productionBranch = deps.environments?.production ?? STAGE_BASE_BRANCH;
   if (!r.integrated) {
     return fail(
-      `merge of ${branch} into ${STAGE_BRANCH} did not integrate (conflict or red suite on the merge) — ` +
-        `the branch re-drives from fresh main`,
+      `merge of ${branch} into ${stageBranch} did not integrate (conflict or red suite on the merge) — ` +
+        `the branch re-drives from ${productionBranch}`,
     );
   }
   process.stdout.write(
-    `Integrated ${branch} → ${STAGE_BRANCH} (${r.rcTag}); opened stage → main PR: ${r.url}. ` +
+    `Integrated ${branch} → ${stageBranch} (${r.rcTag}); opened ${stageBranch} → ${productionBranch} PR: ${r.url}. ` +
       `Click MERGE to release ${r.base}.\n`,
   );
   return 0;

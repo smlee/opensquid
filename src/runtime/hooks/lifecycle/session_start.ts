@@ -5,12 +5,13 @@ import { claimUmbrellaLeaseForSession } from '../../chat/claim_lease.js';
 import { dispatchEvent } from '../dispatch.js';
 import { recordCurrentSession } from '../session_id.js';
 import { initializeV2Cartridges } from '../../loop/v2_supply.js';
-import { writeActiveTask } from '../../session_state.js';
+import { recordSessionCwd, writeActiveTask } from '../../session_state.js';
 
 import type { SessionStartInput, LifecycleContext, LifecycleOutput } from './types.js';
 
 export interface SessionStartHandlerDeps {
   recordCurrentSession(sessionId: string, cwd: string): Promise<unknown>;
+  recordSessionCwd(sessionId: string, cwd: string): Promise<void>;
   claimUmbrellaLeaseForSession(
     sessionId: string,
     cwd: string,
@@ -30,6 +31,7 @@ export interface SessionStartHandlerDeps {
 
 const DEFAULT_DEPS: SessionStartHandlerDeps = {
   recordCurrentSession,
+  recordSessionCwd,
   claimUmbrellaLeaseForSession,
   ensureLapActiveTask: async (sessionId, itemId, now) => {
     await writeActiveTask(sessionId, {
@@ -61,14 +63,16 @@ export async function runSessionStart(
   deps: SessionStartHandlerDeps = DEFAULT_DEPS,
 ): Promise<LifecycleOutput> {
   const event = input.event;
-  if (event.source === 'clear' || event.source === 'compact') return EMPTY;
+  if (event.source === 'clear' || event.source === 'compact' || ctx.role === 'reviewer')
+    return EMPTY;
   const diagnostics: string[] = [];
   const startCwd = event.cwd ?? ctx.cwd;
-  if (ctx.role !== 'lap-child') {
-    await deps.recordCurrentSession(ctx.sessionId, startCwd);
-    await deps.claimUmbrellaLeaseForSession(ctx.sessionId, startCwd, { forceTakeover: true });
-  }
-  if (ctx.role === 'lap-parent' && ctx.itemId !== undefined) {
+  // Stage injection can run on the first prompt before any tool call. Persist cwd at session start for every role
+  // so strict docsRoot resolution never guesses or falls back during that first injection.
+  await deps.recordSessionCwd(ctx.sessionId, startCwd);
+  await deps.recordCurrentSession(ctx.sessionId, startCwd);
+  await deps.claimUmbrellaLeaseForSession(ctx.sessionId, startCwd, { forceTakeover: true });
+  if (ctx.role === 'stage_process' && ctx.itemId !== undefined) {
     try {
       await deps.ensureLapActiveTask(ctx.sessionId, ctx.itemId, ctx.now);
     } catch (error) {

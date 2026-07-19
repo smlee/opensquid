@@ -25,7 +25,6 @@ import { emitMonitorEvent } from '../loop/monitor_emit.js'; // LMP.2 — push it
 import { sweepTerminalBacklog } from '../loop/loop_boot_sweep.js'; // F1c — one-time boot drain of the terminal backlog
 import { escalateLap, EscalationUndeliverableError, type LapEscalator } from './escalate_lap.js';
 import type { DecisionVerdict } from './decision_classifier.js';
-import { addItemWorktree, removeItemWorktree, type WorktreeIo } from './worktree_pool.js'; // AGF.3 — worktree-per-item
 import { renderScopeBefore, renderScopeAfter } from '../loop/scope_report.js'; // RD.3 — task/session before/after bodies
 import {
   durableItemCommitExists,
@@ -35,6 +34,11 @@ import {
 } from './consistency_gate.js'; // CG.1 — the consistency gate at the SHIPPED-close boundary
 import type { ResolvedEnvironments } from '../../packs/discovery.js'; // GF.1 — the config-driven git-flow environments
 import type { ReconcileOutcome } from './auto_pull.js'; // GF.6 — the base-refresh reconcile outcome
+import {
+  inspectBoardAvailability,
+  summarizeBoardWaiting,
+  type BoardWaitingItem,
+} from './board_availability.js';
 
 export interface RalphConfig {
   /** Auth mode from CONFIG (Inv 11; no runtime auto-detect). API → dollar budget; subscription → W. */
@@ -58,6 +62,7 @@ export interface RalphConfig {
  * eliminate — the run-to-exhaustion architecture.) */
 export type RalphStop =
   | 'BOARD_EMPTY'
+  | 'BOARD_WAITING'
   | 'BUDGET'
   | 'RATE_BUDGET'
   | 'PROCESS_PAUSED'
@@ -68,6 +73,8 @@ export interface RalphResult {
   spent: number; // running sum of lap costUsd (meaningful in API mode)
   closed: string[]; // item ids closed (SHIPPED)
   parked: { id: string; reason: HumanRequiredReason }[]; // items parked + escalated (residual)
+  /** Present only for BOARD_WAITING: every nonterminal item and why it was unavailable to automation. */
+  waiting?: BoardWaitingItem[];
 }
 
 export interface RalphDeps {
@@ -77,8 +84,8 @@ export interface RalphDeps {
   /**
    * Run ONE lap for an item → its typed outcome + cost. The CLI wraps the resolved harness lap + outcomeFromEnvelope.
    * `stagePrompt` (T-v2-per-stage-loop PSL.3): when present, the per-stage bundle + directive prepended to the
-   * lap's prompt so the lap completes ONLY that stage and reports its resulting `stage` in RALPH-EXIT. Absent →
-   * the open-ended per-item lap (unchanged).
+   * lap's prompt so the lap completes only that stage. The model-authored exit does not own progression; the
+   * coordinator reads the gate-accepted session receipt by harness-generated attempt id.
    */
   runLap: (item: Issue, stagePrompt?: string, checkpointStage?: string) => Promise<LapResult>;
   /** The undroppable escalation transport (GR.3) — the CLI wires `escalateSeverity`. */
@@ -88,17 +95,13 @@ export interface RalphDeps {
   /**
    * RD.3 — the orchestrator's live REPORT channel: DISPLAY a rendered before/after body for the higher scopes
    * (task at claim/close, session at run start/end). The CLI binds it to `displayReport(body, process.stdout)`
-   * (the orchestrator runs in the PARENT process, so its live channel is stdout — there is no `onStderrLine`
-   * indirection here). OPTIONAL + fail-safe: omitting it (tests, non-wired callers) is a silent no-op — no
+   * (the coordinator's live channel is stdout; StageProcess stderr has its own relay). OPTIONAL + fail-safe:
+   * omitting it (tests, non-wired callers) is a silent no-op — no
    * behavior break — mirroring `narrate`. Distinct from `narrate` (a one-line play-by-play): `display` shows
    * the full before/after report body.
    */
   display?: (body: string) => void;
-  /**
-   * T2.9 loop-driver hook — called after a lap SHIPS a task (phases_complete). The CLI wires this to
-   * `onPhasesComplete` (emit the CODE stage report + compute the next run-group via batchDecide). Optional +
-   * fail-open: a report/grouping error must never break the drain loop.
-   */
+  /** Pack/application completion hook. Optional and fail-open so reporting or routing cannot break the drain. */
   onShipped?: (taskId: string) => Promise<void>;
   /**
    * #26 HWS.5(b) — the loop-pass harness↔workgraph reconcile: once per drained pass (beside the orphan
@@ -117,52 +120,34 @@ export interface RalphDeps {
    */
   recordMetric?: (row: LoopMetricRow) => Promise<void>;
   /**
-   * T-v2-per-stage-loop PSL.3 — present ONLY for a stage-gated pack (fullstack-flow). When present, the
-   * orchestrator drives each AUTOMATED stage as its OWN fresh-context lap (priming `stagePrompt` per stage,
-   * advancing via the lap's reported resulting stage), then falls back to the open-ended per-item lap for the
-   * deploy/accept HUMAN boundary (never-auto-ship). Absent → the open-ended per-item lap for the whole item
-   * (unchanged — v1 coding-flow + any non-per-stage pack).
+   * Present when the active pack declares process-driven states. The coordinator treats every state id as opaque,
+   * runs one fresh StageProcess attempt for each declared state, and waits when the checkpoint reaches any
+   * undeclared state. Absent preserves the legacy open-ended item path.
    */
   stageLoop?: {
-    /** The pack's initial stage (seeded for a FRESH item when no durable stage is recorded). */
+    /** The pack-declared process entry, used only when admission has established a fresh eligible item. */
     initialStage: string;
-    /** True while `stage` is an AUTOMATED stage the loop drives; false at the human boundary (deploy/accept/done). */
+    /** Membership in the pack-declared process-driven state set. */
     isAutomated: (stage: string) => boolean;
+    /** True when the pack FSM classifies this opaque state as terminal. */
+    isTerminal: (stage: string) => boolean;
     /** The per-stage prompt (bundle + 'do only this stage' directive) to prepend for `stage`. */
     stagePrompt: (item: Issue, stage: string) => Promise<string>;
-    /** Read the item's durable loop stage (null → seed `initialStage`). */
+    /** Deterministically skip model work when pack-owned durable evidence already completes this state. */
+    completedStage?: (item: Issue, stage: string) => Promise<string | null>;
+    /** Read the item's durable state (null → seed `initialStage`). */
     readStage: (itemId: string) => Promise<string | null>;
+    /** Read the gate-accepted session-local state from the exact completed attempt. */
+    readAttemptStage: (attemptId: string, itemId: string) => Promise<string>;
     /** Drop the item's durable stage once it leaves the loop (closed). */
     clearStage: (itemId: string) => Promise<void>;
     /**
-     * GS1 — the SCOPE GATE (automation must NEVER scope). Before an item is claimed/driven, verify it is really
-     * scoped: 'drive' → automation-eligible (checkpoint past the human `scope` stage WITH on-disk artifact proof);
-     * 'hold' → NOT scoped (no checkpoint / stage `scope` / no-or-missing artifact), so its checkpoint has been
-     * FIXED back to `scope` and it is skipped this pass. A held item is non-blocking — the picker passes over it
-     * (never re-picked → no spin) and awaits interactive human scope, which re-admits it via the FSM write-through.
+     * Generic admission check. It proves the item has the pack-required durable handoff and that its opaque
+     * checkpoint is in the declared process-driven set. Held items are skipped without rewriting pack state.
      */
-    scopeGate: (item: Issue) => Promise<'drive' | 'hold'>;
-    /**
-     * scope-3 (T-in-lap-gating) — CONDITIONAL durable-stage fallback. Persist the gate-accepted `stage` THROUGH
-     * the single `upsertTaskStage` seam (one write + one stage_advance emit). The orchestrator calls this ONLY when
-     * a post-lap re-read shows the in-lap FSM write-through did not land — so it is a defensive fallback writer,
-     * never a concurrent second writer, and never a double emit. Optional-additive: absent ⇒ no reconcile
-     * (byte-unchanged; every existing `stageLoop` fixture that omits it drives exactly as before).
-     */
-    reconcileStage?: (itemId: string, stage: string) => Promise<void>;
-  };
-  /**
-   * AGF.3 (T-opensquid-automated-gitflow, wg-4ae1004c931b) — the bounded concurrency pool + worktree-per-item.
-   * When PRESENT, the claim-and-drive runs each item in its OWN git worktree (cut from fresh `main`, `auto/wg-<id>`)
-   * so concurrent laps never clobber each other's edits, up to `bound` in flight (`drainPool`). Every git effect is
-   * behind the injected `WorktreeIo` (tests pass a stub — no real git). ABSENT (default) ⇒ the serial in-place
-   * drive (the `bound:1` degenerate case) — unchanged. Opt-in + additive, the framework pattern (like `stageLoop`).
-   */
-  pool?: {
-    bound: number;
-    poolRoot: string;
-    mainRoot: string;
-    io: WorktreeIo;
+    admissionGate: (item: Issue) => Promise<'drive' | 'hold'>;
+    /** The coordinator's sole durable stage writer, called only with a gate-accepted attempt receipt. */
+    reconcileStage: (itemId: string, stage: string) => Promise<void>;
   };
   /**
    * CG.1 (T-consistency-gate, wg-1c620a56b733) — the injected git seam the CONSISTENCY GATE reads through.
@@ -170,7 +155,7 @@ export interface RalphDeps {
    * close it VERIFIES a durable item-owned commit landed (`durableItemCommitExists`); if not, it re-drives up to
    * MAX_COMMIT_REDRIVES then PARKS `NO_DURABLE_COMMIT` (never a silent close). ABSENT (default; every existing
    * test, v1 coding-flow) ⇒ the gate is a NO-OP and the SHIPPED-close is byte-unchanged (backward compatible).
-   * Optional + additive, exactly like `stageLoop?`/`pool?`/`recordMetric?`. The CLI wires `makeRalphGitSeam(root)`.
+   * Optional + additive, exactly like `stageLoop?`/`recordMetric?`. The CLI wires `makeRalphGitSeam(root)`.
    */
   git?: RalphGitSeam;
   /**
@@ -193,11 +178,8 @@ export interface RalphDeps {
   baseRefresh?: () => Promise<ReconcileOutcome>;
 }
 
-/** PSL.3 — a stage that reports the SAME stage this many times in a row (no advance) is genuinely stuck.
- *  Raised 3→10 (2026-07-06): a real multi-lap CODE stage needed ~6 laps to complete (the deploy-commit-gate
- *  task), so 3 wedged legitimate progress. 10 gives generous headroom while staying bounded (a genuinely stuck
- *  stage still wedges — no unbounded spin/OOM). NOTE: a fixed cap can still park a very large task; the durable
- *  fix is progress-aware (reset the counter on real progress). Errors are a separate, per-lap bound (`maxRetries`). */
+/** A state that reports itself this many times in a row is stuck. The bound is intentionally generous for
+ * productive multi-attempt states while still preventing an unbounded retry loop. */
 const MAX_STAGE_RETRIES = 10;
 
 /** Resource pauses END the run; everything else is per-item decision-residual that parks + continues. */
@@ -206,20 +188,17 @@ const RESOURCE_PAUSES: readonly HumanRequiredReason[] = [
   'RATE_BUDGET',
   'PROCESS_PAUSED',
   'CANCELLED_BY_HUMAN',
+  'BOARD_WAITING',
   'BOARD_EMPTY',
 ];
 const isResourcePause = (r: HumanRequiredReason): r is RalphStop & HumanRequiredReason =>
   (RESOURCE_PAUSES as readonly string[]).includes(r);
 
 /**
- * PSL.3 / GS1 — run ONE work-item to its outcome. With `stageLoop`, a unified per-iteration loop handles BOTH
- * automated and human-boundary stages: AUTOMATED stages (scope_write, plan, author, code) run a per-stage lap
- * (stagePrompt); HUMAN-BOUNDARY stages (scope, deploy/accept) run the open-ended per-item lap (no stagePrompt).
- * Two human boundaries exist: the interactive `scope` stage first, then the deploy/accept stage last. A SHIPPED
- * human-boundary lap with no resulting `stage` = item complete (the final human lap reported nothing to advance
- * to). A no-advance lap (automated or human-boundary) retries up to MAX_STAGE_RETRIES then escalates
- * UNRECOVERABLE_WEDGE. Costs accumulate so the caller's budget accounting is unaffected.
- * Without `stageLoop`, ONE open-ended per-item lap drives the whole item (unchanged — v1 coding-flow).
+ * Run one work item. With `stageLoop`, only pack-declared process-driven states receive StageProcess attempts.
+ * Reaching any other opaque state returns `AWAITING_INPUT`; core neither guesses its meaning nor runs an
+ * open-ended fallback. A no-advance attempt retries up to MAX_STAGE_RETRIES, then wedges. Without `stageLoop`,
+ * the legacy open-ended per-item path is unchanged.
  */
 async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Promise<LapResult> {
   const sl = deps.stageLoop;
@@ -260,8 +239,26 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
   };
 
   for (;;) {
-    const isAuto = sl.isAutomated(stage);
-    const sp = isAuto ? await sl.stagePrompt(item, stage) : undefined;
+    if (sl.isTerminal(stage)) {
+      return { kind: 'SHIPPED', costUsd: cost };
+    }
+    if (!sl.isAutomated(stage)) {
+      return { kind: 'AWAITING_INPUT', stage, costUsd: cost };
+    }
+    const completedStage = await sl.completedStage?.(item, stage);
+    if (completedStage !== undefined && completedStage !== null && completedStage !== stage) {
+      await flushStage(stage);
+      await sl.reconcileStage(item.id, completedStage);
+      deps.narrate?.(`  ✓ ${item.id} · ${stage} → ${completedStage} (durable evidence)`);
+      stage = completedStage;
+      sameStage = 0;
+      stageStartMs = Date.now();
+      stageCost = 0;
+      stageIn = 0;
+      stageOut = 0;
+      continue;
+    }
+    const sp = await sl.stagePrompt(item, stage);
     deps.narrate?.(`  ▷ ${item.id} · ${stage} lap…`);
     const res = await superviseLap(() => deps.runLap(item, sp, stage), cfg.supervise);
     cost += res.costUsd;
@@ -272,15 +269,10 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
       await flushStage(stage); // record the resources this stage burned before the escalation parks the item
       return { ...res, costUsd: cost }; // escalation/wedge → the uniform handler parks it
     }
-    const next = res.stage;
-    // A SHIPPED human-boundary lap with no resulting stage = item complete (deploy/accept done, or the scope lap
-    // when the agent reports no stage to advance to). Return the lap result as the item's final outcome.
-    if (!isAuto && next === undefined) {
-      await flushStage(stage);
-      return { ...res, costUsd: cost };
-    }
-    // No advance (stage didn't change, or undefined for an automated lap) → bounded retry.
-    if (next === undefined || next === stage) {
+    const next =
+      res.attemptId === undefined ? stage : await sl.readAttemptStage(res.attemptId, item.id);
+    // No gate-accepted advance receipt → bounded fresh-attempt retry.
+    if (next === stage) {
       if (++sameStage >= MAX_STAGE_RETRIES) {
         await flushStage(stage); // the stuck stage still burned resources — record before wedging
         return { kind: 'HUMAN_REQUIRED', reason: 'UNRECOVERABLE_WEDGE', costUsd: cost };
@@ -290,18 +282,9 @@ async function runItemLaps(item: Issue, deps: RalphDeps, cfg: RalphConfig): Prom
     await flushStage(stage); // the stage COMPLETED (advanced) → write its per-stage row, then reset for `next`
     deps.narrate?.(`  ✓ ${item.id} · ${stage} → ${next}`);
     sameStage = 0;
-    stage = next; // in-run priming; the durable projection is written THROUGH by the FSM (v2_supply → upsertTaskStage)
-    // DURING the lap (hooks live — T-in-lap-gating), the single writer, and scope-3's conditional fallback below
-    // reconciles through that SAME seam if it ever did not land — a loop restart resumes from `readStage`.
-    // scope-3 — belt-and-suspenders: the in-lap FSM write-through is authoritative and USUALLY already persisted
-    // `next` DURING the lap. But if it did NOT land (a silenced hook path, a crash before PostToolUse), re-read the
-    // durable stage and reconcile THROUGH the SAME single seam — conditional (only on divergence), same accepted
-    // value → exactly one write + one stage_advance emit per transition (the shipped single-writer/single-emit
-    // invariant, loop_stage.ts:126-140/:139, holds). `next` is the FSM-accepted transition, never a blind stamp.
-    if (sl.reconcileStage !== undefined) {
-      const durable = await sl.readStage(item.id);
-      if (durable !== next) await sl.reconcileStage(item.id, next);
-    }
+    stage = next;
+    // Only the deterministic coordinator turns the exact attempt's gate receipt into durable issue progression.
+    await sl.reconcileStage(item.id, next);
     stageStartMs = Date.now();
     stageCost = 0;
     stageIn = 0;
@@ -347,18 +330,29 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   } catch {
     /* fail-open: a before-session display fault must never break the drive */
   }
-  const displayAfterSession = (stopped: RalphStop): void => {
+  const displayAfterSession = (
+    stopped: RalphStop,
+    waiting: readonly BoardWaitingItem[] = [],
+  ): void => {
     try {
+      const parkedIds = new Set(parked.map((item) => item.id));
+      const waitingOnly = waiting.filter((item) => !parkedIds.has(item.id));
+      const resumable = [...parked.map((item) => item.id), ...waitingOnly.map((item) => item.id)];
       deps.display?.(
         renderScopeAfter(
           'session',
-          `${stopped} · closed ${closed.length} / parked ${parked.length}`,
+          `${stopped} · closed ${closed.length} / parked ${parked.length} / waiting ${waiting.length}`,
           [
             ...closed.map((id) => ({ item: id, done: true })),
             ...parked.map((p) => ({ item: p.id, done: false, note: p.reason })),
+            ...waitingOnly.map((item) => ({
+              item: item.id,
+              done: false,
+              note: `waiting:${item.reason}`,
+            })),
           ],
           closed.length > 0 ? `closed ${closed.join(', ')}` : undefined,
-          parked.length > 0 ? `resume ${parked.map((p) => p.id).join(', ')}` : undefined,
+          resumable.length > 0 ? `resume ${resumable.join(', ')}` : undefined,
           new Date().toISOString(),
         ).body,
       );
@@ -404,6 +398,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   // passes (the merge was aborted by `reconcileBase`, so the base is clean/unchanged; a human resolves the
   // divergence out of band). This prevents both work-loss (nothing auto-picked) AND an escalate-spin.
   let baseConflictSurfaced = false;
+  const awaitingInputIds = new Set<string>();
   for (;;) {
     // GF.6 (BLOCKING-1 fix) — the LIVE per-pass base-refresh: reconcile the base BEFORE driving so a trunk hot
     // patch is pulled into the base (never later reverted). Fail-open on a transient fetch fault (mirrors the
@@ -423,16 +418,19 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       }
     }
     const ready = await wg.listReady(); // GR.1 ordering, claim+wedge aware (live-claimed items excluded)
-    // GS1 — THE SCOPE GATE, as the PICKER's eligibility filter (automation must NEVER scope). Iterate the ready
-    // list oldest-first and drive the first AUTOMATION-ELIGIBLE (really-scoped) item. An unscoped item is NON-
-    // BLOCKING: the gate fixes its checkpoint back to `scope` and returns 'hold', so it is PASSED OVER within the
-    // pass (never re-picked — no spin) and the loop advances to the next. A held item awaits interactive human
-    // scope, which advances its checkpoint past `scope` + records the artifact (v2_supply write-through) and
-    // re-admits it on a later pass. Without a stageLoop (v1 coding-flow) every item is eligible (no gate).
+    // Pack-neutral admission: skip items whose durable checkpoint/evidence is absent or whose opaque state is
+    // outside the pack-declared process set. The gate never rewrites state and held items do not block later
+    // ready work in this pass.
     let item: Issue | undefined;
+    const admissionHeldIds = new Set<string>();
     for (const cand of ready) {
-      if (deps.stageLoop !== undefined && (await deps.stageLoop.scopeGate(cand)) === 'hold')
+      if (
+        awaitingInputIds.has(cand.id) ||
+        (deps.stageLoop !== undefined && (await deps.stageLoop.admissionGate(cand)) === 'hold')
+      ) {
+        admissionHeldIds.add(cand.id);
         continue;
+      }
       item = cand; // oldest-first eligible (listReady ORDER BY created_lamport ASC; no priority column)
       break;
     }
@@ -460,6 +458,29 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
         deps.narrate?.(`■ reaped ${reaped.length} orphan(s) before BOARD_EMPTY — re-draining`);
         continue; // re-evaluate: the orphans are gone; the held/real items are re-considered
       }
+      let availability;
+      try {
+        availability = await inspectBoardAvailability(wg, admissionHeldIds);
+      } catch {
+        // A failed projection read cannot prove emptiness. Fail closed to BOARD_WAITING rather than emitting a
+        // false BOARD_EMPTY; the empty detail list truthfully means the unavailable rows could not be classified.
+        availability = { kind: 'waiting' as const, waiting: [] };
+      }
+      if (availability.kind === 'waiting') {
+        const summary = summarizeBoardWaiting(availability.waiting) || 'classification unavailable';
+        deps.narrate?.(
+          `■ board waiting — BOARD_WAITING (${summary}; closed ${closed.length}, parked ${parked.length})`,
+        );
+        await parkAndEscalate('BOARD_WAITING');
+        displayAfterSession('BOARD_WAITING', availability.waiting);
+        return {
+          stopped: 'BOARD_WAITING',
+          spent,
+          closed,
+          parked,
+          waiting: availability.waiting,
+        };
+      }
       deps.narrate?.(
         `■ board drained — BOARD_EMPTY (closed ${closed.length}, parked ${parked.length})`,
       );
@@ -473,10 +494,9 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
     deps.narrate?.(`▶ claim ${item.id} — ${item.title.slice(0, 60)}`);
     // RD.3 — before-task: DISPLAY "Before-task · <id> · Will: <title>" live at the claim boundary (§5.2 before-task).
     deps.display?.(renderScopeBefore('task', item.id, [item.title], new Date().toISOString()).body);
-    // AGF.3 — when the pool is enabled, drive the item in its OWN worktree (cut from fresh `main`, `auto/wg-<id>`)
-    // so concurrent laps never clobber each other's edits; the worktree is always torn down (fail-open) even on a
-    // driven-item throw. ABSENT (default) ⇒ the serial in-place drive, unchanged. The claim/fold semantics below
-    // (SHIPPED close, roll-up, onShipped, parked escalate) are PRESERVED — the pool changes WHERE the drive runs.
+    // The live coordinator is serial: one claimed item is driven in the existing configured local checkout.
+    // Parallel worktree primitives remain dormant until a future scoped coordinator can pass the exact branch +
+    // cwd through every stage and integration boundary.
     // CG.1 — the CONSISTENCY GATE: record the integration target's tip BEFORE the drive (per-item by
     // construction — one binding per for-loop iteration, which drives exactly one claimed item; generalizes to
     // a per-item-keyed record in the future pool drainer with NO logic change). Absent seam ⇒ undefined ⇒ no gate.
@@ -486,7 +506,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       ? (deps.environments.staging ?? deps.environments.local)
       : undefined;
     const baseSha = deps.git ? await deps.git.tip(target) : undefined;
-    let outcome = await driveMaybePooled(item, deps, cfg); // GR.3 → LapResult (PSL.3 per-stage when stageLoop present)
+    let outcome = await driveClaimedItem(item, deps, cfg); // GR.3 → LapResult (PSL.3 per-stage when stageLoop present)
     spent += outcome.costUsd; // GR.3 propagates costUsd across retries
 
     // CG.1 — a SHIPPED lap that produced NO durable item commit is re-driven up to MAX_COMMIT_REDRIVES, then
@@ -512,7 +532,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
         deps.narrate?.(
           `  ↻ ${item.id} re-drive ${redrives}/${MAX_COMMIT_REDRIVES} to land the commit`,
         );
-        const re = await driveMaybePooled(item, deps, cfg);
+        const re = await driveClaimedItem(item, deps, cfg);
         spent += re.costUsd;
         if (re.kind !== 'SHIPPED') {
           outcome = re; // a re-drive that itself escalates → fall into the uniform park path below (parked once there)
@@ -522,6 +542,14 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       // Divert PAST the SHIPPED-close AND the else-park: the item is ALREADY parked once here, so `continue` to
       // the next ready item (mirrors the picker's `continue` idiom) — no double-park, no double SHIPPED-close.
       if (parkedNoCommit) continue;
+    }
+
+    if (outcome.kind === 'AWAITING_INPUT') {
+      awaitingInputIds.add(item.id);
+      const claimed = await wg.getIssue(item.id);
+      await wg.releaseClaim(item.id, claimed?.claimToken);
+      deps.narrate?.(`⏸ ${item.id} awaiting pack input at ${outcome.stage}`);
+      continue;
     }
 
     if (outcome.kind === 'SHIPPED') {
@@ -555,8 +583,7 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
       } catch {
         /* fail-open: never break the drain over the parent roll-up */
       }
-      // T2.9: the loop-driver lives here — on phases_complete (a SHIPPED lap) emit the CODE report + compute the
-      // next run-group. Fail-open: a report/grouping error must never break the drain.
+      // Invoke the pack/application completion hook after the durable item close. Fail-open by contract.
       try {
         await deps.onShipped?.(item.id);
       } catch {
@@ -586,26 +613,58 @@ export async function runRalphLoop(cfg: RalphConfig, deps: RalphDeps): Promise<R
   }
 }
 
-/** AGF.3 — drive one item, in its own worktree when the pool is enabled (else the serial in-place drive). The
- *  worktree is cut BEFORE the drive (`addItemWorktree`) and torn down AFTER in a `finally` (`removeItemWorktree`,
- *  fail-open) — the lifecycle is attached to the claim/drive so a concurrent lap gets an isolated checkout, and the
- *  fold at the call site is unchanged. ABSENT pool ⇒ `runItemLaps` directly (the `bound:1` degenerate case). */
-async function driveMaybePooled(
+/** Drive one claimed item in the serial configured checkout while renewing its WorkGraph claim. */
+async function driveClaimedItem(
   item: Issue,
   deps: RalphDeps,
   cfg: RalphConfig,
 ): Promise<LapResult> {
-  const pool = deps.pool;
-  if (pool === undefined) return runItemLaps(item, deps, cfg);
-  let path: string | undefined;
+  const current = await deps.wg.getIssue(item.id);
+  const stopRenewal = startClaimRenewal(
+    deps.wg,
+    item.id,
+    current?.claimToken,
+    cfg.claimTtlSec,
+    deps.narrate,
+  );
   try {
-    path = await addItemWorktree(item.id, pool.mainRoot, pool.poolRoot, pool.io);
-    deps.narrate?.(`⑃ worktree ${path} (auto/${item.id})`);
     return await runItemLaps(item, deps, cfg);
   } finally {
-    if (path !== undefined)
-      await removeItemWorktree(path, pool.mainRoot, pool.io).catch(() => undefined);
+    await stopRenewal();
   }
+}
+
+function startClaimRenewal(
+  wg: WorkGraphFacade,
+  itemId: string,
+  token: string | undefined,
+  ttlSec: number,
+  narrate: RalphDeps['narrate'],
+): () => Promise<void> {
+  const renewClaim = wg.renewClaim?.bind(wg);
+  if (token === undefined || renewClaim === undefined) return () => Promise.resolve();
+  const intervalMs = Math.max(100, Math.floor((ttlSec * 1_000) / 3));
+  let inFlight: Promise<void> = Promise.resolve();
+  let renewing = false;
+  const timer = setInterval(() => {
+    if (renewing) return;
+    renewing = true;
+    inFlight = renewClaim(itemId, token, ttlSec)
+      .then(({ renewed }) => {
+        if (!renewed) narrate?.(`⚠ claim renewal lost for ${itemId}`);
+      })
+      .catch((error: unknown) => {
+        narrate?.(`⚠ claim renewal failed for ${itemId}: ${String(error)}`);
+      })
+      .finally(() => {
+        renewing = false;
+      });
+  }, intervalMs);
+  timer.unref();
+  return async () => {
+    clearInterval(timer);
+    await inFlight;
+  };
 }
 
 /** GR.2's recordMisclassification, injected (kept testable / decoupled). */

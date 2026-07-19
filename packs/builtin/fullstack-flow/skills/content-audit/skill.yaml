@@ -2,10 +2,10 @@
 # facet-gates (scope.anchors_ok, plan.acyclic, …) but DROPPED the qualitative guess-free standard v1 ran via
 # read_rubric + a spawned adversarial audit. This skill restores that audit AS A PRODUCER ONLY: on the
 # advancing artifact write it reads the ACTIVE-pack rubric (read_rubric resolves ctx.packId → fullstack-flow,
-# GFR.1) and runs the synchronous, timeout-bounded, prompt-hash-memoized `cached_audit`, which PERSISTS the
-# verdict to `fullstack-flow-<stage>-audit-cache`. It does NOT advance the FSM or emit a verdict — the v2 GATE
-# (pack.yaml, GFR.2) reads the cache via buildGuardCtx and is what blocks. Clean separation: skill produces the
-# verdict, gate consumes it. Mirrors coding-flow/skills/scope-lifecycle/skill.yaml:86-105,205-258.
+# GFR.1) and runs a bounded parallel lens fan-out through prompt-hash-memoized `cached_audit`, which PERSISTS
+# one merged verdict to `fullstack-flow-<stage>-audit-cache`. It does NOT advance the FSM — the v2 GATE
+# (pack.yaml, GFR.2) reads the cache via buildGuardCtx and is what blocks. Failed lens findings are surfaced to
+# the active StageProcess as a warning; only the merged all-lenses-pass verdict authorizes the gate.
 #
 # STAGES — all four audited, each by its OWN artifact + trigger:
 #   SCOPE  — a `docs/research/*-pre-research-*` Write/Edit (the artifact is the doc).
@@ -16,7 +16,7 @@
 # Each writes `fullstack-flow-<stage>-audit-cache`, read by buildGuardCtx; read_rubric resolves all four.
 #
 # FAIL-LOUD: never run rubric-less (read_rubric → null ⇒ the cached_audit `if` is false ⇒ no audit runs ⇒ the
-# cache stays absent ⇒ readVerdict → undefined ⇒ the GFR.2 gate's `contains(audit.<stage>, …)` is false ⇒ the
+# cache stays absent ⇒ readVerdict → undefined ⇒ the GFR.2 gate's `startsWith(audit.<stage>, …)` is false ⇒ the
 # gate BLOCKS). A missing rubric can never masquerade as a pass. `on_error: continue` so a spawn timeout binds
 # the error to `audit` (uncached) and the NEXT write retries — never freezes the flow (v1 F0c discipline).
 name: content-audit
@@ -48,7 +48,9 @@ rules:
       # never stranded). Same derivation the design-doc REWRITE reader uses → writer/reader keys always agree.
       - call: scope_audit_cache_key
         if: '(tool == "Write" || tool == "Edit") && ((contains(targs.file_path, "docs/research/") && contains(targs.file_path, "-pre-research-")) || (contains(targs.file_path, "docs/design/") && contains(targs.file_path, ".md")))'
-        args: { file_path: '{{targs.file_path}}' }
+        args:
+          file_path: '{{targs.file_path}}'
+          base_key: fullstack-flow-scope-audit-cache
         as: scope_cache_key
       # FAIL-LOUD: only spawn when the rubric loaded (rubric != null). A null rubric ⇒ no cache ⇒ the gate blocks.
       - call: cached_audit
@@ -57,20 +59,47 @@ rules:
         args:
           cache_key: '{{scope_cache_key}}'
           model: reasoning
-          timeout_ms: 340000
-          prompt: >-
-            You are an adversarial reviewer enforcing the GUESS-FREE SCOPE standard on a pre-research / scope
-            artifact. Apply EXACTLY this rubric (the single canonical source,
-            packs/builtin/fullstack-flow/rubric/scope.md):\n\n{{rubric}}\n\n
-            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if EVERY numbered criterion
-            in the rubric above holds: every claim is cited-or-flagged-open AND the simplest-correct solution is
-            justified against alternatives AND it is a full fix (not a patch around a design that should be
-            re-architected) AND coverage + on-topic hold AND the four ARCHITECTURE criteria hold (MODULARITY,
-            SCALABILITY, SINGLE-SOURCE-OF-TRUTH, PUSH-vs-PULL — an architecturally-wrong design that is locally
-            simple STILL fails); otherwise `VERDICT: UNRESOLVED` + one bullet per unresolved guess, un-weighed
-            alternative, un-rearchitected patch, coverage gap, off-topic element, OR architecture defect.
-            ARTIFACT:\n\n{{effective}}
+          timeout_ms: 600000
+          # Freshness anchor: the gate re-hashes the current scope artifact and ignores any older verdict.
+          # This prevents an audit timeout on changed content from exposing a stale GUESS_FREE result.
+          subject: '{{effective}}'
+          lenses:
+            - id: evidence
+              criteria: ['1', '5', '6']
+              prompt: >-
+                Audit ONLY SCOPE rubric criteria 1, 5, and 6 (NEVER-GUESS, ON-TOPIC, SOURCE-LADDER) against the
+                complete artifact. Treat still-current primary citations and cited prior research in these bytes as
+                completed evidence regardless of which session retrieved it; never demand a duplicate fetch.
+                Begin with exactly `VERDICT: GUESS_FREE` only if all assigned criteria pass;
+                otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                ARTIFACT:\n\n{{effective}}
+            - id: solution
+              criteria: ['2', '3', '4']
+              prompt: >-
+                Audit ONLY SCOPE rubric criteria 2, 3, and 4 (BEST-SOLUTION, FULL-FIX, FULL-SCOPE) against the
+                complete artifact. Begin with exactly `VERDICT: GUESS_FREE` only if all assigned criteria pass;
+                otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                ARTIFACT:\n\n{{effective}}
+            - id: modularity-authority
+              criteria: ['7', '9']
+              prompt: >-
+                Audit ONLY SCOPE rubric criteria 7 and 9 (MODULARITY and SINGLE-SOURCE-OF-TRUTH) against the
+                complete artifact. Begin with exactly `VERDICT: GUESS_FREE` only if both assigned criteria pass;
+                otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                ARTIFACT:\n\n{{effective}}
+            - id: scalability-flow
+              criteria: ['8', '10']
+              prompt: >-
+                Audit ONLY SCOPE rubric criteria 8 and 10 (SCALABILITY and PUSH-vs-PULL) against the complete
+                artifact. Begin with exactly `VERDICT: GUESS_FREE` only if both assigned criteria pass;
+                otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                ARTIFACT:\n\n{{effective}}
         as: audit
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && rubric != null && !startsWith(audit, "VERDICT: GUESS_FREE")'
+        args:
+          level: warn
+          message: 'SCOPE audit findings:\n{{audit}}'
   # ── AUTHOR: the guess-free audit of the task spec (SIMPLICITY · real-code · coverage —
   #    fullstack-flow/rubric/author.md). Mirrors scope-lifecycle:206-258.
   - id: author-guess-free-audit
@@ -92,19 +121,42 @@ rules:
         args:
           cache_key: fullstack-flow-author-audit-cache
           model: reasoning
-          timeout_ms: 340000
-          prompt: >-
-            You are an adversarial reviewer enforcing the GUESS-FREE AUTHOR (tasking) standard on a task spec.
-            Apply EXACTLY this rubric (the single canonical source,
-            packs/builtin/fullstack-flow/rubric/author.md):\n\n{{rubric}}\n\n
-            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if EVERY numbered criterion
-            in the rubric above holds: every task block carries its required fields with REAL code (no
-            pseudocode), the spec covers the scope with no gap, the design is the simplest correct one (no
-            over-complection), AND the spec introduces no SINGLE-SOURCE-OF-TRUTH or MODULARITY defect (no second
-            store of DB-owned data, every concern behind its seam); otherwise `VERDICT: UNRESOLVED` + one bullet
-            per offending block, uncovered element, over-complected smell, OR architecture defect.
-            SPEC:\n\n{{effective}}
+          timeout_ms: 600000
+          lenses:
+            - id: contract-coverage
+              criteria: ['1', '2', '3']
+              prompt: >-
+                Audit ONLY AUTHOR rubric criteria 1, 2, and 3 (contract, complete coverage, live wiring) against
+                the complete spec. Begin with exactly `VERDICT: GUESS_FREE` only if all assigned criteria pass;
+                otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                SPEC:\n\n{{effective}}
+            - id: correctness-reuse
+              criteria: ['4', '6']
+              prompt: >-
+                Audit ONLY AUTHOR rubric criteria 4 and 6 (technical correctness and existing-solution search)
+                against the complete spec. Begin with exactly `VERDICT: GUESS_FREE` only if both criteria pass;
+                otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                SPEC:\n\n{{effective}}
+            - id: simplicity-architecture
+              criteria: ['5', '7', '8']
+              prompt: >-
+                Audit ONLY AUTHOR rubric criteria 5, 7, and 8 (simplicity, single source of truth, modularity)
+                against the complete spec. Begin with exactly `VERDICT: GUESS_FREE` only if all assigned criteria
+                pass; otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding.
+                RUBRIC:\n\n{{rubric}}\n\nSPEC:\n\n{{effective}}
+            - id: rolling-plan
+              criteria: ['9']
+              prompt: >-
+                Audit ONLY AUTHOR rubric criterion 9 (rolling PLAN re-audit) against the complete spec and its
+                cited plan evidence. Begin with exactly `VERDICT: GUESS_FREE` only if it passes; otherwise begin
+                `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                SPEC:\n\n{{effective}}
         as: audit
+      - call: verdict
+        if: '(tool == "Write" || tool == "Edit") && rubric != null && !startsWith(audit, "VERDICT: GUESS_FREE")'
+        args:
+          level: warn
+          message: 'AUTHOR audit findings:\n{{audit}}'
   # ── PLAN: the guess-free audit of the work-graph decomposition (no-guess deps · on-topic · re-audit-scope —
   #    fullstack-flow/rubric/plan.md). Artifact is the WORK-GRAPH (serialize_plan), NOT a doc write; the trigger
   #    is a work-graph mutation. MCP tool names carry the mcp__opensquid__ prefix → match by substring. (GFR.1b)
@@ -125,16 +177,35 @@ rules:
         args:
           cache_key: fullstack-flow-plan-audit-cache
           model: reasoning
-          timeout_ms: 340000
-          prompt: >-
-            You are an adversarial reviewer enforcing the GUESS-FREE PLAN standard on a work-graph
-            decomposition. Apply EXACTLY this rubric (the single canonical source,
-            packs/builtin/fullstack-flow/rubric/plan.md):\n\n{{rubric}}\n\n
-            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if every dependency edge is
-            DERIVED (not asserted), every task traces to the captured ask, and the SCOPE still holds guess-free;
-            otherwise `VERDICT: UNRESOLVED` + one bullet per un-derived edge, off-topic task, or scope drift.
-            PLAN:\n\n{{plan_artifact}}
+          timeout_ms: 600000
+          lenses:
+            - id: coverage-topic
+              criteria: ['1', '4']
+              prompt: >-
+                Audit ONLY PLAN rubric criteria 1 and 4 (complete coverage and on-topic traceability) against the
+                complete plan. Begin with exactly `VERDICT: GUESS_FREE` only if both criteria pass; otherwise
+                begin `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                PLAN:\n\n{{plan_artifact}}
+            - id: graph-correctness
+              criteria: ['2', '3']
+              prompt: >-
+                Audit ONLY PLAN rubric criteria 2 and 3 (acyclicity and derived dependencies) against the complete
+                plan. Begin with exactly `VERDICT: GUESS_FREE` only if both criteria pass; otherwise begin
+                `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                PLAN:\n\n{{plan_artifact}}
+            - id: rolling-scope
+              criteria: ['5']
+              prompt: >-
+                Audit ONLY PLAN rubric criterion 5 (rolling SCOPE re-audit) against the complete plan and cited
+                scope evidence. Begin with exactly `VERDICT: GUESS_FREE` only if it passes; otherwise begin
+                `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\n
+                PLAN:\n\n{{plan_artifact}}
         as: audit
+      - call: verdict
+        if: 'rubric != null && plan_artifact != null && !startsWith(audit, "VERDICT: GUESS_FREE")'
+        args:
+          level: warn
+          message: 'PLAN audit findings:\n{{audit}}'
   # ── CODE: the guess-free audit of the DIFF (alignment · doc-use · existing-solution · full-fix · re-audit —
   #    fullstack-flow/rubric/code.md). Artifact is the git diff (staged_diff); the trigger is the audit-phase
   #    log. EXTERNAL reviewer — distinct from the agent-side fan-out in procedure/code.md (anti-self-grading). (GFR.1c)
@@ -157,25 +228,48 @@ rules:
         args:
           cache_key: fullstack-flow-code-audit-cache
           model: reasoning
-          timeout_ms: 340000
+          timeout_ms: 600000
           # The raw diff as the freshness SUBJECT (GFR.2-hard staleness anchor): cached_audit records sha256(diff)
           # so the commit-gate can re-derive `git diff HEAD` and prove this GUESS_FREE verdict still certifies the
           # CURRENT diff — a verdict for a since-changed diff is rejected as stale (re-log audit on the new diff).
           subject: '{{diff}}'
-          prompt: >-
-            You are an adversarial reviewer enforcing the GUESS-FREE CODE standard on a diff. Apply EXACTLY this
-            rubric (the single canonical source, packs/builtin/fullstack-flow/rubric/code.md):\n\n{{rubric}}\n\n
-            Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if EVERY numbered criterion
-            in the rubric above holds: the diff aligns to the scoped element, uses APIs per their docs (no
-            deprecated/misused), reinvents nothing, is a full fix (not a band-aid, not an MVP/reduced subset),
-            the AUTHOR spec still holds, AND the diff introduces no MODULARITY / SCALABILITY /
-            SINGLE-SOURCE-OF-TRUTH / PUSH-vs-PULL defect; otherwise `VERDICT: UNRESOLVED` + one bullet per
-            offending hunk. DIFF:\n\n{{diff}}
+          lenses:
+            - id: before-code
+              criteria: ['1', '2', '3', '4']
+              prompt: >-
+                Audit ONLY CODE rubric section A, criteria 1-4 (task verification, expansion, scope alignment,
+                primary-doc use) against the complete diff and evidence. Begin with exactly `VERDICT: GUESS_FREE`
+                only if every assigned criterion passes; otherwise begin `VERDICT: UNRESOLVED` and list every
+                concrete finding. RUBRIC:\n\n{{rubric}}\n\nDIFF:\n\n{{diff}}
+            - id: after-code
+              criteria: ['5', '6', '7', '8', '9']
+              prompt: >-
+                Audit ONLY CODE rubric section B, criteria 5-9 (alignment, proper docs, existing solution,
+                full-fix, external evidence) against the complete diff. Begin with exactly
+                `VERDICT: GUESS_FREE` only if every assigned criterion passes; otherwise begin
+                `VERDICT: UNRESOLVED` and list every concrete finding. RUBRIC:\n\n{{rubric}}\n\nDIFF:\n\n{{diff}}
+            - id: architecture
+              criteria: ['11', '12', '13', '14']
+              prompt: >-
+                Audit ONLY CODE rubric section C, criteria 11-14 (modularity, scalability, single source of truth,
+                push-vs-pull) against the complete diff. Begin with exactly `VERDICT: GUESS_FREE` only if every
+                assigned criterion passes; otherwise begin `VERDICT: UNRESOLVED` and list every concrete finding.
+                RUBRIC:\n\n{{rubric}}\n\nDIFF:\n\n{{diff}}
+            - id: rolling-author
+              criteria: ['10']
+              prompt: >-
+                Audit ONLY CODE rubric section D, criterion 10 (rolling AUTHOR re-audit) against the complete diff
+                and cited author evidence. Begin with exactly `VERDICT: GUESS_FREE` only if it passes; otherwise
+                begin `VERDICT: UNRESOLVED` and list every concrete finding.
+                RUBRIC:\n\n{{rubric}}\n\nDIFF:\n\n{{diff}}
         as: audit
+      - call: verdict
+        if: 'rubric != null && diff != null && !startsWith(audit, "VERDICT: GUESS_FREE")'
+        args:
+          level: warn
+          message: 'CODE audit findings:\n{{audit}}'
 prose: |
-  The guess-free content-audit RUNNER for v2 fullstack-flow: on the advancing artifact write it reads the
-  active pack's stage rubric (read_rubric → ctx.packId) and runs the memoized, timeout-bounded cached_audit,
-  which persists `VERDICT: GUESS_FREE | UNRESOLVED` to `fullstack-flow-<stage>-audit-cache`. PRODUCER ONLY — the
-  pack.yaml GATE reads the verdict (buildGuardCtx) and is what blocks; this skill never advances the FSM. SCOPE
-  (pre-research write) + AUTHOR (task-spec write) are wired; PLAN + CODE audit their non-doc artifacts in the
-  next GFR.1 increment. FAIL-LOUD: a missing rubric ⇒ no cache ⇒ the gate blocks (never a silent pass).
+  The guess-free content-audit RUNNER for v2 fullstack-flow: each audited stage declares independent rubric
+  lenses, cached_audit runs missing lenses concurrently, resumes completed lenses after a partial timeout, and
+  merges them into exactly one gate-facing verdict. Every lens must pass before GUESS_FREE is emitted. Failed
+  findings are surfaced to the active StageProcess; the pack gate remains the sole stage-advance authority.

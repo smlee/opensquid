@@ -550,12 +550,35 @@ export async function readActiveVerifySuite(scopeRoot: string | null): Promise<s
 export async function readActiveDocsRoot(scopeRoot: string | null): Promise<string> {
   if (scopeRoot === null) return 'docs';
   try {
-    const raw = await fs.readFile(join(scopeRoot, 'active.json'), 'utf-8');
-    const v = (JSON.parse(raw) as ActiveJson).docsRoot;
-    return typeof v === 'string' && v.trim().length > 0 ? v.trim() : 'docs';
+    return await readActiveDocsRootStrict(scopeRoot);
   } catch {
     return 'docs';
   }
+}
+
+/**
+ * Approval/writer policy for planning artifacts. Only an absent file or absent/null/blank docsRoot selects the
+ * project-relative `docs` default; unreadable, malformed, non-object, or non-string policy fails closed.
+ */
+export async function readActiveDocsRootStrict(scopeRoot: string): Promise<string> {
+  const path = join(scopeRoot, 'active.json');
+  let raw: string;
+  try {
+    raw = await fs.readFile(path, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'docs';
+    throw error;
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${path} must contain a JSON object`);
+  }
+  const value = (parsed as Record<string, unknown>).docsRoot;
+  if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+    return 'docs';
+  }
+  if (typeof value !== 'string') throw new Error(`${path} docsRoot must be a string or null`);
+  return value.trim();
 }
 
 /**

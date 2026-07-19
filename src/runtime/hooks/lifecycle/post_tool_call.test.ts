@@ -3,11 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { runPostToolCall, type PostToolCallHandlerDeps } from './post_tool_call.js';
 import type { LifecycleContext } from './types.js';
 
-const CHILD_CTX: LifecycleContext = {
-  sessionId: 'sess-child',
+const REVIEWER_CTX: LifecycleContext = {
+  sessionId: 'sess-reviewer',
   cwd: '/repo',
-  actor: { kind: 'executor', id: 'exec-1' },
-  role: 'lap-child',
+  actor: { kind: 'reviewer', id: 'reviewer-1' },
+  role: 'reviewer',
   now: '2026-07-11T00:00:00.000Z',
 };
 
@@ -42,8 +42,8 @@ function fixture(): PostToolFixture {
   };
 }
 
-describe('runPostToolCall lap-child projection', () => {
-  it('runs executed child tools through pack dispatch, cartridges, and observation', async () => {
+describe('runPostToolCall reviewer projection', () => {
+  it('does not project reviewer observations into workflow state', async () => {
     const mocked = fixture();
     const result = await runPostToolCall(
       {
@@ -55,15 +55,20 @@ describe('runPostToolCall lap-child projection', () => {
           exit_code: 1,
         },
       },
-      CHILD_CTX,
+      REVIEWER_CTX,
       mocked.deps,
     );
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain('Progress floor');
-    expect(mocked.observeCall).toHaveBeenCalledTimes(1);
-    expect(mocked.loadDispatch).toHaveBeenCalledOnce();
-    expect(mocked.dispatchEvent).toHaveBeenCalledOnce();
-    expect(mocked.runV2Cartridges).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      exitCode: 0,
+      stderr: '',
+      contextInjections: [],
+      directives: [],
+      diagnostics: [],
+    });
+    expect(mocked.observeCall).not.toHaveBeenCalled();
+    expect(mocked.loadDispatch).not.toHaveBeenCalled();
+    expect(mocked.dispatchEvent).not.toHaveBeenCalled();
+    expect(mocked.runV2Cartridges).not.toHaveBeenCalled();
   });
 });

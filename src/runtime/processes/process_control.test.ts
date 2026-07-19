@@ -6,12 +6,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  controlledExecutorProcess,
-  listExecutorProcesses,
-  markExecutorProcess,
-  registerExecutorProcess,
-  requestExecutorControl,
-  type ExecutorControlRequest,
+  controlledOwnedProcess,
+  listOwnedProcesses,
+  markOwnedProcess,
+  registerOwnedProcess,
+  requestProcessControl,
+  type ProcessControlRequest,
 } from './process_control.js';
 import type { ProcControl } from '../spawn_lifecycle.js';
 
@@ -31,20 +31,26 @@ afterEach(async () => {
   await rm(project, { recursive: true, force: true });
 });
 
-describe('executor process-control state/action contract', () => {
+const listAsAlive = {
+  readIdentity: (pid: number) =>
+    Promise.resolve({ processGroupId: pid, startIdentity: `start-${String(pid)}` }),
+};
+
+describe('owned process-control state/action contract', () => {
   it('publishes JSON-safe state and queues only actions allowed by the current status', async () => {
-    await registerExecutorProcess({
-      executorId: 'exec-1',
+    await registerOwnedProcess({
+      processId: 'exec-1',
       wgId: 'wg-1',
       role: 'scope-architect',
+      ownership: 'owned',
       pid: 123,
       processGroupId: 123,
       processStartIdentity: 'start-123',
       nowMs: 10,
     });
-    expect(await listExecutorProcesses(true)).toEqual([
+    expect(await listOwnedProcesses(true, listAsAlive)).toEqual([
       expect.objectContaining({
-        executorId: 'exec-1',
+        processId: 'exec-1',
         status: 'running',
         availableActions: ['graceful_stop', 'terminate', 'force_kill'],
       }),
@@ -52,9 +58,9 @@ describe('executor process-control state/action contract', () => {
 
     const kill = vi.fn();
     await expect(
-      requestExecutorControl(
+      requestProcessControl(
         {
-          executorId: 'exec-1',
+          processId: 'exec-1',
           action: 'terminate',
           requestedBy: 'web',
           authorizedBy: 'web:user-1',
@@ -64,23 +70,23 @@ describe('executor process-control state/action contract', () => {
             Promise.resolve({ processGroupId: 123, startIdentity: 'start-123' }),
           ),
           kill,
-          mark: markExecutorProcess,
+          mark: markOwnedProcess,
           ownerWaitMs: 0,
           sleep: () => Promise.resolve(),
         },
       ),
     ).resolves.toMatchObject({
-      executorId: 'exec-1',
+      processId: 'exec-1',
       action: 'terminate',
       requestedBy: 'web',
       result: 'applied',
     });
     expect(kill).toHaveBeenCalledWith(-123, 'SIGTERM');
 
-    await markExecutorProcess('exec-1', 'exited', 0);
+    await markOwnedProcess('exec-1', 'exited', 0);
     await expect(
-      requestExecutorControl({
-        executorId: 'exec-1',
+      requestProcessControl({
+        processId: 'exec-1',
         action: 'force_kill',
         requestedBy: 'cli',
         authorizedBy: 'cli:test',
@@ -88,65 +94,101 @@ describe('executor process-control state/action contract', () => {
     ).rejects.toThrow('does not allow force_kill');
   });
 
-  it('keeps delayed lifecycle events from an old process incarnation from overwriting a fresh lap', async () => {
-    await registerExecutorProcess({
-      executorId: 'stable-executor',
-      processInstanceId: 'lap-1-process',
+  it('requires an attempt-local process id and isolates replacement attempts', async () => {
+    await registerOwnedProcess({
+      processId: 'stage-attempt-1',
+      processInstanceId: 'process-1',
       wgId: 'wg-stable',
-      role: 'fullstack-executor',
+      role: 'stage-process',
+      ownership: 'owned',
       pid: 301,
       processGroupId: 301,
       processStartIdentity: 'start-301',
       nowMs: 10,
     });
-    await registerExecutorProcess({
-      executorId: 'stable-executor',
-      processInstanceId: 'lap-2-process',
+    await expect(
+      registerOwnedProcess({
+        processId: 'stage-attempt-1',
+        processInstanceId: 'process-2',
+        wgId: 'wg-stable',
+        role: 'stage-process',
+        ownership: 'owned',
+        pid: 302,
+        processGroupId: 302,
+        processStartIdentity: 'start-302',
+        nowMs: 20,
+      }),
+    ).rejects.toThrow('attempt-local process id reused');
+    await registerOwnedProcess({
+      processId: 'stage-attempt-2',
+      processInstanceId: 'process-2',
       wgId: 'wg-stable',
       runId: 'run-stable',
       checkpointStage: 'code',
-      lap: 2,
-      role: 'fullstack-executor',
+      lap: 1,
+      role: 'stage-process',
+      ownership: 'owned',
       pid: 302,
       processGroupId: 302,
       processStartIdentity: 'start-302',
       nowMs: 20,
     });
-    await markExecutorProcess(
-      'stable-executor',
-      'paused',
-      0,
-      undefined,
-      'wg-stable',
-      'lap-1-process',
-    );
+    await markOwnedProcess('stage-attempt-1', 'paused', 0, undefined, 'wg-stable', 'process-1');
 
-    await expect(listExecutorProcesses()).resolves.toEqual([
+    await expect(listOwnedProcesses(true, listAsAlive)).resolves.toEqual([
       expect.objectContaining({
-        executorId: 'stable-executor',
-        processInstanceId: 'lap-2-process',
+        processId: 'stage-attempt-2',
+        processInstanceId: 'process-2',
         runId: 'run-stable',
         checkpointStage: 'code',
-        lap: 2,
+        lap: 1,
         pid: 302,
         status: 'running',
       }),
     ]);
   });
 
+  it('reconciles an exact missing OS incarnation out of the active process view', async () => {
+    await registerOwnedProcess({
+      processId: 'stale-process',
+      processInstanceId: 'stale-instance',
+      wgId: 'wg-stale',
+      role: 'orchestrator',
+      ownership: 'control_root',
+      pid: 333,
+      processGroupId: 333,
+      processStartIdentity: 'start-333',
+    });
+    const missing = Object.assign(new Error('no process found'), { code: 1 });
+
+    await expect(
+      listOwnedProcesses(true, { readIdentity: () => Promise.reject(missing) }),
+    ).resolves.toEqual([]);
+    await expect(
+      listOwnedProcesses(false, { readIdentity: () => Promise.reject(missing) }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        processId: 'stale-process',
+        processInstanceId: 'stale-instance',
+        status: 'exited',
+      }),
+    ]);
+  });
+
   it('refuses a direct signal when PID start identity or process group changed', async () => {
-    await registerExecutorProcess({
-      executorId: 'exec-reused',
+    await registerOwnedProcess({
+      processId: 'exec-reused',
       wgId: 'wg-reused',
-      role: 'fullstack-executor',
+      role: 'stage-process',
+      ownership: 'owned',
       pid: 222,
       processGroupId: 222,
       processStartIdentity: 'old-start',
     });
     const kill = vi.fn();
-    const receipt = await requestExecutorControl(
+    const receipt = await requestProcessControl(
       {
-        executorId: 'exec-reused',
+        processId: 'exec-reused',
         action: 'force_kill',
         requestedBy: 'cli',
         authorizedBy: 'cli:test',
@@ -156,7 +198,7 @@ describe('executor process-control state/action contract', () => {
           Promise.resolve({ processGroupId: 222, startIdentity: 'new-start' }),
         ),
         kill,
-        mark: markExecutorProcess,
+        mark: markOwnedProcess,
         ownerWaitMs: 0,
         sleep: () => Promise.resolve(),
       },
@@ -166,31 +208,33 @@ describe('executor process-control state/action contract', () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it('cascades one parent authorization to active executor groups in the same run', async () => {
-    await registerExecutorProcess({
-      executorId: 'parent-1',
-      processInstanceId: 'parent-process',
+  it('propagates one control-root authorization to related owned process groups in the same run', async () => {
+    await registerOwnedProcess({
+      processId: 'control-root-1',
+      processInstanceId: 'control-root-process',
       wgId: 'wg-run',
       runId: 'run-1',
-      role: 'orchestrator',
+      role: 'control-root',
+      ownership: 'control_root',
       pid: 401,
       processGroupId: 401,
       processStartIdentity: 'start-401',
     });
-    await registerExecutorProcess({
-      executorId: 'child-1',
-      processInstanceId: 'child-process',
+    await registerOwnedProcess({
+      processId: 'related-1',
+      processInstanceId: 'related-process',
       wgId: 'wg-run',
       runId: 'run-1',
-      role: 'fullstack-executor',
+      role: 'stage-process',
+      ownership: 'owned',
       pid: 402,
       processGroupId: 402,
       processStartIdentity: 'start-402',
     });
     const kill = vi.fn();
-    const receipt = await requestExecutorControl(
+    const receipt = await requestProcessControl(
       {
-        executorId: 'parent-1',
+        processId: 'control-root-1',
         action: 'force_kill',
         requestedBy: 'web',
         authorizedBy: 'web:user-1',
@@ -199,31 +243,32 @@ describe('executor process-control state/action contract', () => {
         readIdentity: (pid) =>
           Promise.resolve({ processGroupId: pid, startIdentity: `start-${String(pid)}` }),
         kill,
-        mark: markExecutorProcess,
+        mark: markOwnedProcess,
         ownerWaitMs: 0,
         sleep: () => Promise.resolve(),
       },
     );
     expect(receipt.result).toBe('applied');
     expect(receipt.related).toHaveLength(1);
-    expect(receipt.related?.[0]?.executorId).toBe('child-1');
+    expect(receipt.related?.[0]?.processId).toBe('related-1');
     expect(kill).toHaveBeenCalledWith(-401, 'SIGKILL');
     expect(kill).toHaveBeenCalledWith(-402, 'SIGKILL');
   });
 
   it('reconciles an already-absent exact process as an applied idempotent action', async () => {
-    await registerExecutorProcess({
-      executorId: 'already-gone',
+    await registerOwnedProcess({
+      processId: 'already-gone',
       wgId: 'wg-gone',
-      role: 'fullstack-executor',
+      role: 'stage-process',
+      ownership: 'owned',
       pid: 450,
       processGroupId: 450,
       processStartIdentity: 'start-450',
     });
     const missing = Object.assign(new Error('no process found'), { code: 1 });
-    const receipt = await requestExecutorControl(
+    const receipt = await requestProcessControl(
       {
-        executorId: 'already-gone',
+        processId: 'already-gone',
         action: 'terminate',
         requestedBy: 'tui',
         authorizedBy: 'tui:user-1',
@@ -231,14 +276,14 @@ describe('executor process-control state/action contract', () => {
       {
         readIdentity: vi.fn(() => Promise.reject(missing)),
         kill: vi.fn(),
-        mark: markExecutorProcess,
+        mark: markOwnedProcess,
         ownerWaitMs: 0,
         sleep: () => Promise.resolve(),
       },
     );
     expect(receipt.result).toBe('applied');
-    await expect(listExecutorProcesses()).resolves.toEqual([
-      expect.objectContaining({ executorId: 'already-gone', status: 'paused' }),
+    await expect(listOwnedProcesses()).resolves.toEqual([
+      expect.objectContaining({ processId: 'already-gone', status: 'paused' }),
     ]);
   });
 
@@ -272,11 +317,11 @@ describe('executor process-control state/action contract', () => {
       onExit: vi.fn(),
       offExit: vi.fn(),
     };
-    const requests: ExecutorControlRequest[] = [
+    const requests: ProcessControlRequest[] = [
       {
         seq: 1,
         actionId: 'action-1',
-        executorId: 'exec-2',
+        processId: 'exec-2',
         processInstanceId: 'instance-2',
         wgId: 'wg-2',
         action: 'terminate',
@@ -290,7 +335,7 @@ describe('executor process-control state/action contract', () => {
       {
         seq: 2,
         actionId: 'action-2',
-        executorId: 'exec-2',
+        processId: 'exec-2',
         processInstanceId: 'instance-2',
         wgId: 'wg-2',
         action: 'force_kill',
@@ -304,10 +349,11 @@ describe('executor process-control state/action contract', () => {
     ];
     const abort = new AbortController();
     const mark = vi.fn(() => Promise.resolve());
-    const control = controlledExecutorProcess({
-      executorId: 'exec-2',
+    const control = controlledOwnedProcess({
+      processId: 'exec-2',
       wgId: 'wg-2',
       role: 'pack-architect',
+      ownership: 'owned',
       base,
       automaticSignal: abort.signal,
       processInstanceId: 'instance-2',

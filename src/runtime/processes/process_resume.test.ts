@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { resumeExecutorProcess } from './process_resume.js';
+import { resumeOwnedProcess } from './process_resume.js';
 
 const paused = {
-  executorId: 'exec-1',
+  processId: 'exec-1',
   processInstanceId: 'instance-1',
-  actor: 'executor' as const,
+  ownership: 'owned' as const,
   wgId: 'wg-1',
-  role: 'fullstack-executor',
+  role: 'stage-process',
   pid: 123,
   processGroupId: 123,
   processStartIdentity: 'start-123',
@@ -17,12 +17,12 @@ const paused = {
   availableActions: [],
 };
 
-describe('resumeExecutorProcess', () => {
+describe('resumeOwnedProcess', () => {
   it('releases the WorkGraph claim, regains loop control, then records resumed', async () => {
     const order: string[] = [];
-    const result = await resumeExecutorProcess(
+    const result = await resumeOwnedProcess(
       {
-        executorId: 'exec-1',
+        processId: 'exec-1',
         requestedBy: 'web',
         authorizedBy: 'web:user-1',
         cwd: '/repo',
@@ -45,7 +45,7 @@ describe('resumeExecutorProcess', () => {
     );
     expect(order).toEqual(['claim', 'loop', 'event']);
     expect(result).toMatchObject({
-      executorId: 'exec-1',
+      processId: 'exec-1',
       processInstanceId: 'instance-1',
       wgId: 'wg-1',
       requestedBy: 'web',
@@ -56,9 +56,9 @@ describe('resumeExecutorProcess', () => {
 
   it('refuses to resume a process that is not paused', async () => {
     await expect(
-      resumeExecutorProcess(
+      resumeOwnedProcess(
         {
-          executorId: 'exec-1',
+          processId: 'exec-1',
           requestedBy: 'cli',
           authorizedBy: 'cli:test',
         },

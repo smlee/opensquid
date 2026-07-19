@@ -4,9 +4,8 @@ You are in the PLAN stage. The scope is guess-free; turn it into an executable, 
 
 ## Research (PLAN-specific)
 
-- PLAN is parent-owned orchestration work. Inspect the SCOPE artifact and map dependencies directly; do not send
-  read-only planning assignments to implementation executors, because the synchronous executor handoff is
-  reserved for bounded repository implementation at CODE.
+- This disposable PLAN StageProcess owns the decomposition attempt directly. Inspect the SCOPE artifact and map
+  dependencies with the stage's granted tools; do not spawn another stage process or start a nested loop.
 - RE-AUDIT the SCOPE: confirm the pre-research artifact still holds guess-free at plan time (catch drift at
   this boundary, not at the end). If the scope artifact itself drifted, fix that artifact first. If the PLAN
   audit identifies drift in a generated issue, fix the issue rather than widening the already-approved scope.

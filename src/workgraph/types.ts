@@ -50,6 +50,7 @@ export type WgOpType =
   | 'issue_archived' // WGL.1 — soft-retire (a new op surviving replay; NOT a log rewrite)
   | 'issue_unarchived' // WGL.1 — reverse the soft-retire (reversible per §6.1)
   | 'claim_acquired'
+  | 'claim_renewed'
   | 'wedge_marked'
   | 'wedge_cleared'
   | 'claim_released';
@@ -78,6 +79,11 @@ export interface WgOp {
  */
 export interface WorkGraphStore extends WorkGraphFacade {
   init(): Promise<void>;
+  renewClaim(
+    id: string,
+    expectedToken: string,
+    ttlSec: number,
+  ): Promise<{ renewed: boolean; expiresAt: string }>;
 }
 
 /**
@@ -103,10 +109,18 @@ export interface WorkGraphFacade {
     id: string,
     audience: ClaimAudience,
     ttlSec: number,
+    /** Optional lifetime-ownership fence, checked immediately before and after the durable claim CAS. */
+    isAuthorized?: () => boolean,
   ): Promise<{ won: boolean; expiresAt: string }>;
+  /** Extend only the exact claim token still owned by this runner. Optional on lightweight test facades. */
+  renewClaim?(
+    id: string,
+    expectedToken: string,
+    ttlSec: number,
+  ): Promise<{ renewed: boolean; expiresAt: string }>;
   wedgeMark(id: string, reason: string): Promise<void>;
   clearWedge(id: string): Promise<void>;
-  releaseClaim(id: string): Promise<void>;
+  releaseClaim(id: string, expectedToken?: string): Promise<void>;
   listEvents(issueId: string): Promise<WgOp[]>;
   /** T2.5 — the project's folded edge projection as `{from,to,type}` triples (deterministic). */
   listEdges(): Promise<{ from: string; to: string; type: EdgeType }[]>;

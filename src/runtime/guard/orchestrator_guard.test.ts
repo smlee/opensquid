@@ -101,12 +101,11 @@ describe('isMutatingCall — deny-list, default-allow', () => {
   });
 });
 
-describe('checkOrchestratorGuard — main loop denies, executor exempt', () => {
-  // --- main loop (no agent_id): CODE-EDITING is denied ---
-  it('main (no agent_id) + Write → deny', () => {
+describe('checkOrchestratorGuard — coordinator boundary without child exemption', () => {
+  it('coordinator + Write → deny', () => {
     const r = checkOrchestratorGuard('Write', { file_path: '/tmp/x', content: 'y' });
     expect(r.deny).toBe(true);
-    expect(r.message).toContain('orchestrator guard');
+    expect(r.message).toContain('coordinator guard');
   });
   it('main + Edit → deny', () => {
     expect(checkOrchestratorGuard('Edit', { file_path: '/tmp/x' }).deny).toBe(true);
@@ -141,22 +140,29 @@ describe('checkOrchestratorGuard — main loop denies, executor exempt', () => {
     );
   });
 
-  // --- executor exemption: agent_id present → ALLOW even for mutating calls ---
-  it('agent_id present + Write → ALLOW (executor exempt)', () => {
-    const r = checkOrchestratorGuard(
-      'Write',
-      { file_path: '/tmp/x', content: 'y' },
-      { agent_id: 'executor-abc123' },
-    );
-    expect(r.deny).toBe(false);
+  it('pack-authorized StageProcess owns implementation directly', () => {
+    expect(
+      checkOrchestratorGuard(
+        'Write',
+        { file_path: '/tmp/x', content: 'y' },
+        { actor: 'stage_process' },
+      ).deny,
+    ).toBe(false);
   });
-  it('agent_id present + `sed -i` → ALLOW (executor exempt)', () => {
-    const r = checkOrchestratorGuard(
-      'Bash',
-      { command: 'sed -i s/a/b/ file.ts' },
-      { agent_id: 'executor-xyz' },
+  it('reviewer is fail-closed read-only', () => {
+    expect(
+      checkOrchestratorGuard('Bash', { command: 'sed -i s/a/b/ file.ts' }, { actor: 'reviewer' })
+        .deny,
+    ).toBe(true);
+    expect(
+      checkOrchestratorGuard('Bash', { command: 'rg -n TODO src' }, { actor: 'reviewer' }).deny,
+    ).toBe(false);
+    expect(checkOrchestratorGuard('Read', {}, { actor: 'reviewer' }).deny).toBe(false);
+    expect(checkOrchestratorGuard('workgraph_get', {}, { actor: 'reviewer' }).deny).toBe(false);
+    expect(checkOrchestratorGuard('workgraph_update_issue', {}, { actor: 'reviewer' }).deny).toBe(
+      true,
     );
-    expect(r.deny).toBe(false);
+    expect(checkOrchestratorGuard('Agent', {}, { actor: 'reviewer' }).deny).toBe(true);
   });
 });
 
@@ -210,22 +216,32 @@ describe('checkOrchestratorGuard — documents pass, coding files gated by permi
     expect(r.message).toContain('/code-write');
   });
   it('main + coding file WITH a standing permission grant → ALLOW', () => {
-    const r = checkOrchestratorGuard('Write', { file_path: 'src/x.ts', content: 'x' }, undefined, {
-      codeWritePermitted: true,
-    });
-    expect(r.deny).toBe(false);
-  });
-  it('main + coding file with permission NOT granted → DENY', () => {
-    const r = checkOrchestratorGuard('Write', { file_path: 'src/x.ts', content: 'x' }, undefined, {
-      codeWritePermitted: false,
-    });
-    expect(r.deny).toBe(true);
-  });
-  it('executor (agent_id) + coding file → ALLOW even without a grant (executors implement)', () => {
     const r = checkOrchestratorGuard(
       'Write',
       { file_path: 'src/x.ts', content: 'x' },
-      { agent_id: 'executor-abc' },
+      {
+        actor: 'coordinator',
+        codeWritePermitted: true,
+      },
+    );
+    expect(r.deny).toBe(false);
+  });
+  it('main + coding file with permission NOT granted → DENY', () => {
+    const r = checkOrchestratorGuard(
+      'Write',
+      { file_path: 'src/x.ts', content: 'x' },
+      {
+        actor: 'coordinator',
+        codeWritePermitted: false,
+      },
+    );
+    expect(r.deny).toBe(true);
+  });
+  it('StageProcess + coding file → ALLOW through direct stage authority', () => {
+    const r = checkOrchestratorGuard(
+      'Write',
+      { file_path: 'src/x.ts', content: 'x' },
+      { actor: 'stage_process' },
     );
     expect(r.deny).toBe(false);
   });
@@ -248,14 +264,19 @@ describe('checkDesignDocRewrite — the interactive design-doc REWRITE gate (AQG
   // A pure injected verdict reader; `throws` makes it reject (the fail-open branch).
   const gate = (
     verdict: string | undefined,
-    opts: { hookInput?: { agent_id?: string }; throws?: boolean } = {},
+    opts: { actor?: 'coordinator' | 'stage_process' | 'reviewer'; throws?: boolean } = {},
     file_path = 'docs/design/x.md',
     tool = 'Write',
   ) =>
-    checkDesignDocRewrite(tool, { file_path }, opts.hookInput, {
-      readScopeVerdict: () =>
-        opts.throws ? Promise.reject(new Error('unreadable')) : Promise.resolve(verdict),
-    });
+    checkDesignDocRewrite(
+      tool,
+      { file_path },
+      {
+        actor: opts.actor ?? 'coordinator',
+        readScopeVerdict: () =>
+          opts.throws ? Promise.reject(new Error('unreadable')) : Promise.resolve(verdict),
+      },
+    );
 
   it('present-and-not-GUESS_FREE (UNRESOLVED) rewrite → deny', async () => {
     expect((await gate('VERDICT: UNRESOLVED\n- a redundancy defect')).deny).toBe(true);
@@ -273,8 +294,12 @@ describe('checkDesignDocRewrite — the interactive design-doc REWRITE gate (AQG
     expect((await gate(undefined, { throws: true })).deny).toBe(false);
   });
 
-  it('executor (agent_id) → allow even on an UNRESOLVED verdict (exempt, as checkOrchestratorGuard)', async () => {
-    expect((await gate('VERDICT: UNRESOLVED', { hookInput: { agent_id: 'a' } })).deny).toBe(false);
+  it('StageProcess remains governed by its pack gate rather than the coordinator rewrite gate', async () => {
+    expect((await gate('VERDICT: UNRESOLVED', { actor: 'stage_process' })).deny).toBe(false);
+  });
+
+  it('reviewer identity is not a rewrite exemption', async () => {
+    expect((await gate('VERDICT: UNRESOLVED', { actor: 'reviewer' })).deny).toBe(true);
   });
 
   it('a non-design write (src/, docs/tasks/) → allow even on an UNRESOLVED verdict (only design docs gated)', async () => {

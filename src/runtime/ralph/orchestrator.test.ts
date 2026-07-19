@@ -41,25 +41,35 @@ const P = <T>(v: T): Promise<T> => Promise.resolve(v);
 function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphFacade {
   const rows = new Map<
     string,
-    { status: 'open' | 'closed' | 'archived'; wedged: boolean; claimed: boolean }
+    {
+      status: Issue['status'];
+      wedgeReason: string | undefined;
+      claimed: boolean;
+    }
   >();
-  ids.forEach((id) => rows.set(id, { status: 'open', wedged: false, claimed: false }));
-  const issue = (id: string): Issue => ({
-    id,
-    title: id,
-    body: '',
-    status: rows.get(id)!.status,
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...(rows.get(id)!.wedged ? { wedgeReason: 'UNRECOVERABLE_WEDGE' } : {}),
-  });
+  ids.forEach((id) => rows.set(id, { status: 'open', wedgeReason: undefined, claimed: false }));
+  const issue = (id: string): Issue => {
+    const row = rows.get(id)!;
+    return {
+      id,
+      title: id,
+      body: '',
+      status: row.status,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      ...(row.claimed
+        ? { claimToken: `claim-${id}`, claimExpiresAt: '2099-01-01T00:00:00.000Z' }
+        : {}),
+      ...(row.wedgeReason === undefined ? {} : { wedgeReason: row.wedgeReason }),
+    };
+  };
   const store: WorkGraphFacade = {
     listReady: () =>
       P(
         ids
           .filter((id) => {
             const r = rows.get(id)!;
-            return r.status === 'open' && !r.wedged && !r.claimed;
+            return r.status === 'open' && r.wedgeReason === undefined && !r.claimed;
           })
           .map(issue),
       ),
@@ -71,16 +81,16 @@ function mockStore(ids: string[], claimLost = new Set<string>()): WorkGraphFacad
           : { won: true, expiresAt: '2026-01-01T00:30:00.000Z' },
       );
     },
-    updateIssue: (id: string, patch: { status?: 'open' | 'closed' }) => {
+    updateIssue: (id: string, patch: { status?: Issue['status'] }) => {
       if (patch.status) rows.get(id)!.status = patch.status;
       return P(issue(id));
     },
-    wedgeMark: (id: string) => {
-      rows.get(id)!.wedged = true;
+    wedgeMark: (id: string, reason: string) => {
+      rows.get(id)!.wedgeReason = reason;
       return P(undefined);
     },
     clearWedge: (id: string) => {
-      rows.get(id)!.wedged = false;
+      rows.get(id)!.wedgeReason = undefined;
       return P(undefined);
     },
     releaseClaim: (id: string) => {
@@ -142,6 +152,29 @@ describe('runRalphLoop', () => {
     expect(esc).toHaveBeenCalledTimes(1); // BOARD_EMPTY DOES escalate (not a silent stop)
   });
 
+  it('renews the exact claim while a productive lap runs longer than one renewal interval', async () => {
+    vi.useFakeTimers();
+    try {
+      const wg = mockStore(['a']);
+      const renewClaim = vi.fn(() => P({ renewed: true, expiresAt: '2099-01-01T00:00:00.000Z' }));
+      wg.renewClaim = renewClaim;
+      const runLap = vi.fn(
+        () =>
+          new Promise<LapResult>((resolve) => {
+            setTimeout(() => resolve({ kind: 'SHIPPED', costUsd: 0 }), 2_500);
+          }),
+      );
+
+      const running = runRalphLoop(cfg({ claimTtlSec: 3 }), deps(wg, runLap));
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect((await running).stopped).toBe('BOARD_EMPTY');
+      expect(renewClaim).toHaveBeenCalledTimes(2);
+      expect(renewClaim).toHaveBeenCalledWith('a', 'claim-a', 3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('one ready item, lap SHIPPED → item closed, loop closes it → drains to BOARD_EMPTY', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0.04 });
     const r = await runRalphLoop(cfg(), deps(mockStore(['a']), runLap));
@@ -177,15 +210,16 @@ describe('runRalphLoop', () => {
     const r = await runRalphLoop(cfg(), deps(mockStore(['a']), runLap, esc));
     expect(r.parked).toEqual([{ id: 'a', reason: 'SCOPE_FORK' }]);
     expect(r.closed).toEqual([]);
-    expect(r.stopped).toBe('BOARD_EMPTY'); // a wedge-marked → drops out → board empty
-    expect(esc).toHaveBeenCalledTimes(2); // once for SCOPE_FORK, once for BOARD_EMPTY
+    expect(r.stopped).toBe('BOARD_WAITING'); // the wedged nonterminal item still exists
+    expect(r.waiting).toEqual([{ id: 'a', reason: 'wedged', detail: 'SCOPE_FORK' }]);
+    expect(esc).toHaveBeenCalledTimes(2); // once for SCOPE_FORK, once for BOARD_WAITING
   });
 
   it('lap WEDGE → wedge-mark UNRECOVERABLE_WEDGE + escalate, does not stop the loop', async () => {
     const runLap = lap({ kind: 'WEDGE', costUsd: 0.02 });
     const r = await runRalphLoop(cfg(), deps(mockStore(['a']), runLap));
     expect(r.parked).toEqual([{ id: 'a', reason: 'UNRECOVERABLE_WEDGE' }]);
-    expect(r.stopped).toBe('BOARD_EMPTY'); // continued past the wedge to an empty board
+    expect(r.stopped).toBe('BOARD_WAITING'); // the wedged item is nonterminal, not empty
   });
 
   it('API budget exceeded → BUDGET escalate + STOP', async () => {
@@ -230,11 +264,12 @@ describe('runRalphLoop', () => {
     expect(r.spent).toBe(0);
   });
 
-  it('claimIssue won:false → item skipped (no lap), excluded next pass → BOARD_EMPTY', async () => {
+  it('claimIssue won:false → item skipped and reported as live-claimed, never BOARD_EMPTY', async () => {
     const runLap = lap({ kind: 'SHIPPED', costUsd: 0 });
     const r = await runRalphLoop(cfg(), deps(mockStore(['a'], new Set(['a'])), runLap));
     expect(runLap).not.toHaveBeenCalled();
-    expect(r.stopped).toBe('BOARD_EMPTY');
+    expect(r.stopped).toBe('BOARD_WAITING');
+    expect(r.waiting).toEqual([{ id: 'a', reason: 'claimed', detail: '2099-01-01T00:00:00.000Z' }]);
   });
 
   it('lap-emitted RATE_BUDGET (transient resource pause) → escalate + STOP, item NOT wedge-marked (retries)', async () => {
@@ -350,81 +385,77 @@ const AUTOMATED = new Set(['scope_write', 'plan', 'author', 'code']);
 /** A stageLoop driver over an in-memory durable-stage store; stagePrompt = `DO <stage>` (the test reads it back). */
 function stageLoopStub(
   store = new Map<string, string>(),
-  scopeGate: (item: Issue) => Promise<'drive' | 'hold'> = () => P('drive'),
+  admissionGate: (item: Issue) => Promise<'drive' | 'hold'> = () => P('drive'),
 ): NonNullable<RalphDeps['stageLoop']> {
   return {
     initialStage: 'scope_write',
     isAutomated: (s: string) => AUTOMATED.has(s),
+    isTerminal: (s: string) => s === 'done',
     stagePrompt: (_item: Issue, stage: string) => P(`DO ${stage}`),
     readStage: (id: string) => P(store.get(id) ?? null),
+    readAttemptStage: (attemptId: string) => P(attemptId),
+    reconcileStage: (id: string, stage: string) => {
+      store.set(id, stage);
+      return P(undefined);
+    },
     clearStage: (id: string) => {
       store.delete(id);
       return P(undefined);
     },
-    scopeGate,
+    admissionGate,
   };
 }
 
-// T-in-lap-gating scope-3 — the belt-and-suspenders durable-stage reconcile: conditional, seam-routed, single-emit.
-describe('runRalphLoop — scope-3 conditional durable-stage reconcile', () => {
-  // A stageLoop whose readStage is fully controlled + a reconcileStage spy. advance maps scope_write → a
-  // NON-automated stage so exactly ONE automated advance runs (then the boundary lap completes the item).
-  function reconcileStageLoop(
-    durableAfterLap: string | null,
-    reconcileStage?: (id: string, stage: string) => Promise<void>,
-  ): NonNullable<RalphDeps['stageLoop']> {
-    // advance map (scope_write → the non-automated `deploy`) lives in `oneAutoLap` below — one auto lap then boundary.
-    return {
-      initialStage: 'scope_write',
-      isAutomated: (s: string) => AUTOMATED.has(s),
-      stagePrompt: (_item: Issue, stage: string) => P(`DO ${stage}`),
-      // After the automated lap advanced in-memory to `next`, the durable re-read returns this fixed value.
-      readStage: (_id: string) => P(durableAfterLap),
-      clearStage: (_id: string) => P(undefined),
-      scopeGate: () => P('drive'),
-      ...(reconcileStage === undefined ? {} : { reconcileStage }),
-    };
-  }
-  const oneAutoLap = vi.fn((_item: Issue, sp?: string) => {
-    if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }); // deploy boundary → item done
-    const next = { scope_write: 'deploy' }[sp.replace('DO ', '') as 'scope_write'];
-    return P<LapResult>({ kind: 'SHIPPED', stage: next, costUsd: 0 });
-  });
-
-  it('divergence: reconciles ONCE with the accepted `next` when the in-lap write-through did not land', async () => {
+describe('runRalphLoop — coordinator-owned durable stage progression', () => {
+  it('persists only the exact gate-accepted attempt receipt', async () => {
     const reconcileStage = vi.fn((_id: string, _stage: string) => P(undefined));
-    // durable re-read still shows the OLD stage (write-through did not persist) → divergence.
-    await runRalphLoop(cfg(), {
-      ...deps(mockStore(['a']), oneAutoLap),
-      stageLoop: reconcileStageLoop('scope_write', reconcileStage),
-    });
-    expect(reconcileStage).toHaveBeenCalledTimes(1);
-    expect(reconcileStage).toHaveBeenCalledWith('a', 'deploy'); // the FSM-accepted transition, not a blind stamp
-  });
+    const stageLoop = stageLoopStub();
+    stageLoop.readAttemptStage = () => P('deploy');
+    stageLoop.reconcileStage = reconcileStage;
+    const runLap = vi.fn((_item: Issue, sp?: string) =>
+      sp === undefined
+        ? P<LapResult>({ kind: 'SHIPPED', costUsd: 0 })
+        : P<LapResult>({
+            kind: 'SHIPPED',
+            attemptId: 'attempt-1',
+            costUsd: 0,
+          }),
+    );
 
-  it('no divergence: does NOT reconcile when the durable stage already equals `next` (single-emit preserved)', async () => {
-    const reconcileStage = vi.fn((_id: string, _stage: string) => P(undefined));
-    // durable re-read already shows `next` (the in-lap write-through landed) → NO second write / NO second emit.
     await runRalphLoop(cfg(), {
-      ...deps(mockStore(['a']), oneAutoLap),
-      stageLoop: reconcileStageLoop('deploy', reconcileStage),
+      ...deps(mockStore(['a']), runLap),
+      stageLoop,
     });
-    expect(reconcileStage).not.toHaveBeenCalled();
-  });
-
-  it('backward-compat: a stageLoop WITHOUT reconcileStage drives with no reconcile and no throw', async () => {
-    const r = await runRalphLoop(cfg(), {
-      ...deps(mockStore(['a']), oneAutoLap),
-      stageLoop: reconcileStageLoop('scope_write'), // reconcileStage absent (optional-additive)
-    });
-    expect(r.closed).toEqual(['a']); // drives to completion exactly as before
+    expect(reconcileStage).toHaveBeenCalledOnce();
+    expect(reconcileStage).toHaveBeenCalledWith('a', 'deploy');
   });
 });
 
 describe('runRalphLoop — PSL.3 per-stage loop', () => {
-  it('drives each automated stage as its own lap (advancing via the reported stage), then the boundary lap', async () => {
-    // T-active-task-mirror E: a fresh item seeds at `scope_write` (the first AUTOMATED stage) — no initial human
-    // scope lap. Flow: scope_write/plan/author/code (automated) → deploy (human boundary, no stage = done).
+  it('skips a model lap when durable evidence already completes the current stage', async () => {
+    const calls: (string | undefined)[] = [];
+    const reconcileStage = vi.fn((_id: string, _stage: string) => P(undefined));
+    const runLap = vi.fn((_item: Issue, sp?: string) => {
+      calls.push(sp);
+      return sp === 'DO plan'
+        ? P<LapResult>({ kind: 'SHIPPED', attemptId: 'deploy', costUsd: 0 })
+        : P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+    });
+    const stageLoop = stageLoopStub();
+    stageLoop.completedStage = (_item, stage) => P(stage === 'scope_write' ? 'plan' : null);
+    stageLoop.reconcileStage = reconcileStage;
+
+    const result = await runRalphLoop(cfg(), {
+      ...deps(mockStore(['a']), runLap),
+      stageLoop,
+    });
+    expect(calls).toEqual(['DO plan']);
+    expect(reconcileStage).toHaveBeenCalledWith('a', 'plan');
+    expect(result.closed).toEqual([]);
+    expect(result.stopped).toBe('BOARD_WAITING');
+  });
+
+  it('drives each declared stage as its own lap, then waits at the undeclared boundary', async () => {
     const advance: Record<string, string> = {
       scope_write: 'plan',
       plan: 'author',
@@ -435,24 +466,23 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     const store = new Map<string, string>();
     const runLap = vi.fn((_item: Issue, sp?: string) => {
       calls.push(sp);
-      // The deploy/accept boundary lap (sp undefined): no stage = item complete.
-      if (sp === undefined) return P<LapResult>({ kind: 'SHIPPED', costUsd: 0.01 });
+      if (sp === undefined) throw new Error('unexpected open-ended lap');
       const next = advance[sp.replace('DO ', '')];
       return P<LapResult>(
         next === undefined
           ? { kind: 'SHIPPED', costUsd: 0.01 }
-          : { kind: 'SHIPPED', stage: next, costUsd: 0.01 },
+          : { kind: 'SHIPPED', attemptId: next, costUsd: 0.01 },
       );
     });
     const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
-    // 4 automated laps (scope_write/plan/author/code) + 1 human deploy boundary lap = 5
-    expect(calls).toEqual(['DO scope_write', 'DO plan', 'DO author', 'DO code', undefined]);
-    expect(r.closed).toEqual(['a']);
-    expect(r.spent).toBeCloseTo(0.05);
-    expect(store.has('a')).toBe(false); // clearStage on close
+    expect(calls).toEqual(['DO scope_write', 'DO plan', 'DO author', 'DO code']);
+    expect(r.closed).toEqual([]);
+    expect(r.stopped).toBe('BOARD_WAITING');
+    expect(r.spent).toBeCloseTo(0.04);
+    expect(store.get('a')).toBe('deploy');
   });
 
   it('LSF.5 — records ONE per-stage metrics row per stage with the folded cost/tokens/harness/runId', async () => {
@@ -469,7 +499,13 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       return P<LapResult>(
         next === undefined
           ? { kind: 'SHIPPED', costUsd: 0.02, inputTokens: 5, outputTokens: 2 }
-          : { kind: 'SHIPPED', stage: next, costUsd: 0.02, inputTokens: 5, outputTokens: 2 },
+          : {
+              kind: 'SHIPPED',
+              attemptId: next,
+              costUsd: 0.02,
+              inputTokens: 5,
+              outputTokens: 2,
+            },
       );
     });
     const rows: LoopMetricRow[] = [];
@@ -481,8 +517,8 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
         return P(undefined);
       },
     });
-    // one row per stage the drive passed through: scope_write, plan, author, code, then the deploy boundary.
-    expect(rows.map((r) => r.stage)).toEqual(['scope_write', 'plan', 'author', 'code', 'deploy']);
+    // Only process-driven states get metrics; the undeclared boundary starts no process and gets no zero row.
+    expect(rows.map((r) => r.stage)).toEqual(['scope_write', 'plan', 'author', 'code']);
     for (const r of rows) {
       expect(r).toMatchObject({
         runId: 'run-xyz',
@@ -502,7 +538,6 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     const runLap = vi.fn(() =>
       P<LapResult>({
         kind: 'SHIPPED',
-        stage: 'scope_write',
         costUsd: 0.01,
         inputTokens: 3,
         outputTokens: 1,
@@ -523,12 +558,8 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
   });
 
   it('LSF.5 — a recordMetric throw is swallowed (fail-open; the drive still ships)', async () => {
-    const runLap = vi.fn((_item: Issue, sp?: string) =>
-      P<LapResult>(
-        sp === undefined ? { kind: 'SHIPPED', costUsd: 0 } : { kind: 'SHIPPED', costUsd: 0 },
-      ),
-    );
-    const store = new Map<string, string>([['a', 'deploy']]);
+    const runLap = vi.fn(() => P<LapResult>({ kind: 'SHIPPED', attemptId: 'done', costUsd: 0 }));
+    const store = new Map<string, string>([['a', 'scope_write']]);
     const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
@@ -548,17 +579,17 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       return P<LapResult>(
         next === undefined
           ? { kind: 'SHIPPED', costUsd: 0 }
-          : { kind: 'SHIPPED', stage: next, costUsd: 0 },
+          : { kind: 'SHIPPED', attemptId: next, costUsd: 0 },
       );
     });
     await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
-    expect(calls).toEqual(['DO author', 'DO code', undefined]); // started at author, NOT scope
+    expect(calls).toEqual(['DO author', 'DO code']); // started at author, then awaited undeclared deploy
   });
 
-  it('an item already past the automated stages goes straight to the open-ended boundary lap', async () => {
+  it('an item outside the declared process set is held without spawning a fallback lap', async () => {
     const store = new Map<string, string>([['a', 'deploy']]);
     const calls: (string | undefined)[] = [];
     const runLap = vi.fn((_item: Issue, sp?: string) => {
@@ -569,12 +600,18 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(store),
     });
-    expect(calls).toEqual([undefined]); // no per-stage laps — just the boundary/tail lap
+    expect(calls).toEqual([]);
   });
 
   it('a lap that never advances the stage is retried (bounded) then escalated UNRECOVERABLE_WEDGE', async () => {
     // Seeds at `scope_write` (the pack initial); the lap keeps reporting the SAME stage → never advances.
-    const runLap = vi.fn(() => P<LapResult>({ kind: 'SHIPPED', stage: 'scope_write', costUsd: 0 }));
+    const runLap = vi.fn(() =>
+      P<LapResult>({
+        kind: 'SHIPPED',
+        attemptId: 'scope_write',
+        costUsd: 0,
+      }),
+    );
     const r = await runRalphLoop(cfg(), {
       ...deps(mockStore(['a']), runLap),
       stageLoop: stageLoopStub(),
@@ -595,10 +632,7 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     expect(r.parked).toEqual([{ id: 'a', reason: 'SCOPE_FORK' }]);
   });
 
-  it('scopeGate HOLD on the only ready item → skipped (no claim/lap), loop drains to BOARD_EMPTY (no spin)', async () => {
-    // GS1 corrected semantics: an unscoped item is fixed-to-scope + held, NEVER auto-redriven. When it is the
-    // only ready item, the picker finds nothing automation-eligible and the loop STOPS (drained) — it must not
-    // re-pick the same held item forever (the old-design spin).
+  it('admission HOLD on the only ready item reports BOARD_WAITING without spinning', async () => {
     const gate = (_item: Issue): Promise<'drive' | 'hold'> => P('hold');
     const runLap = vi.fn((_item: Issue, _sp?: string) =>
       P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }),
@@ -610,26 +644,47 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     });
     expect(runLap).not.toHaveBeenCalled(); // held → never claimed/driven
     expect(r.closed).toEqual([]);
-    expect(r.stopped).toBe('BOARD_EMPTY'); // no automation-eligible item → drained (no spin)
+    expect(r.stopped).toBe('BOARD_WAITING');
+    expect(r.waiting).toEqual([{ id: 'a', reason: 'admission' }]);
   });
 
-  it('scopeGate skips a held item and drives the NEXT eligible one (loop advances, no spin)', async () => {
+  it('regresses the live one-ready + wedged + in-progress run without false BOARD_EMPTY', async () => {
+    const wg = mockStore(['scope-item', 'wedged-item', 'synced-item']);
+    await wg.wedgeMark('wedged-item', 'UNRECOVERABLE_WEDGE');
+    await wg.updateIssue('synced-item', { status: 'in_progress' });
+    const runLap = vi.fn(() => P<LapResult>({ kind: 'SHIPPED', costUsd: 0 }));
+    const r = await runRalphLoop(cfg(), {
+      ...deps(wg, runLap),
+      stageLoop: stageLoopStub(new Map([['scope-item', 'scope']]), () => P('hold')),
+    });
+
+    expect(runLap).not.toHaveBeenCalled();
+    expect(r.stopped).toBe('BOARD_WAITING');
+    expect(r.waiting).toEqual([
+      { id: 'scope-item', reason: 'admission' },
+      { id: 'wedged-item', reason: 'wedged', detail: 'UNRECOVERABLE_WEDGE' },
+      { id: 'synced-item', reason: 'in_progress' },
+    ]);
+  });
+
+  it('admission skips a held item and drives the next eligible one', async () => {
     // ready = [a (held/unscoped), b (drivable)]: within the pass the gate passes OVER `a` and drives `b`; the
-    // next pass has only the held `a` left → BOARD_EMPTY. `a` is never claimed/driven; the loop advanced past it.
+    // next pass has only held `a` → BOARD_WAITING. `a` is never claimed/driven; the loop advanced past it.
     const gate = (item: Issue): Promise<'drive' | 'hold'> => P(item.id === 'a' ? 'hold' : 'drive');
     const driven: string[] = [];
     const runLap = vi.fn((item: Issue, _sp?: string) => {
       driven.push(item.id);
-      return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+      return P<LapResult>({ kind: 'SHIPPED', attemptId: 'done', costUsd: 0 });
     });
     const wg = mockStore(['a', 'b']);
     const r = await runRalphLoop(cfg(), {
       ...deps(wg, runLap),
-      stageLoop: stageLoopStub(new Map([['b', 'deploy']]), gate),
+      stageLoop: stageLoopStub(new Map([['b', 'scope_write']]), gate),
     });
     expect(driven).toEqual(['b']); // only the eligible item ran; `a` was passed over
     expect(r.closed).toEqual(['b']);
-    expect(r.stopped).toBe('BOARD_EMPTY'); // `a` remains held (awaits interactive scope) → drained
+    expect(r.stopped).toBe('BOARD_WAITING');
+    expect(r.waiting).toEqual([{ id: 'a', reason: 'admission' }]);
   });
 
   it('re-admission: a held item is driven on a later pass once the gate reports it scoped', async () => {
@@ -645,15 +700,15 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
     const driven: string[] = [];
     const runLap = vi.fn((item: Issue, _sp?: string) => {
       driven.push(item.id);
-      return P<LapResult>({ kind: 'SHIPPED', costUsd: 0 });
+      return P<LapResult>({ kind: 'SHIPPED', attemptId: 'done', costUsd: 0 });
     });
     const wg = mockStore(['a', 'b']);
     const r = await runRalphLoop(cfg(), {
       ...deps(wg, runLap),
       stageLoop: stageLoopStub(
         new Map([
-          ['a', 'deploy'],
-          ['b', 'deploy'],
+          ['a', 'scope_write'],
+          ['b', 'scope_write'],
         ]),
         gate,
       ),
@@ -674,8 +729,8 @@ describe('runRalphLoop — PSL.3 per-stage loop', () => {
   });
 });
 
-// WGL.6 (wg-141e0ffd9955) — reap-then-BOARD_EMPTY: before declaring an empty board, reap orphaned stubs so junk
-// never masquerades as an empty board; a genuinely-held (non-orphan) board escalates immediately.
+// WGL.6 (wg-141e0ffd9955) — reap before terminal classification: junk is archived before emptiness is decided;
+// a genuinely-held (non-orphan) board reports BOARD_WAITING.
 describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
   const at = '2026-01-01T00:00:00.000Z';
   const mk = (over: Partial<Issue>): Issue => ({
@@ -727,7 +782,7 @@ describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
     expect(narrate).toHaveBeenCalledWith(expect.stringContaining('reaped 1 orphan'));
   });
 
-  it('a legitimately-held board with NO orphans escalates BOARD_EMPTY immediately (reap is a no-op)', async () => {
+  it('a legitimately-held board with NO orphans reports BOARD_WAITING (reap is a no-op)', async () => {
     const held = mk({ id: 'wg-held', body: 'a genuine human ask' }); // no sourceElementId → never reaped
     const archived: string[] = [];
     const wg: WorkGraphFacade = {
@@ -757,7 +812,8 @@ describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
       ...deps(wg, lap({ kind: 'SHIPPED', costUsd: 0 }), esc),
       narrate: vi.fn(),
     });
-    expect(r.stopped).toBe('BOARD_EMPTY');
+    expect(r.stopped).toBe('BOARD_WAITING');
+    expect(r.waiting).toEqual([{ id: 'wg-held', reason: 'unavailable' }]);
     expect(archived).toEqual([]); // the held task is NOT junk — never reaped
     expect(esc).toHaveBeenCalledTimes(1);
   });
@@ -783,57 +839,6 @@ describe('runRalphLoop — WGL.6 reap-then-BOARD_EMPTY', () => {
       loopPassReconcile: () => Promise.reject(new Error('reconcile down')),
     });
     expect(r.stopped).toBe('BOARD_EMPTY'); // the pass still completes
-  });
-});
-
-describe('runRalphLoop — AGF.3 worktree pool attachment (wg-4ae1004c931b)', () => {
-  it('drives the claimed item in its own worktree (add before drive, remove after) + still closes SHIPPED', async () => {
-    const added: string[] = [];
-    const removed: string[] = [];
-    const io = {
-      worktreeAdd: (_b: string, path: string) => {
-        added.push(path);
-        return P(undefined);
-      },
-      worktreeRemove: (path: string) => {
-        removed.push(path);
-        return P(undefined);
-      },
-    };
-    const wg = mockStore(['a']);
-    const r = await runRalphLoop(cfg(), {
-      ...deps(wg, lap({ kind: 'SHIPPED', costUsd: 0 })),
-      pool: { bound: 2, poolRoot: '/pool', mainRoot: '/main', io },
-    });
-    expect(added).toEqual(['/pool/a']); // worktree cut for the item
-    expect(removed).toEqual(['/pool/a']); // torn down after the drive
-    expect(r.closed).toContain('a'); // fold semantics preserved — SHIPPED still closes
-  });
-
-  it('tears down the worktree even when the drive throws (fail-open finally)', async () => {
-    const removed: string[] = [];
-    const io = {
-      worktreeAdd: () => P(undefined),
-      worktreeRemove: (path: string) => {
-        removed.push(path);
-        return P(undefined);
-      },
-    };
-    const wg = mockStore(['a']);
-    await runRalphLoop(cfg(), {
-      ...deps(
-        wg,
-        vi.fn(() => Promise.reject(new Error('lap boom'))),
-      ),
-      supervise: {
-        maxRetries: 0,
-        backoffMs: () => 0,
-        heartbeat: () => undefined,
-        sleep: () => P(undefined),
-      },
-      pool: { bound: 1, poolRoot: '/pool', mainRoot: '/main', io },
-    } as never);
-    expect(removed).toEqual(['/pool/a']); // torn down despite the throw
   });
 });
 

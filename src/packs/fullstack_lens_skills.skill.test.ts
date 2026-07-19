@@ -101,6 +101,7 @@ describe('fullstack-flow engineering lens skills (T2.13)', () => {
       'frontend-output',
       'content-audit',
       'stage-inject',
+      'scope-entry',
     ]);
     for (const lens of LENSES) expect(dirs, `missing lens dir: ${lens}`).toContain(lens);
     const lensDirs = dirs.filter((d) => !NON_LENS.has(d));

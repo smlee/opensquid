@@ -17,14 +17,21 @@ function io(): WorktreeIo & { added: string[]; removed: string[] } {
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1));
 
-describe('AGF.3 addItemWorktree', () => {
-  it('cuts auto/wg-<id> from main at <poolRoot>/<id>', async () => {
+describe('AGF.3 addItemWorktree (dormant)', () => {
+  it('uses the caller-selected semantic branch and base while keeping the WorkGraph id only in the path', async () => {
     const i = io();
     let call: unknown[] = [];
     const spy: WorktreeIo = { ...i, worktreeAdd: (...a) => ((call = a), Promise.resolve()) };
-    const path = await addItemWorktree('wg-x', '/main', '/pool', spy);
+    const path = await addItemWorktree(
+      'wg-x',
+      'feat/improve-deploy-policy',
+      'trunk',
+      '/main',
+      '/pool',
+      spy,
+    );
     expect(path).toBe('/pool/wg-x');
-    expect(call).toEqual(['auto/wg-x', '/pool/wg-x', 'main', '/main']);
+    expect(call).toEqual(['feat/improve-deploy-policy', '/pool/wg-x', 'trunk', '/main']);
   });
 });
 
@@ -35,10 +42,12 @@ describe('AGF.3 drainPool', () => {
     let idx = 0;
     let inFlight = 0;
     let maxSeen = 0;
-    const claimNext = (): Promise<{ id: string } | null> =>
-      Promise.resolve(idx < ids.length ? { id: ids[idx++]! } : null);
+    const claimNext = (): Promise<{ id: string; branch: string } | null> =>
+      Promise.resolve(
+        idx < ids.length ? { id: ids[idx]!, branch: `feat/task-${ids[idx++]!}` } : null,
+      );
     const out = await drainPool<string>(
-      { bound: 2, poolRoot: '/pool', mainRoot: '/main' },
+      { bound: 2, baseBranch: 'trunk', poolRoot: '/pool', mainRoot: '/main' },
       claimNext,
       async (item) => {
         inFlight++;
@@ -60,8 +69,11 @@ describe('AGF.3 drainPool', () => {
     const ids = ['a', 'b', 'c', 'd', 'e'];
     let idx = 0;
     const out = await drainPool<string>(
-      { bound: 2, poolRoot: '/pool', mainRoot: '/main' },
-      () => Promise.resolve(idx < ids.length ? { id: ids[idx++]! } : null),
+      { bound: 2, baseBranch: 'trunk', poolRoot: '/pool', mainRoot: '/main' },
+      () =>
+        Promise.resolve(
+          idx < ids.length ? { id: ids[idx]!, branch: `feat/task-${ids[idx++]!}` } : null,
+        ),
       async (item) => {
         await tick();
         if (item.id === 'c') throw new Error('boom');

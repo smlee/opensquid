@@ -79,18 +79,12 @@ export async function runSessionEnd(
   deps: SessionEndHandlerDeps = DEFAULT_DEPS,
 ): Promise<LifecycleOutput> {
   const diagnostics: string[] = [];
+  if (ctx.role === 'reviewer') {
+    return { exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics };
+  }
   const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(input.event, packs, registry, ctx.sessionId);
   if (dispatched.stderr) diagnostics.push(dispatched.stderr);
-  if (ctx.role === 'lap-child') {
-    return {
-      exitCode: dispatched.exitCode,
-      stderr: diagnostics.join('\n'),
-      contextInjections: dispatched.contextInjections,
-      directives: dispatched.directives,
-      diagnostics,
-    };
-  }
 
   try {
     const ended = await deps.readActiveTask(ctx.sessionId);

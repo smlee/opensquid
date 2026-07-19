@@ -1,0 +1,17 @@
+# Pack-owned interactive entry. Command recognition and semantics live only in fullstack_scope_entry;
+# this rule forwards every active-pack prompt so ignored prompts remain a no-op.
+name: scope-entry
+load: preload
+when_to_load: []
+triggers:
+  - kind: prompt_submit
+rules:
+  - id: enter-existing-scope
+    process:
+      - call: current_prompt
+        as: raw
+      - call: fullstack_scope_entry
+        args: { raw: '{{raw}}' }
+prose: |
+  Project `/scope <request>` and `/scope --item <wg-id>` prompts into fullstack-flow's existing interactive
+  SCOPE lifecycle. The primitive owns recognition, persistence, recovery, and context; this skill adds no parser.

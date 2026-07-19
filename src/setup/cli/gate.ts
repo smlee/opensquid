@@ -33,6 +33,7 @@ import { promisify } from 'node:util';
 import type { Command } from 'commander';
 
 import { stagedDiff } from '../../functions/staged_diff.js';
+import { resolveEnvironments } from '../../packs/discovery.js';
 import {
   readCommitGateEvidence,
   type CommitGateEvidence,
@@ -484,6 +485,22 @@ async function runPushMessageBackstop(cwd: string, env: NodeJS.ProcessEnv): Prom
   );
 }
 
+/** Resolve and verify the serial DEPLOY branch from the existing environment SSOT. Null means unconfigured,
+ * detached, or the checkout disagrees with the configured local branch — every case fails closed at DEPLOY. */
+export async function configuredLocalBranch(cwd: string): Promise<string | null> {
+  const scopeRoot = await resolveProjectScopeRoot(cwd);
+  if (scopeRoot === null) return null;
+  const env = await resolveEnvironments(scopeRoot);
+  if (env === null) return null;
+  try {
+    const { stdout } = await execFileP('git', ['branch', '--show-current'], { cwd });
+    const current = stdout.trim();
+    return current !== '' && current === env.local ? current : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve the git work-tree root for `cwd`, or null if not in a repo. */
 export async function gitRoot(cwd: string): Promise<string | null> {
   try {
@@ -509,6 +526,19 @@ export function registerGate(program: Command): void {
     .description('pre-push: block a push whose commits have not completed the coding-flow')
     .action(async () => {
       process.exit(await runGate('push', process.cwd()));
+    });
+  gate
+    .command('branch')
+    .description('print the verified configured semantic local branch for serial DEPLOY')
+    .action(async () => {
+      const branch = await configuredLocalBranch(process.cwd());
+      if (branch === null) {
+        process.stderr.write(
+          'opensquid gate branch: checkout does not match version-control.environments.local\n',
+        );
+        process.exit(1);
+      }
+      process.stdout.write(`${branch}\n`);
     });
   gate
     .command('attest')

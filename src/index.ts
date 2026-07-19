@@ -1,21 +1,21 @@
 /** Public SDK surface shared by trusted OpenSquid CLI, TUI, and web adapters. */
 export { setupLoop, type LoopSetupResult } from './setup/wizard/loop_setup.js';
 export {
-  getExecutorControlReceipt,
-  listExecutorProcesses,
-  requestExecutorControl,
-  type ExecutorActionAudit,
-  type ExecutorControlReceipt,
-  type ExecutorControlRequest,
-  type ExecutorProcessState,
+  getProcessControlReceipt,
+  listOwnedProcesses,
+  requestProcessControl,
+  type ProcessActionAudit,
+  type ProcessControlReceipt,
+  type ProcessControlRequest,
+  type OwnedProcessState,
   type HumanControlSurface,
-  type HumanExecutorAction,
+  type HumanProcessAction,
   type HumanProcessSignalAction,
-} from './runtime/subagents/process_control.js';
+} from './runtime/processes/process_control.js';
 export {
-  resumeExecutorProcess,
-  type ResumeExecutorResult,
-} from './runtime/subagents/process_resume.js';
+  resumeOwnedProcess,
+  type ResumeProcessResult,
+} from './runtime/processes/process_resume.js';
 export {
   updatePiModelSelection,
   type PiModelSelection,

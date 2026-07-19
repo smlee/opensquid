@@ -43,27 +43,19 @@ export async function runStop(
   ctx: LifecycleContext,
   deps: StopHandlerDeps = DEFAULT_DEPS,
 ): Promise<StopOutput> {
-  if (ctx.role !== 'lap-child') await deps.maybeIngestTurn(input.raw);
+  if (ctx.role === 'reviewer') {
+    return { exitCode: 0, stderr: '', contextInjections: [], directives: [], diagnostics: [] };
+  }
+  await deps.maybeIngestTurn(input.raw);
   const { packs, registry } = await deps.loadDispatch(ctx.sessionId, ctx.registry);
   const dispatched = await deps.dispatchEvent(input.event, packs, registry, ctx.sessionId);
 
   if (dispatched.exitCode !== 0) {
-    const peek =
-      ctx.role === 'lap-child' ? null : await deps.maybePeekInbound(ctx.sessionId, ctx.cwd);
+    const peek = await deps.maybePeekInbound(ctx.sessionId, ctx.cwd);
     return {
       exitCode: dispatched.exitCode,
       stderr: peek === null ? dispatched.stderr : `${dispatched.stderr}\n\n${peek}`,
       contextInjections: [],
-      directives: dispatched.directives,
-      diagnostics: [],
-    };
-  }
-
-  if (ctx.role === 'lap-child') {
-    return {
-      exitCode: 0,
-      stderr: dispatched.stderr,
-      contextInjections: dispatched.contextInjections,
       directives: dispatched.directives,
       diagnostics: [],
     };

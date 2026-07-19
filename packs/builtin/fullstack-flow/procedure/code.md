@@ -4,10 +4,9 @@ You are in the CODE stage. Drive the active task to a shipped, gated unit. CODE 
 
 ## Research BEFORE coding (pre_research / learn)
 
-- The parent remains orchestration-only. Delegate repository implementation to the pack's implementation
-  executors in one bounded parallel batch when tasks are independent. Include each executor's necessary
-  task-verification, primary-doc reading, local expansion, implementation, tests, audit, and fix loop in that
-  assignment; do not create separate read-only fan-out batches around the implementation batch.
+- This disposable CODE StageProcess owns the bounded implementation attempt directly and receives the tools this
+  stage needs. Do not delegate implementation to another model process, spawn another stage, or start a nested
+  executor loop. Durable issue/checkpoint evidence is the only handoff to the next peer StageProcess.
 - VERIFY the task against current reality (`file:line` / the live API) — a task claim the code contradicts is
   surfaced, not coded around.
 - EXPAND to concrete implementation detail (affected files, existing defs to reuse, current non-deprecated
@@ -45,9 +44,9 @@ feed. `wg_id` defaults to this lap's item — do not pass it. Example:
 
 ## Research AFTER coding (audit) — another layer
 
-- Require the implementation executors in the existing batch to adversarially audit their bounded changes and
-  report evidence for alignment, proper doc-use, existing-solution double-check, full-fix, and spec re-audit.
-  The parent synthesizes those results and must not launch an additional audit batch.
+- Adversarially audit this attempt's bounded changes and record evidence for alignment, proper doc use,
+  existing-solution double-check, full-fix, and spec re-audit. Pack-declared read-only audit lenses may run as
+  bounded reviewers, but they do not implement, own progression, or form another execution hierarchy.
 - ALIGNMENT: the written code matches the goal/scoped element. PROPER DOC USE: APIs used per their primary
   docs (no deprecated/misused calls). EXISTING-SOLUTION DOUBLE-CHECK: nothing reinvented. FULL-FIX, not a
   band-aid. RE-AUDIT the AUTHOR spec (still guess-free at code time?).

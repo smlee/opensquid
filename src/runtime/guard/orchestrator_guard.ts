@@ -1,20 +1,10 @@
 /**
- * GS1 — Orchestrator guard: the interactive main loop may write DOCUMENTS ONLY; coding files are hard-blocked.
+ * Project-scoped coordinator write guard.
  *
- * The main loop is a PLANNER that dispatches implementation to executor subagents — it MUST NOT freehand coding
- * files (src/packs/tests/config). SPEC (user, 2026-07-05): "you can only write docs in this project" — a
- * document write (Markdown / anything under `docs/`) always passes; ANY other mutating call (a non-document file
- * write, or a file-writing Bash) is a CODING-FILE mutation and is DENIED unless one of:
- *   - the caller is an executor subagent (`agent_id` present), OR
- *   - a STANDING human permission grant is present (the project-local `allow_code_write` config value in
- *     orchestrator.json, flipped by `/code-write`; the caller resolves it and passes `codeWritePermitted`).
- *
- * PROJECT-SCOPED, NOT GLOBAL (user: "this is not global"): the caller (pre-tool-use.ts) fires this guard ONLY
- * when the project at `cwd` declares `discipline: { orchestrator_only: true }` (fullstack-flow does). A project
- * without that declaration never gets the guard. It fires in BOTH interactive and automation sessions — the
- * interactive orchestrator is exactly the freehand risk the previous automation-only gate left open.
- *
- * This guard enforces that boundary at PreToolUse.
+ * The interactive coordinator is document-only unless a standing human grant permits code writes. A disposable
+ * StageProcess is not a child exemption: it is the pack-selected worker for its own stage and receives direct
+ * authority, so this coordinator-only restriction does not apply to it. Review helpers receive no blanket write
+ * exemption. Pack lanes and safety policy continue to govern every StageProcess tool call.
  *
  * DENY-LIST, default-allow:
  *   - Write, Edit, NotebookEdit: always mutating (direct file editors).
@@ -34,14 +24,6 @@
  * `cd`, compound commands, `git`, `pnpm`, and any unrecognized verb. This guard uses the
  * opposite shape: a small deny-list where only specific mutating patterns trigger a block.
  *
- * EXECUTOR EXEMPTION: if the hook input includes `agent_id`, the caller is a
- * Task/Agent executor subagent — exempt from GS1. Claude Code populates `agent_id`
- * in the hook stdin JSON ONLY inside a subagent (per the CC hook docs).
- * (The `OPENSQUID_SUBAGENT=1` guard in `subagent_guard.ts` handles opensquid-spawned
- * REVIEWERS before this guard runs; a ralph LAP now runs FULLY hooked — it REACHES this GS1
- * guard (the intended in-lap enforcement — T-in-lap-gating scope-1). `agent_id` covers
- * Claude Code–native Task/Agent children, which do NOT carry that env marker.)
- *
  * FAIL-OPEN: any error in this module must never block the call — the caller
  * (pre-tool-use.ts) wraps the check in a try/catch.
  *
@@ -50,6 +32,7 @@
  */
 
 import { toolMatches } from '../../integrations/pi/tool_aliases.js';
+import { isReadOnlyBash } from '../session_state.js';
 
 function isAlwaysMutatingTool(tool: string): boolean {
   return toolMatches(tool, /^(Write|Edit|NotebookEdit)$/);
@@ -132,11 +115,7 @@ export function isCodeFileMutation(tool: string, args: Record<string, unknown>):
   return true; // a file-writing Bash mutation → treated as a coding-file mutation (no trusted doc target)
 }
 
-/** Optional hook-input fields threaded from the PreToolUse stdin payload. */
-export interface HookInput {
-  /** Present only when the hook runs inside a Task/Agent subagent (per Claude Code docs). */
-  agent_id?: string;
-}
+export type GuardActor = 'coordinator' | 'stage_process' | 'reviewer';
 
 export interface OrchestratorGuardResult {
   deny: boolean;
@@ -144,38 +123,60 @@ export interface OrchestratorGuardResult {
 }
 
 const DENY_MESSAGE =
-  '🦑 [orchestrator guard] In this project you may write DOCUMENTS only (docs/, *.md). Writing a coding file ' +
-  'requires explicit permission — run `/code-write` to flip `allow_code_write` in this project’s orchestrator.json ' +
-  '(it holds until you toggle it off), or dispatch an executor subagent to implement.';
+  '🦑 [coordinator guard] In this project the interactive coordinator may write DOCUMENTS only (docs/, *.md). ' +
+  'Writing a coding file requires explicit permission — run `/code-write` to flip `allow_code_write` in this ' +
+  'project’s orchestrator.json. Automated implementation belongs to the pack-authorized StageProcess.';
+
+const REVIEWER_DENY_MESSAGE =
+  '🦑 [reviewer guard] Reviewers are bounded read-only processes and cannot invoke mutating or unknown tools.';
+
+const REVIEWER_READ_TOOLS = new Set([
+  'read',
+  'grep',
+  'glob',
+  'webfetch',
+  'web_fetch',
+  'recall',
+  'read_state',
+  'workgraph_get',
+  'read_procedure',
+  'read_rubric',
+  'stage_inject',
+]);
+
+/** Fail-closed reviewer capability check: unknown tools are not read-only. */
+export function checkReviewerReadOnly(
+  tool: string,
+  args: Record<string, unknown>,
+): OrchestratorGuardResult {
+  const normalized = tool.toLowerCase();
+  if (normalized === 'bash') {
+    return typeof args.command === 'string' && isReadOnlyBash(args.command)
+      ? { deny: false }
+      : { deny: true, message: REVIEWER_DENY_MESSAGE };
+  }
+  return REVIEWER_READ_TOOLS.has(normalized)
+    ? { deny: false }
+    : { deny: true, message: REVIEWER_DENY_MESSAGE };
+}
 
 /** Caller-resolved inputs the pure guard can't read itself (filesystem lives in pre-tool-use.ts). */
 export interface OrchestratorGuardOptions {
-  /** A STANDING human grant is present (the project-local `allow_code_write` value in orchestrator.json) → allow
-   *  a coding-file write this call. The caller resolves the value; the guard stays pure. */
+  actor: GuardActor;
+  /** A standing human grant permits an interactive coordinator code write. */
   codeWritePermitted?: boolean;
 }
 
-/**
- * GS1 orchestrator-only check: in a project that declares `orchestrator_only`, the main loop may write DOCUMENTS
- * but a CODING-FILE write is denied unless explicitly permitted.
- *
- * Returns `{ deny: false }` when:
- *   - `hookInput.agent_id` is present (a Task/Agent executor — always exempt), OR
- *   - the call is not a coding-file mutation (reads + document writes always pass), OR
- *   - `opts.codeWritePermitted` is true (a standing human grant is in effect).
- *
- * Returns `{ deny: true, message }` when the main loop (no agent_id) attempts a coding-file write with no grant.
- */
+/** Enforce the document-only coordinator boundary without creating a parent/child authority exception. */
 export function checkOrchestratorGuard(
   tool: string,
   args: Record<string, unknown>,
-  hookInput?: HookInput,
-  opts?: OrchestratorGuardOptions,
+  opts: OrchestratorGuardOptions = { actor: 'coordinator' },
 ): OrchestratorGuardResult {
-  // Executor exemption: agent_id present → Task/Agent subagent, not the main loop.
-  if (hookInput?.agent_id !== undefined) return { deny: false };
-  if (!isCodeFileMutation(tool, args)) return { deny: false }; // reads + DOCUMENT writes always pass
-  if (opts?.codeWritePermitted === true) return { deny: false }; // standing human permission granted
+  if (opts.actor === 'stage_process') return { deny: false };
+  if (opts.actor === 'reviewer') return checkReviewerReadOnly(tool, args);
+  if (!isCodeFileMutation(tool, args)) return { deny: false };
+  if (opts.codeWritePermitted === true) return { deny: false };
   return { deny: true, message: DENY_MESSAGE };
 }
 
@@ -191,30 +192,18 @@ export function isDesignDoc(path: string): boolean {
 
 /** Caller-resolved inputs the pure design-doc gate can't read itself (the audit cache lives in the runtime). */
 export interface DesignDocGuardOptions {
-  /**
-   * Reads the scope-audit verdict for the design artifact (the `fullstack-flow-scope-audit-cache` value AQG.3's
-   * widened trigger writes). `undefined` ⇒ no cache yet (the FIRST write, before any audit) ⇒ ALLOW (this is a
-   * REWRITE-gate). A throw ⇒ ALLOW (fail-open, never a hard stall on a synchronous audit read).
-   */
+  actor: GuardActor;
+  /** Read the pack-declared approved-artifact audit verdict. */
   readScopeVerdict(): Promise<string | undefined>;
 }
 
-/**
- * AQG.5 orchestrator design-doc REWRITE gate: a Write/Edit of a `docs/design/*.md` scope-of-record by the MAIN
- * LOOP (no `agent_id`) is DENIED when its scope-audit verdict is present-and-not-`GUESS_FREE`. It is a
- * REWRITE-gate because `cached_audit` is a synchronous spawn with NO cache on the first write: the first write
- * always passes (seeding the audit, AQG.3), and a REWRITE while the verdict is `UNRESOLVED` blocks (the
- * "re-audit at the next boundary" model). FAIL-OPEN on any read error / missing cache; executor subagents
- * (`agent_id`) stay exempt exactly as `checkOrchestratorGuard`. Core reads ONLY the verdict STRING — no
- * architecture criterion enters core (they live in the rubric prose).
- */
+/** Audit-gate rewrites by the coordinator; a StageProcess remains governed by its pack stage gate. */
 export async function checkDesignDocRewrite(
   tool: string,
   args: Record<string, unknown>,
-  hookInput: HookInput | undefined,
   opts: DesignDocGuardOptions,
 ): Promise<OrchestratorGuardResult> {
-  if (hookInput?.agent_id !== undefined) return { deny: false }; // executor exempt (as checkOrchestratorGuard)
+  if (opts.actor === 'stage_process') return { deny: false };
   if (!toolMatches(tool, /^(Write|Edit)$/)) return { deny: false }; // only file writes are gated
   const fp = typeof args.file_path === 'string' ? args.file_path : undefined;
   if (fp === undefined || !isDesignDoc(fp)) return { deny: false }; // only design-doc writes are gated

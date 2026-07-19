@@ -11,12 +11,11 @@
  * Imports from: commander, node:net, ../../runtime/paths.js, ../../runtime/spawn_lifecycle.js,
  * ../../runtime/ralph/*, ../../workgraph/*, ../wizard/ralph_writer.js.
  */
-import { rmSync } from 'node:fs';
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import type { Command } from 'commander';
-import { OPENSQUID_HOME, loopPidPath, resolveLocalStoreDir } from '../../runtime/paths.js';
+import { OPENSQUID_HOME, resolveLocalStoreDir } from '../../runtime/paths.js';
 import { sendChat } from '../../chat_daemon/client.js';
 import {
   loadChannelsConfig,
@@ -24,9 +23,15 @@ import {
   resolveUmbrellaForCwd,
 } from '../../channels/routing.js';
 import type { LapEscalator } from '../../runtime/ralph/escalate_lap.js';
-import { realProcControl, runOneShotCli } from '../../runtime/spawn_lifecycle.js';
+import {
+  isOwnedProcessCleanupError,
+  realProcControl,
+  runOneShotCli,
+} from '../../runtime/spawn_lifecycle.js';
 import { runStreamingCli } from '../../runtime/streaming_cli.js';
 import { resolveActorId } from '../../runtime/actor_id.js';
+import { loadActiveV2Cartridges } from '../../runtime/bootstrap.js';
+import { readFsmState } from '../../runtime/fsm_state.js';
 import { workGraphStore } from '../../workgraph/store.js';
 import { harnessMapStore } from '../../workgraph/harness_map.js';
 import { reconcileHarnessWorkgraph } from '../../workgraph/harness_sync.js';
@@ -44,15 +49,13 @@ import { ensureProductionPr } from '../../runtime/release/stage_pr.js'; // GF.7 
 import { recordStageMetric } from '../../runtime/loop/loop_metrics.js';
 import { emitMonitorEvent } from '../../runtime/loop/monitor_emit.js';
 import {
+  automationAdmission,
   clearLoopStage,
   readLoopStage,
-  scopeGate,
   upsertTaskStage,
 } from '../../runtime/ralph/loop_stage.js';
 import { LOOP_LAP_ENV, isLoopLap } from '../../runtime/hooks/subagent_guard.js';
-import { onPhasesComplete } from '../../runtime/loop/loop_driver.js';
 import { displayReport } from '../../runtime/loop/report_display.js'; // RD.2/RD.3 — the live-display primitive
-import { activeDisciplinePack } from './gate.js';
 import type { LapResult } from '../../runtime/ralph/supervisor.js';
 import { outcomeFromEnvelope } from '../../runtime/ralph/lap_outcome.js';
 import {
@@ -61,16 +64,50 @@ import {
   type HarnessRuntimeAssets,
 } from '../../runtime/ralph/lap_harness.js';
 import { defaultHarnessRuntimeAssets } from '../../integrations/pi/runtime.js';
-import { PI_EXECUTOR_WALL_CLOCK_MS_ENV } from '../../integrations/pi/env.js';
 import { recordMisclassification } from '../../runtime/ralph/decision_classifier.js';
 import { chatEscalator, type ChatSend } from '../../runtime/ralph/escalator.js';
 import { readRalphConfig, type RalphConfigFile } from '../wizard/ralph_writer.js';
 import { registerLoopProcess } from '../../cli/loop_process.js';
-import { completeInteractiveScope } from '../../runtime/ralph/scope_done.js';
+import { completeInteractiveScope, ScopeHandoffError } from '../../runtime/ralph/scope_done.js';
+import { publishLoopReadiness, resolveLoopProject } from '../../runtime/ralph/loop_autospawn.js';
+import { acquireLoopOwner } from '../../runtime/ralph/loop_owner.js';
 import {
-  controlledExecutorProcess,
+  controlledOwnedProcess,
   isProcessPausedError,
-} from '../../runtime/subagents/process_control.js';
+  listOwnedProcesses,
+  type OwnedProcessState,
+} from '../../runtime/processes/process_control.js';
+
+const PROCESS_DRAIN_TIMEOUT_MS = 2_000;
+
+export function previousOwnedProcessDrainError(
+  states: readonly OwnedProcessState[],
+): string | null {
+  return states.length === 0
+    ? null
+    : `previous loop still owns ${String(states.length)} active process(es)`;
+}
+
+export async function reconcilePreviousOwnedProcesses(
+  load: () => Promise<OwnedProcessState[]> = () => listOwnedProcesses(true),
+  timeoutMs = PROCESS_DRAIN_TIMEOUT_MS,
+): Promise<string | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const states = await Promise.race([
+      load(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`process reconciliation timed out after ${String(timeoutMs)}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+    return previousOwnedProcessDrainError(states);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 /**
  * T-project-local-state PLS.2: the ralph loop drains THIS project's ready queue from the PROJECT-LOCAL
@@ -116,8 +153,8 @@ export function buildRalphConfig(
 }
 
 /** Build the per-lap runner: resolve the harness adapter from the config `kind`, spawn the RALPH.md lap
- * through it, fold its envelope → the typed exit. A deadline requests graceful shutdown and pauses logical
- * work for human control; a genuine spawn failure remains eligible for bounded recovery. */
+ * through it, and fold its envelope into the typed exit. The transport bounds inactivity—not productive elapsed
+ * work—and still owns bounded tree cleanup; a genuine spawn failure remains eligible for bounded recovery. */
 export function makeSpawnLap(
   cfg: RalphConfig,
   file: RalphConfigFile,
@@ -151,7 +188,7 @@ export function makeSpawnLap(
       // PSL.3 — the per-stage directive (when the orchestrator drives this item per-stage). Appended LAST so it
       // is the most-specific instruction (it narrows RALPH.md's "do the whole item" to "do ONLY this stage").
       // The lap's OWN stage_inject hook supplies the stage's checkpoint/procedure/rubric/work-context (its own
-      // session) — the directive only constrains scope + asks for the resulting-stage report.
+      // session) — the directive only constrains this disposable attempt's scope.
       (stagePrompt === undefined ? '' : `\n---\n${stagePrompt}\n`);
     // Per-lap log — capture the subprocess's stderr/stdout + outcome so a WEDGED or CRASHED lap is diagnosable
     // afterward (best-effort: logging never breaks a lap). One file per lap under ~/.opensquid/lap-logs/.
@@ -175,7 +212,7 @@ export function makeSpawnLap(
     const request = {
       prompt,
       cwd: lapCwd,
-      timeoutMs: file.wallClockMs,
+      timeoutMs: file.idleTimeoutMs,
       env: {
         OPENSQUID_ITEM_ID: item.id,
         OPENSQUID_SESSION_ID: attemptId,
@@ -183,12 +220,7 @@ export function makeSpawnLap(
         OPENSQUID_RUN_ID: cfg.runId,
         ...(checkpointStage === undefined ? {} : { OPENSQUID_CHECKPOINT_STAGE: checkpointStage }),
         [LOOP_LAP_ENV]: '1',
-        ...(file.harness.kind === 'pi'
-          ? {
-              OPENSQUID_PI_CLI: file.harness.cli,
-              [PI_EXECUTOR_WALL_CLOCK_MS_ENV]: String(file.wallClockMs),
-            }
-          : {}),
+        ...(file.harness.kind === 'pi' ? { OPENSQUID_PI_CLI: file.harness.cli } : {}),
       },
       attemptId,
       onStderrLine: (line: string) =>
@@ -211,13 +243,14 @@ export function makeSpawnLap(
     const oneShotControl =
       file.harness.kind === 'pi'
         ? null
-        : controlledExecutorProcess({
-            executorId: `${file.harness.kind}-parent-${attemptId}`,
+        : controlledOwnedProcess({
+            processId: `${file.harness.kind}-stage-${attemptId}`,
             wgId: item.id,
             runId: cfg.runId,
             ...(checkpointStage === undefined ? {} : { checkpointStage }),
             lap: 1,
-            role: 'orchestrator',
+            role: 'stage-process',
+            ownership: 'control_root',
             base: realProcControl,
           });
     const controlledRunCli: typeof runOneShotCli = (options) =>
@@ -246,7 +279,7 @@ export function makeSpawnLap(
           kind: 'HUMAN_REQUIRED',
           reason: e.cause.action === 'graceful_stop' ? 'PROCESS_PAUSED' : 'CANCELLED_BY_HUMAN',
           payload: {
-            executorId: e.executorId,
+            processId: e.processId,
             action: e.cause.action,
             actionId: e.cause.actionId,
           },
@@ -262,6 +295,14 @@ export function makeSpawnLap(
           costUsd: 0,
         };
       }
+      if (isOwnedProcessCleanupError(e)) {
+        return {
+          kind: 'HUMAN_REQUIRED',
+          reason: 'UNRECOVERABLE_WEDGE',
+          payload: { error: e.message, cause: e.cause.message },
+          costUsd: 0,
+        };
+      }
       if ((e as { __timeout?: boolean }).__timeout === true) {
         return { kind: 'TIMEOUT', costUsd: 0 };
       }
@@ -273,7 +314,7 @@ export function makeSpawnLap(
         `${String(inputTokens)}in/${String(outputTokens)}out\n`,
     );
     // LSF.5 — carry the lap's token usage up so the orchestrator can fold it into the per-stage loop_metrics row.
-    return { ...outcome, costUsd, inputTokens, outputTokens };
+    return { ...outcome, costUsd, inputTokens, outputTokens, attemptId };
   };
 }
 
@@ -322,21 +363,16 @@ export async function resolveLoopEscalator(cwd: string): Promise<LapEscalator> {
   });
 }
 
-/** PSL.3 — the fullstack-flow stages the per-stage loop drives as its own laps (the human boundary is past these).
- *  GS1: `scope` is removed (interactive / human-paced; the agent confirms with the user and emits RALPH-EXIT with
- *  stage:'scope_write'); `scope_write` is added (automated: writes the pre-research artifact + triggers decompose). */
-const AUTOMATED_STAGES = new Set<string>(['scope_write', 'plan', 'author', 'code']);
-
-/** The per-stage directive appended to a lap's prompt: do ONLY this stage + report the resulting stage. The lap's
- *  own stage_inject hook supplies the stage's procedure/rubric/checkpoint/work-context (its own session). */
+/** The generic StageProcess directive. The opaque state id and all authority come from the active pack. */
 export function perStageDirective(stage: string): string {
   return [
-    `## Per-stage assignment (the orchestrator runs ONE stage per lap, for fresh context per stage)`,
-    `You are assigned ONLY the **${stage}** stage of this item — NOT the whole flow.`,
-    `Complete exactly that stage's gate (your in-session stage guidance supplies its procedure + rubric), then STOP.`,
-    `Do NOT proceed into later stages — the orchestrator spawns the next stage's lap with fresh context.`,
-    `Exit by reporting the stage the flow is AT after you finish, so the orchestrator can prime the next lap:`,
-    `  RALPH-EXIT: {"kind":"SHIPPED","stage":"<your current FSM stage after completing ${stage} — verify with read_state>"}`,
+    `## StageProcess assignment (the coordinator runs one fresh process per pack stage)`,
+    `You are assigned ONLY the opaque pack stage **${stage}** — not the whole flow.`,
+    `Follow that stage's pack-provided procedure, rubric, tools, and authority; complete its gate, then STOP.`,
+    `Do not start another workflow loop or another stage process. The coordinator alone owns progression and retry.`,
+    `Do NOT proceed into later stages — the coordinator starts the next peer with fresh context.`,
+    `Exit with exactly one RALPH-EXIT SHIPPED tag after the assigned gate passes.`,
+    `The coordinator reads the gate-accepted session receipt and alone persists the next durable stage.`,
     `If you genuinely cannot complete ${stage} (an irreversible boundary or a product fork the principles cannot`,
     `settle), escalate as usual with EXACTLY ONE valid reason, for example:`,
     `  RALPH-EXIT: {"kind":"HUMAN_REQUIRED","reason":"IRREVERSIBLE_BOUNDARY"}`,
@@ -347,16 +383,14 @@ export function perStageDirective(stage: string): string {
 export function registerRalph(program: Command): Command {
   const loop = program
     .command('loop')
-    .description(
-      "Run the gated-ralph autonomous loop (composes the work-graph + the project's active discipline gates — v2 fullstack-flow or v1 coding-flow)",
-    );
+    .description("Run the deterministic outer loop using the project's active pack declarations");
 
   loop
     .option('--max-budget-usd <n>', 'API-mode dollar budget for this run (overrides config)')
     .action(async (opts: { maxBudgetUsd?: string }) => {
       // scope-1 (T-in-lap-gating) — RECURSION GUARD: a lap already owns this process tree (it publishes
       // OPENSQUID_LOOP_LAP=1). Refuse to start a NESTED loop — the genuine recursion protection the retired
-      // markSubagent silencing used to provide (a lap must not spawn its own child laps).
+      // The loop-lap marker prevents recursion: a StageProcess must not start another workflow loop.
       if (isLoopLap()) {
         process.stderr.write(
           '🦑 loop OFF: refusing to start a nested loop inside a lap (OPENSQUID_LOOP_LAP set).\n',
@@ -380,59 +414,104 @@ export function registerRalph(program: Command): Command {
       const cfg = buildRalphConfig(file, {
         ...(opts.maxBudgetUsd === undefined ? {} : { maxBudgetUsd: Number(opts.maxBudgetUsd) }),
       });
-      const wg = await openRalphWorkGraph();
       const sid = process.env.CLAUDE_SESSION_ID ?? '<cli>';
       const root = process.cwd();
-      // ATL.2 — the loop's PROJECT-LOCAL liveness surface: write our own pid FIRST (so ensureLoopRunning's
-      // waitForPidfile sees it fast on the next scope-exit), remove it on EVERY exit path. Placed AFTER the
-      // config guard (a worker that exits early on missing config must not leave a stale pidfile). The pidfile
-      // lives under the project store (resolveLocalStoreDir(root)) — per-project, not OPENSQUID_HOME.
-      const storeDir = await resolveLocalStoreDir(root);
-      const loopPidFile = loopPidPath(storeDir);
-      await mkdir(dirname(loopPidFile), { recursive: true });
-      await writeFile(loopPidFile, `${process.pid}\n`);
-      const removeLoopPid = (): void => {
-        try {
-          rmSync(loopPidFile, { force: true });
-        } catch {
-          /* race-tolerant — a concurrent reclaim may have unlinked it already */
+      const project = await resolveLoopProject(root);
+      const admission = await acquireLoopOwner(
+        project,
+        (error) => {
+          process.stderr.write(`🦑 loop owner lost: ${error.message}\n`);
+          process.kill(process.pid, 'SIGTERM');
+        },
+        async () => {
+          const drainError = await reconcilePreviousOwnedProcesses();
+          if (drainError !== null) throw new Error(drainError);
+        },
+      );
+      if (admission.status === 'occupied') {
+        if (admission.owner === undefined) {
+          publishLoopReadiness({
+            status: 'error',
+            error: admission.error ?? 'loop-owner endpoint is occupied but has no valid owner',
+          });
+        } else {
+          publishLoopReadiness({ status: 'occupied', pid: admission.owner.pid });
         }
+        process.stdout.write(
+          `${JSON.stringify({
+            kind: 'loop_owner',
+            status: admission.owner === undefined ? 'error' : 'already_running',
+            ...(admission.owner === undefined ? {} : { pid: admission.owner.pid }),
+            ...(admission.error === undefined ? {} : { error: admission.error }),
+          })}\n`,
+        );
+        if (admission.owner === undefined) process.exitCode = 1;
+        return;
+      }
+      const ownerLease = admission.lease;
+      // Push readiness only after lifetime admission + owned-process drain + endpoint listen all succeeded.
+      publishLoopReadiness({ status: 'acquired', pid: ownerLease.owner.pid });
+      const storeDir = project.storeRoot;
+      let signalExitStarted = false;
+      const closeAndExit = (code: number): void => {
+        if (signalExitStarted) return;
+        signalExitStarted = true;
+        void ownerLease.close().finally(() => process.exit(code));
       };
-      process.once('SIGINT', () => {
-        removeLoopPid();
-        process.exit(130);
-      });
-      process.once('SIGTERM', () => {
-        removeLoopPid();
-        process.exit(143);
-      });
-      // PSL.3 — drive a fullstack-flow item per-stage (one fresh-context lap per automated stage); any other
-      // pack (v1 coding-flow) keeps the open-ended per-item lap. Detected from the project's active discipline.
-      const pack = await activeDisciplinePack(root);
+      const onSigint = (): void => closeAndExit(130);
+      const onSigterm = (): void => closeAndExit(143);
+      process.once('SIGINT', onSigint);
+      process.once('SIGTERM', onSigterm);
+      // Admission is held before the WorkGraph ready queue is opened, the pid projection is published, or any
+      // claim can be entered. A losing candidate returned above without touching any of those surfaces.
+      const rawWg = await openRalphWorkGraph();
+      const wg = {
+        ...rawWg,
+        claimIssue: (...args: Parameters<typeof rawWg.claimIssue>) => {
+          if (!ownerLease.isActive()) {
+            throw new Error('loop owner lease was lost before WorkGraph claim');
+          }
+          return rawWg.claimIssue(args[0], args[1], args[2], () => ownerLease.isActive());
+        },
+      };
+      // Select the one active pack that declares process-driven states. Names and state meanings remain in the
+      // cartridge; the coordinator consumes only the generic compiled declaration.
+      const automationCartridges = (await loadActiveV2Cartridges(sid, root)).filter(
+        (loaded) => loaded.compiled.automation !== undefined,
+      );
+      if (automationCartridges.length > 1) {
+        throw new Error(
+          `multiple active packs declare automation: ${automationCartridges.map((loaded) => loaded.pack.name).join(', ')}`,
+        );
+      }
+      const automationCartridge = automationCartridges[0];
+      const automation = automationCartridge?.compiled.automation;
+      const isAutomated = (stageId: string): boolean =>
+        automationCartridge?.compiled.meta[stageId]?.automated === true;
       const stageLoop =
-        pack === 'fullstack-flow'
-          ? {
-              // GS1/T-active-task-mirror E — a fresh item starts at the AUTOMATED `scope_write` (writes the
-              // pre-research artifact), NOT the human `scope` lap. SAFE because `scopeGate` (below, design D)
-              // holds back any item that reaches PAST scope without a real, on-disk scope artifact.
-              initialStage: 'scope_write',
-              isAutomated: (s: string): boolean => AUTOMATED_STAGES.has(s),
-              stagePrompt: (_item: Issue, stage: string): Promise<string> =>
-                Promise.resolve(perStageDirective(stage)),
+        automationCartridge === undefined || automation === undefined
+          ? undefined
+          : {
+              initialStage: automation.entry,
+              isAutomated,
+              isTerminal: (stageId: string): boolean =>
+                automationCartridge.compiled.meta[stageId]?.kind === 'terminal',
+              stagePrompt: (_item: Issue, stageId: string): Promise<string> =>
+                Promise.resolve(perStageDirective(stageId)),
               readStage: readLoopStage,
-              // scope-3 (T-in-lap-gating) — the in-lap FSM write-through (v2_supply → upsertTaskStage) is the
-              // authoritative SINGLE writer of the durable checkpoint DURING the lap (hooks live). The orchestrator
-              // READS it and, on detected divergence (the write-through did not land), reconciles THROUGH that SAME
-              // single seam — a defensive fallback writer, never a divergent second writer. The `null` artifact is
-              // deliberate: upsertTaskStage touches artifacts ONLY when non-null (loop_stage.ts:124), so the
-              // reconcile corrects only the `stage` column and NEVER erases a recorded scope proof.
-              reconcileStage: (id: string, stage: string): Promise<void> =>
-                upsertTaskStage(id, stage, Date.now(), null),
+              readAttemptStage: (attemptId: string, itemId: string): Promise<string> =>
+                readFsmState(
+                  attemptId,
+                  automationCartridge.pack.name,
+                  automationCartridge.compiled.fsm!,
+                  itemId,
+                ),
+              reconcileStage: (id: string, stageId: string): Promise<void> =>
+                upsertTaskStage(id, stageId, Date.now(), null),
               clearStage: clearLoopStage,
-              // D — the scope gate: verify real scope proof before an item is driven past scope.
-              scopeGate: (item: Issue): Promise<'drive' | 'hold'> => scopeGate(item.id),
-            }
-          : undefined;
+              admissionGate: (item: Issue): Promise<'drive' | 'hold'> =>
+                automationAdmission(item.id, isAutomated),
+            };
       // GF.1/GF.2 — resolve the config-driven git-flow environments ONCE for the run (the consistency gate's
       // target + the base-refresh production branch). null ⇒ unconfigured ⇒ the gate is HEAD-based + no refresh.
       const environments = await resolveEnvironments(root);
@@ -446,8 +525,7 @@ export function registerRalph(program: Command): Command {
           // so a detached `opensquid loop > loop.log` is watchable via `tail -f loop.log`.
           narrate: (msg: string) =>
             process.stdout.write(`[${new Date().toISOString().slice(11, 19)}] ${msg}\n`),
-          // RD.3 — the orchestrator's live report channel: DISPLAY the task/session before/after bodies on the
-          // loop terminal (the parent's live channel is stdout — no onStderrLine indirection here).
+          // The coordinator's live report channel is stdout; stage-process stderr uses its separate relay.
           display: (body: string) => displayReport(body, process.stdout),
           // CG.1 — the CONSISTENCY GATE: PRODUCTION always enforces it. The seam reads the loop repo root's live
           // git state at the SHIPPED-close boundary, so an item that ships without a durable commit for its work
@@ -462,23 +540,8 @@ export function registerRalph(program: Command): Command {
             ? {}
             : { baseRefresh: () => reconcileBase(root, environments.production) }),
           ...(stageLoop === undefined ? {} : { stageLoop }),
-          // T2.9 loop-driver: on a SHIPPED task emit the CODE report + compute the next run-group (batchDecide).
-          // The wg facade is adapted to the driver's minimal LoopWorkGraph (ids + edges).
+          // Generic application completion hook. Release routing reads only project configuration.
           onShipped: async (taskId) => {
-            const { next, report } = await onPhasesComplete(
-              sid,
-              root,
-              taskId,
-              {
-                listReadyIds: async () => (await wg.listReady()).map((i) => i.id),
-                listEdges: () => wg.listEdges(),
-              },
-              new Date().toISOString(),
-            );
-            // RD.2 — SHOW the CODE 7-phase after report LIVE on the loop terminal (was saved + silent). The
-            // orchestrator (parent) writes to stdout; the body is byte-unchanged from the render.
-            displayReport(report, process.stdout);
-            process.stdout.write(`🦑 next run-group: ${JSON.stringify(next)}\n`);
             // GF.3 (T-gitflow-integration-fix) — the CONFIG-DRIVEN, FAIL-VISIBLE integration route. Resolve the
             // `version-control.environments` (GF.1); when unconfigured (null) do nothing further (a non-automated
             // project ships as today). When configured, `routeOnShipped` is a TOTAL function over the environments:
@@ -533,9 +596,9 @@ export function registerRalph(program: Command): Command {
         });
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       } finally {
-        // BOARD_EMPTY exhaustion, budget stop, or a throw — the pidfile always goes, so the NEXT scope-exit
-        // re-triggers a fresh loop (the ask's "the next scope-exit re-triggers"), never a false already-running.
-        removeLoopPid();
+        process.removeListener('SIGINT', onSigint);
+        process.removeListener('SIGTERM', onSigterm);
+        await ownerLease.close();
       }
     });
 
@@ -545,10 +608,33 @@ export function registerRalph(program: Command): Command {
     .command('scope-done <itemId> <artifact>')
     .description('human scope-exit: persist scope proof and start/resume the loop')
     .action(async (itemId: string, artifact: string) => {
-      const result = await completeInteractiveScope({ wgId: itemId, artifact });
-      process.stdout.write(
-        `scope complete ${result.wgId} → ${result.stage} (${result.artifact})\n`,
-      );
+      try {
+        const result = await completeInteractiveScope({
+          wgId: itemId,
+          artifact,
+          cwd: process.cwd(),
+        });
+        process.stdout.write(`${JSON.stringify(result)}\n`);
+        if (result.loop.status === 'error') process.exitCode = 1;
+      } catch (error) {
+        const failure =
+          error instanceof ScopeHandoffError
+            ? error
+            : new ScopeHandoffError(
+                'persistence',
+                itemId,
+                error instanceof Error ? error.message : String(error),
+              );
+        process.stderr.write(
+          `${JSON.stringify({
+            kind: 'scope_handoff_error',
+            code: failure.code,
+            wgId: failure.wgId,
+            error: failure.message,
+          })}\n`,
+        );
+        process.exitCode = failure.code === 'persistence' ? 1 : 2;
+      }
     });
 
   loop

@@ -10,21 +10,21 @@ import {
   getAvailablePiProviders,
   getResolvedPiModel,
   loadEffectivePiShellSettings,
-  probeFullPiRuntime,
+  probePiStageRuntime,
   readPiVersion,
 } from './runtime.js';
 import type { StreamingCliOptions, StreamingRecordContext } from '../../runtime/streaming_cli.js';
 
-describe('probeFullPiRuntime', () => {
-  it('requires the composed tool surface with generic mcp absent and uses a provider-free parent probe', async () => {
+describe('probePiStageRuntime', () => {
+  it('requires the composed tool surface with generic mcp absent and uses a provider-free StageProcess probe', async () => {
     let seen!: StreamingCliOptions;
     await expect(
-      probeFullPiRuntime({
+      probePiStageRuntime({
         cli: 'pi-fixture',
         cwd: '/repo',
         adapterEntry: '/adapter/index.ts',
         timeoutMs: 1000,
-        parentTools: ['read', 'spawn_subagent'],
+        stageTools: ['read', 'write'],
         runStreaming: async (options: StreamingCliOptions) => {
           seen = options;
           const ctx: StreamingRecordContext = {
@@ -39,10 +39,10 @@ describe('probeFullPiRuntime', () => {
               type: 'extension_ui_request',
               method: 'notify',
               message:
-                'OPENSQUID_PI_FULL ' +
+                'OPENSQUID_PI_STAGE ' +
                 JSON.stringify({
-                  all: ['read', 'spawn_subagent'],
-                  active: ['read', 'spawn_subagent'],
+                  all: ['read', 'write'],
+                  active: ['read', 'write'],
                 }),
             }),
             ctx,
@@ -51,27 +51,25 @@ describe('probeFullPiRuntime', () => {
         },
       }),
     ).resolves.toEqual({
-      registeredTools: new Set(['read', 'spawn_subagent']),
-      activeTools: new Set(['read', 'spawn_subagent']),
+      registeredTools: new Set(['read', 'write']),
+      activeTools: new Set(['read', 'write']),
     });
     expect(seen.args).not.toContain('--provider');
     expect(seen.args).not.toContain('--model');
     expect(seen.env).toMatchObject({
       OPENSQUID_AUTOMATION: '1',
       OPENSQUID_LOOP_LAP: '1',
-      OPENSQUID_SESSION_ID: 'opensquid-pi-full-probe-session',
-      OPENSQUID_ITEM_ID: 'opensquid-pi-full-probe-item',
+      OPENSQUID_SESSION_ID: 'opensquid-pi-stage-probe-session',
+      OPENSQUID_ITEM_ID: 'opensquid-pi-stage-probe-item',
     });
-    expect(seen.env?.OPENSQUID_EXECUTOR).toBeUndefined();
-    expect(seen.env?.OPENSQUID_EXECUTOR_ID).toBeUndefined();
 
     await expect(
-      probeFullPiRuntime({
+      probePiStageRuntime({
         cli: 'pi-fixture',
         cwd: '/repo',
         adapterEntry: '/adapter/index.ts',
         timeoutMs: 1000,
-        parentTools: ['read'],
+        stageTools: ['read'],
         runStreaming: async (options: StreamingCliOptions) => {
           const ctx: StreamingRecordContext = {
             send: () => Promise.resolve(),
@@ -85,7 +83,7 @@ describe('probeFullPiRuntime', () => {
               type: 'extension_ui_request',
               method: 'notify',
               message:
-                'OPENSQUID_PI_FULL ' +
+                'OPENSQUID_PI_STAGE ' +
                 JSON.stringify({ all: ['read', 'mcp'], active: ['read', 'mcp'] }),
             }),
             ctx,
@@ -247,7 +245,7 @@ describe('createDefaultPiHarnessRuntimeAssets', () => {
           mcpTools: new Set(['read']),
         };
       }),
-      probeFullPiRuntime: vi.fn(async () => {
+      probePiStageRuntime: vi.fn(async () => {
         order.push('full');
         return { registeredTools: new Set(['read']), activeTools: new Set(['read']) };
       }),
@@ -267,10 +265,6 @@ describe('createDefaultPiHarnessRuntimeAssets', () => {
         order.push('settings');
         return { commandPrefix: 'source env.sh', shellPath: '/bin/zsh' };
       }),
-      writePiRoleManifest: vi.fn(async () => {
-        order.push('roles');
-        return { manifestPath: '/manifest.json', manifestHash: 'f'.repeat(64), roles: [] };
-      }),
     };
     const assets = createDefaultPiHarnessRuntimeAssets(
       { env: { HOME: '/tmp/home' }, opensquidRoot: '/source/opensquid' },
@@ -280,19 +274,11 @@ describe('createDefaultPiHarnessRuntimeAssets', () => {
       cli: 'pi-fixture',
       cwd: '/repo',
     });
-    expect(order).toEqual([
-      'mcp',
-      'full',
-      'providers',
-      'resolved-model',
-      'version',
-      'settings',
-      'roles',
-    ]);
+    expect(order).toEqual(['mcp', 'full', 'providers', 'resolved-model', 'version', 'settings']);
     expect(deps.ensurePiMcpReady).toHaveBeenCalledWith(
       expect.objectContaining({ opensquidRoot: '/source/opensquid' }),
     );
-    expect(deps.probeFullPiRuntime).toHaveBeenCalledWith(
+    expect(deps.probePiStageRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         cli: 'pi-fixture',
         cwd: '/repo',
@@ -304,9 +290,6 @@ describe('createDefaultPiHarnessRuntimeAssets', () => {
       mcpAdapterVersion: '4.6.2',
       effectiveShell: { commandPrefix: 'source env.sh', shellPath: '/bin/zsh' },
     });
-    expect(readiness.roleManifestPath).toBe('/manifest.json');
-    expect(readiness.roleManifestHash).toBe('f'.repeat(64));
-
     order.length = 0;
     await expect(
       assets.readiness({
@@ -320,14 +303,14 @@ describe('createDefaultPiHarnessRuntimeAssets', () => {
       { env: { HOME: '/tmp/home' }, opensquidRoot: '/source/opensquid' },
       deps,
     );
-    deps.probeFullPiRuntime.mockRejectedValueOnce(new Error('transient full probe error'));
+    deps.probePiStageRuntime.mockRejectedValueOnce(new Error('transient stage probe error'));
     await expect(
       retryAssets.readiness({
         cli: 'pi-fixture',
         cwd: '/repo',
       }),
-    ).rejects.toThrow(/transient full probe error/);
-    deps.probeFullPiRuntime.mockResolvedValueOnce({
+    ).rejects.toThrow(/transient stage probe error/);
+    deps.probePiStageRuntime.mockResolvedValueOnce({
       registeredTools: new Set(['read']),
       activeTools: new Set(['read']),
     });

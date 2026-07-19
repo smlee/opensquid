@@ -16,14 +16,13 @@ import type {
 import { isExternalConsultTool } from '../../runtime/loop/external_consult.js';
 import { canonicalizePiToolCall } from './canonicalize.js';
 import {
-  PI_PARENT_TOOL_CATALOG,
+  PI_STAGE_TOOL_CATALOG,
   createDefaultPiHarnessRuntimeAssets,
   OPENSQUID_PACKAGE_ROOT,
   type PiRuntimeDeps,
 } from './runtime.js';
-import { enabledPiOptionalTools, mcpDirectTools, parentPiTools } from './capability_catalog.js';
+import { enabledPiOptionalTools, mcpDirectTools, stagePiTools } from './capability_catalog.js';
 import { buildExpectedPiMcpConfig, computePiServerHash } from './mcp_config.js';
-import { PI_ROLE_MANIFEST_HASH_ENV, PI_ROLE_MANIFEST_PATH_ENV } from './env.js';
 
 interface StreamingDriver {
   readonly records: readonly (Record<string, unknown> | string)[];
@@ -62,14 +61,14 @@ function streamingDriver(driver: StreamingDriver) {
   };
 }
 
-function expectedParentCatalog(): string[] {
-  return parentPiTools(enabledPiOptionalTools());
+function expectedStageCatalog(): string[] {
+  return stagePiTools(enabledPiOptionalTools());
 }
 
 const ITEM: Issue = {
   id: 'wg-pi-composition',
   title: 'Pi composition item',
-  body: 'exercise the live parent composition',
+  body: 'exercise the live StageProcess composition',
   status: 'open',
   createdAt: '2026-07-11T00:00:00.000Z',
   updatedAt: '2026-07-11T00:00:00.000Z',
@@ -82,19 +81,17 @@ describe('Pi harness production composition', () => {
     if (dir !== '') await rm(dir, { recursive: true, force: true });
   });
 
-  it('orders readiness before the parent spawn and folds the real Pi runtime surfaces through makeSpawnLap', async () => {
+  it('orders readiness before the StageProcess spawn and folds the real Pi runtime surfaces through makeSpawnLap', async () => {
     dir = await mkdtemp(join(tmpdir(), 'opensquid-pi-composition-'));
     const ralphMdPath = join(dir, 'RALPH.md');
-    const manifestPath = join(dir, 'manifest.json');
     await writeFile(
       ralphMdPath,
-      'You are the parent harness under test. Emit one valid exit.\n',
+      'You are the StageProcess harness under test. Emit one valid exit.\n',
       'utf8',
     );
-    await writeFile(manifestPath, '{"version":1}', 'utf8');
 
     const order: string[] = [];
-    const parentCatalog = expectedParentCatalog();
+    const stageCatalog = expectedStageCatalog();
     const driver: StreamingDriver = {
       sent: [],
       records: [
@@ -103,47 +100,6 @@ describe('Pi harness production composition', () => {
           id: 'opensquid-prompt-fixed-attempt',
           command: 'prompt',
           success: true,
-        },
-        {
-          type: 'tool_execution_end',
-          toolCallId: 'spawn-1',
-          toolName: 'spawn_subagent',
-          result: {
-            details: {
-              results: [
-                { role: 'scope-architect', text: 'child one', isError: false },
-                { role: 'pack-architect', text: 'child two', isError: false },
-              ],
-              opensquidSubagentUsage: {
-                version: 1,
-                inputTokens: 7,
-                outputTokens: 11,
-                cacheReadTokens: 13,
-                cacheWriteTokens: 17,
-                costUsd: 0.4,
-              },
-            },
-          },
-          isError: false,
-        },
-        {
-          type: 'tool_execution_end',
-          toolCallId: 'spawn-1',
-          toolName: 'spawn_subagent',
-          result: {
-            details: {
-              results: [],
-              opensquidSubagentUsage: {
-                version: 1,
-                inputTokens: 100,
-                outputTokens: 100,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                costUsd: 99,
-              },
-            },
-          },
-          isError: false,
         },
         {
           type: 'message_end',
@@ -179,12 +135,12 @@ describe('Pi harness production composition', () => {
           mcpTools: new Set(mcpDirectTools(enabledPiOptionalTools())),
         });
       }),
-      probeFullPiRuntime: vi.fn((input: Parameters<PiRuntimeDeps['probeFullPiRuntime']>[0]) => {
+      probePiStageRuntime: vi.fn((input: Parameters<PiRuntimeDeps['probePiStageRuntime']>[0]) => {
         order.push('full');
-        expect(input.parentTools).toEqual(parentCatalog);
+        expect(input.stageTools).toEqual(stageCatalog);
         return Promise.resolve({
-          registeredTools: new Set(parentCatalog),
-          activeTools: new Set(parentCatalog),
+          registeredTools: new Set(stageCatalog),
+          activeTools: new Set(stageCatalog),
         });
       }),
       getAvailablePiProviders: vi.fn(() => {
@@ -203,19 +159,12 @@ describe('Pi harness production composition', () => {
         order.push('settings');
         return Promise.resolve({});
       }),
-      writePiRoleManifest: vi.fn(() => {
-        order.push('roles');
-        return Promise.resolve({
-          manifestPath,
-          manifestHash: 'a'.repeat(64),
-          roles: [],
-        });
-      }),
     };
     const runtimeAssets = createDefaultPiHarnessRuntimeAssets({ env: { HOME: dir } }, runtimeDeps);
 
-    expect(runtimeAssets.parentTools).toEqual(parentCatalog);
-    expect(PI_PARENT_TOOL_CATALOG.map((tool) => tool.name)).toEqual([
+    expect(runtimeAssets.stageTools).toEqual(stageCatalog);
+    expect(runtimeAssets.stageTools).not.toContain('spawn_subagent');
+    expect(PI_STAGE_TOOL_CATALOG.map((tool) => tool.name)).toEqual([
       'read',
       'bash',
       'grep',
@@ -231,7 +180,6 @@ describe('Pi harness production composition', () => {
       'workgraph_add_edge',
       'workgraph_update_issue',
       'store_lesson',
-      'spawn_subagent',
       'set_loop_phase',
     ]);
 
@@ -239,7 +187,7 @@ describe('Pi harness production composition', () => {
       authMode: 'subscription',
       maxBudgetUsd: 10,
       claimTtlSec: 3600,
-      wallClockMs: 1000,
+      idleTimeoutMs: 1000,
       maxRetries: 0,
       backoffBaseMs: 50,
       harness: {
@@ -266,11 +214,10 @@ describe('Pi harness production composition', () => {
       'resolved-model',
       'version',
       'settings',
-      'roles',
       'spawn',
     ]);
-    expect(result).toMatchObject({ kind: 'SHIPPED', inputTokens: 17, outputTokens: 31 });
-    expect(result.costUsd).toBeCloseTo(0.6, 8);
+    expect(result).toMatchObject({ kind: 'SHIPPED', inputTokens: 10, outputTokens: 20 });
+    expect(result.costUsd).toBeCloseTo(0.2, 8);
     expect(driver.sent).toEqual([
       expect.objectContaining({
         type: 'prompt',
@@ -280,15 +227,13 @@ describe('Pi harness production composition', () => {
     ]);
     expect(driver.sent[0]?.message).toContain('Your assigned work-item id: wg-pi-composition');
     expect(driver.options?.args).toContain('--tools');
-    expect(driver.options?.args.at(-1)).toBe(parentCatalog.join(','));
+    expect(driver.options?.args.at(-1)).toBe(stageCatalog.join(','));
     expect(driver.options?.env).toMatchObject({
       OPENSQUID_ITEM_ID: ITEM.id,
       OPENSQUID_SESSION_ID: 'fixed-attempt',
       OPENSQUID_AUTOMATION: '1',
       OPENSQUID_LOOP_LAP: '1',
       OPENSQUID_PI_CLI: 'pi-fixture',
-      [PI_ROLE_MANIFEST_PATH_ENV]: manifestPath,
-      [PI_ROLE_MANIFEST_HASH_ENV]: 'a'.repeat(64),
     });
   });
 

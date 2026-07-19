@@ -6,7 +6,7 @@
  * byte-identical to the historical `timeout after Xms` string.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,20 +25,36 @@ afterEach(async () => {
 });
 
 describe('subscriptionCliStrategy timeout', () => {
-  it('rejects with CliTimeoutError (typed) and the historical message text', async () => {
-    // A child that never reads stdin to completion and never exits.
+  it('rejects with CliTimeoutError and reclaims the real timed-out child', async () => {
     const script = join(tmpRoot, 'hang.js');
-    await writeFile(script, 'setInterval(() => {}, 1000);', 'utf8');
+    const pidFile = join(tmpRoot, 'hang.pid');
+    await writeFile(
+      script,
+      "require('node:fs').writeFileSync(process.argv[2], String(process.pid)); setInterval(() => {}, 1000);",
+      'utf8',
+    );
     const strategy = subscriptionCliStrategy({
       mode: 'subscription',
       impl: 'cli',
       cli: process.execPath,
-      args: [script],
+      args: [script, pidFile],
     });
 
     const p = strategy.call('prompt', { timeoutMs: 150 });
     await expect(p).rejects.toBeInstanceOf(CliTimeoutError);
     await expect(p).rejects.toThrow('timeout after 150ms');
+
+    const pid = Number(await readFile(pidFile, 'utf8'));
+    let alive = true;
+    for (let attempt = 0; attempt < 40 && alive; attempt += 1) {
+      try {
+        process.kill(pid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
   });
 });
 

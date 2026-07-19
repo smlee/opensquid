@@ -1,19 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { resolveActorId } from '../actor_id.js';
 import { resolveLocalStoreDir } from '../paths.js';
 import { ensureLoopRunning, loopStatus } from '../ralph/loop_autospawn.js';
 import { workGraphStore } from '../../workgraph/store.js';
 import {
-  listExecutorProcesses,
-  markExecutorProcess,
+  listOwnedProcesses,
+  markOwnedProcess,
   type HumanControlSurface,
 } from './process_control.js';
 
-export interface ResumeExecutorResult {
+export interface ResumeProcessResult {
   readonly actionId: string;
-  readonly executorId: string;
+  readonly processId: string;
   readonly processInstanceId: string;
   readonly wgId: string;
   readonly requestedBy: HumanControlSurface;
@@ -23,11 +23,11 @@ export interface ResumeExecutorResult {
   readonly loopStatus: 'spawned' | 'already_running' | 'waited_for_peer';
 }
 
-export interface ResumeExecutorDeps {
-  list: typeof listExecutorProcesses;
+export interface ResumeProcessDeps {
+  list: typeof listOwnedProcesses;
   releaseClaim(wgId: string, cwd: string): Promise<void>;
   ensureLoop(cwd: string): ReturnType<typeof ensureLoopRunning>;
-  mark: typeof markExecutorProcess;
+  mark: typeof markOwnedProcess;
 }
 
 async function ensureLoopAfterPause(cwd: string): ReturnType<typeof ensureLoopRunning> {
@@ -41,11 +41,11 @@ async function ensureLoopAfterPause(cwd: string): ReturnType<typeof ensureLoopRu
       if (!current.running || current.pid !== before.pid) break;
     }
   }
-  return ensureLoopRunning(cwd);
+  return ensureLoopRunning(dirname(root));
 }
 
-const DEFAULT_DEPS: ResumeExecutorDeps = {
-  list: listExecutorProcesses,
+const DEFAULT_DEPS: ResumeProcessDeps = {
+  list: listOwnedProcesses,
   releaseClaim: async (wgId, cwd) => {
     const dir = await resolveLocalStoreDir(cwd);
     const store = workGraphStore({
@@ -61,23 +61,23 @@ const DEFAULT_DEPS: ResumeExecutorDeps = {
     await store.releaseClaim(wgId);
   },
   ensureLoop: ensureLoopAfterPause,
-  mark: markExecutorProcess,
+  mark: markOwnedProcess,
 };
 
 /** Resume paused logical work from WorkGraph/checkpoint truth; never attempts to revive an old OS process. */
-export async function resumeExecutorProcess(
+export async function resumeOwnedProcess(
   input: {
-    executorId: string;
+    processId: string;
     requestedBy: HumanControlSurface;
     authorizedBy: string;
     cwd?: string;
   },
-  deps: ResumeExecutorDeps = DEFAULT_DEPS,
-): Promise<ResumeExecutorResult> {
-  const state = (await deps.list()).find((candidate) => candidate.executorId === input.executorId);
+  deps: ResumeProcessDeps = DEFAULT_DEPS,
+): Promise<ResumeProcessResult> {
+  const state = (await deps.list()).find((candidate) => candidate.processId === input.processId);
   if (state?.status !== 'paused') {
     throw new Error(
-      `executor ${input.executorId} cannot resume from status ${state?.status ?? 'missing'}`,
+      `process ${input.processId} cannot resume from status ${state?.status ?? 'missing'}`,
     );
   }
   const authorizedBy = input.authorizedBy.trim();
@@ -93,7 +93,7 @@ export async function resumeExecutorProcess(
   }
   const appliedAtMs = Date.now();
   await deps.mark(
-    input.executorId,
+    input.processId,
     'resumed',
     undefined,
     input.requestedBy,
@@ -110,7 +110,7 @@ export async function resumeExecutorProcess(
   );
   return {
     actionId,
-    executorId: input.executorId,
+    processId: input.processId,
     processInstanceId: state.processInstanceId,
     wgId: state.wgId,
     requestedBy: input.requestedBy,

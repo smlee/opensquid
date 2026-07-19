@@ -68,6 +68,7 @@ import { emitMonitorEvent } from '../runtime/loop/monitor_emit.js';
 import type { RagBackend } from '../rag/types.js';
 
 import { anchorProcessToProjectDir } from './anchor.js';
+import { bindStdioLifetime } from './stdio_lifecycle.js';
 import { handleForget, ForgetSchema, type ForgetArgs } from './tools/forget.js';
 import { handleInspectSkill } from './tools/inspect-skill.js';
 import { handleListDriftEvents } from './tools/list-drift-events.js';
@@ -562,6 +563,7 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  bindStdioLifetime({ closeServer: () => server.close() });
 }
 
 main().catch((e: unknown) => {

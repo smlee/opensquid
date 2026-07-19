@@ -153,6 +153,16 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
         ],
       });
       return;
+    case 'claim_renewed':
+      // Renewal is fenced by the exact incarnation token. It may extend an expired-but-not-reclaimed claim, but
+      // can never overwrite a successor claim because the token must still match.
+      await client.execute({
+        sql: `UPDATE wg_issues
+              SET claim_expires_at = ?, updated_at = ?
+              WHERE id = ? AND status = 'open' AND claim_token = ?`,
+        args: [s(p.expiresAt), s(p.ts), op.issueId, s(p.expectedToken)],
+      });
+      return;
     case 'wedge_marked':
       // GR.3 — record the wedge reason; listReady excludes wedge-marked items (escalate, not re-attempt).
       await client.execute({
@@ -167,15 +177,18 @@ export async function applyOp(client: Client, op: WgOp): Promise<void> {
         args: [s(p.ts), op.issueId],
       });
       return;
-    case 'claim_released':
-      // wg-8e1104f1934b — drop a live claim so an un-wedged item is IMMEDIATELY re-claimable
-      // (resolveParked's snappy-retry intent), not stuck until the TTL expires.
+    case 'claim_released': {
+      // A release emitted by a claimant that lost loop-owner authority is token-conditional: it cannot clear a
+      // successor's newer claim. Existing explicit human/orchestrator releases omit expectedToken and remain
+      // unconditional for backward compatibility.
+      const expectedToken = s(p.expectedToken);
       await client.execute({
         sql: `UPDATE wg_issues
               SET claim_token = NULL, claim_audience = NULL, claim_expires_at = NULL, updated_at = ?
-              WHERE id = ?`,
-        args: [s(p.ts), op.issueId],
+              WHERE id = ?${expectedToken === '' ? '' : ' AND claim_token = ?'}`,
+        args: expectedToken === '' ? [s(p.ts), op.issueId] : [s(p.ts), op.issueId, expectedToken],
       });
       return;
+    }
   }
 }

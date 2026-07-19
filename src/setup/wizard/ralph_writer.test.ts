@@ -84,17 +84,12 @@ describe('readRalphConfig', () => {
     ).toThrow();
   });
 
-  it('the schema enforces T > W (claimTtlSec*1000 > wallClockMs) — anti double-ship (S7)', () => {
-    // T <= W → a long lap outruns its claim → double-ship; must be rejected fail-loud.
-    expect(() =>
-      RalphConfigFileSchema.parse({
-        ...defaultRalphConfig(home),
-        claimTtlSec: 60,
-        wallClockMs: 120_000,
-      }),
-    ).toThrow(/T > W/);
-    // the defaults satisfy T > W (1h claim TTL > 30m deadline)
-    expect(() => RalphConfigFileSchema.parse(defaultRalphConfig(home))).not.toThrow();
+  it('migrates the legacy wall-clock key to a renewable idle timeout', () => {
+    const current = defaultRalphConfig(home);
+    const { idleTimeoutMs, ...rest } = current;
+    const parsed = RalphConfigFileSchema.parse({ ...rest, wallClockMs: idleTimeoutMs });
+    expect(parsed.idleTimeoutMs).toBe(idleTimeoutMs);
+    expect('wallClockMs' in parsed).toBe(false);
   });
 });
 
@@ -104,7 +99,7 @@ describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
       authMode: 'subscription',
       maxBudgetUsd: 10,
       claimTtlSec: 3600,
-      wallClockMs: 1_800_000,
+      idleTimeoutMs: 1_800_000,
       maxRetries: 3,
       backoffBaseMs: 2000,
       harness: { cli: 'claude', ralphMdPath: '/x/RALPH.md' }, // no `kind` — the old on-disk shape
@@ -246,13 +241,13 @@ describe('harness.kind discriminator (MHL.1/MHL.2)', () => {
 });
 
 describe('CH.1 — cross-field kind/cli reject + askForApproval enum + SSOT types', () => {
-  // A well-formed base with T > W satisfied; `withHarness` overrides only the harness fields under test so a
-  // rejection pins the RIGHT field (not the T>W refine or a budget). ralphMdPath is required (min(1)).
+  // A well-formed base; `withHarness` overrides only the harness fields under test so a rejection pins the
+  // RIGHT field. ralphMdPath is required (min(1)).
   const base = {
     authMode: 'subscription',
     maxBudgetUsd: 1,
     claimTtlSec: 3600,
-    wallClockMs: 600_000,
+    idleTimeoutMs: 600_000,
     maxRetries: 3,
     backoffBaseMs: 1000,
   } as const;

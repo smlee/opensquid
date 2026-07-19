@@ -79,20 +79,26 @@ const PersistedHarnessSchema = z.preprocess(
 );
 
 export const RalphConfigFileSchema = z
-  .object({
-    authMode: z.enum(['api', 'subscription']),
-    maxBudgetUsd: z.number().positive(),
-    claimTtlSec: z.number().int().positive(),
-    wallClockMs: z.number().int().positive(),
-    maxRetries: z.number().int().nonnegative(),
-    backoffBaseMs: z.number().int().positive(),
-    harness: PersistedHarnessSchema,
-  })
-  .refine((config) => config.claimTtlSec * 1000 > config.wallClockMs, {
-    message:
-      'claimTtlSec*1000 must exceed wallClockMs (T > W) — else a long lap outruns its claim → double-ship',
-    path: ['claimTtlSec'],
-  })
+  .preprocess(
+    (value) => {
+      if (value === null || typeof value !== 'object') return value;
+      const record = value as Record<string, unknown>;
+      if (record.idleTimeoutMs !== undefined || record.wallClockMs === undefined) return value;
+      const { wallClockMs, ...rest } = record;
+      return { ...rest, idleTimeoutMs: wallClockMs };
+    },
+    z
+      .object({
+        authMode: z.enum(['api', 'subscription']),
+        maxBudgetUsd: z.number().positive(),
+        claimTtlSec: z.number().int().positive(),
+        idleTimeoutMs: z.number().int().positive(),
+        maxRetries: z.number().int().nonnegative(),
+        backoffBaseMs: z.number().int().positive(),
+        harness: PersistedHarnessSchema,
+      })
+      .strict(),
+  )
   .superRefine((config, ctx) => {
     if (!HARNESS_KINDS.includes(config.harness.kind)) {
       ctx.addIssue({
@@ -126,8 +132,9 @@ export function defaultRalphConfig(home: string = OPENSQUID_HOME()): RalphConfig
   return {
     authMode: 'subscription',
     maxBudgetUsd: 10,
-    claimTtlSec: 3600, // T = 1h claim TTL — MUST exceed wallClockMs (W = 30m deadline) per S7 (T > W)
-    wallClockMs: 30 * 60 * 1000,
+    claimTtlSec: 3600,
+    // Renewable inactivity bound, not a cap on productive elapsed work.
+    idleTimeoutMs: 30 * 60 * 1000,
     // Retry cap: 3 supervised re-attempts per lap. Kept low deliberately — beyond a few, retries waste
     // budget/wall-clock on a lap that's structurally stuck rather than flaky (user call, 2026-06-28).
     maxRetries: 3,

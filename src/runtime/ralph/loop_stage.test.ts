@@ -7,35 +7,30 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createClient } from '@libsql/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 import { recordStageMetric, readMetrics } from '../loop/loop_metrics.js';
 import {
-  scopeGate,
+  automationAdmission,
   readLoopStage,
   clearLoopStage,
   withTaskCheckpointStore,
   upsertTaskStage,
 } from './loop_stage.js';
-import { ensureLoopRunning } from './loop_autospawn.js';
 import { tailEventsSince, foldEvents } from '../loop/loop_events.js';
 
 import type { Client } from '@libsql/client';
 
-// ATL.3/ATL.4 — mock the loop-autospawn trigger so the scope-3 wire-test never spawns a real loop; the spy
-// lets us assert fire-once on scope_write / no-fire otherwise / fail-open. The other describes never call it.
-vi.mock('./loop_autospawn.js', () => ({
-  ensureLoopRunning: vi.fn().mockResolvedValue({ status: 'spawned', pid: 1 }),
-}));
-const ensureLoopRunningMock = vi.mocked(ensureLoopRunning);
-
 const yes = (): Promise<boolean> => Promise.resolve(true);
 const no = (): Promise<boolean> => Promise.resolve(false);
+const receipt = (_artifactPath: string): Promise<boolean> => Promise.resolve(true);
 
-describe('loop_stage — scopeGate (GS1 scope proof, checkpoint-backed)', () => {
+describe('loop_stage — opaque automation admission', () => {
   let client: Client;
   let store: CheckpointStore;
+  const isAutomated = (stageId: string): boolean => stageId === 'beta' || stageId === 'gamma';
+
   beforeEach(async () => {
     client = createClient({ url: ':memory:' });
     store = new CheckpointStore(client);
@@ -43,66 +38,35 @@ describe('loop_stage — scopeGate (GS1 scope proof, checkpoint-backed)', () => 
   });
   afterEach(() => client.close());
 
-  it('no checkpoint (fresh) → hold (automation never scopes); the no-op reset leaves the checkpoint absent', async () => {
-    expect(await scopeGate('wg-fresh', no, store)).toBe('hold');
-    // updateTaskStage is UPDATE-only — it must NOT fabricate a checkpoint for a fresh item.
+  it('holds a fresh item without fabricating a checkpoint', async () => {
+    expect(await automationAdmission('wg-fresh', isAutomated, no, store)).toBe('hold');
     expect(await store.getTaskCheckpoint('wg-fresh')).toBeNull();
   });
 
-  it('the human-only `scope` stage → hold (out of automation; awaits interactive scope)', async () => {
-    await store.createTaskCheckpoint('wg-s', 'scope', 1);
-    expect(await scopeGate('wg-s', yes, store)).toBe('hold'); // even with `exists`→true: stage `scope` is never driven
+  it('holds an undeclared state without rewriting it', async () => {
+    await store.createTaskCheckpoint('wg-a', 'alpha', 1);
+    expect(await automationAdmission('wg-a', isAutomated, yes, store)).toBe('hold');
+    expect((await store.getTaskCheckpoint('wg-a'))?.stage).toBe('alpha');
   });
 
-  it('an automated stage (scope_write) with NO artifact → hold + fix to scope (not really scoped)', async () => {
-    await store.createTaskCheckpoint('wg-sw', 'scope_write', 1);
-    expect(await scopeGate('wg-sw', yes, store)).toBe('hold');
-    expect((await store.getTaskCheckpoint('wg-sw'))?.stage).toBe('scope');
+  it('holds a declared state without artifact proof or receipt', async () => {
+    await store.createTaskCheckpoint('wg-b', 'beta', 1);
+    expect(await automationAdmission('wg-b', isAutomated, yes, store)).toBe('hold');
+    await store.setTaskArtifacts('wg-b', ['/approved/artifact.md'], 2);
+    expect(await automationAdmission('wg-b', isAutomated, yes, store)).toBe('hold');
   });
 
-  it('an automated stage (scope_write) WITH an on-disk artifact → drive (really scoped)', async () => {
-    await store.createTaskCheckpoint('wg-swp', 'scope_write', 1);
-    await store.setTaskArtifacts('wg-swp', ['docs/research/a-pre-research.md'], 1);
-    expect(await scopeGate('wg-swp', yes, store)).toBe('drive');
+  it('drives a declared state with one existing artifact and semantic receipt', async () => {
+    await store.createTaskCheckpoint('wg-c', 'gamma', 1);
+    await store.setTaskArtifacts('wg-c', ['/approved/artifact.md'], 2);
+    expect(await automationAdmission('wg-c', isAutomated, yes, store, receipt)).toBe('drive');
   });
 
-  it('past scope WITH an artifact that EXISTS on disk → drive', async () => {
-    await store.createTaskCheckpoint('wg-p', 'author', 1);
-    await store.setTaskArtifacts('wg-p', ['docs/research/a-pre-research.md'], 1);
-    expect(await scopeGate('wg-p', yes, store)).toBe('drive');
-  });
-
-  it('past scope but the recorded artifact is MISSING on disk → hold + fix to scope', async () => {
-    await store.createTaskCheckpoint('wg-m', 'author', 1);
-    await store.setTaskArtifacts('wg-m', ['docs/research/gone-pre-research.md'], 1);
-    expect(await scopeGate('wg-m', no, store)).toBe('hold');
-    expect(await store.getTaskCheckpoint('wg-m')).toEqual({
-      stage: 'scope', // fixed to scope — not really scoped
-      scopeArtifacts: ['docs/research/gone-pre-research.md'],
-    });
-  });
-
-  it('past scope with NO recorded artifact → hold + fix to scope (exists never consulted)', async () => {
-    await store.createTaskCheckpoint('wg-n', 'plan', 1);
-    expect(await scopeGate('wg-n', yes, store)).toBe('hold');
-    expect((await store.getTaskCheckpoint('wg-n'))?.stage).toBe('scope');
-  });
-
-  it('a fixed-to-scope item STAYS held on the next pass (automation never re-scopes — no auto-redrive)', async () => {
-    await store.createTaskCheckpoint('wg-x', 'plan', 1);
-    expect(await scopeGate('wg-x', no, store)).toBe('hold'); // fixed to scope
-    expect(await scopeGate('wg-x', no, store)).toBe('hold'); // stage is now `scope` → still held (NOT driven)
-    expect((await store.getTaskCheckpoint('wg-x'))?.stage).toBe('scope');
-  });
-
-  it('re-admission: after interactive scope (checkpoint past `scope` + on-disk artifact) the gate drives', async () => {
-    // Model the FSM write-through re-admitting a previously-held item: it advances past `scope` and records the
-    // on-disk pre-research artifact. The gate then treats it as really scoped → drive.
-    await store.createTaskCheckpoint('wg-re', 'scope', 1);
-    expect(await scopeGate('wg-re', no, store)).toBe('hold'); // unscoped → held
-    await store.updateTaskStage('wg-re', 'scope_write', 2); // human scopes interactively: advance past `scope`
-    await store.setTaskArtifacts('wg-re', ['docs/research/re-pre-research.md'], 2); // + record the artifact
-    expect(await scopeGate('wg-re', yes, store)).toBe('drive'); // re-admitted
+  it('holds missing artifact bytes without changing the opaque state', async () => {
+    await store.createTaskCheckpoint('wg-d', 'gamma', 1);
+    await store.setTaskArtifacts('wg-d', ['/missing/artifact.md'], 2);
+    expect(await automationAdmission('wg-d', isAutomated, no, store, receipt)).toBe('hold');
+    expect((await store.getTaskCheckpoint('wg-d'))?.stage).toBe('gamma');
   });
 });
 
@@ -173,9 +137,9 @@ describe('loop_stage — project-LOCAL opensquid.db opener (PLS.3 table split; W
   });
 });
 
-describe('loop_stage — scope-3 loop-autospawn trigger (ATL.3: fire on scope_write, fail-open)', () => {
-  // upsertTaskStage writes the durable checkpoint through the LOCAL opener, then fires ensureLoopRunning ONLY on
-  // scope_write. Same OPENSQUID_PROJECT_ROOT seam as above so the write lands in a temp store, never the repo db.
+describe('loop_stage — generic writer ownership', () => {
+  // The writer stamps opaque state ids; approval authority is enforced by admission and artifact receipts.
+  // The OPENSQUID_PROJECT_ROOT seam keeps every checkpoint/event in a temp store.
   let projectRoot: string;
   let priorRoot: string | undefined;
   let priorHome: string | undefined;
@@ -186,8 +150,6 @@ describe('loop_stage — scope-3 loop-autospawn trigger (ATL.3: fire on scope_wr
     mkdirSync(join(projectRoot, '.opensquid'), { recursive: true });
     process.env.OPENSQUID_PROJECT_ROOT = projectRoot;
     process.env.OPENSQUID_HOME = mkdtempSync(join(tmpdir(), 'osq-atl3-home-'));
-    ensureLoopRunningMock.mockClear();
-    ensureLoopRunningMock.mockResolvedValue({ status: 'spawned', pid: 1 });
   });
   afterEach(() => {
     if (priorRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
@@ -197,41 +159,24 @@ describe('loop_stage — scope-3 loop-autospawn trigger (ATL.3: fire on scope_wr
     rmSync(projectRoot, { recursive: true, force: true });
   });
 
-  it('fires the loop trigger exactly once on a scope_write advance', async () => {
-    await upsertTaskStage('wg-t', 'scope_write', 1);
-    expect(ensureLoopRunningMock).toHaveBeenCalledTimes(1);
-    // it targets the current project (process.cwd()) — the same project the checkpoint was written to.
-    expect(ensureLoopRunningMock).toHaveBeenCalledWith(process.cwd());
-    expect(await readLoopStage('wg-t')).toBe('scope_write'); // the durable write still landed
-  });
-
-  it('does NOT fire on a non-scope_write stage (the guard)', async () => {
-    await upsertTaskStage('wg-t2', 'plan', 1);
-    expect(ensureLoopRunningMock).not.toHaveBeenCalled();
-    expect(await readLoopStage('wg-t2')).toBe('plan');
+  it('round-trips an arbitrary pack state without assigning it core meaning', async () => {
+    await upsertTaskStage('wg-t', 'pack-state-17', 1);
+    expect(await readLoopStage('wg-t')).toBe('pack-state-17');
   });
 
   it('LMP.2: pushes exactly one stage_advance monitor event AFTER the durable write', async () => {
-    await upsertTaskStage('wg-adv', 'code', 42);
+    await upsertTaskStage('wg-adv', 'delta', 42);
     const events = await tailEventsSince(0);
     const advances = events.filter((e) => e.kind === 'stage_advance' && e.wgId === 'wg-adv');
     expect(advances).toHaveLength(1);
-    expect(advances[0]).toMatchObject({ stage: 'code', atMs: 42 });
-    expect(await readLoopStage('wg-adv')).toBe('code'); // the checkpoint advanced too
+    expect(advances[0]).toMatchObject({ stage: 'delta', atMs: 42 });
+    expect(await readLoopStage('wg-adv')).toBe('delta'); // the checkpoint advanced too
   });
 
-  it('scope-2 (DPM.4b): a NON-code stage advance still folds to a stage-granular row with phase CLEARED (no regression)', async () => {
-    // The enforced stage_advance is the ONLY feed a non-code stage needs — it appears at stage granularity with no
-    // phase, no set_loop_phase required (DPM.2's coverage invariant). Confirm DPM.1/DPM.3 did not regress it.
-    await upsertTaskStage('wg-ncr', 'author', 7);
+  it('an opaque state advance folds to a stage-granular row with phase cleared', async () => {
+    await upsertTaskStage('wg-ncr', 'epsilon', 7);
     const [folded] = foldEvents(await tailEventsSince(0)).filter((s) => s.wgId === 'wg-ncr');
-    expect(folded).toMatchObject({ wgId: 'wg-ncr', stage: 'author' });
+    expect(folded).toMatchObject({ wgId: 'wg-ncr', stage: 'epsilon' });
     expect(folded?.phase).toBeUndefined(); // stage-granular: a fresh stage has no phase yet (loop_events.ts:201-211)
-  });
-
-  it('a trigger throw NEVER breaks the checkpoint write (fail-open — the ask invariant)', async () => {
-    ensureLoopRunningMock.mockRejectedValueOnce(new Error('boom'));
-    await expect(upsertTaskStage('wg-t3', 'scope_write', 1)).resolves.toBeUndefined();
-    expect(await readLoopStage('wg-t3')).toBe('scope_write'); // the write survived the trigger fault
   });
 });
