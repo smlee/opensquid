@@ -55,7 +55,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
     await rm(project, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
-  it('survives automatic EOF, terminates only the root, then force-kills the owned descendant job', async () => {
+  it('survives stdin EOF until human terminate kills the exact owned descendant job', async () => {
     const grandPidFile = join(project, 'grand.pid');
     const grand = join(project, 'grand.cjs');
     await writeFile(
@@ -78,21 +78,23 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
     });
     cleanupControl = () => control.dispose();
     processRegistered = true;
-    await runOneShotCli({
+    // Keep the invocation in flight while the cold PowerShell Add-Type broker starts. Awaiting an intentional
+    // short inactivity timeout here used to kill the Job before the grandchild could publish readiness.
+    const invocation = runOneShotCli({
       cli: process.execPath,
       args: [child],
       cwd: project,
       prompt: '',
-      timeoutMs: 500,
-      timeoutError: () => new Error('expected timeout'),
+      timeoutMs: 30_000,
+      timeoutError: () => new Error('unexpected inactivity timeout before human control'),
       onShutdownRequested: () => control.markAutomaticShutdown(),
       procControl: control.procControl,
-    }).catch(() => undefined);
+    }).then(
+      () => ({ kind: 'resolved' as const }),
+      (error: unknown) => ({ kind: 'rejected' as const, error }),
+    );
 
-    // PowerShell's first Add-Type compilation is cold on a fresh Windows runner. Wait for the target's
-    // observable readiness instead of assuming the broker, C# compile, child, and grandchild all finish in
-    // 500 ms. The transport has already reached its automatic EOF/timeout path; no OS signal was sent.
-    const grandPid = Number(await waitForFile(grandPidFile, 10_000));
+    const grandPid = Number(await waitForFile(grandPidFile, 20_000));
     expect(Number.isSafeInteger(grandPid) && grandPid > 0).toBe(true);
     expect(() => process.kill(grandPid, 0)).not.toThrow();
 
@@ -103,6 +105,14 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
       authorizedBy: 'tui:windows-e2e',
     });
     expect(receipt.result).toBe('applied');
+    const outcome = await invocation;
+    expect(outcome.kind).toBe('rejected');
+    if (outcome.kind === 'rejected') {
+      expect(outcome.error).toBeInstanceOf(Error);
+      expect((outcome.error as Error).message).not.toContain(
+        'unexpected inactivity timeout before human control',
+      );
+    }
     const deadline = Date.now() + 5_000;
     let alive = true;
     while (alive && Date.now() < deadline) {
@@ -116,5 +126,66 @@ describe.skipIf(process.platform !== 'win32')('Windows Job Object process contro
     // Windows has no portable POSIX TERM analogue: the human terminate action closes the exact owned Job
     // Object with a distinct exit code, and must still remove every descendant.
     expect(alive).toBe(false);
-  }, 30_000);
+  }, 45_000);
+
+  it('automatic inactivity timeout reclaims the exact owned descendant job', async () => {
+    const grandPidFile = join(project, 'automatic-grand.pid');
+    const grand = join(project, 'automatic-grand.cjs');
+    await writeFile(
+      grand,
+      `require('node:fs').writeFileSync(${JSON.stringify(grandPidFile)},String(process.pid));setInterval(()=>{},1000);`,
+    );
+    const child = join(project, 'automatic-child.cjs');
+    await writeFile(
+      child,
+      `require('node:child_process').spawn(process.execPath,[${JSON.stringify(grand)}],{stdio:'ignore'});setInterval(()=>{},1000);`,
+    );
+
+    const control = controlledOwnedProcess({
+      processId: 'windows-job-e2e',
+      wgId: 'wg-windows-job',
+      role: 'stage-process',
+      ownership: 'owned',
+      base: realProcControl,
+      pollMs: 20,
+    });
+    cleanupControl = () => control.dispose();
+    processRegistered = true;
+    const invocation = runOneShotCli({
+      cli: process.execPath,
+      args: [child],
+      cwd: project,
+      prompt: '',
+      timeoutMs: 20_000,
+      timeoutError: () => new Error('expected automatic inactivity timeout'),
+      onShutdownRequested: () => control.markAutomaticShutdown(),
+      procControl: control.procControl,
+    }).then(
+      () => ({ kind: 'resolved' as const }),
+      (error: unknown) => ({ kind: 'rejected' as const, error }),
+    );
+
+    // Prove the grandchild entered the named Job before the automatic transport timeout owns cleanup.
+    const grandPid = Number(await waitForFile(grandPidFile, 15_000));
+    expect(Number.isSafeInteger(grandPid) && grandPid > 0).toBe(true);
+    expect(() => process.kill(grandPid, 0)).not.toThrow();
+
+    const outcome = await invocation;
+    expect(outcome).toMatchObject({ kind: 'rejected' });
+    if (outcome.kind === 'rejected') {
+      expect(outcome.error).toBeInstanceOf(Error);
+      expect((outcome.error as Error).message).toContain('expected automatic inactivity timeout');
+    }
+    const deadline = Date.now() + 5_000;
+    let alive = true;
+    while (alive && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      try {
+        process.kill(grandPid, 0);
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
+  }, 45_000);
 });

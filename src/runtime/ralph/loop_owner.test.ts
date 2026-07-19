@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { lstat, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -236,6 +236,36 @@ describe('loop lifetime owner', () => {
       const result = await acquireLoopOwner(p);
       expect(result).toMatchObject({ status: 'occupied' });
       expect(await readFile(endpoint, 'utf8')).toBe('do not delete');
+      await unlink(endpoint);
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'fails closed on an endpoint directory and never removes it',
+    async () => {
+      const p = await project();
+      const endpoint = loopOwnerEndpoint(p.targetRepoRoot);
+      await mkdir(endpoint, { recursive: true, mode: 0o700 });
+      const result = await acquireLoopOwner(p);
+      expect(result).toMatchObject({ status: 'occupied' });
+      expect((await lstat(endpoint)).isDirectory()).toBe(true);
+      await rm(endpoint, { recursive: true });
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'fails closed on an endpoint symlink and preserves both link and target',
+    async () => {
+      const p = await project();
+      const endpoint = loopOwnerEndpoint(p.targetRepoRoot);
+      const target = join(p.targetRepoRoot, 'endpoint-target');
+      await mkdir(dirname(endpoint), { recursive: true, mode: 0o700 });
+      await writeFile(target, 'do not delete');
+      await symlink(target, endpoint);
+      const result = await acquireLoopOwner(p);
+      expect(result).toMatchObject({ status: 'occupied' });
+      expect((await lstat(endpoint)).isSymbolicLink()).toBe(true);
+      expect(await readFile(target, 'utf8')).toBe('do not delete');
       await unlink(endpoint);
     },
   );

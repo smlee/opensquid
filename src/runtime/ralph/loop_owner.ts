@@ -339,7 +339,7 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-async function quarantineRefusedSocket(endpoint: string): Promise<'retry' | 'gone'> {
+async function quarantineRefusedSocket(endpoint: string): Promise<'retry' | 'gone' | 'unsafe'> {
   let stat;
   try {
     stat = await lstat(endpoint);
@@ -347,7 +347,9 @@ async function quarantineRefusedSocket(endpoint: string): Promise<'retry' | 'gon
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'gone';
     throw error;
   }
-  if (!stat.isSocket()) throw new Error(`loop-owner endpoint is not a socket: ${endpoint}`);
+  // A regular file, directory, or symlink at the endpoint is not stale socket residue. Never rename/delete it;
+  // return a fail-closed result so Linux ECONNREFUSED behavior cannot turn hostile path occupancy into a throw.
+  if (!stat.isSocket()) return 'unsafe';
   const quarantine = `${endpoint}.stale.${String(process.pid)}.${randomUUID()}`;
   try {
     await rename(endpoint, quarantine);
@@ -462,7 +464,15 @@ export async function acquireLoopOwner(
         return { status: 'occupied', endpoint, error: probe.error };
       }
       if (process.platform !== 'win32' && probe.refused) {
-        await quarantineRefusedSocket(endpoint);
+        const quarantine = await quarantineRefusedSocket(endpoint);
+        if (quarantine === 'unsafe') {
+          await admissionLock.close();
+          return {
+            status: 'occupied',
+            endpoint,
+            error: `loop-owner endpoint is not a socket: ${endpoint}`,
+          };
+        }
         continue;
       }
       await admissionLock.close();
