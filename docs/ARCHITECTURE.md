@@ -972,6 +972,170 @@ requirements:
     wg: wg-f166de25d186
     assert: { kind: reachable, symbol: hasCodexAuth, from: [orchestrator] }
     proof: 'src/runtime/ralph/harnesses/codex_lap_harness.test.ts'
+  # Candidate-recovery audit contract (wg-0467f177dce7) — fullstack-flow declares parallel reviewer policy as
+  # pack data; one shared schema, cache owner, activity signal, and thin reaudit projection execute it.
+  - id: R-AUDIT-SHARED-SCALARS
+    intent: 'distinctAuditVerdicts and runtime/audit_schema own the cardinality, id, verdict-token, and text/criteria scalar contracts reused by declarations, persisted evidence, and defensive aggregation so seams cannot drift'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: distinctAuditVerdicts, from: [hooks, setup] }
+    proof: 'src/functions/audit_fanout.test.ts'
+  - id: R-AUDIT-ID-SCHEMA
+    intent: 'AuditLensIdSchema is the single bounded safe-id grammar used by declarations, failures, persisted verdicts, and defensive attribution'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: AuditLensIdSchema, from: [hooks, setup] }
+    proof: 'src/functions/audit_fanout.test.ts'
+  - id: R-AUDIT-VERDICT-SCHEMA
+    intent: 'AuditVerdictTokenSchema is the single uppercase-token grammar used by live call arguments and persisted evidence; distinctAuditVerdicts supplies shared pass/fail separation'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: AuditVerdictTokenSchema, from: [hooks, setup] }
+    proof: 'src/functions/cached_audit.test.ts'
+  - id: R-AUDIT-LENS-SCHEMA
+    intent: 'AuditLensSetSchema is the single strict 2-4 lens validator: unique bounded safe ids, nonempty prompts, and optional nonempty rubric criteria; pack execution, fan-out, and reaudit cannot drift to separate lens shapes'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: AuditLensSetSchema, from: [hooks, setup] }
+    proof: 'src/functions/audit_fanout.test.ts'
+  - id: R-AUDIT-TEXT-BOUND
+    intent: 'AuditTextSchema applies one 300000-byte UTF-8 cap to every reviewer prompt and raw subject, bounding four-way payload replication while failing loud instead of truncating evidence'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: AuditTextSchema, from: [hooks, setup] }
+    proof: 'src/functions/audit_fanout.test.ts'
+  - id: R-AUDIT-DIFF-BOUND
+    intent: 'stagedDiff uses the same MAX_AUDIT_TEXT_BYTES UTF-8 cap as policy subject/prompt validation, so every diff the canonical audit can certify remains readable by commit gate and over-cap diffs fail loud without truncation'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: stagedDiff, from: [hooks, setup] }
+    proof: 'src/functions/staged_diff.test.ts'
+  - id: R-AUDIT-LENS-PROMPT
+    intent: 'renderAuditLensPrompt is the single model-prompt projection for a lens, retains every declared criterion, caps criteria at 16×4096 UTF-8 bytes, and keeps the complete rendered prompt within the shared 300000-byte bound'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: renderAuditLensPrompt, from: [hooks, setup] }
+    proof: 'src/functions/cached_audit.test.ts'
+  - id: R-AUDIT-FANOUT
+    intent: 'AuditFanout starts every missing pack-declared lens concurrently, reuses only matching prompt-hash results for the exact subject, preserves declaration order, and reports partial failures without discarding completed evidence'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: AuditFanout, from: [hooks] }
+    proof: 'src/functions/audit_fanout.test.ts'
+  - id: R-AUDIT-DECLARATION
+    intent: 'parseCachedAuditDeclaration projects complete fan-out policy through the live primitive schema and defaults, including model, timeout, subject template, distinct pass/fail tokens, and the shared lens set'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: parseCachedAuditDeclaration, from: [setup] }
+    proof: 'src/setup/cli/reaudit.test.ts'
+  - id: R-AUDIT-AGGREGATE
+    intent: 'aggregateAuditLenses first enforces shared valid/distinct verdict tokens, then derives GUESS_FREE only for 2-4 exact first-line passes; strict persistence caps summed evidence and defensive invalid input returns bounded fail-closed attribution'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: aggregateAuditLenses, from: [hooks] }
+    proof: 'src/functions/cached_audit.test.ts'
+  - id: R-AUDIT-CACHE-IDENTITY
+    intent: 'auditDeclarationCacheHash is the shared runtime/gate outer identity over model, ordered lenses or prompt, verdict policy, normalized timeout, and exact subject bytes; any policy change misses'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: auditDeclarationCacheHash, from: [hooks, setup] }
+    proof: 'src/functions/cached_audit.test.ts'
+  - id: R-AUDIT-CANONICAL-STORE
+    intent: 'writeTaskAuditCache is the sole memoized evidence publication, retains 100 attempts, and classification inspects that full bound; an older exact hit is republished latest before return so primitive and gate agree, while guards inspect latest-20 and never session files'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: writeTaskAuditCache, from: [hooks, setup] }
+    proof: 'src/functions/cached_audit.test.ts'
+  - id: R-AUDIT-LENS-IDENTITY
+    intent: 'auditLensPolicyHash is the shared runtime/gate identity over model, id, prompt, criteria, verdict policy, and normalized timeout; commit authorization compares every ordered persisted lens against it'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: auditLensPolicyHash, from: [hooks, setup] }
+    proof: 'src/setup/cli/gate.test.ts'
+  - id: R-AUDIT-EVIDENCE-CONTRACT
+    intent: 'parseAuditEvidenceEntry strictly rejects malformed, contradictory, duplicate, reduced-complete, oversized, or policy-less persisted evidence instead of filtering corruption into a passable shape'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: parseAuditEvidenceEntry, from: [hooks, setup] }
+    proof: 'src/runtime/loop/audit_evidence.test.ts'
+  - id: R-AUDIT-GATE-POLICY
+    intent: 'Gate and reaudit load active policy from the recorded session cwd; auditEvidenceMatchesPolicy authorizes only exact complete identity, while its diagnostic companion admits exact current-policy partials solely for bounded findings'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: auditEvidenceMatchesPolicy, from: [setup] }
+    proof: 'src/setup/cli/gate.test.ts'
+  - id: R-AUDIT-VERDICT-AUTH
+    intent: 'auditVerdictMatchesPass is the shared gate/reaudit semantic check: only the active policy pass token authorizes, even when its configured failure token spells GUESS_FREE'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: auditVerdictMatchesPass, from: [setup] }
+    proof: 'src/runtime/loop/audit_evidence.test.ts'
+  - id: R-AUDIT-EVIDENCE-DERIVE
+    intent: 'deriveAuditEvidenceVerdict is the one primitive/guard/gate interpretation; complete fan-out uses aggregateAuditLenses, while partial evidence emits bounded PASS/finding rows for every completed and failed declared lens and can never pass'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: deriveAuditEvidenceVerdict, from: [hooks, setup] }
+    proof: 'src/runtime/loop/audit_evidence.test.ts'
+  - id: R-AUDIT-MODEL-TIMEOUT
+    intent: 'ModelTimeoutError is the strategy-neutral timeout classification consumed by audit orchestration; concrete CLI compatibility errors extend it without leaking strategy modules into the primitive'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: ModelTimeoutError, from: [hooks] }
+    proof: 'src/models/strategies/subscription_cli.test.ts'
+  - id: R-AUDIT-MODEL-BOUND
+    intent: 'resolveStrategy admits maxOutputBytes only for strategies that enforce at capture; both prompt and fan-out audit modes request the 50KiB bound, subscription CLI caps at the owned-process boundary, and unsupported strategies reject before dispatch'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: resolveStrategy, from: [hooks] }
+    proof: 'src/models/strategies/subscription_cli.test.ts'
+  - id: R-AUDIT-ADMISSION
+    intent: 'withAuditFanoutAdmission solely owns two fixed machine-local SQLite BEGIN-IMMEDIATE slots plus two explicit-deadline projections from publication through cleanup; pause retains kernel ownership, crash releases it and leaves only bounded observability state, and contention fails fast without a queue, heartbeat, or stale theft'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: withAuditFanoutAdmission, from: [hooks] }
+    proof: 'src/runtime/audit_admission.test.ts'
+  - id: R-AUDIT-CACHE-LOCK
+    intent: 'withAuditCacheKeyLock maps canonical task/cache identity into 64 fixed SQLite transaction slots and holds either single or fan-out mode from cache classification through durable write; same-key mixed-mode calls collide, files stay bounded, and rare cross-key collisions fail safe/fast'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: withAuditCacheKeyLock, from: [hooks] }
+    proof: 'src/functions/cached_audit.test.ts'
+  - id: R-AUDIT-ACTIVITY-PROJECTION
+    intent: 'readAuditActivity owns all two-slot projection/recovery internals and exposes only activity/unknown plus opaque diagnostics; expired/future recovery maps changed/delete-error to unknown and holds a free guard through reread/delete so successor publication cannot race cleanup'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: readAuditActivity, from: [hooks] }
+    proof: 'src/runtime/hooks/session_liveness.test.ts'
+  - id: R-AUDIT-TELEMETRY
+    intent: 'appendAuditTelemetry stores only model/cache operation, status, duration, model, and optional lens—no audit/cache identity or evidence—and retains at most 1000 rows per session/10000 globally with SQLite-owned idempotent initialization and no timers, queues, or file locks'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: appendAuditTelemetry, from: [hooks] }
+    proof: 'src/runtime/loop/audit_telemetry.test.ts'
+  - id: R-AUDIT-TELEMETRY-READ
+    intent: 'readAuditTelemetryTail is the sole SQL-hiding bounded operational-fact reader for tests and handoff display; no JSONL or direct-table reader remains'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: readAuditTelemetryTail, from: [hooks, setup] }
+    proof: 'src/runtime/handoff/collect.test.ts'
+  - id: R-AUDIT-CANONICAL-DISPATCH
+    intent: 'dispatchCachedAudit is the one live schema/cache/task-persistence/partial-resume/output-bound dispatch used by pack reactions and gate reaudit; fan-out stores no aggregate and emits only bounded metadata through appendAuditTelemetry'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: dispatchCachedAudit, from: [hooks, setup] }
+    proof: 'src/setup/cli/reaudit.test.ts'
+  - id: R-REAUDIT-PACK-POLICY
+    intent: 'materializePackAuditPolicy computes final replacement bytes before allocation (without order-dependent intermediate rejection), performs one non-recursive pass, rejects any residual braces including empty placeholders, then re-parses exact expanded policy before hashing/dispatch'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: materializePackAuditPolicy, from: [hooks, setup] }
+    proof: 'src/setup/cli/reaudit.test.ts'
+  - id: R-AUDIT-CODEX-TIMEOUT
+    intent: 'projectCodexHooks reads the neutral 620-second PreToolUse timeout owned by runtime/hooks/timeouts, keeping both host projections above the pack-declared ten-minute reviewer bound without adapter literals'
+    spec: 'docs/tasks/T-candidate-recovery-audit-contract.md'
+    wg: wg-0467f177dce7
+    assert: { kind: reachable, symbol: projectCodexHooks, from: [setup] }
+    proof: 'src/setup/wizard/codex-hooks-writer.test.ts'
   # T-fullstack-slash-scope (wg-ad368ef9ef98) — one pack-owned command operation projected through all hosts,
   # with canonical WorkGraph/checkpoint authority and existing stage lanes. No command registry or second flow.
   - id: R-FSCOPE-COMMAND

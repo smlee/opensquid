@@ -44,16 +44,35 @@ import { subscriptionCliStrategy } from './strategies/subscription_cli.js';
 import { subscriptionSdkStrategy } from './strategies/subscription_sdk.js';
 import type { ModelAliasConfig, ModelStrategy } from './types.js';
 
+/** Refuse a bounded call before dispatch unless the strategy enforces the byte cap at capture. */
+function withOutputBound(strategy: ModelStrategy, captureBounded: boolean): ModelStrategy {
+  return {
+    async call(prompt, opts) {
+      if (opts?.maxOutputBytes !== undefined && !captureBounded) {
+        throw new Error('model strategy does not support capture-bounded output');
+      }
+      const output = await strategy.call(prompt, opts);
+      if (
+        opts?.maxOutputBytes !== undefined &&
+        Buffer.byteLength(output, 'utf8') > opts.maxOutputBytes
+      ) {
+        throw new Error(`model output exceeded ${String(opts.maxOutputBytes)} bytes`);
+      }
+      return output;
+    },
+  };
+}
+
 export function resolveStrategy(
   alias: string,
   config: ModelAliasConfig,
   secrets?: SecretResolver,
 ): ModelStrategy {
   if (config.mode === 'subscription' && config.impl === 'cli') {
-    return subscriptionCliStrategy(config);
+    return withOutputBound(subscriptionCliStrategy(config), true);
   }
   if (config.mode === 'subscription' && config.impl === 'sdk') {
-    return subscriptionSdkStrategy(config);
+    return withOutputBound(subscriptionSdkStrategy(config), false);
   }
   if (config.mode === 'api') {
     if (!secrets) {
@@ -62,10 +81,10 @@ export function resolveStrategy(
       );
     }
     if (config.provider === 'anthropic') {
-      return apiAnthropicStrategy(config, secrets);
+      return withOutputBound(apiAnthropicStrategy(config, secrets), false);
     }
     if (config.provider === 'openai') {
-      return apiOpenAIStrategy(config, secrets);
+      return withOutputBound(apiOpenAIStrategy(config, secrets), false);
     }
     throw new Error(
       `Model alias "${alias}": api mode requires \`provider\` to be one of "anthropic" | "openai" ` +
@@ -75,14 +94,14 @@ export function resolveStrategy(
   if (config.mode === 'local') {
     // Phase 1: Ollama is the only `local` implementation. Future engines
     // (llama.cpp, vLLM, MLX) would branch on cfg.provider here.
-    return localOllamaStrategy(config);
+    return withOutputBound(localOllamaStrategy(config), false);
   }
   if (config.mode === 'mcp') {
     // mcp strategy fail-fasts on missing server/tool at factory time —
     // resolve here surfaces config errors at pack-load.
-    return mcpStrategy(config);
+    return withOutputBound(mcpStrategy(config), false);
   }
   // Unknown mode (shouldn't be reachable given ModelMode union, but the
   // stub is a safe fallback).
-  return stubStrategy(alias, config.mode);
+  return withOutputBound(stubStrategy(alias, config.mode), false);
 }

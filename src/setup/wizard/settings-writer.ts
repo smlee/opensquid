@@ -32,6 +32,9 @@
 import { promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { PRETOOLUSE_HOOK_TIMEOUT_S } from '../../runtime/hooks/timeouts.js';
+export { PRETOOLUSE_HOOK_TIMEOUT_S } from '../../runtime/hooks/timeouts.js';
+
 // Maps opensquid's supported Claude Code hook events to the bin entries
 // declared in package.json (resolve to `dist/runtime/hooks/*.js` binaries
 // that already wire `loadActivePacks` + `dispatchEvent`).
@@ -52,13 +55,6 @@ export const OPENSQUID_BIN_FOR_EVENT = {
 } as const;
 
 export type ClaudeEvent = keyof typeof OPENSQUID_BIN_FOR_EVENT;
-
-// The PreToolUse hook hosts blocking audit-reviewer calls. Its ceiling stays
-// twenty seconds above the pack's ten-minute inner reviewer timeout so the
-// reviewer returns the readable failure first. Only PreToolUse carries this
-// cap; the other five events keep host defaults. Existing users pick it up by
-// re-running `opensquid setup` (same convention as POSTPUSH.1).
-export const PRETOOLUSE_HOOK_TIMEOUT_S = 620;
 
 // Loose hook entry shapes — we round-trip `unknown` fields verbatim so
 // unrelated third-party schema additions survive a wizard pass.

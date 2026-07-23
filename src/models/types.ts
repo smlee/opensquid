@@ -57,9 +57,23 @@ export interface ModelAliasConfig {
 }
 
 // Strategies expose a single async `call` method. `timeoutMs` is per-call
-// override; strategies default to 30 s when undefined. The return is the
-// raw model output as a string — classification / parsing is the caller's
+// override; strategies default to 30 s when undefined. `maxOutputBytes` is a
+// fail-loud capture bound for callers that fan results out in memory. The return
+// is the raw model output as a string — classification / parsing is the caller's
 // job (see `functions/llm.ts`).
+export interface ModelCallOptions {
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+}
+
+/** Strategy-neutral timeout classification for orchestration/telemetry. */
+export class ModelTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ModelTimeoutError';
+  }
+}
+
 export interface ModelStrategy {
-  call(prompt: string, opts?: { timeoutMs?: number }): Promise<string>;
+  call(prompt: string, opts?: ModelCallOptions): Promise<string>;
 }

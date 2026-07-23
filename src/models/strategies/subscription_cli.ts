@@ -27,7 +27,12 @@
 
 import { runOneShotCli } from '../../runtime/spawn_lifecycle.js';
 
-import type { ModelAliasConfig, ModelStrategy } from '../types.js';
+import {
+  ModelTimeoutError,
+  type ModelAliasConfig,
+  type ModelCallOptions,
+  type ModelStrategy,
+} from '../types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -36,7 +41,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * (T-AUDIT-SPAWN-FIX — the spawn ledger counts `timeout` vs `error` outcomes).
  * Message stays byte-identical to the historical `timeout after Xms` string.
  */
-export class CliTimeoutError extends Error {
+export class CliTimeoutError extends ModelTimeoutError {
   constructor(timeoutMs: number) {
     super(`timeout after ${timeoutMs}ms`);
     this.name = 'CliTimeoutError';
@@ -45,7 +50,7 @@ export class CliTimeoutError extends Error {
 
 export function subscriptionCliStrategy(cfg: ModelAliasConfig): ModelStrategy {
   return {
-    async call(prompt: string, opts?: { timeoutMs?: number }): Promise<string> {
+    async call(prompt: string, opts?: ModelCallOptions): Promise<string> {
       if (!cfg.cli) {
         throw new Error('subscription/cli strategy requires `cli` (the host binary name or path)');
       }
@@ -63,6 +68,7 @@ export function subscriptionCliStrategy(cfg: ModelAliasConfig): ModelStrategy {
         args,
         prompt,
         timeoutMs,
+        ...(opts?.maxOutputBytes === undefined ? {} : { maxCaptureBytes: opts.maxOutputBytes }),
         markSubagent: true,
         timeoutError: (ms) => new CliTimeoutError(ms),
       });

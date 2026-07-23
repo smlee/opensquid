@@ -32,6 +32,9 @@ import { promisify } from 'node:util';
 
 import type { Command } from 'commander';
 
+import { materializePackAuditPolicy } from '../../functions/audit_policy.js';
+import { auditDeclarationCacheHash, auditLensPolicyHash } from '../../functions/cached_audit.js';
+import { readRubricContent } from '../../functions/read_rubric.js';
 import { stagedDiff } from '../../functions/staged_diff.js';
 import { resolveEnvironments } from '../../packs/discovery.js';
 import {
@@ -39,8 +42,15 @@ import {
   type CommitGateEvidence,
 } from '../../runtime/commit_gate_evidence.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
+import {
+  auditEvidenceMatchesPolicy,
+  auditEvidenceMatchesPolicyForDiagnostics,
+  auditVerdictMatchesPass,
+  deriveAuditEvidenceVerdict,
+  type AuditEvidencePolicyIdentity,
+} from '../../runtime/loop/audit_evidence.js';
 import { sha256Hex } from '../../runtime/durable/run_id.js';
-import { resolveProjectScopeRoot, sessionStateFile } from '../../runtime/paths.js';
+import { resolveProjectScopeRoot } from '../../runtime/paths.js';
 import { PROTECTED_PREFIXES, isDocsOnly } from '../../runtime/protected_paths.js';
 import {
   commitSubjectsSince,
@@ -48,10 +58,11 @@ import {
   // commit-msg gate + the pre-push range backstop) and by REL.4's bump path. No duplicate parser.
 } from '../../runtime/release/release_core.js';
 import { validateConventionalMessage } from '../../runtime/release/release_semver.js';
+import { loadActivePacksForDispatch } from '../../runtime/bootstrap.js';
 import { readFsmStateRaw } from '../../runtime/fsm_state.js';
 import { readTaskAuditCache } from '../../runtime/loop/task_audit_cache.js';
 import { readSuite } from '../../runtime/loop/verification.js';
-import { readActiveTask } from '../../runtime/session_state.js';
+import { readActiveTask, readSessionCwd } from '../../runtime/session_state.js';
 import { isComplete, readPhaseState } from '../../runtime/workflow_phases.js';
 
 import { appendAttestation, readAttestedShas } from './attestations.js';
@@ -155,56 +166,79 @@ function block(msg: string): number {
 async function readCodeAuditEntry(
   sid: string,
   auditCacheKey: string,
+  expectedPolicy: AuditEvidencePolicyIdentity,
 ): Promise<{ verdict: string; subjectHash?: string } | null> {
   try {
-    const parsed = JSON.parse(await readFile(sessionStateFile(sid, auditCacheKey), 'utf8')) as {
-      verdict?: unknown;
-      subjectHash?: unknown;
+    // Fan-out evidence has one authorizing home. Both outer identity and every ordered lens identity must match
+    // the active pack; a caller cannot bless reduced/reordered evidence by copying the expected outer hash.
+    const entry = await readTaskAuditCache(sid, auditCacheKey);
+    if (entry === null || !auditEvidenceMatchesPolicy(entry, expectedPolicy)) return null;
+    const verdict = deriveAuditEvidenceVerdict(entry);
+    if (verdict === undefined) return null;
+    return {
+      verdict,
+      ...(entry.subjectHash === undefined ? {} : { subjectHash: entry.subjectHash }),
     };
-    if (typeof parsed.verdict === 'string') {
-      return {
-        verdict: parsed.verdict,
-        ...(typeof parsed.subjectHash === 'string' ? { subjectHash: parsed.subjectHash } : {}),
-      };
-    }
-  } catch {
-    // A fresh recovery/commit process falls through to the task-durable audit cache.
-  }
-  try {
-    return await readTaskAuditCache(sid, auditCacheKey);
   } catch {
     return null;
   }
 }
 
-async function readCodeAuditVerdict(sid: string, auditCacheKey: string): Promise<string | null> {
-  return (await readCodeAuditEntry(sid, auditCacheKey))?.verdict ?? null;
-}
-
-/** GUESS_FREE iff the verdict exists AND says so. FAIL-CLOSED: absent/UNRESOLVED → false (cannot commit). */
-function isGuessFree(verdict: string | null): boolean {
-  return verdict?.includes('VERDICT: GUESS_FREE') ?? false;
+async function expectedCodeAuditPolicy(
+  sid: string,
+  pack: DisciplinePack,
+  auditCacheKey: string,
+  diff: string,
+): Promise<AuditEvidencePolicyIdentity | null> {
+  try {
+    const rubric = await readRubricContent('code', pack);
+    if (rubric === null) return null;
+    const cwd = await readSessionCwd(sid);
+    if (cwd === null) return null;
+    const policy = materializePackAuditPolicy(
+      await loadActivePacksForDispatch(sid, cwd),
+      pack,
+      auditCacheKey,
+      rubric,
+      diff,
+    );
+    if (policy === null) return null;
+    return {
+      hash: auditDeclarationCacheHash({
+        model: policy.model,
+        lenses: policy.lenses,
+        passVerdict: policy.passVerdict,
+        failVerdict: policy.failVerdict,
+        timeoutMs: policy.timeoutMs,
+        subject: policy.subject,
+      }),
+      subjectHash: sha256Hex(policy.subject),
+      passVerdict: policy.passVerdict,
+      failVerdict: policy.failVerdict,
+      lenses: policy.lenses.map((lens) => ({
+        id: lens.id,
+        promptHash: auditLensPolicyHash({
+          model: policy.model,
+          lens,
+          passVerdict: policy.passVerdict,
+          failVerdict: policy.failVerdict,
+          timeoutMs: policy.timeoutMs,
+        }),
+      })),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** GFR.2-hard staleness anchor: the sha256 of the diff the CODE audit certified (cached_audit `subjectHash`),
  *  or null when absent/unreadable (an audit run before the subject was recorded, or no cache). */
-async function readCodeAuditSubjectHash(
-  sid: string,
-  auditCacheKey: string,
-): Promise<string | null> {
-  return (await readCodeAuditEntry(sid, auditCacheKey))?.subjectHash ?? null;
-}
-
-/** Closes the STALENESS WINDOW: a GUESS_FREE verdict only authorizes a commit if it certifies the diff being
- *  committed NOW. Re-derive `git diff HEAD` and require its sha256 to equal the audit's recorded `subjectHash`.
- *  FAIL-CLOSED: no recorded subject (a pre-anchor audit), no current diff (over-cap/empty/git error), or a
- *  mismatch (the code changed since the audit) → false → block (re-log the `audit` phase on the current diff). */
-async function codeAuditCertifiesCurrentDiff(sid: string, auditCacheKey: string): Promise<boolean> {
-  const recorded = await readCodeAuditSubjectHash(sid, auditCacheKey);
-  if (recorded === null) return false;
-  const diff = await stagedDiff(sid);
-  if (diff === null) return false;
-  return sha256Hex(diff) === recorded;
+/** Exact subject bytes and exact active-pack declaration must both match at the git boundary. */
+function codeAuditCertifiesCurrentDiff(
+  entry: { subjectHash?: string } | null,
+  diff: string | null,
+): boolean {
+  return entry?.subjectHash !== undefined && diff !== null && sha256Hex(diff) === entry.subjectHash;
 }
 
 export async function commitAllowedNow(
@@ -241,9 +275,17 @@ export async function commitAllowedNow(
     // (null) is NOT green. The suite RECORD is the single source of truth (one writer, two readers: the DEPLOY
     // driver via deploy_evidence + this gate); core names no suite command literal (design §4a).
     const suiteOk = !ev.requireSuiteGreen || (await readSuite(sid, active.id)) === true;
+    const diff = await stagedDiff(sid);
+    const expectedPolicy =
+      diff === null ? null : await expectedCodeAuditPolicy(sid, pack, ev.auditCacheKey, diff);
+    const audit =
+      expectedPolicy === null
+        ? null
+        : await readCodeAuditEntry(sid, ev.auditCacheKey, expectedPolicy);
     return (!ev.requirePhaseLedger || isComplete(phases, active.id)) &&
-      isGuessFree(await readCodeAuditVerdict(sid, ev.auditCacheKey)) &&
-      (await codeAuditCertifiesCurrentDiff(sid, ev.auditCacheKey)) &&
+      expectedPolicy !== null &&
+      auditVerdictMatchesPass(audit?.verdict, expectedPolicy.passVerdict) &&
+      codeAuditCertifiesCurrentDiff(audit, diff) &&
       suiteOk
       ? { allowed: true, reason: 'flow_complete' }
       : null;
@@ -346,10 +388,33 @@ export async function runGate(
   // GFR.2-hard: if the 7-phase flow IS complete, the block is the CODE guess-free audit, not the flow —
   // give the precise reason rather than the misleading "finish the flow".
   if (ev !== null && active !== null && isComplete(await readPhaseState(sid), active.id)) {
-    const verdict = await readCodeAuditVerdict(sid, ev.auditCacheKey);
-    // STALENESS branch: the verdict IS GUESS_FREE but it certified a DIFFERENT diff (the code changed since the
-    // audit). The fix is mechanical — re-run the audit on the current diff — not a content redo, so say so.
-    if (isGuessFree(verdict) && !(await codeAuditCertifiesCurrentDiff(sid, ev.auditCacheKey))) {
+    const diff = await stagedDiff(sid);
+    const expectedPolicy =
+      diff === null ? null : await expectedCodeAuditPolicy(sid, pack, ev.auditCacheKey, diff);
+    const audit =
+      expectedPolicy === null
+        ? null
+        : await readCodeAuditEntry(sid, ev.auditCacheKey, expectedPolicy);
+    const auditVerdict = audit?.verdict ?? null;
+    const rawEntry = audit === null ? await readTaskAuditCache(sid, ev.auditCacheKey) : null;
+    const rawVerdict = rawEntry === null ? undefined : deriveAuditEvidenceVerdict(rawEntry);
+    const currentPolicyRawVerdict =
+      rawEntry !== null &&
+      expectedPolicy !== null &&
+      auditEvidenceMatchesPolicyForDiagnostics(rawEntry, expectedPolicy)
+        ? rawVerdict
+        : undefined;
+    const auditPass =
+      expectedPolicy !== null && auditVerdictMatchesPass(auditVerdict, expectedPolicy.passVerdict);
+    const rawPass =
+      expectedPolicy !== null && auditVerdictMatchesPass(rawVerdict, expectedPolicy.passVerdict);
+    const staleRaw =
+      rawPass &&
+      diff !== null &&
+      rawEntry?.subjectHash !== undefined &&
+      sha256Hex(diff) !== rawEntry.subjectHash;
+    // STALENESS branch: exact or legacy diagnostic evidence passes but certifies different bytes.
+    if ((auditPass && !codeAuditCertifiesCurrentDiff(audit, diff)) || staleRaw) {
       return block(
         `this ${boundary} is GUESS_FREE but the audit certified a DIFFERENT diff — the code changed since the ` +
           `CODE audit ran (staleness window). Re-log the \`audit\` phase to re-run the audit on the CURRENT ` +
@@ -360,7 +425,8 @@ export async function runGate(
     // pack-declared suite requirement is not met — the repo-wide verification suite is not recorded green. Surface
     // THAT precise, mechanical reason (run the suite) rather than the audit-redo one. Core names no suite command.
     if (
-      isGuessFree(verdict) &&
+      auditPass &&
+      codeAuditCertifiesCurrentDiff(audit, diff) &&
       ev.requireSuiteGreen &&
       (await readSuite(sid, active.id)) !== true
     ) {
@@ -372,8 +438,9 @@ export async function runGate(
       );
     }
     const findings =
-      verdict ??
-      '(no verdict yet — log/re-log the `audit` phase to run the CODE audit, then retry)';
+      auditVerdict ??
+      currentPolicyRawVerdict ??
+      '(no exact active-policy verdict yet — log/re-log the `audit` phase to run the CODE audit, then retry)';
     // Force a GUIDED redo: surface the exact findings so the agent fixes those, re-logs audit → re-audit →
     // loop until GUESS_FREE (the self-continue pattern), rather than a bare refusal.
     return block(

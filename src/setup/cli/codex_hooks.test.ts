@@ -33,10 +33,11 @@ describe('runCodexHooksWizard', () => {
   it('creates hooks.json with the 5 entries on a fresh ~/.codex', async () => {
     await runCodexHooksWizard(deps());
     const parsed = JSON.parse(await readFile(join(codexDir, 'hooks.json'), 'utf8')) as {
-      hooks: Record<string, unknown[]>;
+      hooks: Record<string, { hooks?: { timeout?: number }[] }[]>;
     };
     expect(Object.keys(parsed.hooks)).toHaveLength(5);
     expect(parsed.hooks.SessionEnd).toBeUndefined();
+    expect(parsed.hooks.PreToolUse?.[0]?.hooks?.[0]?.timeout).toBe(620);
     expect(lines.join('\n')).toContain('5 added');
     expect(lines.join('\n')).toContain('ACTIVATION REQUIRES TRUST');
   });

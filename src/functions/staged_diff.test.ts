@@ -10,6 +10,8 @@ import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
+import { MAX_AUDIT_TEXT_BYTES } from '../runtime/audit_schema.js';
+
 import { readGitWorkingTreeDiff, stagedDiff, type DiffDeps } from './staged_diff.js';
 
 const execFileP = promisify(execFile);
@@ -42,7 +44,7 @@ describe('stagedDiff', () => {
   });
 
   it('returns null when over-cap (never a partial/truncated diff)', async () => {
-    const huge = 'x'.repeat(200_001);
+    const huge = 'x'.repeat(MAX_AUDIT_TEXT_BYTES + 1);
     await expect(stagedDiff('s', deps({ run: () => Promise.resolve(huge) }))).resolves.toBeNull();
   });
 

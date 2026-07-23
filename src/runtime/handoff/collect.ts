@@ -25,12 +25,14 @@ import {
   resolveLocalStoreDir,
   resolveProjectMarker,
   resolveProjectScopeRoot,
-  sessionLogFile,
   sessionStateFile,
 } from '../paths.js';
 import { type ActiveTask, readActiveTask } from '../session_state.js';
 import { readGoalMap } from '../goal_map/goal_map.js';
 import { waitingItems } from '../loop/acceptance.js';
+import { deriveAuditEvidenceVerdict } from '../loop/audit_evidence.js';
+import { readAuditTelemetryTail } from '../loop/audit_telemetry.js';
+import { readTaskAuditCache } from '../loop/task_audit_cache.js';
 import { readCheckpointBySession } from '../ralph/loop_stage.js';
 
 const execFileP = promisify(execFile);
@@ -95,12 +97,16 @@ async function readJsonState(
   );
 }
 
-/** First N chars of a cached audit verdict (or an absent/unreadable marker). */
+/** First N chars derived from the canonical task-durable audit evidence. */
 async function auditHead(sessionId: string, key: string, n = 600): Promise<string> {
-  const parsed = await readJsonState(sessionId, key);
-  if (typeof parsed === 'string') return parsed; // <unreadable: …>
-  const verdict = (parsed as { verdict?: unknown }).verdict;
-  return typeof verdict === 'string' ? verdict.slice(0, n) : '<no verdict field>';
+  try {
+    const entry = await readTaskAuditCache(sessionId, key);
+    if (entry === null) return '<no canonical audit evidence>';
+    const verdict = deriveAuditEvidenceVerdict(entry);
+    return verdict === undefined ? '<no derived verdict>' : verdict.slice(0, n);
+  } catch (error) {
+    return `<unreadable canonical audit: ${error instanceof Error ? error.message : String(error)}>`;
+  }
 }
 
 async function tailLines(path: string, n: number): Promise<string[]> {
@@ -309,7 +315,9 @@ export async function collectHandoffState(sessionId: string, cwd: string): Promi
     phaseLedger,
     guessAuditHead: await auditHead(sessionId, 'coding-flow-guess-audit-cache'),
     specAuditHead: await auditHead(sessionId, 'coding-flow-spec-audit-cache'),
-    spawnLedgerTail: await tailLines(sessionLogFile(sessionId, 'audit-spawn-ledger'), 5),
+    spawnLedgerTail: await readAuditTelemetryTail(sessionId, 5)
+      .then((entries) => entries.slice(-5).map((entry) => JSON.stringify(entry)))
+      .catch(() => []),
     attestationsTail,
     artifacts,
     git,

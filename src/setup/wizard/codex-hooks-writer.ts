@@ -27,6 +27,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { PRETOOLUSE_HOOK_TIMEOUT_S } from '../../runtime/hooks/timeouts.js';
 import { OPENSQUID_BIN_FOR_EVENT, isOpensquidHookEntry } from './settings-writer.js';
 
 /** The five codex events we wire (NO SessionEnd — see header). */
@@ -40,7 +41,7 @@ export const CODEX_EVENTS = [
 export type CodexEvent = (typeof CODEX_EVENTS)[number];
 
 const TIMEOUT_S: Record<CodexEvent, number> = {
-  PreToolUse: 360, // the 0.5.376 audit-window sizing
+  PreToolUse: PRETOOLUSE_HOOK_TIMEOUT_S,
   PostToolUse: 60,
   UserPromptSubmit: 60,
   Stop: 60,

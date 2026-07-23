@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { activeTaskFile, sessionStateFile } from '../paths.js';
 
+import { withAuditFanoutAdmission } from '../audit_admission.js';
 import { DEFAULT_FRESH_MS, FRESH_MS, isSessionPlausible } from './session_liveness.js';
 
 let tempHome: string;
@@ -38,6 +39,14 @@ async function seedFile(absPath: string, mtimeMs: number): Promise<void> {
   await writeFile(absPath, '{}', 'utf8');
   const date = new Date(mtimeMs);
   await utimes(absPath, date, date);
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe('FRESH_MS', () => {
@@ -69,9 +78,10 @@ describe('isSessionPlausible', () => {
     const result = await isSessionPlausible('absent-sid');
     expect(result.plausible).toBe(false);
     expect(result.newestMtimeMs).toBeNull();
-    expect(result.probedFiles).toHaveLength(2);
+    expect(result.probedFiles).toHaveLength(4);
     expect(result.probedFiles[0]).toBe(activeTaskFile('absent-sid'));
     expect(result.probedFiles[1]).toBe(sessionStateFile('absent-sid', 'tool-ledger'));
+    expect(result.probedFiles.slice(2)).toEqual(['audit:projection:0', 'audit:projection:1']);
   });
 
   it('plausible when active-task.json is fresh', async () => {
@@ -121,6 +131,49 @@ describe('isSessionPlausible', () => {
       freshMs: 60_000,
     });
     expect(loose.plausible).toBe(true);
+  });
+
+  it('uses producer-published in-flight activity instead of guessing from quiet mtimes', async () => {
+    const started = deferred();
+    const release = deferred();
+    const running = withAuditFanoutAdmission('audit-running', async () => {
+      started.resolve();
+      await release.promise;
+    });
+    await started.promise;
+    const active = await isSessionPlausible('audit-running', { freshMs: 1 });
+    expect(active.plausible).toBe(true);
+    expect(active.newestMtimeMs).toBeNull();
+
+    release.resolve();
+    await running;
+    expect((await isSessionPlausible('audit-running', { freshMs: 1 })).plausible).toBe(false);
+  });
+
+  it('keeps either overlapping producer live regardless of completion order', async () => {
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    const first = withAuditFanoutAdmission('overlap', async () => {
+      firstStarted.resolve();
+      await releaseFirst.promise;
+    });
+    await firstStarted.promise;
+
+    const secondStarted = deferred();
+    const releaseSecond = deferred();
+    const second = withAuditFanoutAdmission('overlap', async () => {
+      secondStarted.resolve();
+      await releaseSecond.promise;
+    });
+    await secondStarted.promise;
+
+    // The newer producer finishes first; the older producer's independent fixed-slot projection remains active.
+    releaseSecond.resolve();
+    await second;
+    expect((await isSessionPlausible('overlap', { freshMs: 1 })).plausible).toBe(true);
+    releaseFirst.resolve();
+    await first;
+    expect((await isSessionPlausible('overlap', { freshMs: 1 })).plausible).toBe(false);
   });
 
   it('honors OPENSQUID_SESSION_FRESH_MS env when freshMs not passed', async () => {

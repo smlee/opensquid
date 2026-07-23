@@ -175,6 +175,37 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
       expect(byId[id]).toBe('met');
     }
     for (const id of [
+      'R-AUDIT-SHARED-SCALARS',
+      'R-AUDIT-ID-SCHEMA',
+      'R-AUDIT-VERDICT-SCHEMA',
+      'R-AUDIT-LENS-SCHEMA',
+      'R-AUDIT-TEXT-BOUND',
+      'R-AUDIT-DIFF-BOUND',
+      'R-AUDIT-LENS-PROMPT',
+      'R-AUDIT-FANOUT',
+      'R-AUDIT-DECLARATION',
+      'R-AUDIT-AGGREGATE',
+      'R-AUDIT-CACHE-IDENTITY',
+      'R-AUDIT-CANONICAL-STORE',
+      'R-AUDIT-LENS-IDENTITY',
+      'R-AUDIT-EVIDENCE-CONTRACT',
+      'R-AUDIT-GATE-POLICY',
+      'R-AUDIT-EVIDENCE-DERIVE',
+      'R-AUDIT-VERDICT-AUTH',
+      'R-AUDIT-MODEL-TIMEOUT',
+      'R-AUDIT-MODEL-BOUND',
+      'R-AUDIT-ADMISSION',
+      'R-AUDIT-CACHE-LOCK',
+      'R-AUDIT-ACTIVITY-PROJECTION',
+      'R-AUDIT-TELEMETRY',
+      'R-AUDIT-TELEMETRY-READ',
+      'R-AUDIT-CANONICAL-DISPATCH',
+      'R-REAUDIT-PACK-POLICY',
+      'R-AUDIT-CODEX-TIMEOUT',
+    ]) {
+      expect(byId[id]).toBe('met');
+    }
+    for (const id of [
       'R-FSCOPE-COMMAND',
       'R-FSCOPE-ENTRY-PRIMITIVE',
       'R-FSCOPE-ENGAGEMENT',
@@ -185,6 +216,6 @@ describe('coverage report-only over the live tree (CFD.1)', () => {
     ]) {
       expect(byId[id]).toBe('met');
     }
-    expect(a.results.length).toBe(113); // 105 prior + 7 fullstack /scope + DEPLOY local-branch verification
+    expect(a.results.length).toBe(140); // prior manifest + 27 pack-declared audit-contract requirements
   }, 30_000);
 });

@@ -5,7 +5,7 @@
  * manifest → code; CODE passes on the 7-phase ledger + clean readiness → deploy; DEPLOY + the accept
  * decision pass on capability-skip + an accepted item → done. Per-task gates seed the per-task FSM key.
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +20,7 @@ import { appendAsk } from '../coverage/captured_ask.js';
 import { appendTool, recordSessionCwd, writeActiveTask } from '../session_state.js';
 import { readFsmStateRaw, readFsmStateFile, persistActorState } from '../fsm_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../workflow_phases.js';
+import { writeTaskAuditCache } from './task_audit_cache.js';
 import { recordReadiness } from './readiness.js';
 import { readVerification, recordSuite } from './verification.js';
 import { appendAcceptance, markAccepted } from './acceptance.js';
@@ -43,14 +44,12 @@ const FSF = resolve(
 
 const PRE_RESEARCH_PATH_KEY = 'fullstack-flow-pre-research-path';
 
-/** Seed a stage's content-audit cache with a GUESS_FREE verdict (the flat `{verdict}` shape readVerdict reads),
- *  so the live GFR.2 (own-stage) + GFR.3 (rolling prior-stage) guard clauses are satisfied without spawning the
- *  real adversarial (LLM) audit producer — these tests exercise the deterministic gate spine, not the producer. */
+/** Seed canonical task-durable GUESS_FREE evidence so these deterministic gate-spine tests do not spawn LLMs. */
 async function seedVerdict(sid: string, stage: string): Promise<void> {
-  await atomicWriteFile(
-    sessionStateFile(sid, `fullstack-flow-${stage}-audit-cache`),
-    JSON.stringify({ verdict: 'VERDICT: GUESS_FREE\n- seeded ok', hash: 'seed' }),
-  );
+  await writeTaskAuditCache(sid, `fullstack-flow-${stage}-audit-cache`, {
+    verdict: 'VERDICT: GUESS_FREE\n- seeded ok',
+    hash: 'e'.repeat(64),
+  });
 }
 
 const postWrite = (filePath: string): Event =>
@@ -61,7 +60,17 @@ const postWrite = (filePath: string): Event =>
     exit_code: 0,
   }) as unknown as Event;
 
-beforeEach(() => mockLoad.mockReset());
+let priorProjectRoot: string | undefined;
+beforeEach(() => {
+  mockLoad.mockReset();
+  priorProjectRoot = process.env.OPENSQUID_PROJECT_ROOT;
+  delete process.env.OPENSQUID_ITEM_ID;
+});
+afterEach(() => {
+  delete process.env.OPENSQUID_ITEM_ID;
+  if (priorProjectRoot === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+  else process.env.OPENSQUID_PROJECT_ROOT = priorProjectRoot;
+});
 
 describe('fullstack-flow E2E — real pack, live path', () => {
   it('SCOPE is a no-op resting state: a pre-research write DWELLS — the interactive FSM does not advance', async () => {
@@ -71,6 +80,7 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     const sid = 'e2e-scope';
     const root = await mkdtemp(join(tmpdir(), 'fsf-e2e-'));
     await mkdir(join(root, '.opensquid'), { recursive: true });
+    process.env.OPENSQUID_PROJECT_ROOT = root;
     await recordSessionCwd(sid, root);
     // SCOPE runs BEFORE a task is active (taskId=null → session-level FSM key 'fullstack-flow', per T2.2).
 
@@ -83,8 +93,6 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     const artifact = join(sub, 'T-e2e-pre-research-2026.md');
     await writeFile(artifact, '1. Login [ask: "add login screen"]\n', 'utf8');
     await atomicWriteFile(sessionStateFile(sid, PRE_RESEARCH_PATH_KEY), JSON.stringify(artifact));
-    await seedVerdict(sid, 'scope');
-
     const d = await runV2Cartridges(sid, postWrite(artifact), NOW);
 
     // SCOPE never blocks (no on_fail fires without a trigger) and never advances (dwells): the interactive stage
@@ -102,6 +110,7 @@ describe('fullstack-flow E2E — real pack, live path', () => {
     const sid = 'e2e-plan';
     const root = await mkdtemp(join(tmpdir(), 'fsf-e2e-'));
     await mkdir(join(root, '.opensquid'), { recursive: true });
+    process.env.OPENSQUID_PROJECT_ROOT = root;
     await recordSessionCwd(sid, root);
     await writeActiveTask(sid, { id: '1', subject: 'add login', started_at: NOW, taskId: 'T-e2e' });
 
@@ -131,8 +140,10 @@ describe('fullstack-flow E2E — real pack, live path', () => {
   ): Promise<{ sid: string; root: string; taskId: string }> {
     const sid = `e2e-${stage}`;
     const taskId = `T-${stage}`;
+    process.env.OPENSQUID_ITEM_ID = `wg-e2e-${stage}`;
     const root = await mkdtemp(join(tmpdir(), 'fsf-e2e-'));
     await mkdir(join(root, '.opensquid'), { recursive: true });
+    process.env.OPENSQUID_PROJECT_ROOT = root;
     await recordSessionCwd(sid, root);
     await writeActiveTask(sid, { id: '1', subject: stage, started_at: NOW, taskId });
     await persistActorState(sid, 'fullstack-flow', stage, NOW, taskId); // seed at this stage (per-task key)
