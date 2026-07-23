@@ -1,25 +1,15 @@
+import {
+  parseAuditEvidenceEntry,
+  type AuditEvidenceEntry,
+  type AuditEvidenceFailure,
+  type AuditLensVerdict,
+} from './audit_evidence.js';
 import { withLoopDb } from './loop_db.js';
 import { resolveCheckpointKey } from './checkpoint_key.js';
 
-export interface DurableTaskAuditLens {
-  readonly id: string;
-  readonly promptHash: string;
-  readonly output: string;
-}
-
-export interface DurableTaskAuditFailure {
-  readonly id: string;
-  readonly error: string;
-}
-
-export interface DurableTaskAuditEntry {
-  readonly hash: string;
-  readonly verdict: string;
-  readonly complete?: boolean;
-  readonly lenses?: readonly DurableTaskAuditLens[];
-  readonly failures?: readonly DurableTaskAuditFailure[];
-  readonly subjectHash?: string;
-}
+export type DurableTaskAuditLens = AuditLensVerdict;
+export type DurableTaskAuditFailure = AuditEvidenceFailure;
+export type DurableTaskAuditEntry = AuditEvidenceEntry;
 
 export interface DurableTaskAuditAttempt {
   readonly entry: DurableTaskAuditEntry;
@@ -66,49 +56,7 @@ async function ensureTable(): Promise<void> {
 }
 
 function parseEntry(value: unknown): DurableTaskAuditEntry | null {
-  if (
-    value === null ||
-    typeof value !== 'object' ||
-    typeof (value as { hash?: unknown }).hash !== 'string' ||
-    typeof (value as { verdict?: unknown }).verdict !== 'string'
-  ) {
-    return null;
-  }
-  const record = value as {
-    hash: string;
-    verdict: string;
-    complete?: unknown;
-    lenses?: unknown;
-    failures?: unknown;
-    subjectHash?: unknown;
-  };
-  const lenses = Array.isArray(record.lenses)
-    ? record.lenses.filter(
-        (lens): lens is DurableTaskAuditLens =>
-          lens !== null &&
-          typeof lens === 'object' &&
-          typeof (lens as { id?: unknown }).id === 'string' &&
-          typeof (lens as { promptHash?: unknown }).promptHash === 'string' &&
-          typeof (lens as { output?: unknown }).output === 'string',
-      )
-    : undefined;
-  const failures = Array.isArray(record.failures)
-    ? record.failures.filter(
-        (failure): failure is DurableTaskAuditFailure =>
-          failure !== null &&
-          typeof failure === 'object' &&
-          typeof (failure as { id?: unknown }).id === 'string' &&
-          typeof (failure as { error?: unknown }).error === 'string',
-      )
-    : undefined;
-  return {
-    hash: record.hash,
-    verdict: record.verdict,
-    ...(typeof record.complete === 'boolean' ? { complete: record.complete } : {}),
-    ...(lenses === undefined ? {} : { lenses }),
-    ...(failures === undefined ? {} : { failures }),
-    ...(typeof record.subjectHash === 'string' ? { subjectHash: record.subjectHash } : {}),
-  };
+  return parseAuditEvidenceEntry(value);
 }
 
 /** Persist an opaque pack audit cache under durable task identity so a fresh per-stage lap can re-use it. */
@@ -119,8 +67,10 @@ export async function writeTaskAuditCache(
 ): Promise<void> {
   const taskId = await resolveCheckpointKey(sessionId);
   await ensureTable();
+  const validated = parseEntry(entry);
+  if (validated === null) throw new Error('refusing malformed task audit evidence');
   await withLoopDb(async (db) => {
-    const encoded = JSON.stringify(entry);
+    const encoded = JSON.stringify(validated);
     const now = Date.now();
     await db.batch(
       [

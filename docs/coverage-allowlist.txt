@@ -2313,3 +2313,28 @@ readCodexConfig
 # cannot drift). ---
 CodexApprovalPolicy
 CodexSandboxMode
+
+# --- Candidate-recovery audit contract (wg-0467f177dce7): data-only lens/result/declaration/call-option
+# records and shared numeric bound constants exchanged by requirement-backed audit seams. They carry no
+# independent control flow; schema, dispatch, cache authorization, concurrency, output bounds,
+# liveness, and aggregation are requirements. ---
+AuditLens
+AuditLensVerdict
+AuditLensFailure
+AuditFanoutResult
+CachedAuditDeclaration
+MaterializedAuditPolicy
+ModelCallOptions
+AuditActivityResult
+AuditDeclarationHashInput
+AuditEvidenceEntry
+AuditEvidenceFailure
+AuditEvidencePolicyIdentity
+AuditLensPolicyHashInput
+AuditTelemetryEntry
+MAX_AUDIT_AGGREGATE_EVIDENCE_BYTES
+AUDIT_LENS_MIN
+AUDIT_LENS_MAX
+MAX_AUDIT_TEXT_BYTES
+MAX_AUDIT_CRITERIA
+MAX_AUDIT_CRITERION_BYTES

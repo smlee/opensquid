@@ -31,50 +31,33 @@
 
 import type { Command } from 'commander';
 
+import {
+  materializePackAuditPolicy,
+  type MaterializedAuditPolicy,
+} from '../../functions/audit_policy.js';
 import { stagedDiff } from '../../functions/staged_diff.js';
 import { readRubricContent } from '../../functions/read_rubric.js';
-import { loadModelsConfig } from '../../models/load_config.js';
-import { resolveStrategy } from '../../models/dispatcher.js';
-import { atomicWriteFile } from '../../runtime/atomic_write.js';
 import {
   readCommitGateEvidence,
   type CommitGateEvidence,
 } from '../../runtime/commit_gate_evidence.js';
-import { sha256Hex } from '../../runtime/durable/run_id.js';
 import { resolveMcpSessionId } from '../../runtime/hooks/session_id.js';
-import { sessionStateFile } from '../../runtime/paths.js';
+import { loadActivePacksForDispatch } from '../../runtime/bootstrap.js';
+import { readSessionCwd } from '../../runtime/session_state.js';
+import { auditVerdictMatchesPass } from '../../runtime/loop/audit_evidence.js';
+
+import { dispatchCachedAudit } from '../../functions/cached_audit.js';
 
 import { activeDisciplinePack } from './gate.js';
 
-/** The `reasoning` task-purpose alias, mirroring `content-audit/skill.yaml`'s CODE audit. Generic — not pack
- *  vocabulary; the alias is resolved from the layered models config (`loadModelsConfig`). */
-const AUDIT_MODEL = 'reasoning';
-/** Match the skill's `timeout_ms: 340000` so the CLI and the PostToolUse producer bound the spawn identically. */
-const AUDIT_TIMEOUT_MS = 340_000;
+export { materializePackAuditPolicy } from '../../functions/audit_policy.js';
+export type { MaterializedAuditPolicy } from '../../functions/audit_policy.js';
 
-/**
- * The CODE guess-free audit prompt — the SAME instruction the `content-audit` skill's `code-guess-free-audit`
- * rule runs (packs/builtin/fullstack-flow/skills/content-audit/skill.yaml), so the CLI and the in-session
- * producer enforce one standard. The `code` rubric is the single canonical source; the diff is the artifact.
- */
-export function buildCodeAuditPrompt(rubric: string, diff: string): string {
-  return (
-    'You are an adversarial reviewer enforcing the GUESS-FREE CODE standard on a diff. Apply EXACTLY this ' +
-    'rubric (the single canonical source, injected below):\n\n' +
-    `${rubric}\n\n` +
-    'Begin your response with EXACTLY one line — `VERDICT: GUESS_FREE` ONLY if the diff aligns to the ' +
-    'scoped element, uses APIs per their docs (no deprecated/misused), reinvents nothing, is a full fix ' +
-    '(not a band-aid, not an MVP/reduced subset), and the AUTHOR spec still holds; otherwise ' +
-    '`VERDICT: UNRESOLVED` + one bullet per offending hunk. DIFF:\n\n' +
-    diff
-  );
-}
-
-/** The dispatch input the injected `runAudit` seam receives (mirrors `cached_audit`'s call args). */
-export interface AuditDispatch {
-  model: string;
-  prompt: string;
-  timeoutMs: number;
+/** The dispatch input the injected `runAudit` seam receives. */
+export interface AuditDispatch extends MaterializedAuditPolicy {
+  sessionId: string;
+  packId: string;
+  subject: string;
 }
 
 /** Injectable dependencies — tests pass pure stubs; defaults resolve the live session + dispatch the model. */
@@ -89,10 +72,16 @@ export interface ReauditDeps {
   diff: (sid: string) => Promise<string | null>;
   /** The pack's CODE rubric, or null when absent/over-cap (fail-loud — no rubric ⇒ no audit ⇒ gate blocks). */
   rubric: (pack: string) => Promise<string | null>;
-  /** The REAL adversarial audit dispatch. Returns the raw verdict text (must contain `VERDICT:`). */
+  /** Materialize the active pack's complete validated audit policy; core duplicates no schema/default. */
+  policy: (
+    sid: string,
+    pack: string,
+    auditCacheKey: string,
+    rubric: string,
+    diff: string,
+  ) => Promise<MaterializedAuditPolicy | null>;
+  /** The REAL canonical cached-audit dispatch. It owns cache persistence and returns the aggregate verdict. */
   runAudit: (d: AuditDispatch) => Promise<string>;
-  /** Persist the cache entry (atomic write to the session-state file). */
-  write: (sid: string, key: string, entry: string) => Promise<void>;
 }
 
 const defaultReauditDeps: ReauditDeps = {
@@ -101,15 +90,51 @@ const defaultReauditDeps: ReauditDeps = {
   evidence: readCommitGateEvidence,
   diff: stagedDiff,
   rubric: (pack) => readRubricContent('code', pack),
-  runAudit: async ({ model, prompt, timeoutMs }) => {
-    // The SAME dispatch path as `cached_audit`: resolve the alias from the layered models config, then call the
-    // strategy with the bounded timeout. No pack models layer needed — `reasoning` lives in the user-level config.
-    const cfg = await loadModelsConfig();
-    const aliasCfg = cfg[model];
-    if (!aliasCfg) throw new Error(`Unknown model alias "${model}"`);
-    return resolveStrategy(model, aliasCfg).call(prompt, { timeoutMs });
+  policy: async (sid, pack, auditCacheKey, rubric, diff) => {
+    const cwd = await readSessionCwd(sid);
+    return cwd === null
+      ? null
+      : materializePackAuditPolicy(
+          await loadActivePacksForDispatch(sid, cwd),
+          pack,
+          auditCacheKey,
+          rubric,
+          diff,
+        );
   },
-  write: (sid, key, entry) => atomicWriteFile(sessionStateFile(sid, key), entry),
+  runAudit: async ({
+    model,
+    lenses,
+    timeoutMs,
+    sessionId,
+    packId,
+    cacheKey,
+    subject,
+    passVerdict,
+    failVerdict,
+  }) => {
+    const result = await dispatchCachedAudit(
+      {
+        cache_key: cacheKey,
+        model,
+        lenses,
+        ...(timeoutMs === undefined ? {} : { timeout_ms: timeoutMs }),
+        pass_verdict: passVerdict,
+        fail_verdict: failVerdict,
+        subject,
+      },
+      {
+        event: { kind: 'stop', assistantText: '' },
+        bindings: new Map(),
+        sessionId,
+        packId,
+      },
+    );
+    if (!result.ok) throw new Error(result.error.message);
+    if (typeof result.value !== 'string')
+      throw new Error('cached_audit returned a non-string result');
+    return result.value;
+  },
 };
 
 /** The outcome of a reaudit run — a typed result the CLI renders (never throws to the caller). */
@@ -157,29 +182,40 @@ export async function runReaudit(
       reason: `pack "${pack}" has no readable CODE rubric — cannot audit (fail-loud)`,
     };
   }
-  const prompt = buildCodeAuditPrompt(rubric, diff);
+  const policy = await deps.policy(sid, pack, ev.auditCacheKey, rubric, diff);
+  if (policy === null) {
+    return {
+      ok: false,
+      reason: `pack "${pack}" has no valid parallel CODE audit lenses for ${ev.auditCacheKey}`,
+    };
+  }
   let verdict: string;
   try {
-    verdict = await deps.runAudit({ model: AUDIT_MODEL, prompt, timeoutMs: AUDIT_TIMEOUT_MS });
+    verdict = await deps.runAudit({
+      ...policy,
+      sessionId: sid,
+      packId: pack,
+      subject: policy.subject,
+    });
   } catch (e) {
     return { ok: false, reason: `CODE audit dispatch failed: ${String(e)}` };
   }
   // The audit must produce a real verdict; a spawn that returned no `VERDICT:` line is AUDIT-UNAVAILABLE, not a
   // pass — do NOT write it (mirrors cached_audit: only a real verdict is cached, so a retry is possible).
-  if (!verdict.includes('VERDICT:')) {
-    return { ok: false, reason: 'the audit returned no VERDICT: line (audit unavailable — retry)' };
+  const firstLine = verdict.split(/\r?\n/u, 1)[0] ?? '';
+  if (!/^VERDICT: [A-Z][A-Z_]*$/u.test(firstLine)) {
+    return {
+      ok: false,
+      reason: 'the audit returned no leading VERDICT: line (audit unavailable — retry)',
+    };
   }
-  // Write the EXACT shape `cached_audit` writes and the gate reads: `{hash, verdict, subjectHash}`. `subjectHash`
-  // is `sha256(diff)` — the freshness anchor `codeAuditCertifiesCurrentDiff` re-derives from `git diff HEAD`.
-  await deps.write(
-    sid,
-    ev.auditCacheKey,
-    JSON.stringify({ hash: sha256Hex(prompt), verdict, subjectHash: sha256Hex(diff) }, null, 2),
-  );
+  // `runAudit` is the canonical cached_audit dispatch: it has already persisted the exact session/task cache
+  // artifact, ledger, partial evidence, subject freshness anchor, and aggregate verdict. Reaudit is only an
+  // adapter from active-pack policy + current diff into that one owner; it never recreates the cache datum.
   return {
     ok: true,
     verdict,
-    guessFree: verdict.includes('VERDICT: GUESS_FREE'),
+    guessFree: auditVerdictMatchesPass(firstLine, policy.passVerdict),
     cacheKey: ev.auditCacheKey,
   };
 }

@@ -29,7 +29,7 @@ describe('projectCodexHooks', () => {
     const pre = next.hooks?.PreToolUse?.[0];
     expect(pre?.matcher).toBe('^.*$');
     expect(pre?.hooks[0]?.command).toBe('/abs/bin/opensquid-hook-pretooluse');
-    expect(pre?.hooks[0]?.timeout).toBe(360);
+    expect(pre?.hooks[0]?.timeout).toBe(620);
     expect(pre?.hooks[0]?.['@opensquid']).toBe(true);
     expect(next.hooks?.Stop?.[0]?.hooks[0]?.timeout).toBe(60);
   });

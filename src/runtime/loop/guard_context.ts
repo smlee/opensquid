@@ -5,13 +5,16 @@ import { toolMatches } from '../../integrations/pi/tool_aliases.js';
 import { sha256Hex } from '../durable/run_id.js';
 import type { Event } from '../event.js';
 import { readCheckpointBySession } from '../ralph/loop_stage.js';
-import { sessionStateFile } from '../paths.js';
 import { matchesLane } from './write_lane.js';
-import { readTaskAuditCache, readTaskAuditHistory } from './task_audit_cache.js';
+import { deriveAuditEvidenceVerdict } from './audit_evidence.js';
+import {
+  readTaskAuditCache,
+  readTaskAuditHistory,
+  type DurableTaskAuditEntry,
+} from './task_audit_cache.js';
 import {
   auditEntryCertifiesSubject,
   scopeAuditExpectedLenses,
-  type AuditCacheLens,
   type ScopeAuditEntry,
   type ScopeAuditPolicy,
 } from './scope_audit_policy.js';
@@ -22,58 +25,26 @@ export type AuditContextDeclarations = Readonly<
   Record<string, { binding: AuditBinding; policy?: ScopeAuditPolicy | null }>
 >;
 
-function asAuditCacheEntry(value: unknown): ScopeAuditEntry | null {
-  if (
-    value === null ||
-    typeof value !== 'object' ||
-    typeof (value as { verdict?: unknown }).verdict !== 'string'
-  ) {
-    return null;
-  }
-  const record = value as {
-    verdict: string;
-    subjectHash?: unknown;
-    complete?: unknown;
-    lenses?: unknown;
-  };
-  const lenses = Array.isArray(record.lenses)
-    ? record.lenses.filter(
-        (lens): lens is AuditCacheLens =>
-          lens !== null &&
-          typeof lens === 'object' &&
-          typeof (lens as { id?: unknown }).id === 'string' &&
-          typeof (lens as { promptHash?: unknown }).promptHash === 'string',
-      )
-    : undefined;
+function asTaskAuditEntry(entry: DurableTaskAuditEntry | null): ScopeAuditEntry | null {
+  if (entry === null) return null;
+  const verdict = deriveAuditEvidenceVerdict(entry);
+  if (verdict === undefined) return null;
   return {
-    verdict: record.verdict,
-    ...(typeof record.subjectHash === 'string' ? { subjectHash: record.subjectHash } : {}),
-    ...(typeof record.complete === 'boolean' ? { complete: record.complete } : {}),
-    ...(lenses === undefined ? {} : { lenses }),
+    verdict,
+    ...(entry.subjectHash === undefined ? {} : { subjectHash: entry.subjectHash }),
+    ...(entry.complete === undefined ? {} : { complete: entry.complete }),
+    ...(entry.lenses === undefined
+      ? {}
+      : { lenses: entry.lenses.map(({ id, promptHash }) => ({ id, promptHash })) }),
   };
-}
-
-async function readLocalAuditEntry(
-  sessionId: string,
-  key: string,
-): Promise<ScopeAuditEntry | null> {
-  try {
-    return asAuditCacheEntry(
-      JSON.parse(await readFile(sessionStateFile(sessionId, key), 'utf8')) as unknown,
-    );
-  } catch {
-    return null;
-  }
 }
 
 export async function readAuditVerdict(
   sessionId: string,
   key: string,
 ): Promise<string | undefined> {
-  const local = await readLocalAuditEntry(sessionId, key);
-  if (local !== null) return local.verdict;
   try {
-    return (await readTaskAuditCache(sessionId, key))?.verdict;
+    return asTaskAuditEntry(await readTaskAuditCache(sessionId, key))?.verdict;
   } catch {
     return undefined;
   }
@@ -109,13 +80,15 @@ export async function readFreshAuditVerdict(
   try {
     const [latest, history] = await Promise.all([
       readTaskAuditCache(sessionId, cacheKey),
-      readTaskAuditHistory(sessionId, cacheKey),
+      readTaskAuditHistory(sessionId, cacheKey, 20),
     ]);
-    candidates.push(latest, ...history.map((attempt) => attempt.entry));
+    candidates.push(
+      asTaskAuditEntry(latest),
+      ...history.map((attempt) => asTaskAuditEntry(attempt.entry)),
+    );
   } catch {
     candidates.push(null);
   }
-  candidates.push(await readLocalAuditEntry(sessionId, cacheKey));
   return candidates.find((entry) => auditEntryCertifiesSubject(entry, currentHash, expectedLenses))
     ?.verdict;
 }

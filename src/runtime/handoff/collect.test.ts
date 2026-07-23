@@ -12,24 +12,37 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { collectHandoffState, dedupeArtifactsByPath, handoverDocPath } from './collect.js';
 import type { HandoffArtifact } from './collect.js';
-import { sessionLogFile, sessionStateFile } from '../paths.js';
+import { sessionStateFile } from '../paths.js';
+import { appendAuditTelemetry } from '../loop/audit_telemetry.js';
+import { writeTaskAuditCache } from '../loop/task_audit_cache.js';
 import { CheckpointStore } from '../durable/checkpoint_store.js';
 
 let home: string;
 let cwd: string;
 let priorHome: string | undefined;
+let priorProject: string | undefined;
+let priorItem: string | undefined;
 const SID = 'handoff-test-session-0001';
 
 beforeEach(async () => {
   priorHome = process.env.OPENSQUID_HOME;
+  priorProject = process.env.OPENSQUID_PROJECT_ROOT;
+  priorItem = process.env.OPENSQUID_ITEM_ID;
   home = await mkdtemp(join(tmpdir(), 'opensquid-handoff-home-'));
   cwd = await mkdtemp(join(tmpdir(), 'opensquid-handoff-cwd-'));
+  await mkdir(join(home, '.opensquid'), { recursive: true });
   process.env.OPENSQUID_HOME = home;
+  process.env.OPENSQUID_PROJECT_ROOT = home;
+  process.env.OPENSQUID_ITEM_ID = 'wg-handoff-test';
 });
 
 afterEach(async () => {
   if (priorHome === undefined) delete process.env.OPENSQUID_HOME;
   else process.env.OPENSQUID_HOME = priorHome;
+  if (priorProject === undefined) delete process.env.OPENSQUID_PROJECT_ROOT;
+  else process.env.OPENSQUID_PROJECT_ROOT = priorProject;
+  if (priorItem === undefined) delete process.env.OPENSQUID_ITEM_ID;
+  else process.env.OPENSQUID_ITEM_ID = priorItem;
   await rm(home, { recursive: true, force: true });
   await rm(cwd, { recursive: true, force: true });
 });
@@ -82,16 +95,17 @@ describe('collectHandoffState — populated home (real shapes)', () => {
       JSON.stringify({ task_id: '3', phases: ['pre_research', 'learn'] }),
       'utf8',
     );
-    await writeFile(
-      sessionStateFile(SID, 'coding-flow-guess-audit-cache'),
-      JSON.stringify({ hash: 'h', verdict: 'VERDICT: UNRESOLVED\n\n- one open bullet here' }),
-      'utf8',
-    );
-    await writeFile(
-      sessionLogFile(SID, 'audit-spawn-ledger'),
-      `${JSON.stringify({ at: 't', cache_key: 'k', model: 'reasoning', hash8: 'a', outcome: 'verdict', duration_ms: 1 })}\n`,
-      'utf8',
-    );
+    await writeTaskAuditCache(SID, 'coding-flow-guess-audit-cache', {
+      hash: 'a'.repeat(64),
+      verdict: 'VERDICT: UNRESOLVED\n\n- one open bullet here',
+    });
+    await appendAuditTelemetry(SID, {
+      at: '2026-06-10T06:57:56.338Z',
+      model: 'reasoning',
+      operation: 'model_call',
+      status: 'returned',
+      duration_ms: 1,
+    });
     const preResearch = join(cwd, 'pre.md');
     await writeFile(preResearch, '# pre-research content', 'utf8');
     await writeFile(

@@ -18,14 +18,13 @@ import { promisify } from 'node:util';
 
 import { z } from 'zod';
 
+import { MAX_AUDIT_TEXT_BYTES } from '../runtime/audit_schema.js';
 import { ok } from '../runtime/result.js';
 import { readSessionCwd } from '../runtime/session_state.js';
 
 import type { FunctionRegistry } from './registry.js';
 
 const execFileP = promisify(execFile);
-// Diffs can be large; cap so the audit prompt stays bounded. Over-cap → null (never a partial-diff verdict).
-const MAX_DIFF = 200_000;
 
 /** Injectable readers (tests pass pure stubs); defaults read every uncommitted tracked/staged/untracked file. */
 export interface DiffDeps {
@@ -91,7 +90,7 @@ export async function stagedDiff(
     if (cwd === null) return null;
     const diff = await deps.run(cwd);
     if (diff.trim().length === 0) return null; // nothing to audit
-    return diff.length > MAX_DIFF ? null : diff; // over-cap → null (never a partial diff)
+    return Buffer.byteLength(diff, 'utf8') > MAX_AUDIT_TEXT_BYTES ? null : diff; // shared audit byte cap
   } catch {
     return null;
   }

@@ -6,11 +6,15 @@ import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { materializePackAuditPolicy } from '../../functions/audit_policy.js';
+import { auditDeclarationCacheHash, auditLensPolicyHash } from '../../functions/cached_audit.js';
+import { readRubricContent } from '../../functions/read_rubric.js';
 import { readGitWorkingTreeDiff } from '../../functions/staged_diff.js';
 import { loadPack } from '../../packs/loader.js';
+import { loadActivePacksForDispatch } from '../../runtime/bootstrap.js';
 import { advanceFsmState } from '../../runtime/fsm_state.js';
 import { sha256Hex } from '../../runtime/durable/run_id.js';
-import { sessionStateFile } from '../../runtime/paths.js';
+import { writeTaskAuditCache } from '../../runtime/loop/task_audit_cache.js';
 import { recordSuite } from '../../runtime/loop/verification.js';
 import { recordSessionCwd, writeActiveTask } from '../../runtime/session_state.js';
 import { appendPhase, REQUIRED_PHASES } from '../../runtime/workflow_phases.js';
@@ -35,19 +39,97 @@ const execFileP = promisify(execFile);
 const SID = 'gate-test-session';
 const NOW = '2026-06-04T00:00:00.000Z';
 
-/** GFR.2-hard fixture: write the CODE producer's verdict cache the commit-gate now requires (fullstack-flow).
- *  An optional `subjectHash` is the staleness anchor (sha256 of the diff the verdict certified). */
-async function writeCodeAudit(verdict: string, subjectHash?: string): Promise<void> {
-  const p = sessionStateFile(SID, 'fullstack-flow-code-audit-cache');
-  await mkdir(dirname(p), { recursive: true });
-  const entry =
-    subjectHash === undefined ? { hash: 'x', verdict } : { hash: 'x', verdict, subjectHash };
-  await writeFile(p, JSON.stringify(entry), 'utf8');
+/** Write exact active-pack CODE evidence for `certifiedDiff`; undefined deliberately creates legacy evidence. */
+async function writeCodeAudit(
+  verdict: string,
+  certifiedDiff?: string,
+  identityTimeoutMs?: number,
+): Promise<void> {
+  process.env.OPENSQUID_ITEM_ID = 't1';
+  if (certifiedDiff === undefined) {
+    await writeTaskAuditCache(SID, 'fullstack-flow-code-audit-cache', {
+      hash: '0'.repeat(64),
+      verdict,
+    });
+    return;
+  }
+  const rubric = await readRubricContent('code', 'fullstack-flow');
+  if (rubric === null) throw new Error('missing code rubric');
+  const policy = materializePackAuditPolicy(
+    await loadActivePacksForDispatch(SID, repo),
+    'fullstack-flow',
+    'fullstack-flow-code-audit-cache',
+    rubric,
+    certifiedDiff,
+  );
+  if (policy === null) throw new Error('missing code policy');
+  const promptHash = (lens: (typeof policy.lenses)[number]): string =>
+    auditLensPolicyHash({
+      model: policy.model,
+      lens,
+      passVerdict: policy.passVerdict,
+      failVerdict: policy.failVerdict,
+      timeoutMs: identityTimeoutMs ?? policy.timeoutMs,
+    });
+  await writeTaskAuditCache(SID, policy.cacheKey, {
+    hash: auditDeclarationCacheHash({
+      model: policy.model,
+      lenses: policy.lenses,
+      passVerdict: policy.passVerdict,
+      failVerdict: policy.failVerdict,
+      timeoutMs: identityTimeoutMs ?? policy.timeoutMs,
+      subject: policy.subject,
+    }),
+    complete: true,
+    passVerdict: policy.passVerdict,
+    failVerdict: policy.failVerdict,
+    subjectHash: sha256Hex(certifiedDiff),
+    lenses: policy.lenses.map((lens) => ({
+      id: lens.id,
+      promptHash: promptHash(lens),
+      output: verdict,
+    })),
+  });
 }
 
-/** The sha256 of the complete tracked/staged/untracked working-tree artifact the CODE audit certifies. */
-async function currentDiffHash(): Promise<string> {
-  return sha256Hex(await readGitWorkingTreeDiff(repo));
+async function writePartialCodeAudit(certifiedDiff: string): Promise<void> {
+  process.env.OPENSQUID_ITEM_ID = 't1';
+  const rubric = await readRubricContent('code', 'fullstack-flow');
+  if (rubric === null) throw new Error('missing code rubric');
+  const policy = materializePackAuditPolicy(
+    await loadActivePacksForDispatch(SID, repo),
+    'fullstack-flow',
+    'fullstack-flow-code-audit-cache',
+    rubric,
+    certifiedDiff,
+  );
+  if (policy === null) throw new Error('missing code policy');
+  await writeTaskAuditCache(SID, policy.cacheKey, {
+    hash: auditDeclarationCacheHash({
+      model: policy.model,
+      lenses: policy.lenses,
+      passVerdict: policy.passVerdict,
+      failVerdict: policy.failVerdict,
+      timeoutMs: policy.timeoutMs,
+      subject: policy.subject,
+    }),
+    complete: false,
+    passVerdict: policy.passVerdict,
+    failVerdict: policy.failVerdict,
+    subjectHash: sha256Hex(certifiedDiff),
+    lenses: policy.lenses.slice(0, -1).map((lens) => ({
+      id: lens.id,
+      promptHash: auditLensPolicyHash({
+        model: policy.model,
+        lens,
+        passVerdict: policy.passVerdict,
+        failVerdict: policy.failVerdict,
+        timeoutMs: policy.timeoutMs,
+      }),
+      output: `VERDICT: ${policy.passVerdict}`,
+    })),
+    failures: [{ id: policy.lenses.at(-1)!.id, error: 'reviewer timed out' }],
+  });
 }
 
 /** Give the repo a HEAD (so `git diff HEAD` resolves) + point the session cwd at it (so the gate's stagedDiff
@@ -63,6 +145,8 @@ const saved: Record<string, string | undefined> = {};
 const ENV_KEYS = [
   'OPENSQUID_HOME',
   'OPENSQUID_SESSION_ID',
+  'OPENSQUID_ITEM_ID',
+  'OPENSQUID_PROJECT_ROOT',
   'CLAUDE_SESSION_ID',
   'CLAUDE_CODE_SESSION_ID',
   'CLAUDE_PROJECT_DIR',
@@ -84,6 +168,9 @@ beforeEach(async () => {
   await git(['init', '-q'], repo);
   await git(['config', 'user.email', 't@t'], repo);
   await git(['config', 'user.name', 't'], repo);
+  await writeFile(join(repo, '.git', 'info', 'exclude'), '.opensquid/\n', 'utf8');
+  process.env.OPENSQUID_PROJECT_ROOT = repo;
+  await mkdir(join(repo, '.opensquid'), { recursive: true });
 });
 afterEach(async () => {
   for (const k of ENV_KEYS) {
@@ -139,7 +226,7 @@ describe('GF.2 — owned-boundary git gate (runGate "commit")', () => {
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
-  it('gated repo, code staged, flow COMPLETE → ALLOW (0)', async () => {
+  it('v1 coding-flow remains FSM/phase-authorized with no commit_gate lenses or audit evidence', async () => {
     await makeGated();
     await stage('src/x.ts');
     await driveComplete();
@@ -400,12 +487,74 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     await stage('src/x.ts');
     await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
-    // GFR.2-hard: the external verdict AND its subjectHash certifies exactly the diff being committed.
-    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', await currentDiffHash());
+    // GFR.2-hard: the external verdict certifies the exact active policy and diff being committed.
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', await readGitWorkingTreeDiff(repo));
     // scope-5 (§5.4): fullstack-flow now declares `require_suite_green: true`, so the gate ALSO needs the
     // suite record green (the belt-and-suspenders backstop) — record it for the active task.
     await recordSuite(SID, 't1', true);
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(0);
+  });
+
+  it('rejects passing evidence produced under a different timeout policy', async () => {
+    await makeGatedV2();
+    await armStalenessRepo();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writeCodeAudit(
+      'VERDICT: GUESS_FREE\n- old timeout policy',
+      await readGitWorkingTreeDiff(repo),
+      1,
+    );
+    await recordSuite(SID, 't1', true);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('rejects reduced arbitrary lenses even when marked complete and passing', async () => {
+    await makeGatedV2();
+    await armStalenessRepo();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    process.env.OPENSQUID_ITEM_ID = 't1';
+    const diff = await readGitWorkingTreeDiff(repo);
+    const rubric = await readRubricContent('code', 'fullstack-flow');
+    if (rubric === null) throw new Error('missing code rubric');
+    const policy = materializePackAuditPolicy(
+      await loadActivePacksForDispatch(SID, repo),
+      'fullstack-flow',
+      'fullstack-flow-code-audit-cache',
+      rubric,
+      diff,
+    );
+    if (policy === null) throw new Error('missing code policy');
+    await writeTaskAuditCache(SID, policy.cacheKey, {
+      hash: auditDeclarationCacheHash({
+        model: policy.model,
+        lenses: policy.lenses,
+        passVerdict: policy.passVerdict,
+        failVerdict: policy.failVerdict,
+        timeoutMs: policy.timeoutMs,
+        subject: policy.subject,
+      }),
+      complete: true,
+      passVerdict: policy.passVerdict,
+      failVerdict: policy.failVerdict,
+      subjectHash: sha256Hex(diff),
+      lenses: policy.lenses.slice(0, 2).map((lens) => ({
+        id: lens.id,
+        promptHash: auditLensPolicyHash({
+          model: policy.model,
+          lens,
+          passVerdict: policy.passVerdict,
+          failVerdict: policy.failVerdict,
+          timeoutMs: policy.timeoutMs,
+        }),
+        output: 'VERDICT: GUESS_FREE',
+      })),
+    });
+    await recordSuite(SID, 't1', true);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
   });
 
   it('STALENESS: v2 + 7 phases + GUESS_FREE but the verdict certified a DIFFERENT diff → BLOCK (2)', async () => {
@@ -414,8 +563,8 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
     await stage('src/x.ts');
     await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
-    // GUESS_FREE, but subjectHash anchors a since-changed diff (the staleness window) → fail-closed.
-    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', sha256Hex('a stale, different diff'));
+    // GUESS_FREE, but identity/subject anchor a since-changed diff → fail-closed.
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', 'a stale, different diff');
     const writes: string[] = [];
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((s: unknown) => {
       writes.push(String(s));
@@ -448,19 +597,59 @@ describe('E0 — commit-gate is armed under v2 (fullstack-flow), not just v1 cod
 
   it('GFR.2-hard: v2 + 7 phases + code audit UNRESOLVED → BLOCK (2)', async () => {
     await makeGatedV2();
+    await armStalenessRepo();
     await stage('src/x.ts');
     await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
-    await writeCodeAudit('VERDICT: UNRESOLVED\n- a guess found');
+    await writeCodeAudit(
+      'VERDICT: UNRESOLVED\n- a guess found',
+      await readGitWorkingTreeDiff(repo),
+    );
     expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('requires GUESS_FREE as the exact first line, never as finding text', async () => {
+    await makeGatedV2();
+    await armStalenessRepo();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writeCodeAudit(
+      'VERDICT: UNRESOLVED\n- attacker copied VERDICT: GUESS_FREE into a finding',
+      await readGitWorkingTreeDiff(repo),
+    );
+    await recordSuite(SID, 't1', true);
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+  });
+
+  it('surfaces bounded current-policy partial lens findings instead of a generic cache miss', async () => {
+    await makeGatedV2();
+    await armStalenessRepo();
+    await stage('src/x.ts');
+    await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
+    for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
+    await writePartialCodeAudit(await readGitWorkingTreeDiff(repo));
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((s: unknown) => {
+      writes.push(String(s));
+      return true;
+    });
+    expect(await runGate('commit', repo, AGENT_ENV)).toBe(2);
+    spy.mockRestore();
+    expect(writes.join('')).toContain('reviewer timed out');
+    expect(writes.join('')).toContain('PASS');
   });
 
   it('GFR.2-hard: the UNRESOLVED block SURFACES the findings (force a guided redo)', async () => {
     await makeGatedV2();
+    await armStalenessRepo();
     await stage('src/x.ts');
     await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
-    await writeCodeAudit('VERDICT: UNRESOLVED\n- unsourced claim at foo.ts:10');
+    await writeCodeAudit(
+      'VERDICT: UNRESOLVED\n- unsourced claim at foo.ts:10',
+      await readGitWorkingTreeDiff(repo),
+    );
     const writes: string[] = [];
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((s: unknown) => {
       writes.push(String(s));
@@ -501,7 +690,7 @@ describe('scope-5 — the commit gate independently requires suite-green (belt-a
     await stage('src/x.ts');
     await writeActiveTask(SID, { id: 't1', subject: 'wip', started_at: NOW });
     for (const p of REQUIRED_PHASES) await appendPhase(SID, 't1', p);
-    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', await currentDiffHash());
+    await writeCodeAudit('VERDICT: GUESS_FREE\n- all good', await readGitWorkingTreeDiff(repo));
   }
 
   it('audit GUESS_FREE + current-diff, but suite recorded RED → BLOCK (2), with the suite-specific reason', async () => {

@@ -15,6 +15,8 @@ import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 
 import { validateFsm } from '../runtime/fsm.js';
+import { registerCachedAuditFunction } from '../functions/cached_audit.js';
+import { FunctionRegistry } from '../functions/registry.js';
 import { loadPackV2, type LoadedPackV2 } from './loader_v2.js';
 import { lintPhaseEmits } from './phase_emit_lint.js';
 import { V2ObservedActor } from '../runtime/loop/v2_observed_actor.js';
@@ -188,6 +190,10 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
       ['plan-guess-free-audit', ['criteria 1 and 4', 'criteria 2 and 3', 'criterion 5']],
       ['code-guess-free-audit', ['criteria 1-4', 'criteria 5-9', 'criteria 11-14', 'criterion 10']],
     ]);
+    const registry = new FunctionRegistry();
+    registerCachedAuditFunction(registry);
+    const cachedAuditSchema = registry.get('cached_audit')?.argSchema;
+    expect(cachedAuditSchema).toBeDefined();
     const criterionUniverse = new Map([
       ['scope-guess-free-audit', ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']],
       ['author-guess-free-audit', ['1', '2', '3', '4', '5', '6', '7', '8', '9']],
@@ -202,6 +208,11 @@ describe('fullstack-flow pack — v2 enforcing discipline (T2.1)', () => {
       const audit = rule?.process.find((step) => step.call === 'cached_audit');
       expect(audit?.args?.timeout_ms, ruleId).toBe(600_000);
       expect(audit?.args?.prompt, ruleId).toBeUndefined();
+      const contract = cachedAuditSchema?.safeParse(audit?.args);
+      expect(
+        contract?.success,
+        `${ruleId} pack args must satisfy the live cached_audit primitive: ${contract?.success === false ? contract.error.message : ''}`,
+      ).toBe(true);
       expect(
         audit?.args?.lenses?.map((lens) => lens.id),
         ruleId,
